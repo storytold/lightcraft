@@ -40,6 +40,22 @@ pub fn gpu_notice(reason: Option<&str>, enabled: bool) -> Option<String> {
     Some(text)
 }
 
+/// The quit prompt's text while `count` cancellable tasks run (`names` lists them).
+fn tasks_message(count: usize, names: &str) -> String {
+    if count == 1 {
+        crate::i18n::tr_format!("1 task is still running: {names}. Quitting stops it.", names = names)
+    } else {
+        crate::i18n::tr_format!("{n} tasks are still running: {names}. Quitting stops them.", n = count, names = names)
+    }
+}
+
+/// The quit prompt's text when `n` changes couldn't be written to disk, for the reason `e`.
+fn unsaved_message(n: usize, e: &str) -> String {
+    let s = crate::i18n::plural_s(n);
+    let lost = if n == 1 { "it is" } else { "they are" };
+    crate::i18n::tr_format!("{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.", s, lost, n = n, e = e)
+}
+
 /// The window may close now (`true`), or the quit prompt is shown (`false`). Running tasks that
 /// can be cancelled (an import, an export…) are asked about first; then changes that couldn't be
 /// written are retried — the log, then a snapshot of everything in memory.
@@ -49,13 +65,15 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
     }
     // before the library is touched: a Cancel here keeps working with it
     let running = app.session.activity.running_cancellable();
-    if !running.is_empty() {
-        let names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>().join(", ");
-        app.quit_prompt = Some(QuitPrompt::Tasks(if running.len() == 1 {
-            crate::i18n::tr_format!("1 task is still running: {names}. Quitting stops it.", names = names)
-        } else {
-            crate::i18n::tr_format!("{n} tasks are still running: {names}. Quitting stops them.", n = running.len(), names = names)
-        }));
+    let mut names = running.iter().map(|t| crate::i18n::tr(&t.label)).collect::<Vec<_>>();
+    // an import handed its files this tick (files that waited for a library, #2779) is listed only
+    // from its first tick on, and files still waiting will be imported too
+    let unlisted = app.import.as_ref().is_some_and(|t| !t.listed()) || !app.waiting_import.files.is_empty();
+    if unlisted && !running.iter().any(|t| t.kind == "import") {
+        names.push(crate::i18n::tr("Importing"));
+    }
+    if !names.is_empty() {
+        app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(names.len(), &names.join(", "))));
         return false;
     }
     if app.session.unsaved().is_none() {
@@ -70,13 +88,7 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
     match app.session.unsaved() {
         None => true,
         Some((n, e)) => {
-            app.quit_prompt = Some(QuitPrompt::Unsaved(crate::i18n::tr_format!(
-                "{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.",
-                if n == 1 { "" } else { "s" },
-                if n == 1 { "it is" } else { "they are" },
-                n = n,
-                e = e
-            )));
+            app.quit_prompt = Some(QuitPrompt::Unsaved(unsaved_message(n, e)));
             false
         }
     }
@@ -506,6 +518,8 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
         });
     // A backdrop press can raise its area; keep the prompt buttons above it.
     if let Some(window) = shown {
+        crate::widgets::announce_dialog(ctx, &window.response, crate::widgets::Modal::Alert);
+        crate::widgets::describe_dialog(ctx, &window.response, text);
         ctx.move_to_top(window.response.layer_id);
     }
     input.button_ids = seen;
@@ -530,6 +544,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         app.quit_prompt = None;
         if buttons.get(i).is_some_and(|(_, _, choice)| *choice == Choice::QuitAnyway) {
             app.session.activity.cancel_all();
+            // files waiting for an import, and one handed its files but not started, are given up
+            // too, or `may_close` would ask about them again
+            app.waiting_import = Default::default();
+            if app.import.as_ref().is_some_and(|t| !t.listed()) {
+                app.import = None;
+            }
             // unsaved changes still get their own question
             if may_close(app) {
                 app.ui.quit = true;

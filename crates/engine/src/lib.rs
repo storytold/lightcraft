@@ -628,10 +628,12 @@ impl Session {
 
     // ---------------------------------------------------------------- ops, undo
 
-    /// Apply an op as one undoable step.
+    /// Apply an op as one undoable step. A new edit: one that would make a smart album include
+    /// itself is refused here, whichever command, task or caller asked ([`Catalog::apply_new`]);
+    /// undo, redo and opening a library bring back what was and are not held to that.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let inv = self.apply_catalog(op)?;
+        let inv = self.apply_through(op, Catalog::apply_new)?;
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -645,7 +647,14 @@ impl Session {
         Ok(())
     }
 
+    /// [`Catalog::apply`] for what brings back what was (an undo or a redo).
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
+        self.apply_through(op, Catalog::apply)
+    }
+
+    /// Apply `op` with `apply` (the catalog's way in for a new edit or for bringing back what
+    /// was), then forget what the session cached of the photos it replaced.
+    fn apply_through(&mut self, op: Op, apply: fn(&mut Catalog, Op) -> std::result::Result<Op, lightcraft_catalog::CatalogError>) -> Result<Op> {
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
@@ -664,7 +673,7 @@ impl Session {
                 _ => {}
             }
         }
-        let inv = self.catalog.apply(op)?;
+        let inv = apply(&mut self.catalog, op)?;
         for id in invalidated {
             self.media.forget(id);
         }
@@ -1360,90 +1369,7 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod tests_album_order;
-#[cfg(test)]
-mod tests_album_remove;
-#[cfg(test)]
-mod tests_albums_local;
-#[cfg(test)]
-mod tests_color;
-#[cfg(test)]
-mod tests_constrain_crop;
-#[cfg(test)]
-mod tests_crop_angle;
-#[cfg(test)]
-mod tests_crop_aspect;
-#[cfg(test)]
-mod tests_denoise;
-#[cfg(test)]
-mod tests_export;
-#[cfg(test)]
-mod tests_face_models;
-#[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
-mod tests_face_recognize;
+use tests::face_recognize as tests_face_recognize;
 #[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
-mod tests_face_tiles;
-#[cfg(test)]
-mod tests_filesystem_history;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod tests_focus_scan;
-#[cfg(test)]
-mod tests_folders;
-#[cfg(test)]
-mod tests_forget_local;
-#[cfg(test)]
-mod tests_history_cursor;
-#[cfg(test)]
-mod tests_hold_view;
-#[cfg(test)]
-mod tests_ids_params;
-#[cfg(test)]
-mod tests_import;
-#[cfg(test)]
-mod tests_import_move;
-#[cfg(test)]
-mod tests_keyword_list;
-#[cfg(test)]
-mod tests_libops;
-#[cfg(test)]
-mod tests_library;
-#[cfg(test)]
-mod tests_lightroom_folder;
-#[cfg(test)]
-mod tests_mask_effects;
-#[cfg(test)]
-mod tests_merge;
-#[cfg(test)]
-mod tests_move_to_share;
-#[cfg(test)]
-mod tests_organize;
-#[cfg(test)]
-mod tests_persist;
-#[cfg(test)]
-mod tests_prefs;
-#[cfg(test)]
-mod tests_presets_scale;
-#[cfg(test)]
-mod tests_print;
-#[cfg(test)]
-mod tests_process;
-#[cfg(test)]
-mod tests_recheck;
-#[cfg(test)]
-mod tests_segment;
-#[cfg(test)]
-mod tests_settings_files;
-#[cfg(test)]
-mod tests_slide;
-#[cfg(test)]
-mod tests_slideshow_export;
-#[cfg(test)]
-mod tests_spots;
-#[cfg(test)]
-mod tests_sync;
-#[cfg(test)]
-mod tests_view_follow;
-#[cfg(test)]
-mod tests_xmp;
+use tests::xmp as tests_xmp;
