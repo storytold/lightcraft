@@ -53,7 +53,10 @@ fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.renderer.request(Slot::Second, job, 95);
     }
     let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
-    let tex = mine(Slot::Second).or_else(|| mine(Slot::Main)).or_else(|| app.renderer.thumb(id));
+    // Main can be explicitly zoomed while this automatic Fit view is open. Do not borrow
+    // its nearest sampler: use the smooth thumbnail until this window's render is ready.
+    let tex =
+        mine(Slot::Second).or_else(|| app.renderer.main_for_fit(id, [area.width() * ppp, area.height() * ppp])).or_else(|| app.renderer.thumb(id));
     if let Some(t) = tex {
         let [tw, th] = t.tex.size();
         let s = (area.width() / tw as f32).min(area.height() / th as f32);

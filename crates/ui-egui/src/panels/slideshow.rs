@@ -251,13 +251,13 @@ fn wanted(play: &Playback, now: f64) -> Vec<(Item, u32)> {
 /// The texture to draw for slide `item`: its own render, else (a photo) the loupe's or a
 /// thumbnail (a slide stepped to with ←/→ shows at once, sharp when its render lands). A title
 /// screen has nothing to stand in for it: the black canvas shows until it lands.
-fn texture(app: &LightcraftApp, item: Item) -> Option<&crate::render::Tex> {
+fn texture(app: &LightcraftApp, item: Item, physical_bounds: [f32; 2]) -> Option<&crate::render::Tex> {
     let Item::Photo(id) = item else { return app.renderer.textures.get(&Slot::Slide(item)) };
     app.renderer
         .textures
         .get(&Slot::Slide(item))
         .filter(|t| t.photo == id)
-        .or_else(|| app.renderer.textures.get(&Slot::Main).filter(|t| t.photo == id))
+        .or_else(|| app.renderer.main_for_fit(id, physical_bounds))
         .or_else(|| app.renderer.thumb(id))
 }
 
@@ -324,9 +324,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.renderer.release_slides(&keep);
     let p = ui.painter_at(canvas);
     p.rect_filled(canvas, 0.0, Color32::BLACK);
+    let physical_bounds = [canvas.width() * ui.ctx().pixels_per_point(), canvas.height() * ui.ctx().pixels_per_point()];
     let rect_of = |t: &crate::render::Tex| super::detail::fit_texture_rect(canvas, t.size);
     let draw = |id: Item, alpha: f32| -> Option<Rect> {
-        let t = texture(app, id)?;
+        let t = texture(app, id, physical_bounds)?;
         let r = rect_of(t);
         p.image(t.tex.id(), r, full_uv(), Color32::WHITE.gamma_multiply(alpha.clamp(0.0, 1.0)));
         Some(r)
@@ -347,8 +348,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // crossfade: where the slides overlap the new one goes over the old at `k`; where only
         // the old one is, it fades to the backdrop
         (Some(from), None) => {
-            let new_rect = texture(app, frame.current).map(rect_of);
-            if let Some(t) = texture(app, from) {
+            let new_rect = texture(app, frame.current, physical_bounds).map(rect_of);
+            if let Some(t) = texture(app, from, physical_bounds) {
                 let r = rect_of(t);
                 match new_rect {
                     Some(n) => {

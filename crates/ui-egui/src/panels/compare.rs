@@ -208,6 +208,16 @@ fn request_tile_renders(app: &mut LightcraftApp, id: PhotoId, slot: Slot, want: 
     }
 }
 
+/// Survey always fits; interactive panes use the mode after this frame's zoom gesture.
+fn tile_texture_zoom(app: &mut LightcraftApp, slot: Slot, zoom: Zoom) -> Zoom {
+    let zoom = if matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference) { app.ui.zoom } else { zoom };
+    app.renderer.set_texture_zoom(slot, zoom);
+    if let Slot::Compare(i) = slot {
+        app.renderer.set_texture_zoom(Slot::CompareRegion(i), zoom);
+    }
+    zoom
+}
+
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
 /// strip below. Returns the image rect and the click/drag response.
 fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area: Rect, label: &str, zoom: Zoom) -> (Rect, egui::Response) {
@@ -238,6 +248,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
             super::detail::pan_image(app, img_area, img, resp.drag_delta());
         }
     }
+    let zoom = tile_texture_zoom(app, slot, zoom);
     let texture_side = super::detail::texture_side(ui.ctx());
     let want =
         (img.width().max(img.height()).min(img_area.width().max(img_area.height()) * 4.0) * ppp).min(2560.0_f32.min(texture_side as f32)) as usize;
