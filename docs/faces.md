@@ -235,6 +235,29 @@ The detector's output matches OpenCV's own YuNet on a 45-photo public-domain tes
 mean box overlap 0.97), including marble busts and paintings, with no false boxes on the landscape and architecture
 photos in the set.
 
+### And how well does it find faces?
+
+`cargo xtask ai-bench` measures the detector on the **WIDER FACE validation set** (3,226 photos, 39,708 faces) and prints the
+average precision (AP) for the benchmark's three settings: easy, medium and hard (hard includes the smallest faces). The photos are the publisher's, not ours: they are licensed CC BY-NC-ND 4.0, for non-commercial research
+use only, so the command downloads them to your machine only when you pass `--accept-terms`, and they are never part of
+this repository.
+
+```text
+cargo xtask ai-bench fetch --accept-terms          # WIDER_val.zip, the evaluation toolkit's ground truth and YuNet,
+                                                   # into corpus/ai-bench (SHA-256 checked; needs curl and tar or unzip)
+cargo xtask ai-bench run face-detection --set wider-face-val
+```
+
+`--dir DIR` puts the files elsewhere (the set goes in `DIR/wider-face-val`), `--model FILE` measures another
+YuNet-architecture `.onnx`, and `--limit N` scores N photos spread evenly, for a quick look. Detection uses the same
+code as **Photo ▸ Detect Faces** (a 640-pixel input), keeps every box scoring at least 0.02 as the protocol expects, and
+scores by the benchmark's published procedure: intersection over union of at least 0.5, scores normalised over the whole
+set, 1,000 thresholds. The scoring is our own implementation of that description, not the toolkit's MATLAB code.
+
+Measured with the pinned YuNet 2023mar model on an Intel Core i9-13950HX (32 threads, CPU only): **87.8 easy, 83.7 medium,
+59.8 hard** AP in 41 s for the 3,226 photos. The published figures for this model are 88.44 / 86.56 / 75.03. The gap is widest on hard, which includes the smallest
+faces, and those are what a 640-pixel input resolves worst (the limit noted above).
+
 ## Suggesting who is in a photo
 
 With **Recognise faces** switched on in Settings ▸ Faces and a recognition model chosen (**Use**; the switch cannot be

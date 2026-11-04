@@ -46,7 +46,8 @@ Tests that use a corpus skip cleanly when it is absent.
     ))
 }
 
-fn file_sha256(path: &Path) -> Result<String, String> {
+/// SHA-256 of a file as lowercase hex; `ai_bench` reuses it to verify pinned downloads.
+pub(crate) fn file_sha256(path: &Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     let mut file = std::fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let mut hash = Sha256::new();
