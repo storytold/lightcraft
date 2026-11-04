@@ -188,7 +188,8 @@ fn pool_priorities_dedupe_and_drop() {
         1000,
         Box::new(move || {
             let (m, cv) = &*g;
-            let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(60));
+            // the gate is opened by the test, so its limit never shrinks below 60 s (a hang guard)
+            let limit = stretched(std::time::Duration::from_secs(60));
             let (_open, waited) = cv.wait_timeout_while(m.lock().unwrap(), limit, |open| !*open).unwrap();
             assert!(!waited.timed_out(), "the test never opened the gate");
             999
