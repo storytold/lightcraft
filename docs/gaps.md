@@ -61,6 +61,8 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 ## Closed recently (kept for calibration)
 
+- 2026-11-04: persistent ignore/restore for individual and selected faces (#1873), with catalog-only Undo/Redo and paginated review without a recognition model. People remains partial: separated unnamed clusters and per-person rejection are not included; no ranked gap or headline count closes.
+
 - 2026-10-29: the import review has a remembered 80–320 pt thumbnail-size slider, density-aware previews and bounded visible retention (#2237, part of #2056). Small sources do not reconstruct the same preview job every frame. The pre-import loupe and keyboard culling remain open in #2056; no ranked gap or headline feature count closes.
 
 - 2026-10-22: saving XMP preserves foreign namespaces even when they use `lc:` or `xmp:` prefixes; importing them no longer interprets their properties as native settings or ratings. Parser, merge and save-command regressions cover the correction; no ranked gap or readiness estimate changes.
@@ -90,6 +92,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | LRC-LIB-PEOPLE: persistent multi-select ignore/restore, format-12 upgrade and model-independent review; People remains partial and ranked gaps/counts are unchanged |
 | 2026-10-28 | minor | Gap 8 shrinks: the desktop app offers lensfun's lens database (CC BY-SA, pinned) once on the first launch and downloads it on request and looks the library's raws up when it arrives; validation, a profile picker and own calibration remain |
 | 2026-10-23 | patch | Gap 8: the Sigma 10–18 mm on the ILCE-6700 gets a measured lens exception at 10–10.5 mm (0.55 px worst over 99 photos, was about 1.4 px) |
 | 2026-10-29 | minor | Import thumbnails render when the camera JPEG is too small, retaining preview-only/error fallbacks; import review: remembered thumbnail size and density-aware previews (#2237, part of #2056); pre-import loupe/keyboard culling remains open; no ranked gap closes |

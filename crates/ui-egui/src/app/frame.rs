@@ -306,6 +306,14 @@ impl LightcraftApp {
         if self.shown_library == Some(generation) {
             return;
         }
+        if self.shown_library.is_some() {
+            self.ui.ignored_faces = None;
+            self.ui.person_selection = Default::default();
+            self.ui.unnamed_selected.clear();
+            self.ui.unnamed_anchor = None;
+            self.caches.unnamed = None;
+            self.caches.person_page = None;
+        }
         self.shown_library = Some(generation);
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();

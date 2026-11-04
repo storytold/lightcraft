@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### Keep unwanted faces out of People
+- Select one or several faces in Unnamed faces and choose **Ignore selected faces**. A person's page also offers
+  selection controls and a face's right-click **Ignore face** action. Ignored faces stay out of recognition suggestions
+  across launches; their photos, face boxes and names are retained. **Ignored faces…** in People lets you review and
+  restore them, without a recognition model. Each ignore or restore batch is one Undo step and does not write XMP.
+  Existing libraries upgrade to catalog format 12; older builds cannot open an upgraded library.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III

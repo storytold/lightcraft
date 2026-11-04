@@ -70,6 +70,13 @@ pub fn faces(app: &mut LightcraftApp, now: f64) -> Arc<Unnamed> {
     }
     let v = app.session.execute("faces.unnamed", &json!({})).unwrap_or(Value::Null);
     let list = Arc::new(parse(&v));
+    if app.caches.unnamed.as_ref().is_some_and(|(old, _, _, _)| *old != rev) {
+        // A removed region can leave another face at the same index. Do not transfer the
+        // reviewed selection to that face, even when its photo/index pair still exists.
+        app.ui.unnamed_selected.clear();
+        app.ui.unnamed_anchor = None;
+        app.ui.unnamed_focus = false;
+    }
     // what was selected and has since been named (or removed) is no longer selected
     let present: std::collections::HashSet<(u64, usize)> = list.faces.iter().map(|f| (f.photo, f.index)).collect();
     app.ui.unnamed_selected.retain(|k| present.contains(k));
@@ -127,6 +134,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let mut submit: Option<String> = None;
     let mut clear = false;
+    let mut ignore = false;
     ui.horizontal(|ui| {
         ui.add_space(super::people::PAD - 4.0);
         let n = selected.len();
@@ -151,6 +159,9 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let c = ui.button(crate::i18n::tr("Clear"));
         register(ui, "unnamed:clear", c.rect);
         clear = c.clicked() || field.cancelled();
+        let b = ui.button(crate::i18n::tr("Ignore selected faces"));
+        register(ui, "unnamed:ignore", b.rect);
+        ignore = b.clicked();
     });
     // the people already named, matching what is typed (a click names the faces)
     let typed = app.ui.unnamed_name.trim().to_lowercase();
@@ -170,7 +181,16 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             });
         }
     }
-    if let Some(who) = submit {
+    if ignore {
+        let faces: Vec<_> = selected.iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
+        match app.run("faces.ignore", json!({"faces": faces})) {
+            Ok(_) => {
+                app.ui.unnamed_selected.clear();
+                app.ui.unnamed_anchor = None;
+            }
+            Err(error) => app.toast(ui.ctx(), error),
+        }
+    } else if let Some(who) = submit {
         name(app, &selected, &who);
         app.ui.unnamed_selected.clear();
         app.ui.unnamed_name.clear();
