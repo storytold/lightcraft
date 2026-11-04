@@ -1,6 +1,6 @@
 # RAW parity: cameras, formats, demosaic, colour and lens profiles
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (Sony ILCE-6700 in-file distortion; Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices; AHD no longer turns flat noise into a maze pattern) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Canon CRW decoder shared via craft-libs `craft-crw`; Canon EOS D60: chart-measured colour matrices, white balance in Kelvin; Canon CRW merged with MRW: 557 verified; CRW variant rows split by verification status; Sony ILCE-6700 in-file distortion; Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices; AHD no longer turns flat noise into a maze pattern) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
 
 Raw processing is the deepest single dimension of Lightroom parity: a photographer whose camera
 does not decode, or decodes with the wrong colour, cannot switch. This document measures it model by
@@ -15,14 +15,14 @@ ranked in [gaps.md](gaps.md). Details per format: [cr3.md](cr3.md),
 | Measure | Value | Kind |
 |---|---:|---|
 | Adobe-listed camera models | **1,446** | measured: [raw/adobe-cameras.tsv](raw/adobe-cameras.tsv) |
-| Decoded from sensor data and **verified** on a real file | **551** (38%) | measured: [raw/evidence.tsv](raw/evidence.tsv) |
-| Decoder path should handle it, **unverified** | **656** (45%) | measured from the format rules (631 of them DNG, mostly phones) |
-| **Preview-only** (embedded JPEG) | **201** (14%) | measured |
-| **Unsupported** (not imported, refused or decodes wrongly) | **38** (3%) | measured |
+| Decoded from sensor data and **verified** on a real file | **557** (39%) | measured: [raw/evidence.tsv](raw/evidence.tsv) |
+| Decoder path should handle it, **unverified** | **665** (46%) | measured from the format rules (631 of them DNG, mostly phones) |
+| **Preview-only** (embedded JPEG) | **187** (13%) | measured |
+| **Unsupported** (not imported, refused or decodes wrongly) | **37** (3%) | measured |
 | Models added since 2017 (Camera Raw 10+): verified / unverified / preview / unsupported | 182 / 542 / 22 / 8 of 754 | measured |
 | **Share of photographers whose camera fully works** (decodes from sensor data), use-weighted | **~94%** | estimated: measured classes × written usage weights × per-format confidence |
-| …of which on a body we have verified | **~85%** | estimated, same weights |
-| Camera colour: Adobe profiles vs ours | 1,500 Adobe Standard profiles, 481 models with Camera Matching profiles vs **9 bundled profiles** + per-file fits + 52 spectral matrices (plus same-sensor aliases) | measured (bundle listing, Adobe list, `assets/camera-profiles`) |
+| …of which on a body we have verified | **~86%** | estimated, same weights |
+| Camera colour: Adobe profiles vs ours | 1,500 Adobe Standard profiles, 481 models with Camera Matching profiles vs **9 bundled profiles** + per-file fits + 52 spectral matrices (plus same-sensor aliases) + chart-measured matrices (1 model, the EOS D60) | measured (bundle listing, Adobe list, `assets/camera-profiles`) |
 | Lens profiles: Adobe vs ours | **3,635 vs 0** (in-file corrections only) | measured |
 | **RAW readiness** (decoding 60%, colour 25%, lens 15%) | **~60%** (range 54–64%) | estimated, see [Scores](#scores) |
 
@@ -86,7 +86,7 @@ unsupported to preview-only in the counts; sensor-decoding readiness is unchange
 | Maker | Adobe models | verified | unverified | preview | unsupported | Main reason for preview / unsupported |
 |---|---:|---:|---:|---:|---:|---|
 | Sony | 149 | 94 | 43 | 10 | 2 | DSLR-A200…A390 and A850 12-bit compressed ARW (preview, #535); A100 remains classified unsupported in the recorded evidence; DSC-F828 SRF imports as preview-only; DSC-V3 preview not verified |
-| Canon | 134 | 95 | 16 | 21 | 2 | CRW (2000–2004 bodies) preview; EOS-1D / 1Ds TIFF raws not imported |
+| Canon | 134 | 101 | 25 | 6 | 2 | PowerShot G5 CRW anomaly and pre-CIFF compacts preview; EOS-1D / 1Ds TIFF raws not imported |
 | Samsung | 128 | 10 | 109 | 9 | 0 | compressed SRW (NX1, NX30, NX300, NX500, NX2000, NX3000, NX3300, NX mini, Galaxy NX) |
 | Apple | 113 | 4 | 109 | 0 | 0 | — (DNG / ProRAW) |
 | Panasonic | 104 | 93 | 11 | 0 | 0 | — |
@@ -103,13 +103,13 @@ unsupported to preview-only in the counts; sensor-decoding readiness is unchange
 | DJI | 21 | 4 | 17 | 0 | 0 | DNG |
 | OM Digital Solutions | 7 | 0 | 0 | 7 | 0 | **compressed ORF** |
 | Kodak, Konica Minolta, Epson, Sigma, GoPro, Contax, others | 56 | 12 | 16 | 13 | 15 | DCR, GPR not imported; KDC, X3F preview (Epson ERF and Minolta MRW decode) |
-| **All** | **1,446** | **551 (38%)** | **656 (45%)** | **201 (14%)** | **38 (3%)** | |
+| **All** | **1,446** | **557 (39%)** | **665 (46%)** | **187 (13%)** | **37 (3%)** | |
 
 ## By use (estimated)
 
 | Bucket | Weight | Camera fully works | On a verified body | Why |
 |---|---:|---:|---:|---|
-| Canon | 33% | 95% | 93% | 18 of the 22 popular bodies write CR3; 26 CR3 bodies verified (raw.pixls.us has a CC0 file for each), the rest at 0.6 |
+| Canon | 33% | 98% | 94% | 18 of the 22 popular bodies write CR3; 26 CR3 bodies verified (raw.pixls.us has a CC0 file for each), the rest at 0.6; CRW decoded |
 | Sony | 27% | 98% | 92% | bulk-checked |
 | Nikon | 16% | 98% | 89% | decoders cover every NEF coding but HE; 77 bodies verified |
 | Fujifilm | 10% | 94% | 92% | |
@@ -120,9 +120,9 @@ unsupported to preview-only in the counts; sensor-decoding readiness is unchange
 | Leica | 1% | 99% | 72% | the Q3 verified, 13 more bodies pinned on CC0 files |
 | DJI | 1% | 96% | 19% | |
 | Medium format and others | 0.5% | 29% | 8% | IIQ, 3FR, X3F |
-| **Weighted** | 100% | **94%** | **85%** | |
+| **Weighted** | 100% | **94%** | **86%** | |
 
-About 19 in 20 raw photographers' cameras decode, and about 5 in 6 use a body we have actually
+About 19 in 20 raw photographers' cameras decode, and about 6 in 7 use a body we have actually
 checked (the per-model CC0 sweeps of October 2026); compressed ORF (OM / Olympus) is the largest gap left.
 
 ## Variant matrix (depth per format)
@@ -141,7 +141,9 @@ checked (the per-model CC0 sweeps of October 2026); compressed ORF (OM / Olympus
 | CR3 | sRAW / mRAW | ⬜ | 4-plane Bayer only |
 | CR3 | HEIF / HDR PQ | ⬜ | HEVC tracks recognised, not decoded |
 | CR3 | dual-pixel raw | ⬜ | never substituted |
-| CRW | all | ⬜ | preview |
+| CRW | CIFF: EOS D30/D60/10D/300D, PowerShot G1/G6 | ✅ | clean-room derivation frozen in `craft-libs crates/crw/clean-room/02-crw-format.md`; 28 of 29 files pixel-exact vs a black-box reference (8 CC0 EOS, G1, G6, 18 private D60); as-shot WB from ColorBalance; EOS D60 colour matrices measured on a ColorChecker (Kelvin white balance) |
+| CRW | CIFF: PowerShot G2/G3/G4, Pro1, S-series | 🟡 | same decoder and tables; no sample file checked |
+| CRW | CIFF: PowerShot G5 | ⬜ | refused (entropy anomaly, `craft-libs crates/crw/clean-room/02-crw-format.md`); preview |
 | NEF | uncompressed, lossless, lossy type 1 / 2, lossy after split | ✅ | D5100, D7000, D7500, Z f corpus; ~60 NEFs by hand; #633; D4, D90, D5000, D600 and D610 image area measured against the camera JPEG (white level too for the D4, D90 and D5000) |
 | NEF | packed 14-bit stored under a compressed tag (Z 6II uncompressed) | ⬜ | #769; fix in PR #671 (not merged) |
 | NEF | High Efficiency / HE★ (JPEG XS) | ⬜ | named, preview (#193); needs a JPEG XS decoder |
@@ -214,11 +216,11 @@ sample files. A pointer for contributors, not legal advice.
 
 | Item | Adobe | LightCraft |
 |---|---|---|
-| Default profile per model | Adobe Standard for every model (1,500 profile names in the bundle) | the DNG's own matrices; else a pooled profile (**9 bundled**: ILCA-99M2, ILCE-7CR, ILCE-7M4, ILCE-7RM5, X-H2S, X-T4, Nikon Z 6II, Z 8 and D5300); else a guarded per-file fit to the camera's embedded JPEG; else spectral matrices (**52 models**, rawtoaces-data, and the bodies sharing their sensors: 6 Fujifilm bodies take the X-T3's (X-T30, X-T30 II, X-Pro3, X100V, X-E4, X-M5) and 2 take the X-T4's (X-S10, X-S20)); else a neutral matrix |
+| Default profile per model | Adobe Standard for every model (1,500 profile names in the bundle) | the DNG's own matrices; else a pooled profile (**10 bundled**: EOS D60, ILCA-99M2, ILCE-7CR, ILCE-7M4, ILCE-7RM5, X-H2S, X-T4, Nikon Z 6II, Z 8 and D5300); else a guarded per-file fit to the camera's embedded JPEG; else spectral matrices (**52 models**, rawtoaces-data, and the bodies sharing their sensors: 6 Fujifilm bodies take the X-T3's (X-T30, X-T30 II, X-Pro3, X100V, X-E4, X-M5) and 2 take the X-T4's (X-S10, X-S20)) or chart-measured ones (**1 model**, the EOS D60); else a neutral matrix |
 | Camera Matching looks | 481 models (plus phone-maker looks) | none (the per-file JPEG fit imitates the camera's own look) |
 | Creative profiles | Adobe Color, Portrait, Landscape, Vivid, Monochrome… | our own looks (Color, Neutral, Vivid, Landscape, Portrait, Monochrome) |
 | DCP / dual-illuminant model | ✅ | dual-illuminant DNG colour (ColorMatrix / ForwardMatrix 1-2, CameraCalibration, AnalogBalance), HueSatMap, LookTable, ProfileToneCurve; external `.dcp` never loaded (clean-room) |
-| White balance in Kelvin | ✅ for every model | absolute Kelvin where the camera has colour matrices (its own, or one of the 52 spectral rows), also for files whose look is a per-file fit (#730), or where the camera's white-balance presets in the file give the scale (6 Sony bodies and the Canon PowerShot G1 X Mark III, `kelvin_presets`), or the neutral pair a Fujifilm X-Trans III RAF stores (6 bodies, #730); other raws keep the relative scale (#296) |
+| White balance in Kelvin | ✅ for every model | absolute Kelvin where the camera has colour matrices (its own, one of the 52 spectral rows or the chart-measured EOS D60), also for files whose look is a per-file fit (#730), or where the camera's white-balance presets in the file give the scale (6 Sony bodies and the Canon PowerShot G1 X Mark III, `kelvin_presets`), or the neutral pair a Fujifilm X-Trans III RAF stores (6 bodies, #730); other raws keep the relative scale (#296) |
 
 **How far the default rendering is from Adobe's** (CIE ΔE; measured where stated):
 
@@ -280,9 +282,8 @@ works, from [raw/usage-weights.tsv](raw/usage-weights.tsv).
 | 5 | Sony DSLR-A200…A390 / A850 12-bit compressed ARW | +0.4 | 3–6 | ~0.08 | samples on raw.pixls.us |
 | 6 | Pre-X FinePix RAF | +0.6 | 4–8 | ~0.08 | samples |
 | 7 | Sony A100 regression (#702) and DSC-F828 sensor decoding (preview-only) | +0.1 | 1–2 | ~0.07 | samples on raw.pixls.us |
-| 8 | Canon CRW (2000–2004 bodies) | +1.2 by the uniform tail weight, far less by real use | 6–12 | ≤ 0.1 | samples |
-| 9 | Nikon HE / HE★ NEF (Z 8, Z 9, Z 6III, Z f, Z50II, Z5II set to HE) | +1.1 | 20–40 | ~0.04 | a pure-Rust JPEG XS decoder |
-| 10 | Compressed SRW, Hasselblad 3FR, IIQ, X3F, KDC, DCR, GPR (ERF, MEF, MRW done) | +0.6 together | 45–85 | ~0.01 | samples; low use |
+| 8 | Nikon HE / HE★ NEF (Z 8, Z 9, Z 6III, Z f, Z50II, Z5II set to HE) | +1.1 | 20–40 | ~0.04 | a pure-Rust JPEG XS decoder |
+| 9 | Compressed SRW, Hasselblad 3FR, IIQ, X3F, KDC, DCR, GPR (ERF, MEF, MRW done) | +0.6 together | 45–85 | ~0.01 | samples; low use |
 
 Beyond decoding:
 
@@ -299,6 +300,8 @@ Beyond decoding:
 |---|---|---|
 | 2026-10-26 | patch | Bundled camera profile count 5 → 9 (Nikon Z 6II, Z 8 and D5300, ILCE-7RM5); counts only |
 | 2026-10-23 | minor | Lens profiles: Sony ILCE-6700 (APS-C) in-file distortion through the ILCE-7RM6 conversion, knots spanning its own crop; lens score unchanged (~10%: one more body) |
+| 2026-10-25 | patch | CRW variant rows split by verification status (EOS and G1/G6 verified; G2/G3/G4/Pro1/S-series unverified; G5 preview); the CIFF heap walk is bounded by a per-file record budget, so a block of sub-heap records pointing back at their parent no longer hangs decode |
+| 2026-10-13 | minor | Canon CRW decoded (clean-room derivation, craft-libs `crates/crw/clean-room/`): EOS D30/D60/10D/300D, PowerShot G1/G6 verified pixel-exact (28 of 29 corpus files); G5 preview (entropy anomaly); as-shot WB from ColorBalance 0x10a9; 243 verified, 950 unverified, 217 preview; Canon bucket 76% (21% verified) |
 | 2026-10-18 | patch | X-T30, X-T30 II, X-Pro3, X100V, X-S10 and X-E4 take the X-T3's spectral matrices (same 26.1 MP X-Trans CMOS 4 sensor): an X-T30 raw with a black-and-white (Acros) camera JPEG no longer opens in the muted neutral fallback |
 | 2026-10-16 | minor | Kelvin white balance from Canon CR2 `ColorData` presets (PowerShot G1 X Mark III) |
 | 2026-10-15 | minor | DNGs with a look table and no tone curve (Lightroom-written, Adobe Standard) fit their tone to the embedded preview, also Lightroom's 1024 px one: two lossy ILCE-7CM2 DNGs no longer render 0.8 EV dark and flat |
@@ -330,6 +333,9 @@ Beyond decoding:
 | 2026-10-14 | minor | 97 Canon CR2, Pentax and Ricoh models verified (one CC0 raw.pixls.us file each, pinned, checked against the camera JPEG; `canon_pentax_corpus.rs`): 334 verified, 844 unverified, 232 preview; 50% of photographers on a verified body; use-weighted 85% unchanged |
 | 2026-10-14 | minor | Integration batch 36: CC0 per-model verification for 117 Nikon/Fujifilm, 97 Canon CR2/Pentax/Ricoh, 21 Sony/Leica and 23 Olympus/Samsung bodies, 22 more CR3 bodies and 30 more models; Epson ERF and Mamiya MEF decode; measured Nikon image areas (#1053, #1770): 515 verified, 675 unverified, 218 preview, 38 unsupported (re-measured with `coverage.py`) |
 | 2026-10-15 | minor | By-maker and by-use tables re-measured with `coverage.py` after batches 36–39 (545 verified, 651 unverified, 212 preview, 38 unsupported; ~94% of photographers' cameras fully work, ~85% on a verified body); rows the per-model PRs had updated are current again |
+| 2026-10-15 | minor | Canon CRW merged with batches 36–39 and re-measured with `coverage.py`: 551 verified, 660 unverified, 197 preview, 38 unsupported; Canon 98% (94% on verified bodies); use-weighted 94% and 86% |
+| 2026-10-25 | minor | Canon EOS D60: dual-illuminant matrices fitted to our own ColorChecker Classic shots (tungsten, sun; `crates/raw/src/chart_table.rs`), the first chart-calibrated model: its CRWs edit white balance in Kelvin; counts unchanged |
 | 2026-10-18 | minor | Minolta MRW decoded (`vendor/mrw.rs`): DiMAGE 7, 7Hi, A1, A2, A200 and Dynax / Maxxum 7D verified; 551 verified, 656 unverified, 201 preview (re-measured with `coverage.py`) |
 | 2026-10-23 | minor | AHD blends its horizontal and vertical candidates where their homogeneity is close, so flat noise no longer becomes a maze pattern; Bayer demosaic row notes the pre-white-balance demosaic (#1328); scores unchanged |
 | 2026-10-30 | patch | RAF camera look fitted on the vignetting-corrected sensor (`LOOK_VERSION` 13): renders were up to 0.3 EV too bright in midtones and 0.6 EV in shadows; X-S10 mean ΔE00 vs the camera JPEG 2.71 → 2.55 on 60 photos |
+| 2026-10-26 | minor | Canon CRW decoding moved to the shared craft-libs crate `craft-crw` (local path dependency until that branch merges); `vendor/crw.rs` is now the adapter onto `RawImage`, and the clean-room derivation record lives in craft-libs `crates/crw/clean-room/`; counts unchanged |
