@@ -1953,6 +1953,9 @@ fn originals_on_other_computers_are_never_looked_at_or_added() {
         );
         assert!(!catalog.warnings.iter().any(|w| w.contains("missing")), "{root}: {:?}", catalog.warnings);
         let mut s = crate::Session::new();
+        // inspecting the catalog doesn't list it as missing either
+        let inspected = s.execute("library.inspectLightroom", &json!({"path": source})).unwrap();
+        assert_eq!(inspected["missing"], json!([]), "{root}: {inspected}");
         let probes = Arc::new(AtomicUsize::new(0));
         let calls = probes.clone();
         s.media.file_probe = Some(Arc::new(move |_| {

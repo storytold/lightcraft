@@ -246,13 +246,14 @@ fn spawn_finalize(
 }
 
 /// What `status` and the result window show for an inspected catalog: counts, missing originals,
-/// warnings and skipped images.
+/// warnings and skipped images (a photo on a refused path isn't missing, see
+/// `CatalogPhoto::original_is_missing`).
 #[cfg(not(target_arch = "wasm32"))]
 fn inspect_report(data: lightcraft_engine::lightroom_catalog::CatalogImport) -> Value {
     json!({
         "photos": data.photos.len(),
         "collections": data.collections.iter().filter(|r| r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0) == 0.0).count(),
-        "missing": data.photos.iter().filter(|p| !p.original_is_file()).map(|p| &p.path).collect::<Vec<_>>(),
+        "missing": data.photos.iter().filter(|p| p.original_is_missing()).map(|p| &p.path).collect::<Vec<_>>(),
         "warnings": data.warnings,
         "skipped": data.skipped,
     })
@@ -940,5 +941,41 @@ mod tests {
         assert_eq!(report["collections"], 0);
         assert_eq!(report["missing"], serde_json::json!([]));
         assert_eq!(report["warnings"], serde_json::json!(["warning"]));
+    }
+
+    /// Inspecting a catalog lists as missing what the import would: an original on a refused path
+    /// gets no record (the import counts it in `pathRefused`), so it isn't missing; one that
+    /// isn't on this computer is (#2589).
+    #[test]
+    fn inspect_report_does_not_list_refused_paths_as_missing() {
+        use lightcraft_engine::lightroom_catalog::{CatalogPhoto, Original};
+        let photo = |source_id, path: &str, original| CatalogPhoto {
+            source_id,
+            uuid: String::new(),
+            path: path.into(),
+            image: Default::default(),
+            settings: String::new(),
+            xmp: String::new(),
+            keywords: Vec::new(),
+            history: Vec::new(),
+            snapshots: Vec::new(),
+            original,
+        };
+        let report = inspect_report(CatalogImport {
+            source: "synthetic.lrcat".into(),
+            photos: vec![
+                photo(1, "//server/share/a.dng", Original::Refused("it is on another computer".into())),
+                photo(2, "D:/Photos/b.dng", Original::NotHere),
+            ],
+            collections: Vec::new(),
+            members: Vec::new(),
+            collection_content: Vec::new(),
+            warnings: Vec::new(),
+            skipped: Vec::new(),
+            images: 2,
+            not_supported: Default::default(),
+        });
+        assert_eq!(report["photos"], 2);
+        assert_eq!(report["missing"], serde_json::json!(["D:/Photos/b.dng"]));
     }
 }

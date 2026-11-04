@@ -181,6 +181,12 @@ impl CatalogPhoto {
     pub fn original_is_file(&self) -> bool {
         self.original == Original::Local && Path::new(&self.path).is_file()
     }
+
+    /// Whether an inspection lists the original as missing, as the import does: it isn't a file
+    /// here and isn't on a refused path (which gets no record, see [`Original::Refused`]).
+    pub fn original_is_missing(&self) -> bool {
+        !matches!(self.original, Original::Refused(_)) && !self.original_is_file()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
