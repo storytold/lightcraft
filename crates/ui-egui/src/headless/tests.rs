@@ -2170,6 +2170,8 @@ fn a_slow_photos_import_never_blocks_the_window() {
     let t0 = Instant::now();
     let r = h.request("engine.execute", json!({"command": "export.addToPhotos", "params": {"paths": [file.to_string_lossy()], "album": "Slow"}}), t);
     assert_eq!(answered.load(std::sync::atomic::Ordering::SeqCst), 0, "answered before Photos did: {r}");
+    // no bounded wait in front of the background job either (the gate can't see one)
+    lightcraft_testkit::assert_responsive(t0, "export.addToPhotos through the window");
     assert_eq!(r["result"]["running"], true, "{r}");
     go.send(()).unwrap();
     // (a hang guard: scaled(20 s) alone would be 2 s at LIGHTCRAFT_TIME_SCALE=0.1)

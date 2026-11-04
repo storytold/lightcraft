@@ -93,6 +93,7 @@ fn library_missing_is_checked_off_the_ui_thread_and_answered_when_done() {
     // (a hang guard only: the test opens the share itself)
     let guard = Duration::from_secs(30);
     let (mut h, share) = app_on_a_slow_share(guard);
+    let t0 = Instant::now();
     let rx = ask(&mut h);
     for _ in 0..3 {
         h.step();
@@ -100,6 +101,8 @@ fn library_missing_is_checked_off_the_ui_thread_and_answered_when_done() {
     // the share is still answering nothing (it waits for `open`): the window took its frames all
     // the same, with no file answered
     assert!(!share.forced.load(Ordering::SeqCst), "the frames waited for the files until the share's hold ran out");
+    // nor did they wait a bounded while on it (the share's gate can't see that)
+    lightcraft_testkit::assert_responsive(t0, "asking for missing files and three frames on a slow share");
     assert!(rx.try_recv().is_err(), "no answer before the files are checked");
     assert_eq!(share.on_ui.load(Ordering::SeqCst), 0, "no file was looked at on the UI thread");
     let rows = missing_rows(&h);
