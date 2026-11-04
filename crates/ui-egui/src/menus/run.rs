@@ -1355,6 +1355,10 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             import_into_album(app, p, r)
         }
         "file.importLightroom" => {
+            // the browser build can't import a catalog at all, path or not: say that, not "no dialog"
+            if cfg!(target_arch = "wasm32") {
+                return Some(Err(crate::lightroom_import::UNSUPPORTED_IN_BROWSER.into()));
+            }
             // where the catalog goes (#2672): checked before a file dialog opens
             let req = match crate::lightroom_destination::Request::parse(p) {
                 Ok(req) => req,

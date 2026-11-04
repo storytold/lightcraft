@@ -450,6 +450,12 @@ fn no_catalog_dialog_is_an_error_not_silence() {
     // a dialog that was there but came back empty (cancelled)
     app.services.pick_lightroom_catalog = Some(Box::new(|| None));
     assert!(crate::menus::ui_enabled(&app, "file.importLightroom"));
+    // a host with only the background picker asks through it, so the item is on there too
+    app.services.pick_lightroom_catalog = None;
+    app.services.picker = Some(Box::new(|_| Ok(std::sync::mpsc::channel().1)));
+    assert!(crate::menus::ui_enabled(&app, "file.importLightroom"));
+    app.services.picker = None;
+    app.services.pick_lightroom_catalog = Some(Box::new(|| None));
     assert_eq!(app.run("file.importLightroom", json!({})).unwrap(), Value::Null);
     app.services.pick_folder = Some(Box::new(|| None));
     assert_eq!(app.run("file.addFolder", json!({})).unwrap(), Value::Null);
