@@ -49,7 +49,7 @@ pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orient
             db.find_lens_named(m.lens_make.as_deref(), &name, camera)?
         }
     };
-    let crop = frame_crop_factor(camera.map(|c| c.crop_factor), focal, m.focal_length_35mm);
+    let crop = frame_crop_factor(camera.and_then(|c| c.crop_factor), focal, m.focal_length_35mm);
     let shot = Shot { focal, aperture: m.f_number, distance: None, crop_factor: crop, width: w, height: h };
     let corr = lens.correction(&shot)?;
     Some(lightcraft_pipeline::optics::reorient_lens(&corr, orientation, w, h))
@@ -175,6 +175,32 @@ mod tests {
         }
         assert_eq!(frame_crop_factor(None, 70.0, Some(105.0)), Some(1.5), "no body in the database: the 35 mm equivalent's");
         assert_eq!(frame_crop_factor(Some(1.0), 0.0, Some(105.0)), Some(1.0), "a hostile focal length is ignored");
+    }
+
+    #[test]
+    fn unknown_camera_crop_uses_exif_equivalent_without_full_frame_assumption() {
+        for crop in [
+            "",
+            "<cropfactor/>",
+            "<cropfactor>bad</cropfactor>",
+            "<cropfactor>NaN</cropfactor>",
+            "<cropfactor>inf</cropfactor>",
+            "<cropfactor>0.049</cropfactor>",
+            "<cropfactor>21</cropfactor>",
+        ] {
+            let xml = DB.replacen("<cropfactor>1.5</cropfactor>", crop, 1).replace("-0.03", "-0.003").replace("-0.4", "-0.04");
+            let db = LensDb::parse(&xml).unwrap();
+            // A below-1 crop exposes the old synthetic 1.0 body: the 10% crop-mode policy would keep it.
+            let m = lightcraft_meta::Metadata { focal_length_35mm: Some(17.1), ..meta() };
+            let expected = db.lenses[0]
+                .correction(&Shot { focal: 18.0, aperture: Some(3.5), distance: None, crop_factor: Some(17.1 / 18.0), width: 6000.0, height: 4000.0 })
+                .unwrap();
+            assert_eq!(lookup(&db, &m, 6000.0, 4000.0, Orientation::Normal).unwrap(), expected, "{crop}");
+            let fallback = db.lenses[0]
+                .correction(&Shot { focal: 18.0, aperture: Some(3.5), distance: None, crop_factor: None, width: 6000.0, height: 4000.0 })
+                .unwrap();
+            assert_eq!(lookup(&db, &meta(), 6000.0, 4000.0, Orientation::Normal).unwrap(), fallback, "no equivalent: {crop}");
+        }
     }
 
     /// A synthetic grid recorded through the profile's barrel distortion comes out of the pipeline's geometry
