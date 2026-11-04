@@ -1,5 +1,5 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{Seen, expand_knowing, probe_all, reusable_probes};
+use super::files::{Seen, expand_knowing, probe_all, reusable_probes, sidecars_of};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::{HashMap, ListedFolders, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -324,6 +324,19 @@ impl ImportJob {
             library.as_ref(),
             todo.iter().zip(&probed).filter_map(|(path, info)| info.as_ref().ok().map(|i| (path.as_str(), i.kind))),
         );
+        // The sidecar of every file that was probed, looked up for the batch at once: each is a few
+        // names asked of the disk, which on a network share made a folder of thousands of photos wait
+        // a round trip per name, one name after another.
+        let asked: Vec<&str> = todo.iter().zip(&probed).filter(|(_, p)| p.is_ok()).map(|(f, _)| f.as_str()).collect();
+        // (a file whose content the library has is skipped below as a duplicate: it asks the disk nothing)
+        let known: std::collections::HashSet<&str> = todo
+            .iter()
+            .zip(&probed)
+            .filter(|(_, p)| !opts.local && p.as_ref().is_ok_and(|i| i.content_hash.as_ref().is_some_and(|h| self.by_hash.contains_key(h))))
+            .map(|(f, _)| f.as_str())
+            .collect();
+        let mut found =
+            sidecars_of(&asked, cancel, |f| if known.contains(f) { None } else { self.listed.find_for_import(&stems, self.naming, f) }).into_iter();
         // Files are planned one by one, in order (duplicates, sidecars, names, folders); their
         // copies or moves — the slow part, reading and writing every byte and verifying it — are
         // collected and run on several threads (issue #367), then their outcomes take their places.
@@ -341,6 +354,8 @@ impl ImportJob {
                     continue;
                 }
             };
+            // (this file's place in the lookups above: files that failed to probe have none)
+            let found_sidecar = found.next().flatten();
             // a copy of a file whose transfer is still pending: a duplicate only if that one succeeds
             if !opts.local
                 && let Some(h) = &info.content_hash
@@ -360,10 +375,7 @@ impl ImportJob {
             let packet = if duplicate_of.is_some() && info.captured.is_some() {
                 None
             } else {
-                self.listed
-                    .find_for_import(&stems, self.naming, &path)
-                    .and_then(|f| std::fs::read_to_string(f).ok())
-                    .or_else(|| info.xmp.clone().filter(|_| raw))
+                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
             };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {

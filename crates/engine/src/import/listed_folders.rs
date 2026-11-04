@@ -45,6 +45,10 @@ pub struct ListedFolders {
     pub(crate) asked: AtomicUsize,
     /// How many folders' times were looked at (for the tests).
     pub(crate) looked: AtomicUsize,
+    /// The threads that looked a sidecar up for an import (for the tests: the lookups of a batch are
+    /// not made one after another by the thread that plans it).
+    #[cfg(test)]
+    pub(crate) lookers: Mutex<HashSet<std::thread::ThreadId>>,
 }
 
 impl ListedFolders {
@@ -78,7 +82,10 @@ impl ListedFolders {
         self.folders.insert(folder.to_path_buf(), listed);
     }
 
-    /// A new batch of files is handled: look at the folders' times again.
+    /// A new batch of files is handled: look at the folders' times again. A folder's time is looked at
+    /// once per batch, by the first lookup in it (a look for each photo would cost the round trip each
+    /// that the listing saves), so a sidecar added there while the batch is handled is not seen until
+    /// the next batch.
     pub(crate) fn new_batch(&self) {
         self.checked.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
@@ -139,6 +146,8 @@ impl ListedFolders {
     /// there is none: a file that owns its stem sidecar ([`crate::sidecar::ImportStems`]) is looked
     /// up as [`ListedFolders::find`] does; one that doesn't reads only its own `<file>.xmp`.
     pub(crate) fn find_for_import(&self, stems: &crate::sidecar::ImportStems, naming: SidecarNaming, original: &str) -> Option<PathBuf> {
+        #[cfg(test)]
+        self.lookers.lock().unwrap_or_else(|e| e.into_inner()).insert(std::thread::current().id());
         if stems.owns(original) {
             return self.find(original, naming);
         }
