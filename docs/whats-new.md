@@ -92,7 +92,8 @@
   photo's settings, so when the copy still held an older value, such as Clarity +30, the import showed +30 where
   Lightroom shows 0; a photo already in the library that the import updated kept its own value the same way. The
   catalog's settings now decide every setting they can carry, and one they leave out is at its default, for every
-  photo whose settings the import applies. The copy still gives the photo its title, caption and other metadata,
+  photo whose settings the import applies; that includes its masks, so masks only the copy has are no longer
+  added. The copy still gives the photo its title, caption and other metadata,
   and its heal and clone spots, which LightCraft can't read from the settings yet. A photo the catalog has no
   readable settings for still takes them from the copy.
 

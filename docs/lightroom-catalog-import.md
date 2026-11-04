@@ -107,8 +107,10 @@ photo whose settings the import applies (a photo already in the library included
 or when it has no edit of its own): a setting they leave out is at the camera's default, not what the
 packet or the photo had. The packet still gives the photo its metadata (title, caption, creator,
 location…) and what LightCraft can't read from the develop settings (heal and clone spots, and the parts of
-LightCraft's own settings they don't cover); the photo keeps the rest (its rotation in LightCraft, its
-process version). Without develop settings, or with ones that can't be read, the packet's settings apply
+LightCraft's own settings they don't cover). The develop settings also decide the photo's masks: masks only
+the packet has are dropped. The rest stays as it was before the develop settings were applied: the photo's
+rotation in LightCraft and its process version, which a packet carrying LightCraft's whole settings
+(`lc:settings`) sets first, as it always has. Without develop settings, or with ones that can't be read, the packet's settings apply
 as before.
 Any change after browsing, a rating or keyword included, makes a Local photo's settings count as
 existing. Persistent import
