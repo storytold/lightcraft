@@ -146,12 +146,21 @@ fn wait_for_slot(dir: &Path, slots: usize, owner: &str, wait: Option<Duration>, 
             // is given back rather than taken late
             if let Some(wait) = wait.filter(|w| waiting.elapsed() >= *w) {
                 drop(held);
-                return Err(gave_up(wait, &holders(dir, slots)));
+                return Err(freed_as_it_ended(wait));
             }
             eprintln!("=== ci: waited {:.0} s for a CI slot ===", waiting.elapsed().as_secs_f64());
             return Ok(Some(held));
         }
     }
+}
+
+/// The error when a slot came free only as the wait ran out: nothing to end, just run again.
+fn freed_as_it_ended(wait: Duration) -> String {
+    format!(
+        "ci lock: a CI slot came free just as the {} wait for one ran out, so it wasn't taken; run again \
+         (it's free now), or set {WAIT_ENV}=<minutes> to wait longer (0 for as long as it takes)",
+        crate::deadline::show(wait)
+    )
 }
 
 /// The error when the wait for a slot ran out: who holds the slots, and what to do.
@@ -172,6 +181,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("xtask-ci-lock-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn a_slot_freed_as_the_wait_ended_says_so_and_names_no_holder() {
+        let e = freed_as_it_ended(Duration::from_secs(120));
+        assert!(e.contains("came free just as the") && e.contains("run again"), "{e}");
+        assert!(!e.contains("held by") && !e.contains("is stuck"), "nothing to end: {e}");
     }
 
     #[test]
