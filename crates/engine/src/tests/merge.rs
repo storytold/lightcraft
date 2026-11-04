@@ -250,3 +250,45 @@ fn a_photo_named_twice_is_merged_once() {
     assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![a, b]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Issue #3741: a merge started from an album puts its result in that album (Lightroom Classic adds the
+/// merged photo to the source collection), so it shows up where the user is working instead of only in
+/// All Photos. A merge started from All Photos, or from a smart album, adds to no album.
+#[test]
+fn a_merge_started_from_an_album_joins_that_album() {
+    let dir = temp_dir("hdr-album");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(320, 240, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    s.execute("library.selectAll", &json!({})).unwrap();
+    let album = s.execute("album.create", &json!({"name": "Bracketed", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+    s.execute("library.source", &json!({"kind": "album", "id": album})).unwrap();
+    assert_eq!(s.visible().len(), 3);
+    let r = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false})).unwrap();
+    let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let album_id = lightcraft_catalog::AlbumId(album);
+    assert_eq!(s.catalog.albums_of(id), vec![album_id], "the merged photo joins the album it was merged from");
+    assert!(s.visible_cloned().contains(&id), "the result shows in the album the user is looking at");
+    // the result is a member like any other: removing it from the album doesn't touch the photo
+    s.execute("album.removePhotos", &json!({"id": album, "ids": [id.0]})).unwrap();
+    assert!(s.catalog.albums_of(id).is_empty());
+    assert!(s.catalog.photo(id).is_some());
+    // from All Photos, no album gains the result (another deghost level: import skips a byte-identical DNG)
+    s.execute("library.source", &json!({"kind": "all"})).unwrap();
+    let r = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false, "deghost": "low"})).unwrap();
+    let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    assert!(s.catalog.albums_of(id).is_empty(), "a merge from All Photos adds to no album");
+    // a smart album can't hold photos: the merge from one still succeeds and adds to nothing
+    let smart = s.execute("album.createSmart", &json!({"name": "Raws"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("library.source", &json!({"kind": "album", "id": smart})).unwrap();
+    let r = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false, "deghost": "high"})).unwrap();
+    let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let smart_album = s.catalog.album(lightcraft_catalog::AlbumId(smart)).unwrap();
+    assert!(smart_album.photos.is_empty() && s.catalog.albums_of(id).iter().all(|a| *a == smart_album.id), "a smart album gains nothing");
+    let _ = std::fs::remove_dir_all(&dir);
+}

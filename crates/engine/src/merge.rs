@@ -4,13 +4,13 @@
 //! `Send` and self-contained), run anywhere (a worker thread in the app, inline for the CLI/MCP:
 //! [`MergeJob::run`], with progress and cancellation), and finished on the session
 //! ([`crate::Session::finish_merge`]): the DNG is written next to the first source photo
-//! (`<name>-HDR.dng`, `-Pano.dng`, `-HDR-Pano.dng`), imported, selected, and given Auto Settings /
-//! the auto-crop rectangle when asked. A *preview* run works on ≤ 1024 px frames and returns a
+//! (`<name>-HDR.dng`, `-Pano.dng`, `-HDR-Pano.dng`), imported, added to the album the merge was
+//! started from, selected, and given Auto Settings / the auto-crop rectangle when asked. A *preview* run works on ≤ 1024 px frames and returns a
 //! rendered image (with the deghost overlay when asked) instead of a file.
 
 use std::sync::Arc;
 
-use lightcraft_catalog::{PhotoId, Source};
+use lightcraft_catalog::{AlbumId, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_merge::pano::MAX_MEGAPIXELS;
 use lightcraft_merge::{Deghost, Frame, HdrOptions, PanoOptions, Projection};
@@ -84,6 +84,9 @@ pub struct MergeJob {
     pub sources: Vec<(PhotoId, String)>,
     /// `Some(edge)`: preview at that frame size; `None`: the full-resolution merge.
     pub preview: Option<usize>,
+    /// The regular album the library showed when the merge was planned: the result joins it, as
+    /// Lightroom Classic adds a merge to the collection it was started from (issue #3741).
+    pub album: Option<AlbumId>,
     pub read: ByteReader,
 }
 
@@ -423,11 +426,17 @@ impl Session {
             Some(r) => r.clone(),
             None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
         };
-        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read })
+        // the album the merge is started from, while it can hold photos (not a smart album or folder)
+        let album = match self.source {
+            crate::view::LibrarySource::Album(a) => self.catalog.album(a).filter(|al| !al.is_smart() && !al.folder).map(|al| al.id),
+            _ => None,
+        };
+        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), album, read })
     }
 
-    /// Write a finished (non-preview) merge next to its first source, import it, select it and
-    /// apply Auto Settings / the auto crop. Returns `{id, path, …info}`.
+    /// Write a finished (non-preview) merge next to its first source, import it, add it to the album
+    /// the merge was started from, select it and apply Auto Settings / the auto crop. Returns
+    /// `{id, path, …info}`.
     pub fn finish_merge(&mut self, job: &MergeJob, out: MergeOutput) -> Result<Value> {
         let first = &job.sources.first().ok_or_else(|| EngineError::Other("nothing merged".into()))?.1;
         // a new file under a free name (never replacing one), complete and synced before it appears
@@ -449,6 +458,12 @@ impl Session {
             }
         }
         self.selection = crate::Selection::single(id);
+        // the result joins the album the merge was started from, if it still exists and still holds photos
+        if let Some(a) = job.album
+            && self.catalog.album(a).is_some_and(|al| !al.is_smart() && !al.folder)
+        {
+            self.execute("album.addPhotos", &json!({"id": a.0, "ids": [id.0]}))?;
+        }
         if job.finish.auto_settings {
             self.execute("develop.auto", &json!({}))?;
         }
