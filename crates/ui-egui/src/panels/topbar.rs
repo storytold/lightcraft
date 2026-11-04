@@ -217,8 +217,7 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
                 register(ui, "indicator:unsaved", badge_rect);
             }
             let menu_id = egui::Id::new("cloud-badge-files");
-            let open_menu =
-                ui.rect_contains_pointer(badge_rect) && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
+            let open_menu = ui.rect_contains_pointer(badge_rect) && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary));
             egui::Popup::new(menu_id, ui.ctx().clone(), badge_rect, ui.layer_id())
                 .kind(egui::PopupKind::Menu)
                 .open_memory(open_menu.then_some(egui::SetOpenCommand::Bool(true)))
@@ -226,20 +225,20 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
                 .layout(egui::Layout::top_down_justified(egui::Align::Min))
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show(|ui| {
-                let open = ui.button(crate::i18n::tr("Open from CollabCraft…"));
-                register(ui, "menu:cloudOpen", open.rect);
-                if open.clicked() {
-                    let _ = app.run("file.cloudOpen", json!({}));
-                    ui.close();
-                }
-                let has_photo = app.session.active().is_some();
-                let save = ui.add_enabled(has_photo, egui::Button::new(crate::i18n::tr("Save to CollabCraft…")));
-                register(ui, "menu:cloudSave", save.rect);
-                if save.clicked() {
-                    let _ = app.run("file.cloudSave", json!({}));
-                    ui.close();
-                }
-            });
+                    let open = ui.button(crate::i18n::tr("Open from CollabCraft…"));
+                    register(ui, "menu:cloudOpen", open.rect);
+                    if open.clicked() {
+                        let _ = app.run("file.cloudOpen", json!({}));
+                        ui.close();
+                    }
+                    let has_photo = app.session.active().is_some();
+                    let save = ui.add_enabled(has_photo, egui::Button::new(crate::i18n::tr("Save to CollabCraft…")));
+                    register(ui, "menu:cloudSave", save.rect);
+                    if save.clicked() {
+                        let _ = app.run("file.cloudSave", json!({}));
+                        ui.close();
+                    }
+                });
             x -= 40.0;
             continue;
         }

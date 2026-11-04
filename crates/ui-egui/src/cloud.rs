@@ -306,8 +306,8 @@ impl CloudApp for LightcraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use lightcraft_engine::activity::Cancel;
-            use std::sync::atomic::{AtomicBool, Ordering};
             use std::sync::Arc;
+            use std::sync::atomic::{AtomicBool, Ordering};
 
             let cancel = Arc::new(AtomicBool::new(false));
             let guard = self.session.activity.start("cloud-save", "Preparing cloud save", Cancel::Flag(cancel.clone()));

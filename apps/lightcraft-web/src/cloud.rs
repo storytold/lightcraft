@@ -168,11 +168,7 @@ fn fault(e: Error) -> Fault {
 /// not on the page host (which may have no auth routes).
 fn auth_url(path: &str) -> String {
     let base = Client::from_page().base().trim_end_matches('/');
-    if base.is_empty() {
-        path.to_owned()
-    } else {
-        format!("{base}{path}")
-    }
+    if base.is_empty() { path.to_owned() } else { format!("{base}{path}") }
 }
 
 fn offer_login() {

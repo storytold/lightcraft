@@ -282,10 +282,7 @@ fn open_bytes_uses_store_bytes_when_configured() {
 #[test]
 fn open_bytes_refuses_after_library_generation_change() {
     use craft_ui::cloud::CloudApp;
-    let services = Services {
-        store_bytes: Some(Box::new(|_, _| {})),
-        ..Default::default()
-    };
+    let services = Services { store_bytes: Some(Box::new(|_, _| {})), ..Default::default() };
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     app.cloud_open_library = Some(app.session.library_generation().wrapping_add(1));
     let err = CloudApp::open_bytes(&mut app, "late.jpg", b"x".to_vec()).expect_err("stale library must refuse");

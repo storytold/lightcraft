@@ -119,7 +119,13 @@ async fn store_file(originals: Originals, backend: Option<Backend>, name: String
 /// A keyed invite already carries the photo bytes. Store them the same way a drop does, so the
 /// next frame imports the path `store_file` queued. LightCraft's import is asynchronous, so this
 /// does not wait for the photo to appear in the grid.
-fn open_invite(app: &mut LightcraftApp, originals: &Originals, backend: &Option<Backend>, ctx: &egui::Context, invitation: craft_cloud_client::invite::Invitation) {
+fn open_invite(
+    app: &mut LightcraftApp,
+    originals: &Originals,
+    backend: &Option<Backend>,
+    ctx: &egui::Context,
+    invitation: craft_cloud_client::invite::Invitation,
+) {
     let name = invitation.name.clone();
     let bytes = invitation.document.clone();
     let mode = if invitation.read_only() { " (view only)" } else { "" };
@@ -903,7 +909,8 @@ pub fn start(chinese_font: Vec<u8>) {
         };
         let boot = boot(opts).await;
         let runner = eframe::WebRunner::new();
-        let r = runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot, chinese_font, invite))))).await;
+        let r =
+            runner.start(canvas, eframe::WebOptions::default(), Box::new(move |cc| Ok(Box::new(WebApp::new(cc, boot, chinese_font, invite))))).await;
         match r {
             Ok(()) => {
                 if let Some(el) = window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("lightcraft_loading")) {

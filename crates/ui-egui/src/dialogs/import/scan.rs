@@ -31,7 +31,7 @@ pub(crate) fn busy_synchronizing(app: &LightcraftApp) -> Result<(), String> {
 }
 
 /// Refuse starting a background import while sync, an import, or a review scan is active.
-pub(crate) fn ensure_can_start(app: &LightcraftApp) -> Result<(), String> {
+pub fn ensure_can_start(app: &LightcraftApp) -> Result<(), String> {
     busy_synchronizing(app)?;
     if running(app) {
         return Err(crate::i18n::tr("An import is running").to_string());

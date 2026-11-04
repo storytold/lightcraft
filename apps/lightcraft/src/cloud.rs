@@ -376,8 +376,7 @@ mod tests {
     fn unix_token_file_is_owner_only() {
         use std::os::unix::fs::PermissionsExt as _;
         let tmp = std::env::temp_dir().join(format!("lightcraft-token-mode-test-{}", std::process::id()));
-        write_private(&tmp, b"{\"token\":\"test\",\"service\":\"https://x.example\"}")
-            .expect("write_private should succeed");
+        write_private(&tmp, b"{\"token\":\"test\",\"service\":\"https://x.example\"}").expect("write_private should succeed");
         let mode = std::fs::metadata(&tmp).expect("stat").permissions().mode();
         let _ = std::fs::remove_file(&tmp);
         // Mode bits: owner read+write = 0o600; nothing for group or other.
