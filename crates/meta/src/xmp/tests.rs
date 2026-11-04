@@ -241,6 +241,7 @@ fn xmp_iso_preserves_valid_values() {
         ("2e2", 200),
         ("400/2", 200),
         ("1.5/0.5", 3),
+        ("0.3/0.1", 3),
         ("1.0000000000000001/1.0000000000000001", 1),
         ("1e39/1e39", 1),
         ("1e39/5e38", 2),
@@ -253,6 +254,12 @@ fn xmp_iso_preserves_valid_values() {
     assert_eq!(parse_xmp(&iso_packet("", "<exifEX:PhotographicSensitivity>640</exifEX:PhotographicSensitivity>")).unwrap().metadata.iso, Some(640));
     let packet = iso_packet(r#"exif:ISOSpeedRatings="100" exifEX:PhotographicSensitivity="200""#, "");
     assert_eq!(parse_xmp(&packet).unwrap().metadata.iso, Some(100));
+}
+
+#[test]
+fn xmp_iso_accepts_equal_coefficients_above_u128() {
+    let value = "340282366920938463463374607431768211456/340282366920938463463374607431768211456";
+    assert_eq!(parse_xmp(&iso_packet(&format!(r#"exif:ISOSpeedRatings="{value}""#), "")).unwrap().metadata.iso, Some(1));
 }
 
 #[test]
