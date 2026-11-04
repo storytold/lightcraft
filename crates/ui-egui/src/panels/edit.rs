@@ -31,7 +31,7 @@ pub(crate) use grading::{WheelGrab, WheelLock, WheelMods, wheel_pick};
 pub(crate) use histogram::histogram;
 use histogram::soft_proofing;
 use mixer::{mixer, point_color};
-use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
+use sliders::{REL_TEMP, REL_TINT, hdr_row, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
 pub use sliders::{apply_slider_out, sub_title};
 pub(crate) use sliders::{control, reload_preview_only};
 
