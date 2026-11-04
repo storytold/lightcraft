@@ -284,6 +284,12 @@ fn leave_enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &
     }
 }
 
+/// Gives up an Enter Keywords edit, applied or not, and the cursor in its box.
+pub(super) fn give_up_enter_keywords(ui: &mut egui::Ui) {
+    ui.memory_mut(|m| m.surrender_focus(crate::text_field::id(ENTER_FIELD)));
+    ui.data_mut(|d| d.remove::<EnterEdit>(enter_id()));
+}
+
 /// Enter Keywords: the selection's keywords as text, separated by commas, one only some of the
 /// photos have marked with an asterisk. Return, leaving the box, choosing another view or folding
 /// the box applies the edit to the photos selected when it started, as one undo step; Esc gives it

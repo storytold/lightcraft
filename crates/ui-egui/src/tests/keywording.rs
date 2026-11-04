@@ -1205,3 +1205,20 @@ fn enter_keywords_gives_up_an_edit_when_the_selection_changes() {
     assert!(every.iter().all(|id| !keywords_of(&h, *id).contains(&"harbor".to_string())), "nobody got harbor");
     assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"]);
 }
+
+/// A selection cleared while the box is being edited gives the edit up too: the same photos
+/// selected again keep their keywords.
+#[test]
+fn enter_keywords_gives_up_an_edit_when_the_selection_is_cleared() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": []}}));
+    h.step();
+    assert!(h.app.session.active().is_none(), "nothing selected");
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": ids}}));
+    h.step();
+    assert_eq!(enter_text(&mut h), "beach, Weddings*", "the box shows the photos' keywords, not the old text");
+    ask(&mut h, "ui.key", json!({"key": "Tab"}));
+    assert!(none_has(&h, &ids, "harbor"), "the edit was not applied when the photos came back");
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"]);
+}
