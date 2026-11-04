@@ -52,6 +52,15 @@ pub fn existing_file_path(dir: &Path, sharded: PathBuf) -> PathBuf {
     if legacy.exists() { legacy } else { sharded }
 }
 
+/// [`existing_file_path`] for a proxy given by its sharded path alone (its folder is two levels up).
+/// Call only off the UI thread, like it.
+pub fn existing_beside_shard(sharded: &Path) -> PathBuf {
+    match sharded.parent().and_then(Path::parent) {
+        Some(dir) => existing_file_path(dir, sharded.to_path_buf()),
+        None => sharded.to_path_buf(),
+    }
+}
+
 /// The most header [`is_valid`] reads (the JSON line before the JPEG).
 const HEADER_MAX: u64 = 4096;
 
