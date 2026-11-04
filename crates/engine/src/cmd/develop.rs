@@ -33,7 +33,7 @@ fn groups_param(p: &Value, c: &str) -> Result<Option<Vec<SettingsGroup>>> {
     }
 }
 
-fn crop_dims(s: &Session, id: PhotoId) -> (f64, f64) {
+pub(super) fn crop_dims(s: &Session, id: PhotoId) -> (f64, f64) {
     let p = s.catalog.photo(id);
     let (w, h) = p.map(|p| (p.width.max(1) as f64, p.height.max(1) as f64)).unwrap_or((3.0, 2.0));
     let o = p.map(|p| p.develop.orientation).unwrap_or_default();

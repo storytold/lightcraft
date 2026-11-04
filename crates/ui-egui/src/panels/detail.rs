@@ -14,6 +14,7 @@ use crate::state::{BeforeAfter, RightPanel, ToolOverlay, Zoom};
 use crate::theme::Tokens;
 use crate::widgets::{register, register_geometry};
 
+mod brush;
 mod crop;
 mod filmstrip;
 mod geometry;
@@ -22,6 +23,8 @@ mod masks;
 mod retouch;
 mod window;
 
+pub(crate) use brush::settle_wheel_edit;
+use brush::{brush_drag, brush_wheel};
 pub(crate) use crop::crop_angle_label;
 use crop::crop_overlay;
 #[cfg(test)]
@@ -168,6 +171,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
+    brush_wheel(app, ui, &resp, right);
     let navigating = areas.iter().any(|&view_area| {
         let view_img = in_pane(view_area, img_rect);
         navigate_gesture(app, ui, &resp, view_area, view_img, native) || middle_pan(app, ui, &resp, view_area, view_img)
@@ -684,6 +688,9 @@ struct ToolView<'a> {
 /// Route the pointer to the right panel's tool on the photo, or to the general interactions.
 fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, tv: &ToolView, v: &Views) {
     let (map, d) = (tv.map, tv.d);
+    if brush_drag(app, ui, resp, tv.right, map) {
+        return;
+    }
     match tv.right {
         RightPanel::Crop => crop_overlay(app, ui, resp, map, tv.frame, d, tv.id),
         RightPanel::Masking => mask_overlay(app, ui, resp, map, d),
