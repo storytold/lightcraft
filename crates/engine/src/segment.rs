@@ -179,6 +179,12 @@ impl Segmenter {
         false
     }
 
+    /// Run `hold` on the worker just before each model load (a test holds the load there).
+    #[cfg(all(test, feature = "sam"))]
+    pub(crate) fn before_model_load(&self, hold: impl Fn() + Send + Sync + 'static) {
+        *self.worker.shared.before_load.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::sync::Arc::new(hold));
+    }
+
     /// Whether requests are queued or running (loading, analyzing the photo, a click…).
     pub fn busy(&self) -> bool {
         #[cfg(feature = "sam")]
