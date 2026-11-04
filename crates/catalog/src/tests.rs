@@ -13,6 +13,17 @@ fn photo(c: &mut Catalog, name: &str, date: &str) -> PhotoId {
 }
 
 #[test]
+fn date_token_matches_time_part_case_insensitively() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-05-01T10:00:00");
+    let q = |c: &Catalog, text: &str| c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+    assert_eq!(q(&c, "date:2026-05-01T10"), vec![a]);
+    assert_eq!(q(&c, "date:2026-05-01t10"), vec![a]);
+    assert_eq!(q(&c, "date:2026-05"), vec![a]);
+    assert!(q(&c, "date:2026-05-01T11").is_empty());
+}
+
+#[test]
 fn apply_and_inverse_roundtrip() {
     let mut c = Catalog::new();
     let a = photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
