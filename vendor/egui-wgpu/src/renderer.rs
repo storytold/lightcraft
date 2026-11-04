@@ -155,7 +155,11 @@ struct UniformBuffer {
     /// surface's units (1.0 on macOS EDR, `sdr_white_nits / 80` on Windows scRGB). Unused for
     /// 8-bit framebuffers. (Patch for HDR display output.)
     output_scale: f32,
-    _padding: f32,
+
+    /// 1 when the float framebuffer is PQ (ST 2084) encoded: the shader then writes
+    /// `PQ(linear * output_scale / 10000)`, with `output_scale` = SDR white in cd/m². 0 for
+    /// extended-linear output. (Patch for HDR display output.)
+    output_pq: u32,
 }
 
 struct SlicedBuffer {
@@ -249,6 +253,7 @@ pub struct Renderer {
     uniform_buffer: wgpu::Buffer,
     previous_uniform_buffer_content: UniformBuffer,
     output_scale: f32,
+    output_pq: bool,
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
 
@@ -274,6 +279,18 @@ impl Renderer {
     /// Has no effect on 8-bit framebuffers.
     pub fn set_output_scale(&mut self, scale: f32) {
         self.output_scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    }
+
+    /// Patch (HDR display output): the float framebuffer is PQ (ST 2084) encoded
+    /// (`SurfaceColorSpace::Bt2100Pq`) instead of extended-linear. [`Self::set_output_scale`] is
+    /// then SDR white in cd/m².
+    pub fn set_pq_output(&mut self, pq: bool) {
+        self.output_pq = pq;
+    }
+
+    /// Whether [`Self::set_pq_output`] is on.
+    pub fn pq_output(&self) -> bool {
+        self.output_pq
     }
 
     /// The scale set by [`Self::set_output_scale`].
@@ -308,7 +325,7 @@ impl Renderer {
                 dithering: u32::from(options.dithering),
                 predictable_texture_filtering: u32::from(options.predictable_texture_filtering),
                 output_scale: 1.0,
-                _padding: 0.0,
+                output_pq: 0,
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -482,6 +499,7 @@ impl Renderer {
             // Buffers on wgpu are zero initialized, so this is indeed its current state!
             previous_uniform_buffer_content: UniformBuffer::zeroed(),
             output_scale: 1.0,
+            output_pq: false,
             uniform_bind_group,
             texture_bind_group_layout,
             textures: HashMap::default(),
@@ -955,7 +973,7 @@ impl Renderer {
             dithering: u32::from(self.options.dithering),
             predictable_texture_filtering: u32::from(self.options.predictable_texture_filtering),
             output_scale: self.output_scale,
-            _padding: 0.0,
+            output_pq: u32::from(self.output_pq),
         };
         if uniform_buffer_content != self.previous_uniform_buffer_content {
             profiling::scope!("update uniforms");

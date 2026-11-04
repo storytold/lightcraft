@@ -497,22 +497,26 @@ impl Default for WgpuConfiguration {
     }
 }
 
-/// Patch (HDR display output): the extended-range surface format and colour space to use among
-/// those a surface offers: `Rgba16Float` in extended linear sRGB (scRGB on Windows, EDR on
-/// macOS), or `None` when the surface doesn't offer it (an SDR display, or HDR off in the OS).
+/// Patch (HDR display output): the HDR surface format and colour space to use among those a
+/// surface offers: `Rgba16Float` in extended linear sRGB (scRGB on Windows, EDR on macOS, Wayland
+/// compositors with `extended_target_volume`), else `Rgba16Float` in BT.2100 PQ (Wayland
+/// compositors without it, such as GNOME's Mutter, where Mesa offers PQ only); `None` when the
+/// surface offers neither (an SDR display, or HDR off in the OS).
 pub fn hdr_surface_format(
     offered: &[wgpu::SurfaceFormatCapabilities],
 ) -> Option<(wgpu::TextureFormat, wgpu::SurfaceColorSpace)> {
-    offered
-        .iter()
-        .any(|f| {
-            f.format == wgpu::TextureFormat::Rgba16Float
-                && f.color_spaces.contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)
-        })
-        .then_some((
-            wgpu::TextureFormat::Rgba16Float,
-            wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
-        ))
+    let float_in = |space: wgpu::SurfaceColorSpaces| {
+        offered
+            .iter()
+            .any(|f| f.format == wgpu::TextureFormat::Rgba16Float && f.color_spaces.contains(space))
+    };
+    if float_in(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR) {
+        Some((wgpu::TextureFormat::Rgba16Float, wgpu::SurfaceColorSpace::ExtendedSrgbLinear))
+    } else if float_in(wgpu::SurfaceColorSpaces::BT2100_PQ) {
+        Some((wgpu::TextureFormat::Rgba16Float, wgpu::SurfaceColorSpace::Bt2100Pq))
+    } else {
+        None
+    }
 }
 
 /// Patch (HDR display output): whether to use the extended-range surface for this display.

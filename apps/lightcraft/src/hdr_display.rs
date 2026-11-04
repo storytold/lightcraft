@@ -225,6 +225,13 @@ pub fn levels(platform: Platform, info: Option<&DisplayHdrInfo>, headroom_overri
     Levels { headroom, scale }
 }
 
+/// SDR white in cd/m² for a PQ surface, where values are absolute: the user's override
+/// (`LIGHTCRAFT_HDR_PAPER_WHITE`), else the 203 cd/m² reference white of BT.2408 (what Wayland
+/// compositors report as the reference luminance).
+pub fn pq_paper_white(paper_white_override: Option<f32>) -> f32 {
+    paper_white_override.filter(|v| v.is_finite() && *v > 0.0).map_or(203.0, |v| v.clamp(20.0, 1000.0))
+}
+
 /// sRGB's encoding curve, continued above 1 (egui's shader decodes it the same way).
 fn srgb_encode(v: f32) -> f32 {
     if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
@@ -269,7 +276,8 @@ pub fn report(state: Option<&RenderState>) -> DisplayOutput {
     let info = state.display_hdr_info.read().clone();
     log::info!("display: HDR facts {info:?}");
     let l = levels(Platform::current(), info.as_ref(), env_f32("HDR_HEADROOM").or_else(read_compositor_headroom), env_f32("HDR_PAPER_WHITE"));
-    let target = (state.target_color_space == ColorSpace::ExtendedSrgbLinear || state.target_format != TextureFormat::Rgba16Float)
+    let target = (matches!(state.target_color_space, ColorSpace::ExtendedSrgbLinear | ColorSpace::Bt2100Pq)
+        || state.target_format != TextureFormat::Rgba16Float)
         .then_some(state.target_format);
     let out = choose(target, Platform::current(), l.headroom, disabled());
     let sdr_at_start = Platform::current() == Platform::Windows && !disabled() && !eframe::egui_wgpu::hdr_surface_wanted(info.as_ref(), true);
@@ -282,7 +290,13 @@ pub fn report(state: Option<&RenderState>) -> DisplayOutput {
         ),
         DisplayOutput::Sdr { reason } => log::info!("display: SDR ({reason}; surface {:?} {:?})", state.target_format, state.target_color_space),
         DisplayOutput::Hdr { format, encoding } => {
-            log::info!("display: HDR {encoding:?} ({format:?}), headroom {:?}, SDR white ×{}", l.headroom, l.scale)
+            let pq = state.target_color_space == ColorSpace::Bt2100Pq;
+            let (encoding, white) = if pq {
+                ("PQ float (BT.2100)", format!("{} cd/m²", pq_paper_white(env_f32("HDR_PAPER_WHITE"))))
+            } else {
+                (&*format!("{encoding:?}"), format!("×{}", l.scale))
+            };
+            log::info!("display: HDR {encoding} ({format:?}), headroom {:?}, SDR white {white}", l.headroom)
         }
     }
     out
@@ -294,6 +308,8 @@ pub fn report(state: Option<&RenderState>) -> DisplayOutput {
 pub struct WindowHdr {
     state: RenderState,
     extended: bool,
+    /// The float surface is BT.2100 PQ (GNOME's Mutter) rather than extended linear.
+    pq: bool,
     headroom_override: Option<f32>,
     paper_white_override: Option<f32>,
     levels: Option<Levels>,
@@ -312,7 +328,9 @@ impl WindowHdr {
     pub fn any(state: &RenderState) -> WindowHdr {
         WindowHdr {
             state: state.clone(),
-            extended: state.target_format == TextureFormat::Rgba16Float && state.target_color_space == ColorSpace::ExtendedSrgbLinear,
+            extended: state.target_format == TextureFormat::Rgba16Float
+                && matches!(state.target_color_space, ColorSpace::ExtendedSrgbLinear | ColorSpace::Bt2100Pq),
+            pq: state.target_format == TextureFormat::Rgba16Float && state.target_color_space == ColorSpace::Bt2100Pq,
             headroom_override: env_f32("HDR_HEADROOM").or_else(read_compositor_headroom),
             paper_white_override: env_f32("HDR_PAPER_WHITE"),
             levels: None,
@@ -335,11 +353,20 @@ impl WindowHdr {
 impl lightcraft_ui_egui::HdrOutput for WindowHdr {
     fn headroom(&mut self) -> Option<f32> {
         let info = self.state.display_hdr_info.read().clone();
-        let l = levels(Platform::current(), info.as_ref(), self.headroom_override, self.paper_white_override);
+        let mut l = levels(Platform::current(), info.as_ref(), self.headroom_override, self.paper_white_override);
+        if self.pq {
+            // PQ is absolute: the scale is SDR white in cd/m²
+            l.scale = pq_paper_white(self.paper_white_override);
+        }
         if self.levels != Some(l) {
-            log::info!("display: headroom {:?}, SDR white ×{}", l.headroom, l.scale);
-            self.state.renderer.write().set_output_scale(l.scale);
-            set_metadata_for(l);
+            log::info!("display: headroom {:?}, SDR white ×{}{}", l.headroom, l.scale, if self.pq { " cd/m² (PQ)" } else { "" });
+            {
+                let mut r = self.state.renderer.write();
+                r.set_pq_output(self.pq);
+                r.set_output_scale(l.scale);
+            }
+            // metadata_for takes the paper white in 80 cd/m² units; PQ's scale is already in cd/m²
+            set_metadata_for(if self.pq { Levels { scale: l.scale / lightcraft_hdrmeta::LINEAR_UNIT_NITS, ..l } } else { l });
             self.levels = Some(l);
         }
         let out = choose(self.extended.then_some(self.state.target_format), Platform::current(), l.headroom, disabled());
@@ -491,6 +518,25 @@ mod tests {
             coarse: Some(DisplayCoarseRange { high_dynamic_range: Some(hdr), gamut: None }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn pq_paper_white_defaults_to_203_nits_and_clamps_nonsense() {
+        assert_eq!(pq_paper_white(None), 203.0);
+        assert_eq!(pq_paper_white(Some(300.0)), 300.0);
+        assert_eq!(pq_paper_white(Some(f32::NAN)), 203.0);
+        assert_eq!(pq_paper_white(Some(-5.0)), 203.0);
+        assert_eq!(pq_paper_white(Some(1e9)), 1000.0);
+    }
+
+    #[test]
+    fn float_surface_picks_extended_linear_then_pq() {
+        let lin = [offer(F::Rgba16Float, Cs::SRGB | Cs::EXTENDED_SRGB_LINEAR | Cs::BT2100_PQ)];
+        assert_eq!(hdr_surface_format(&lin), Some((F::Rgba16Float, ColorSpace::ExtendedSrgbLinear)));
+        let pq = [offer(F::Rgba16Float, Cs::SRGB | Cs::DISPLAY_P3 | Cs::BT2100_PQ)];
+        assert_eq!(hdr_surface_format(&pq), Some((F::Rgba16Float, ColorSpace::Bt2100Pq)));
+        let none = [offer(F::Bgra8Unorm, Cs::SRGB | Cs::BT2100_PQ), offer(F::Rgba16Float, Cs::SRGB)];
+        assert_eq!(hdr_surface_format(&none), None);
     }
 
     #[test]
