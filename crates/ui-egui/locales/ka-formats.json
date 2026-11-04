@@ -291,7 +291,7 @@
   "{not_supported} not supported": "მხარდაუჭერელი: {not_supported}",
   "{path_refused} on refused paths": "უარყოფილი ბილიკით: {path_refused}",
   "{incomplete} incomplete": "არასრული: {incomplete}",
-  "{failed} failed": "ვერ მოხერხდა: {failed}",
+  "{message}; {failed} originals could not be read": "{message}; ვერ წაიკითხა ორიგინალი: {failed}",
   "{message}; index warning: {warning}": "{message}; ინდექსის გაფრთხილება: {warning}",
   "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.": "ფოტოები კატალოგში, ვირტუალური ასლების ჩათვლით: {in_catalog}; კოლექციები: {collections}.",
   "{added} added to the library.": "დაემატა ბიბლიოთეკას: {added}.",

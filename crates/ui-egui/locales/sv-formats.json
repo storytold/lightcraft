@@ -306,7 +306,7 @@
   "{not_supported} not supported": "{not_supported} stöds inte",
   "{path_refused} on refused paths": "{path_refused} med nekade sökvägar",
   "{incomplete} incomplete": "{incomplete} ofullständiga",
-  "{failed} failed": "{failed} misslyckades",
+  "{message}; {failed} originals could not be read": "{message}; {failed} original kunde inte läsas",
   "{message}; index warning: {warning}": "{message}; indexvarning: {warning}",
   "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.": "{in_catalog} foton i katalogen, virtuella kopior inräknade; {collections} samlingar.",
   "{added} added to the library.": "{added} har lagts till i biblioteket.",

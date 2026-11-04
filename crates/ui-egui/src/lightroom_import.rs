@@ -329,15 +329,16 @@ fn import_summary(report: &Value) -> String {
     if incomplete > 0 {
         parts.push(crate::i18n::tr_format!("{incomplete} incomplete", incomplete = incomplete));
     }
-    let failed = report["failed"].as_array().map_or(0, Vec::len);
-    if failed > 0 {
-        parts.push(crate::i18n::tr_format!("{failed} failed", failed = failed));
-    }
-    crate::i18n::tr_format!(
+    let message = crate::i18n::tr_format!(
         "Lightroom import complete. {in_catalog} photos in the catalog: {parts}",
         in_catalog = count("inCatalog"),
         parts = parts.join(", ")
-    )
+    );
+    // An original that is there but can't be read already has its outcome among the parts (a new
+    // one is added as a placeholder, as a missing original is), so the parts add up to the
+    // catalog's photos and the failures are said after them.
+    let failed = report["failed"].as_array().map_or(0, Vec::len);
+    if failed > 0 { crate::i18n::tr_format!("{message}; {failed} originals could not be read", message = message, failed = failed) } else { message }
 }
 
 fn show_result(app: &mut LightcraftApp) {
@@ -891,7 +892,9 @@ mod tests {
     }
 
     /// The toast counts the catalog's photos and names each outcome besides the photos added only
-    /// when some photo had it: "nothing happened" was "0 added" (#1584).
+    /// when some photo had it: "nothing happened" was "0 added" (#1584). Originals that couldn't
+    /// be read are said apart: each is also one of the outcomes, which add up to the catalog's
+    /// photos (#2589).
     #[test]
     fn the_toast_reconciles_the_catalog() {
         crate::i18n::set_language(crate::i18n::Locale::En);
@@ -904,7 +907,7 @@ mod tests {
         assert_eq!(
             import_summary(&report),
             "Lightroom import complete. 8 photos in the catalog: 2 added, 1 already in the library, 1 in Recently Deleted, 2 not supported, \
-             1 on refused paths, 1 incomplete, 1 failed"
+             1 on refused paths, 1 incomplete; 1 originals could not be read"
         );
     }
 

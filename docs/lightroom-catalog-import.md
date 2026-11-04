@@ -71,7 +71,8 @@ Photographs counts them), and these add up to it:
 
 Should the counts not add up, a warning says by how much. `imported` (records added, as before) stays in the report
 and normally equals `added`. The toast says, for example, "45091 photos in the catalog: 16521 added, 812 already in
-the library" (only the outcomes some photo had, then failures); the result window has one line per outcome.
+the library" (only the outcomes some photo had); then, apart, how many originals couldn't be read, since each of
+those is also one of the outcomes (a new one is added as a placeholder). The result window has one line per outcome.
 **Show in Library** opens All Photos, clears filters and selects an imported record (not one left in Recently
 Deleted; the button is left out when every record is there). Errors stay
 readable in the same result window. If another dialog is open, the result waits until that dialog closes. The result

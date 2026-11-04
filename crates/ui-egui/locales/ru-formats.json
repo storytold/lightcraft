@@ -283,7 +283,7 @@
   "{not_supported} not supported": "не поддерживается: {not_supported}",
   "{path_refused} on refused paths": "с отклонённым путём: {path_refused}",
   "{incomplete} incomplete": "неполных: {incomplete}",
-  "{failed} failed": "ошибок: {failed}",
+  "{message}; {failed} originals could not be read": "{message}; не удалось прочитать оригиналов: {failed}",
   "{message}; index warning: {warning}": "{message}; предупреждение индекса: {warning}",
   "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.": "Фото в каталоге, включая виртуальные копии: {in_catalog}; коллекций: {collections}.",
   "{added} added to the library.": "Добавлено в библиотеку: {added}.",

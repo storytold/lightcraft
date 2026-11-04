@@ -278,7 +278,7 @@
   "{not_supported} not supported": "nepodporováno: {not_supported}",
   "{path_refused} on refused paths": "s odmítnutou cestou: {path_refused}",
   "{incomplete} incomplete": "neúplné: {incomplete}",
-  "{failed} failed": "neúspěšné: {failed}",
+  "{message}; {failed} originals could not be read": "{message}; nečitelné originály: {failed}",
   "{message}; index warning: {warning}": "{message}; varování indexu: {warning}",
   "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.": "Fotografií v katalogu včetně virtuálních kopií: {in_catalog}; kolekcí: {collections}.",
   "{added} added to the library.": "Přidáno do knihovny: {added}.",

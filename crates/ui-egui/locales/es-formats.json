@@ -283,7 +283,7 @@
   "{not_supported} not supported": "{not_supported} no compatibles",
   "{path_refused} on refused paths": "{path_refused} con rutas rechazadas",
   "{incomplete} incomplete": "{incomplete} incompletas",
-  "{failed} failed": "{failed} con errores",
+  "{message}; {failed} originals could not be read": "{message}; no se pudieron leer {failed} originales",
   "{message}; index warning: {warning}": "{message}; aviso del índice: {warning}",
   "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.": "{in_catalog} fotos en el catálogo, copias virtuales incluidas; {collections} colecciones.",
   "{added} added to the library.": "{added} añadidas a la biblioteca.",

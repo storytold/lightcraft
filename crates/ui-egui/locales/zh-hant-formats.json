@@ -287,7 +287,7 @@
   "{not_supported} not supported": "{not_supported} 張不受支援",
   "{path_refused} on refused paths": "{path_refused} 張路徑遭拒",
   "{incomplete} incomplete": "{incomplete} 張不完整",
-  "{failed} failed": "{failed} 張失敗",
+  "{message}; {failed} originals could not be read": "{message}；{failed} 張原始檔無法讀取",
   "{message}; index warning: {warning}": "{message}；索引警告：{warning}",
   "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.": "目錄中有 {in_catalog} 張相片（含虛擬副本）；{collections} 個收藏集。",
   "{added} added to the library.": "已將 {added} 張加入圖庫。",

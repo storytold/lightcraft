@@ -283,7 +283,7 @@
   "{not_supported} not supported": "не підтримується: {not_supported}",
   "{path_refused} on refused paths": "з відхиленим шляхом: {path_refused}",
   "{incomplete} incomplete": "неповних: {incomplete}",
-  "{failed} failed": "помилок: {failed}",
+  "{message}; {failed} originals could not be read": "{message}; не вдалося прочитати оригіналів: {failed}",
   "{message}; index warning: {warning}": "{message}; попередження індексу: {warning}",
   "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.": "Фото в каталозі, разом із віртуальними копіями: {in_catalog}; колекцій: {collections}.",
   "{added} added to the library.": "Додано до бібліотеки: {added}.",

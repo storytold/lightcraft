@@ -287,7 +287,7 @@
   "{not_supported} not supported": "{not_supported} 枚は非対応",
   "{path_refused} on refused paths": "{path_refused} 枚はパスを拒否",
   "{incomplete} incomplete": "{incomplete} 枚は不完全",
-  "{failed} failed": "{failed} 枚が失敗",
+  "{message}; {failed} originals could not be read": "{message}。読み込めなかった元画像：{failed} 枚",
   "{message}; index warning: {warning}": "{message}。インデックスの警告：{warning}",
   "{in_catalog} photos in the catalog, virtual copies included; {collections} collections.": "カタログの写真は {in_catalog} 枚（仮想コピーを含む）、コレクションは {collections} 件です。",
   "{added} added to the library.": "{added} 枚をライブラリに追加しました。",
