@@ -15,7 +15,8 @@
 //!
 //! Formats: DNG (uncompressed, lossless JPEG, lossy JPEG (Smart Previews), Deflate incl. floating point, JPEG XL (DNG 1.7,
 //! `jxl` feature, on by default), tiled/stripped, CFA and LinearRaw),
-//! Canon CR2 / CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
+//! Canon CR2 / CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW) / CRW (the CIFF bodies of 2000–2004; clean-room-derived
+//! compression, `vendor::crw`; the PowerShot G5's anomalous coding is refused), Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
 //! and X-Trans, lossless and lossy compressed), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format: compressed 4 and 6, the prefix-coded strips of 8,
 //! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed: 16-bit words, 12-bit XZ-2 words, 12-bit 16-byte blocks of the E-300/E-330/E-500).
 //! [`embedded_preview`] covers these containers' JPEG previews. Variants we can't decode yet (compressed ORF, CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
@@ -140,6 +141,7 @@ impl RawFormat {
             RawFormat::Dng
                 | RawFormat::Cr2
                 | RawFormat::Cr3
+                | RawFormat::Crw
                 | RawFormat::Nef
                 | RawFormat::Nrw
                 | RawFormat::Arw
@@ -413,6 +415,7 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         RawFormat::Dng => dng::decode(bytes, mode).map(lift_clipped),
         RawFormat::Cr2 => vendor::cr2::decode(bytes, mode),
         RawFormat::Cr3 => vendor::cr3::decode(bytes, mode),
+        RawFormat::Crw => vendor::crw::decode(bytes, mode),
         RawFormat::Nef | RawFormat::Nrw => vendor::nef::decode(bytes, mode),
         RawFormat::Arw => vendor::arw::decode(bytes, mode),
         RawFormat::Raf => vendor::raf::decode(bytes, mode),
