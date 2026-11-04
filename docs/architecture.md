@@ -84,7 +84,7 @@ first.
 What these runs wait on after the build is bounded (`xtask/src/deadline.rs`, #3060). Stable libtest
 has no per-test timeout, so each test binary gets `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30; `0`
 for none): timed from its start when xtask runs it (`test::run_binary`), and from cargo's `Running` /
-`Doc-tests` line for it, and again from its own `running N tests` line, when `cargo test` runs it (the
+`Doc-tests` line for it, and again from its own first `running N tests` line, when `cargo test` runs it (the
 full `ci`'s test and HEIF steps; the build before isn't bounded; cargo runs with
 `CARGO_TERM_QUIET=false` and without `-q` so it prints those lines). The output streams through and is
 read for libtest's lines, keeping a bounded amount. On timeout the binary and the processes it started
@@ -101,7 +101,7 @@ still reaches it. The run reports `timed out after N min: <binary>`, what
 the kill found, the tests still running (libtest's "has been running for over 60 seconds" warnings,
 or the test a single-threaded run started) and those that never reported a result (`--list`, itself
 bounded in time and size). Under nextest, `.config/nextest.toml`'s `slow-timeout` kills a test
-after 30 minutes instead. The wait for the CI slot gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes
+after 30 minutes instead, whatever `LIGHTCRAFT_TEST_BINARY_TIMEOUT` says (xtask notes that when it is set). The wait for the CI slot gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes
 (default 120, several full runs; `0` for no limit) with an error naming the run that holds it.
 
 Outside `ci`, `.cargo/config.toml`'s `[env]` limits plain `cargo test` to 4 tests at once per test
@@ -128,6 +128,7 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Quality gates: a test run's output is forwarded outside the lock its clock is checked under, and not after the run ends; only a binary's first `running N tests` line restarts its clock; the slot wait never sleeps past its limit |
 | 2026-11-03 | minor | Quality gates: a timed-out test run's processes are signalled through pidfds on Linux (never a reused pid; without pidfds only xtask's own child is killed), and one that can't be killed is continued rather than left stopped |
 | 2026-10-26 | minor | Quality gates: each test binary's run (`LIGHTCRAFT_TEST_BINARY_TIMEOUT`) and the wait for the CI slot (`LIGHTCRAFT_CI_LOCK_WAIT`) have a time limit |
 | 2026-10-26 | minor | Quality gates: plain `cargo test` (and `cargo nextest run`) runs at most 4 tests at once; xtask tells that default from a caller's `RUST_TEST_THREADS` |

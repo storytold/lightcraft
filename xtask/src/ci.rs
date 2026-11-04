@@ -88,6 +88,8 @@ pub(crate) fn nextest() -> bool {
             .is_ok_and(|s| s.success());
         if !found {
             eprintln!("note: LIGHTCRAFT_NEXTEST=1 but cargo-nextest is not installed, so the tests run under cargo test (cargo install cargo-nextest --locked)");
+        } else if let Some(note) = deadline::nextest_note(std::env::var_os(deadline::TEST_BINARY_TIMEOUT_ENV).as_deref()) {
+            eprintln!("{note}");
         }
         found
     })
@@ -248,8 +250,9 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 c.args(["clippy", "-p", "lightcraft-codecs", "--features", "heif", "--all-targets", "--", "-D", "warnings"]);
                 run(c, "cargo clippy -p lightcraft-codecs --features heif --all-targets -- -D warnings")?;
                 test(tests(&with_test_targets(&["-p", "lightcraft-codecs", "--features", "lightcraft-codecs/heif"])), "heif")?;
-                // the engine's HEIC import test, with the decoder (the workspace run checks the error)
-                test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"]), "heif")
+                // the engine's HEIC import test, with the decoder (the workspace run checks the error);
+                // the filter after `--`, so a timeout's `--list` keeps to the tests it selects
+                test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "--", "heic"]), "heif")
             }),
         ),
         (

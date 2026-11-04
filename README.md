@@ -425,7 +425,8 @@ processes it started (on Linux found by an environment variable they inherit, so
 their parent too, unless they cleared their environment; on macOS and the BSDs only the process xtask
 started is killed, which under the full `ci` is cargo, so a hung test binary may keep running), and the run reports it as `timed out after 30 min` with the tests still running
 and those that never reported a result. Under `LIGHTCRAFT_NEXTEST=1`, `.config/nextest.toml` kills a
-test after 30 minutes instead. After a timeout, `ci` skips its GPU probe and translation gaps report.
+test after 30 minutes instead, whatever `LIGHTCRAFT_TEST_BINARY_TIMEOUT` says (`0` included; a
+profile there without `terminate-after`, picked with `NEXTEST_PROFILE`, runs without it). After a timeout, `ci` skips its GPU probe and translation gaps report.
 
 CI defaults to line-table debug information and one build job per 1.5 GB of RAM
 available when it starts (at most one per CPU; 4 if memory can't be read), so an
