@@ -551,8 +551,8 @@ fn a_photo_of_unknown_size_is_sized_from_its_header() {
     assert!(job.sizes.iter().all(|s| s.is_some_and(|s| (s.width, s.height) == (480, 320) && s.bytes > 0)), "the catalog's sizes: {:?}", job.sizes);
     let unknown = vec![
         None,
-        Some(crate::merge::PhotoSize { width: 0, height: 0, bytes: 9, samples: 0 }),
-        Some(crate::merge::PhotoSize { width: 1, height: 1, bytes: 9, samples: 1 }),
+        Some(crate::merge::PhotoSize { width: 0, height: 0, bytes: 9, samples: 0, active: 0, whole: false }),
+        Some(crate::merge::PhotoSize { width: 1, height: 1, bytes: 9, samples: 1, active: 1, whole: false }),
     ];
     // three 480 × 320 photos need several MB: refused with 4 MB after reading only the headers
     let (small, reads) = counted(&job, unknown.clone(), 4e6, false);
@@ -655,4 +655,32 @@ fn a_guessed_memory_never_refuses_a_merge() {
     assert!(job.plan(guess(1.5e9)).unwrap().0.edge.is_some());
     let (job, _) = counted_job(panorama(), photos_24mp(6).into_iter().map(Some).collect(), Some(crate::merge::PREVIEW_EDGE), 1e12);
     assert!(job.plan(guess(1e12)).unwrap().0.parallel);
+}
+
+/// A raw with a default crop much smaller than its active area (an in-camera aspect or crop mode)
+/// demosaics the whole active area, then crops it, unless it is a Bayer mosaic without an
+/// `OpcodeList3` (`lightcraft_raw::RawImage::develop`): its decode is counted at least the
+/// demosaiced active area (12 bytes a pixel) beside its frame, not just its picture. A preview's
+/// (bilinear) decode always demosaics the whole area.
+#[test]
+fn a_small_crop_of_a_large_sensor_is_counted_with_its_whole_demosaic() {
+    use crate::merge::{PhotoSize, holds};
+    let catalog = PhotoSize::new(3000, 2000, 30_000_000).unwrap();
+    let sensor = 6000 * 4000;
+    let whole = PhotoSize { samples: sensor, active: sensor, whole: true, ..catalog };
+    let windowed = PhotoSize { whole: false, ..whole };
+    let (frame, demosaic) = (6e6 * 12.0, sensor as f64 * 12.0);
+    assert!(whole.decoding(None, false) >= demosaic + frame, "{}", whole.decoding(None, false));
+    assert_eq!(whole.decoding(None, false) - windowed.decoding(None, false), demosaic, "a Bayer AHD decode demosaics just its crop");
+    assert!(windowed.decoding(Some(1024), true) >= demosaic + frame, "a preview demosaics all of it");
+    // two of them: planned from the catalog they fit in 600 MB; with the header read before the
+    // decode the whole demosaic (288 MB a photo, ~654 MB at the second decode) doesn't
+    assert_eq!(holds(&hdr(), &[catalog; 2], 6e8, None, None), Ok(()));
+    assert!(holds(&hdr(), &[whole; 2], 6e8, None, None).is_err());
+    // the header's active area: a linear DNG (three samples a pixel) "demosaics" all of it, which
+    // here is its picture, so it holds nothing more
+    let dng = lightcraft_merge::synth::bracket_dngs(480, 320, &[0.0]).unwrap().remove(0);
+    let header = PhotoSize::from_header(&dng).unwrap();
+    assert_eq!((header.width, header.height, header.active, header.whole), (480, 320, 480 * 320, true), "{header:?}");
+    assert_eq!(header.decoding(None, false), PhotoSize { whole: false, ..header }.decoding(None, false));
 }

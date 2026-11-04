@@ -90,7 +90,9 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   against the merge's memory: three quarters of the RAM, less the cache budget. Each phase is followed in the order
   it runs. Photos are decoded one at a time, always at full size, then made smaller: each holds its file and ~36 bytes
   a pixel (48 when it is made smaller; a raw whose sensor has many more samples than its picture has pixels, 8 bytes
-  a sample instead when that is more) beside the frames already held (12 bytes a pixel each). Issue #3708: until then
+  a sample instead when that is more; and one that demosaics its whole active area before cropping it, 12 bytes a
+  pixel of that area besides: every raw but a Bayer mosaic without an `OpcodeList3`, and every raw in a preview)
+  beside the frames already held (12 bytes a pixel each). Issue #3708: until then
   a merge was sized only after every photo was decoded, which could run out of memory first. A merge that fits runs
   as it always did; one with no size known at all runs unplanned. When the computer's memory can't be read
   (Windows, for now) the merge's memory is a guess (that of 8 GB of RAM): the plan follows it but refuses nothing on

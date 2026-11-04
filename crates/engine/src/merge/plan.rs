@@ -50,13 +50,21 @@ pub struct PhotoSize {
     /// included), else its pixels. The catalog doesn't keep a raw's: its pixels until the header
     /// is read just before the decode.
     pub samples: u64,
+    /// The pixels of a raw's active area (its sensor without the masked borders): a decode may
+    /// demosaic all of them, however small its default crop ([`PhotoSize::whole`]). Its pixels for
+    /// anything else, and until the header is read for a raw the catalog has.
+    pub active: u64,
+    /// A full-size decode demosaics the whole active area, then crops it (an `OpcodeList3` beyond
+    /// lens corrections, or a mosaic that isn't Bayer or several samples a pixel): only a Bayer
+    /// mosaic without one demosaics just its default crop. A preview's decode always does.
+    pub whole: bool,
 }
 
 impl PhotoSize {
     /// `None` for a size the catalog doesn't know (a pixel or less, or no file size).
     pub fn new(width: u32, height: u32, bytes: u64) -> Option<PhotoSize> {
         let px = u64::from(width) * u64::from(height);
-        (px > 1 && bytes > 0).then_some(PhotoSize { width, height, bytes, samples: px })
+        (px > 1 && bytes > 0).then_some(PhotoSize { width, height, bytes, samples: px, active: px, whole: false })
     }
 
     /// From the file's header, as an import reads it, without decoding pixels: `None` when it
@@ -69,7 +77,12 @@ impl PhotoSize {
             let (w, h) = info.developed_size();
             let size = PhotoSize::new(u32::try_from(w).ok()?, u32::try_from(h).ok()?, file)?;
             let sensor = (info.width as u64).saturating_mul(info.height as u64).saturating_mul(info.cpp.max(1) as u64);
-            return Some(PhotoSize { samples: size.samples.max(sensor), ..size });
+            let active = (info.active_area.width as u64).saturating_mul(info.active_area.height as u64);
+            // as `lightcraft_raw::RawImage::develop` decides (the merge drops lens corrections first)
+            let windowed = info.cpp == 1
+                && info.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer)
+                && info.opcodes.list3.iter().all(lightcraft_raw::opcodes::Opcode::is_lens_correction);
+            return Some(PhotoSize { samples: size.samples.max(sensor), active: size.active.max(active), whole: !windowed, ..size });
         }
         match lightcraft_codecs::sniff(bytes)? {
             Format::Jpeg | Format::Png | Format::Tiff | Format::WebP | Format::Psd | Format::Heif | Format::Gif | Format::Bmp => {}
@@ -100,10 +113,14 @@ impl PhotoSize {
         side(self.width) * side(self.height)
     }
 
-    /// The bytes it holds at the peak of its decode, its frame included.
-    fn decoding(self, edge: Option<usize>) -> f64 {
+    /// The bytes it holds at the peak of its decode, its frame included (`preview`: a preview's
+    /// decode, which demosaics a raw's whole active area).
+    pub(crate) fn decoding(self, edge: Option<usize>, preview: bool) -> f64 {
         let resample = if self.reduced(edge) { RESAMPLE_BYTES } else { 0.0 };
-        let decode = (self.px() * DECODE_BYTES).max(self.samples as f64 * SAMPLE_BYTES);
+        // a raw demosaicing more than its picture holds the demosaiced active area beside its
+        // samples, and then beside the crop (its frame) made from it
+        let demosaic = if (preview || self.whole) && self.active as f64 > self.px() { self.active as f64 * FRAME_BYTES } else { 0.0 };
+        let decode = (self.px() * DECODE_BYTES).max(self.samples as f64 * SAMPLE_BYTES + demosaic);
         self.px() * (FRAME_BYTES + resample) + decode + self.bytes as f64
     }
 }
@@ -112,7 +129,7 @@ impl PhotoSize {
 fn decode_peak(sizes: &[PhotoSize], edge: Option<usize>) -> f64 {
     let (mut held, mut peak) = (0.0f64, 0.0f64);
     for s in sizes {
-        peak = peak.max(held + s.decoding(edge));
+        peak = peak.max(held + s.decoding(edge, false));
         held += s.decoded(edge) * FRAME_BYTES;
     }
     peak.max(held)
@@ -175,7 +192,7 @@ fn need(kind: &MergeKind, sizes: &[PhotoSize], edge: Option<usize>) -> (f64, Opt
 /// beside every preview frame.
 fn preview_decode(sizes: &[PhotoSize], threads: usize) -> f64 {
     let edge = Some(PREVIEW_EDGE);
-    let mut peaks: Vec<f64> = sizes.iter().map(|s| s.decoding(edge)).collect();
+    let mut peaks: Vec<f64> = sizes.iter().map(|s| s.decoding(edge, true)).collect();
     peaks.sort_by(|a, b| b.total_cmp(a));
     let small: f64 = sizes.iter().map(|s| s.decoded(edge) * FRAME_BYTES).sum();
     peaks.iter().take(threads.max(1)).sum::<f64>() + small
@@ -292,5 +309,7 @@ pub(crate) fn fill_unknown(sizes: &[Option<PhotoSize>]) -> Option<Vec<PhotoSize>
     let largest = sizes.iter().flatten().copied().max_by(|a, b| a.px().total_cmp(&b.px()))?;
     let bytes = sizes.iter().flatten().map(|s| s.bytes).max().unwrap_or(largest.bytes);
     let samples = sizes.iter().flatten().map(|s| s.samples).max().unwrap_or(largest.samples);
-    Some(sizes.iter().map(|s| s.unwrap_or(PhotoSize { bytes, samples, ..largest })).collect())
+    let active = sizes.iter().flatten().map(|s| s.active).max().unwrap_or(largest.active);
+    let whole = sizes.iter().flatten().any(|s| s.whole);
+    Some(sizes.iter().map(|s| s.unwrap_or(PhotoSize { bytes, samples, active, whole, ..largest })).collect())
 }
