@@ -184,6 +184,11 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         if let Some(a) = p.analysis {
             let mut line = crate::i18n::tr_format!("Focus {:.0}", a.sharpness);
+            match a.focus_on {
+                lightcraft_catalog::FocusOn::Face => line.push_str(crate::i18n::tr(" · on the face")),
+                lightcraft_catalog::FocusOn::FocusPoint => line.push_str(crate::i18n::tr(" · on the focus point")),
+                lightcraft_catalog::FocusOn::Frame => {}
+            }
             if a.clipped > 0.02 {
                 line.push_str(&crate::i18n::tr_format!(" · {:.0}% clipped", a.clipped * 100.0));
             }
