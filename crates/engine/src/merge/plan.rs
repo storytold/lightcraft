@@ -79,8 +79,8 @@ impl PhotoSize {
             let sensor = (info.width as u64).saturating_mul(info.height as u64).saturating_mul(info.cpp.max(1) as u64);
             let active = (info.active_area.width as u64).saturating_mul(info.active_area.height as u64);
             // as `lightcraft_raw::RawImage::develop` decides (the merge drops lens corrections first)
-            let windowed = info.cpp == 1
-                && info.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer)
+            let (aw, ah) = (info.active_area.width, info.active_area.height);
+            let windowed = lightcraft_raw::demosaic::ahd_windowable(info.cfa.as_ref(), info.cpp, aw, ah)
                 && info.opcodes.list3.iter().all(lightcraft_raw::opcodes::Opcode::is_lens_correction);
             return Some(PhotoSize { samples: size.samples.max(sensor), active: size.active.max(active), whole: !windowed, ..size });
         }
