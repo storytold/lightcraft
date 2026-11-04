@@ -53,4 +53,4 @@ Notes
 - CJK fonts (BIZ UDPGothic, BIZ UDMincho, Shippori Mincho, Noto Sans CJK SC) are not in this repository. They live in
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts), with their licences and attribution in its
   `ATTRIBUTION.md`, and are embedded only in builds made with the optional `CRAFT_FONTS_DIR` build input (all official
-  releases). Never commit font files here; add new fonts to craft-fonts (craftrules `standards/fonts.md`).
+  releases). Never commit font files here; add new fonts to craft-fonts.

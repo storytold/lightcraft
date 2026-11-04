@@ -35,10 +35,22 @@ pub(super) fn strs(p: &Value, key: &str) -> Vec<String> {
 
 /// The targets an album can hold and how many were browsed (Local) photos, which album views
 /// never show (issue #684): those are skipped, and reported, instead of becoming invisible members.
+/// An id the catalog doesn't have (named outright, or kept selected after an undo took its photo
+/// away) is dropped before anything changes, and isn't counted: `skipped` stays the Local count
+/// the toasts name.
 pub(super) fn album_targets(s: &Session, targets: Vec<PhotoId>) -> (Vec<PhotoId>, usize) {
-    let before = targets.len();
-    let kept: Vec<PhotoId> = targets.into_iter().filter(|id| s.catalog.photo(*id).is_none_or(|p| !p.local)).collect();
-    let skipped = before - kept.len();
+    let mut skipped = 0;
+    let kept: Vec<PhotoId> = targets
+        .into_iter()
+        .filter(|id| match s.catalog.photo(*id) {
+            None => false,
+            Some(p) if p.local => {
+                skipped += 1;
+                false
+            }
+            Some(_) => true,
+        })
+        .collect();
     (kept, skipped)
 }
 

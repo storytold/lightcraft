@@ -187,14 +187,34 @@ pub(super) fn region_overlay(
 
 // ------------------------------------------------------------------------ masks
 
-/// Where a mask component's pin sits (normalized), for shapes that have a place on the photo.
+/// Where a mask component's pin sits (normalized), for shapes that have a place on the photo: an
+/// Object at its first click, a Describe mask on what its segmentation found (issue #3049).
 pub(crate) fn component_pin(shape: &MaskShape) -> Option<Point> {
     match shape {
         MaskShape::Radial { center, .. } => Some(*center),
         MaskShape::Linear { start, end } => Some(Point::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0)),
         MaskShape::Brush { strokes } => strokes.iter().find(|s| !s.erase).and_then(|s| s.points.first()).copied(),
+        MaskShape::Object { hint, seg, .. } => hint.first().copied().or_else(|| seg.as_ref().and_then(seg_center)),
+        MaskShape::Prompt { seg, .. } => seg.as_ref().and_then(seg_center),
         _ => None,
     }
+}
+
+/// The middle of what a segmentation selects (the mean of its cells inside the mask), else of the
+/// part of the image it covers; `None` when it is damaged.
+fn seg_center(seg: &lightcraft_develop::SegMask) -> Option<Point> {
+    let [x0, y0, x1, y1] = seg.bounds()?;
+    let logits = seg.logits()?;
+    let side = seg.side as usize;
+    let (mut sx, mut sy, mut n) = (0.0, 0.0, 0usize);
+    for (i, _) in logits.iter().enumerate().filter(|(_, l)| **l > 0.0) {
+        sx += (i % side) as f64 + 0.5;
+        sy += (i / side) as f64 + 0.5;
+        n += 1;
+    }
+    let cells = n as f64 * side as f64;
+    let (u, v) = if n == 0 { (0.5, 0.5) } else { (sx / cells, sy / cells) };
+    Some(Point::new(x0 + u * (x1 - x0), y0 + v * (y1 - y0)))
 }
 
 /// `shape` moved by `dn` (normalized); `handle` 1/2 = a linear gradient's start/end set to `at`.
@@ -336,11 +356,11 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         return;
     }
     if app.ui.tool == "object" {
-        object_tool(app, ui, resp, map);
+        object_tool(app, ui, resp, map, d, &grips);
         return;
     }
     if app.ui.tool == "brush" {
-        brush_tool(app, ui, resp, map, p, clip);
+        brush_tool(app, ui, resp, map, p, clip, d);
         return;
     }
     grip_gestures(app, ui, resp, map, d, &grips);
@@ -437,14 +457,52 @@ fn object_marks(app: &LightcraftApp, p: &egui::Painter, map: &CanvasMap, d: &Dev
     }
 }
 
-/// Object tool: a click includes what's under it, ⌥-click leaves it out.
-fn object_tool(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap) {
+/// The mask whose pin is under `q` (within the 10 px [`grip_gestures`] grabs at), not counting
+/// the `active` mask's own pins.
+fn other_pin_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) -> Option<u32> {
+    grips
+        .iter()
+        .filter(|g| Some(g.0) != active && g.2 == 0 && g.3.distance(q) < 10.0)
+        .min_by(|a, b| a.3.distance(q).total_cmp(&b.3.distance(q)))
+        .map(|g| g.0)
+}
+
+/// Whether `q` is on one of the `active` mask's own pins (within the same 10 px).
+fn own_pin_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) -> bool {
+    active.is_some_and(|a| grips.iter().any(|g| g.0 == a && g.2 == 0 && g.3.distance(q) < 10.0))
+}
+
+/// Object tool: a click includes what's under it, ⌥-click leaves it out. A click on another
+/// mask's pin selects that mask instead of adding a click to the selected one (issue #3049);
+/// the tool then stays on only if the newly selected mask has an Object selection to refine. A
+/// click on the selected mask's own pin does nothing: its first click is already there, and a
+/// near-copy of it would use up one of the mask's limited Object clicks.
+fn object_tool(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    map: &CanvasMap,
+    d: &DevelopSettings,
+    grips: &[(u32, usize, u8, Pos2)],
+) {
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
     {
+        if let Some(mid) = other_pin_at(grips, app.session.active_mask, q) {
+            let _ = app.run("mask.select", json!({"id": mid}));
+            let has_object =
+                d.masks.iter().find(|m| m.id == mid).is_some_and(|m| m.components.iter().any(|c| matches!(c.shape, MaskShape::Object { .. })));
+            if !has_object {
+                app.ui.tool.clear();
+            }
+            return;
+        }
+        if own_pin_at(grips, app.session.active_mask, q) {
+            return;
+        }
         let n = map.norm(q);
         let exclude = ui.input(|i| i.modifiers.alt);
         match app.run_typed("mask.objectPoint", json!({"x": n.x, "y": n.y, "exclude": exclude})) {
@@ -459,7 +517,16 @@ fn object_tool(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
 }
 
 /// Brush tool: the cursor, the stroke being painted and its commit.
-fn brush_tool(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, p: &egui::Painter, clip: Rect) {
+fn brush_tool(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    map: &CanvasMap,
+    p: &egui::Painter,
+    clip: Rect,
+    d: &DevelopSettings,
+) {
+    let active = app.session.active_mask;
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let r = (app.ui.brush_size as f64 * long) as f32;
     if let Some(h) = resp.hover_pos() {
@@ -487,10 +554,21 @@ fn brush_tool(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
         }
     }
     // the stroke being painted (the render shows it once it's committed), with the committed
-    // stroke's dab spacing, feather and flow (issue #517)
-    if let Some(Gesture::Brush { points, pressure }) = &app.gesture {
+    // stroke's dab spacing, feather and flow (issue #517), tinted only when the overlay will
+    // show it: with the overlay hidden (O, or a mask slider hid it) or a colour overlay at
+    // opacity 0, the photo stays untinted while painting, so dodging and burning is judged on
+    // the photo (issue #2549)
+    use lightcraft_pipeline::MaskView;
+    let colored = matches!(MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default(), MaskView::Color | MaskView::ColorOnBw);
+    // the all-masks overlay ([`view_overlay`]) shows only visible masks, and gives way to the
+    // selected mask's when none has anything in it (a stroke goes into the selected mask, or a new one)
+    let visible = active.and_then(|id| d.masks.iter().find(|m| m.id == id)).is_none_or(|m| m.visible);
+    let all = app.ui.mask_overlay_all && (visible || d.masks.iter().any(|m| m.visible && !m.components.is_empty()));
+    let shown = if all { visible } else { app.ui.mask_overlay } && !(colored && app.ui.mask_overlay_opacity <= 0.0);
+    if shown && let Some(Gesture::Brush { points, pressure }) = &app.gesture {
         let screen: Vec<Pos2> = points.iter().map(|q| map.screen(*q)).collect();
-        let opacity = if app.ui.mask_overlay && app.ui.mask_overlay_opacity > 0.0 { app.ui.mask_overlay_opacity / 100.0 } else { 110.0 / 255.0 };
+        // opacity 0 only gets here in the image views, which ignore it: a fixed tint there
+        let opacity = if app.ui.mask_overlay_opacity > 0.0 { app.ui.mask_overlay_opacity / 100.0 } else { 110.0 / 255.0 };
         let params = crate::brush_live::LiveParams {
             clip,
             scale: ui.ctx().pixels_per_point(),

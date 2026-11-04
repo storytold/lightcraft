@@ -32,6 +32,13 @@ The full-frame path and the filters are unchanged, so V1 and V2 full-render pixe
 stay byte-identical and no process version is added. Hidden and empty masks retain main's #1214 fix: they do not select
 the tone base Clarity reads. Window support follows the planes that can affect pixels. See [window context](window-context.md).
 
+**AI mask edges** (Object and Describe selections stored as a model's grid) follow the photo's edges
+when they are enlarged to the output (issue #3272): the plain enlargement spilled 1–2 px onto the
+background, which a raised Exposure turned into a bright outline around the subject in previews and
+exports. Existing AI masks become 1–2 px tighter at a subject's edges, on every process; their
+inside, their outside and edges without contrast in the photo are unchanged. It landed in place as
+a bug fix: the outline is output that isn't in the photo nor in the edit, not a look anyone chose.
+
 ## Adding a process
 
 1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in

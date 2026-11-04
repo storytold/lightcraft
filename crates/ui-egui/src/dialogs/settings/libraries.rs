@@ -3,13 +3,23 @@ use super::{LightcraftApp, Value, json};
 // ------------------------------------------------------------------------------- Open Library…
 
 /// Switching libraries is refused while an import (or the folder scan before one) is running: its
-/// remaining batches would be committed into the new library (issue #1509).
+/// remaining batches would be committed into the new library (issue #1509). So is a switch while
+/// Move Folder To… waits for its destination: the move runs when the dialog closes, and in another
+/// library it would move the folder on disk with nothing to relink, leaving this library's photos
+/// missing (issue #3140).
 pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     if crate::lightroom_import::is_running(app) {
         return Err("wait for Lightroom catalog import to finish before switching libraries".into());
     }
     if app.import.is_some() || app.scan.is_some() {
         return Err("wait for the import to finish before switching libraries".into());
+    }
+    if app.pending_picks.iter().any(|p| p.command == "folder.move") {
+        return Err("wait for Move Folder To… to finish before switching libraries".into());
+    }
+    // they were meant for the library open now (issue #2779)
+    if !app.waiting_import.files.is_empty() {
+        return Err("wait for the photos waiting to be imported before switching libraries".into());
     }
     Ok(())
 }
@@ -87,6 +97,8 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
     app.ui.reference = None;
     app.ui.compare = None;
     app.ui.brief_info = crate::state::BriefInfo::default();
+    // a keyword picked in the Keyword List belongs to the library being left
+    app.ui.keyword_list_selected = None;
     if app.ui.view == crate::state::ViewMode::Reference {
         app.ui.view = crate::state::ViewMode::PhotoGrid;
     }
