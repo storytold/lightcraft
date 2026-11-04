@@ -96,7 +96,7 @@ impl Options {
             // the benchmark edits the first photo it finds: a link with `?bench` must never reach
             // the library in browser storage, so it always runs on the demo photos in an unsaved library
             store: if bench { "memory".into() } else { get("store").filter(|s| s == "idb" || s == "memory").unwrap_or_else(|| "opfs".into()) },
-            workers: get("workers").and_then(|v| v.parse().ok()),
+            workers: get("workers").and_then(|v| v.parse().ok()).map(|n: usize| n.min(crate::workers::MAX_WORKERS)),
             reset: get("reset").is_some(),
         }
     }

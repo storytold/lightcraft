@@ -102,6 +102,24 @@ pub struct GeoNames {
     countries: HashMap<String, String>,
 }
 
+/// Most bytes of one dump file read into memory (the extracted `cities*.txt` is far below this).
+const MAX_FILE_BYTES: u64 = 256 << 20;
+
+/// A regular file's text, at most [`MAX_FILE_BYTES`] of it (the opened file is checked, never its pathname).
+fn read_text(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "file too large"));
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 fn cell(p: LatLon) -> (i32, i32) {
     // valid positions only: |lat| ≤ 90, |lon| ≤ 180, so the casts are in range
     // longitude 180 is the same meridian as -180: key it as column -180, the wrap `reverse` probes
@@ -121,7 +139,8 @@ impl GeoNames {
             if g.cities.len() >= MAX_PLACES {
                 break;
             }
-            let f: Vec<&str> = line.split('\t').collect();
+            // only the first 11 columns are used: a line of tabs must not build a field for each
+            let f: Vec<&str> = line.split('\t').take(11).collect();
             // columns: 1 name, 4 latitude, 5 longitude, 8 country code, 10 admin1 code
             let (Some(name), Some(lat), Some(lon), Some(cc)) = (f.get(1), f.get(4), f.get(5), f.get(8)) else { continue };
             let (Ok(lat), Ok(lon)) = (lat.trim().parse::<f64>(), lon.trim().parse::<f64>()) else { continue };
@@ -152,7 +171,7 @@ impl GeoNames {
     /// Load from a folder holding [`GEONAMES_FILES`] (the last two are optional: without them
     /// states stay blank and countries are ISO codes).
     pub fn load(dir: &Path) -> Result<GeoNames, GeocodeError> {
-        let read = |n: &str| std::fs::read(dir.join(n)).map(|b| String::from_utf8_lossy(&b).into_owned());
+        let read = |n: &str| read_text(&dir.join(n));
         let cities = read(GEONAMES_FILES[0]).map_err(|e| GeocodeError::Missing(format!("the place names aren't downloaded ({e})")))?;
         let g = GeoNames::parse(&cities, read(GEONAMES_FILES[1]).ok().as_deref(), read(GEONAMES_FILES[2]).ok().as_deref());
         if g.is_empty() {
@@ -260,6 +279,14 @@ mod tests {
         for lon in [179.9, -179.9, 180.0, -180.0] {
             assert_eq!(g.reverse(LatLon::new(0.0, lon)).map(|p| p.city).as_deref(), Some("Taveuni"), "from {lon}");
         }
+    }
+
+    #[test]
+    fn a_line_of_tabs_and_a_non_regular_file_are_handled() {
+        assert!(GeoNames::parse(&"\t".repeat(100_000), None, None).is_empty());
+        assert!(read_text(&std::env::temp_dir()).is_err());
+        #[cfg(unix)]
+        assert!(read_text(Path::new("/dev/zero")).is_err());
     }
 
     #[test]
