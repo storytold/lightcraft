@@ -8,7 +8,7 @@
   burst whose subject is soft, and Reject below focus goes by the subject. A burst whose shots don't all have a subject
   score is compared on the frames. The Info panel says which score was used ("Focus 72 · on the face", "· on the focus
   point"; no note means the whole frame), and `photo.analyze` reports `focusOn`, `subject` and `frame` per photo.
-- The catalog format is now version 11 (`Analysis.subject`, `Analysis.focus_on`, `Analysis.frame`). Once this version
+- The catalog format is now version 12 (`Analysis.subject`, `Analysis.focus_on`, `Analysis.frame`). Once this version
   has opened a library, older versions refuse it, as with every format change.
 
 ## 2026-10-30
