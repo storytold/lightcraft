@@ -201,6 +201,77 @@ impl Warp {
         self.corrected_to_source(self.to_corrected(p), ch)
     }
 
+    /// Source pixel → transformed pixel for colour plane `ch` (0 = R, 1 = G, 2 = B).
+    ///
+    /// Inverts `to_source` for a point attached to the original image, such as a
+    /// sensor blemish. The lens warp may contain radial/tangential polynomials
+    /// and perspective, so this uses a bounded, damped Newton solve and returns
+    /// `None` for non-invertible or non-finite transformations.
+    ///
+    /// This is for positioning a small number of edits, not per-pixel rendering.
+    pub fn from_source(&self, src: Point, ch: usize) -> Option<Point> {
+        if ch >= 3 || !self.w.is_finite() || !self.h.is_finite() || self.w <= 0.0 || self.h <= 0.0 || !src.x.is_finite() || !src.y.is_finite() {
+            return None;
+        }
+        if !self.moves_pixels() {
+            return Some(src);
+        }
+        // Perspective is already invertible analytically; start close to the
+        // desired pixel even when manual or embedded lens corrections are on.
+        let mut p = self.from_corrected(src);
+        let h = (self.w.max(self.h) * 1e-5).clamp(0.001, 0.1);
+        // Check the initial guess and every candidate after each of the 24
+        // updates; the final candidate must not be silently discarded.
+        for iteration in 0..=24 {
+            let sampled = self.to_source(p, ch);
+            let err = (sampled.x - src.x, sampled.y - src.y);
+            let distance = err.0.hypot(err.1);
+            if !distance.is_finite() {
+                return None;
+            }
+            // Do not accept a zero-residual point until verifying local
+            // invertibility: a collapsed CA plane may map every point to the
+            // source centre, including a point with exactly zero residual.
+            // Numerical Jacobian of transformed → source, in source px per
+            // transformed px. Degenerate geometry cannot be inverted safely.
+            let x = self.to_source(Point::new(p.x + h, p.y), ch);
+            let y = self.to_source(Point::new(p.x, p.y + h), ch);
+            let (a, b) = ((x.x - sampled.x) / h, (y.x - sampled.x) / h);
+            let (c, d) = ((x.y - sampled.y) / h, (y.y - sampled.y) / h);
+            let det = a * d - b * c;
+            if !det.is_finite() || det.abs() < 1e-12 {
+                return None;
+            }
+            if distance < 1e-5 {
+                return Some(p);
+            }
+            if iteration == 24 {
+                return None;
+            }
+            let (dx, dy) = ((d * err.0 - b * err.1) / det, (-c * err.0 + a * err.1) / det);
+            if !dx.is_finite() || !dy.is_finite() {
+                return None;
+            }
+            // Backtracking avoids accepting Newton steps that amplify error.
+            let mut scale = 1.0;
+            let mut next = None;
+            for _ in 0..12 {
+                let candidate = Point::new(p.x - scale * dx, p.y - scale * dy);
+                if candidate.x.is_finite() && candidate.y.is_finite() {
+                    let mapped = self.to_source(candidate, ch);
+                    let residual = (mapped.x - src.x).hypot(mapped.y - src.y);
+                    if residual.is_finite() && residual < distance {
+                        next = Some(candidate);
+                        break;
+                    }
+                }
+                scale *= 0.5;
+            }
+            p = next?;
+        }
+        None
+    }
+
     /// Vignetting compensation gain at source position `src` (px).
     pub fn gain(&self, src: Point) -> f32 {
         let mut g = 1.0;

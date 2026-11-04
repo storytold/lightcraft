@@ -251,6 +251,75 @@ fn ca_estimate_recovers_scale() {
     assert!(r.abs() < 0.0005 && b.abs() < 0.0005, "{r} {b}");
 }
 
+/// Issue #3590: a defect tied to a source pixel must be located on the transformed
+/// image even after manual distortion, lens correction and perspective change.
+#[test]
+fn source_anchored_point_roundtrips_through_optical_warps() {
+    let mut warps = vec![Warp::identity(600.0, 400.0)];
+    for distortion in [-100.0, -50.0, 50.0, 100.0] {
+        let mut s = DevelopSettings::default();
+        s.optics.distortion = distortion;
+        warps.push(Warp::from_settings(600.0, 400.0, &s, None));
+    }
+    let mut with_lens = Warp::identity(600.0, 400.0);
+    with_lens.lens = Some(EmbeddedLens {
+        warp: Some(EmbeddedWarp { planes: [[1.0, -0.03, 0.01, 0.0, 0.001, -0.002]; 3], center: Point::new(0.52, 0.49), radius: 0.6 }),
+        ..Default::default()
+    });
+    with_lens.lens_dist = 1.0;
+    with_lens.k1 = -0.08;
+    // Channel-specific correction must be inverted using the requested
+    // plane, not a hard-coded green-plane approximation.
+    with_lens.ca = [0.002, 0.0, -0.002];
+    let colour_probe = Point::new(100.0, 75.0);
+    assert!(with_lens.to_source(colour_probe, 0).dist(with_lens.to_source(colour_probe, 1)) > 0.1);
+    assert!(with_lens.to_source(colour_probe, 2).dist(with_lens.to_source(colour_probe, 1)) > 0.1);
+    warps.push(with_lens.clone());
+    // Also exercise multi-stage DNG lens correction (WarpRectilinear2).
+    let mut with_stages = chain(&[stage(&[(0, 1.0), (1, 0.05)], Point::new(0.5, 0.5), 0.6, false)]);
+    with_stages.w = 600.0;
+    with_stages.h = 400.0;
+    warps.push(with_stages);
+    let mut with_perspective = Warp::identity(600.0, 400.0);
+    with_perspective.persp_inv = Homography([1.0, 0.02, 0.04, 0.01, 1.0, -0.02, 0.001, 0.002, 1.0]);
+    with_perspective.persp = with_perspective.persp_inv.inverse().expect("invertible synthetic perspective");
+    warps.push(with_perspective.clone());
+    // Catch regressions where applying perspective silently omits the lens
+    // correction or applies the two inverse maps in the wrong order.
+    let mut combined = with_lens;
+    combined.persp = with_perspective.persp;
+    combined.persp_inv = with_perspective.persp_inv;
+    warps.push(combined);
+
+    for warp in &warps {
+        for original in
+            [Point::new(65.0, 55.0), Point::new(140.0, 310.0), Point::new(300.0, 200.0), Point::new(480.0, 92.0), Point::new(540.0, 365.0)]
+        {
+            for ch in 0..3 {
+                let transformed = warp.from_source(original, ch).expect("source pixel can be located in transformed image");
+                let recovered = warp.to_source(transformed, ch);
+                assert!(recovered.dist(original) < 0.01, "source {original:?}, transformed {transformed:?}, recovered {recovered:?}, ch {ch}");
+            }
+        }
+    }
+    // At the defect's location, distortion really moves its displayed position.
+    let p = Point::new(65.0, 55.0);
+    assert!(warps[3].from_source(p, 1).expect("mapped").dist(p) > 2.0);
+}
+
+/// Invalid or non-invertible geometry must never introduce NaNs or panics.
+#[test]
+fn source_to_transformed_rejects_non_finite_and_degenerate_mappings() {
+    let mut warp = Warp::identity(600.0, 400.0);
+    assert!(warp.from_source(Point::new(f64::NAN, 20.0), 1).is_none());
+    assert!(warp.from_source(Point::new(10.0, 20.0), 3).is_none());
+    warp.ca[1] = -1.0; // every transformed green pixel samples the image centre
+    assert!(warp.from_source(Point::new(65.0, 55.0), 1).is_none());
+    // Regression: even a perfect residual cannot make a collapsed mapping
+    // invertible. The earlier implementation returned Some(centre) here.
+    assert!(warp.from_source(Point::new(300.0, 200.0), 1).is_none());
+}
+
 #[test]
 fn warp_identity_and_distortion_direction() {
     let s = DevelopSettings::default();
