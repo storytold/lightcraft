@@ -577,6 +577,54 @@ fn templates_from_before_folders_are_in_user_templates() {
     run(&mut s, "print.template.apply", json!({"name": "Old"}));
 }
 
+#[test]
+fn template_folders_with_and_without_templates_and_with_path_characters() {
+    let files = MemStore::new();
+    let mut s = Session::with_demo();
+    let stores = LibraryStores { dir: "print".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    let kept: Vec<String> = files.files.lock().unwrap().keys().cloned().collect();
+    let no_new_files = |files: &MemStore| files.files.lock().unwrap().keys().all(|k| kept.contains(k) || k == "prefs.json");
+
+    // a folder name is a label in prefs.json, not a path: `/`, `\` and `..` are kept as typed
+    for name in ["Clients/2024", r"a\b", ".."] {
+        let r = run(&mut s, "print.template.folder.create", json!({"name": name}));
+        assert_eq!(r["name"], name);
+    }
+    let r = run(&mut s, "print.template.list", json!({}));
+    assert_eq!(folder_names(&r), ["User Templates", "..", r"a\b", "Clients/2024"]);
+    assert!(no_new_files(&files), "folders make no files of their own");
+    assert!(fails(&mut s, "print.template.folder.create", json!({"name": "clients/2024"})).contains("already a folder"));
+
+    // an empty folder is renamed and deleted like one with templates; nothing moves
+    let r = run(&mut s, "print.template.folder.rename", json!({"name": "..", "to": "Empty"}));
+    assert_eq!(folder_names(&r), ["User Templates", r"a\b", "Clients/2024", "Empty"]);
+    assert_eq!(r["folders"][3], json!({"name": "Empty", "default": false, "templates": 0}));
+    let r = run(&mut s, "print.template.folder.delete", json!({"name": "Empty"}));
+    assert_eq!((r["deleted"].as_str(), r["moved"].as_u64()), (Some("Empty"), Some(0)));
+    assert_eq!(folder_names(&r), ["User Templates", r"a\b", "Clients/2024"]);
+
+    // templates move into a folder and out of it again
+    run(&mut s, "print.template.save", json!({"name": "One", "folder": "Clients/2024"}));
+    run(&mut s, "print.template.save", json!({"name": "Two"}));
+    run(&mut s, "print.template.save", json!({"name": "Three", "folder": r"a\b"}));
+    let r = run(&mut s, "print.template.move", json!({"name": "Two", "folder": "Clients/2024"}));
+    assert_eq!(template_folders(&r), [pair("One", "Clients/2024"), pair("Two", "Clients/2024"), pair("Three", r"a\b")]);
+    let r = run(&mut s, "print.template.move", json!({"name": "Three", "folder": "User Templates"}));
+    assert_eq!(template_folders(&r)[2], pair("Three", "User Templates"));
+
+    // a folder with templates is renamed with them; deleting it moves every one to User Templates
+    let r = run(&mut s, "print.template.folder.rename", json!({"name": "clients/2024", "to": "Clients/2025"}));
+    assert_eq!(template_folders(&r)[..2], [pair("One", "Clients/2025"), pair("Two", "Clients/2025")]);
+    let r = run(&mut s, "print.template.folder.delete", json!({"name": "Clients/2025"}));
+    assert_eq!(r["moved"], 2);
+    assert_eq!(template_folders(&r), [pair("One", "User Templates"), pair("Two", "User Templates"), pair("Three", "User Templates")]);
+    // a new folder under a deleted folder's name starts empty
+    let r = run(&mut s, "print.template.folder.create", json!({"name": "Clients/2025"}));
+    assert_eq!(r["folders"][2], json!({"name": "Clients/2025", "default": false, "templates": 0}));
+    assert!(no_new_files(&files));
+}
+
 /// A library whose `prefs.json` can't be read, so saving the preferences fails.
 #[derive(Clone, Default)]
 struct PrefsUnreadable(MemStore);
