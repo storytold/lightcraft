@@ -253,6 +253,9 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         }
     }
     let total = queue.len();
+    if !d.move_files && ImportDialog::can_copy(app) {
+        app.ui.settings.import_copy = d.copy;
+    }
     app.import = Some(ImportTask::new(queue, params, undo0, false));
     app.renderer.forget_imports();
     Ok(json!({"importing": total}))

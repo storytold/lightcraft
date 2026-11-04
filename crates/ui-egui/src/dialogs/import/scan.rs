@@ -73,7 +73,8 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard });
+    let copy = app.ui.settings.import_copy && ImportDialog::can_copy(app);
+    app.scan = Some(ScanTask { progress, rx, copy, album: None, browse: false, sources, guard });
     Ok(json!({"scanning": true}))
 }
 

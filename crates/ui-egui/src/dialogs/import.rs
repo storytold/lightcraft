@@ -114,6 +114,10 @@ impl ImportDialog {
     fn in_library(&self, app: &LightcraftApp) -> bool {
         self.library.is_none_or(|g| g == app.session.library_generation())
     }
+    /// Whether the review can copy or move files (into a library on disk, or a chosen folder).
+    pub(super) fn can_copy(app: &LightcraftApp) -> bool {
+        app.session.library.as_ref().is_some_and(|l| l.on_disk) || app.services.pick_folder.is_some()
+    }
     /// Mark the candidates whose photo is in Recently Deleted. They are checked when the choice
     /// for them (`on_deleted`) imports them — by default it restores them, so a photo deleted by
     /// mistake comes back by importing its file again (issue #706).

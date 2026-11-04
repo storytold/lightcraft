@@ -134,6 +134,8 @@ pub struct AppSettings {
     pub close_dialogs_outside: bool,
     /// Photos and folders dropped on the window import at once, without the import review.
     pub import_dropped_directly: bool,
+    /// The import review opens with Copy chosen (else Add in place; Move is never remembered).
+    pub import_copy: bool,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
     /// Use Windows DirectComposition to prevent VRR flicker; applies at next launch.
@@ -225,6 +227,7 @@ impl Default for AppSettings {
             ask_before_move: true,
             close_dialogs_outside: false,
             import_dropped_directly: false,
+            import_copy: false,
             gpu: true,
             compose_window: false,
             preview_limit: 0,
