@@ -1,14 +1,12 @@
 //! Location filling uses the current view and the shared activity stack.
-use crate::{
-    LightcraftApp,
-    theme::Tokens,
-    widgets::{register, text_button},
-};
+use crate::LightcraftApp;
+use crate::widgets::{register, text_button};
 use serde_json::json;
 
-pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
+/// Advance a running Fill view (`metadata.pumpLocations`): every 0.1 s while it runs, else every 5 s.
+/// Background work: `now` is the host's clock, not the frame's input.
+pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     let key = egui::Id::new("location-fill-next-pump");
-    let now = ctx.input(|i| i.time);
     if ctx.data(|d| d.get_temp::<f64>(key)).is_some_and(|next| now < next) {
         return;
     }
@@ -31,8 +29,13 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
 pub fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, has_gps: bool) {
     let task = app.session.activity.list().into_iter().find(|t| t.kind == "geocode");
     ui.horizontal_wrapped(|ui| {
-        let fill=ui.add_enabled_ui(has_gps,|ui|text_button(ui,"fillLocation","Fill Location",false)).inner;
-        if fill.on_hover_text(crate::i18n::tr("Fill missing places for selected photos and save to the catalog.")).clicked() {
+        let fill = ui.add_enabled_ui(has_gps, |ui| text_button(ui, "fillLocation", "Fill Location", false)).inner;
+        let hover = format!(
+            "{}\n{}",
+            crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
+            crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
+        );
+        if fill.on_hover_text(hover).clicked() {
             match app.run("metadata.reverseGeocode",json!({})) {
                 Ok(v) => app.toast(ui.ctx(),format!("{}: {}",crate::i18n::tr("Locations saved to catalog"),v["changed"].as_u64().unwrap_or(0))),
                 Err(e) => app.toast_error(ui.ctx(),e),
@@ -49,7 +52,7 @@ pub fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, has_gps: bool) {
     });
     if let Some(task) = task {
         ui.label(format!("{} · {} / {}", crate::i18n::tr("Filling places"), task.done, task.total));
-        let bar = super::activity::bar(ui, &Tokens::get(ui.ctx()), &task, ui.available_width());
-        register(ui.ctx(), "locations:progress", bar);
+        let bar = super::activity::bar(ui, &task, ui.available_width());
+        register(ui, "locations:progress", bar.rect);
     }
 }
