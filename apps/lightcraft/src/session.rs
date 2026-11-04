@@ -235,6 +235,10 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         })),
         // atomic (temp file + sync + rename): a failed write never leaves a truncated file
         write_shared: Some(std::sync::Arc::new(lightcraft_engine::export::write_file)),
+        original_copy: Some(Box::new(lightcraft_engine::export::copy_original)),
+        original_copy_shared: Some(std::sync::Arc::new(lightcraft_engine::export::copy_original)),
+        // the copier itself checks the source before it writes anything
+        original_check: None,
         write: Some(Box::new(lightcraft_engine::export::write_file)),
         write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
         png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {

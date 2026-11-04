@@ -20,10 +20,56 @@ pub fn params(text: &str) -> Result<Value, String> {
     }
 }
 
+/// Whether command `id` keeps its place behind an Original export that is still waiting for its
+/// videos to load: anything that can change the library (it could remove a photo the export
+/// copies), but not a query, which runs at once. UI commands and unknown ids keep their order too.
+pub fn waits_behind_export(id: &str) -> bool {
+    if id == "web.stats" {
+        return false;
+    }
+    lightcraft_engine::find_command(id).is_none_or(|spec| spec.journal)
+}
+
+/// The `app.export` params an export that has to wait runs with later: its `resolved` settings
+/// (a preset expanded, or the previous export's), with the targets frozen in `params`. A preset or
+/// a previous export changed during the wait no longer changes what this export writes.
+pub fn frozen_export(resolved: &Value, params: &Value) -> Value {
+    let mut frozen = resolved.clone();
+    if let Some(o) = frozen.as_object_mut() {
+        o.remove("preset");
+        if let Some(ids) = params.get("ids").filter(|ids| !ids.is_null()) {
+            o.insert("ids".into(), ids.clone());
+        }
+    }
+    frozen
+}
+
+/// How long an Original export waits for its videos before it runs anyway (and reports the one
+/// still loading), so a storage read that never settles can't hold the commands behind it forever.
+pub const EXPORT_WAIT_MS: f64 = 30_000.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_waiting_export_keeps_its_resolved_settings_and_targets() {
+        let resolved = json!({"format": "original", "dir": "out", "preset": "Mine"});
+        let frozen = frozen_export(&resolved, &json!({"preset": "Mine", "ids": [4, 5]}));
+        assert_eq!(frozen, json!({"format": "original", "dir": "out", "ids": [4, 5]}));
+        assert_eq!(frozen_export(&json!({"format": "original"}), &json!({})), json!({"format": "original"}));
+    }
+
+    #[test]
+    fn library_changes_wait_behind_a_waiting_export_and_queries_do_not() {
+        for id in ["photo.deletePermanently", "photo.delete", "dialog.allMetadata", "no.such.command"] {
+            assert!(waits_behind_export(id), "{id}");
+        }
+        for id in ["library.info", "photo.allMetadata", "web.stats"] {
+            assert!(!waits_behind_export(id), "{id}");
+        }
+    }
 
     #[test]
     fn blank_or_null_params_are_an_empty_object() {

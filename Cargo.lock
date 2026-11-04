@@ -4024,6 +4024,7 @@ dependencies = [
  "js-sys",
  "lightcraft-codecs",
  "lightcraft-engine",
+ "lightcraft-meta",
  "lightcraft-preview",
  "lightcraft-raster",
  "lightcraft-ui-egui",
