@@ -806,15 +806,15 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     } else {
         r
     };
-    paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
+    let photo_rect = paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
     // labels and badges
     paint_cell_caption(app, p, &t, &photo, r, square);
-    paint_cell_badges(app, p, &t, &photo, img_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
+    paint_cell_badges(app, p, &t, &photo, photo_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
     if let Some(name) = &photo.copy_name {
         paint_copy_tag(p, &t, name, img_rect, square);
     }
     if let Some(why) = &photo.preview_only {
-        paint_preview_pill(ui, p, &t, id, why, img_rect);
+        paint_preview_pill(ui, p, &t, id, why, photo_rect);
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
@@ -838,7 +838,7 @@ pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::
     spoken
 }
 
-fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) {
+fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) -> Rect {
     let ThumbFlags { square, state, onscreen, ppp } = flags;
     let size = thumb_px(img_rect.width().max(img_rect.height()), ppp);
     request_thumb(app, id, size, if onscreen { 10 } else { 5 });
@@ -848,6 +848,7 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
         let fit = super::detail::fit_texture_rect(img_rect, [tw, th]);
         p.image(tex.tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         selection_ring(p, t, fit, state);
+        fit
     } else {
         let ph = img_rect.shrink(if square { 20.0 } else { 0.0 });
         p.rect_filled(ph, 0.0, t.skeleton);
@@ -857,6 +858,7 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
             // unreadable / missing file
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
         }
+        ph
     }
 }
 
@@ -890,14 +892,22 @@ fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo:
     }
 }
 
-fn paint_cell_badges(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, img_rect: Rect, flags: BadgeFlags) {
+/// The 24-pixel band the badges sit in, on the photo itself: a portrait's fitted rect is
+/// narrower than the cell's image area and a landscape's is shorter, so a band sized from
+/// the image area sticks out past the photo and crosses its selection frame (#3601). A photo
+/// shorter than the band keeps its own top edge.
+fn photo_badge_bar(photo_rect: Rect) -> Rect {
+    Rect::from_min_max(pos2(photo_rect.left(), (photo_rect.bottom() - 24.0).max(photo_rect.top())), photo_rect.right_bottom())
+}
+
+fn paint_cell_badges(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, photo_rect: Rect, flags: BadgeFlags) {
     let BadgeFlags { square, selected, hovered } = flags;
     let show_badges = match app.ui.settings.grid_badges {
         crate::state::GridBadges::Auto => hovered || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
         crate::state::GridBadges::Always => true,
         crate::state::GridBadges::Never => false,
     };
-    let badge_bar = Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - 24.0), img_rect.right_bottom());
+    let badge_bar = photo_badge_bar(photo_rect);
     if !square && photo.label.is_some() {
         // Justified photos fill the whole cell, so the label shows as a translucent tinted footer
         // over the photo's bottom edge (opaque, it would hide 24 px of every labelled photo).
@@ -944,11 +954,11 @@ fn paint_copy_tag(p: &egui::Painter, t: &Tokens, name: &str, img_rect: Rect, squ
     p.galley(pos2(br.left() + 22.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
 }
 
-fn paint_preview_pill(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, why: &str, img_rect: Rect) {
-    // a raw shown from its embedded JPEG: a small amber "Preview" pill at the image's bottom
+fn paint_preview_pill(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, why: &str, photo_rect: Rect) {
+    // a raw shown from its embedded JPEG: a small amber "Preview" pill at the photo's bottom
     // left, above the badge bar (always shown: it changes what editing does)
     let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.semibold(9.5), Color32::WHITE);
-    let at = pos2(img_rect.left() + 6.0, img_rect.bottom() - 30.0 - 16.0);
+    let at = pos2(photo_rect.left() + 6.0, photo_rect.bottom() - 30.0 - 16.0);
     let br = Rect::from_min_size(at, vec2(g.size().x + 24.0, 16.0));
     p.rect_filled(br, 8.0, Color32::from_black_alpha(170));
     paint(p, Rect::from_center_size(pos2(br.left() + 9.0, br.center().y), vec2(12.0, 12.0)), Icon::Info, t.caution);
@@ -1661,5 +1671,28 @@ mod tests {
         assert_eq!(resolve_group(GroupBy::Auto, 90.0), GroupBy::Year);
         assert_eq!(resolve_group(GroupBy::None, 220.0), GroupBy::None);
         assert_eq!(resolve_group(GroupBy::Year, 400.0), GroupBy::Year);
+    }
+
+    /// The badge band sits on the photo itself — a portrait's fitted rect is narrower than the
+    /// cell's image area, a landscape's is shorter — so it never sticks out past the photo or
+    /// crosses its selection frame (#3601).
+    #[test]
+    fn the_badge_band_stays_on_the_photo() {
+        let cell = Rect::from_min_size(pos2(10.0, 24.0), vec2(180.0, 180.0));
+        // A photo that fills the image area: the band is the usual 24 px footer
+        let full = photo_badge_bar(cell);
+        assert!((full.height() - 24.0).abs() < 0.01, "{full:?}");
+        assert!((full.bottom() - cell.bottom()).abs() < 0.01);
+        assert!((full.left() - cell.left()).abs() < 0.01 && (full.right() - cell.right()).abs() < 0.01);
+        // A portrait photo fitted inside it: the band is no wider than the photo
+        let portrait = Rect::from_min_size(pos2(cell.left() + 55.0, cell.top()), vec2(70.0, 180.0));
+        let bar = photo_badge_bar(portrait);
+        assert!(bar.left() >= portrait.left() && bar.right() <= portrait.right(), "{bar:?}");
+        assert!((bar.height() - 24.0).abs() < 0.01);
+        // A landscape photo shorter than the band: its own top edge, never a negative rect
+        let wide = Rect::from_min_size(pos2(cell.left(), cell.top() + 80.0), vec2(180.0, 20.0));
+        let bar = photo_badge_bar(wide);
+        assert!((bar.top() - wide.top()).abs() < 0.01, "{bar:?}");
+        assert!(bar.bottom() <= wide.bottom() + 0.01);
     }
 }
