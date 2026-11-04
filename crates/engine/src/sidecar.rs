@@ -186,20 +186,7 @@ pub enum DevelopPatch {
 /// ([`crate::crs::Target`]: absolute Kelvin for raws with a measured illuminant, a shift from the
 /// as-shot white for everything developed relative to it).
 pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Result<SidecarData, String> {
-    parse_sidecar_where(xmp, target, |_| true)
-}
-
-/// [`parse_sidecar`], with only the develop properties `develop` takes (by name: `crs:` ones as
-/// `crs:Clarity2012`, `crs:RetouchAreas`, LightCraft's own settings as `lc:settings`). The
-/// metadata (rating, label, titles, keywords…) is read whole.
-pub(crate) fn parse_sidecar_where(xmp: &str, target: crate::crs::Target, develop: impl Fn(&str) -> bool) -> std::result::Result<SidecarData, String> {
-    let mut d = lightcraft_meta::parse_xmp(xmp).map_err(|e| e.to_string())?;
-    let takes = |k: &String| !k.starts_with("crs:") || develop(k.split('/').next().unwrap_or(k));
-    d.properties.retain(|k, _| takes(k));
-    d.values.retain(|k, _| takes(k));
-    if !develop("lc:settings") {
-        d.lc_settings = None;
-    }
+    let d = lightcraft_meta::parse_xmp(xmp).map_err(|e| e.to_string())?;
     let m = &d.metadata;
     let lc = |k: &str| d.properties.get(&format!("lc:{k}")).and_then(|v| v.first()).cloned();
     let mut out = SidecarData {

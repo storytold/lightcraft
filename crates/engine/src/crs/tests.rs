@@ -369,3 +369,55 @@ fn disabled_lens_profile_switch_keeps_embedded_corrections() {
     let on = props(&preset_packet("", "").replace(r#"crs:LensProfileEnable="0""#, r#"crs:LensProfileEnable="1""#));
     assert!(apply_partial(&DevelopSettings::default(), &to_partial(&on, Target::Any), 1.0).optics.lens_profile);
 }
+
+/// [`mapped_paths`] names every develop setting [`to_partial`] writes, and only settings that
+/// exist: a mapping added without its path would leave that setting at a stale value where a
+/// packet is the whole of a photo's settings (a Lightroom catalog's develop text).
+#[test]
+fn mapped_paths_name_every_setting_the_mapping_writes() {
+    // every field the mapping reads, each with a value it takes
+    READ.with(|r| *r.borrow_mut() = Some(Default::default()));
+    to_partial(&Props::new(), Target::Any);
+    let keys = READ.with(|r| r.borrow_mut().take()).unwrap_or_default();
+    assert!(keys.len() > 100, "{keys:?}");
+    let value = |k: &str| -> Vec<String> {
+        match k {
+            _ if k.contains("ToneCurve") => vec!["0, 0".into(), "128, 140".into(), "255, 255".into()],
+            "crs:HasCrop" | "crs:HDREditMode" | "crs:ConvertToGrayscale" | "crs:LensProfileEnable" | "crs:AutoLateralCA" => vec!["True".into()],
+            "crs:WhiteBalance" => vec!["Custom".into()],
+            "crs:CropLeft" | "crs:CropTop" => vec!["0.1".into()],
+            "crs:CropRight" | "crs:CropBottom" => vec!["0.9".into()],
+            "crs:Temperature" | "crs:AsShotTemperature" => vec!["5000".into()],
+            _ => vec!["10".into()],
+        }
+    };
+    let full: Props = keys.iter().map(|k| (k.clone(), value(k))).collect();
+    // (without the 2012 fields, the older process versions' are read)
+    let old: Props = full.iter().filter(|(k, _)| !k.ends_with("2012")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let paths = mapped_paths();
+    fn written(v: &Value, at: &str, paths: &std::collections::BTreeSet<String>, out: &mut Vec<String>) {
+        match v {
+            _ if paths.contains(at) => {}
+            Value::Object(m) => m.iter().for_each(|(k, v)| written(v, &if at.is_empty() { k.clone() } else { format!("{at}.{k}") }, paths, out)),
+            _ => out.push(at.to_string()),
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for props in [&full, &old] {
+        for target in [Target::Any, Target::Rendered, Target::RawAbsolute, Target::RawRelative] {
+            let partial = to_partial(props, target);
+            let mut unnamed = Vec::new();
+            written(&partial, "", paths, &mut unnamed);
+            assert!(unnamed.is_empty(), "{target:?}: written but not in mapped_paths: {unnamed:?}");
+            // (a develop setting: it is in the settings the partial makes, where not at its default)
+            let merged = DevelopSettings::default().merged(&partial).unwrap().to_json();
+            let mut all = Vec::new();
+            written(&merged, "", &Default::default(), &mut all);
+            seen.extend(all);
+        }
+    }
+    // and each named path is a develop setting the mapping writes (crop.geometry is an object of its own)
+    for p in paths {
+        assert!(seen.iter().any(|s| s == p || s.starts_with(&format!("{p}."))), "{p} is never written");
+    }
+}
