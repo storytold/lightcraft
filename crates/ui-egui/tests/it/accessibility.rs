@@ -328,7 +328,7 @@ fn tool_strip_and_toolbar_buttons_are_named_by_label_with_the_shortcut_as_descri
 fn import_button_describes_its_shortcut_as_this_platform_writes_it() {
     let h = harness(ViewMode::PhotoGrid, RightPanel::Edit);
     let mac = h.ctx.os() == egui::os::OperatingSystem::Mac;
-    let sc = lightcraft_ui_egui::shortcuts::shortcut_of(&h.state().ui.settings.keymap, "file.addPhotos").expect("Import Photos… has a shortcut");
+    let sc = lightcraft_ui_egui::shortcuts::shortcut_of(h.state().ui.settings.profile(), &h.state().ui.settings.keymap, "file.addPhotos").expect("Import Photos… has a shortcut");
     let help = lightcraft_ui_egui::menubar::shortcut_text(sc, mac);
     assert!(button_described(&h, "Import Photos…", &help), "a button named \"Import Photos…\" describing {help:?}");
 }
