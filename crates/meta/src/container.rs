@@ -171,6 +171,33 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
     crate::jpeg_embedded(b).0
 }
 
+fn collect_extended_xmp_chunk(packets: &mut JpegXmpPackets, payload: &[u8], complete: bool, expected_guid: Option<&str>) {
+    packets.saw_extension = true;
+    let Some(expected_guid) = expected_guid.filter(|_| packets.extension_error.is_none()) else { return };
+    let chunk = match parse_extended_xmp_chunk(payload.get(XMP_EXT_SIG.len()..), complete, expected_guid) {
+        Ok(Some(chunk)) => chunk,
+        Ok(None) => return,
+        Err(error) => {
+            packets.extension_error = Some(error);
+            return;
+        }
+    };
+    let Some(received) = packets.received_bytes.checked_add(chunk.data.len()) else {
+        packets.extension_error = Some("Extended XMP received length overflow".into());
+        return;
+    };
+    if usize::try_from(chunk.total_length).map_or(true, |length| length > MAX_EXTENDED_XMP_BYTES) {
+        packets.extension_error = Some("Extended XMP length exceeds the 16 MiB limit".into());
+    } else if packets.chunks.len() >= MAX_EXTENDED_XMP_CHUNKS {
+        packets.extension_error = Some("Extended XMP has too many chunks".into());
+    } else if received > MAX_EXTENDED_XMP_BYTES {
+        packets.extension_error = Some("Extended XMP received data exceeds the 16 MiB limit".into());
+    } else {
+        packets.received_bytes = received;
+        packets.chunks.push(chunk);
+    }
+}
+
 /// Collect JPEG metadata and, when supplied, only validate and retain chunks for the referenced GUID.
 /// Passing `None` discovers the standard packet and extension presence without accumulating chunks,
 /// allowing the caller to apply chunk and byte limits only after resolving the reference.
@@ -218,30 +245,7 @@ pub(crate) fn jpeg_segments_with_packets(b: &[u8], expected_guid: Option<&str>) 
                 out.xmp = Some(String::from_utf8_lossy(payload.get(XMP_SIG.len()..).unwrap_or(&[])).into_owned());
             }
             0xe1 if payload.starts_with(XMP_EXT_SIG) => {
-                packets.saw_extension = true;
-                if let Some(expected_guid) = expected_guid.filter(|_| packets.extension_error.is_none()) {
-                    match parse_extended_xmp_chunk(payload.get(XMP_EXT_SIG.len()..), complete, expected_guid) {
-                        Ok(Some(chunk)) => {
-                            let Some(received) = packets.received_bytes.checked_add(chunk.data.len()) else {
-                                packets.extension_error = Some("Extended XMP received length overflow".into());
-                                i = segment_end;
-                                continue;
-                            };
-                            if usize::try_from(chunk.total_length).map_or(true, |length| length > MAX_EXTENDED_XMP_BYTES) {
-                                packets.extension_error = Some("Extended XMP length exceeds the 16 MiB limit".into());
-                            } else if packets.chunks.len() >= MAX_EXTENDED_XMP_CHUNKS {
-                                packets.extension_error = Some("Extended XMP has too many chunks".into());
-                            } else if received > MAX_EXTENDED_XMP_BYTES {
-                                packets.extension_error = Some("Extended XMP received data exceeds the 16 MiB limit".into());
-                            } else {
-                                packets.received_bytes = received;
-                                packets.chunks.push(chunk);
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(error) => packets.extension_error = Some(error),
-                    }
-                }
+                collect_extended_xmp_chunk(&mut packets, payload, complete, expected_guid);
             }
             0xe2 if expected_guid.is_none() && payload.starts_with(b"ICC_PROFILE\0") => {
                 if !complete || payload.len() < 14 {
