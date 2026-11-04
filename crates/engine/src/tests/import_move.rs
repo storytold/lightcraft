@@ -187,6 +187,29 @@ fn copies_are_written_in_large_chunks() {
     }
 }
 
+/// Both copies to another volume go through `copy_in_chunks`: moving a photo
+/// (`RealFs::copy_no_replace`) and Import > Copy (`copy_verified`). A caller back on `io::copy`
+/// would write 8 KiB at a time on Windows again (issue #3561).
+#[test]
+fn copies_to_another_volume_go_through_large_chunks() {
+    use crate::import_move::{CHUNKED_COPIES, COPY_CHUNK, copy_verified};
+    use crate::rename::{MoveFs, RealFs};
+    let base = temp_dir("chunkedcopies");
+    let src = base.join("src.bin");
+    let bytes: Vec<u8> = (0..2 * COPY_CHUNK + 7).map(|i| (i * 31 % 251) as u8).collect();
+    std::fs::write(&src, &bytes).unwrap();
+    let copies = || CHUNKED_COPIES.with(|c| c.get());
+    let before = copies();
+    RealFs.copy_no_replace(&src, &base.join("moved.bin")).unwrap();
+    assert_eq!(copies(), before + 1, "copy_no_replace copies through copy_in_chunks");
+    copy_verified(&src, &base.join("imported.bin"), None).unwrap();
+    assert_eq!(copies(), before + 2, "copy_verified copies through copy_in_chunks");
+    for name in ["moved.bin", "imported.bin"] {
+        assert!(std::fs::read(base.join(name)).unwrap() == bytes, "{name}: the copy differs");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A copy that fails while writing, or comes out different, leaves nothing behind and keeps the
 /// source; nothing is catalogued.
 #[test]

@@ -83,6 +83,13 @@ pub(crate) fn injected_fault() -> Fault {
 static COPY_THREADS: std::sync::Mutex<Vec<std::thread::ThreadId>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
+thread_local! {
+    /// How many copies the calling thread made through [`copy_in_chunks`] (tests only), to see
+    /// that a caller copies with it, not with `io::copy`'s 8 KiB writes.
+    pub(crate) static CHUNKED_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 pub(crate) fn copy_threads() -> Vec<std::thread::ThreadId> {
     COPY_THREADS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
@@ -345,6 +352,8 @@ pub(crate) const COPY_CHUNK: usize = 1 << 20;
 /// (`copy_file_range`, `sendfile`), and where the kernel declines, the copy std falls back to
 /// fills the buffer, so the writes stay large.
 pub(crate) fn copy_in_chunks<W: Write>(from: &mut impl Read, to: &mut W) -> io::Result<u64> {
+    #[cfg(test)]
+    CHUNKED_COPIES.with(|c| c.set(c.get() + 1));
     let mut out = io::BufWriter::with_capacity(COPY_CHUNK, to);
     let n = io::copy(from, &mut out)?;
     out.flush()?;
