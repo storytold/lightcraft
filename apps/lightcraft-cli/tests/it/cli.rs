@@ -114,6 +114,101 @@ fn calibrate_reads_raf_inputs_and_reports_bad_files() {
     assert!(!out.join("X-T4.json").exists(), "bad input must not produce a profile");
 }
 
+#[test]
+fn calibrate_pairs_options_check_their_inputs() {
+    let run = |args: &[&std::ffi::OsStr]| Command::new(binary()).arg("calibrate").args(args).output().unwrap();
+    let text = |o: &std::process::Output| String::from_utf8_lossy(&o.stderr).into_owned();
+    // nothing to fit from
+    let r = run(&[]);
+    assert!(!r.status.success() && text(&r).contains("--from-pairs"), "{}", text(&r));
+    // `--pairs` needs a file name
+    let r = run(&["--pairs".as_ref()]);
+    assert!(!r.status.success() && text(&r).contains("--pairs"), "{}", text(&r));
+    // a missing, foreign or damaged pairs file is refused with its name, and writes nothing
+    let out = tmp("pairs-profiles");
+    for (name, content) in
+        [("junk.pairs", Some(&b"{not json"[..])), ("foreign.pairs", Some(&br#"{"format":"x","version":1,"photos":[]}"#[..])), ("missing.pairs", None)]
+    {
+        let path = tmp(name);
+        if let Some(c) = content {
+            std::fs::write(&path, c).unwrap();
+        }
+        let r = run(&["--out".as_ref(), out.as_os_str(), "--from-pairs".as_ref(), path.as_os_str()]);
+        assert!(!r.status.success() && text(&r).contains(name), "{name}: {}", text(&r));
+    }
+    assert!(!out.exists(), "a refused pairs file must not write a profile");
+}
+
+#[test]
+fn calibrate_pairs_only_exports_and_pools_pairs_files() {
+    use lightcraft_engine::camera_pairs;
+    use lightcraft_engine::camera_profiles::PhotoPairs;
+    // six photos of one made-up model, in two files that overlap in one photo
+    let mut state = 12345u32;
+    let mut next = move || {
+        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+        f64::from(state >> 8) / f64::from(1u32 << 24)
+    };
+    let photos: Vec<PhotoPairs> = (0..6)
+        .map(|k| PhotoPairs {
+            model: "TEST-1".into(),
+            id: format!("{:032x}", k + 1),
+            dro: None,
+            pairs: (0..400)
+                .map(|_| {
+                    let c = [next() * 0.8 + 0.02, next() * 0.8 + 0.02, next() * 0.8 + 0.02];
+                    let y = [c[0] * 1.4 - c[1] * 0.2, c[1] * 1.3 - c[2] * 0.1, c[2] * 1.2 + 0.05 * c[0]].map(|v: f64| v.clamp(0.001, 1.0));
+                    let single = |v: [f64; 3]| v.map(|x| f64::from(x as f32));
+                    (single(c), single(y))
+                })
+                .collect(),
+        })
+        .collect();
+    let write = |name: &str, p: &[&PhotoPairs]| {
+        let path = tmp(name);
+        std::fs::write(&path, camera_pairs::write(p).unwrap()).unwrap();
+        path
+    };
+    let refs: Vec<&PhotoPairs> = photos.iter().collect();
+    let (a, b, all) = (write("share-a.pairs", &refs[..4]), write("share-b.pairs", &refs[3..]), write("share-all.pairs", &refs));
+    let fit = |inputs: &[&std::path::Path], dir: &str| {
+        let out = tmp(dir);
+        let mut cmd = Command::new(binary());
+        cmd.args(["calibrate", "--out"]).arg(&out);
+        for i in inputs {
+            cmd.arg("--from-pairs").arg(i);
+        }
+        let r = cmd.output().unwrap();
+        assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+        std::fs::read_to_string(out.join("TEST-1.json")).unwrap()
+    };
+    let pooled = fit(&[&a, &b], "pairs-pooled");
+    assert_eq!(pooled, fit(&[&all], "pairs-all"), "pooling two files of the same photos gives the same profile");
+    assert_eq!(pooled, fit(&[&b, &a], "pairs-reversed"));
+    assert!(pooled.contains("\"files\": 6"), "the shared photo counts once: {pooled}");
+    // `--pairs` alone re-exports the pooled photos and writes no profile
+    let merged = tmp("share-merged.pairs");
+    let default_dir = tmp("pairs-default-profiles");
+    let r = Command::new(binary())
+        .env("LIGHTCRAFT_CAMERA_PROFILES", &default_dir)
+        .args(["calibrate", "--from-pairs"])
+        .arg(&a)
+        .arg("--from-pairs")
+        .arg(&b)
+        .arg("--pairs")
+        .arg(&merged)
+        .output()
+        .unwrap();
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert!(!default_dir.exists(), "--pairs without --out must not install a profile");
+    // the same photos, each one's pairs in value order
+    let mut sorted = photos;
+    for photo in &mut sorted {
+        lightcraft_engine::camera_profiles::canonical_order(&mut photo.pairs);
+    }
+    assert_eq!(camera_pairs::read(&std::fs::read(&merged).unwrap(), "merged").unwrap(), sorted);
+}
+
 fn mean(path: &std::path::Path) -> f64 {
     let d = lightcraft_codecs::decode(&std::fs::read(path).unwrap(), Default::default()).unwrap();
     let img = d.to_srgb8();
