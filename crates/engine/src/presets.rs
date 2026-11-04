@@ -569,6 +569,34 @@ impl Session {
     }
 }
 
+/// Apply `preset` to a photo's settings `d` at `amount` (1.0 = 100 %): the one path every caller that puts a
+/// preset on a photo takes (the `preset.apply` command, thumbnails and hover previews, importing with a preset,
+/// import defaults), so all of them show and store the same result.
+///
+/// `info` is the photo's source: a hand-written preset may name one white balance number only, and then it means
+/// what a one-field partial means (`prepare_photo_for_wb_partial`, shared with `develop.merge`): the photo is brought onto the preset's
+/// scale with its own as-shot white first, and the result is put back on the scale the photo is edited on. The
+/// source-free [`Preset::apply`] has no as-shot context and expects that preparation to have been done already.
+/// A zero (or negative, or NaN) `amount` returns `d` exactly as it was, before any preparation, so a preview at
+/// nothing never turns As Shot into Custom.
+pub fn apply_preset_to_photo(
+    preset: &Preset,
+    d: &lightcraft_develop::DevelopSettings,
+    amount: f64,
+    info: &lightcraft_pipeline::SourceInfo,
+) -> lightcraft_develop::DevelopSettings {
+    if amount.is_nan() || amount <= 0.0 {
+        return d.clone();
+    }
+    let prepared = crate::cmd::prepare_photo_for_wb_partial(d, &preset.settings, info);
+    let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
+    let mut next = preset.apply(prepared.as_ref().unwrap_or(d), amount);
+    if on_kelvin_scale {
+        lightcraft_pipeline::local::normalize_wb(&mut next, info);
+    }
+    next
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

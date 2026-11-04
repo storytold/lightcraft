@@ -159,6 +159,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let active = app.session.active();
         let marked = AppliedByPhoto::of(ui.ctx(), &app.session, active);
         let current = active.and_then(|id| app.session.develop_of(id)).map(|d| (*d).clone());
+        // the photo's source, so a preview prepares a one-field white balance preset as applying it will
+        let source = active.map(|id| app.session.source_info(id)).unwrap_or_default();
         let thumbs = app.ui.preset_thumbs && active.is_some();
         let row_h = if thumbs { 54.0 } else { 26.0 };
         let groups = grouped(ui.ctx(), &app.session.presets);
@@ -220,7 +222,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     } else if resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.7));
                     }
-                    let look = if thumbs || resp.hovered() { current.as_ref().map(|d| pr.apply(d, 1.0)) } else { None };
+                    let look = if thumbs || resp.hovered() {
+                        current.as_ref().map(|d| lightcraft_engine::presets::apply_preset_to_photo(&pr, d, 1.0, &source))
+                    } else {
+                        None
+                    };
                     let mut text_x = r.left() + 40.0;
                     if thumbs && let (Some(id), Some(s)) = (active, look.as_ref()) {
                         let tr = Rect::from_min_size(pos2(r.left() + 36.0, r.top() + 5.0), vec2(66.0, row_h - 10.0));
@@ -317,7 +323,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ui.data(|d| d.get_temp::<(lightcraft_catalog::PhotoId, Preset, String)>(last_hover_id))
                 && saved_id == id
             {
-                app.hover_preview = Some(HoverPreview { label: saved_label, settings: saved_preset.apply(curr, 1.0) });
+                app.hover_preview = Some(HoverPreview {
+                    label: saved_label,
+                    settings: lightcraft_engine::presets::apply_preset_to_photo(&saved_preset, curr, 1.0, &source),
+                });
             }
         } else {
             ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(last_hover_id));

@@ -13,6 +13,7 @@ mod cull;
 pub mod curves;
 pub(crate) mod denoise;
 mod develop;
+pub(crate) use develop::prepare_photo_for_wb_partial;
 mod edit;
 mod export;
 pub(crate) mod face_detect;
