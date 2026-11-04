@@ -19,30 +19,43 @@ impl Drop for Dir {
 /// An app on a library at `dir/lib` with one photo whose preview-only flag an older version set.
 /// Its file (a PNG) reads fine, as a raw a newer decoder handles would.
 fn app_with_stale_photo(dir: &Path) -> (LightcraftApp, PhotoId) {
+    let (app, photos) = app_with_stale_photos(dir, 1);
+    (app, photos[0].0)
+}
+
+fn app_with_stale_photos(dir: &Path, count: usize) -> (LightcraftApp, Vec<(PhotoId, PathBuf)>) {
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir.join("files")).unwrap();
-    let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, 50, 255]);
     let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
-    let file = dir.join("files/one.png");
-    std::fs::write(&file, lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+    let files: Vec<_> = (0..count)
+        .map(|i| {
+            let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, i as u8, 255]);
+            let name = if count == 1 { "one.png".to_string() } else { format!("photo-{i}.png") };
+            let file = dir.join("files").join(name);
+            std::fs::write(&file, lightcraft_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+            file
+        })
+        .collect();
     let mut session = lightcraft_engine::Session::new().with_fs();
     session.open_library(dir.join("lib"), false).unwrap();
-    let r = session.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
-    let id = PhotoId(r["imported"][0].as_u64().unwrap());
-    let p = session.catalog.photo(id).unwrap().clone();
-    session
-        .catalog
-        .apply(Op::SetContent {
-            id,
-            width: p.width,
-            height: p.height,
-            file_size: p.file_size,
-            content_hash: p.content_hash.clone(),
-            preview_only: Some("Cr3 files are not decoded yet".into()),
-            preview_checked: "0.5.0".into(),
-        })
-        .unwrap();
-    (LightcraftApp::new(session, Default::default()), id)
+    let r = session.execute("library.import", &json!({"paths": files.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>()})).unwrap();
+    let photos: Vec<_> = r["imported"].as_array().unwrap().iter().zip(files).map(|(id, path)| (PhotoId(id.as_u64().unwrap()), path)).collect();
+    for (id, _) in &photos {
+        let p = session.catalog.photo(*id).unwrap().clone();
+        session
+            .catalog
+            .apply(Op::SetContent {
+                id: *id,
+                width: p.width,
+                height: p.height,
+                file_size: p.file_size,
+                content_hash: p.content_hash.clone(),
+                preview_only: Some("Cr3 files are not decoded yet".into()),
+                preview_checked: "0.5.0".into(),
+            })
+            .unwrap();
+    }
+    (LightcraftApp::new(session, Default::default()), photos)
 }
 
 #[test]
@@ -63,6 +76,78 @@ fn opening_a_library_rechecks_stale_preview_only_raws_in_the_background() {
     app.ui.toast = None;
     crate::recheck::tick(&mut app);
     assert!(app.tasks.is_empty());
+}
+
+#[test]
+fn automatic_recheck_activity_reports_progress_and_can_be_cancelled() {
+    use std::sync::Arc;
+
+    const PHOTOS: usize = 32;
+    let dir = Dir(std::env::temp_dir().join(format!("lc-ui-recheck-cancel-{}", std::process::id())));
+    let (mut app, photos) = app_with_stale_photos(&dir.0, PHOTOS);
+    let native = app.session.media.file_probe.clone().unwrap();
+    let gate = Arc::new((std::sync::Mutex::new((false, false)), std::sync::Condvar::new()));
+    let started = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let worker_gate = gate.clone();
+    let worker_started = started.clone();
+    app.session.media.file_probe = Some(Arc::new(move |path| {
+        let call = {
+            let mut started = worker_started.lock().unwrap_or_else(|e| e.into_inner());
+            started.push(path.to_string());
+            started.len()
+        };
+        if call > 1 {
+            let mut state = worker_gate.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.0 = true;
+            worker_gate.1.notify_all();
+            let (released, _) = worker_gate.1.wait_timeout_while(state, Duration::from_secs(10), |state| !state.1).unwrap_or_else(|e| e.into_inner());
+            drop(released);
+        }
+        native(path)
+    }));
+
+    crate::recheck::tick(&mut app);
+    let (state, _) = gate
+        .1
+        .wait_timeout_while(gate.0.lock().unwrap_or_else(|e| e.into_inner()), Duration::from_secs(5), |state| !state.0)
+        .unwrap_or_else(|e| e.into_inner());
+    let entered = state.0;
+    drop(state);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut row = None;
+    while std::time::Instant::now() < deadline {
+        row = app.session.activity.list().into_iter().find(|row| row.kind == "recheck");
+        if row.as_ref().is_some_and(|row| row.done > 0) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let cancel = row.as_ref().map(|row| app.session.activity.cancel(row.id));
+    let mut state = gate.0.lock().unwrap_or_else(|e| e.into_inner());
+    state.1 = true;
+    gate.1.notify_all();
+    drop(state);
+    assert!(crate::tasks::wait(&mut app, &egui::Context::default(), Duration::from_secs(10)));
+
+    assert!(entered, "the automatic recheck entered its file probe");
+    let row = row.expect("the recheck has an activity row");
+    assert!(row.cancellable, "automatic recheck row should offer cancellation: {row:?}");
+    assert_eq!(row.total, PHOTOS as u64, "the task should report its known file count: {row:?}");
+    assert!(row.done > 0 && row.done < row.total, "the row should show completed progress while other probes are blocked: {row:?}");
+    assert!(cancel.as_ref().is_some_and(|result| result.is_ok()), "activity.cancel should reach the probe: {cancel:?}");
+    let started: std::collections::HashSet<_> = started.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect();
+    assert!(started.len() < photos.len(), "cancellation should leave some files unstarted: {} of {}", started.len(), photos.len());
+    for (id, path) in &photos {
+        let photo = app.session.catalog.photo(*id).unwrap();
+        if started.contains(&path.to_string_lossy().to_string()) {
+            assert!(photo.preview_only.is_none(), "a completed probe should be applied: {path:?}");
+        } else {
+            assert!(photo.preview_only.is_some(), "an unstarted file should remain preview-only: {path:?}");
+            assert_eq!(photo.preview_checked, "0.5.0", "an unstarted file keeps its stale stamp");
+        }
+    }
+    crate::recheck::tick(&mut app);
+    assert!(app.tasks.is_empty(), "a cancelled recheck is not restarted on the next frame");
 }
 
 /// A result for a library that was closed meanwhile is dropped, not applied to the new one.
