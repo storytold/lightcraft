@@ -973,10 +973,10 @@ fn enter_keywords_edits_the_selections_keywords_as_text() {
     let (mut h, ids) = two_selected();
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordView:enter"}));
     assert!(has(&h, "field:enterKeywords") && !has(&h, "keywordChip:beach"), "the text gives the chips way");
-    enter(&mut h, "beach, Weddings*, harbour");
+    enter(&mut h, "beach, Weddings*, harbor");
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
-    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings", "harbour"]);
-    assert_eq!(keywords_of(&h, ids[1]), ["beach", "harbour"], "Weddings stays on the photo that had it");
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings", "harbor"]);
+    assert_eq!(keywords_of(&h, ids[1]), ["beach", "harbor"], "Weddings stays on the photo that had it");
     assert!(!enter_focused(&h), "Return gave up the cursor");
     ask(&mut h, "engine.execute", json!({"command": "edit.undo", "params": {}}));
     assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"], "one undo takes the edit back");
@@ -1029,16 +1029,16 @@ fn enter_keywords_applies_an_edit_when_another_view_is_chosen() {
     ask(&mut h, "ui.clickWidget", json!({"id": "field:enterKeywords"}));
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
     assert_eq!(keywords_of(&h, ids[1]), ["beach"], "the old text did not come back to give sea again");
-    enter(&mut h, "beach, harbour*");
+    enter(&mut h, "beach, harbor*");
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordView:keywords"}));
-    assert!(h.app.ui.toast.as_ref().is_some_and(|(t, ..)| t.contains("harbour*")), "{:?}", h.app.ui.toast);
-    assert!(none_has(&h, &ids, "harbour"));
+    assert!(h.app.ui.toast.as_ref().is_some_and(|(t, ..)| t.contains("harbor*")), "{:?}", h.app.ui.toast);
+    assert!(none_has(&h, &ids, "harbor"));
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordView:enter"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "field:enterKeywords"}));
     ask(&mut h, "ui.key", json!({"key": "End", "cmd": true}));
     ask(&mut h, "ui.key", json!({"key": "Backspace"}));
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
-    assert!(all_have(&h, &ids, "harbour"), "the refused text came back to be put right");
+    assert!(all_have(&h, &ids, "harbor"), "the refused text came back to be put right");
 }
 
 /// Folding the Keywords box while typing applies the edit, as leaving the box does; so does hiding
@@ -1051,13 +1051,13 @@ fn enter_keywords_applies_an_edit_when_the_box_is_folded_or_hidden() {
     assert!(!has(&h, "field:enterKeywords"), "the box is folded");
     assert!(all_have(&h, &ids, "sea"), "folding the box applied it");
     ask(&mut h, "ui.clickWidget", json!({"id": "section:keywording"}));
-    enter(&mut h, "beach, Weddings*, sea, harbour");
+    enter(&mut h, "beach, Weddings*, sea, harbor");
     h.app.ui.toggle_folded("keywording");
     h.step();
-    assert!(all_have(&h, &ids, "harbour"), "folded without a click, it applied it");
+    assert!(all_have(&h, &ids, "harbor"), "folded without a click, it applied it");
     h.app.ui.toggle_folded("keywording");
     h.step();
-    enter(&mut h, "beach, Weddings*, sea, harbour, pier");
+    enter(&mut h, "beach, Weddings*, sea, harbor, pier");
     ask(&mut h, "ui.set", json!({"right": "info"}));
     h.step();
     ask(&mut h, "ui.set", json!({"right": "keywords"}));
@@ -1119,10 +1119,10 @@ fn enter_text(h: &mut Headless) -> String {
 #[test]
 fn enter_keywords_gives_a_plain_list_to_every_photo() {
     let (mut h, ids) = two_selected();
-    enter(&mut h, "harbour, sea, pier");
+    enter(&mut h, "harbor, sea, pier");
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
     for id in &ids {
-        assert_eq!(keywords_of(&h, *id), ["harbour", "sea", "pier"], "photo {id}");
+        assert_eq!(keywords_of(&h, *id), ["harbor", "sea", "pier"], "photo {id}");
     }
 }
 
@@ -1136,6 +1136,21 @@ fn enter_keywords_reads_a_hierarchy_typed_with_greater_or_less_than() {
     assert!(all_have(&h, &ids, "animal|dog") && all_have(&h, &ids, "animal|cat"), "{:?}", keywords_of(&h, ids[1]));
     assert!(none_has(&h, &ids, "animal > dog") && none_has(&h, &ids, "cat < animal"));
     assert_eq!(enter_text(&mut h), "animal|cat, animal|dog, beach, Weddings*", "the box shows them as paths");
+}
+
+/// The Add keyword box reads `>` and `<` as Enter Keywords does: `animal > dog, cat < animal`
+/// gives both photos `animal|dog` and `animal|cat`, and so does an offer taken after them.
+#[test]
+fn the_add_keyword_box_reads_a_hierarchy_typed_with_greater_or_less_than() {
+    let (mut h, ids) = with_places();
+    typed(&mut h, "animal > dog, cat < animal");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "animal|dog") && all_have(&h, &ids, "animal|cat"), "{:?}", keywords_of(&h, ids[1]));
+    assert!(none_has(&h, &ids, "animal > dog") && none_has(&h, &ids, "cat < animal"));
+    typed(&mut h, "bird < animal, lis");
+    ask(&mut h, "ui.key", json!({"key": "ArrowDown"}));
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "animal|bird") && all_have(&h, &ids, "Places|Portugal|Lisbon"), "{:?}", keywords_of(&h, ids[1]));
 }
 
 /// A mixed selection shows each keyword only some photos have with an asterisk after it. Left
@@ -1183,10 +1198,10 @@ fn enter_keywords_undoes_an_edit_of_every_photo_in_one_step() {
 #[test]
 fn enter_keywords_gives_up_an_edit_when_the_selection_changes() {
     let (mut h, ids) = two_selected();
-    enter(&mut h, "beach, Weddings*, harbour");
+    enter(&mut h, "beach, Weddings*, harbor");
     ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [ids[1]]}}));
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
     let every: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
-    assert!(every.iter().all(|id| !keywords_of(&h, *id).contains(&"harbour".to_string())), "nobody got harbour");
+    assert!(every.iter().all(|id| !keywords_of(&h, *id).contains(&"harbor".to_string())), "nobody got harbor");
     assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"]);
 }

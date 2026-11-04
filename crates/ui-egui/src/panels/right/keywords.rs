@@ -110,9 +110,8 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // this edit (the shared field does)
         let returned = r.ending == Some(crate::text_field::Ending::Return) && !text.trim().is_empty();
         // a new name goes inside the default parent (Put New Keywords Inside This Keyword)
-        let as_typed = |app: &LightcraftApp, text: &str| -> Vec<String> {
-            text.split(',').map(|s| app.session.catalog.typed_keyword(s)).filter(|s| !s.is_empty()).collect()
-        };
+        // (`>` and `<` mark a hierarchy as `|` does)
+        let as_typed = |app: &LightcraftApp, text: &str| -> Vec<String> { crate::panels::keywording::typed_names(&app.session.catalog, text) };
         let adding: Option<Vec<String>> = match picked {
             // an offer: it, and the keywords typed before the last comma
             Some(crate::panels::keywording::Picked::Keyword(k)) => {

@@ -377,20 +377,53 @@ pub(crate) fn typing(text: &str) -> &str {
 /// The keywords typed before the last comma, each where the library would put it.
 pub(crate) fn typed_before(catalog: &Catalog, text: &str) -> Vec<String> {
     let Some((before, _)) = text.rsplit_once(',') else { return Vec::new() };
-    before.split(',').map(|s| catalog.typed_keyword(s)).filter(|s| !s.is_empty()).collect()
+    typed_names(catalog, before)
+}
+
+/// The keywords typed in the Add keyword box's `text`, split at commas, each where the library
+/// would put it. `>` and `<` mark a hierarchy as `|` does (see `typed_levels`).
+pub(crate) fn typed_names(catalog: &Catalog, text: &str) -> Vec<String> {
+    text.split(',').map(|s| catalog.typed_keyword(&typed_levels(catalog, s).unwrap_or_else(|| s.to_string()))).filter(|s| !s.is_empty()).collect()
+}
+
+/// `typed` with `>` and `<` read as hierarchy marks (see `levels`), cleaned, when that changes it
+/// and no keyword of the library holds the name as written as whole levels of its path (`a > b`,
+/// `Inbox|a > b` or `a > b|c` for `a > b`).
+fn typed_levels(catalog: &Catalog, typed: &str) -> Option<String> {
+    use lightcraft_catalog::keywords::{SEP, clean, same};
+    let written = clean(typed);
+    let leveled = clean(&levels(typed));
+    if leveled == written {
+        return None;
+    }
+    // whole levels of a path, anywhere in it
+    let levels_of = format!("{SEP}{}{SEP}", written.to_lowercase());
+    let spelled = |p: &str| same(p, &written) || format!("{SEP}{}{SEP}", p.to_lowercase()).contains(&levels_of);
+    // the listed keywords and the photos' own, one pass that stops at the first match
+    let listed = catalog.listed_keywords().map(|l| l.path.as_str());
+    let on_photos = catalog.photos().filter(|p| p.in_library()).flat_map(|p| p.meta.keywords.iter().map(String::as_str));
+    let known = listed.chain(on_photos).any(spelled);
+    (!known).then_some(leveled)
 }
 
 /// What the box offers for `typed`, for photos that all have the `current` keywords.
 pub(crate) fn offers(catalog: &Catalog, current: &[String], typed: &str) -> Offers {
     use lightcraft_catalog::keywords::{SEP, clean};
-    let name = clean(typed);
+    // `>` and `<` read as hierarchy marks, as Return reads them (see `typed_names`)
+    let as_written = clean(typed);
+    let leveled = typed_levels(catalog, typed);
+    let name = leveled.clone().unwrap_or(as_written);
     if name.is_empty() {
         return Offers::default();
     }
     // (a keyword two photos spell differently is one offer, the first spelling)
     let mut seen = std::collections::HashSet::new();
-    let mut keywords = catalog.keyword_suggestions(current, typed, OFFERS);
+    // with `>` or `<` read as levels, the keywords for that first, then those for the text as
+    // written (a keyword whose own name holds `>` or `<`)
+    let mut keywords = leveled.as_deref().map(|l| catalog.keyword_suggestions(current, l, OFFERS)).unwrap_or_default();
+    keywords.extend(catalog.keyword_suggestions(current, typed, OFFERS));
     keywords.retain(|k| seen.insert(k.to_lowercase()));
+    keywords.truncate(OFFERS);
     // where Return would put a name the library lacks, as `Catalog::typed_keyword` does, without
     // looking through the library a second time
     let create = (!catalog.has_keyword(&name)).then(|| match catalog.default_keyword_parent() {
@@ -1206,6 +1239,29 @@ mod tests {
         assert!(typed_before(&c, "lis").is_empty());
     }
 
+    /// In the Add keyword box, `>` and `<` mark a hierarchy as `|` does, unless the name as written
+    /// is a keyword the library has.
+    #[test]
+    fn the_add_keyword_box_reads_greater_and_less_than_as_levels() {
+        let (c, _) = library(&[&["sea", "a > b"]]);
+        assert_eq!(typed_names(&c, "animal > dog, cat < animal, x|y"), ["animal|dog", "animal|cat", "x|y"]);
+        assert_eq!(typed_names(&c, "a > b, sea"), ["a > b", "sea"], "a keyword the library has is read as written");
+        assert_eq!(typed_before(&c, "animal > dog, lis"), ["animal|dog"]);
+        // the offers say what Return gives
+        assert_eq!(offers(&c, &[], "animal > dog").create.as_deref(), Some("animal|dog"));
+        assert_eq!(offers(&c, &[], "a > b").create, None, "the library has `a > b`");
+        let (c, _) = library(&[&["animal|dog"]]);
+        let got = offers(&c, &[], "dog < animal");
+        assert_eq!((got.keywords, got.create), (vec!["animal|dog".to_string()], None), "the library has animal|dog");
+        // a keyword inside another whose own name holds `>` is read as written too
+        let (c, _) = library(&[&["Inbox|a > b"]]);
+        assert_eq!(typed_names(&c, "a > b, x > y"), ["a > b", "x|y"]);
+        assert_eq!(offers(&c, &[], "a > b").keywords, ["Inbox|a > b"]);
+        // a part of such a name still offers it, after the keywords for the levels
+        let (c, _) = library(&[&["a > boat", "a|bow"]]);
+        assert_eq!(offers(&c, &[], "a > bo").keywords, ["a|bow", "a > boat"]);
+    }
+
     /// The grouped box's suggestions say a keyword's own name; two with the same name say their
     /// whole paths, so they can be told apart.
     #[test]
@@ -1248,9 +1304,9 @@ mod tests {
         let (c, ids) = library(&[&["Places|Lisbon", "beach"], &["beach", "sea"]]);
         let start = chips(&c, &ids);
         assert_eq!(entered(&c, &start, "Places|Lisbon*, sea*"), Ok(edit(&[], &["beach"])));
-        assert_eq!(entered(&c, &start, "beach, Places|Lisbon*, sea*, harbour, Places|Porto"), Ok(edit(&["harbour", "Places|Porto"], &[])));
+        assert_eq!(entered(&c, &start, "beach, Places|Lisbon*, sea*, harbor, Places|Porto"), Ok(edit(&["harbor", "Places|Porto"], &[])));
         assert_eq!(entered(&c, &start, "beach, Places|Lisbon, sea*"), Ok(edit(&["Places|Lisbon"], &[])), "made common");
-        assert_eq!(entered(&c, &start, "beach, harbour, HARBOUR"), Ok(edit(&["harbour"], &["Places|Lisbon", "sea"])), "named once");
+        assert_eq!(entered(&c, &start, "beach, harbor, HARBOR"), Ok(edit(&["harbor"], &["Places|Lisbon", "sea"])), "named once");
         assert_eq!(entered(&c, &start, ""), Ok(edit(&[], &["beach", "Places|Lisbon", "sea"])), "an empty box clears them");
         assert_eq!(entered(&c, &start, " , | ,"), Ok(edit(&[], &["beach", "Places|Lisbon", "sea"])), "nothing but separators");
     }
@@ -1278,7 +1334,7 @@ mod tests {
         let (c, ids) = library(&[&["beach", "sea"], &["beach"]]);
         let start = chips(&c, &ids);
         assert_eq!(entered(&c, &start, "beach*, sea*"), Err("beach*".to_string()), "every photo has beach");
-        assert_eq!(entered(&c, &start, "beach, sea*, harbour*"), Err("harbour*".to_string()), "a new name");
+        assert_eq!(entered(&c, &start, "beach, sea*, harbor*"), Err("harbor*".to_string()), "a new name");
         assert_eq!(entered(&c, &start, "beach, *"), Err("*".to_string()));
     }
 
@@ -1355,7 +1411,7 @@ mod tests {
         assert_eq!(entered(&c, &start, &text), Ok(Entered::default()));
         assert_eq!(entered(&c, &start, "beach, star*"), Ok(edit(&[], &["sea*"])), "without its quotes");
         assert_eq!(entered(&c, &start, "beach, \"sea*\", \"star*\""), Ok(edit(&["sea*"], &[])), "a quoted partial goes to all");
-        assert_eq!(entered(&c, &start, "beach, \"harbour*\""), Err("\"harbour*\"".to_string()), "a new name with an asterisk");
+        assert_eq!(entered(&c, &start, "beach, \"harbor*\""), Err("\"harbor*\"".to_string()), "a new name with an asterisk");
         // a partial `star` beside a common `star*`: each reads differently, and either can go
         let (c, ids) = library(&[&["star*", "star"], &["star*"]]);
         let start = chips(&c, &ids);
@@ -1406,7 +1462,7 @@ mod tests {
         let (mut c, ids) = library(&[&["beach"]]);
         c.apply(Op::SetKeyword { path: "Inbox".into(), info: Some(KeywordInfo { new_keywords_inside: true, ..KeywordInfo::default() }) }).unwrap();
         let start = chips(&c, &ids);
-        assert_eq!(entered(&c, &start, "beach, harbour"), Ok(edit(&["Inbox|harbour"], &[])));
+        assert_eq!(entered(&c, &start, "beach, harbor"), Ok(edit(&["Inbox|harbor"], &[])));
     }
 
     /// `>` and `<` mark a hierarchy as `|` does: `animal > dog` and `dog < animal` are both
