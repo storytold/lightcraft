@@ -76,6 +76,7 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
         "productsDir": s.denoise_products_dir().map(|d| d.display().to_string()),
         "model": st.model,
         "rgbModel": st.rgb_model,
+        "upscaleModel": st.upscale_model,
         // whether this build can run denoise models (the `denoise` feature: our pure-Rust CPU/GPU runners)
         "runtime": cfg!(feature = "denoise"),
         "auto": st.auto(),
@@ -248,6 +249,7 @@ fn activate_install(s: &mut Session, result: &Value, model: Arc<dyn crate::denoi
     v["installed"]["selected"] = json!(st.chosen(id));
     v["model"] = json!(st.model);
     v["rgbModel"] = json!(st.rgb_model);
+    v["upscaleModel"] = json!(st.upscale_model);
     Ok(v)
 }
 
@@ -460,7 +462,7 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let mut st = read_settings(&dir);
     // the kind of photo it was in use for takes another installed model of the same kind, if there is one
     let mut changed = false;
-    for domain in [Domain::BayerToRgb, Domain::RgbToRgb] {
+    for domain in [Domain::BayerToRgb, Domain::RgbToRgb, Domain::RgbToRgb4x] {
         if st.slot(domain) == Some(id) {
             *st.slot_mut(domain) =
                 installed_models(&dir).into_iter().filter(|i| i.manifest.domain == domain).map(|i| i.manifest.id).find(|m| m != id);
@@ -472,7 +474,7 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.denoise.touch();
     s.denoise_refresh_active(true);
-    Ok(json!({"removed": id, "model": st.model, "rgbModel": st.rgb_model}))
+    Ok(json!({"removed": id, "model": st.model, "rgbModel": st.rgb_model, "upscaleModel": st.upscale_model}))
 }
 
 fn select(s: &mut Session, p: &Value) -> Result<Value> {
@@ -492,17 +494,19 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
                 .ok_or_else(|| bad(C, "that denoise model is not installed"))?;
             *st.slot_mut(domain) = Some(id.clone());
         }
-        // off: for one kind of photo (`kind`: raw | rgb), else for raw photos as before there were two
+        // off: for one kind of photo (`kind`: raw | rgb), the upscaler (`upscale`), else for raw photos as before
+        // there were two
         None => match str_param(p, "kind") {
             None | Some("raw") => st.model = None,
             Some("rgb") => st.rgb_model = None,
-            Some(other) => return Err(bad(C, format!("unknown kind `{other}`: use raw or rgb"))),
+            Some("upscale") => st.upscale_model = None,
+            Some(other) => return Err(bad(C, format!("unknown kind `{other}`: use raw, rgb or upscale"))),
         },
     }
     write_settings(&dir, &st).map_err(EngineError::Other)?;
     s.denoise.touch();
     s.denoise_refresh_active(true);
-    Ok(json!({"model": st.model, "rgbModel": st.rgb_model}))
+    Ok(json!({"model": st.model, "rgbModel": st.rgb_model, "upscaleModel": st.upscale_model}))
 }
 
 fn settings(s: &mut Session, p: &Value) -> Result<Value> {
@@ -678,15 +682,15 @@ fn clear(s: &mut Session, _: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "denoise.models.list", "Denoise Models", [], None, "{} → {dir, productsDir, model, rgbModel, runtime, auto, cacheGb, threads, runOn, models: [{id, name, version, licence{name, commercial, url, notice}, provenance, source, sizeBytes, sha256, domain: bayerToRgb | rgbToRgb, tile, known, downloadHost, installed, selected, accepted}]}", always, list),
+        cmd!(query "denoise.models.list", "Denoise Models", [], None, "{} → {dir, productsDir, model, rgbModel, upscaleModel, runtime, auto, cacheGb, threads, runOn, models: [{id, name, version, licence{name, commercial, url, notice}, provenance, source, sizeBytes, sha256, domain: bayerToRgb | rgbToRgb | rgbToRgb4x, tile, known, downloadHost, installed, selected, accepted}]}", always, list),
         cmd!(query "denoise.models.inspect", "Inspect Denoise Model", [], None, "{path} → model terms from an adjacent manifest; never executes the file", always, inspect),
         cmd!(query "denoise.models.install", "Install Denoise Model", [], None, "{path, acknowledged: true, activate?: true, background?: false} → {installed, model} or {started} — install a denoise model from a file: an .onnx with a denoise-model.json beside it, or an archive LightCraft knows (the darktable `.dtmodel`). `acknowledged` must be true: the user has been shown the model's licence and accepted it. Unless `activate` is false it becomes the model in use", always, install),
         cmd!(query "denoise.models.download", "Download Denoise Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a model LightCraft has a pinned address for (see `downloadHost` in the list) in the background over HTTPS with lightcraft-fetch. `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, installed and chosen by itself; `denoise.models.downloads` shows how far it is", always, download),
         cmd!(query "denoise.models.downloads", "Denoise Model Downloads", [], None, "{} → {running, downloads: [{id, state: running | done | installed | failed | cancelled, bytes, total, error, from}]} — also installs any download that has arrived", always, downloads),
         cmd!(query "denoise.models.downloadCancel", "Cancel Denoise Model Download", [], None, "{id} → {discarded} — stop a download, or delete a finished one that was not installed", always, download_cancel),
         cmd!(query "denoise.models.test", "Test Denoise Model", [], None, "{id} → {ok, result} — load an installed model and check it gives sensible pictures; needs the denoise runtime", always, test),
-        cmd!(query "denoise.models.remove", "Remove Denoise Model", [], None, "{id} → {removed, model, rgbModel} — delete an installed model (its cached pictures stay until they are evicted); the kind of photo it was chosen for takes another installed model of that kind, if there is one", always, remove),
-        cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null, kind?: raw | rgb} → {model, rgbModel} — choose the model for the kind of photo it is made for (raw photos or finished pictures); null switches denoise off for `kind` (raw when omitted)", always, select),
+        cmd!(query "denoise.models.remove", "Remove Denoise Model", [], None, "{id} → {removed, model, rgbModel, upscaleModel} — delete an installed model (its cached pictures stay until they are evicted); the kind of photo it was chosen for (or Super Resolution, for an upscaler) takes another installed model of that kind, if there is one", always, remove),
+        cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null, kind?: raw | rgb | upscale} → {model, rgbModel, upscaleModel} — choose the model for the kind of photo it is made for (raw photos or finished pictures), or the upscaler Super Resolution uses; null switches `kind` off (raw when omitted)", always, select),
         cmd!(query "denoise.settings", "Denoise Settings", [], None, "{auto?: bool, cacheGb?: 1..10000, threads?: 1..64 | null, runOn?: auto | gpu | cpu} → the settings — `auto`: make the picture of the photos being looked at that have a Denoise amount; `cacheGb`: how much the cached pictures may take; `threads`: most tiles run at once; `runOn`: where the model runs — `auto` (the default) the graphics card where it is faster than the processor (both timed on this computer when the card is set up), `gpu` the card whenever it can run the model, `cpu` the processor. Setting `runOn` also lets the card be tried again after a set-up that failed or closed LightCraft", always, settings),
         cmd!(
             "denoise.toggle",

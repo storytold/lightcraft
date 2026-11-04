@@ -909,6 +909,7 @@ fn a_finished_picture_has_a_model_of_its_own_and_its_amount_mixes_in_the_denoise
         Ok(match m.domain {
             Domain::RgbToRgb => Arc::new(Half { runs: half.clone() }) as Arc<dyn Model>,
             Domain::BayerToRgb => Arc::new(Dim { runs: dim.clone() }) as Arc<dyn Model>,
+            Domain::RgbToRgb4x => panic!("no upscaler in this test"),
         })
     });
     x.s.denoise_pump(crate::denoise::Pace::Pause);

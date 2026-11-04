@@ -169,7 +169,8 @@ fn upscalers_match_the_reference_on_odd_and_tiny_tiles() {
             assert_eq!(got.len(), 3 * (scale as usize * t).pow(2));
             agree(&got, &reference::run(&n, t, &x).unwrap());
         }
-        assert!(NetRunner::new(&n, 4).is_err(), "an upscaler is not a Bayer denoiser");
+        // the runner for models takes a 4× upscaler (Super Resolution's contract), and nothing else that enlarges RGB
+        assert_eq!(NetRunner::new(&n, 4).is_ok(), scale == 4, "{scale}×");
     }
 }
 

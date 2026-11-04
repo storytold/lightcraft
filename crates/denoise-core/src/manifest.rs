@@ -24,6 +24,9 @@ pub enum Domain {
     /// A finished picture (a JPEG, PNG, TIFF …) as three planes `[R, G, B]` of gamma-encoded sRGB in 0 to 1; gives the
     /// same, at the same size. For photos that have no sensor data left to denoise.
     RgbToRgb,
+    /// An upscaler for finished pictures: three planes of gamma-encoded sRGB in 0 to 1 in, the same at four times the
+    /// size across out (Super Resolution). Never used to denoise.
+    RgbToRgb4x,
 }
 
 impl Domain {
@@ -31,7 +34,7 @@ impl Domain {
     pub fn in_channels(self) -> usize {
         match self {
             Domain::BayerToRgb => 4,
-            Domain::RgbToRgb => 3,
+            Domain::RgbToRgb | Domain::RgbToRgb4x => 3,
         }
     }
 
@@ -40,6 +43,7 @@ impl Domain {
         match self {
             Domain::BayerToRgb => 2,
             Domain::RgbToRgb => 1,
+            Domain::RgbToRgb4x => 4,
         }
     }
 }

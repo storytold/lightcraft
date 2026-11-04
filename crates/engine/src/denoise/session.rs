@@ -91,6 +91,8 @@ impl Session {
         match domain_of(p)? {
             Domain::BayerToRgb => self.denoise.active.as_ref(),
             Domain::RgbToRgb => self.denoise.active_rgb.as_ref(),
+            // no photo is of an upscaler's kind
+            Domain::RgbToRgb4x => None,
         }
     }
 

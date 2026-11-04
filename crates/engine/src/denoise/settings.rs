@@ -26,6 +26,8 @@ pub(crate) struct Settings {
     pub model: Option<String>,
     /// The installed model in use for finished pictures (JPEG, PNG, TIFF …); `None`: denoise is off for them.
     pub rgb_model: Option<String>,
+    /// The installed upscaler Super Resolution uses (`Domain::RgbToRgb4x`); `None`: none is chosen.
+    pub upscale_model: Option<String>,
     /// Photos with a Denoise amount above 0 that are being looked at (active, selected) get their picture made without
     /// being asked (`None`: yes).
     pub auto: Option<bool>,
@@ -57,6 +59,7 @@ impl Settings {
         match domain {
             lightcraft_denoise::manifest::Domain::BayerToRgb => self.model.as_deref(),
             lightcraft_denoise::manifest::Domain::RgbToRgb => self.rgb_model.as_deref(),
+            lightcraft_denoise::manifest::Domain::RgbToRgb4x => self.upscale_model.as_deref(),
         }
     }
 
@@ -64,12 +67,13 @@ impl Settings {
         match domain {
             lightcraft_denoise::manifest::Domain::BayerToRgb => &mut self.model,
             lightcraft_denoise::manifest::Domain::RgbToRgb => &mut self.rgb_model,
+            lightcraft_denoise::manifest::Domain::RgbToRgb4x => &mut self.upscale_model,
         }
     }
 
-    /// Is `id` the model in use for one kind of photo?
+    /// Is `id` the model in use for one kind of photo, or the upscaler in use?
     pub fn chosen(&self, id: &str) -> bool {
-        self.model.as_deref() == Some(id) || self.rgb_model.as_deref() == Some(id)
+        [&self.model, &self.rgb_model, &self.upscale_model].into_iter().any(|m| m.as_deref() == Some(id))
     }
 
     pub fn cache_bytes(&self) -> u64 {

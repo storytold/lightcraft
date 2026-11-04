@@ -78,12 +78,13 @@ pub struct NetRunner {
 }
 
 impl NetRunner {
-    /// A runner for a denoiser: four Bayer planes of `tile × tile` in and RGB at twice the size out, or RGB in and RGB
-    /// at the same size out.
+    /// A runner for a denoiser or an upscaler: four Bayer planes of `tile × tile` in and RGB at twice the size out, or
+    /// RGB in and RGB at the same size (a denoiser) or four times the size (an upscaler) out.
     pub fn new(net: &Net, tile: usize) -> Result<Self> {
+        // the output's resolution level: -1 twice the input's size, 0 the same, -2 four times
+        let rgb_levels = [0, -2];
         if net.out_channels() != 3
-            // Bayer to RGB: 4 planes in, 3 out at twice the size; RGB to RGB: 3 planes in, 3 out at the same size
-            || !((net.in_channels == 4 && net.fits_tile(tile)) || (net.in_channels == 3 && net.fits_tile_at(tile, 0)))
+            || !((net.in_channels == 4 && net.fits_tile(tile)) || (net.in_channels == 3 && rgb_levels.iter().any(|&l| net.fits_tile_at(tile, l))))
         {
             return Err(bad("the tile or the Bayer-to-RGB / RGB-to-RGB contract does not fit the network"));
         }
