@@ -271,13 +271,13 @@ fn lens_corrections_leave_no_blank_corners() {
         s.optics.distortion = distortion;
         s.optics.ca_red = ca;
         s.optics.ca_blue = -ca;
-        let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).image;
+        let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).unwrap().image;
         assert!(blank_fraction(&r) < 0.002, "distortion {distortion}, CA {ca}: {}", blank_fraction(&r));
     }
     let mut s = DevelopSettings::default();
     s.optics.distortion = -60.0;
     s.geometry.vertical = -60.0;
-    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).image;
+    let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(300, 300)).unwrap().image;
     assert!(blank_fraction(&r) > 0.03, "the keystone keeps its corners: {}", blank_fraction(&r));
 }
 
