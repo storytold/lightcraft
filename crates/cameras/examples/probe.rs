@@ -44,12 +44,18 @@ fn main() {
             let name = std::path::Path::new(&f.name).file_name().unwrap_or(std::ffi::OsStr::new("_"));
             let path = std::path::Path::new(dir).join(name);
             let t = Instant::now();
-            let r = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                .map_err(|e| lightcraft_cameras::Error::Write(e.to_string()))
-                .and_then(|mut out| s.copy_to(f, &mut out, &cancel, &mut |_| {}));
+            let r = match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut out) => {
+                    let r = s.copy_to(f, &mut out, &cancel, &mut |_| {});
+                    // a failed copy leaves no partial file (only one this run made)
+                    if r.is_err() {
+                        drop(out);
+                        let _ = std::fs::remove_file(&path);
+                    }
+                    r
+                }
+                Err(e) => Err(lightcraft_cameras::Error::Write(e.to_string())),
+            };
             match r {
                 Ok(n) => println!(
                     "  copied {} ({n} bytes) in {:.2?} = {:.1} MB/s",
