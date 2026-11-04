@@ -129,6 +129,14 @@ still has lens corrections removed, so the pipeline applies them once through En
 Corrections. Developing this proxy requires a full-resolution demosaic; files without such
 opcodes keep their binned proxy.
 
+An accepted DNG tone fit may then add colour terms on top of the file's own matrix, white balance
+and profile tables: a hue/saturation table, luminance-band chroma matrices, a hue-chroma gain and
+rotation, and bounded offsets. Each term is kept only if it lowers the median displayed CIE76 error
+on the other spatial half and on a finer proxy (up to 768 px) by at least 3%, and the combined look
+is applied through the render's own colour model to confirm its near-white share stays within the larger of
+the plain render's and the camera preview's (plus a small tolerance).
+These checks measure agreement with the camera preview, not calibrated colour.
+
 ## Embedded vignetting correction (Fujifilm RAF)
 
 The RAF decoder turns the maker note's vignetting data into a `FixVignetteRadial` correction, and the render applies

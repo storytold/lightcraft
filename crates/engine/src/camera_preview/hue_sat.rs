@@ -135,6 +135,28 @@ const SHRINK_WEIGHT: f64 = 5.0;
 /// saturation) node, kernel-weighted and shrunk toward identity where the photo has few samples.
 /// Saturation 0 stays identity, so neutrals are never tinted.
 pub(super) fn fit_hue_sat(pairs: &[([f64; 3], [f64; 3])], matrix: &Mat3) -> Option<HsvTable> {
+    fit_hue_sat_grid(pairs, matrix, &TableGrid::FINE)
+}
+
+pub(super) struct TableGrid {
+    hues: usize,
+    sats: usize,
+    pub(super) vals: usize,
+    kernel_hue: f64,
+    kernel_sat: f64,
+    kernel_val: f64,
+}
+
+impl TableGrid {
+    /// The per-photo table of [`fit_hue_sat`].
+    pub(super) const FINE: TableGrid =
+        TableGrid { hues: TABLE_HUES, sats: TABLE_SATS, vals: TABLE_VALS, kernel_hue: KERNEL_HUE, kernel_sat: KERNEL_SAT, kernel_val: KERNEL_VAL };
+    /// Few parameters for a photo with little colour to learn from (and for a camera JPEG that is already close):
+    /// 24 hue nodes 15° apart, three saturation nodes and no value axis, each node reading ±20° around it.
+    pub(super) const SMOOTH: TableGrid = TableGrid { hues: 24, sats: 3, vals: 1, kernel_hue: 10.0, kernel_sat: 0.4, kernel_val: f64::INFINITY };
+}
+
+pub(super) fn fit_hue_sat_grid(pairs: &[([f64; 3], [f64; 3])], matrix: &Mat3, grid: &TableGrid) -> Option<HsvTable> {
     let to = to_prophoto();
     let samples: Vec<(f64, f64, f64, f64, f64)> = pairs
         .iter()
@@ -158,32 +180,32 @@ pub(super) fn fit_hue_sat(pairs: &[([f64; 3], [f64; 3])], matrix: &Mat3) -> Opti
         return None;
     }
     // Samples by table hue step: a node only looks at hues within its kernel's reach.
-    let step = 360.0 / TABLE_HUES as f64;
-    let mut by_hue: Vec<Vec<(f64, f64, f64, f64, f64)>> = vec![Vec::new(); TABLE_HUES];
+    let step = 360.0 / grid.hues as f64;
+    let mut by_hue: Vec<Vec<(f64, f64, f64, f64, f64)>> = vec![Vec::new(); grid.hues];
     for sample in samples {
-        if let Some(bin) = by_hue.get_mut(((sample.0.rem_euclid(360.0) / step) as usize).min(TABLE_HUES - 1)) {
+        if let Some(bin) = by_hue.get_mut(((sample.0.rem_euclid(360.0) / step) as usize).min(grid.hues - 1)) {
             bin.push(sample);
         }
     }
-    let reach = (4.0 * KERNEL_HUE / step).ceil() as usize + 1;
+    let reach = (4.0 * grid.kernel_hue / step).ceil() as usize + 1;
     use rayon::prelude::*;
-    let data: Vec<[f32; 3]> = (0..TABLE_VALS * TABLE_HUES * TABLE_SATS)
+    let data: Vec<[f32; 3]> = (0..grid.vals * grid.hues * grid.sats)
         .into_par_iter()
         .map(|index| {
-            let (v, h, s) = (index / (TABLE_HUES * TABLE_SATS), index / TABLE_SATS % TABLE_HUES, index % TABLE_SATS);
+            let (v, h, s) = (index / (grid.hues * grid.sats), index / grid.sats % grid.hues, index % grid.sats);
             if s == 0 {
                 return [0.0, 1.0, 1.0];
             }
-            let (val, hue, sat) = (v as f64 / (TABLE_VALS - 1) as f64, h as f64 * step, s as f64 / (TABLE_SATS - 1) as f64);
+            let (val, hue, sat) = (v as f64 / (grid.vals.max(2) - 1) as f64, h as f64 * step, s as f64 / (grid.sats - 1) as f64);
             let (mut weight, mut shift, mut log_scale) = (0.0, 0.0, 0.0);
             for offset in 0..=2 * reach {
-                let Some(bin) = by_hue.get((h + TABLE_HUES * 2 + offset - reach) % TABLE_HUES) else { continue };
+                let Some(bin) = by_hue.get((h + grid.hues * 2 + offset - reach) % grid.hues) else { continue };
                 for &(hp, sp, vp, dh, ls) in bin {
                     let dhue = (hp - hue + 180.0).rem_euclid(360.0) - 180.0;
-                    if dhue.abs() > 4.0 * KERNEL_HUE {
+                    if dhue.abs() > 4.0 * grid.kernel_hue {
                         continue;
                     }
-                    let d2 = (dhue / KERNEL_HUE).powi(2) + ((sp - sat) / KERNEL_SAT).powi(2) + ((vp - val) / KERNEL_VAL).powi(2);
+                    let d2 = (dhue / grid.kernel_hue).powi(2) + ((sp - sat) / grid.kernel_sat).powi(2) + ((vp - val) / grid.kernel_val).powi(2);
                     let k = (-0.5 * d2).exp() * sp;
                     weight += k;
                     shift += k * dh;
@@ -198,11 +220,11 @@ pub(super) fn fit_hue_sat(pairs: &[([f64; 3], [f64; 3])], matrix: &Mat3) -> Opti
         })
         .collect();
     data.iter().all(|e| e.iter().all(|v| v.is_finite())).then_some(HsvTable {
-        hue_divisions: TABLE_HUES,
-        sat_divisions: TABLE_SATS,
-        val_divisions: TABLE_VALS,
+        hue_divisions: grid.hues,
+        sat_divisions: grid.sats,
+        val_divisions: grid.vals,
         data,
-        srgb_value: true,
+        srgb_value: grid.vals > 1,
     })
 }
 
