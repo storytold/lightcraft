@@ -51,6 +51,9 @@ pub struct PrintUi {
     pub template_name: String,
     /// The folder Save and Import… put a template in; `None`: User Templates.
     pub save_folder: Option<String>,
+    /// Whether a folder was picked in the Folder selector or made with New Folder…. Until then Save
+    /// over an existing name leaves that template in its folder.
+    pub save_folder_chosen: bool,
     /// A folder name being typed in the Template Browser.
     pub folder_edit: Option<FolderEdit>,
     /// The folder whose Delete Folder waits for a confirmation.
@@ -230,6 +233,16 @@ fn folder_label(folder: Option<&str>) -> String {
     folder.map_or_else(|| crate::i18n::tr("User Templates").to_string(), str::to_string)
 }
 
+/// The folder the Folder selector shows, where Save puts the template: the one picked, or until a
+/// folder is picked, the folder of the saved template with the typed name (any ASCII case).
+fn shown_save_folder(app: &LightcraftApp, pu: &PrintUi) -> Option<String> {
+    if pu.save_folder_chosen {
+        return pu.save_folder.clone();
+    }
+    let name = pu.template_name.trim();
+    app.session.print_templates.iter().find(|x| x.name.eq_ignore_ascii_case(name)).map_or_else(|| pu.save_folder.clone(), |x| x.folder.clone())
+}
+
 /// The print templates: save the settings as one into a folder, import, and the Template Browser:
 /// its folders (New Folder…, Rename Folder…, Delete Folder) and in each the saved templates to
 /// apply, export, delete, and drag onto another folder or move there from their menu.
@@ -239,15 +252,20 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
     // a folder deleted or renamed by a command is no longer the one Save uses
     if pu.save_folder.as_ref().is_some_and(|f| !app.session.print_template_folders.contains(f)) {
         pu.save_folder = None;
+        pu.save_folder_chosen = false;
     }
     ui.horizontal(|ui| {
         crate::text_field::TextField::singleline("field:printTemplateName", &mut pu.template_name)
             .hint(crate::i18n::tr("Template name"))
             .width(140.0)
             .show(ui);
-        let folder = folder_param(pu.save_folder.as_deref()).to_string();
+        let folder = folder_param(shown_save_folder(app, pu).as_deref()).to_string();
         if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
-            run(app, &ctx, "print.template.save", json!({"name": pu.template_name, "folder": folder}));
+            let mut params = json!({"name": pu.template_name});
+            if pu.save_folder_chosen {
+                params["folder"] = json!(folder);
+            }
+            run(app, &ctx, "print.template.save", params);
         }
         if app.services.pick_print_templates.is_some() && text_button(ui, "printTemplateImport", "Import…", false).clicked() {
             let paths = app.services.pick_print_templates.as_mut().map(|pick| pick()).unwrap_or_default();
@@ -259,20 +277,19 @@ fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut 
         }
     });
     let folders: Vec<Option<String>> = std::iter::once(None).chain(app.session.print_template_folders.iter().cloned().map(Some)).collect();
+    let shown = shown_save_folder(app, pu);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Folder")).color(t.text_label));
-        let c = craft_ui::ComboBox::from_id_salt("printSaveFolder").width(120.0).selected_text(folder_label(pu.save_folder.as_deref())).show_ui(
-            ui,
-            |ui| {
-                for (j, f) in folders.iter().enumerate() {
-                    let r = ui.selectable_label(pu.save_folder == *f, folder_label(f.as_deref()));
-                    register(ui, format!("item:printSaveFolder-{j}"), r.rect);
-                    if r.clicked() {
-                        pu.save_folder.clone_from(f);
-                    }
+        let c = craft_ui::ComboBox::from_id_salt("printSaveFolder").width(120.0).selected_text(folder_label(shown.as_deref())).show_ui(ui, |ui| {
+            for (j, f) in folders.iter().enumerate() {
+                let r = ui.selectable_label(shown == *f, folder_label(f.as_deref()));
+                register(ui, format!("item:printSaveFolder-{j}"), r.rect);
+                if r.clicked() {
+                    pu.save_folder.clone_from(f);
+                    pu.save_folder_chosen = true;
                 }
-            },
-        );
+            }
+        });
         crate::widgets::name_combo(&c.response, crate::i18n::tr("Folder"));
         register(ui, "combo:printSaveFolder", c.response.rect);
         if text_button(ui, "printTemplateNewFolder", "New Folder…", false).clicked() {
@@ -324,6 +341,9 @@ fn folder_editor(app: &mut LightcraftApp, ui: &mut Ui, ctx: &egui::Context, pu: 
             // a new folder is where the next Save goes; a renamed one keeps its place there and its closed state
             if edit.from.is_none() || pu.save_folder == edit.from {
                 pu.save_folder.clone_from(&made);
+            }
+            if edit.from.is_none() {
+                pu.save_folder_chosen = true;
             }
             if let (Some(from), Some(to)) = (&edit.from, &made) {
                 for c in &mut pu.closed_folders {

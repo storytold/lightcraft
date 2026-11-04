@@ -303,6 +303,21 @@ fn the_template_browser_makes_folders_and_saves_into_one() {
 }
 
 #[test]
+fn saving_over_a_template_keeps_its_folder_until_one_is_picked() {
+    let mut h = demo(Services::default());
+    open_print(&mut h);
+    cmd(&mut h, "print.template.folder.create", json!({"name": "Weddings"}));
+    cmd(&mut h, "print.template.save", json!({"name": "Sheet", "folder": "Weddings"}));
+    h.app.ui.print.template_name = "Sheet".into();
+    click(&mut h, "button:printSaveTemplate");
+    assert_eq!(template_folders(&h), [("Sheet".into(), Some("Weddings".into()))], "the Folder selector was not touched");
+    click(&mut h, "combo:printSaveFolder");
+    click(&mut h, "item:printSaveFolder-0");
+    click(&mut h, "button:printSaveTemplate");
+    assert_eq!(template_folders(&h), [("Sheet".into(), None)], "User Templates was picked");
+}
+
+#[test]
 fn a_template_dragged_onto_a_folder_moves_there() {
     let mut h = demo(Services::default());
     open_print(&mut h);
