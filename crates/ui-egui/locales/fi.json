@@ -2368,5 +2368,8 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "Filter settings": "Suodata asetuksia",
+  "No setting matches what is typed.": "Mikään asetus ei vastaa kirjoitettua.",
+  "Try one word, or part of one: the names of tabs and sections, labels and explanations are all looked through.": "Kokeile yhtä sanaa tai sen osaa: haku kattaa välilehtien ja osioiden nimet, otsikot ja selitykset."
 }
