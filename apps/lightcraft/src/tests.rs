@@ -39,11 +39,7 @@ fn startup_headless(
 
 fn startup_png(path: &std::path::Path, seed: u8) -> Vec<u8> {
     let image = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[seed, 40, 90, 255]; 64] };
-    let bytes = lightcraft_codecs::encode_png(
-        &lightcraft_codecs::EncodeImage::rgba8(&image),
-        &lightcraft_codecs::EncodeMeta::default(),
-    )
-    .unwrap();
+    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&image), &lightcraft_codecs::EncodeMeta::default()).unwrap();
     std::fs::write(path, &bytes).unwrap();
     bytes
 }
