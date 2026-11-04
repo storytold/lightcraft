@@ -101,6 +101,14 @@ fn super_resolution_writes_a_larger_tiff_stacked_on_top_of_its_photo() {
     let r = s.execute("enhance.superResolution", &json!({"id": original.0, "scale": 4})).unwrap();
     assert!(r["path"].as_str().unwrap().ends_with("ramp-Enhanced-SR-2.tif"), "{r}");
     assert_eq!((r["width"].clone(), r["height"].clone()), (json!(600), json!(400)));
+
+    // the same request gives the same bytes: the photo that has them is the result, and no copy is left behind
+    let photos = s.catalog.photos().count();
+    let again = s.execute("enhance.superResolution", &json!({"id": original.0})).unwrap();
+    assert_eq!((again["id"].clone(), again["path"].as_str()), (json!(id.0), Some(path.as_str())), "{again}");
+    assert_eq!(s.catalog.photos().count(), photos);
+    assert!(!Path::new(&path.replace("ramp-Enhanced-SR.tif", "ramp-Enhanced-SR-3.tif")).exists());
+    assert_eq!(s.selected(), vec![id]);
     drop(s);
     let _ = std::fs::remove_dir_all(dir);
 }

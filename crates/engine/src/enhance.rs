@@ -184,12 +184,21 @@ impl Session {
             .to_string_lossy()
             .to_string();
         let report = crate::import::import(self, std::slice::from_ref(&path), crate::import::ImportMode::Add)?;
-        let id = report
-            .imported
-            .first()
-            .copied()
-            .map(PhotoId)
-            .ok_or_else(|| fail(format!("the enhanced file {path} could not be imported: {:?}", report.failed)))?;
+        let (id, path) = match (report.imported.first(), report.duplicates.first()) {
+            (Some(&id), _) => (PhotoId(id), path),
+            // the upscaler gives the same answer for the same photo: a photo with these bytes is the result already, and
+            // the copy just written (ours, under a new name) goes again
+            (None, Some(crate::import::Duplicate { existing: Some(existing), existing_deleted: false, .. })) => {
+                let existing = PhotoId(*existing);
+                std::fs::remove_file(&path).map_err(|e| fail(format!("could not remove the repeated result {path}: {e}")))?;
+                let existing_path = match self.catalog.photo(existing).map(|p| &p.source) {
+                    Some(Source::File { path }) => path.clone(),
+                    _ => path,
+                };
+                (existing, existing_path)
+            }
+            _ => return Err(fail(format!("the enhanced file {path} could not be imported: {:?}", report.failed))),
+        };
         if let Some(op) = self.catalog.stack_with_ops(id, &[job.photo]) {
             self.commit("Stack with Original", op)?;
         }
