@@ -2438,5 +2438,7 @@
   "Set up name suggestions…": "Nastavit návrhy jmen…",
   "Top bar": "Horní lišta",
   "Tool strip": "Pruh nástrojů",
-  "Bottom bar": "Dolní lišta"
+  "Bottom bar": "Dolní lišta",
+  "Zoom Tool": "Nástroj Lupa",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "Nástroj Lupa: kliknutím přepnete zvětšení; tažením doprava přiblížíte, doleva oddálíte. Tažení se Shiftem zvětšuje i bez tohoto nástroje. Klepnutím na mezerník přepnete zvětšení při uvolnění; podržením mezerníku a tažením posunete snímek bez přepnutí."
 }

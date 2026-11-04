@@ -2390,5 +2390,7 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de herramientas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)",
+  "Zoom Tool": "Herramienta Zoom",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "Herramienta Zoom: haz clic para alternar el zoom; arrastra a la derecha para acercar y a la izquierda para alejar. Arrastrar con Mayús también hace zoom sin esta herramienta. Pulsa Espacio para alternar el zoom al soltarlo; mantén Espacio y arrastra para desplazar sin alternar."
 }

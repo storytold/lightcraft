@@ -2389,5 +2389,7 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "Zoom Tool": "缩放工具",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "缩放工具：单击切换缩放；向右拖动放大，向左拖动缩小。按住 Shift 拖动时，不选此工具也能缩放。轻按空格键会在松开时切换缩放；按住空格键拖动可平移而不切换缩放。"
 }

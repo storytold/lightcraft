@@ -170,6 +170,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("tool.linear", "Linear Gradient", Some("L"), "Window>Tools"),
     ("tool.radial", "Radial Gradient", Some("R"), "Window>Tools"),
     ("tool.wbPicker", "White Balance Selector", Some("W"), "Window>Tools"),
+    ("tool.zoom", "Zoom Tool", None, "Window>Tools"),
     ("tool.none", "No Tool", None, ""),
     // brush size / feather of the active brush (Masking brush, Remove tool and its selected spot)
     ("brush.smaller", "Decrease Brush Size", Some("["), "Window>Tools"),

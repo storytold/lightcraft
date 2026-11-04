@@ -2596,5 +2596,7 @@
   "Top bar": "Верхняя панель",
   "Tool strip": "Панель инструментов",
   "Bottom bar": "Нижняя панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)",
+  "Zoom Tool": "Инструмент «Масштаб»",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "Инструмент «Масштаб»: щелчок переключает масштаб; перетаскивание вправо увеличивает, влево уменьшает. Перетаскивание с Shift тоже меняет масштаб без этого инструмента. Короткое нажатие пробела переключает масштаб при отпускании; удерживайте пробел и перетаскивайте, чтобы сдвигать без переключения."
 }

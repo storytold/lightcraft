@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (KEYC-METADATA: ⌘⌥⇧K Set Keyword Shortcut and ⇧K; KEYC-METADATA: ⌘⇧K Edit Keywords; KEYC-METADATA: ⌘⌥K Enable Painting; KEYC-METADATA: ⌘⌥⇧C / ⌘⌥⇧V Copy / Paste Metadata; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌥0 / ⌥⇧0 next / previous keyword set; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌘K Add Keywords; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-03 · **Change:** patch (magnifier and scrub navigation integrated with the split UI modules and tool-scoped Space hand; source-only update, not rebuilt) · minor (KEYC-METADATA: ⌘⌥⇧K Set Keyword Shortcut and ⇧K; KEYC-METADATA: ⌘⇧K Edit Keywords; KEYC-METADATA: ⌘⌥K Enable Painting; KEYC-METADATA: ⌘⌥⇧C / ⌘⌥⇧V Copy / Paste Metadata; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌥0 / ⌥⇧0 next / previous keyword set; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌘K Add Keywords; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -27,7 +27,7 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 | Crop, Upright, transform handles | handles, aspect lock, angle, overlays (O / ⇧O), guided Upright | ✅ all of them; overlay cycle on ⇧O | 85% | crop opacity of cut-out area (15.5) |
 | Masking tools | brush (A / B, flow, density, auto mask, pressure), linear / radial, range masks, AI masks, pins | brush, linear, radial, colour / luminance range, add / subtract / intersect / invert, masks panel, pins | 60% | brush live preview (#517 / #518), no pen pressure, no depth range, AI masks, Feather / Edge controls (15.5) |
 | Remove / heal | content-aware remove, heal, clone, visualize spots | heal, clone, auto source, visualize spots, red / pet eye | 65% | content-aware (patch synthesis) remove, generative remove, detect distractions |
-| Zoom and navigation | Fit / Fill / 1:1 / 2:1 … 11:1, Navigator, spacebar pan | Fit to 800%, pinch zoom, pan, Navigator-like, Space-held hand over tools; every view, mask and diagnostic overlays (Visualize Spots, Point Color range, HDR range) and soft proofing included, is sharp at 1:1–8:1 | 60% | zoom stops at 800 % (Adobe's reference goes to 11:1) |
+| Zoom and navigation | Fit / Fill / 1:1 / 2:1 … 11:1, Navigator, spacebar pan | Fit to 800%, selected magnifier, anchored horizontal / Shift scrub, pinch zoom, pan, Navigator-like, Space-held hand over tools; every view, mask and diagnostic overlays (Visualize Spots, Point Color range, HDR range) and soft proofing included, is sharp at 1:1–8:1 | 60% | zoom stops at 800 % (Adobe's reference goes to 11:1) |
 | Library culling and metadata | ratings, flags, labels with keys, painter, keywording, metadata panel, filter bar | ratings / flags / labels and advance, keyword list and sets, keywording box, metadata fields, smart albums, filter bar | 85% | painter tool, quick collection, some Classic keys |
 | Shortcuts | Lightroom desktop and Classic keymaps | Lightroom-desktop keymap with Classic additions, editable | 85% | deliberate differences below; no Classic keymap layer |
 | Context menus | everywhere | 31 sites (grid, filmstrip, albums, folders, keywords, masks, presets, text fields…), all through `widgets::context_menu` (`crates/ui-egui/src/widgets.rs`): a right-click elsewhere while a menu is open closes it and opens the menu there, also on the same widget (issue #1877: that one flashed at the new spot and closed, as egui counts the opening click as a click while open) | 70% | unaudited against Lightroom's menus item by item |
@@ -150,6 +150,71 @@ unnamed was in the way.
 Not done: brush strokes and red-eye ellipses still need a pointer. Nobody has tried the app with
 a real screen reader on any platform yet.
 
+## Magnifying-glass tool and scrub zoom
+
+The magnifying-glass button beside the zoom selector selects `tool.zoom`. With it selected,
+hold the primary mouse button and drag right to zoom in or left to zoom out. Vertical travel
+does not change the scale; the image point where the drag began stays under that press position,
+subject to the existing pan edge limits. Moving back reverses the zoom without accumulating drift.
+The scale doubles per 200 logical pixels of horizontal travel and is bounded from Fit to 800%.
+
+Shift-drag temporarily uses the same gesture without selecting the tool, following Lightroom
+Classic's scrubby-zoom direction. Ordinary dragging still pans when the tool is off. Middle-button
+dragging pans a zoomed photo in Detail, including with the magnifier selected or Shift held; it
+does not scrub or click-toggle zoom, and fitted photos stay centred. Holding
+Space with the magnifier selected temporarily pans, including when pressed after a scrub has
+already begun. That cancels the scrub anchor; releasing Space during the same held drag does
+not replay it or toggle zoom. A keyboard-only Space tap toggles Fit / the chosen click-zoom
+ratio exactly once on key release, not on press or key repeat. Any pointer-button interaction
+owns that Space hold, so a mouse click cannot also replay a keyboard toggle. Input batches are
+processed in order: a later fresh Space press after pointer release is a new tap. Losing window/keyboard focus,
+changing tools or views, or opening a dialog or popup discards a pending tap. Custom and native
+bindings and focused widgets keep ownership of Space. With no tool, Space retains its press-time
+toggle; over an editing tool it uses the shared temporary hand described above. Space still pauses
+a slideshow. Clicking without dragging toggles Fit / the chosen click-zoom ratio in Detail and either Compare/Reference pane. Compare
+still selects the clicked photo; Reference keeps the active edit target. A completed scrub does
+not trigger that click toggle on release.
+Pointer clicks keep the clicked image point under the pointer, including off-centre clicks in
+Compare/Reference at the chosen target ratio, subject to pan edge limits. Keyboard Toggle Zoom
+can still centre the active photo's camera focus point when Zoom to Focus Point is enabled.
+Compare and Reference apply their pointer toggle separately from the keyboard focus-point path;
+extracting that calculation from tile drawing does not change either pane's selection policy.
+
+Crop, Masking, Remove, Red Eye, pickers and targeted adjustments retain their editing gestures;
+Shift does not turn those tools into scrub zoom. Selecting the zoom tool leaves an editing tool
+panel and clears the previous gesture, but preserves Compare and Reference views. Wheel, pinch,
+trackpad pan, Before/After clipping and native-window rendering are unchanged.
+
+The 2026-11-03 merge moves scrub geometry and command handling into main's split modules, keeps
+its independent middle-button pan and tool-scoped Space hand, and retains F8 tool clearing.
+This source-only integration has not been rebuilt or exercised; earlier evidence below is historical.
+
+This is a navigation-only change: it does not fix RAW cold decoding or alter cache policy.
+Upstream separately closed gap 4 with mask-overlay and soft-proofing zoom windows; diagnostic
+overlays retain the limitations listed above. No Adobe assets are used; the button reuses
+LightCraft's existing original magnifying-glass icon.
+
+### Historical standalone zoom verification (2026-10-11)
+
+The zoom-only Windows x64 release build was exercised on an isolated Sony RAW library with the
+RTX 5080 / DX12: button selection, horizontal right/left zoom, vertical-travel independence,
+Fit / 100% click toggle, Shift scrub, ordinary pan and Compare/Reference scrubbing. The button
+also toggled at 800 × 600; native captures at that size and 1600 × 1000 did not fall back to
+headless rendering. Cropped toolbar review confirmed the visibly highlighted magnifier beside
+the percentage selector. No personal photos or screenshots are included in the contribution.
+
+The regression harness sends held egui key events, not OS-level synthetic input, to distinguish
+Space taps (one toggle on release) from Space drags (pan with no toggle), including Space pressed
+mid-scrub and released while the pointer stays down. It also covers native-style input batches
+with successive key releases/presses or complete pointer drags, cancelled taps on ownership
+changes, typing, custom/native bindings and slideshow pause/resume. The running app's `ui.key`
+control request emits both press and release, so it cannot hold Space across a separate drag request.
+
+On that historical Windows build, `cargo xtask ci` passed formatting and stopped at unchanged
+upstream `pipeline/src/spots.rs:250` (`chunks_exact_to_as_chunks`) with Rust 1.99.0.
+Full workspace tests, the HEIF CI gate and WASM were not reached. This is not verification of
+the current merge, nor a claim of full-CI or cross-platform verification.
+
 ## Reference view lifecycle
 
 Escape leaves Reference for Detail, preserving the active photo and its edits; a second Escape
@@ -172,6 +237,12 @@ establish OS keyboard delivery or cross-platform acceptance.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | patch | Magnifier / scrub navigation migrated into main's split UI modules; editing-panel Space hand, F8 tool clearing, current preview paths and closed gap 4 retained. Source-only update; no new runtime or performance evidence |
+| 2026-10-22 | patch | Magnifier, scrub zoom and Space pan section retained alongside upstream Reference lifecycle, context-menu and Filter Bar entries; percentages unchanged |
+| 2026-10-18 | patch | Compare/Reference click zoom calculates pan at the target scale so off-centre points stay under the pointer; pane selection and camera-focus keyboard zoom remain unchanged |
+| 2026-10-18 | patch | Restored middle-button Detail pan independently of primary-button scrub selection and Shift; fitted photos remain centred and release does not toggle zoom |
+| 2026-10-18 | patch | Selected magnifier Space taps toggle once on release in event order; pointer interactions and mid-scrub pan cancel the tap and anchor, including complete batched drags. Focus/tool/view changes and owned input discard pending taps; breadth and readiness unchanged |
+| 2026-10-15 | minor | Integrated upstream focus-point zoom and slideshow playback state; pane clicks retain their clicked position while keyboard zoom retains AF centring. 123 targeted Linux ARM64 tests and a headless procedural-image smoke passed; no native desktop or full-CI claim |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⌥K / Ctrl+Alt+K (Photo ▸ Enable Painting) paints the painter box's keyword, stops painting when pressed again, and with the box empty opens the Keywords panel |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⇧K / Ctrl+Shift+K (Edit Keywords) opens the keyword picked in the Keyword List in Edit Keyword Tag |
 | 2026-10-25 | minor | KEYC-METADATA: ⌘⌥⇧K / Ctrl+Alt+Shift+K (Set Keyword Shortcut) and ⇧K add and remove the keyword shortcut's keywords; the Keyword List marks them with a + |
@@ -192,6 +263,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 | 2026-10-14 | minor | Zoom row: soft proofing gets zoom windows; LR-VIEW-ZOOM gap closed |
 | 2026-10-12 | minor | Accessibility: an AccessKit tree audit test over every view, Develop tool and 13 dialogs; unnamed fields, slider ranges and the Auto Stack slider fixed; 30% → 55%; UI remaining 40–70 h → 34–58 h |
 | 2026-10-21 | minor | Reference Escape exits to Detail; catalog-local pins and missing/deleted reference handling verified with regressions and native Windows smoke |
+| 2026-10-11 | minor | Magnifier tool and press-anchored horizontal scrub; Shift scrub, ordinary pan and temporary Space pan preserve editing input and comparison views |
 | 2026-10-11 | minor | Alt/Option-drag slider previews (clipping, sharpening) and the Linux window-manager note |
 | 2026-10-11 | minor | Zoom row: Compare and Reference get zoom windows; what remains of LR-VIEW-ZOOM is overlays and soft proofing |
 | 2026-10-10 | major | Created: measured command and shortcut counts, assessment by area, estimates; moved the shortcut conflicts section here from the checklist |

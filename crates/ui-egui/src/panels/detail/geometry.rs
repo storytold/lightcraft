@@ -1,6 +1,6 @@
 #[cfg(test)]
 use super::info::label_badge_rect;
-use super::{Affine, Frame, LightcraftApp, PhotoId, Point, Pos2, Rect, Zoom, json, pos2, vec2};
+use super::{Affine, Frame, Gesture, LightcraftApp, PhotoId, Point, Pos2, Rect, Zoom, ZoomScrub, json, pos2, vec2};
 
 /// Screen ↔ normalized-image mapping for the displayed frame.
 #[derive(Clone, Copy)]
@@ -92,7 +92,7 @@ pub(crate) fn snap_fit_rect(rect: Rect, size: [usize; 2], ppp: f32) -> Rect {
 }
 
 /// Keep the viewport inside the photo; axes smaller than the viewport stay centred.
-fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
+pub(crate) fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
     let bound = |visible: f32, image: f32, centre: f32| {
         let centre = if centre.is_finite() { centre } else { 0.5 };
         if image > visible.max(0.0) {
@@ -106,9 +106,57 @@ fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
 }
 
 pub(crate) fn pan_image(app: &mut LightcraftApp, area: Rect, img: Rect, delta: egui::Vec2) {
+    app.ui.space_zoom_tap = None;
     let centre = area.center() - img.min - delta;
     let pan = bounded_pan(area, img.size(), (centre.x / img.width().max(1.0), centre.y / img.height().max(1.0)));
     let _ = app.run("view.navigate", json!({"pan": pan}));
+}
+
+fn scrub_zoom(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, area: Rect, img: Rect, native: [usize; 2]) -> bool {
+    let active = matches!(&app.gesture, Some(Gesture::ScrubZoom(scrub)) if scrub.response == resp.id);
+    if active && !ui.input(|i| i.pointer.primary_down()) {
+        app.gesture = None;
+        return true;
+    }
+    let (shift, space) = ui.input(|i| (i.modifiers.shift, i.key_down(egui::Key::Space)));
+    if active && !app.ui.zoom_scrub_allowed(shift, space) {
+        app.ui.space_zoom_tap = None;
+        app.gesture = None;
+        return false;
+    }
+    if !active
+        && app.ui.zoom_scrub_allowed(shift, space)
+        && resp.drag_started_by(egui::PointerButton::Primary)
+        && let Some(anchor) = ui.input(|i| i.pointer.press_origin()).filter(|p| area.contains(*p))
+    {
+        app.gesture = Some(Gesture::ScrubZoom(ZoomScrub {
+            response: resp.id,
+            anchor,
+            point: (anchor - img.min) / img.size(),
+            percent: img.width() * ui.ctx().pixels_per_point() * 100.0 / native[0].max(1) as f32,
+            area,
+            native,
+        }));
+    }
+    let Some(Gesture::ScrubZoom(scrub)) = app.gesture.as_ref() else { return false };
+    if scrub.response != resp.id || scrub.area != area || scrub.native != native {
+        return false;
+    }
+    if let Some(pointer) = resp.interact_pointer_pos() {
+        let ppp = ui.ctx().pixels_per_point();
+        let aspect = img.width() / img.height().max(1.0);
+        let fit = fit_rect(area, aspect, Zoom::Fit, native, ppp, (0.5, 0.5));
+        let fit_pct = fit.width() * ppp * 100.0 / native[0].max(1) as f32;
+        let factor = ((pointer.x - scrub.anchor.x) / 200.0).clamp(-16.0, 16.0).exp2();
+        let pct = (scrub.percent * factor).clamp(fit_pct.min(800.0), 800.0);
+        let zoom = if pct <= fit_pct { Zoom::Fit } else { Zoom::Percent(pct) };
+        let size = fit_rect(area, aspect, zoom, native, ppp, (0.5, 0.5)).size();
+        let offset = area.center() - scrub.anchor;
+        let pan = bounded_pan(area, size, (scrub.point.x + offset.x / size.x.max(1.0), scrub.point.y + offset.y / size.y.max(1.0)));
+        let _ = app.run("view.navigate", json!({"zoom": zoom, "pan": pan}));
+        ui.ctx().request_repaint();
+    }
+    true
 }
 
 /// A drag with the middle button (the mouse wheel pressed) pans the zoomed photo whatever tool is
@@ -142,6 +190,9 @@ fn wheel_notches(events: &[egui::Event]) -> f32 {
 
 /// Native pinch (also modifier-wheel zoom) and two-finger scroll, scoped to this image view.
 pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, area: Rect, img: Rect, native: [usize; 2]) -> bool {
+    if scrub_zoom(app, ui, resp, area, img, native) {
+        return true;
+    }
     if !resp.hovered() {
         return false;
     }

@@ -208,9 +208,41 @@ fn request_tile_renders(app: &mut LightcraftApp, id: PhotoId, slot: Slot, want: 
     }
 }
 
+/// Toggle a comparison pane around the clicked image point, without keyboard focus-point zoom.
+fn magnifier_click(
+    app: &mut LightcraftApp,
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    placement: &super::detail::PhotoPlacement,
+    zoom: Zoom,
+) -> Option<(Zoom, Rect)> {
+    if app.ui.tool != "zoom" || !resp.clicked() {
+        return None;
+    }
+    let super::detail::PhotoPlacement { img, canvas, native, aspect } = *placement;
+    let at = resp.interact_pointer_pos().filter(|p| canvas.contains(*p))?;
+    let zoom = if zoom == Zoom::Fit { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
+    let ppp = ui.ctx().pixels_per_point();
+    let point = ((at.x - img.left()) / img.width(), (at.y - img.top()) / img.height());
+    let size = super::detail::fit_rect(canvas, aspect, zoom, native, ppp, (0.5, 0.5)).size();
+    let offset = canvas.center() - at;
+    // Pointer zoom keeps this pane's image point under the pointer, within the photo's edges.
+    app.ui.pan = super::detail::bounded_pan(canvas, size, (point.0 + offset.x / size.x.max(1.0), point.1 + offset.y / size.y.max(1.0)));
+    app.ui.zoom = zoom;
+    Some((zoom, super::detail::fit_rect(canvas, aspect, zoom, native, ppp, app.ui.pan)))
+}
+
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
 /// strip below. Returns the image rect and the click/drag response.
-fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area: Rect, label: &str, zoom: Zoom) -> (Rect, egui::Response) {
+fn photo_tile(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    id: PhotoId,
+    slot: Slot,
+    area: Rect,
+    label: &str,
+    mut zoom: Zoom,
+) -> (Rect, egui::Response) {
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
     let resp = ui.interact(area, egui::Id::unique(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
@@ -230,12 +262,19 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let mut img = super::detail::fit_rect(img_area, aspect, zoom, native, ppp, app.ui.pan);
     if matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference) {
         if super::detail::navigate_gesture(app, ui, &resp, img_area, img, native) {
-            img = super::detail::fit_rect(img_area, aspect, app.ui.zoom, native, ppp, app.ui.pan);
+            // a scrub or pinch changes the zoom as well as the pan: draw with both
+            zoom = app.ui.zoom;
+            img = super::detail::fit_rect(img_area, aspect, zoom, native, ppp, app.ui.pan);
             // a pinch changes the zoom every frame: no new windows until it is quiet
             app.compare_hold_until = ui.input(|i| i.time) + crate::region::HOLD_SECS;
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::region::HOLD_SECS));
         } else if resp.dragged() {
             super::detail::pan_image(app, img_area, img, resp.drag_delta());
+        }
+        let placement = super::detail::PhotoPlacement { img, canvas: img_area, native, aspect };
+        if let Some((next_zoom, next_img)) = magnifier_click(app, ui, &resp, &placement, zoom) {
+            zoom = next_zoom;
+            img = next_img;
         }
     }
     let texture_side = super::detail::texture_side(ui.ctx());
@@ -508,8 +547,9 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         (sel, Rect::from_min_size(area.min, vec2(half, area.height())), "Select", 0u8),
         (cand, Rect::from_min_size(pos2(area.right() - half, area.top()), vec2(half, area.height())), "Candidate", 1u8),
     ];
-    let zoom = app.ui.zoom;
     for (id, r, label, i) in panes {
+        // read per pane: a click or scrub in the first pane changes the linked zoom
+        let zoom = app.ui.zoom;
         let (img, resp) = photo_tile(app, ui, id, Slot::Compare(i), r, label, zoom);
         if i == 1 {
             app.image_rect = Some(img);
@@ -517,7 +557,7 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if resp.clicked() {
             select_pair(app, sel, cand, id);
         }
-        if resp.double_clicked() {
+        if resp.double_clicked() && app.ui.tool != "zoom" {
             app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(100.0) } else { Zoom::Fit };
         }
         crate::widgets::context_menu(&resp, |ui| {
@@ -616,11 +656,10 @@ pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let area = canvas.shrink(18.0);
     let half = (area.width() - 16.0) / 2.0;
-    let zoom = app.ui.zoom;
     let left = Rect::from_min_size(area.min, vec2(half, area.height()));
     let right = Rect::from_min_size(pos2(area.right() - half, area.top()), vec2(half, area.height()));
-    let (_, lresp) = photo_tile(app, ui, r, Slot::Compare(0), left, "Reference", zoom);
-    let (img, _) = photo_tile(app, ui, active, Slot::Compare(1), right, "Active", zoom);
+    let (_, lresp) = photo_tile(app, ui, r, Slot::Compare(0), left, "Reference", app.ui.zoom);
+    let (img, _) = photo_tile(app, ui, active, Slot::Compare(1), right, "Active", app.ui.zoom);
     app.image_rect = Some(img);
     crate::widgets::context_menu(&lresp, |ui| {
         if ui.button(crate::i18n::tr("Clear Reference")).clicked() {

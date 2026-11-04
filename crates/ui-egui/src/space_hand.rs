@@ -72,7 +72,14 @@ pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// (the navigator stays above it), so it takes the click or the drag and they get neither: they
 /// still draw, without the pointer. `main` is the pane the photo `img` is laid out in; `before`
 /// the Before pane of a side-by-side or stacked view with its photo, where a press there acts.
-pub(crate) fn interact(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, main: (Rect, Rect), before: Option<(Rect, Rect)>) {
+pub(crate) fn interact(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    canvas: Rect,
+    main: (Rect, Rect),
+    before: Option<(Rect, Rect)>,
+    native: [usize; 2],
+) {
     if app.space_hand.is_none() {
         return;
     }
@@ -89,7 +96,8 @@ pub(crate) fn interact(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect,
         hand.used = true;
     }
     let zoomed = crate::panels::detail::zoomed(img, pane);
-    crate::panels::detail::click_zoom_and_pan(app, &resp, img, pane);
+    let placement = crate::panels::detail::PhotoPlacement { img, canvas: pane, native, aspect: img.width() / img.height().max(1.0) };
+    crate::panels::detail::click_zoom_and_pan(app, ui, &resp, &placement);
     if resp.hovered() || resp.dragged() {
         ui.ctx().set_cursor_icon(match (zoomed, resp.dragged()) {
             (true, true) => CursorIcon::Grabbing,

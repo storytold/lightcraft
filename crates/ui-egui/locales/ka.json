@@ -3659,5 +3659,7 @@
   "Top bar": "ზედა ზოლი",
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
+  "Zoom Tool": "მასშტაბის ხელსაწყო",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "მასშტაბის ხელსაწყო: დააწკაპუნეთ მასშტაბის გადასართავად; გადაათრიეთ მარჯვნივ გასადიდებლად, მარცხნივ დასაპატარავებლად. Shift-ით გადათრევა ამ ხელსაწყოს გარეშეც ცვლის მასშტაბს. Space-ზე მოკლე დაჭერა გაშვებისას გადართავს მასშტაბს; Space-ის დაჭერით და გადათრევით ფოტოს გადაადგილებთ გადართვის გარეშე."
 }

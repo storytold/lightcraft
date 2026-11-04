@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::render::Slot;
-use crate::state::{BeforeAfter, RightPanel, ToolOverlay, Zoom};
+use crate::state::{BeforeAfter, RightPanel, ToolOverlay, Zoom, ZoomScrub};
 use crate::theme::Tokens;
 use crate::widgets::{register, register_geometry};
 
@@ -38,7 +38,7 @@ pub use geometry::CanvasMap;
 #[cfg(test)]
 pub(crate) use geometry::focus_box;
 use geometry::{animated_rect, middle_pan};
-pub(crate) use geometry::{fit_rect, fit_texture_rect, focus_pan, navigate_gesture, output_px, pan_image, snap_fit_rect, texture_side};
+pub(crate) use geometry::{bounded_pan, fit_rect, fit_texture_rect, focus_pan, navigate_gesture, output_px, pan_image, snap_fit_rect, texture_side};
 #[cfg(test)]
 use info::RENDERING_AFTER_SECS;
 use info::{
@@ -85,6 +85,8 @@ pub enum Gesture {
         start: (f32, f32),
         at: Pos2,
     },
+    /// Horizontal scrub zoom: hold the image point at the press position.
+    ScrubZoom(ZoomScrub),
     /// Dragging component `comp` of `mask`: its pin (`handle` 0) or a linear gradient's start (1)
     /// or end (2).
     MaskHandle {
@@ -335,7 +337,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         tool_interaction(app, ui, &resp, &tv, &Views { img_rect, target_rect, before_img, before_target, areas: &areas, main_area, canvas });
     }
     // Space held over a tool: the view's hand takes the pointer from it (#1895)
-    crate::space_hand::interact(app, ui, canvas, (main_area, img_rect), split.then(|| (areas[0], before_img)));
+    crate::space_hand::interact(app, ui, canvas, (main_area, img_rect), split.then(|| (areas[0], before_img)), native);
     // drawn and hit-tested above the loupe and its tools: clicks on it pan
     let nav = navigator(app, ui, canvas, img_rect, id);
     // what is on screen isn't the render on its way (a stand-in, the last render after an edit,
@@ -988,6 +990,16 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
     let cursor = match app.ui.tool.as_str() {
         "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
+        "zoom" if !ui.input(|i| i.key_down(egui::Key::Space)) => {
+            if matches!(app.gesture, Some(Gesture::ScrubZoom(_))) {
+                egui::CursorIcon::ResizeHorizontal
+            } else if matches!(app.ui.zoom, Zoom::Fit) {
+                egui::CursorIcon::ZoomIn
+            } else {
+                egui::CursorIcon::ZoomOut
+            }
+        }
+        "" if ui.input(|i| app.ui.zoom_scrub_allowed(i.modifiers.shift, i.key_down(egui::Key::Space))) => egui::CursorIcon::ResizeHorizontal,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {
                 egui::CursorIcon::Grabbing
@@ -995,24 +1007,24 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
                 egui::CursorIcon::Grab
             }
         }
+        "" => egui::CursorIcon::ZoomIn,
         _ => return,
     };
     ui.ctx().set_cursor_icon(cursor);
 }
 
 /// Where the photo is on the canvas.
-struct PhotoPlacement {
+pub(crate) struct PhotoPlacement {
     /// the photo's rectangle
-    img: Rect,
+    pub(crate) img: Rect,
     /// the canvas it is shown on
-    canvas: Rect,
+    pub(crate) canvas: Rect,
     /// the photo's size in pixels
-    native: [usize; 2],
-    aspect: f32,
+    pub(crate) native: [usize; 2],
+    pub(crate) aspect: f32,
 }
 
 fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, placement: &PhotoPlacement) {
-    let PhotoPlacement { img, canvas, native, aspect } = *placement;
     if app.ui.tool == "wbPicker" {
         if resp.clicked()
             && let Some(q) = resp.interact_pointer_pos()
@@ -1043,8 +1055,7 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         }
         return;
     }
-    click_zoom_and_pan(app, resp, img, canvas);
-    let _ = (native, aspect);
+    click_zoom_and_pan(app, ui, resp, placement);
 }
 
 /// The photo `img` reaches past its pane `canvas`: a drag pans it.
@@ -1054,21 +1065,32 @@ pub(crate) fn zoomed(img: Rect, canvas: Rect) -> bool {
 
 /// The loupe's own click and drag (also Space's hand over a tool, `space_hand`): a click toggles
 /// Fit ↔ the chosen click-zoom ratio at the clicked point, a drag pans when zoomed.
-pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, resp: &egui::Response, img: Rect, canvas: Rect) {
+pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, placement: &PhotoPlacement) {
+    let PhotoPlacement { img, canvas, native, aspect } = *placement;
     let zoomed = zoomed(img, canvas);
     if resp.double_clicked() || (resp.clicked() && !zoomed) {
+        let to = if matches!(app.ui.zoom, Zoom::Fit) { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
         if let Some(q) = resp.interact_pointer_pos() {
             let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);
             let v = ((q.y - img.top()) / img.height()).clamp(0.0, 1.0);
-            app.ui.pan = (u, v);
+            app.ui.pan = if app.ui.tool == "zoom" {
+                // the magnifier keeps the clicked point under the pointer, as in Compare and Reference
+                let size = fit_rect(canvas, aspect, to, native, ui.ctx().pixels_per_point(), (0.5, 0.5)).size();
+                let offset = canvas.center() - q;
+                bounded_pan(canvas, size, (u + offset.x / size.x.max(1.0), v + offset.y / size.y.max(1.0)))
+            } else {
+                (u, v)
+            };
         }
-        app.ui.zoom = if matches!(app.ui.zoom, Zoom::Fit) { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
+        app.ui.zoom = to;
         app.ui.zoom_anim = true;
     } else if resp.clicked() && zoomed {
         app.ui.zoom = Zoom::Fit;
         app.ui.zoom_anim = true;
     }
-    if zoomed && resp.dragged() {
+    // any button pans, as before the magnifier; with it selected the primary button scrubs unless Space is held
+    let magnifier_scrubs = app.ui.tool == "zoom" && !ui.input(|i| i.key_down(egui::Key::Space));
+    if zoomed && resp.dragged() && !(magnifier_scrubs && resp.dragged_by(egui::PointerButton::Primary)) {
         pan_image(app, canvas, img, resp.drag_delta());
     }
 }

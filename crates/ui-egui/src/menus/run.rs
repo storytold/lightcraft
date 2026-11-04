@@ -1050,6 +1050,17 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             let tool = &s["tool.".len()..];
             match tool {
                 "none" => app.ui.tool.clear(),
+                "zoom" => {
+                    if matches!(app.ui.right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
+                        let _ = app.session.end_interaction();
+                        app.ui.right = RightPanel::Edit;
+                    }
+                    if !matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference) {
+                        app.ui.view = ViewMode::Detail;
+                    }
+                    app.gesture = None;
+                    app.ui.tool = "zoom".into();
+                }
                 "guidedUpright" => {
                     // Crop & Geometry with Guided Upright on, ready to draw guides
                     app.ui.right = RightPanel::Crop;

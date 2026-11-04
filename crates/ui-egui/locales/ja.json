@@ -2388,5 +2388,7 @@
   "Top bar": "上部バー",
   "Tool strip": "ツールバー",
   "Bottom bar": "下部バー",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）",
+  "Zoom Tool": "ズームツール",
+  "Zoom tool: click to toggle zoom; drag right to zoom in, left to zoom out. Shift-drag also zooms without this tool. Tap Space to toggle zoom on release; hold Space and drag to pan without toggling.": "ズームツール：クリックでズームを切り替え、右へドラッグで拡大、左へドラッグで縮小します。Shift キーを押しながらドラッグすると、このツールなしでもズームできます。Space キーを短く押すと離したときにズームを切り替え、Space キーを押したままドラッグすると切り替えずに移動します。"
 }
