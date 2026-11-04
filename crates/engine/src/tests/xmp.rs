@@ -1237,6 +1237,51 @@ fn reload_picks_up_changed_files() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Reloading a virtual copy re-reads the file it shares with its photo, so that photo and every
+/// other copy get the new file details too (orientation included), not only the copy picked.
+#[test]
+fn reloading_a_virtual_copy_refreshes_its_photo_and_the_other_copies() {
+    use lightcraft_catalog::{Op, PhotoId};
+    use lightcraft_geom::Orientation;
+    let dir = temp_dir("reload-copy");
+    let f = dir.join("x.png");
+    write_png(&f, 10);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [f.to_string_lossy()]})).unwrap();
+    let master = s.active().unwrap();
+    let copy = |s: &mut Session| PhotoId(s.execute("photo.virtualCopy", &json!({"ids": [master.0]})).unwrap()["ids"][0].as_u64().unwrap());
+    let (a, b) = (copy(&mut s), copy(&mut s));
+    let probed = s.catalog.photo(master).unwrap().file_orientation;
+    let stale = if probed == Some(Orientation::Rotate90) { Orientation::Normal } else { Orientation::Rotate90 };
+    // every record remembers the file as it was: turned
+    for id in [master, a, b] {
+        let p = s.catalog.photo(id).unwrap().clone();
+        s.apply_system(Op::SetContent {
+            id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: p.content_hash.clone(),
+            preview_only: p.preview_only.clone(),
+            preview_checked: p.preview_checked.clone(),
+            file_orientation: Some(stale),
+        })
+        .unwrap();
+    }
+    write_png(&f, 200);
+    let r = s.execute("photo.reload", &json!({"ids": [a.0]})).unwrap();
+    let mut reloaded: Vec<u64> = r["reloaded"].as_array().unwrap().iter().filter_map(serde_json::Value::as_u64).collect();
+    reloaded.sort_unstable();
+    assert_eq!(reloaded, vec![master.0, a.0, b.0], "{r}");
+    let hash = s.catalog.photo(master).unwrap().content_hash.clone();
+    for id in [master, a, b] {
+        let p = s.catalog.photo(id).unwrap();
+        assert_eq!(p.file_orientation, probed, "photo {}: the file's orientation now", id.0);
+        assert_eq!(p.content_hash, hash, "photo {}: the same file", id.0);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn duplicate_copies_the_file_and_the_edits() {
     let dir = temp_dir("dup");

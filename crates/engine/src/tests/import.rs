@@ -506,6 +506,44 @@ fn missing_files_are_found_and_relinked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Find Missing brings the photo up to date with the file it found, as `photo.relink` does: a
+/// file orientation on record that the found file doesn't have is replaced right away (not only
+/// on the next Reload), and undo puts it back.
+#[test]
+fn find_missing_refreshes_the_file_orientation_from_the_found_file() {
+    use lightcraft_catalog::{Op, PhotoId};
+    use lightcraft_geom::Orientation;
+    let dir = temp_dir("missing-orientation");
+    std::fs::create_dir_all(dir.join("old")).unwrap();
+    std::fs::create_dir_all(dir.join("moved")).unwrap();
+    write_png(&dir.join("old/a.png"), 1);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.join("old/a.png").to_string_lossy()]})).unwrap();
+    let id = PhotoId(r["imported"][0].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    let probed = p.file_orientation;
+    // the library remembers the previous file as turned
+    let stale = if probed == Some(Orientation::Rotate90) { Orientation::Normal } else { Orientation::Rotate90 };
+    s.apply_system(Op::SetContent {
+        id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: p.preview_only.clone(),
+        preview_checked: p.preview_checked.clone(),
+        file_orientation: Some(stale),
+    })
+    .unwrap();
+    std::fs::rename(dir.join("old/a.png"), dir.join("moved/a.png")).unwrap();
+    let r = s.execute("library.findMissing", &json!({"folder": dir.join("moved").to_string_lossy()})).unwrap();
+    assert_eq!(r["found"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(s.catalog.photo(id).unwrap().file_orientation, probed, "the found file's orientation, without a Reload");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().file_orientation, Some(stale), "undo puts back what was on record");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn recently_added_covers_recent_imports_newest_first() {
     let dir = std::env::temp_dir().join(format!("lc-recent-{}", std::process::id()));

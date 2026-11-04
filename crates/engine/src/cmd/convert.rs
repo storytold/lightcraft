@@ -207,12 +207,16 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 /// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
     let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
+    // a probe that can't tell the orientation (a raw shown from its preview) doesn't forget the
+    // one on record while the bytes are the same; for other bytes only the probe's answer counts
+    let same_bytes = info.content_hash.is_some() && info.content_hash == ph.content_hash && info.file_size == ph.file_size;
+    let file_orientation = info.orientation.or(if same_bytes { ph.file_orientation } else { None });
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
         && info.preview_only == ph.preview_only
         && preview_checked == ph.preview_checked
-        && info.orientation == ph.file_orientation;
+        && file_orientation == ph.file_orientation;
     (!same).then_some(Op::SetContent {
         id,
         width: info.width,
@@ -221,7 +225,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         content_hash: info.content_hash,
         preview_only: info.preview_only,
         preview_checked,
-        file_orientation: info.orientation,
+        file_orientation,
     })
 }
 
@@ -492,6 +496,39 @@ mod tests {
         assert_eq!(p.file_orientation, Some(Orientation::Rotate90));
         cat.apply(inv).unwrap();
         assert_eq!(cat.photo(ph.id).unwrap().file_orientation, Some(Orientation::Normal), "undo restores it");
+    }
+
+    /// A probe that can't tell the orientation keeps the one on record while the bytes are the
+    /// same (a raw shown from its preview, rechecked), and drops it for other bytes.
+    #[test]
+    fn an_unknown_orientation_keeps_the_known_one_only_for_the_same_bytes() {
+        use lightcraft_geom::Orientation;
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.cr3".into() }, "x.cr3", "CR3", 6000, 4000, "2026-10-06T00:00:00");
+        ph.file_size = 10;
+        ph.content_hash = Some("old".into());
+        ph.file_orientation = Some(Orientation::Rotate90);
+        let unknown = crate::media::ProbeInfo {
+            width: 6000,
+            height: 4000,
+            file_size: 10,
+            content_hash: Some("old".into()),
+            orientation: None,
+            ..Default::default()
+        };
+        // same bytes: nothing about the content changes
+        assert!(content_op(ph.id, &ph, unknown.clone()).is_none());
+        // same bytes, now shown from the preview: that is stored, the orientation is kept
+        let preview = crate::media::ProbeInfo { preview_only: Some("no decoder".into()), ..unknown.clone() };
+        let Some(Op::SetContent { file_orientation, preview_only, .. }) = content_op(ph.id, &ph, preview) else { panic!() };
+        assert_eq!((file_orientation, preview_only.as_deref()), (Some(Orientation::Rotate90), Some("no decoder")));
+        // other bytes: the probe's answer (unknown) counts
+        let other = crate::media::ProbeInfo { content_hash: Some("new".into()), ..unknown.clone() };
+        let Some(Op::SetContent { file_orientation, .. }) = content_op(ph.id, &ph, other) else { panic!() };
+        assert_eq!(file_orientation, None);
+        // a probe that knows it wins, whatever was on record
+        let known = crate::media::ProbeInfo { orientation: Some(Orientation::Normal), ..unknown };
+        let Some(Op::SetContent { file_orientation, .. }) = content_op(ph.id, &ph, known) else { panic!() };
+        assert_eq!(file_orientation, Some(Orientation::Normal));
     }
 
     fn lens() -> lightcraft_develop::EmbeddedLens {

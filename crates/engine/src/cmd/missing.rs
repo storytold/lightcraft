@@ -472,7 +472,19 @@ fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
     // ambiguous photos relinked meanwhile aren't missing any more
     missing = missing.saturating_sub(planned - ambiguous.len());
     if !found.is_empty() {
-        s.commit("Find Missing Photos", Op::Batch { ops: found.iter().map(|f| relink_op(f.id, &f.to)).collect() })?;
+        let mut ops: Vec<Op> = found.iter().map(|f| relink_op(f.id, &f.to)).collect();
+        // as `photo.relink` does: the file found (same name and size, maybe not the same content)
+        // brings its own dimensions, preview-only state and orientation
+        if s.media.file_probe.is_some() {
+            let paths: Vec<String> = found.iter().map(|f| f.to.clone()).collect();
+            let infos = crate::import::probe_paths(s, &paths);
+            for (f, info) in found.iter().zip(infos) {
+                if let (Ok(info), Some(ph)) = (info, s.catalog.photo(f.id)) {
+                    ops.extend(crate::cmd::convert::content_op(f.id, ph, info));
+                }
+            }
+        }
+        s.commit("Find Missing Photos", Op::Batch { ops })?;
         for f in &found {
             s.media.forget(f.id);
         }

@@ -35,16 +35,22 @@ pub struct Tickets {
 }
 
 /// The photos `p` targets (`ids`, else the selection) that have a file, under a new ticket. No
-/// file-system calls.
+/// file-system calls. A virtual copy is listed as the photo it was copied from when the two share
+/// the file: the file is re-read once, and [`apply`] brings that photo and all its copies up to
+/// date, so none keeps what the file was before.
 pub fn plan(s: &mut Session, p: &Value) -> Result<Vec<Item>> {
     let ids = s.targets(p)?;
     s.reload_tickets.last = s.reload_tickets.last.saturating_add(1);
     let ticket = s.reload_tickets.last;
+    let mut seen = std::collections::HashSet::new();
     Ok(ids
         .into_iter()
-        .filter_map(|id| match s.catalog.photo(id).map(|ph| &ph.source) {
-            Some(Source::File { path }) => Some(Item { id, path: path.clone(), ticket }),
-            _ => None,
+        .filter_map(|id| {
+            let ph = s.catalog.photo(id)?;
+            let Source::File { path } = &ph.source else { return None };
+            let master = ph.copy_of.filter(|m| s.catalog.photo(*m).is_some_and(|mp| matches!(&mp.source, Source::File { path: q } if q == path)));
+            let id = master.unwrap_or(id);
+            seen.insert(id).then(|| Item { id, path: path.clone(), ticket })
         })
         .collect())
 }
