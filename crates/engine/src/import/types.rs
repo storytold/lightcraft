@@ -133,11 +133,6 @@ impl Origins {
     pub fn record(&mut self, id: PhotoId, origin: Origin) -> Origin {
         *self.0.entry(id).or_insert(origin)
     }
-
-    /// `id`'s origin, if the job recorded one.
-    pub fn get(&self, id: PhotoId) -> Option<Origin> {
-        self.0.get(&id).copied()
-    }
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the

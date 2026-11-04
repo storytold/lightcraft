@@ -207,15 +207,7 @@ pub struct LightroomJob {
 impl LightroomJob {
     /// Snapshot session state only.  This constructor performs no filesystem work.
     pub fn new(s: &mut crate::Session, path: PathBuf, update_existing: bool) -> crate::Result<Self> {
-        // a photo deleted here stays deleted: the catalog's record is matched, not restored; a
-        // duplicate by content becomes a record of its own, so its file and sidecar are read (#2589)
-        let opts = ImportOptions {
-            mode: ImportMode::Add,
-            on_deleted: crate::import::OnDeleted::Skip,
-            same_content: crate::import::SameContent::Create,
-            ..ImportOptions::default()
-        };
-        let import = ImportJob::new(s, opts)?;
+        let import = ImportJob::new(s, file_import_options())?;
         let archive_dir = s.library.as_ref().filter(|library| library.on_disk).map(|library| library.dir.join("Interop"));
         let progress = LightroomProgress {
             read_total: Arc::clone(&import.read_total),
@@ -288,6 +280,18 @@ impl LightroomJob {
     }
 }
 
+/// The options of the job's file import, for both its halves (prepare and commit): a photo
+/// deleted here stays deleted (the catalog's record is matched, not restored), and a duplicate by
+/// content becomes a record of its own, so its file and sidecar are read (#2589).
+fn file_import_options() -> ImportOptions {
+    ImportOptions {
+        mode: ImportMode::Add,
+        on_deleted: crate::import::OnDeleted::Skip,
+        same_content: crate::import::SameContent::Create,
+        ..ImportOptions::default()
+    }
+}
+
 /// Apply prepared data on the owner thread.  No source, archive or index filesystem work occurs.
 pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) -> crate::Result<LightroomCompletion> {
     if prepared.cancelled {
@@ -306,9 +310,8 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
 
     let undo0 = s.undo.len();
     prepared.normal.revalidate_add(s);
-    let options = ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, ..ImportOptions::default() };
     let now = prepared.now.clone();
-    let files = crate::import::commit_prepared(s, &options, &now, prepared.normal)?;
+    let files = crate::import::commit_prepared(s, &file_import_options(), &now, prepared.normal)?;
     let applied = lightroom_catalog::apply_prepared(
         s,
         prepared.data,
@@ -802,6 +805,130 @@ mod tests {
             assert_eq!(session.catalog.photo(id).unwrap().develop.light.exposure, -1.0, "catalog photo {source}: {report}");
         }
         assert_eq!(report["preservedExistingEdits"], 0, "{report}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `prepared` with a second catalog photo (source id 2) at `path`.
+    fn with_second_photo(mut prepared: PreparedLightroom, path: &str) -> PreparedLightroom {
+        let mut second = prepared.data.photos[0].clone();
+        second.source_id = 2;
+        second.uuid = "fixture-photo-2".into();
+        second.path = path.into();
+        second.image.insert("id_local".into(), serde_json::json!(2));
+        prepared.data.photos.push(second);
+        prepared.data.images = 2;
+        prepared
+    }
+
+    /// Two catalog photos at one path land on one record. The report counts that record once
+    /// (`added` for one the job made or promoted, the other photo `alreadyInLibrary`), and
+    /// `imported` counts it once. `preservedExistingEdits` counts catalog photos, not records: both
+    /// photos keep the record's edit when it was there before the job.
+    #[test]
+    fn two_catalog_photos_at_one_path_count_their_record_once() {
+        // (record before the job: none, browsed in Local, in the library)
+        for before in [None, Some(true), Some(false)] {
+            let (dir, path, mut session) = file_with_develop_sidecar(&format!("lr-job-origin-twice-{before:?}"), "twice-bytes");
+            if let Some(local) = before {
+                edited_record(&mut session, &path, local, None);
+            }
+            let prepared = with_second_photo(prepared_for(&session, &path, 3), &path);
+            let report = run_job(&mut session, prepared, vec![path.clone()], false);
+            assert_eq!(session.catalog.len(), 1, "{before:?}: {report}");
+            assert_eq!(report["mapping"]["1"], report["mapping"]["2"], "{before:?}: one record");
+            let id = lightcraft_catalog::PhotoId(report["mapping"]["1"].as_u64().unwrap());
+            let photo = session.catalog.photo(id).unwrap();
+            assert!(!photo.local, "{before:?}");
+            let (exposure, preserved, added, already, imported) = match before {
+                None => (-1.0, 0, 1, 1, 1),
+                Some(true) => (0.75, 2, 1, 1, 1),
+                Some(false) => (0.75, 2, 0, 2, 0),
+            };
+            assert_eq!(photo.develop.light.exposure, exposure, "{before:?}: {report}");
+            assert_eq!(report["preservedExistingEdits"], preserved, "{before:?}: {report}");
+            assert_eq!((report["added"].as_u64(), report["alreadyInLibrary"].as_u64()), (Some(added), Some(already)), "{before:?}: {report}");
+            assert_eq!(report["imported"], imported, "{before:?}: {report}");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    /// A catalog photo whose original is offline never reaches the job's file import, so the
+    /// catalog step records the origin of the library record it finds there: a photo browsed in
+    /// Local (Promoted) joins the library and is added, a library record (Existing) is already
+    /// there, and both keep their edit unless "update existing" is on.
+    #[test]
+    fn an_offline_original_s_record_keeps_its_origin() {
+        let path = "/missing/lr-job-offline.jpg";
+        for (local, update_existing) in [(true, false), (true, true), (false, false), (false, true)] {
+            let case = format!("local {local} update {update_existing}");
+            let mut session = crate::Session::new();
+            let personal = edited_record(&mut session, path, local, None);
+            let mut prepared = prepared_for(&session, path, 3);
+            prepared.update_existing = update_existing;
+            prepared.data.photos[0].settings = "s = { Exposure2012 = -1.0 }".into();
+            let report = commit_prepared(&mut session, prepared).unwrap().report;
+            assert_eq!(report["mapping"]["1"].as_u64(), Some(personal.0), "{case}: {report}");
+            let photo = session.catalog.photo(personal).unwrap();
+            assert!(!photo.local, "{case}: the import brings it into the library");
+            assert_eq!(photo.develop.light.exposure, if update_existing { -1.0 } else { 0.75 }, "{case}: {report}");
+            assert_eq!(report["preservedExistingEdits"], u64::from(!update_existing), "{case}: {report}");
+            assert_eq!(
+                (report["added"].as_u64(), report["alreadyInLibrary"].as_u64()),
+                (Some(u64::from(local)), Some(u64::from(!local))),
+                "{case}: {report}"
+            );
+            assert_eq!(report["imported"], u64::from(local), "{case}: {report}");
+        }
+    }
+
+    /// Two new files with the same bytes, each beside its own XMP sidecar, and each with a capture
+    /// time of its own: the job's file import adds the first and reads the second's sidecar too,
+    /// since the job makes a record of it (`SameContent::Create`). Each record has its own caption.
+    #[test]
+    fn two_new_files_with_the_same_bytes_each_keep_their_own_sidecar() {
+        let dir = crate::tests_xmp::temp_dir("lr-job-origin-same-bytes");
+        let caption = |text: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">{text}</rdf:li></rdf:Alt></dc:description>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#
+            )
+        };
+        let paths: Vec<String> = ["a", "b"]
+            .iter()
+            .map(|name| {
+                let file = dir.join(format!("{name}.jpg"));
+                std::fs::write(&file, b"same bytes").unwrap();
+                std::fs::write(dir.join(format!("{name}.xmp")), caption(&format!("Caption {name}"))).unwrap();
+                file.to_string_lossy().into_owned()
+            })
+            .collect();
+        let mut session = crate::Session::new();
+        session.media.file_probe = Some(Arc::new(|_| {
+            Ok(crate::media::ProbeInfo {
+                format: "JPEG".into(),
+                width: 20,
+                height: 10,
+                content_hash: Some("same-bytes".into()),
+                captured: Some("2024-05-06T07:08:09".into()),
+                ..Default::default()
+            })
+        }));
+        let prepared = with_second_photo(prepared_for(&session, &paths[0], 3), &paths[1]);
+        let report = run_job(&mut session, prepared, paths.clone(), false);
+        assert_eq!(session.catalog.len(), 2, "{report}");
+        for (source, name) in [("1", "a"), ("2", "b")] {
+            let id = lightcraft_catalog::PhotoId(report["mapping"][source].as_u64().unwrap());
+            let photo = session.catalog.photo(id).unwrap();
+            assert_eq!(photo.meta.caption, format!("Caption {name}"), "catalog photo {source}: {report}");
+            assert_eq!(photo.develop.light.exposure, -1.0, "catalog photo {source}: {report}");
+        }
+        assert_eq!(
+            (report["added"].as_u64(), report["imported"].as_u64(), report["preservedExistingEdits"].as_u64()),
+            (Some(2), Some(2), Some(0)),
+            "{report}"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
