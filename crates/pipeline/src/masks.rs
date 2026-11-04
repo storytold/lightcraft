@@ -144,7 +144,7 @@ const MAX_ALPHA_BYTES: usize = 8 << 30;
 const MIN_MASKS: usize = 16;
 
 /// How many masks of a `w` × `h` render are evaluated (the first ones, in order).
-fn max_masks(w: usize, h: usize) -> usize {
+pub fn max_masks(w: usize, h: usize) -> usize {
     (MAX_ALPHA_BYTES / w.saturating_mul(h).saturating_mul(4).max(1)).max(MIN_MASKS)
 }
 
