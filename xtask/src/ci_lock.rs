@@ -135,13 +135,15 @@ fn wait_for_slot(dir: &Path, slots: usize, owner: &str, wait: Option<Duration>, 
         eprintln!("  running: {h}");
     }
     loop {
-        std::thread::sleep(poll);
+        // never past the limit: a sleep ends by it, and the limit is checked before each try, so
+        // a slot freed after it isn't taken
+        std::thread::sleep(wait.map_or(poll, |w| poll.min(w.saturating_sub(waiting.elapsed()))));
+        if let Some(wait) = wait.filter(|w| waiting.elapsed() >= *w) {
+            return Err(gave_up(wait, &holders(dir, slots)));
+        }
         if let Some(held) = try_acquire(dir, slots, owner)? {
             eprintln!("=== ci: waited {:.0} s for a CI slot ===", waiting.elapsed().as_secs_f64());
             return Ok(Some(held));
-        }
-        if let Some(wait) = wait.filter(|w| waiting.elapsed() >= *w) {
-            return Err(gave_up(wait, &holders(dir, slots)));
         }
     }
 }
@@ -202,6 +204,32 @@ mod tests {
         let got = wait_for_slot(&dir, 1, "second", Some(Duration::from_secs(30)), Duration::from_millis(20)).unwrap();
         assert!(got.is_some());
         assert_eq!(holders(&dir, 1), ["second"]);
+        release.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_limit_shorter_than_the_poll_interval_is_kept() {
+        let dir = scratch("short-limit");
+        let _held = try_acquire(&dir, 1, "first").unwrap().expect("free slot");
+        let t = Instant::now();
+        let err = wait_for_slot(&dir, 1, "second", Some(Duration::from_millis(100)), Duration::from_secs(5)).err().expect("gave up");
+        assert!(t.elapsed() >= Duration::from_millis(100) && t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+        assert!(err.contains("gave up after waiting 100 ms"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_slot_freed_after_the_limit_is_not_taken() {
+        let dir = scratch("late");
+        let held = try_acquire(&dir, 1, "first").unwrap().expect("free slot");
+        // freed after the 100 ms limit and before the 1 s poll would have looked again
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            drop(held);
+        });
+        let got = wait_for_slot(&dir, 1, "second", Some(Duration::from_millis(100)), Duration::from_secs(1));
+        assert!(got.is_err_and(|e| e.contains("gave up")), "the limit ended the wait first");
         release.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
