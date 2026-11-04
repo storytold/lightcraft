@@ -400,6 +400,22 @@ pub(crate) fn lua_settings_props(settings: &Lua) -> Result<(Props, crate::crs_ma
             && let Lua::Table(_, look) = v
         {
             for (f, fv) in look {
+                // the look's own settings (`Parameters`), as XMP's nested struct
+                // (`crs:Look/crs:Parameters/crs:ProfileGainTableMap`…)
+                if f == "Parameters"
+                    && let Lua::Table(_, params) = fv
+                {
+                    for (pf, pv) in params {
+                        let val = match pv {
+                            Lua::Num(n) => format!("{n}"),
+                            Lua::Str(s) => delocalize(s),
+                            Lua::Bool(b) => if *b { "True" } else { "False" }.to_string(),
+                            _ => continue,
+                        };
+                        props.insert(format!("crs:Look/crs:Parameters/crs:{pf}"), vec![val]);
+                    }
+                    continue;
+                }
                 let val = match fv {
                     Lua::Num(n) => format!("{n}"),
                     Lua::Str(s) => delocalize(s),
