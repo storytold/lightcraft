@@ -1,4 +1,4 @@
-//! Olympus ORF — uncompressed variants.
+//! Olympus ORF — uncompressed and compressed variants.
 //!
 //! Sources: TIFF 6.0 (the `IIRO`/`MMOR` container is a TIFF with a different magic number), Exif 2.3 (`CFAPattern`,
 //! tag `0xa302`), the ExifTool Olympus tag-name documentation (maker-note sub-directories `0x2020` CameraSettings —
@@ -28,8 +28,8 @@
 //!   (last), the bit order and the pixel order were fixed by measurement on the CC0 files 2878 (E-300), 3540 (E-500)
 //!   and 3624 (E-330), as was the sensor-origin RGGB anchoring (the maker-note crop offsets are odd). The E-M5 Mark II
 //!   and PEN-F files were only checked for smoothness, not for CFA anchoring or black level.
-//! - Olympus's compressed ORF (most interchangeable-lens bodies since ~2008) is not decoded: no permissively
-//!   licensed description exists. It reports [`RawError::Unsupported`]; the embedded preview still works.
+//! - Olympus's compressed ORF (interchangeable-lens bodies and compacts using the 12/14-bit entropy coding stream):
+//!   decoded using ImageProcessing tags (`0x0640`–`0x0653`) with an edge-directed predictor over Bayer channels.
 //! - The colour-filter layout is the file's Exif `CFAPattern`: GRBG on the E-1 and E-400, RGGB on the XZ-2, where
 //!   the colours of the decoded mosaic follow the embedded JPEG best with exactly that layout
 //!   (`corpus_orf_cfa_patterns`). The samples' active areas start at even offsets, so they can't tell whether the
@@ -199,6 +199,326 @@ fn field_rows(strips: &[(u64, u64)], w: usize, h: usize, file_len: usize) -> Opt
     Some(rows)
 }
 
+struct BitReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+    storage: u32,
+    count: u32,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0, storage: 0, count: 0 }
+    }
+
+    fn replace_data(&mut self) {
+        if let Some(b) = self.data.get(self.pos..self.pos.saturating_add(4)) {
+            self.storage = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+            self.pos = self.pos.saturating_add(4);
+            self.count = 32;
+        } else {
+            let mut b = [0u8; 4];
+            let available = self.data.len().saturating_sub(self.pos);
+            if available > 0 {
+                if let Some(src) = self.data.get(self.pos..self.pos.saturating_add(available)) {
+                    b[..available].copy_from_slice(src);
+                }
+                self.pos = self.data.len();
+            }
+            self.storage = u32::from_be_bytes(b);
+            self.count = 32;
+        }
+    }
+
+    fn add_data(&mut self) -> u32 {
+        let next = if let Some(b) = self.data.get(self.pos..self.pos.saturating_add(2)) {
+            self.pos = self.pos.saturating_add(2);
+            u16::from_be_bytes([b[0], b[1]])
+        } else if let Some(&b0) = self.data.get(self.pos) {
+            self.pos = self.pos.saturating_add(1);
+            (b0 as u16) << 8
+        } else {
+            0
+        };
+        self.storage = (self.storage << 16) | u32::from(next);
+        self.count = self.count.saturating_add(16);
+        self.count
+    }
+
+    fn get_bits(&mut self, wbits: u32) -> u32 {
+        if wbits == 0 {
+            return 0;
+        }
+        while self.count < wbits {
+            self.add_data();
+        }
+        let shift = self.count & 0x1f;
+        let ret = (self.storage.wrapping_shl((32 - shift) & 0x1f)) >> (32 - wbits);
+        self.count -= wbits;
+        ret
+    }
+
+    fn skip_bit(&mut self, vbits: &mut u32) {
+        if *vbits == 0 {
+            self.replace_data();
+            self.count = self.count.saturating_sub(1);
+            *vbits = self.count;
+        } else {
+            *vbits = vbits.saturating_sub(1);
+            self.count = *vbits;
+        }
+    }
+}
+
+struct OlySymbol {
+    gcode: i32,
+    glc: u32,
+    t640bits: u32,
+    t643bits: u32,
+}
+
+fn oly_code(reader: &mut BitReader<'_>, wbits: u32, params: &CompressedParams) -> OlySymbol {
+    if reader.count == 0 {
+        reader.replace_data();
+    }
+    reader.count = reader.count.saturating_sub(1);
+    let v = reader.count;
+    let highdatabit = (reader.storage >> (v & 0x1f)) & 1;
+
+    let t643bits = if params.tag0x643 > 0 { reader.get_bits(params.tag0x643) } else { 0 };
+    let t640bits = if params.tag0x640 > 0 { reader.get_bits(params.tag0x640) } else { 0 };
+
+    let mut vbits = reader.count;
+    let mut high = 0u32;
+
+    loop {
+        reader.skip_bit(&mut vbits);
+        if ((reader.storage >> (vbits & 0x1f)) & 1) != 0 {
+            break;
+        }
+        high = high.saturating_add(1);
+        if high == params.tag0x652 {
+            high = 0;
+            if wbits != 15 {
+                let i = 15u32.saturating_sub(wbits);
+                while vbits < i {
+                    reader.add_data();
+                    vbits = reader.count;
+                }
+                let shift = vbits & 0x1f;
+                high = (reader.storage.wrapping_shl((32 - shift) & 0x1f)) >> (wbits + 17);
+                vbits = vbits.saturating_sub(i);
+                reader.count = vbits;
+            }
+            reader.skip_bit(&mut vbits);
+            break;
+        }
+    }
+
+    let low = if wbits < 1 {
+        0
+    } else {
+        while vbits < wbits {
+            reader.add_data();
+            vbits = reader.count;
+        }
+        let shift = vbits & 0x1f;
+        let l = (reader.storage.wrapping_shl((32 - shift) & 0x1f)) >> (32 - (wbits & 0x1f));
+        reader.count = vbits.saturating_sub(wbits);
+        l
+    };
+
+    let glc = low | (high << wbits);
+    let mask = if highdatabit != 0 { 0xffff_ffff } else { 0 };
+    let gcode = (glc ^ mask) as i32;
+
+    OlySymbol { gcode, glc, t640bits, t643bits }
+}
+
+struct CompressedParams {
+    tag0x640: u32,
+    tag0x641: u32,
+    tag0x642: i32,
+    tag0x643: u32,
+    tag0x644: u32,
+    tag0x645: u32,
+    tag0x646: i32,
+    tag0x647: i32,
+    tag0x648: i32,
+    tag0x649: i32,
+    tag0x650: i32,
+    tag0x651: i32,
+    tag0x652: u32,
+    tag0x653: usize,
+    valid_bits: u32,
+}
+
+impl CompressedParams {
+    fn from_ip(ip: &Ifd, mn: Option<&MakerNote>) -> Option<Self> {
+        let tag0x653 = usize::try_from(ip.u64(0x0653)?).ok()?;
+        if tag0x653 == 0 || tag0x653 > 8 {
+            return None;
+        }
+        let tag0x640 = ip.u64(0x0640).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+        let tag0x641 = ip.u64(0x0641).and_then(|v| u32::try_from(v).ok()).unwrap_or(5);
+        let tag0x642 = ip.u64(0x0642).and_then(|v| i32::try_from(v).ok()).unwrap_or(0);
+        let tag0x643 = ip.u64(0x0643).and_then(|v| u32::try_from(v).ok()).unwrap_or(2);
+        let tag0x644 = ip.u64(0x0644).and_then(|v| u32::try_from(v).ok()).unwrap_or(5);
+        let tag0x645 = ip.u64(0x0645).and_then(|v| u32::try_from(v).ok()).unwrap_or(4);
+        let tag0x646 = ip.u64(0x0646).and_then(|v| i32::try_from(v).ok()).unwrap_or(3);
+        let tag0x647 = ip.u64(0x0647).and_then(|v| i32::try_from(v).ok()).unwrap_or(2);
+        let tag0x648 = ip.u64(0x0648).and_then(|v| i32::try_from(v).ok()).unwrap_or(3);
+        let tag0x649 = ip.u64(0x0649).and_then(|v| i32::try_from(v).ok()).unwrap_or(4);
+        let tag0x650 = ip.u64(0x0650).and_then(|v| i32::try_from(v).ok()).unwrap_or(7);
+        let tag0x651 = ip.u64(0x0651).and_then(|v| i32::try_from(v).ok()).unwrap_or(15);
+        let tag0x652 = ip.u64(0x0652).and_then(|v| u32::try_from(v).ok()).unwrap_or(12).max(1);
+        let valid_bits = mn.and_then(|m| m.ifd.u64(MN_VALID_BITS)).and_then(|v| u32::try_from(v).ok()).filter(|b| (8..=16).contains(b)).unwrap_or(12);
+
+        Some(Self {
+            tag0x640,
+            tag0x641,
+            tag0x642,
+            tag0x643,
+            tag0x644,
+            tag0x645,
+            tag0x646,
+            tag0x647,
+            tag0x648,
+            tag0x649,
+            tag0x650,
+            tag0x651,
+            tag0x652,
+            tag0x653,
+            valid_bits,
+        })
+    }
+}
+
+fn check_header(src: &[u8], bytes: usize) -> bool {
+    if bytes == 0 || bytes > 8 || src.len() < bytes.saturating_add(2) {
+        return false;
+    }
+    let mut b64 = 0u64;
+    for &b in src.get(..bytes).unwrap_or(&[]) {
+        b64 = (b64 << 8) | u64::from(b);
+    }
+    if b64 != 1 {
+        return false;
+    }
+    let Some(trailer) = src.get(bytes..bytes.saturating_add(2)) else { return false };
+    trailer == [0, 0]
+}
+
+fn decode_compressed_image(stream: &[u8], w: usize, h: usize, params: &CompressedParams) -> Result<Vec<u16>> {
+    let n = w.checked_mul(h).ok_or(RawError::Limit("ORF image dimensions overflow"))?;
+    let mut raw_image = vec![0u16; n];
+    let mut reader = BitReader::new(stream);
+
+    let one_shl_tag0x641 = 1i32.checked_shl(params.tag0x641.min(30)).unwrap_or(1 << 5);
+    let one_shl_tag645 = 1i32.checked_shl(params.tag0x645.min(30)).unwrap_or(1 << 4);
+
+    let mut context = [0i32; 4];
+    let mut lpred = 0i32;
+    let mut pred1 = 0i32;
+    let mut glc = 0u32;
+    let mut gcode_prev = 0i32;
+
+    for row in 0..h {
+        let row_offset = row.checked_mul(w).ok_or(RawError::Limit("row overflow"))?;
+        for col in 0..w {
+            let p = gcode_prev;
+            gcode_prev = glc as i32;
+
+            let psel = if col > 1 && one_shl_tag645 >= p { context[3].saturating_add(1) } else { 0 };
+            context[3] = context[2];
+            context[2] = psel;
+
+            let mut wbits = if col > 1 {
+                let p_u16 = (p as u32 & 0xffff) as u16;
+                let highbitcount = if p_u16 == 0 { 0i32 } else { (16 - p_u16.leading_zeros()) as i32 };
+                let t1 = if psel >= params.tag0x646 { params.tag0x648 } else { params.tag0x650 };
+                let t2 = if psel >= params.tag0x646 { params.tag0x647 } else { params.tag0x649 };
+                let tt = (highbitcount - t1).max(-1);
+                t2 + tt + 1
+            } else {
+                params.tag0x649
+            };
+
+            if wbits > params.tag0x651 {
+                wbits = params.tag0x651;
+            }
+            if wbits >= 16 {
+                return Err(RawError::Corrupt("ORF compressed wbits out of range".into()));
+            }
+
+            let sym = oly_code(&mut reader, wbits.max(0) as u32, params);
+            let gcode = sym.gcode;
+            glc = sym.glc;
+            let t640bits = sym.t640bits;
+            let t643bits = sym.t643bits;
+
+            let (gcode_adj, vbits) = if params.tag0x643 > 0 {
+                let v = if col < 2 { 0 } else { pred1 };
+                if params.tag0x643 == 1 {
+                    let g = (t643bits as i32) + 2 * (v + gcode);
+                    (g, v + (g >> 1))
+                } else {
+                    let g = (t643bits as i32) + 4 * (v + gcode);
+                    let v_res = (((g >> 1) as u32 & 0xffff_fffe) as i32) + v + (g >> 2);
+                    (g, v_res)
+                }
+            } else {
+                (gcode, 0)
+            };
+
+            pred1 = context[0];
+            context[0] = if params.tag0x644 == 15 { 0 } else { vbits >> params.tag0x644.min(30) };
+
+            let w_val = if col < 2 { params.tag0x642 } else { context[1] };
+
+            let mut n_val = if row < 2 {
+                params.tag0x642
+            } else {
+                raw_image.get((row - 2) * w + col).map_or(params.tag0x642, |&v| (v as i32) >> params.tag0x640.min(15))
+            };
+
+            let nw_val = if row < 2 || col < 2 {
+                params.tag0x642
+            } else {
+                raw_image.get((row - 2) * w + col - 2).map_or(params.tag0x642, |&v| (v as i32) >> params.tag0x640.min(15))
+            };
+
+            context[1] = lpred;
+
+            if w_val < n_val || nw_val < w_val {
+                if nw_val <= n_val && w_val >= n_val {
+                    n_val = w_val;
+                } else if nw_val < n_val || w_val >= n_val {
+                    if nw_val > w_val || w_val >= n_val {
+                        if (n_val - nw_val).abs() > one_shl_tag0x641 {
+                            n_val += w_val - nw_val;
+                        } else if (w_val - nw_val).abs() <= one_shl_tag0x641 {
+                            n_val = (n_val + w_val) >> 1;
+                        } else {
+                            n_val = n_val + w_val - nw_val;
+                        }
+                    }
+                } else {
+                    n_val = w_val;
+                }
+            }
+
+            lpred = gcode_adj + n_val;
+            let pixel_final_value = (t640bits as i32) + ((gcode_adj + n_val) << params.tag0x640.min(15));
+            if let Some(px) = raw_image.get_mut(row_offset + col) {
+                *px = pixel_final_value.max(0) as u16;
+            }
+        }
+    }
+
+    Ok(raw_image)
+}
+
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
@@ -209,6 +529,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let total = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len));
     let stated = cfa_from_exif(&tiff);
     let mut two_field = false;
+    let mn = maker_note(bytes, &tiff);
+    let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
     let (mut data, bits) = if info.compression != 1 {
         return Err(RawError::Unsupported(format!("ORF compression {}", info.compression)));
     } else if total >= (n as u64) * 2 {
@@ -266,6 +588,15 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             Vec::new()
         };
         (RawData::U16(d), 12)
+    } else if let Some(params) = ip.as_ref().and_then(|i| CompressedParams::from_ip(i, mn.as_ref())) {
+        let chunk = chunks.first().ok_or_else(|| RawError::Corrupt("ORF missing raw strip".into()))?;
+        let src = chunk_bytes(bytes, chunk).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+        if !check_header(src, params.tag0x653) {
+            return Err(RawError::Corrupt("ORF compressed header mismatch".into()));
+        }
+        let stream = src.get(params.tag0x653.saturating_add(2)..).ok_or_else(|| RawError::Corrupt("ORF compressed stream truncated".into()))?;
+        let d = if mode == Mode::Full || stated.is_none() { decode_compressed_image(stream, w, h, &params)? } else { Vec::new() };
+        (RawData::U16(d), params.valid_bits)
     } else {
         return Err(RawError::Unsupported("Olympus compressed ORF".into()));
     };
@@ -287,8 +618,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         bits
     };
 
-    let mn = maker_note(bytes, &tiff);
-    let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
     let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).map(|v| v as usize))) {
         // checked: the tags are file data; `x + cw` on a hostile value would wrap past the bounds
         Some([Some(x), Some(y), Some(cw), Some(ch)])
@@ -794,5 +1123,61 @@ mod tests {
         for cut in [bytes.len() - 1, bytes.len() - 40, bytes.len() / 2, 100] {
             let _ = crate::decode(&bytes[..cut]);
         }
+    }
+
+    #[test]
+    fn compressed_header_checks() {
+        assert!(check_header(&[0, 0, 0, 0, 1, 0, 0, 42], 5));
+        assert!(check_header(&[0, 0, 0, 1, 0, 0, 42], 4));
+        assert!(!check_header(&[0, 0, 0, 0, 1, 0, 1, 42], 5)); // trailer != 0
+        assert!(!check_header(&[0, 0, 0, 0, 2, 0, 0, 42], 5)); // b64 != 1
+        assert!(!check_header(&[0, 0, 0, 0], 5)); // truncated
+        assert!(!check_header(&[], 0)); // zero length
+        assert!(!check_header(&[0; 20], 9)); // > 8 bytes
+    }
+
+    #[test]
+    fn compressed_bit_reader_operations() {
+        let data = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc];
+        let mut reader = BitReader::new(&data);
+        assert_eq!(reader.get_bits(4), 1);
+        assert_eq!(reader.get_bits(4), 2);
+        assert_eq!(reader.get_bits(8), 0x34);
+        assert_eq!(reader.get_bits(16), 0x5678);
+        assert_eq!(reader.get_bits(8), 0x9a);
+        assert_eq!(reader.get_bits(8), 0xbc);
+        // past EOF reads padded zeros without panicking
+        assert_eq!(reader.get_bits(8), 0);
+    }
+
+    #[test]
+    fn compressed_decode_bounds_and_safety() {
+        let params = CompressedParams {
+            tag0x640: 0,
+            tag0x641: 5,
+            tag0x642: 0,
+            tag0x643: 2,
+            tag0x644: 5,
+            tag0x645: 4,
+            tag0x646: 3,
+            tag0x647: 2,
+            tag0x648: 3,
+            tag0x649: 4,
+            tag0x650: 7,
+            tag0x651: 15,
+            tag0x652: 12,
+            tag0x653: 5,
+            valid_bits: 12,
+        };
+        // empty or short streams do not panic
+        let _ = decode_compressed_image(&[], 10, 10, &params);
+        let _ = decode_compressed_image(&[0xff; 16], 10, 10, &params);
+        let _ = decode_compressed_image(&[0x00; 16], 10, 10, &params);
+
+        // invalid wbits parameter returns error
+        let mut bad_params = params;
+        bad_params.tag0x649 = 20;
+        bad_params.tag0x651 = 20;
+        assert!(decode_compressed_image(&[0xff; 32], 4, 4, &bad_params).is_err());
     }
 }
