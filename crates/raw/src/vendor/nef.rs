@@ -166,6 +166,7 @@ const MEASURED_BODIES: &[MeasuredBody] = &[
     // D800: 6 files; D800E: 2, with the D800 as sibling; masked: right 14 (issue #914, the top in portrait)
     MeasuredBody { model: "NIKON D800", size: (7424, 4924), bits: 12, crop: (8, 6, 7360, 4912), white: None },
     MeasuredBody { model: "NIKON D800", size: (7424, 4924), bits: 14, crop: (8, 6, 7360, 4912), white: None },
+    MeasuredBody { model: "NIKON D800E", size: (7424, 4924), bits: 12, crop: (8, 6, 7360, 4912), white: None },
     MeasuredBody { model: "NIKON D800E", size: (7424, 4924), bits: 14, crop: (8, 6, 7360, 4912), white: None },
     // 3 files; dark: bottom 1
     MeasuredBody { model: "NIKON D810", size: (7380, 4928), bits: 12, crop: (12, 8, 7360, 4912), white: None },
@@ -937,6 +938,19 @@ mod tests {
         assert!(d90.crop.x + d90.crop.width <= 4310, "the filler columns are outside the image");
         assert_eq!(d90.white, vec![3830.0]);
         assert_eq!((d90.metadata.width, d90.metadata.height), (Some(4288), Some(2848)));
+    }
+
+    /// The D800E writes the D800's sensor readout at both sample depths, so its 12-bit files must hit the
+    /// measured area too: the lookup is keyed on depth, and a miss leaves the filler columns to the
+    /// masked-column test, which keeps them (they sit above its threshold) and they develop as a magenta
+    /// bar on the right.
+    #[test]
+    fn measured_d800e_covers_both_bit_depths() {
+        for bits in [12u32, 14] {
+            let body = measured_body("NIKON D800E", 7424, 4924, bits).expect("the 12-bit readout is the D800's");
+            assert_eq!(body.crop, (8, 6, 7360, 4912));
+            assert!(body.crop.0 + body.crop.2 <= 7368, "the masked columns are outside the image");
+        }
     }
 
     /// Issue #708: the active width is judged from the first [`MASK_ROWS`] rows in both modes, so the header probe

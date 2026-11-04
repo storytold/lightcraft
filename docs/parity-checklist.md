@@ -799,6 +799,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | LR-IMP-CAMERA-COVERAGE: the Nikon D800E gets its own 12-bit `MeasuredBody` row (the D800's frame): the lookup is keyed on sample depth, and 14-bit was covered by #914, but 12-bit files fell to the masked-column test, which keeps their filler columns and developed them as a magenta bar on the right; status unchanged (🟡) |
 | 2026-10-30 | patch | LR-BEHAV-ACCESS: the Flatpak manifests grant `--talk-name=org.a11y.Bus`, so AccessKit can find out whether a screen reader is running and publish the window inside the sandbox; packaging lint requires it in both manifests; status unchanged (🟡), not tried with Orca |
 | 2026-10-27 | patch | LR-LIB-LABEL, MENU-PHOTO-LABEL, KEY-LABELS: Clear Color Label (`photo.clearLabel`) is a command of its own, so Help → Keyboard Shortcuts can give it a key (#2980); the Photo ▸ Set Color Label ▸ None row runs it; status unchanged |
 | 2026-10-25 | minor | KEYC-METADATA, LRC-LIB-KEYWORDS: ⌘⌥⇧K / Ctrl+Alt+Shift+K (`dialog.keywordShortcut`, Set Keyword Shortcut) and ⇧K (`keyword.toggleShortcut`) add and remove the keyword shortcut's keywords; Keyword Shortcut leaves LRC-LIB-KEYWORDS' Not yet list; status counts unchanged (KEYC-METADATA stays 🟡) |
