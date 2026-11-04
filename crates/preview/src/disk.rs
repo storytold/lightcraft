@@ -191,7 +191,11 @@ impl DiskCache {
         let used = total.get_or_insert_with(|| self.scan().iter().map(|f| f.1).sum());
         let old_len = std::fs::metadata(&p).map_or(0, |m| m.len());
         let tmp = p.with_extension(format!("tmp{:?}", std::thread::current().id()).replace(['(', ')'], ""));
-        if std::fs::write(&tmp, &bytes).is_err() || std::fs::rename(&tmp, &p).is_err() {
+        // a new temp file: an entry already under the name (a link planted in the cache would be
+        // written through) is removed, never opened
+        let _ = std::fs::remove_file(&tmp);
+        let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).and_then(|mut f| std::io::Write::write_all(&mut f, &bytes));
+        if written.is_err() || std::fs::rename(&tmp, &p).is_err() {
             let _ = std::fs::remove_file(&tmp);
             return;
         }
