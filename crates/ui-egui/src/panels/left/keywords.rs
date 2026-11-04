@@ -27,7 +27,7 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
     if let Some(k) = open_id {
         tree_toggle(ui, &resp, indent, k, open, format!("keywordToggle:{}", n.path), &n.name);
     }
-    let resp = resp.on_hover_text(if n.children.is_empty() { n.path.clone() } else { format!("{} (includes the keywords below it)", n.path) });
+    let resp = resp.on_hover_text(keyword_tip(&n.path, !n.children.is_empty()));
     if resp.clicked() {
         let v = if sel { serde_json::Value::Null } else { json!(n.path) };
         browse_all_photos(app, !sel);
@@ -52,4 +52,24 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
             let _ = app.run("keyword.delete", json!({"keyword": n.path}));
         }
     });
+}
+
+/// A keyword row's hover text, on one line like the row's name (a path holding line breaks must not
+/// spill into a tall tooltip).
+fn keyword_tip(path: &str, has_children: bool) -> String {
+    let path = lightcraft_catalog::keywords::one_line(path);
+    if has_children { format!("{path} (includes the keywords below it)") } else { path.into_owned() }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A sidebar keyword's hover text is on one line, as its name is painted (CodeRabbit on #2922).
+    #[test]
+    fn a_keyword_path_with_line_breaks_is_hovered_on_one_line() {
+        let path = "Wedding|Bride\r\nGroom\u{2028}Guests\u{2029}Cake";
+        for children in [false, true] {
+            let tip = super::keyword_tip(path, children);
+            assert!(!tip.contains(['\r', '\n', '\u{2028}', '\u{2029}']), "{tip:?}");
+        }
+    }
 }

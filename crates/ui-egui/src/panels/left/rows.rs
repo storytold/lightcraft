@@ -157,6 +157,10 @@ impl<'a> Row<'a> {
 fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Response {
     let Row { id, icon, label, spoken, count, selected, indent, sense, mark } = row;
     let label = if matches!(id, "all" | "recentlyAdded" | "picks" | "missing" | "recentlyDeleted") { crate::i18n::tr(label) } else { label };
+    // a name is drawn on one line: one holding line breaks (a whole keyword list read as one
+    // keyword) would spill over the rows around it
+    let one_line = lightcraft_catalog::keywords::one_line(label);
+    let label: &str = &one_line;
     let t = Tokens::get(ui.ctx());
     let indent = drawn_indent(ui, indent);
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), sense);
@@ -242,7 +246,8 @@ pub(super) fn out_of_sight(app: &LightcraftApp, ui: &mut egui::Ui, id: &str, lab
     let indent = drawn_indent(ui, indent);
     let t = Tokens::get(ui.ctx());
     let painter = ui.painter();
-    let name_w = painter.layout_no_wrap(label.to_string(), t.font(13.5), t.text_label).size().x;
+    // measured as the row paints it: on one line
+    let name_w = painter.layout_no_wrap(lightcraft_catalog::keywords::one_line(label).into_owned(), t.font(13.5), t.text_label).size().x;
     let count_w = count.filter(|_| app.ui.show_counts).map(|n| painter.layout_no_wrap(n.to_string(), t.font(12.5), t.text_dim).size().x);
     let mark_w = if mark { MARK_W } else { 0.0 };
     let mut needed = row_need(indent, name_w, mark_w, count_w);

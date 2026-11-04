@@ -1,6 +1,18 @@
 use super::*;
 use crate::{Filter, Photo, PhotoId, Source};
 
+/// A camera preset's keyword list written as one `dc:subject` item, a keyword a line, is one
+/// keyword a line; names stay one line wherever they are drawn.
+#[test]
+fn a_list_in_one_entry_is_a_keyword_a_line() {
+    let flat = vec!["Beautiful Bride\r\n Bride and Groom\r\n\r\n Happy Couple".to_string(), "Solo".to_string()];
+    assert_eq!(from_file(&flat, &[]), vec!["Beautiful Bride", "Bride and Groom", "Happy Couple", "Solo"]);
+    assert_eq!(from_file(&["a\nb".to_string()], &["x|a".to_string()]), vec!["x|a", "b"], "a level of a path isn't listed twice");
+    assert_eq!(one_line("a\r\n b"), "a b");
+    assert!(matches!(one_line("plain"), std::borrow::Cow::Borrowed(_)));
+    assert!(split_lines("\r\n").is_empty());
+}
+
 fn lib(kws: &[&[&str]]) -> (Catalog, Vec<PhotoId>) {
     let mut c = Catalog::new();
     let mut ids = Vec::new();

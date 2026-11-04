@@ -73,15 +73,37 @@ pub fn to_file(keywords: &[String]) -> FileKeywords {
 /// A file's keywords as a photo carries them: the paths of `lr:hierarchicalSubject`, then the
 /// names of `dc:subject` that aren't levels of those paths (Lightroom Classic writes each keyword's
 /// name, its parents' and synonyms flat besides its path). Each once, cleaned.
+///
+/// An entry holding several lines is several keywords: some cameras' metadata presets write the
+/// whole list as one `dc:subject` item, a keyword a line ("Beautiful Bride&#xD;&#xA; Bride and
+/// Groom…"). Read as one, it would be a single keyword many lines tall.
 pub fn from_file(flat: &[String], hierarchical: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = hierarchical.iter().map(|k| clean(k)).collect();
+    let lines = |v: &[String]| -> Vec<String> { v.iter().flat_map(|k| split_lines(k)).collect() };
+    let (flat, hierarchical) = (lines(flat), lines(hierarchical));
+    let mut out: Vec<String> = hierarchical.iter().map(|k| clean(k)).filter(|k| !k.is_empty()).collect();
     // One lowered set of every hierarchical level, not a search of `hierarchical` for each flat
     // keyword: disjoint lists from sidecars made the old approach quadratic in both (CWE-407), and
     // `same` allocates two lower-cased strings per comparison.
     let levels: std::collections::HashSet<String> = hierarchical.iter().flat_map(|h| h.split(SEP).map(|l| l.trim().to_lowercase())).collect();
-    out.extend(flat.iter().map(|k| clean(k)).filter(|k| !levels.contains(&k.to_lowercase())));
+    out.extend(flat.iter().map(|k| clean(k)).filter(|k| !k.is_empty()).filter(|k| !levels.contains(&k.to_lowercase())));
     dedupe(&mut out);
     out
+}
+
+/// The keywords of one metadata entry: one a line (any of `\r`, `\n`, the Unicode line and
+/// paragraph separators), blank lines dropped.
+pub fn split_lines(k: &str) -> Vec<String> {
+    k.split(['\r', '\n', '\u{2028}', '\u{2029}']).map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
+}
+
+/// `text` on one line: line breaks become spaces (a name drawn in a row must never spill over
+/// the rows around it).
+pub fn one_line(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains(['\r', '\n', '\u{2028}', '\u{2029}']) {
+        std::borrow::Cow::Owned(split_lines(text).join(" "))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
 }
 
 /// The deepest a keyword list file may nest keywords: a file is input, so its nesting is bounded.
