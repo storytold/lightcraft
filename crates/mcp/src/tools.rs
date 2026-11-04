@@ -623,6 +623,11 @@ fn obj(args: &Value, keys: &[&str]) -> Value {
 
 /// Run one tool.
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
+    let roots = b.automation_roots();
+    lightcraft_engine::file_access::confine(roots.as_ref(), || run_tool(b, name, args))
+}
+
+fn run_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     let args = if args.is_null() { &json!({}) } else { args };
     if !args.is_object() {
         return ToolResult::error("tool arguments must be an object");
@@ -718,10 +723,10 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
                     return ToolResult::error(e);
                 }
             }
-            if let Some(dest) = args.get("destination").and_then(Value::as_str).filter(|d| !d.trim().is_empty()) {
-                if let Err(e) = lightcraft_engine::file_access::check_write(dest) {
-                    return ToolResult::error(e);
-                }
+            if let Some(dest) = args.get("destination").and_then(Value::as_str).filter(|d| !d.trim().is_empty())
+                && let Err(e) = lightcraft_engine::file_access::check_write(dest)
+            {
+                return ToolResult::error(e);
             }
             if args.get("mode").and_then(Value::as_str) == Some("move") {
                 for f in &files {

@@ -169,7 +169,9 @@ pub enum Original {
 impl CatalogPhoto {
     /// Whether the original is a file here; only a [`Original::Local`] path is looked at.
     pub fn original_is_file(&self) -> bool {
-        self.original == Original::Local && Path::new(&self.path).is_file()
+        // (a catalog names any path: outside the automation roots a file counts as missing, so
+        // what it names can't be used to ask whether a file exists there)
+        self.original == Original::Local && crate::file_access::check_read(&self.path).is_ok() && Path::new(&self.path).is_file()
     }
 }
 

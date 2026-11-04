@@ -134,7 +134,7 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             let bytes = match &s.media.file_bytes {
                 Some(r) => r(path),
-                None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
+                None => crate::file_access::check_read(path).and_then(|()| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
             }
             .map_err(|e| super::bad("photo.allMetadata", e))?;
             let exif: Vec<Value> = lightcraft_meta::file_tag_rows(&bytes)
@@ -143,7 +143,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 .collect();
             // Keep sidecar precedence; reuse the loaded bytes for embedded XMP.
             let packet = match s.sidecar_lookup(ph.id).find(path) {
-                Some(sc) => std::fs::read_to_string(sc).ok(),
+                Some(sc) => crate::file_access::check_read(&sc).ok().and_then(|()| std::fs::read_to_string(sc).ok()),
                 None => lightcraft_meta::embedded(&bytes).xmp,
             };
             let xmp: Vec<Value> = packet

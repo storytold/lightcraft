@@ -194,12 +194,16 @@ fn walk(
             }
             let Ok(ft) = ft else { continue };
             let dir = if ft.is_symlink() {
+                // (a link out of the automation roots is passed over, whatever it leads to)
+                if crate::file_access::check_read(&p).is_err() {
+                    continue;
+                }
                 // a link (or a Windows junction): a folder is entered once, a file is a file
                 match std::fs::metadata(&p) {
                     Ok(m) if m.is_dir() => {
                         // (asked before the folder is marked as entered, so a folder turned down
                         // here can still be entered through another link to it)
-                        if !enter(&p) || crate::file_access::check_read(&p).is_err() {
+                        if !enter(&p) {
                             continue;
                         }
                         let Ok(c) = std::fs::canonicalize(&p) else { continue };

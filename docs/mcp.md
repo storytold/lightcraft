@@ -33,48 +33,58 @@ A malformed, incomplete, oversized or mismatched reply also closes the connectio
 an unknown outcome without resending. An idless `ok: false` with a string `error` is preserved
 as a pre-dispatch refusal (for example, too many control connections); the next call reconnects.
 
-### Automation roots confinement
+### Automation roots
 
-For autonomous environments and sandboxed agent workflows, `lightcraft-cli mcp` can confine all file operations to designated directories:
+`lightcraft-cli mcp` can keep an agent's file access to the folders you give it, for a server that hosts agents or any
+other unattended use:
 
-- `--automation-read-root DIR`: Confines all file reads (imports, probes, previews, presets) to `DIR`.
-- `--automation-write-root DIR`: Confines all file writes (exports, renders, sidecars) to `DIR`.
+- `--automation-read-root DIR`: reads stay inside `DIR` (or the write root).
+- `--automation-write-root DIR`: writes stay inside `DIR`.
 
-#### Confinement semantics & rules:
-- **In-process headless only**: Confinement applies strictly to the in-process headless server. Combining `--automation-read-root` or `--automation-write-root` with `--connect` is immediately rejected with an error because a running external desktop app cannot be confined by CLI arguments.
-- **Strict canonicalization**: Both roots and target paths are canonicalized with all symbolic links resolved.
-- **Traversal & link escape refusal**: Path traversal attempts (e.g. `..`), symlinks pointing outside roots, and dangling symlinks are refused before any filesystem operation begins. Denied writes never create parent directories or truncate existing files.
-- **Case-insensitivity & device names**: Windows path matching is case-insensitive, and reserved DOS device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`) are unconditionally blocked.
-- **Root permissions**: Specifying neither root preserves 100% unconfined default behavior. When automation roots are configured, read access is permitted within either the read root or write root (allowing tools to read back exported files), while write access is strictly confined to the write root. A read-only root denies all writes.
-- **Threat model limits**: Confinement enforces path boundary invariants against accidental or adversarial paths emitted by LLM tool calls. It does not replace OS-level kernel sandbox primitives against external processes racing or modifying folder trees concurrently.
-- **Operator configuration vs. agent file access**: Startup flags such as `--library DIR` designate operator-chosen configuration rather than LLM-directed paths. The server's internal library catalog storage is operated under unconfined authority, while all agent-driven operations (reads, imports, exports, sidecars, browsing) are strictly confined to the configured automation roots.
+The rules:
 
-#### Covered commands & authority enforcement points
+- **A root grants its own kind only.** Reads are allowed inside either root, writes only inside the write root. With only
+  a read root nothing can be written; with neither option nothing is confined.
+- **Links are followed before a path is judged.** Both the roots and every path are resolved first, so `..`, a link to a
+  file or folder outside, and a link that leads nowhere are refused before anything is opened. A file that doesn't exist
+  yet is judged by its nearest existing folder. Comparison is by whole path components (`/work2` isn't inside `/work`),
+  without regard to case on Windows, where reserved device names (`CON`, `NUL`, `COM1`…) are refused too.
+- **Headless only.** `--connect` is refused together with a root: a running app isn't confined by them.
+- **Every command is classified.** `Session::execute` checks the paths among a command's parameters before it runs
+  (`crates/engine/src/file_access/commands.rs`). A command not in that list is refused, and a test walks the command
+  registry so a new command can't land without a line there. `app.export` and the helper tools go through the same check.
+- **What a command reaches indirectly is checked where it is opened**: a photo's original and sidecars through the
+  library, a watermark or identity plate graphic, a print or proof profile. A catalog or preset can name a file outside
+  the roots: it counts as missing and isn't read, and nothing says whether it exists.
+- **The check comes before anything else a command looks at.** With roots in force, `photo.convertToDng` on a photo that
+  isn't raw and sits in a read-only place answers with an error, not a skip entry.
 
-Confinement is applied in depth across the filesystem abstraction layer (`RealFs`, `folder_on_disk`), engine command dispatch, and MCP protocol routing:
+Refused while roots are in force: `export.addToPhotos` (hands files to another application) and `library.devices` (lists
+the mounted volumes).
 
-| Operation / Tool | Command / Subsystem | Authority Required | Enforcement Point |
-|---|---|---|---|
-| `import` | `library.import`, `expand_paths` | Read (Write for Move source & destination) | `crates/mcp/src/tools.rs`, `cmd/library.rs`, `import.rs`, `import_move.rs` |
-| Import preview | `library.importPreview` | Read | `crates/engine/src/cmd/library.rs` |
-| Folder browsing | `library.browse` | Read | `crates/engine/src/cmd/browse.rs` |
-| Create folder | `folder.create`, `folder_on_disk` | Write | `crates/engine/src/cmd/browse.rs` |
-| Rename / Move folder | `folder.rename`, `folder.move`, `move_folder` | Write (both source and destination) | `crates/engine/src/cmd/browse.rs` |
-| Move photo to folder | `photo.moveToFolder` | Write (both source and destination) | `crates/engine/src/cmd/browse.rs`, `rename.rs` |
-| Batch rename photos | `photo.rename`, `apply_file_plans` | Write (both source and destination) | `crates/engine/src/cmd/manage.rs`, `rename.rs` (`RealFs`) |
-| Low-level file moves / copies / deletes | `RealFs` (`MoveFs`) | Read for source copy; Write for target & remove | `crates/engine/src/rename.rs` (`RealFs`) |
-| Original & sidecar reads | `files.rs`, `sidecar.rs`, `read_packet` | Read | `crates/engine/src/files.rs`, `crates/engine/src/sidecar.rs` |
-| Sidecar writes | `photo.saveMetadataToFile`, `sidecar.rs` | Write | `crates/engine/src/sidecar.rs` (`save_sidecar_with`) |
-| Export photo | `app.export`, `export.rs` | Write | `crates/engine/src/export.rs` (`write_with`) |
-| Render to disk | `ui.render` / `render_photo` | Write (in-memory if no explicit path) | `crates/mcp/src/headless.rs`, `crates/engine/src/export.rs` |
-| Preset & LUT import | `preset.import`, `lut_profiles.rs` | Read | `crates/engine/src/cmd/preset_files.rs`, `lut_profiles.rs` |
-| Mask effect import | `mask.importEffects` | Read (top-level and per-directory) | `crates/engine/src/cmd/mask_effect_files.rs` |
-| Keywords import / export | `keywords.import`, `keywords.export` | Read / Write | `crates/engine/src/cmd/keywords.rs` |
-| Lightroom Classic interop | `library.inspectLightroom`, `library.importLightroom` | Read | `crates/engine/src/cmd/library/specs.rs`, `lightroom_catalog.rs` |
-| Duplicate photo | `photo.duplicate` | Read source, Write destination | `crates/engine/src/cmd/convert.rs` |
-| Convert photo to DNG | `photo.convertToDng` | Read source, Write destination | `crates/engine/src/cmd/convert.rs` |
-| Smart previews location | `library.smartPreviewsLocation` | Write target folder | `crates/engine/src/cmd/previews.rs` |
-| Relink photo | `photo.relink` | Read target path | `crates/engine/src/cmd/missing.rs` |
+Not confined, on purpose:
+
+- What the operator chose at startup: the `--library` folder with its catalog, previews and archives.
+- The app's own folders: settings, user presets and templates, the denoise and face models and the lens and place-name
+  data it downloads. No path an agent gives reaches them, but a shared server should give each client its own `HOME`.
+- Other programs. A path is checked and then opened, so a process that swaps in a link in between can still win. A hard
+  link looks like an ordinary file, so a root must not hold hard links to what it should not reach. The roots keep an
+  agent to the files it was given; they don't replace an operating-system sandbox.
+
+Where the file-touching commands are checked, besides the check of their parameters:
+
+| Commands | Access | Checked in |
+|---|---|---|
+| `import`, `library.import`, `library.importPreview`, `library.browse`, `library.findMissing`, `library.autoImport*`, `folder.synchronize`, `folder.scanChanges` | Read (`move` also needs write on the source; `destination` needs write) | `walk.rs`, `files/fs.rs`, `import_move.rs`, `cmd/library/`, `cmd/browse.rs`, `sync.rs` |
+| Originals and sidecars, read | Read | `files/fs.rs`, `files/preview.rs`, `sidecar.rs`, `import/job.rs`, `focus_scan.rs`, `cmd/query.rs` |
+| `photo.saveMetadataToFile`, automatic sidecars | Write | `sidecar.rs` |
+| `export`, `app.export`, `render_photo` with a `path`, `export.contactSheet`, `print.exportPdf`, `slideshow.export`, every `*.export*` of presets and templates | Write (a render without a `path` stays in memory) | `export/place.rs`, `originals.rs`, `slideshow_export.rs` |
+| `folder.create`, `folder.rename`, `folder.move`, `photo.moveToFolder`, `photo.rename` | Write on both ends | `cmd/browse.rs`, `rename/fs.rs`, `cmd/manage.rs` |
+| `photo.duplicate`, `photo.convertToDng`, `photo.editExternal` | Read the source, write the copy | `cmd/convert.rs`, `export/place.rs` |
+| `library.smartPreviewsLocation` | Write | `cmd/previews.rs` |
+| `photo.relink`, `photo.autoTagTracklog`, `keyword.import`, `curve.importPresets`, `preset.import`, `mask.importEffects`, `profile.import`, `print.template.import`, `slideshow.templates.import`, `denoise.models.install`, `faces.models.install` | Read | `file_access/commands.rs`, and the command's own file where it opens one |
+| `library.inspectLightroom`, `library.importLightroom` | Read, the `-wal` file too | `cmd/library/specs.rs`, `lightroom_catalog.rs` |
+| Watermark and identity plate graphics, print and proof profiles | Read | `export/watermark.rs`, `print_color.rs`, `proof.rs`, `display.rs` |
 
 Logs go to stderr; stdout carries only protocol messages.
 

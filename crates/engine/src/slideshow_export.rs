@@ -383,6 +383,7 @@ struct PartFile {
 
 impl PartFile {
     fn new(target: &Path) -> Result<(PartFile, std::fs::File), String> {
+        crate::file_access::check_write(target)?;
         if let Some(dir) = target.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }

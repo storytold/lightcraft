@@ -220,7 +220,10 @@ impl PreparedExport {
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
                 let bytes = match &read {
                     Some(r) => r(&path)?,
-                    None => std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?,
+                    None => {
+                        crate::file_access::check_read(&path)?;
+                        std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?
+                    }
                 };
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds

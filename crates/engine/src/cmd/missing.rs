@@ -166,6 +166,7 @@ fn stored_hash(p: &Photo) -> Option<&str> {
 fn file_hash(path: &str) -> Option<String> {
     use std::io::Read;
     // the opened file must be regular (a FIFO or device would never end), and no more than its size at open is read
+    crate::file_access::check_read(path).ok()?;
     let file = std::fs::File::open(path).ok()?;
     let meta = file.metadata().ok().filter(|m| m.is_file())?;
     hash_reader(file.take(meta.len()))

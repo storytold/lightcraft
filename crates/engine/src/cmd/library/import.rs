@@ -4,6 +4,7 @@ use super::{AlbumId, PhotoId, Result, Selection, Session, Value, bad, bool_or, j
 /// The auto-import folder's visible files with their sizes (the file-system half of
 /// `library.autoImportScan`; the app lists on a worker thread and passes `listing`).
 pub fn list_auto_import_folder(folder: &str) -> std::result::Result<Vec<(String, u64)>, String> {
+    crate::file_access::check_read(folder).map_err(|e| format!("{folder}: {e}"))?;
     let rd = std::fs::read_dir(folder).map_err(|e| format!("{folder}: {e}"))?;
     Ok(rd
         .flatten()

@@ -29,6 +29,7 @@ impl Display {
     /// Load the ICC profile at `path`.
     pub fn load(path: &str) -> Result<Display, String> {
         let path = path.trim();
+        crate::file_access::check_read(path)?;
         let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
         if meta.len() > MAX_PROFILE_BYTES as u64 {
             return Err(format!("{path}: too large for an ICC profile"));

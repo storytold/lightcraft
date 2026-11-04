@@ -562,19 +562,16 @@ pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Op
         // A discovered sidecar keeps precedence even when reading it fails.
         return std::fs::read_to_string(&sc).ok().map(|s| (s, sc));
     }
+    crate::file_access::check_read(original).ok()?;
     if kind == MediaKind::Raw {
-        if crate::file_access::check_read(original).is_ok() {
-            let bytes = std::fs::read(original).ok()?;
-            let x = lightcraft_meta::embedded(&bytes).xmp?;
-            return Some((x, PathBuf::from(original)));
-        }
+        let bytes = std::fs::read(original).ok()?;
+        let x = lightcraft_meta::embedded(&bytes).xmp?;
+        return Some((x, PathBuf::from(original)));
     }
     if kind == MediaKind::Image {
-        if crate::file_access::check_read(original).is_ok() {
-            let mut file = std::fs::File::open(original).ok()?;
-            let x = read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)?;
-            return Some((x, PathBuf::from(original)));
-        }
+        let mut file = std::fs::File::open(original).ok()?;
+        let x = read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)?;
+        return Some((x, PathBuf::from(original)));
     }
     None
 }

@@ -7,7 +7,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use lightcraft_engine::Session;
 use lightcraft_engine::file_access::AutomationRoots;
@@ -24,7 +23,9 @@ fn create_test_image(path: &Path, text: &str) {
     let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
     std::fs::write(path, png).unwrap();
     // Also write an xmp sidecar with the text to check leakage
-    let xmp = format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">{text}</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>");
+    let xmp = format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">{text}</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"
+    );
     std::fs::write(path.with_extension("png.xmp"), xmp).unwrap();
 }
 
@@ -40,7 +41,7 @@ fn confined(tag: &str, read: bool, write: bool) -> (Server, PathBuf) {
 
     let (in_dir, out_dir) = (base.join("in"), base.join("out"));
     let roots = AutomationRoots::new(read.then_some(in_dir.as_path()), write.then_some(out_dir.as_path())).unwrap();
-    let mut session = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models();
+    let session = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models();
     let headless = Headless::new(session.with_default_sam3_model().with_default_slide_templates()).with_automation_roots(roots);
     let server = Server::new(Box::new(headless));
     (server, base)
@@ -54,9 +55,8 @@ fn call(server: &mut Server, name: &str, args: Value) -> (bool, String, Value) {
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}}).to_string();
     let reply: Value = serde_json::from_str(&server.handle_line(&line).unwrap()).unwrap();
     let result = &reply["result"];
-    let text = result["content"].as_array().map(|arr| {
-        arr.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")
-    }).unwrap_or_default();
+    let text =
+        result["content"].as_array().map(|arr| arr.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default();
     (result["isError"] == true, text, reply)
 }
 
@@ -142,7 +142,7 @@ fn read_only_root_permits_reads_but_denies_all_writes() {
     ok(&mut server, "import", json!({"paths": [valid_path]}));
 
     let out_file = s(&base.join("out/exported.jpg"));
-    refused(&mut server, "export", json!({"path": out_file, "format": "jpeg"}), "outside the write root");
+    refused(&mut server, "export", json!({"path": out_file, "format": "jpeg"}), "write authority is absent");
 
     let _ = std::fs::remove_dir_all(base);
 }
@@ -181,7 +181,7 @@ fn sidecar_write_refused_outside_write_root() {
 
     let sidecar = base.join("in/photo.png.xmp");
     let before = std::fs::read(&sidecar).unwrap();
-    let (error, text, reply) = call(&mut server, "run_command", json!({"command": "photo.saveMetadataToFile", "params": {}}));
+    let (_, text, reply) = call(&mut server, "run_command", json!({"command": "photo.saveMetadataToFile", "params": {}}));
     assert!(text.contains("outside the write root") || reply.to_string().contains("outside the write root"), "{text}");
     assert_eq!(std::fs::read(&sidecar).unwrap(), before, "Denied sidecar write must not modify the existing sidecar");
     assert!(!base.join("in/photo.xmp").exists(), "Denied sidecar write must not create file");
@@ -199,12 +199,7 @@ fn folder_browse_refused_outside_read_root() {
     ok(&mut server, "run_command", json!({"command": "library.browse", "params": {"path": inside_dir}}));
 
     // Browsing folder outside read root is refused
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "library.browse", "params": {"path": outside_dir}}),
-        "outside the read root",
-    );
+    refused(&mut server, "run_command", json!({"command": "library.browse", "params": {"path": outside_dir}}), "outside the read root");
 
     let _ = std::fs::remove_dir_all(base);
 }
@@ -234,9 +229,7 @@ fn symlink_directory_outside_read_root_is_not_traversed() {
         let in_dir = s(&base.join("in"));
         let (error, text, reply) = call(&mut server, "import", json!({"paths": [in_dir]}));
         assert!(!error, "import {in_dir}: {text}");
-        let imported = reply["result"]["structuredContent"]["imported"]
-            .as_array()
-            .expect("import response must contain imported photo ids");
+        let imported = reply["result"]["structuredContent"]["imported"].as_array().expect("import response must contain imported photo ids");
         assert_eq!(imported.len(), 1, "Must not import photo through symlink directory: {reply}");
     }
     let _ = std::fs::remove_dir_all(base);
@@ -256,10 +249,7 @@ fn mask_import_effects_symlink_directory_outside_read_root_is_not_traversed() {
         let (error, text, reply) = call(&mut server, "cmd_mask_importEffects", json!({"paths": [in_dir]}));
         assert!(!error, "mask.importEffects {in_dir}: {text}");
         let full_response = reply.to_string();
-        assert!(
-            !full_response.contains("secret.lceffect"),
-            "Must not disclose outside directory entries through nested symlink: {reply}"
-        );
+        assert!(!full_response.contains("secret.lceffect"), "Must not disclose outside directory entries through nested symlink: {reply}");
     }
     let _ = std::fs::remove_dir_all(base);
 }
@@ -290,11 +280,7 @@ fn folder_create_refused_outside_write_root() {
     assert!(!base.join("outside/subfolder").exists(), "Denied folder.create must not create folder outside");
 
     // Creating folder inside write root succeeds
-    ok(
-        &mut server,
-        "run_command",
-        json!({"command": "folder.create", "params": {"parent": out_dir, "name": "valid_subfolder"}}),
-    );
+    ok(&mut server, "run_command", json!({"command": "folder.create", "params": {"parent": out_dir, "name": "valid_subfolder"}}));
     assert!(base.join("out/valid_subfolder").exists(), "Valid folder.create inside write root must succeed");
 
     let _ = std::fs::remove_dir_all(base);
@@ -322,21 +308,11 @@ fn folder_rename_and_move_refused_outside_write_root() {
     assert!(!base.join("in/renamed_folder").exists(), "Denied folder rename must not create new folder");
 
     // Moving folder from read root into write root is refused (source cannot be modified)
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "folder.move", "params": {"path": in_folder, "into": out_dir}}),
-        "outside the write root",
-    );
+    refused(&mut server, "run_command", json!({"command": "folder.move", "params": {"path": in_folder, "into": out_dir}}), "outside the write root");
     assert!(base.join("in/my_folder").exists(), "Denied folder move must keep source intact");
 
     // Moving folder from write root into read root is refused (destination cannot be outside write root)
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "folder.move", "params": {"path": out_folder, "into": in_dir}}),
-        "outside the write root",
-    );
+    refused(&mut server, "run_command", json!({"command": "folder.move", "params": {"path": out_folder, "into": in_dir}}), "outside the write root");
     assert!(base.join("out/my_folder").exists(), "Folder in write root must remain in place");
 
     let _ = std::fs::remove_dir_all(base);
@@ -403,12 +379,7 @@ fn import_mode_move_refused_without_source_write_authority() {
     let out_dir = s(&base.join("out"));
 
     // Attempting to import with mode=move from read root (without write authority on source) is refused
-    refused(
-        &mut server,
-        "import",
-        json!({"paths": [valid_path], "mode": "move", "destination": out_dir}),
-        "outside the write root",
-    );
+    refused(&mut server, "import", json!({"paths": [valid_path], "mode": "move", "destination": out_dir}), "outside the write root");
     assert!(photo.exists(), "Source photo in read root must not be removed by move import");
     assert!(base.join("in/photo.png.xmp").exists(), "Sidecar in read root must not be removed by move import");
 
@@ -421,19 +392,9 @@ fn lightroom_commands_refused_outside_read_root() {
     let lrcat_outside = s(&base.join("outside/catalog.lrcat"));
     std::fs::write(base.join("outside/catalog.lrcat"), b"not a real catalog").unwrap();
 
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "library.inspectLightroom", "params": {"path": lrcat_outside}}),
-        "outside the read root",
-    );
+    refused(&mut server, "run_command", json!({"command": "library.inspectLightroom", "params": {"path": lrcat_outside}}), "outside the read root");
 
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "library.importLightroom", "params": {"path": lrcat_outside}}),
-        "outside the read root",
-    );
+    refused(&mut server, "run_command", json!({"command": "library.importLightroom", "params": {"path": lrcat_outside}}), "outside the read root");
 
     let _ = std::fs::remove_dir_all(base);
 }
@@ -459,12 +420,7 @@ fn lightroom_wal_symlink_outside_read_root_is_refused() {
             json!({"command": "library.inspectLightroom", "params": {"path": s(&lrcat_in)}}),
             "outside the read root",
         );
-        refused(
-            &mut server,
-            "run_command",
-            json!({"command": "library.importLightroom", "params": {"path": s(&lrcat_in)}}),
-            "outside the read root",
-        );
+        refused(&mut server, "run_command", json!({"command": "library.importLightroom", "params": {"path": s(&lrcat_in)}}), "outside the read root");
     }
     let _ = std::fs::remove_dir_all(base);
 }
@@ -474,12 +430,7 @@ fn library_import_preview_refused_outside_read_root() {
     let (mut server, base) = confined("preview", true, true);
     let outside_path = s(&base.join("outside/secret.png"));
 
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "library.importPreview", "params": {"paths": [outside_path]}}),
-        "outside the read root",
-    );
+    refused(&mut server, "run_command", json!({"command": "library.importPreview", "params": {"paths": [outside_path]}}), "outside the read root");
 
     let _ = std::fs::remove_dir_all(base);
 }
@@ -496,7 +447,7 @@ fn confined_with_library(tag: &str, read: bool, write: bool) -> (Server, PathBuf
     let (in_dir, out_dir) = (base.join("in"), base.join("out"));
     let roots = AutomationRoots::new(read.then_some(in_dir.as_path()), write.then_some(out_dir.as_path())).unwrap();
     let mut session = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models();
-    session.open_library(&base.join("lib"), false).unwrap();
+    session.open_library(base.join("lib"), false).unwrap();
     let headless = Headless::new(session.with_default_sam3_model().with_default_slide_templates()).with_automation_roots(roots);
     let server = Server::new(Box::new(headless));
     (server, base)
@@ -512,12 +463,7 @@ fn photo_duplicate_refused_outside_write_root_and_in_read_only_root() {
     assert!(!error, "import {valid_path}: {text}");
     let id = reply["result"]["structuredContent"]["imported"][0].as_u64().unwrap();
 
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "photo.duplicate", "params": {"ids": [id]}}),
-        "outside the write root",
-    );
+    refused(&mut server, "run_command", json!({"command": "photo.duplicate", "params": {"ids": [id]}}), "outside the write root");
     assert!(!base.join("in/photo-copy.png").exists(), "Duplicate file must not be created outside write root");
     let _ = std::fs::remove_dir_all(base);
 
@@ -528,12 +474,7 @@ fn photo_duplicate_refused_outside_write_root_and_in_read_only_root() {
     assert!(!error, "import {valid_path}: {text}");
     let id = reply["result"]["structuredContent"]["imported"][0].as_u64().unwrap();
 
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "photo.duplicate", "params": {"ids": [id]}}),
-        "write authority is absent",
-    );
+    refused(&mut server, "run_command", json!({"command": "photo.duplicate", "params": {"ids": [id]}}), "write authority is absent");
     assert!(!base.join("in/photo-copy.png").exists(), "Duplicate file must not be created with read-only root");
     let _ = std::fs::remove_dir_all(base);
 }
@@ -547,12 +488,7 @@ fn photo_convert_to_dng_refused_outside_write_root_and_in_read_only_root() {
     assert!(!error, "import {valid_path}: {text}");
     let id = reply["result"]["structuredContent"]["imported"][0].as_u64().unwrap();
 
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "photo.convertToDng", "params": {"ids": [id]}}),
-        "outside the write root",
-    );
+    refused(&mut server, "run_command", json!({"command": "photo.convertToDng", "params": {"ids": [id]}}), "outside the write root");
     assert!(!base.join("in/photo.dng").exists(), "DNG must not be created outside write root");
     let _ = std::fs::remove_dir_all(base);
 
@@ -563,12 +499,7 @@ fn photo_convert_to_dng_refused_outside_write_root_and_in_read_only_root() {
     assert!(!error, "import {valid_path}: {text}");
     let id = reply["result"]["structuredContent"]["imported"][0].as_u64().unwrap();
 
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "photo.convertToDng", "params": {"ids": [id]}}),
-        "write authority is absent",
-    );
+    refused(&mut server, "run_command", json!({"command": "photo.convertToDng", "params": {"ids": [id]}}), "write authority is absent");
     assert!(!base.join("in/photo.dng").exists(), "DNG must not be created with read-only root");
     let _ = std::fs::remove_dir_all(base);
 }
@@ -611,11 +542,6 @@ fn photo_relink_refused_outside_read_root() {
     let id = reply["result"]["structuredContent"]["imported"][0].as_u64().unwrap();
 
     let outside_path = s(&base.join("outside/secret.png"));
-    refused(
-        &mut server,
-        "run_command",
-        json!({"command": "photo.relink", "params": {"id": id, "path": outside_path}}),
-        "outside the read root",
-    );
+    refused(&mut server, "run_command", json!({"command": "photo.relink", "params": {"id": id, "path": outside_path}}), "outside the read root");
     let _ = std::fs::remove_dir_all(base);
 }

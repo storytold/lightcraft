@@ -160,7 +160,10 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     }
     let bytes = match &spec.read {
         Some(r) => r(&spec.path).map_err(MakeError::Failed)?,
-        None => std::fs::read(&spec.path).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?,
+        None => {
+            crate::file_access::check_read(&spec.path).map_err(MakeError::Failed)?;
+            std::fs::read(&spec.path).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?
+        }
     };
     // the decode and the normalised mosaic wait their turn at the process-wide memory gate, as every decode does
     let (mosaic, layout) = {

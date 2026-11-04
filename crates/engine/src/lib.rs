@@ -566,6 +566,7 @@ impl Session {
     /// Run a command by id. THE entry point for every frontend.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        file_access::check_command(id, params).map_err(|e| EngineError::BadParams { cmd: id.to_string(), msg: e })?;
         // a command that validates the photos a call names isn't held back by the selection
         if !(spec.explicit_targets && cmd::names_photos(params)) {
             (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))?;

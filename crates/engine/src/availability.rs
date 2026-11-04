@@ -39,7 +39,7 @@ pub const RECHECK: Duration = Duration::from_secs(15);
 
 fn fs_exists(path: &str) -> bool {
     // the browser build has no file system: its originals are always "there"
-    cfg!(target_arch = "wasm32") || std::path::Path::new(path).exists()
+    cfg!(target_arch = "wasm32") || (crate::file_access::check_read(path).is_ok() && std::path::Path::new(path).exists())
 }
 
 #[derive(Default)]

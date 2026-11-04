@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use crate::backend::{Backend, ProgressHook};
 
-use std::sync::Arc;
 use lightcraft_engine::file_access::AutomationRoots;
+use std::sync::Arc;
 
 /// Headless backend: a [`Session`] with filesystem hooks.
 pub struct Headless {
@@ -73,6 +73,7 @@ impl Headless {
     /// With `path` and no `format`, the format follows the path's extension.
     fn export(&mut self, p: &Value) -> Result<Value, String> {
         use lightcraft_engine::export::{Destination, ExportFormat, ExportOptions, Resize, prepare_batch, run_batch};
+        lightcraft_engine::file_access::check_command("app.export", p)?;
         let p = &self.session.export_params_or(p, ExportFormat::Png)?;
         // PNG for a `path` that names no format; `bitDepth` is checked against the format written
         let mut opts = ExportOptions::from_params_or(p, ExportFormat::Png).map_err(|e| e.to_string())?;
@@ -131,7 +132,8 @@ impl Backend for Headless {
     }
 
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        lightcraft_engine::file_access::confine(self.roots.as_ref(), || {
+        let roots = self.roots.clone();
+        lightcraft_engine::file_access::confine(roots.as_ref(), || {
             let p = if params.is_null() { json!({}) } else { params };
             match method {
                 "engine.execute" | "ui.menu.invoke" | "command" => {
@@ -170,6 +172,10 @@ impl Backend for Headless {
                 other => Err(format!("unknown method `{other}`")),
             }
         })
+    }
+
+    fn automation_roots(&self) -> Option<Arc<AutomationRoots>> {
+        self.roots.clone()
     }
 
     fn has_ui(&self) -> bool {

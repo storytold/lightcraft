@@ -16,14 +16,21 @@
 //! [`confine_process`] (`lightcraft-cli mcp`), except inside [`unconfined`]. Without roots
 //! nothing is checked.
 //!
+//! [`Session::execute`](crate::Session::execute) also checks the paths among a command's
+//! parameters before it runs, and refuses a command that isn't classified: see [`commands`].
+//!
 //! A path is checked, then opened: a process that can change the folders in between (swapping in
 //! a link) can still win that race. The roots keep an agent to the files it was given; they don't
 //! guard against other programs on the computer.
+
+pub mod commands;
 
 use std::cell::RefCell;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+
+pub use commands::check_command;
 
 /// Read access or write access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
