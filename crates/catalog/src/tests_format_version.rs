@@ -156,7 +156,7 @@ fn v10_catalog_repair_clears_spurious_captured_manual_on_local_photos() {
 }
 
 #[test]
-fn v10_library_preserves_captured_manual_values() {
+fn v12_library_preserves_captured_manual_values() {
     let mut c = Catalog::new();
     let id1 = c.alloc_photo_id();
     let mut p1 = Photo::new(id1, Source::File { path: "/p/1.jpg".into() }, "1.jpg", "JPEG", 100, 100, "2026-01-01");
@@ -172,7 +172,7 @@ fn v10_library_preserves_captured_manual_values() {
 
     let snap = c.to_snapshot();
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":10,\"seq\":2,\"catalog\":{snap}}}\n").into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{snap}}}\n").into_bytes());
 
     let (_, loaded, r) = Journal::open(Box::new(m)).unwrap();
     assert_eq!(r.upgraded_from, None);
