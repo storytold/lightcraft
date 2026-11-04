@@ -52,7 +52,8 @@
 //! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
 //! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
 //! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
-//! | 11 | Remove is content-aware (#2359); 10 is taken by open pull requests | `Spot.content_aware` (a Remove spot without it loads as Heal) |
+//! | 10 | masks stay on the photo under lens corrections, Upright and Transform | `Mask.on_photo` (develop settings) |
+//! | 11 | Remove is content-aware (#2359) | `Spot.content_aware` (a Remove spot without it loads as Heal) |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
