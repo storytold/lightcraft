@@ -3,7 +3,7 @@
 //!
 //! Entry points:
 //! - [`read_exif`] — a TIFF-structured Exif block → [`Metadata`]; [`from_tiff`] for an already parsed stream.
-//! - [`embedded`] / [`jpeg_segments`] / [`png_chunks`] / [`webp_chunks`] — locate Exif / XMP / ICC / IPTC blocks.
+//! - [`embedded`] / [`jpeg_segments`] / [`jpeg_segments_with_all_xmp`] / [`png_chunks`] / [`webp_chunks`] — locate Exif / XMP / ICC / IPTC blocks.
 //! - [`parse_xmp`] / [`write_xmp`] — XMP packets (interchange fields + the opaque `lc:settings` JSON).
 //! - [`parse_iptc`] — IPTC-IIM record 2 datasets.
 //! - [`parse_gpx`] — GPS track logs (GPX) for geotagging by capture time.
@@ -28,7 +28,7 @@ pub mod tags;
 mod xmp;
 mod xmp_merge;
 
-pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
+pub use container::{Embedded, embedded, jpeg_segments, jpeg_segments_with_all_xmp, png_chunks, webp_chunks};
 pub use datetime::DateTime;
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
