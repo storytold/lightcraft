@@ -4,8 +4,9 @@ use super::gpu::{GPU_CRASHED, GPU_MAX_FALLBACKS, GPU_PARALLEL, GPU_SLOW, GPU_STU
 use super::settings::{installed_models, read_settings};
 #[cfg(feature = "denoise")]
 use super::state::Pace;
-use super::*;
-
+use super::{Arc, DenoiserManifest, Mutex, Path, TileRunner, Value, json};
+#[cfg(feature = "denoise")]
+use super::{AtomicBool, AtomicUsize, OnceLock, Ordering, PathBuf, PoisonError, RunError};
 /// Stack of the threads that run the model (the runtime recurses through its graph).
 pub(super) const STACK: usize = 16 << 20;
 

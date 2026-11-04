@@ -17,10 +17,11 @@ fn corpus_root() -> PathBuf {
 
 /// Variants known not to decode yet (see the crate docs): matched against the lower-case file name.
 const KNOWN_UNSUPPORTED: &[&str] = &[
-    "cr3-",           // Unverified CRX coding variants; exact supported cases live in cr3_corpus.rs.
-    "orf-olympus-em", // Olympus compressed ORF
-    "-he.nef",        // Nikon High Efficiency (HE / HE★) NEF, issue #193
-    "sraw",           // Canon sRAW / mRAW
+    "cr3-",                       // Unverified CRX coding variants; exact supported cases live in cr3_corpus.rs.
+    "orf-olympus-em",             // Olympus compressed ORF
+    "-he.nef",                    // Nikon High Efficiency (HE / HE★) NEF, issue #193
+    "sraw",                       // Canon sRAW / mRAW
+    "crw-canon-powershot-g5.crw", // Canon PowerShot G5 CRW: entropy coding anomaly (craft-libs crates/crw/clean-room/02-crw-format.md §4)
 ];
 
 #[test]
@@ -1443,7 +1444,7 @@ fn corpus_kodak_dcs520c() {
 
 /// Fujifilm RAF lens tables (`0xf00b` distortion, `0xf010` vignetting) become a warp and a vignette gain for the
 /// cameras whose geometry was checked against the camera JPEG (docs/fuji-lens-corrections.md). Reads `LIGHTCRAFT_FUJI` (a folder
-/// of RAFs or of per-model folders, e.g. the CC0 pixls set) or the corpus' `raf-fuji-*` files; skips when absent.
+/// of RAFs or of per-model folders, e.g. the CC0 pixls set) or the corpus' `raf-fuji*` files; skips when absent.
 #[test]
 fn fuji_embedded_lens_tables_follow_the_validated_models() {
     fn collect(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
@@ -1462,7 +1463,7 @@ fn fuji_embedded_lens_tables_follow_the_validated_models() {
         Some(dir) => collect(Path::new(&dir), 0, &mut files),
         None => {
             collect(&corpus_root().join("raw"), 1, &mut files);
-            files.retain(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("raf-fuji-")));
+            files.retain(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("raf-fuji")));
         }
     }
     files.sort();

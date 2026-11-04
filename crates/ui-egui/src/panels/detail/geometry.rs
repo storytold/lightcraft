@@ -1,6 +1,6 @@
 #[cfg(test)]
 use super::info::label_badge_rect;
-use super::*;
+use super::{Affine, Frame, LightcraftApp, PhotoId, Point, Pos2, Rect, Zoom, json, pos2, vec2};
 
 /// Screen ↔ normalized-image mapping for the displayed frame.
 #[derive(Clone, Copy)]
@@ -296,7 +296,7 @@ mod preview_geometry_tests {
     fn before_label_badge_keeps_clear_of_the_filter_pill_and_the_right_edge() {
         let text = vec2(40.0, 14.0);
         let pane = Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0));
-        let inset = super::FILTER_PILL_INSET + super::FILTER_PILL_HEIGHT;
+        let inset = crate::panels::detail::FILTER_PILL_INSET + crate::panels::detail::FILTER_PILL_HEIGHT;
         let past = label_badge_rect(Rect::from_min_size(pos2(-900.0, -700.0), vec2(3000.0, 2000.0)), pane, text, inset);
         assert_eq!(past.min, pos2(108.0, 50.0 + inset + 8.0));
         let under = label_badge_rect(Rect::from_min_size(pos2(200.0, 60.0), vec2(400.0, 300.0)), pane, text, inset);

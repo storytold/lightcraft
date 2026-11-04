@@ -1,4 +1,4 @@
-use super::*;
+use super::{Session, Value, pick};
 
 pub type PickFiles = Box<dyn FnMut() -> Vec<String>>;
 
@@ -51,6 +51,8 @@ pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 /// Platform services injected by the host app (desktop or web).
 #[derive(Default)]
 pub struct Services {
+    /// Local's built-in places as (label, path). None uses the host's home folder.
+    pub local_places: Option<Vec<(String, String)>>,
     /// Native file dialogs for commands, shown off the UI thread and answered later
     /// (`pick`; #191). With it, the synchronous pickers below serve only the buttons inside
     /// dialogs; without it (the web, tests) they answer the commands too.

@@ -1,7 +1,7 @@
 use super::options::{Conflict, DestinationMode, ExportFormat, HdrCurve, MetadataPolicy, Resize, ResizeMode, SharpenAmount, SharpenFor};
 use super::prepare::DngCompression;
 use super::watermark::{Anchor, Watermark};
-use super::*;
+use super::{ExportOptions, JxlColour, JxlEffort, JxlOptions, OutputDepth, OutputSpace, TiffCompression};
 
 impl Default for ExportOptions {
     fn default() -> Self {

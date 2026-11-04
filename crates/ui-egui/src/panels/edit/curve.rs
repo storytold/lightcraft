@@ -1,6 +1,9 @@
 use super::histogram::preview_histogram;
 use super::sliders::control;
-use super::*;
+use super::{
+    Align2, Color32, DevelopSettings, Icon, LightcraftApp, Mesh, PARAM_AMOUNTS, ParametricCurve, PhotoId, Point, Pos2, Rect, RichText, Sense, Stroke,
+    Tokens, Vertex, controls, hex, json, paint, pos2, register, text_button, vec2,
+};
 
 // ------------------------------------------------------------------------------ tone curve
 

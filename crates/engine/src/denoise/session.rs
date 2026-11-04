@@ -4,7 +4,10 @@ use super::model::STACK;
 use super::products::{Active, JobSpec, MakeError, Progress, eligible, make_product, product_key, product_path, products_in};
 use super::settings::{DIR, SETTINGS_TTL, installed_models, read_settings};
 use super::state::{AUTO_LOOK, Failure, MAX_QUEUE, Outcome, Pace, PhotoState, Running};
-use super::*;
+use super::{
+    Arc, DenoiseSpec, DevelopSettings, HashMap, HashSet, MakeProduct, Mutex, Ordering, PairLoader, Path, PathBuf, Photo, PhotoId, PoisonError,
+    Selection, Session, Source, Value, json, product,
+};
 
 impl Session {
     /// Where the active model's tiles run (see [`Model::device`]); `{kind: "none"}` while no model is loaded.

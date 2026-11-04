@@ -1,4 +1,4 @@
-use super::*;
+use super::{Tokens, register};
 
 /// Reserve the actual translated tag button width beside a template field.
 pub(crate) fn tag_field_width(ui: &egui::Ui) -> f32 {

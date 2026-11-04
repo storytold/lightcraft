@@ -872,11 +872,23 @@ fn people_and_the_name_box_offer_to_set_face_recognition_up() {
     h.step();
     assert!(offers(&mut h));
     assert_eq!(h.app.session.execute("faces.models.list", &json!({})).unwrap()["enabled"], false);
+    h.app.ui.language = crate::i18n::Locale::De;
+    crate::i18n::set_language(crate::i18n::Locale::De);
+    h.step();
+    h.step();
+    assert!(offers(&mut h), "the offer is still there in German");
     let r = h.request("ui.clickWidget", json!({"id": "faces:setup"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
     assert_eq!(h.app.session.execute("faces.models.list", &json!({})).unwrap()["enabled"], true);
+    assert_eq!(
+        h.app.ui.toast.as_ref().map(|toast| toast.0.as_str()),
+        Some(crate::i18n::Locale::De.tr("Face recognition is on")),
+        "the toast is looked up in the UI language"
+    );
+    h.app.ui.language = crate::i18n::Locale::En;
+    crate::i18n::set_language(crate::i18n::Locale::En);
     assert_eq!(h.app.ui.dialog, None, "nothing to go to Settings for");
     h.step();
     assert!(!offers(&mut h), "once it is on the offer is gone");
@@ -1568,7 +1580,7 @@ fn filter_bar_filters_and_saves_a_smart_album() {
         assert_eq!(r["ok"], true, "{w}: {r}");
     }
     let f = h.app.session.filter.clone();
-    assert_eq!((f.rating, f.flag, f.label), (3, Some(lightcraft_catalog::Flag::Pick), None), "a second click clears the label");
+    assert_eq!((f.rating, f.flag, &f.flags[..], f.label), (3, None, &[lightcraft_catalog::Flag::Pick][..], None), "a second click clears the label");
     let n = h.app.session.visible_cloned().len();
     assert!(n > 0 && n < all);
     h.request("ui.clickWidget", json!({"id": "button:filterSave"}), t);
@@ -1580,6 +1592,42 @@ fn filter_bar_filters_and_saves_a_smart_album() {
     h.request("ui.clickWidget", json!({"id": "button:filterClear"}), t);
     assert_eq!(h.app.session.filter, Default::default());
     assert_eq!(h.app.session.visible_cloned().len(), all);
+    h.settle(SETTLE);
+}
+
+/// The filter bar's flag buttons toggle on and off together, as Lightroom Classic's do (#2588):
+/// Picked + Unflagged shows everything but the rejects, a second click turns one off, and a
+/// filter saved with the old single flag shows its button lit and folds into the list.
+#[test]
+fn filter_bar_flags_combine() {
+    use lightcraft_catalog::Flag;
+    let mut h = demo([1400.0, 800.0]);
+    let t = Duration::from_secs(10);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(3).map(|p| p.id.0).collect();
+    for (id, f) in ids.iter().zip(["pick", "reject", "none"]) {
+        h.app.session.execute("photo.flag", &json!({"ids": [id], "flag": f})).unwrap();
+    }
+    let rejects = h.app.session.catalog.photos().filter(|p| p.in_library() && p.flag == Flag::Reject).count();
+    let all = h.app.session.visible_cloned().len();
+    h.request("engine.execute", json!({"command": "view.filterBar"}), t);
+    for w in ["filter:none", "filter:pick"] {
+        let r = h.request("ui.clickWidget", json!({"id": w}), t);
+        assert_eq!(r["ok"], true, "{w}: {r}");
+    }
+    assert_eq!(h.app.session.filter.flags, vec![Flag::Pick, Flag::None]);
+    assert_eq!(h.app.session.visible_cloned().len(), all - rejects);
+    h.request("ui.clickWidget", json!({"id": "filter:none"}), t);
+    assert_eq!(h.app.session.filter.flags, vec![Flag::Pick]);
+    // an old single-flag filter: Unflagged joins it instead of replacing it
+    h.app.session.execute("library.filter", &json!({"flag": "reject", "flags": []})).unwrap();
+    h.request("ui.clickWidget", json!({"id": "filter:none"}), t);
+    let f = h.app.session.filter.clone();
+    assert_eq!((f.flag, f.flags), (None, vec![Flag::Reject, Flag::None]));
+    // both set through the API: only Picked passes, so only Picked is lit and Unflagged joins it
+    h.app.session.execute("library.filter", &json!({"flag": "pick", "flags": ["pick", "none"]})).unwrap();
+    h.request("ui.clickWidget", json!({"id": "filter:none"}), t);
+    let f = h.app.session.filter.clone();
+    assert_eq!((f.flag, f.flags), (None, vec![Flag::Pick, Flag::None]));
     h.settle(SETTLE);
 }
 
@@ -2337,6 +2385,48 @@ fn crop_default_browsing_is_read_only_and_drag_is_one_edit() {
     assert_eq!(h.app.session.develop_of(photo).unwrap(), before);
 }
 
+/// Issue #3029: a ratio picked on one photo is the one the crop tool offers on the next. The box
+/// drawn on an untouched photo has that ratio too (not the photo's full frame), browsing still
+/// doesn't edit the photo, and Return crops it to the box shown.
+#[test]
+fn crop_box_on_the_next_photo_shows_the_remembered_ratio() {
+    let mut h = demo([1200.0, 800.0]);
+    let t = Duration::from_secs(10);
+    let photos: Vec<_> = h.app.session.visible_cloned().into_iter().filter(|id| !h.app.session.catalog.photo(*id).unwrap().is_edited()).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [photos[0].0]}}), t);
+    h.request("ui.set", json!({"view": "detail"}), t);
+    h.request("engine.execute", json!({"command": "panel.crop"}), t);
+    h.app.run("crop.aspect", json!({"aspect": "4x5"})).unwrap();
+    h.app.run("tool.done", json!({})).unwrap();
+    h.settle(SETTLE);
+    let photo = photos[1];
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [photo.0]}}), t);
+    let before = h.app.session.catalog.photo(photo).unwrap().clone();
+    let undo = h.app.session.undo.len();
+    h.request("engine.execute", json!({"command": "panel.crop"}), t);
+    h.settle(SETTLE);
+    let after = h.app.session.catalog.photo(photo).unwrap();
+    assert_eq!(after.develop, before.develop, "browsing doesn't edit the photo");
+    assert_eq!(after.history.len(), before.history.len());
+    assert_eq!(h.app.session.undo.len(), undo);
+    let (aw, ah) = h.app.crop_tool_aspect().expect("the remembered ratio");
+    let shown = f64::from(aw) / f64::from(ah);
+    let same = |a: f64, b: f64| (a - b).abs() < 0.02 || (1.0 / a - b).abs() < 0.02;
+    let corner = |h: &Headless, i: usize| {
+        h.app.widgets.iter().find(|(w, _)| *w == format!("cropHandle:{i}")).map(|(_, r)| r.center()).expect("a corner handle")
+    };
+    let (tl, br) = (corner(&h, 0), corner(&h, 2));
+    let drawn = f64::from((br.x - tl.x) / (br.y - tl.y));
+    assert!(same(shown, drawn), "the dropdown says {shown:.3} but the crop box is {drawn:.3}");
+    // Return crops to the box shown
+    h.request("engine.execute", json!({"command": "tool.done"}), t);
+    h.settle(SETTLE);
+    let p = h.app.session.catalog.photo(photo).unwrap();
+    let r = p.develop.crop.geometry.rect;
+    let cropped = r.width() * f64::from(p.width) / (r.height() * f64::from(p.height));
+    assert!(same(shown, cropped), "the dropdown says {shown:.3} but the crop is {cropped:.3}");
+}
+
 /// While cropping: O cycles the guides, ⇧O mirrors them, A locks / unlocks the aspect.
 #[test]
 fn crop_keys() {
@@ -2775,6 +2865,109 @@ fn browse_a_local_folder() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn hide_rects(h: &mut Headless) -> Vec<(String, Vec<f64>)> {
+    let w = h.request("ui.widgets", json!({"filter": "source:local:"}), Duration::from_secs(10));
+    w["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| (x["id"].as_str().unwrap().to_string(), x["rect"].as_array().unwrap().iter().filter_map(|v| v.as_f64()).collect()))
+        .collect()
+}
+
+fn hide_ids(h: &mut Headless) -> Vec<String> {
+    hide_rects(h).into_iter().map(|(id, _)| id).collect()
+}
+
+fn hide_menu(h: &mut Headless) -> Vec<String> {
+    let w = h.request("ui.widgets", json!({"filter": "local:restoreHidden:"}), Duration::from_secs(10));
+    w["result"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect()
+}
+
+/// Hides `path` through the command and settles the frames.
+fn hide_path(h: &mut Headless, path: &str) {
+    let r = h.request("engine.execute", json!({"command": "local.hide", "params": {"path": path}}), Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+}
+
+/// Keeps and browses `path` the way Browse Folder… does; returns whether anything was hidden before.
+fn hide_browse_and_hide(h: &mut Headless, path: &str, size: [f32; 2]) -> bool {
+    let t = Duration::from_secs(10);
+    // Browse Folder… browses the picked folder and keeps it in Local within one frame; a
+    // request runs frames, so keep it first (no frame sees it browsed but not yet kept)
+    let r = h.request("engine.execute", json!({"command": "local.addRoot", "params": {"path": path}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": path}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let row = format!("source:local:{path}");
+    assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == row)), "the browsed folder is listed: {:?}", hide_ids(h));
+    // the "Show hidden locations" row appears only while something is hidden
+    let hidden_before = !h.app.ui.hidden_locations.is_empty();
+    assert_eq!(hide_ids(h).iter().any(|i| i == "source:local:restoreHidden"), hidden_before);
+    // hide it while it is still being browsed
+    hide_path(h, path);
+    // give any listing a reveal would wait for time to arrive
+    for _ in 0..20 {
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    h.settle(SETTLE);
+    let after = hide_rects(h);
+    let after_ids: Vec<&str> = after.iter().map(|(id, _)| id.as_str()).collect();
+    assert!(!after_ids.contains(&format!("source:local:{path}").as_str()), "{after_ids:?}");
+    let restore = after.iter().find(|(id, _)| id == "source:local:restoreHidden").map(|(_, r)| r.clone());
+    let restore = restore.unwrap_or_else(|| panic!("no restore row: {after_ids:?}"));
+    assert!(restore[1] >= 0.0 && restore[1] + restore[3] <= f64::from(size[1]), "the restore row is in view: {restore:?} {after_ids:?}");
+    assert!(h.app.session.browse.is_some(), "hiding does not stop browsing");
+    hidden_before
+}
+
+/// A second hidden place: the row lists them, and each comes back on its own (issue #2114:
+/// the row used to bring every hidden place back at once).
+fn hide_second_place_restores_alone(h: &mut Headless, path: &str, path2: &str) {
+    let t = Duration::from_secs(10);
+    for (command, params) in [("local.addRoot", json!({"path": path2})), ("local.hide", json!({"path": path2}))] {
+        let r = h.request("engine.execute", json!({"command": command, "params": params}), t);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    h.settle(SETTLE);
+    assert!(hide_menu(h).is_empty(), "the list opens from the row");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
+    h.settle(SETTLE);
+    let items = hide_menu(h);
+    assert!(items.contains(&format!("local:restoreHidden:{path}")) && items.contains(&"local:restoreHidden:all".to_string()), "{items:?}");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": format!("local:restoreHidden:{path}")}), t)["ok"], true);
+    h.settle(SETTLE);
+    assert!(!h.app.ui.hidden_locations.iter().any(|x| x == path), "{:?}", h.app.ui.hidden_locations);
+    assert!(h.app.ui.hidden_locations.iter().any(|x| x == path2), "the other place stays hidden");
+    assert!(hide_ids(h).iter().any(|i| i == "source:local:restoreHidden"), "still something to restore");
+}
+
+fn hide_restore_all_then_single(h: &mut Headless, path: &str, path2: &str, hidden_before: bool) {
+    let t = Duration::from_secs(10);
+    // two hidden again: Restore All brings every one back
+    hide_path(h, path);
+    assert!(h.app.ui.hidden_locations.len() >= 2, "{:?}", h.app.ui.hidden_locations);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
+    h.settle(SETTLE);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "local:restoreHidden:all"}), t)["ok"], true);
+    h.settle(SETTLE);
+    assert!(h.app.ui.hidden_locations.is_empty(), "{:?}", h.app.ui.hidden_locations);
+    assert!(!hide_ids(h).iter().any(|i| i == "source:local:restoreHidden"), "nothing left to restore");
+    // one hidden: the row brings it back itself, no list
+    hide_path(h, path2);
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
+    h.settle(SETTLE);
+    assert!(hide_menu(h).is_empty(), "no list for a single hidden place");
+    assert!(h.app.ui.hidden_locations.is_empty(), "{:?}", h.app.ui.hidden_locations);
+    if !hidden_before {
+        // (with Home hidden for this test, the folder is back inside Home's tree instead)
+        assert!(hide_ids(h).contains(&format!("source:local:{path}")));
+    }
+}
+
 /// Local: Remove from Local hides a sidebar location (nothing on disk changes) and the
 /// "Show hidden locations" row puts it back. The folder is browsed and kept the way Browse
 /// Folder… does it, in the temporary folder — on Windows beneath Home, whose tree must not
@@ -2788,96 +2981,16 @@ fn local_location_can_be_hidden_and_restored() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.to_string_lossy().to_string();
-    let rects = |h: &mut Headless| -> Vec<(String, Vec<f64>)> {
-        let w = h.request("ui.widgets", json!({"filter": "source:local:"}), t);
-        w["result"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|x| (x["id"].as_str().unwrap().to_string(), x["rect"].as_array().unwrap().iter().filter_map(|v| v.as_f64()).collect()))
-            .collect()
-    };
-    let ids = |h: &mut Headless| -> Vec<String> { rects(h).into_iter().map(|(id, _)| id).collect() };
     h.request("ui.set", json!({"leftPanel": true}), t);
     h.hide_home_above(&dir);
-    // Browse Folder… browses the picked folder and keeps it in Local within one frame; a
-    // request runs frames, so keep it first (no frame sees it browsed but not yet kept)
-    let r = h.request("engine.execute", json!({"command": "local.addRoot", "params": {"path": path}}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": path}}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    let row = format!("source:local:{path}");
-    assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == row)), "the browsed folder is listed: {:?}", ids(&mut h));
-    // the "Show hidden locations" row appears only while something is hidden
-    let hidden_before = !h.app.ui.hidden_locations.is_empty();
-    assert_eq!(ids(&mut h).iter().any(|i| i == "source:local:restoreHidden"), hidden_before);
-    // hide it while it is still being browsed
-    let r = h.request("engine.execute", json!({"command": "local.hide", "params": {"path": path}}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    // give any listing a reveal would wait for time to arrive
-    for _ in 0..20 {
-        h.step();
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    h.settle(SETTLE);
-    let after = rects(&mut h);
-    let after_ids: Vec<&str> = after.iter().map(|(id, _)| id.as_str()).collect();
-    assert!(!after_ids.contains(&format!("source:local:{path}").as_str()), "{after_ids:?}");
-    let restore = after.iter().find(|(id, _)| id == "source:local:restoreHidden").map(|(_, r)| r.clone());
-    let restore = restore.unwrap_or_else(|| panic!("no restore row: {after_ids:?}"));
-    assert!(restore[1] >= 0.0 && restore[1] + restore[3] <= f64::from(size[1]), "the restore row is in view: {restore:?} {after_ids:?}");
-    assert!(h.app.session.browse.is_some(), "hiding does not stop browsing");
+    let hidden_before = hide_browse_and_hide(&mut h, &path, size);
     assert!(dir.is_dir(), "the folder itself is untouched");
-    // a second hidden place: the row lists them, and each comes back on its own (issue #2114:
-    // the row used to bring every hidden place back at once)
     let dir2 = std::env::temp_dir().join(format!("lc-ui-hide-{}-b", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir2);
     std::fs::create_dir_all(&dir2).unwrap();
     let path2 = dir2.to_string_lossy().to_string();
-    for (command, params) in [("local.addRoot", json!({"path": path2})), ("local.hide", json!({"path": path2}))] {
-        let r = h.request("engine.execute", json!({"command": command, "params": params}), t);
-        assert_eq!(r["ok"], true, "{r}");
-    }
-    h.settle(SETTLE);
-    let menu = |h: &mut Headless| -> Vec<String> {
-        let w = h.request("ui.widgets", json!({"filter": "local:restoreHidden:"}), t);
-        w["result"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect()
-    };
-    assert!(menu(&mut h).is_empty(), "the list opens from the row");
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
-    h.settle(SETTLE);
-    let items = menu(&mut h);
-    assert!(items.contains(&format!("local:restoreHidden:{path}")) && items.contains(&"local:restoreHidden:all".to_string()), "{items:?}");
-    assert_eq!(h.request("ui.clickWidget", json!({"id": format!("local:restoreHidden:{path}")}), t)["ok"], true);
-    h.settle(SETTLE);
-    assert!(!h.app.ui.hidden_locations.iter().any(|x| x == &path), "{:?}", h.app.ui.hidden_locations);
-    assert!(h.app.ui.hidden_locations.iter().any(|x| x == &path2), "the other place stays hidden");
-    assert!(ids(&mut h).iter().any(|i| i == "source:local:restoreHidden"), "still something to restore");
-    // two hidden again: Restore All brings every one back
-    let r = h.request("engine.execute", json!({"command": "local.hide", "params": {"path": path}}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(h.app.ui.hidden_locations.len() >= 2, "{:?}", h.app.ui.hidden_locations);
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
-    h.settle(SETTLE);
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "local:restoreHidden:all"}), t)["ok"], true);
-    h.settle(SETTLE);
-    assert!(h.app.ui.hidden_locations.is_empty(), "{:?}", h.app.ui.hidden_locations);
-    assert!(!ids(&mut h).iter().any(|i| i == "source:local:restoreHidden"), "nothing left to restore");
-    // one hidden: the row brings it back itself, no list
-    let r = h.request("engine.execute", json!({"command": "local.hide", "params": {"path": path2}}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
-    h.settle(SETTLE);
-    assert!(menu(&mut h).is_empty(), "no list for a single hidden place");
-    assert!(h.app.ui.hidden_locations.is_empty(), "{:?}", h.app.ui.hidden_locations);
-    if !hidden_before {
-        // (with Home hidden for this test, the folder is back inside Home's tree instead)
-        assert!(ids(&mut h).contains(&format!("source:local:{path}")));
-    }
+    hide_second_place_restores_alone(&mut h, &path, &path2);
+    hide_restore_all_then_single(&mut h, &path, &path2, hidden_before);
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&dir2);
 }
@@ -4296,13 +4409,26 @@ fn settings_dialog_by_keyboard_and_clicks() {
     assert_eq!(h.app.session.cache_mb, 512);
     h.request("ui.clickWidget", json!({"id": "button:settingsPreview-3"}), t);
     assert_eq!(h.app.ui.settings.preview_limit, 3840);
-    h.request("ui.clickWidget", json!({"id": "button:settingsMemory-2"}), t);
-    assert_eq!(h.app.ui.settings.memory_mb, 1024);
-    h.step();
-    assert_eq!(lightcraft_engine::memory::budget(), 1024 << 20, "applied through app.memoryBudget");
-    h.request("ui.clickWidget", json!({"id": "button:settingsMemory-0"}), t);
-    h.step();
-    assert_eq!(lightcraft_engine::memory::budget(), lightcraft_engine::memory::default_budget(), "back to automatic");
+    {
+        // the memory budget is process-wide: this test's turn to change it, and it goes back
+        // to what it was (not the default) when the guard drops, also on a failed assertion
+        // (issue #3065). The change lasts these few frames.
+        use lightcraft_engine::memory::{budget, cache_share, default_budget};
+        let _budget = crate::test_budget::BudgetGuard::hold();
+        // the session's own share, set apart from the 1024 MB choice's: only the command
+        // changes it, whatever another test does to the process-wide budget
+        h.app.session.media.set_budget(cache_share(1024 << 20) + (1 << 20));
+        h.request("ui.clickWidget", json!({"id": "button:settingsMemory-2"}), t);
+        assert_eq!(h.app.ui.settings.memory_mb, 1024);
+        h.step();
+        assert_eq!(h.app.session.media.budget(), cache_share(1024 << 20), "the session's caches follow");
+        assert_eq!(budget(), 1024 << 20, "applied through app.memoryBudget");
+        h.request("ui.clickWidget", json!({"id": "button:settingsMemory-0"}), t);
+        h.step();
+        let automatic = (default_budget() >> 20) << 20;
+        assert_eq!(h.app.session.media.budget(), cache_share(automatic), "back to automatic");
+        assert_eq!(budget(), automatic, "back to automatic");
+    }
     // Import: per-camera defaults
     h.request("ui.clickWidget", json!({"id": "button:settingsTab-import"}), t);
     h.request("ui.clickWidget", json!({"id": "check:settings.perCamera"}), t);
@@ -4929,4 +5055,40 @@ fn screenshot_request_is_answered_without_a_window() {
     assert_eq!(r["ok"], true);
     let r = h.request("ui.screenshot", json!({"headless": true}), SETTLE);
     assert_eq!(r["result"]["width"], 640, "{r}");
+}
+
+/// A size typed in the Export dialog is the size exported: the pixel fields kept only multiples
+/// of 16, so 1080 became 1088 and 3000 became 3008 (issue #3300).
+#[test]
+fn export_sizes_keep_the_pixels_typed() {
+    let mut h = demo([1400.0, 900.0]);
+    let t = Duration::from_secs(10);
+    h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
+    h.settle(SETTLE);
+    let type_value = |h: &mut Headless, id: &str, text: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": id}), t);
+        assert_eq!(r["ok"], true, "{id}: {r}");
+        h.request("ui.text", json!({"text": text}), t);
+        h.request("ui.key", json!({"key": "Enter"}), t);
+        h.settle(SETTLE);
+    };
+    let resize = |h: &Headless| match &h.app.ui.dialog {
+        Some(crate::state::Dialog::Export { resize, .. }) => *resize,
+        _ => panic!("the dialog closed"),
+    };
+    if let Some(crate::state::Dialog::Export { full_size, resize, .. }) = &mut h.app.ui.dialog {
+        *full_size = false;
+        *resize = lightcraft_engine::export::Resize::long_edge(2048);
+    }
+    h.settle(SETTLE);
+    type_value(&mut h, "sliderValue:export.sizePx", "3000");
+    assert_eq!(resize(&h).value, 3000.0);
+    if let Some(crate::state::Dialog::Export { resize, .. }) = &mut h.app.ui.dialog {
+        resize.mode = lightcraft_engine::export::ResizeMode::WidthHeight;
+        resize.height = 2048;
+    }
+    h.settle(SETTLE);
+    type_value(&mut h, "sliderValue:export.sizeW", "1080");
+    type_value(&mut h, "sliderValue:export.sizeH", "1350");
+    assert_eq!((resize(&h).value, resize(&h).height), (1080.0, 1350));
 }

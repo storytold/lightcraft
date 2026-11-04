@@ -15,7 +15,8 @@
 //!
 //! Formats: DNG (uncompressed, lossless JPEG, lossy JPEG (Smart Previews), Deflate incl. floating point, JPEG XL (DNG 1.7,
 //! `jxl` feature, on by default), tiled/stripped, CFA and LinearRaw),
-//! Canon CR2 / CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
+//! Canon CR2 / CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW) / CRW (the CIFF bodies of 2000–2004; clean-room-derived
+//! compression, `vendor::crw`; the PowerShot G5's anomalous coding is refused), Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
 //! and X-Trans, lossless and lossy compressed), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format: compressed 4 and 6, the prefix-coded strips of 8,
 //! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed: 16-bit words, 12-bit XZ-2 words, 12-bit 16-byte blocks of the E-300/E-330/E-500).
 //! [`embedded_preview`] covers these containers' JPEG previews. Variants we can't decode yet (compressed ORF, CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
@@ -140,6 +141,7 @@ impl RawFormat {
             RawFormat::Dng
                 | RawFormat::Cr2
                 | RawFormat::Cr3
+                | RawFormat::Crw
                 | RawFormat::Nef
                 | RawFormat::Nrw
                 | RawFormat::Arw
@@ -413,6 +415,7 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         RawFormat::Dng => dng::decode(bytes, mode).map(lift_clipped),
         RawFormat::Cr2 => vendor::cr2::decode(bytes, mode),
         RawFormat::Cr3 => vendor::cr3::decode(bytes, mode),
+        RawFormat::Crw => vendor::crw::decode(bytes, mode),
         RawFormat::Nef | RawFormat::Nrw => vendor::nef::decode(bytes, mode),
         RawFormat::Arw => vendor::arw::decode(bytes, mode),
         RawFormat::Raf => vendor::raf::decode(bytes, mode),
@@ -866,6 +869,15 @@ impl RawImage {
     /// The result is camera RGB (not white balanced), white level = 1.0, not oriented.
     pub fn develop(&self, method: Method) -> Result<Rgb32f> {
         let n = self.normalized()?;
+        // with no `OpcodeList3` to apply to the whole picture first, AHD demosaics just the default crop (the same
+        // pixels, without demosaicing the margin and then copying the crop out of the full picture)
+        if self.opcodes.list3.is_empty() && method == Method::Ahd {
+            let c = self.develop_crop(n.width, n.height);
+            if let Some(rgb) = demosaic::ahd_window(&n, c) {
+                drop(n);
+                return Ok(self.stretched(rgb));
+            }
+        }
         let rgb = demosaic(&n, method);
         drop(n);
         Ok(self.finish_demosaiced(rgb))
@@ -878,6 +890,11 @@ impl RawImage {
         let c = self.develop_crop(rgb.width, rgb.height);
         let rgb =
             if c.x == 0 && c.y == 0 && c.width == rgb.width && c.height == rgb.height { rgb } else { rgb.into_crop(c.x, c.y, c.width, c.height) };
+        self.stretched(rgb)
+    }
+
+    /// The cropped camera RGB with its rows stretched for non-square pixels.
+    fn stretched(&self, rgb: Rgb32f) -> Rgb32f {
         let h = stretched_height(rgb.height, self.pixel_aspect);
         if h == rgb.height {
             return rgb;

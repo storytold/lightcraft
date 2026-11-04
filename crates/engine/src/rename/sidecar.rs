@@ -1,5 +1,5 @@
 use super::fs::{MoveFs, is_respelling, move_one};
-use super::*;
+use super::{Path, PathBuf};
 
 /// An unfinished sidecar operation. Keep its exact paths and any recorded copy requirement: the photo may
 /// already have followed its new path, so a retry cannot infer this work from the catalog.

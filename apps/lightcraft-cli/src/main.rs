@@ -106,7 +106,7 @@ USAGE:
   lightcraft-cli controls [--json]   list every develop control id with its range
   lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
-      (Sony ARW, Nikon NEF, Fujifilm RAF): up to N files spread over the folders (default 300; 0 = all), pooled per
+      (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CRW): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
@@ -155,7 +155,16 @@ fn main() -> ExitCode {
     // Warnings (a GPU render redone on the CPU, an unknown backend name) on stderr; LIGHTCRAFT_LOG
     // or RUST_LOG picks another level (#168).
     lightcraft_engine::logging::install("lightcraft-cli");
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = Vec::new();
+    for (index, arg) in std::env::args_os().skip(1).enumerate() {
+        match arg.into_string() {
+            Ok(arg) => args.push(arg),
+            Err(_) => {
+                eprintln!("lightcraft-cli: argument {} is not valid Unicode", index + 1);
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let r = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
         Some("mcp") => mcp(&args[1..]),
@@ -187,26 +196,35 @@ fn main() -> ExitCode {
 }
 
 /// Raw files below `path` (or `path` itself), skipping hidden and NAS metadata folders.
-fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
-    let is_raw =
-        |p: &Path| p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw", "raf"].iter().any(|x| e.eq_ignore_ascii_case(x)));
+///
+/// Folders go through the engine's bounded walk ([`lightcraft_engine::walk::files_in`]): it enters
+/// a folder reached through a link once at most and stops at a depth and an entry budget. A
+/// folder of links pointing back at their parents made the old recursive walk re-read the same
+/// folders exponentially often before its depth limit cut it off (CWE-400).
+fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let is_raw = |p: &Path| {
+        p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw", "raf", "crw"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+    };
     if path.is_file() {
         if is_raw(path) {
             out.push(path.to_path_buf());
         }
         return;
     }
-    let Ok(entries) = std::fs::read_dir(path) else { return };
-    if depth > 32 {
-        return;
+    // (hidden entries are left out by the walk; `@eaDir` and other NAS metadata folders and files
+    // here, folders before they are listed so their entries do not use up the walk's budget)
+    let nas_metadata = |p: &Path| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('@'));
+    let walked = lightcraft_engine::walk::files_in_entering(
+        path,
+        None,
+        lightcraft_engine::walk::Limits::default(),
+        |p| is_raw(p) && !nas_metadata(p) && p.is_file(),
+        |p| !nas_metadata(p),
+    );
+    if walked.truncated {
+        eprintln!("calibrate: {} has more folders or entries than a walk looks at; the rest is left out", path.display());
     }
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if name.to_string_lossy().starts_with(['.', '@']) {
-            continue;
-        }
-        raw_files(&entry.path(), out, depth + 1);
-    }
+    out.extend(walked.files);
 }
 
 fn calibrate(args: &[String]) -> Result<(), String> {
@@ -228,7 +246,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     }
     let mut files = Vec::new();
     for input in &inputs {
-        raw_files(Path::new(input), &mut files, 0);
+        raw_files(Path::new(input), &mut files);
     }
     files.sort();
     files.dedup();
@@ -557,6 +575,8 @@ fn run(args: &[String]) -> Result<(), String> {
         } else {
             std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?
         };
+        // Windows PowerShell 5.1 writes a UTF-8 BOM; it is not part of the first JSON line.
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty() && !l.trim_start().starts_with('#')) {
             let v: Value = serde_json::from_str(line).map_err(|e| format!("{path}:{}: {e}", n + 1))?;
             // `{"command": id, "params": …}` or a control request `{"method": m, "params": …}`
@@ -565,7 +585,11 @@ fn run(args: &[String]) -> Result<(), String> {
                 .or(v.get("method"))
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("{path}:{}: needs `command` or `method`", n + 1))?;
-            let params = v.get("params").cloned().filter(|p| p.is_object()).unwrap_or_else(|| json!({}));
+            let params = match v.get("params") {
+                None | Some(Value::Null) => json!({}),
+                Some(Value::Object(params)) => Value::Object(params.clone()),
+                Some(_) => return Err(format!("{path}:{}: `params` must be a JSON object", n + 1)),
+            };
             steps.push(Step { id: id.to_string(), params });
         }
     }
@@ -594,14 +618,7 @@ fn run(args: &[String]) -> Result<(), String> {
                     None => Headless::default(),
                 };
                 if !imports.is_empty() {
-                    let paths = expand_paths(&imports);
-                    let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
-                    // what follows acts on the imported photos (already-known files are reported as duplicates)
-                    let mut ids: Vec<Value> = r["imported"].as_array().cloned().unwrap_or_default();
-                    ids.extend(r["duplicates"].as_array().into_iter().flatten().filter_map(|d| d.get("existing").filter(|v| v.is_u64()).cloned()));
-                    if let Some(first) = ids.first().cloned() {
-                        h.session.execute("library.select", &json!({"ids": ids, "active": first})).map_err(|e| e.to_string())?;
-                    }
+                    import_and_select(&mut h.session, &imports)?;
                 }
                 Box::new(h)
             }
@@ -624,6 +641,34 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     drop(backend); // a library session is flushed here
     if failed > 0 { Err(format!("{failed} command(s) failed")) } else { Ok(()) }
+}
+
+fn import_and_select(session: &mut Session, imports: &[String]) -> Result<(), String> {
+    let selection = session.selection.clone();
+    let paths = expand_paths(imports);
+    let result = (|| {
+        let r = session.execute("library.import", &json!({"paths": paths})).map_err(|e| format!("import failed: {e}; no commands were run"))?;
+        let ids = import_targets(&r)?;
+        let first = ids.first().cloned().ok_or("import found no photos to select; no commands were run")?;
+        session.execute("library.select", &json!({"ids": ids, "active": first})).map_err(|e| e.to_string())?;
+        Ok::<(), String>(())
+    })();
+    if result.is_err() {
+        session.selection = selection;
+    }
+    result
+}
+
+fn import_targets(report: &Value) -> Result<Vec<Value>, String> {
+    if let Some(failed) = report["failed"].as_array().filter(|failed| !failed.is_empty()) {
+        return Err(format!("import failed for {} item(s): {}; no commands were run", failed.len(), json!(failed)));
+    }
+    let mut ids: Vec<Value> = report["imported"].as_array().cloned().unwrap_or_default();
+    ids.extend(report["duplicates"].as_array().into_iter().flatten().filter_map(|d| d.get("existing").filter(|v| v.is_u64()).cloned()));
+    ids.extend(report["restored"].as_array().into_iter().flatten().filter(|id| id.is_u64()).cloned());
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| id.as_u64().is_none_or(|id| seen.insert(id)));
+    if ids.is_empty() { Err("import found no photos to select; no commands were run".into()) } else { Ok(ids) }
 }
 
 fn take_value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, String> {
@@ -683,7 +728,9 @@ fn render(args: &[String]) -> Result<(), String> {
             "--set" => {
                 let kv = take_value(args, &mut i, "--set")?;
                 let (k, v) = kv.split_once('=').ok_or_else(|| format!("--set expects control=value, got `{kv}`"))?;
-                let v: f64 = v.trim().parse().map_err(|_| format!("--set {k}: `{v}` is not a number"))?;
+                // `inf` / `NaN` parse as f64 but become JSON null, which the control would silently ignore.
+                let v: f64 =
+                    v.trim().parse().ok().filter(|n: &f64| n.is_finite()).ok_or_else(|| format!("--set {k}: `{v}` is not a finite number"))?;
                 values.insert(k.trim().to_string(), json!(v));
             }
             "--settings" => settings = Some(read_settings(take_value(args, &mut i, "--settings")?)?),
@@ -852,6 +899,8 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let mut failed = 0usize;
     if let Some(script) = &script {
         let text = std::fs::read_to_string(script).map_err(|e| format!("{script}: {e}"))?;
+        // Windows PowerShell 5.1 writes a UTF-8 BOM; it is not part of the first JSON line.
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let mut out = std::io::stdout().lock();
         for (n, line) in text.lines().enumerate() {
             let line = line.trim();
@@ -1027,4 +1076,84 @@ fn denoise_serve(args: &[String]) -> Result<(), String> {
 #[cfg(not(feature = "denoise"))]
 fn denoise_serve(_: &[String]) -> Result<(), String> {
     Err("denoise-serve: this build has no denoise support (build with the `denoise` feature)".into())
+}
+
+#[cfg(all(test, unix))]
+mod raw_files_tests {
+    use super::raw_files;
+
+    /// Links back to their own folders are entered once, not once per path that reaches them: a
+    /// handful of such links made the old walk list the same folders exponentially often.
+    #[test]
+    fn folder_links_back_up_are_walked_once() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-cli-raw-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = dir.join("a");
+        std::fs::create_dir_all(a.join("@eaDir")).unwrap();
+        std::fs::write(a.join("one.NEF"), b"").unwrap();
+        std::fs::write(a.join("@eaDir").join("thumb.nef"), b"").unwrap();
+        std::fs::write(a.join("notes.txt"), b"").unwrap();
+        for i in 0..8 {
+            std::os::unix::fs::symlink(&dir, a.join(format!("up{i}"))).unwrap();
+        }
+        // a named pipe with a raw extension: not a file, so never opened (a read would block)
+        assert!(std::process::Command::new("mkfifo").arg(a.join("pipe.nef")).status().unwrap().success());
+        let started = std::time::Instant::now();
+        let mut files = Vec::new();
+        raw_files(&dir, &mut files);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "walk took {:?}", started.elapsed());
+        assert_eq!(files, vec![a.join("one.NEF")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod import_target_tests {
+    use super::{import_and_select, import_targets, json};
+
+    #[test]
+    fn empty_reports_and_duplicates_without_ids_have_no_target() {
+        assert!(import_targets(&json!({})).is_err());
+        assert!(import_targets(&json!({"imported": [], "duplicates": [{"existing": null}]})).is_err());
+    }
+
+    #[test]
+    fn restored_only_and_mixed_reports_keep_target_order() {
+        assert_eq!(import_targets(&json!({"restored": [9]})).unwrap(), vec![json!(9)]);
+        assert_eq!(
+            import_targets(&json!({"imported": [1], "duplicates": [{"existing": null}, {"existing": 2}], "restored": [3]})).unwrap(),
+            vec![json!(1), json!(2), json!(3)]
+        );
+    }
+
+    #[test]
+    fn repeated_targets_are_selected_once_in_first_occurrence_order() {
+        let report = json!({"imported": [5, 7], "duplicates": [{"existing": 5}, {"existing": 8}, {"existing": 8}, {"existing": 7}, {"existing": null}], "restored": [8, 9, 5]});
+        assert_eq!(import_targets(&report).unwrap(), vec![json!(5), json!(7), json!(8), json!(9)]);
+    }
+
+    #[test]
+    fn failed_items_reject_even_when_targets_exist() {
+        let error = import_targets(&json!({"imported": [1], "failed": [["broken.png", "invalid"]]})).unwrap_err();
+        assert!(error.contains("1") && error.contains("broken.png") && error.contains("no commands were run"), "{error}");
+    }
+
+    #[test]
+    fn failed_partial_import_restores_empty_selection() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-import-selection-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("valid.png");
+        let broken = dir.join("broken.png");
+        let img = lightcraft_raster::Rgba8::from_fn(2, 2, |_, _| [20, 40, 60, 255]);
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
+        std::fs::write(&input, png).unwrap();
+        std::fs::write(&broken, b"not a PNG").unwrap();
+        let mut headless = lightcraft_mcp::Headless::default();
+        let session = &mut headless.session;
+        let selection = session.selection.clone();
+        assert!(selection.ids.is_empty() && selection.active.is_none());
+        assert!(import_and_select(session, &[input.to_string_lossy().into_owned(), broken.to_string_lossy().into_owned()]).is_err());
+        assert_eq!(session.selection, selection);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

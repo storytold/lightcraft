@@ -2,7 +2,7 @@ use super::batch::run_batch;
 use super::encoding::{encode_gain_map_jpeg, encode_rendered, export_metadata, removes_location};
 use super::options::ExportFormat;
 use super::params::apple_photos_unsupported;
-use super::*;
+use super::{ExportOptions, Metadata, OutputDepth};
 
 /// One exported file.
 pub struct Exported {
@@ -227,9 +227,22 @@ impl PreparedExport {
                     if remove_location {
                         let metadata = lightcraft_meta::try_extract(&bytes)
                             .map_err(|e| format!("{label}: can't verify location metadata in this original file: {e}"))?;
-                        if metadata.gps.is_some() {
+                        if !bytes.starts_with(b"8BPS") {
+                            let embedded = lightcraft_meta::embedded(&bytes);
+                            if let Some(xmp) = embedded.xmp.as_deref() {
+                                lightcraft_meta::parse_xmp(xmp).map_err(|e| {
+                                    format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}")
+                                })?;
+                            }
+                        }
+                        let embeds_place_name =
+                            [metadata.sublocation.as_deref(), metadata.city.as_deref(), metadata.state.as_deref(), metadata.country.as_deref()]
+                                .into_iter()
+                                .flatten()
+                                .any(|value| !value.trim().is_empty());
+                        if metadata.gps.is_some() || embeds_place_name {
                             return Err(format!(
-                                "{label}: can't remove the location from an original file that embeds GPS; export as JPEG, TIFF or DNG instead"
+                                "{label}: can't remove the location from an original file that embeds GPS or place names; export as JPEG or TIFF, or as DNG for a raw photo"
                             ));
                         }
                     }
