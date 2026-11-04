@@ -283,6 +283,7 @@ pub(crate) fn focus_text(f: Option<&lightcraft_meta::FocusPoint>) -> Option<Stri
     Some(if words.is_empty() { crate::i18n::tr("Focus point").to_string() } else { words.join(" · ") })
 }
 
+/// Format a byte count compactly for the Info and Metadata panels.
 pub(super) fn human_size(bytes: u64) -> String {
     match bytes {
         b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / (1u64 << 20) as f64),

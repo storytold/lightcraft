@@ -10,10 +10,12 @@ use serde_json::{Value, json};
 pub const OPERATIONS: &[(&str, &str)] =
     &[("union", "OR: any album"), ("intersection", "AND: every album"), ("difference", "First minus others"), ("exclusive", "Only one album")];
 
+/// Build one catalog album-membership predicate.
 fn field(id: u64, included: bool) -> Rule {
     Rule::Field { field: "album".into(), op: if included { "is" } else { "isNot" }.into(), value: json!(id) }
 }
 
+/// Translate a named set operation into the catalog's existing live rules.
 fn rules(ids: &[u64], operation: &str) -> Result<RuleSet, String> {
     let (mode, rules) = match operation {
         "union" => (Match::Any, ids.iter().map(|id| field(*id, true)).collect()),
@@ -40,6 +42,7 @@ pub fn clear(app: &mut LightcraftApp) {
     }
 }
 
+/// Whether the stored combination still exactly describes the current live view.
 pub fn active(app: &LightcraftApp) -> bool {
     app.ui.album_combination.as_ref().is_some_and(|(ids, op)| {
         (2..=8).contains(&ids.len())
@@ -48,6 +51,7 @@ pub fn active(app: &LightcraftApp) -> bool {
     })
 }
 
+/// Validate and apply `view.combineAlbums`, returning the visible photo count.
 pub fn command(app: &mut LightcraftApp, params: &Value) -> Result<Value, String> {
     let values = params.get("ids").and_then(Value::as_array).ok_or("view.combineAlbums: ids must be an array")?;
     if !(2..=8).contains(&values.len()) {
@@ -114,6 +118,7 @@ pub fn toggle(app: &mut LightcraftApp, id: u64) {
     }
 }
 
+/// Draw operation choices and the ordered names of the albums being combined.
 pub fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !active(app) {
         return;

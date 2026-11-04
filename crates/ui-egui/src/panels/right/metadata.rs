@@ -21,6 +21,7 @@ pub(crate) struct Runtime {
     queued: bool,
 }
 
+/// Dispatch at most one read for the selected photo and accept only its current result.
 fn load(app: &mut LightcraftApp, id: PhotoId) {
     let Some(photo) = app.session.catalog.photo(id) else { return };
     let path = match &photo.source {
@@ -58,7 +59,12 @@ fn load(app: &mut LightcraftApp, id: PhotoId) {
         app,
         TASK,
         None,
-        move || request.read_with_diagnostics(),
+        move || {
+            #[cfg(any(test, target_arch = "wasm32"))]
+            return request.read_with_diagnostics();
+            #[cfg(all(not(test), not(target_arch = "wasm32")))]
+            request.read_with_deadline(READ_TIMEOUT)
+        },
         move |app, _, result| {
             if Arc::ptr_eq(&app.metadata_panel.attempt, &attempt)
                 && app.metadata_panel.key.as_ref() == Some(&key)
@@ -74,6 +80,7 @@ fn load(app: &mut LightcraftApp, id: PhotoId) {
     }
 }
 
+/// Draw immediate catalog fields followed by asynchronously read file metadata.
 pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     load(app, id);
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
@@ -170,6 +177,7 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 }
 
 /// Labels and values share the top edge and both align left, including wrapped rows.
+/// Draw a wrapping, selectable label/value pair.
 fn row(ui: &mut egui::Ui, name: &str, value: &str, t: &Tokens) {
     ui.horizontal_top(|ui| {
         let label_width = (ui.available_width() * 0.38).min(110.0);
@@ -185,6 +193,7 @@ fn row(ui: &mut egui::Ui, name: &str, value: &str, t: &Tokens) {
     ui.add_space(4.0);
 }
 
+/// Flatten nested catalog metadata into labeled rows, with a recursion limit.
 fn catalog_rows(ui: &mut egui::Ui, prefix: &str, value: &Value, depth: usize, t: &Tokens) {
     if depth > 16 {
         return;
@@ -208,6 +217,7 @@ fn catalog_rows(ui: &mut egui::Ui, prefix: &str, value: &Value, depth: usize, t:
     }
 }
 
+/// Recognize date-bearing EXIF and XMP field names emitted by the metadata parser.
 fn is_date_tag(name: &str) -> bool {
     matches!(
         name.rsplit(':').next(),
@@ -229,10 +239,12 @@ fn is_date_tag(name: &str) -> bool {
     )
 }
 
+/// Format recognized date fields while preserving every other metadata value literally.
 fn tag_value(name: &str, value: &str, locale: &str) -> String {
     if is_date_tag(name) { numeric_date(value, locale) } else { value.to_owned() }
 }
 
+/// Convert supported numeric dates to the locale's day/month order and separators.
 fn numeric_date(value: &str, locale: &str) -> String {
     let tag = locale.to_ascii_lowercase().replace('_', "-");
     let date = if tag.starts_with("de") || ["ru", "fi", "cs", "pl", "sk"].iter().any(|s| tag.starts_with(s)) {
@@ -324,6 +336,7 @@ fn sections(p: &lightcraft_catalog::Photo, locale: &str) -> Vec<(&'static str, R
     result
 }
 
+/// Add a non-empty optional field to a stable metadata section.
 fn push(rows: &mut Rows, name: &'static str, value: &str) {
     if !value.trim().is_empty() {
         rows.push((name, value.to_string()));
