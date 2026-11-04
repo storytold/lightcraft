@@ -117,6 +117,10 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     if app.scan.as_ref().is_some_and(|t| !t.browse) || app.import.as_ref().is_some_and(|t| !t.browse) {
         return Err("an import is running".into());
     }
+    // the camera's review needs the scan slot when its photos are staged (`camera_import::poll`)
+    if app.camera.is_some() {
+        return Err("a camera is being read".into());
+    }
     let dir_s = dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
     let subfolders = subfolders.unwrap_or_else(|| app.session.browse.as_ref().is_some_and(|b| b.subfolders));
     let running = app.scan.as_ref().is_some_and(|t| t.browse) || app.import.as_ref().is_some_and(|t| t.browse);

@@ -270,6 +270,8 @@ mod tests {
         task(&mut h, "X100T", None);
         let e = crate::import::open(&mut h.app, vec![std::env::temp_dir().to_string_lossy().to_string()]).unwrap_err();
         assert_eq!(e, "a camera is being read");
+        let e = crate::import::browse(&mut h.app, &std::env::temp_dir().to_string_lossy(), None).unwrap_err();
+        assert_eq!(e, "a camera is being read");
         assert!(h.app.scan.is_none());
     }
 
