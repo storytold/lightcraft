@@ -174,10 +174,15 @@ impl Downloads {
         }
     }
 
-    /// Wait while a download still runs: `nap` waits a moment and says whether to look again. The
-    /// tests pass a `nap` that counts, which shows what quitting waits for without timing it.
-    fn wait_while_running(&self, mut nap: impl FnMut() -> bool) {
-        while self.running() && nap() {}
+    /// Quitting: tell every download to stop, then wait while one still runs, [`QUIT_WAIT`] at most on the clock
+    /// `now`, napping 10 ms at a time with `nap`. The tests pass a clock that moves only while `nap` naps, and a
+    /// `nap` that records its naps, which shows what quitting waits for without timing it.
+    fn quit(&self, now: impl Fn() -> web_time::Instant, mut nap: impl FnMut(Duration)) {
+        self.cancel_all();
+        let started = now();
+        while self.running() && now().saturating_duration_since(started) < QUIT_WAIT {
+            nap(Duration::from_millis(10));
+        }
     }
 }
 
@@ -185,15 +190,7 @@ impl Drop for Downloads {
     /// Quitting while a download runs stops it instead of leaving it behind, waiting [`QUIT_WAIT`] at most for it
     /// to notice.
     fn drop(&mut self) {
-        self.cancel_all();
-        let started = web_time::Instant::now();
-        self.wait_while_running(|| {
-            if started.elapsed() >= QUIT_WAIT {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-            true
-        });
+        self.quit(web_time::Instant::now, std::thread::sleep);
     }
 }
 
@@ -429,37 +426,45 @@ mod tests {
         assert_eq!(shared.get(), State::Cancelled);
     }
 
-    /// Quitting tells a running download to stop and waits while it runs, no longer: the wait is counted in naps
-    /// (each 10 ms, up to [`QUIT_WAIT`]), not timed. Here the download stops during the first nap, so quitting naps
-    /// once; nothing running, it never naps.
+    /// Quit `d` on a clock that moves only while it naps; `during(n)` runs in nap `n` (from 1). Returns the naps.
+    fn quitting(d: &Downloads, mut during: impl FnMut(usize)) -> Vec<Duration> {
+        let base = web_time::Instant::now();
+        let (at, mut naps) = (std::cell::Cell::new(Duration::ZERO), Vec::new());
+        d.quit(
+            || base + at.get(),
+            |nap| {
+                naps.push(nap);
+                at.set(at.get() + nap);
+                during(naps.len());
+            },
+        );
+        naps
+    }
+
+    /// Quitting tells a running download to stop, then waits while it runs, no longer, and never past
+    /// [`QUIT_WAIT`]: the wait is counted in naps on a clock of the test's, not timed. Nothing running, it never
+    /// naps.
     #[test]
     fn quitting_waits_only_while_a_download_still_runs() {
         let shared = Arc::new(Shared::new(10));
         let mut d = Downloads::default();
         d.jobs.insert("m".into(), shared.clone());
-        d.cancel_all();
-        let mut naps = 0;
-        d.wait_while_running(|| {
-            naps += 1;
+        // the download notices the cancel during the first nap
+        let naps = quitting(&d, |_| {
             assert!(shared.cancel.load(Ordering::Relaxed), "the download is told to stop before quitting waits");
-            // (the download thread notices the cancel)
             shared.set(State::Cancelled);
-            naps < 100
         });
-        assert_eq!(naps, 1, "quitting kept waiting after the download stopped");
-        let mut naps = 0;
-        d.wait_while_running(|| {
-            naps += 1;
-            naps < 100
-        });
-        assert_eq!(naps, 0, "nothing runs: no wait");
+        assert_eq!(naps, [Duration::from_millis(10)], "quitting kept waiting after the download stopped");
+        assert_eq!(quitting(&d, |_| ()), [], "nothing runs: no wait");
         let mut idle = Downloads::default();
         idle.set_outcome("m", State::Failed("x".into()));
-        idle.wait_while_running(|| {
-            naps += 1;
-            naps < 100
-        });
-        assert_eq!(naps, 0, "a finished download is not waited for");
+        assert_eq!(quitting(&idle, |_| ()), [], "a finished download is not waited for");
+        // one that never notices is waited for QUIT_WAIT, then left
+        let mut stuck = Downloads::default();
+        stuck.jobs.insert("m".into(), Arc::new(Shared::new(10)));
+        let naps = quitting(&stuck, |_| ());
+        assert_eq!((naps.len(), naps.iter().sum::<Duration>()), (100, QUIT_WAIT), "{naps:?}");
+        stuck.jobs.clear();
     }
 
     #[test]

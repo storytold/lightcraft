@@ -187,7 +187,9 @@ fn damaged_model_requests_are_queued_while_the_model_loads(s: &mut Session, id: 
     s.segmenter.before_model_load(move || {
         e.store(true, Ordering::SeqCst);
         let waited = gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner).recv_timeout(hold);
-        f.store(matches!(waited, Err(std::sync::mpsc::RecvTimeoutError::Timeout)), Ordering::SeqCst);
+        if matches!(waited, Err(std::sync::mpsc::RecvTimeoutError::Timeout)) {
+            f.store(true, Ordering::SeqCst);
+        }
     });
     s.execute("mask.add", &json!({"kind": "object"})).unwrap();
     let r = s.execute("mask.objectPoint", &json!({"x": 0.5, "y": 0.5})).unwrap();

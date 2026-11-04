@@ -636,7 +636,7 @@ mod tests {
     fn a_program_started_meanwhile_does_not_hold_the_connection_open() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
-        let (tx, _rx) = channel::<ControlRequest>();
+        let (tx, requests) = channel::<ControlRequest>();
         let server = std::thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
             serve(s, &tx, &egui::Context::default(), IDLE_TIMEOUT);
@@ -647,14 +647,21 @@ mod tests {
         let guard = lightcraft_testkit::scaled(Duration::from_secs(60)).max(Duration::from_secs(60));
         let mut c = TcpStream::connect(addr).unwrap();
         c.set_read_timeout(Some(guard)).unwrap();
-        // the connection is being served: start the program
-        std::thread::sleep(Duration::from_millis(200));
+        let mut replies = BufReader::new(c.try_clone().unwrap());
+        // one request answered first: the connection is being served (every handle the server makes for it
+        // exists) before the program starts
+        c.write_all(b"{\"id\":1,\"method\":\"x\"}\n").unwrap();
+        let req = lightcraft_testkit::recv_within(&requests, Duration::from_secs(30), "the request reaches the app");
+        let _ = req.take();
+        let _ = req.reply.send(json!({"ok": true, "result": 1}));
+        let mut first = String::new();
+        replies.read_line(&mut first).unwrap();
+        assert!(first.contains("\"id\":1"), "{first}");
         let mut child = std::process::Command::new("ping").args(["-n", "3600", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
-        std::thread::sleep(Duration::from_millis(200));
         // junk makes the server answer once and close
         c.write_all(b"hello\n").unwrap();
         let mut text = String::new();
-        let read = c.read_to_string(&mut text);
+        let read = replies.read_to_string(&mut text);
         let still_running = child.try_wait().is_ok_and(|status| status.is_none());
         let _ = child.kill();
         let _ = child.wait();

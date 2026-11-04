@@ -568,10 +568,15 @@ mod prepared_tests {
         assert_eq!(asked, [Duration::from_millis(50)], "the call waits once, for its limit, no longer");
         assert!(!answered.load(Ordering::SeqCst), "the probe never answered");
         drop(open);
-        // the same through the real wait: given up after 50 ms, the probe still blocked
+        // the same through the real wait (on a thread of its own too): given up after 50 ms, the probe still blocked
         let answered = std::sync::Arc::new(AtomicBool::new(false));
         let (open, probe) = blocked(&answered);
-        assert_eq!(within(Duration::from_millis(50), probe), None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(within(Duration::from_millis(50), probe));
+        });
+        let found = lightcraft_testkit::recv_within(&rx, Duration::from_secs(30), "the real wait returns while the probe is blocked");
+        assert_eq!(found, None);
         assert!(!answered.load(Ordering::SeqCst), "the call waited for the probe");
         drop(open);
         assert_eq!(within(LAUNCH_PROBE_LIMIT, || Some(1)), Some(1), "a quick answer is kept");
