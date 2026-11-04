@@ -370,7 +370,10 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         && let Some(q) = resp.interact_pointer_pos()
         && nearest(q).is_none_or(|(_, dist)| dist >= 10.0)
     {
-        let (x, y) = from_screen(q);
+        // the new point goes on the curve at the clicked x, as in Lightroom Classic: adding a
+        // point doesn't change the curve until it is dragged
+        let (x, _) = from_screen(q);
+        let y = curve.eval(x).clamp(0.0, 1.0);
         let mut v = pts.clone();
         let i = v.iter().position(|p| p.x > x).unwrap_or(v.len());
         v.insert(i, Point::new(x, y));
