@@ -82,15 +82,20 @@ struct DeadlineReader {
     stream: TcpStream,
     deadline: Option<Instant>,
     idle_timeout: Duration,
+    deadline_message: &'static str,
 }
 
 impl DeadlineReader {
     fn new(stream: TcpStream, idle_timeout: Duration) -> std::io::Result<Self> {
-        let budget = idle_timeout.min(AUTH_HEADER_TIMEOUT);
+        Self::with_budget(stream, idle_timeout, AUTH_HEADER_TIMEOUT, "authentication header deadline elapsed")
+    }
+
+    fn with_budget(stream: TcpStream, idle_timeout: Duration, budget: Duration, deadline_message: &'static str) -> std::io::Result<Self> {
+        let budget = idle_timeout.min(budget);
         let deadline = Instant::now()
             .checked_add(budget)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "authentication deadline is out of range"))?;
-        Ok(Self { stream, deadline: Some(deadline), idle_timeout })
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "header deadline is out of range"))?;
+        Ok(Self { stream, deadline: Some(deadline), idle_timeout, deadline_message })
     }
 
     fn restore_idle_timeout(&mut self) -> std::io::Result<()> {
@@ -115,11 +120,23 @@ impl Read for DeadlineReader {
         let Some(deadline) = self.deadline else {
             return self.stream.read(buf);
         };
-        let timeout = read_timeout_until(Some(deadline), self.idle_timeout, Instant::now())?;
+        let timeout = match read_timeout_until(Some(deadline), self.idle_timeout, Instant::now()) {
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                return Err(std::io::Error::new(error.kind(), self.deadline_message));
+            }
+            Err(error) => return Err(error),
+            Ok(timeout) => timeout,
+        };
         self.stream.set_read_timeout(Some(timeout))?;
-        let read = self.stream.read(buf)?;
+        let read = match self.stream.read(buf) {
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {
+                return Err(std::io::Error::new(error.kind(), self.deadline_message));
+            }
+            Err(error) => return Err(error),
+            Ok(read) => read,
+        };
         if Instant::now() >= deadline {
-            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "authentication header deadline elapsed"));
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, self.deadline_message));
         }
         Ok(read)
     }
@@ -346,6 +363,7 @@ pub struct Remote {
     tile: usize,
     slots: usize,
     timeout: Duration,
+    first_response_header_timeout: Duration,
     busy: AtomicUsize,
     failures: AtomicUsize,
     last_error: Mutex<Option<String>>,
@@ -365,6 +383,7 @@ impl Remote {
             tile,
             slots: 4,
             timeout: Duration::from_secs(60),
+            first_response_header_timeout: AUTH_HEADER_TIMEOUT,
             busy: AtomicUsize::new(0),
             failures: AtomicUsize::new(0),
             last_error: Mutex::new(None),
@@ -414,7 +433,7 @@ impl Remote {
         Ok((r, s))
     }
 
-    fn reply(&self, r: &mut BufReader<TcpStream>) -> Result<Value, Error> {
+    fn reply(&self, r: &mut impl BufRead) -> Result<Value, Error> {
         let line = read_line(r).map_err(|e| self.err(e))?.ok_or_else(|| self.err("the connection closed"))?;
         let v: Value = serde_json::from_str(&line).map_err(|_| self.err("malformed reply"))?;
         if v.get("ok").and_then(Value::as_bool) != Some(true) {
@@ -425,9 +444,15 @@ impl Remote {
 
     /// Greet the server: its device and model. Fails when it runs another model or tile size than this one.
     pub fn hello(&self) -> Result<ServerInfo, Error> {
-        let (mut r, mut s) = self.connect()?;
+        let (r, mut s) = self.connect()?;
+        let response_stream = r.get_ref().try_clone().map_err(|e| self.err(e))?;
+        let response =
+            DeadlineReader::with_budget(response_stream, self.timeout, self.first_response_header_timeout, "first response header deadline elapsed")
+                .map_err(|e| self.err(e))?;
+        let mut response = BufReader::new(response);
         writeln!(s, "{}", json!({"v": PROTOCOL, "token": self.token, "op": "hello"})).map_err(|e| self.err(e))?;
-        let v = self.reply(&mut r)?;
+        let v = self.reply(&mut response)?;
+        response.get_mut().restore_idle_timeout().map_err(|e| self.err(e))?;
         let m = v.get("model").cloned().unwrap_or_default();
         let text = |o: &Value, k: &str| o.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         let info = ServerInfo {
@@ -549,6 +574,27 @@ mod tests {
         addr
     }
 
+    fn fake_server(serve: impl FnOnce(TcpStream) + Send + 'static) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                serve(stream);
+            }
+        });
+        addr
+    }
+
+    fn remote_with_header_timeout(address: &str, timeout: Duration) -> Remote {
+        let mut remote = Remote::new(address, TOKEN, "aa11", T);
+        remote.first_response_header_timeout = timeout;
+        remote
+    }
+
+    fn greeting() -> Vec<u8> {
+        format!("{}\n", json!({"ok": true, "v": PROTOCOL, "device": "CPU (fake)", "model": id("aa11"), "tile": T})).into_bytes()
+    }
+
     struct Local(RunTile, AtomicUsize);
     impl TileRunner for Local {
         fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
@@ -571,6 +617,50 @@ mod tests {
         let got = remote.try_run(&input).unwrap().unwrap();
         let want = model(2.0)(&input).unwrap();
         assert!(got.iter().zip(&want).all(|(a, b)| (a - b).abs() < 2e-3));
+    }
+
+    #[test]
+    fn remote_hello_bounds_a_silent_first_response_header() {
+        let addr = fake_server(|stream| {
+            let mut request = String::new();
+            let _ = BufReader::new(stream.try_clone().unwrap()).read_line(&mut request);
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        let remote = remote_with_header_timeout(&addr, Duration::from_millis(100));
+        let started = Instant::now();
+        let error = remote.hello().unwrap_err().to_string();
+        assert!(error.contains("first response header deadline elapsed"), "unexpected error: {error}");
+        assert!(started.elapsed() < Duration::from_secs(1), "silent server held the greeting for too long");
+    }
+
+    #[test]
+    fn remote_hello_uses_one_deadline_for_a_trickled_response_header() {
+        let addr = fake_server(|mut stream| {
+            let mut request = String::new();
+            let _ = BufReader::new(stream.try_clone().unwrap()).read_line(&mut request);
+            let response = greeting();
+            for byte in response {
+                if stream.write_all(&[byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let remote = remote_with_header_timeout(&addr, Duration::from_millis(120));
+        let error = remote.hello().unwrap_err().to_string();
+        assert!(error.contains("first response header deadline elapsed"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn remote_hello_accepts_a_normal_first_response_header() {
+        let addr = fake_server(|mut stream| {
+            let mut request = String::new();
+            BufReader::new(stream.try_clone().unwrap()).read_line(&mut request).unwrap();
+            stream.write_all(&greeting()).unwrap();
+        });
+        let remote = remote_with_header_timeout(&addr, Duration::from_secs(1));
+        let info = remote.hello().unwrap();
+        assert_eq!((info.device.as_str(), info.tile), ("CPU (fake)", T));
     }
 
     #[test]
