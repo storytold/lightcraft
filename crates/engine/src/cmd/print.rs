@@ -308,7 +308,7 @@ fn find_folder(s: &Session, name: &str, id: &str) -> Result<Option<String>> {
 /// The `folder` parameter: not given (`None`), or the folder it names (see [`find_folder`]).
 fn folder_param(s: &Session, p: &Value, id: &str) -> Result<Option<Option<String>>> {
     match p.get("folder") {
-        None | Some(Value::Null) => Ok(None),
+        None => Ok(None),
         Some(Value::String(f)) => find_folder(s, f, id).map(Some),
         Some(_) => Err(bad(id, "`folder` must be a folder name")),
     }
@@ -407,6 +407,11 @@ fn folder_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let to = clean_folder(p.get("to").and_then(Value::as_str).ok_or_else(|| bad(ID, "missing `to`"))?).map_err(|e| bad(ID, e))?;
     if s.print_template_folders.iter().any(|f| f.eq_ignore_ascii_case(&to) && *f != from) {
         return Err(bad(ID, format!("there is already a folder named “{to}”")));
+    }
+    if to == from {
+        let mut out = template_list(s);
+        out["name"] = json!(to);
+        return Ok(out);
     }
     let before = before(s);
     for f in &mut s.print_template_folders {

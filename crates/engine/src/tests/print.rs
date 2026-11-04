@@ -509,6 +509,8 @@ fn template_folders_hold_templates_and_survive_reopening() {
         ("print.template.move", json!({"name": "Sheet"}), "missing `folder`"),
         ("print.template.move", json!({"name": "Sheet", "folder": "Nope"}), "no print template folder"),
         ("print.template.move", json!({"name": "Sheet", "folder": 3}), "`folder` must be"),
+        ("print.template.save", json!({"name": "New", "folder": null}), "`folder` must be"),
+        ("print.template.import", json!({"path": "x.lcprint", "folder": null}), "`folder` must be"),
         ("print.template.move", json!({"name": "Nope", "folder": "User Templates"}), "no print template `Nope`"),
         ("print.template.save", json!({"name": "New", "folder": "Nope"}), "no print template folder"),
         ("print.template.import", json!({"path": "x.lcprint", "folder": "Nope"}), "no print template folder"),
@@ -683,6 +685,10 @@ fn template_changes_that_cant_be_saved_are_undone() {
         assert!(fails(&mut s, id, p.clone()).contains("prefs.json"), "{id} {p}");
         assert_eq!(names(&s), kept, "{id} {p}");
     }
+    // a rename to the same spelling changes nothing, so it writes nothing and doesn't fail
+    let r = run(&mut s, "print.template.folder.rename", json!({"name": "family", "to": " Family "}));
+    assert_eq!(r["name"], "Family");
+    assert_eq!(names(&s), kept);
 }
 
 #[test]
