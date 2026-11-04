@@ -321,7 +321,7 @@ impl MergeJob {
                 let frames = self.load(load, &check, progress, (0.0, 0.25))?;
                 let p = sub(0.25, 0.9);
                 let scale = areas(&frames, 1);
-                let fit = fit_in_memory(pano, pixels(&frames), room)?;
+                let fit = fit_decoded(pano, pixels(&frames), &scale, memory, self.preview.is_some())?;
                 let r = lightcraft_merge::stitch(frames, &fit, &p).map_err(err)?;
                 let info = pano_info(&r, &self.sources, pano, &fit, &scale);
                 (
@@ -367,7 +367,7 @@ impl MergeJob {
                 }
                 let p = sub(0.6, 0.9);
                 let scale = areas(&merged, b);
-                let fit = fit_in_memory(pano, pixels(&merged), room)?;
+                let fit = fit_decoded(pano, pixels(&merged), &scale, memory, self.preview.is_some())?;
                 let r = lightcraft_merge::stitch(merged, &fit, &p).map_err(err)?;
                 let mut info = pano_info(&r, &self.sources, pano, &fit, &scale);
                 info["bracket"] = json!(b);
@@ -457,7 +457,7 @@ fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], as
 }
 
 /// Why a panorama of `megapixels` came out smaller than its photos' resolution (`native`), if it
-/// did: `memory` when [`fit_in_memory`] held it below the size `asked` for, `asked`, or `size`.
+/// did: `memory` when [`fit_with_floor`] held it below the size `asked` for, `asked`, or `size`.
 pub(crate) fn size_limit(asked: f64, fit: f64, native: f64, megapixels: f64) -> Option<&'static str> {
     let why = if fit < asked && fit < native {
         "memory"
@@ -492,10 +492,11 @@ fn merge_memory(ram: Option<usize>) -> f64 {
 /// needs and has (issue #3708: the floor used to be kept whatever the memory, and a 40 MP stitch
 /// peaks near 2.7 GB, more than a small computer or a memory limit allows; a refusal is preferred
 /// to a panorama quietly far below it). Between the floor and the full size the result says
-/// `limit: "memory"`. Never above what was asked.
-pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std::result::Result<PanoOptions, String> {
+/// `limit: "memory"`. Never above what was asked. The floor (megapixels) is given:
+/// [`panorama_floor`] of the photos' own pixels, also when the plan decoded them smaller than they
+/// are, so smaller frames don't lower it.
+pub(crate) fn fit_with_floor(pano: &PanoOptions, frame_px: f64, floor: f64, room: f64) -> std::result::Result<PanoOptions, String> {
     let fits = ((room - frame_px * FRAME_BYTES) / PANO_TILE_BYTES).min(room / PANO_BLEND_BYTES) / 1e6;
-    let floor = panorama_floor(pano.max_megapixels, frame_px);
     // a NaN `fits` (a NaN `room`) is refused too
     if fits.is_nan() || fits < floor {
         let need = (frame_px * FRAME_BYTES + floor * 1e6 * PANO_TILE_BYTES).max(floor * 1e6 * PANO_BLEND_BYTES);
@@ -507,6 +508,27 @@ pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std
         ));
     }
     Ok(PanoOptions { max_megapixels: pano.max_megapixels.min(fits), ..pano.clone() })
+}
+
+/// [`fit_with_floor`] for decoded frames of `frame_px` pixels, the floor following the photos' own
+/// pixels (`areas`, each stitched frame's photo pixels and its own, [`photo_areas`]; empty: the
+/// frames are the photos' size). On a guessed memory a panorama it would refuse is made at its
+/// floor, as before merges were planned ([`Memory::known`]). A `preview`'s floor is at most
+/// [`MIN_PREVIEW_MEGAPIXELS`].
+fn fit_decoded(pano: &PanoOptions, frame_px: f64, areas: &[(f64, f64)], memory: Memory, preview: bool) -> std::result::Result<PanoOptions, String> {
+    let photos = if areas.is_empty() { frame_px } else { areas.iter().map(|a| a.0).sum() };
+    let floor = panorama_floor(pano.max_megapixels, photos);
+    let floor = if preview { floor.min(MIN_PREVIEW_MEGAPIXELS) } else { floor };
+    match fit_with_floor(pano, frame_px, floor, memory.bytes) {
+        Err(_) if !memory.known => Ok(PanoOptions { max_megapixels: pano.max_megapixels.min(floor), ..pano.clone() }),
+        fit => fit,
+    }
+}
+
+/// [`fit_with_floor`] with the floor of `frame_px` (frames of the photos' own size; tests).
+#[cfg(test)]
+pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std::result::Result<PanoOptions, String> {
+    fit_with_floor(pano, frame_px, panorama_floor(pano.max_megapixels, frame_px), room)
 }
 
 /// The smallest a panorama is made to fit its memory (megapixels): [`MIN_PANORAMA_MEGAPIXELS`],
@@ -535,10 +557,15 @@ fn pixels(frames: &[Frame]) -> f64 {
     frames.iter().map(|f| (f.width() * f.height()) as f64).sum()
 }
 
-/// The smallest panorama [`fit_in_memory`] plans (megapixels): the size every panorama had before
+/// The smallest panorama [`fit_with_floor`] plans (megapixels): the size every panorama had before
 /// it followed its photos' resolution. A merge whose memory can't hold it (or the smaller
 /// [`panorama_floor`]) is refused rather than made smaller.
 pub(crate) const MIN_PANORAMA_MEGAPIXELS: f64 = 40.0;
+
+/// A preview's floor (megapixels): it shows how the merge will look, so it is made down to this
+/// (or less, as [`panorama_floor`] allows) rather than refused for the floor of the panorama it
+/// previews.
+pub(crate) const MIN_PREVIEW_MEGAPIXELS: f64 = 1.0;
 
 /// Bytes in MB (MiB).
 fn mb(bytes: f64) -> f64 {

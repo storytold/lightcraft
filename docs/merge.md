@@ -87,20 +87,21 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   caption also lists them.
 - Memory is planned before a merge decodes anything (`crates/engine/src/merge/plan.rs`), from each photo's size and
   file size in the catalog (when it has none, its file's header; when that can't be read either, the largest known),
-  against the merge's memory: three quarters of the RAM, less the cache budget. Each phase is followed in the order
-  it runs. Photos are decoded one at a time, always at full size, then made smaller: each holds its file and ~36 bytes
-  a pixel (48 when it is made smaller; a raw whose sensor has many more samples than its picture has pixels, 8 bytes
-  a sample instead when that is more; and one that demosaics its whole active area before cropping it, 12 bytes a
-  pixel of that area besides: every raw but a Bayer mosaic without an `OpcodeList3`, and every raw in a preview)
-  beside the frames already held (12 bytes a pixel each). Issue #3708: until then
-  a merge was sized only after every photo was decoded, which could run out of memory first. A merge that fits runs
-  as it always did; one with no size known at all runs unplanned. When the computer's memory can't be read
-  (Windows, for now) the merge's memory is a guess (that of 8 GB of RAM): the plan follows it but refuses nothing on
-  it, and what it would refuse runs as it did before, at full size, one photo at a time. Just before each photo is decoded its header is
-  read again and the plan checked with it (the catalog doesn't keep a raw's sensor size, and a file can have changed
-  since it was imported): when the plan no longer holds the merge stops before decoding it, naming the file.
+  against the merge's memory: three quarters of the RAM, less the cache budget. Each phase is followed in the order it
+  runs. Photos are decoded one at a time, always at full size, then made smaller: each holds its file and ~36 bytes a
+  pixel (48 when it is made smaller; a raw whose sensor has many more samples than its picture has pixels, 8 bytes a
+  sample instead when that is more; and one that demosaics its whole active area before cropping it, 12 bytes a pixel
+  of that area besides: every raw but a Bayer mosaic without an `OpcodeList3`, and every raw in a preview) beside the
+  frames already held (12 bytes a pixel each). Issue #3708: until then a merge was sized only after every photo was
+  decoded, which could run out of memory first. A merge that fits runs as it always did; one with no size known at all
+  runs unplanned. When the computer's memory can't be read (Windows, for now) the merge's memory is a guess (that of 8
+  GB of RAM): the plan follows it but refuses nothing on it, and what it would refuse runs as it did before, at full
+  size, one photo at a time. Just before each photo is decoded its header is read again and the plan checked with it
+  (the catalog doesn't keep a raw's sensor size, and a file can have changed since it was imported): when the plan no
+  longer holds the merge stops before decoding it, naming the file.
 - A preview's photos are decoded at full size too, several at once: one at a time when several don't fit, and the
-  preview is refused when not even that, or the merge or stitch of its small frames after it, fits.
+  preview is refused when not even that, or the merge or stitch of its small frames after it, fits. A preview's
+  panorama is made down to 1 MP (or its frames' size, when less), not to the floor of the panorama it previews.
 - HDR memory: every frame is held as 32-bit float RGB (~0.86 GB per 67 MP frame at the peak, plus ~1.2 GB); full-size
   photos are decoded one at a time. Measured on 67 MP raws: 3 frames 3.8 GB, 4 frames 4.7 GB, 5 frames 5.5 GB (was
   4.8 / 6.3 GB for 3 / 4). Planned as 17 bytes a pixel of every frame and 12 of the largest, plus deghosting's 2048 px
@@ -113,9 +114,13 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   less than the photos' resolution, the result says `limit: "memory"`. It is made no smaller than its floor: 40 MP,
   or the smaller `maxMegapixels` asked for (at least 0.1 MP), or the photos' own pixels when they have less. A merge
   whose memory can't hold the floor is refused with the memory it needs and has (issue #3708; until then the 40 MP
-  floor was kept whatever the memory, and could run out of it). Photos that don't fit at full
-  size are decoded smaller, as large as fits and still leaves the panorama as large as memory allows (frames above
-  about 1/25 of the memory in pixels leave less room for projecting it), and never under 1024 px on the long side (the preview's frames): the result says `limit: "memory"`, and `nativeMegapixels` is still the photos' own
-  resolution. One that doesn't fit even then is refused. An HDR panorama holds all its brackets' photos before merging
-  them, one bracket at a time; with the bracket left to EXIF, every size it could be is planned for.
+  floor was kept whatever the memory, and could run out of it).
+- Photos for a panorama that don't fit at full size are decoded smaller, but only while the stitch still reaches
+  its floor (which follows the photos' own size, not the smaller frames'); a merge that would have to go below it is
+  refused before any photo is read. They are decoded as large as fits and still leaves the panorama as large as
+  memory allows (frames above about 1/25 of the memory in pixels leave less room for projecting it), and never under
+  1024 px on the long side (the preview's frames): the result says `limit: "memory"`, and `nativeMegapixels` is
+  still the photos' own resolution. On a guessed memory a panorama the stitch would refuse is made at its floor, as
+  before merges were planned. An HDR panorama holds all its brackets' photos before merging them, one bracket at a
+  time; with the bracket left to EXIF, every size it could be is planned for.
 - The browser build has no file access for merges yet.
