@@ -192,11 +192,11 @@ fn bad_crc_is_still_a_torn_tail() {
     assert!(r.torn_bytes > 0 && r.damaged.is_none(), "{r:?}");
 }
 
-/// A v10 library (bursts as culling made them) reads every analysis as not arranged by hand and
+/// A v11 library (bursts as culling made them) reads every analysis as not arranged by hand and
 /// is rewritten in the current format; a place set by hand survives the round trip, and none is
 /// written for a photo left as culling placed it.
 #[test]
-fn v10_analysis_loads_unarranged_and_is_upgraded() {
+fn v11_analysis_loads_unarranged_and_is_upgraded() {
     let mut c = Catalog::new();
     let id = c.alloc_photo_id();
     let mut p = Photo::new(id, Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 160, 120, "2026-01-01");
@@ -205,11 +205,11 @@ fn v10_analysis_loads_unarranged_and_is_upgraded() {
     let snap = c.to_snapshot();
     assert!(!snap.contains("rank"), "nothing new is written for a burst culling made: {snap}");
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":10,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":11,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
     let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
     let a = loaded.photo(id).unwrap().analysis.unwrap();
     assert_eq!((a.group, a.best, a.rank, a.by_hand()), (Some(2), true, None, false));
-    assert_eq!(r.upgraded_from, Some(10));
+    assert_eq!(r.upgraded_from, Some(11));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
     // a place set by hand round-trips
     let mut c = loaded;
@@ -265,8 +265,9 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v11: `Analysis.rank` (v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 11;
+    /// v12: `Analysis.rank` (v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9: `Photo.preview_checked` and
+    /// `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 12;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
