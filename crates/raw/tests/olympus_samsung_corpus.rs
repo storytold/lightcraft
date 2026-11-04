@@ -1,4 +1,4 @@
-//! One CC0 file per uncompressed Olympus ORF and Samsung SRW body from raw.pixls.us (URLs and SHA-256 in `RAW_SAMPLES`,
+//! One CC0 file per Olympus ORF and Samsung SRW body from raw.pixls.us (URLs and SHA-256 in `RAW_SAMPLES`,
 //! xtask/src/main.rs; downloaded into the gitignored corpus/raw by `cargo xtask corpus --download`).
 //!
 //! No external decoder was run on these: the FNV-1a hashes over the decoded u16 samples (row-major,
@@ -67,6 +67,8 @@ fn olympus_and_samsung_bodies_decode_like_the_camera_jpeg() {
         ("orf-olympus-e-330.orf", (3280, 2450), 0xc938_38fa_9822_c81a, true),
         ("orf-olympus-e-500.orf", (3360, 2504), 0x5e22_2ac8_17ed_89d9, true),
         ("orf-olympus-e-m5-mark-ii.orf", (9280, 6932), 0xa222_be38_c767_7782, true),
+        ("orf-olympus-em1.orf", (4640, 3472), 0xfda1_2420_eeee_2373, true),
+        ("orf-olympus-em10iii.orf", (4640, 3472), 0x9f0c_34ce_c75a_27cf, false),
         ("orf-olympus-pen-f.orf", (10400, 7796), 0x415e_bf27_092e_9897, true),
         ("orf-olympus-sh-2.orf", (4624, 3470), 0xb25b_8d24_4ade_1f3d, true),
         ("orf-olympus-sp510uz.orf", (3088, 2309), 0xa885_b7ca_83ba_02f1, true),
