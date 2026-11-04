@@ -34,6 +34,7 @@ mod libops;
 mod library;
 mod lightroom_folder;
 mod mask_effects;
+mod mask_geometry;
 mod merge;
 mod move_to_share;
 mod organize;
