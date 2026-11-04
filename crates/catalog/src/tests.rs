@@ -1107,3 +1107,21 @@ fn a_batch_that_cannot_be_rolled_back_whole_makes_earlier_changes_unknown() {
     assert_eq!(c.touched_since(start), None, "so nothing is said of what changed");
     assert_eq!(c.touched_since(c.revision), Some(vec![]), "from after it, it is known again");
 }
+
+/// Issue #3590: camera orientation survives a catalog reload, but old catalogs
+/// without that field keep their original JSON and default to normal.
+#[test]
+fn physical_sensor_orientation_roundtrips_without_changing_legacy_photos() {
+    use lightcraft_meta::Orientation;
+    let mut photo = Photo::new(PhotoId(123), Source::File { path: "/synthetic/portrait.arw".into() }, "portrait.arw", "ARW", 150, 200, "2026-11-02");
+    let normal = serde_json::to_value(&photo).unwrap();
+    assert!(normal.get("sensor_orientation").is_none());
+    let restored: Photo = serde_json::from_value(normal).unwrap();
+    assert_eq!(restored.sensor_orientation, Orientation::Normal);
+
+    photo.sensor_orientation = Orientation::Rotate270;
+    let stored = serde_json::to_value(&photo).unwrap();
+    assert_eq!(stored["sensor_orientation"], serde_json::json!("Rotate270"));
+    let roundtrip: Photo = serde_json::from_value(stored).unwrap();
+    assert_eq!(roundtrip.sensor_orientation, Orientation::Rotate270);
+}

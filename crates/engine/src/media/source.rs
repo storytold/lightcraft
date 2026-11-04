@@ -185,7 +185,12 @@ impl DecodedSource {
     /// decoder only sees the level it decoded.
     pub fn info_or(&self, header: SourceInfo) -> SourceInfo {
         match &self.info {
-            Some(info) => SourceInfo { native_long: info.native_long.or(header.native_long), ..info.clone() },
+            Some(info) => SourceInfo {
+                sensor_orientation: if info.sensor_orientation_missing { header.sensor_orientation } else { info.sensor_orientation },
+                sensor_orientation_missing: false,
+                native_long: info.native_long.or(header.native_long),
+                ..info.clone()
+            },
             None => SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header },
         }
     }
@@ -311,6 +316,8 @@ pub struct ProbeInfo {
     /// metadata would otherwise all land under "Unknown Date").
     pub file_modified: Option<String>,
     pub meta: lightcraft_catalog::Meta,
+    /// EXIF orientation already applied to the pixels; presets can follow sensor positions.
+    pub sensor_orientation: lightcraft_geom::Orientation,
     pub as_shot_wb: Option<(f64, f64)>,
     /// Hash of the file's bytes (hex), for duplicate detection. When it is a 32-digit
     /// [`lightcraft_preview::hash_bytes`] of the whole file (as the native probe computes it),

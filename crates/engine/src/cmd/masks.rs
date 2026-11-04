@@ -1,7 +1,7 @@
 //! Masking and Remove (spot) commands on the active photo.
 
 use lightcraft_develop::{
-    BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode,
+    BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotAnchor, SpotMode,
 };
 use lightcraft_geom::Point;
 use serde_json::{Value, json};
@@ -784,12 +784,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find Dust Spots",
             [],
             None,
-            "{sensitivity?: 0..100 (50), add?: bool (true)} — find sensor-dust spots (small soft dark spots on smooth areas) and add a heal spot on each (one undo step) → {spots: [{x, y, size}], added}",
+            "{sensitivity?: 0..100 (50), add?: bool (true), anchor?: image|sensor (image default)} — find sensor-dust spots (small soft dark spots on smooth areas) and add a heal spot on each (one undo step) → {spots: [{x, y, size}], added}",
             has_active,
             |s, p| {
                 let c = "spot.findDust";
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
-                // the uncropped photo, so positions are the spots' own coordinates
+                let anchor: SpotAnchor =
+                    serde_json::from_value(p.get("anchor").cloned().unwrap_or(json!("image"))).map_err(|e| bad(c, e.to_string()))?;
+                // Detect on the uncropped rendered photo; sensor-anchored spots
+                // must then map back through the same optical and EXIF frame.
                 let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
                 let found = lightcraft_pipeline::dust::detect(&img, f64_or(p, "sensitivity", 50.0) as f32);
@@ -798,21 +801,52 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Ok(json!({"spots": out, "added": 0}));
                 }
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
+                // Use actual decoded-source dimensions and correction data, not
+                // just catalog dimensions; the render may use a reduced RAW or
+                // an embedded lens profile.
+                let frame = if anchor == SpotAnchor::Sensor {
+                    let src = s.source_now(id, crate::media::SourceLevel::Preview).map_err(|e| bad(c, e))?;
+                    let info = s.source_info(id);
+                    // Match the render plan: apply the active profile before
+                    // resolving automatic Upright, then build the same frame.
+                    let effective = lightcraft_pipeline::profiles::effective(&dd);
+                    let resolved = lightcraft_pipeline::upright::resolve(&src, &info, &effective);
+                    Some(lightcraft_pipeline::frame_for(&src, &info, &resolved, false))
+                } else {
+                    None
+                };
+                let transform = frame.as_ref().map(|f| f.out_to_norm(img.width, img.height));
                 let base = Spot::default();
+                let mut added = 0;
                 for d in &found {
+                    let detected = Point::new(d.x, d.y);
+                    let target = match (&frame, &transform) {
+                        (Some(frame), Some(to_norm)) => {
+                            let rendered = Point::new(d.x * img.width as f64, d.y * img.height as f64);
+                            match frame.transformed_to_sensor(to_norm.apply(rendered)) {
+                                Some(point) => point,
+                                None => continue,
+                            }
+                        }
+                        _ => detected,
+                    };
                     let mut spot = Spot {
                         mode: SpotMode::Heal,
-                        points: vec![Point::new(d.x, d.y)],
+                        points: vec![target],
                         size: d.radius.clamp(SPOT_SIZE.0, SPOT_SIZE.1),
                         feather: base.feather,
                         opacity: 100.0,
                         source_offset: None,
+                        anchor,
                     };
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                     dd.spots.push(spot);
+                    added += 1;
                 }
-                s.set_develop(id, dd, "Find Dust Spots")?;
-                Ok(json!({"spots": out, "added": found.len()}))
+                if added != 0 {
+                    s.set_develop(id, dd, "Find Dust Spots")?;
+                }
+                Ok(json!({"spots": out, "added": added}))
             }
         ),
         cmd!(
@@ -864,6 +898,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         feather: base.feather,
                         opacity: 100.0,
                         source_offset: None,
+                        anchor: Default::default(),
                     };
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                     dd.spots.push(spot);
@@ -877,7 +912,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Remove Spot",
             [],
             None,
-            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby)} — selects the new spot; returns {index}",
+            "{mode?: remove|heal|clone|fill (content-aware), anchor?: image|sensor (image default; sensor = camera-native, pre-EXIF pixels), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby)} — selects the new spot; returns {index}",
             has_active,
             |s, p| {
                 let mode: SpotMode =
@@ -890,6 +925,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if pts.is_empty() {
                     return Err(bad("spot.add", "missing points"));
                 }
+                let anchor: SpotAnchor =
+                    serde_json::from_value(p.get("anchor").cloned().unwrap_or(json!("image"))).map_err(|e| bad("spot.add", e.to_string()))?;
                 let d = Spot::default();
                 let mut spot = Spot {
                     mode,
@@ -898,6 +935,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     feather: f64_or(p, "feather", d.feather).clamp(0.0, 100.0),
                     opacity: f64_or(p, "opacity", d.opacity).clamp(0.0, 100.0),
                     source_offset: point(p, "source"),
+                    anchor,
                 };
                 let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();

@@ -73,7 +73,8 @@ pub fn load_embedded_preview(bytes: &[u8], max_edge: usize) -> Option<(Rgb32f, S
     let d = decode_raw_preview(bytes, fit_box(max_edge), None)?;
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Some((img.oriented(preview_orientation(bytes, d.orientation)), SourceInfo::default()))
+    let orientation = preview_orientation(bytes, d.orientation);
+    Some((img.oriented(orientation), SourceInfo { sensor_orientation: orientation, ..Default::default() }))
 }
 
 /// The embedded preview of a raw file for display (sRGB, oriented, no larger than `max_edge`): the

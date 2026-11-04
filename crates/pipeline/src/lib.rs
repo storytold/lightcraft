@@ -73,6 +73,13 @@ pub struct CameraColor {
 /// Facts about the source the settings are interpreted against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {
+    /// EXIF orientation already applied to decoded pixels. Sensor-fixed spots
+    /// use the inverse to find their original location in camera-native space.
+    pub sensor_orientation: lightcraft_geom::Orientation,
+    /// True only for an old offline smart preview whose decoder facts were
+    /// written before the original sensor orientation was stored.
+    /// The catalog's probed orientation then takes precedence.
+    pub sensor_orientation_missing: bool,
     /// Lens corrections embedded in the file (DNG opcodes), relative to the EXIF-oriented source.
     pub lens: Option<lightcraft_develop::EmbeddedLens>,
     /// Raw sources use absolute Kelvin white balance; rendered sources use a relative scale around
@@ -105,6 +112,8 @@ pub struct SourceInfo {
 impl Default for SourceInfo {
     fn default() -> Self {
         Self {
+            sensor_orientation: lightcraft_geom::Orientation::Normal,
+            sensor_orientation_missing: false,
             raw: false,
             as_shot_temp: 6500.0,
             as_shot_tint: 0.0,
@@ -250,6 +259,7 @@ pub fn native_output_size(src_w: usize, src_h: usize, s: &DevelopSettings) -> (f
 /// The geometric frame `render` uses for `src` (lens data, automatic CA estimate included).
 pub fn frame_for(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, apply_crop: bool) -> geometry::Frame {
     let mut frame = geometry::Frame::with_lens(src.width, src.height, s, apply_crop, info.lens.as_ref());
+    frame.sensor_orientation = info.sensor_orientation;
     if s.optics.remove_ca && s.section_enabled("optics") {
         frame.add_lateral_ca(optics::estimate_lateral_ca(src));
         if apply_crop {

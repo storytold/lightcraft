@@ -1080,11 +1080,30 @@ pub enum SpotMode {
     Fill,
 }
 
+/// Coordinate space in which a Remove/Heal/Clone spot was recorded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpotAnchor {
+    /// Existing behavior: points refer to the image after optical transformations.
+    #[default]
+    Image,
+    /// Camera-native sensor coordinates, before EXIF orientation and optics.
+    /// Use this for a persistent sensor blemish across landscape and portrait.
+    Sensor,
+}
+
+impl SpotAnchor {
+    fn is_image(&self) -> bool {
+        *self == Self::Image
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Spot {
     pub mode: SpotMode,
-    /// Target: a single point (circle spot) or a brushed path. Normalized coords.
+    /// Target: a single point (circle spot) or a brushed path. Normalized coords
+    /// in the coordinate space specified by `anchor`.
     pub points: Vec<Point>,
     /// Radius as a fraction of the long edge.
     pub size: f64,
@@ -1092,11 +1111,14 @@ pub struct Spot {
     pub opacity: f64,
     /// Source offset (normalized) from the target; None = auto (content-aware remove).
     pub source_offset: Option<Point>,
+    /// Old spots remain image-anchored; only sensor-anchored spots serialize this key.
+    #[serde(default, skip_serializing_if = "SpotAnchor::is_image")]
+    pub anchor: SpotAnchor,
 }
 
 impl Default for Spot {
     fn default() -> Self {
-        Self { mode: SpotMode::Remove, points: Vec::new(), size: 0.02, feather: 50.0, opacity: 100.0, source_offset: None }
+        Self { mode: SpotMode::Remove, points: Vec::new(), size: 0.02, feather: 50.0, opacity: 100.0, source_offset: None, anchor: SpotAnchor::Image }
     }
 }
 

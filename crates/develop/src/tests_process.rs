@@ -132,6 +132,34 @@ fn a_damaged_process_value_reads_as_v1_and_keeps_the_edits() {
     }
 }
 
+/// Issue #3590: existing retouches must not change position after the schema
+/// gains an optional source-pixel coordinate space.
+#[test]
+fn sensor_anchored_spots_keep_legacy_json_and_survive_presets() {
+    let legacy_spot = json!({
+        "mode": "heal",
+        "points": [{"x": 0.15, "y": 0.27}],
+        "size": 0.02,
+        "feather": 50.0,
+        "opacity": 100.0,
+        "source_offset": null
+    });
+    let old: Spot = serde_json::from_value(legacy_spot.clone()).unwrap();
+    assert_eq!(old.anchor, SpotAnchor::Image);
+    assert_eq!(serde_json::to_value(&old).unwrap(), legacy_spot, "old JSON stays byte-shape compatible");
+
+    let mut sensor = old.clone();
+    sensor.anchor = SpotAnchor::Sensor;
+    let stored_sensor = serde_json::to_value(&sensor).unwrap();
+    assert_eq!(stored_sensor["anchor"], json!("sensor"));
+    assert_eq!(serde_json::from_value::<Spot>(stored_sensor).unwrap(), sensor);
+
+    let photo = DevelopSettings { spots: vec![sensor.clone()], ..Default::default() };
+    let preset = Preset::from_settings("sensor-spot", "Sensor blemish", "User", &photo, &[SettingsGroup::Spots]);
+    let applied = preset.apply(&DevelopSettings::default(), 1.0);
+    assert_eq!(applied.spots, vec![sensor], "preset preserves the point's coordinate space");
+}
+
 #[test]
 fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
     let mut s = DevelopSettings { process: ProcessVersion(LATEST_PLUS_ONE), ..Default::default() };

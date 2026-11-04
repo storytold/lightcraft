@@ -1908,6 +1908,29 @@ fn presets_validate_groups_on_create_and_update() {
     assert_eq!(p_after_omitted.settings["color"]["vibrance"], -20.0);
 }
 
+/// Issue #3590: creating a sensor-fixed correction through the command layer
+/// persists that intent, while old callers still get legacy image coordinates.
+#[test]
+fn new_spots_can_explicitly_use_sensor_coordinates() {
+    use lightcraft_develop::SpotAnchor;
+
+    let mut s = demo();
+    let id = s.active().unwrap();
+    // Explicit physical-sensor coordinates are opt-in.
+    s.execute("spot.add", &json!({"mode": "heal", "anchor": "sensor", "points": [[0.5, 0.5]], "source": [0.1, 0.0]})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap().spots.last().unwrap().anchor, SpotAnchor::Sensor);
+
+    // An experimental anchor string must not silently be treated as sensor space.
+    assert!(s.execute("spot.add", &json!({"mode": "clone", "anchor": "source", "points": [[0.18, 0.24]]})).is_err());
+
+    s.execute("spot.add", &json!({"mode": "heal", "points": [[0.5, 0.5]], "source": [0.1, 0.0]})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap().spots.last().unwrap().anchor, SpotAnchor::Image);
+
+    let before = s.develop_of(id).unwrap().spots.len();
+    assert!(s.execute("spot.add", &json!({"anchor": "bogus", "points": [[0.4, 0.4]]})).is_err());
+    assert_eq!(s.develop_of(id).unwrap().spots.len(), before, "a bad coordinate space never adds a spot");
+}
+
 /// A Heal or Remove spot whose size (from a sidecar, which isn't held to the slider's range) is far past the photo
 /// made the render's radius infinite: its heal blur and the source it reads went with it, overflowing the blur's box
 /// radii and the bilinear sampler (issue #1519). Such spots render, quickly, as a spot over the whole frame.

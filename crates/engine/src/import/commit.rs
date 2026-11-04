@@ -260,6 +260,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.file_size = info.file_size;
                 p.captured = info.captured;
                 p.meta = info.meta;
+                p.sensor_orientation = info.sensor_orientation;
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;

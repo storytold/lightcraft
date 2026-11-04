@@ -1,14 +1,44 @@
 use super::geometry::CanvasMap;
 use super::masks::{pin, pins_live};
 use super::{Color32, DevelopSettings, Gesture, LightcraftApp, Point, Pos2, Rect, Stroke, ToolOverlay, json, register, vec2};
+use lightcraft_develop::SpotAnchor;
+use lightcraft_pipeline::geometry::Frame;
 
 // ------------------------------------------------------------------------ remove
+
+/// Spot pins are displayed after the optical warp; source anchors use the
+/// inverse warp, like the pipeline, instead of staying fixed to the canvas.
+fn spot_display(frame: &Frame, anchor: SpotAnchor, p: Point) -> Option<Point> {
+    match anchor {
+        SpotAnchor::Image => (p.x.is_finite() && p.y.is_finite()).then_some(p),
+        SpotAnchor::Sensor => frame.sensor_to_transformed(p),
+    }
+}
+
+/// Pointer positions are in transformed-image coordinates. Convert them to
+/// source coordinates only for a new/existing source-anchored retouch.
+fn spot_stored(frame: &Frame, anchor: SpotAnchor, p: Point) -> Option<Point> {
+    match anchor {
+        SpotAnchor::Image => (p.x.is_finite() && p.y.is_finite()).then_some(p),
+        SpotAnchor::Sensor => frame.transformed_to_sensor(p),
+    }
+}
+
+fn spot_delta(frame: &Frame, anchor: SpotAnchor, a: Point, b: Point) -> Option<[f64; 2]> {
+    let a = spot_stored(frame, anchor, a)?;
+    let b = spot_stored(frame, anchor, b)?;
+    Some([a.x - b.x, a.y - b.y])
+}
+
+fn new_spot_anchor(sensor: bool, tool: &str) -> SpotAnchor {
+    if sensor && tool != "fill" { SpotAnchor::Sensor } else { SpotAnchor::Image }
+}
 
 /// The Remove tool on the photo: every spot's outline and pin (the selected one with its source),
 /// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one.
 /// The Tool Overlay mode (Shift+H) says which spots show; a hidden spot can't be grabbed, so a
 /// click there adds a new one.
-pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
+pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, frame: &Frame, d: &DevelopSettings) {
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let active = app.session.active_spot.filter(|i| *i < d.spots.len());
     let (mode, live) = (app.ui.tool_overlay, pins_live(app, resp, map));
@@ -30,14 +60,21 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         let p = &pins;
         let col = Color32::from_white_alpha(if sel { 230 } else { 150 });
         for q in &s.points {
-            p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
+            if let Some(display) = spot_display(frame, s.anchor, *q) {
+                p.circle_stroke(map.screen(display), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
+            }
         }
         let Some(&t) = s.points.first() else { continue };
-        let tq = map.screen(t);
-        if let Some(o) = s.source_offset.filter(|_| sel) {
-            let sq = map.screen(Point::new(t.x + o.x, t.y + o.y));
+        let Some(target_display) = spot_display(frame, s.anchor, t) else { continue };
+        let tq = map.screen(target_display);
+        if let Some(o) = s.source_offset.filter(|_| sel)
+            && let Some(source_display) = spot_display(frame, s.anchor, Point::new(t.x + o.x, t.y + o.y))
+        {
+            let sq = map.screen(source_display);
             for q in &s.points {
-                p.circle_stroke(map.screen(Point::new(q.x + o.x, q.y + o.y)), r, Stroke::new(1.0, Color32::from_white_alpha(170)));
+                if let Some(display) = spot_display(frame, s.anchor, Point::new(q.x + o.x, q.y + o.y)) {
+                    p.circle_stroke(map.screen(display), r, Stroke::new(1.0, Color32::from_white_alpha(170)));
+                }
             }
             let dir = (tq - sq).normalized();
             p.arrow(sq + dir * r, (tq - sq) - dir * (2.0 * r).min((tq - sq).length()), Stroke::new(1.0, Color32::from_white_alpha(200)));
@@ -48,7 +85,7 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         register(ui, format!("spotPin:{i}"), Rect::from_center_size(tq, vec2(14.0, 14.0)));
         grips.push((i, false, tq, r));
     }
-    if spot_keys(app, ui, map, d, &grips) {
+    if spot_keys(app, ui, map, frame, d, &grips) {
         return;
     }
     let r = (app.ui.remove_size as f64 * long) as f32;
@@ -86,9 +123,10 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         if resp.dragged()
             && let Some(q) = resp.interact_pointer_pos()
         {
-            let (n, n0) = (map.norm(q), map.norm(q - resp.drag_delta()));
-            let dn = [n.x - n0.x, n.y - n0.y];
-            if dn != [0.0, 0.0] {
+            let anchor = d.spots.get(spot).map_or(SpotAnchor::Image, |s| s.anchor);
+            if let Some(dn) = spot_delta(frame, anchor, map.norm(q), map.norm(q - resp.drag_delta()))
+                && dn != [0.0, 0.0]
+            {
                 let _ = app.run("spot.update", json!({"index": spot, if source { "moveSource" } else { "move" }: dn}));
             }
         }
@@ -127,18 +165,28 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             "fill" => "fill",
             _ => "remove",
         };
-        let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
-        let _ = app.run(
-            "spot.add",
-            json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
-        );
+        let anchor = new_spot_anchor(app.ui.remove_sensor_anchor, mode);
+        let pts: Option<Vec<[f64; 2]>> = points.iter().map(|q| spot_stored(frame, anchor, *q).map(|p| [p.x, p.y])).collect();
+        if let Some(pts) = pts {
+            let _ = app.run(
+                "spot.add",
+                json!({"mode": mode, "anchor": anchor, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
+            );
+        }
     }
 }
 
 /// Keyboard stand-ins for the Remove tool: each spot's target and source (an arrow press moves
 /// it a step, one undo step; Return selects the spot), and a placement point that the arrows move
 /// and Return turns into a new spot of the brush's size there. True when a spot was added.
-fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSettings, grips: &[(usize, bool, Pos2, f32)]) -> bool {
+fn spot_keys(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    map: &CanvasMap,
+    frame: &Frame,
+    d: &DevelopSettings,
+    grips: &[(usize, bool, Pos2, f32)],
+) -> bool {
     for &(spot, source, q, _) in grips {
         let at = map.norm(q);
         let name =
@@ -150,9 +198,14 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             let _ = app.run("spot.select", json!({"index": spot}));
         }
         if let Some((dx, dy)) = keys.delta {
-            let _ = app.run("develop.beginInteraction", json!({"label": "Edit Spot"}));
-            let _ = app.run("spot.update", json!({"index": spot, if source { "moveSource" } else { "move" }: [dx, dy]}));
-            let _ = app.run("develop.endInteraction", json!({}));
+            let anchor = d.spots.get(spot).map_or(SpotAnchor::Image, |s| s.anchor);
+            let current = map.norm(q);
+            let moved = Point::new(current.x + dx, current.y + dy);
+            if let Some(delta) = spot_delta(frame, anchor, moved, current) {
+                let _ = app.run("develop.beginInteraction", json!({"label": "Edit Spot"}));
+                let _ = app.run("spot.update", json!({"index": spot, if source { "moveSource" } else { "move" }: delta}));
+                let _ = app.run("develop.endInteraction", json!({}));
+            }
         }
     }
     // where a new spot goes: the photo's centre at first, then wherever the arrows took it
@@ -181,11 +234,14 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             "fill" => "fill",
             _ => "remove",
         };
-        let _ = app.run(
-            "spot.add",
-            json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
-        );
-        return true;
+        let anchor = new_spot_anchor(app.ui.remove_sensor_anchor, mode);
+        if let Some(at) = spot_stored(frame, anchor, Point::new(place.0, place.1)) {
+            let _ = app.run(
+                "spot.add",
+                json!({"mode": mode, "anchor": anchor, "points": [[at.x, at.y]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
+            );
+            return true;
+        }
     }
     false
 }
@@ -245,5 +301,42 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         })
     {
         app.ui.eye = i;
+    }
+}
+
+#[cfg(test)]
+mod sensor_anchor_tests {
+    use super::*;
+
+    #[test]
+    fn sensor_pins_and_pointer_edits_follow_the_optical_warp() {
+        let mut d = DevelopSettings::default();
+        d.optics.distortion = 100.0;
+        let mut frame = Frame::new(600, 400, &d, true);
+        frame.sensor_orientation = lightcraft_geom::Orientation::Rotate270;
+        let sensor = Point::new(0.12, 0.15);
+        let displayed = spot_display(&frame, SpotAnchor::Sensor, sensor).expect("synthetic warp is invertible");
+        assert!(displayed.dist(sensor) > 0.01, "distortion moves the defect's displayed position");
+        let recovered = spot_stored(&frame, SpotAnchor::Sensor, displayed).expect("synthetic mapping stays finite");
+        assert!(recovered.dist(sensor) < 1e-7, "{sensor:?} vs {recovered:?}");
+
+        // Dragging the displayed spot generates a delta in source coordinates.
+        let new_display = Point::new(displayed.x + 0.01, displayed.y + 0.02);
+        let delta = spot_delta(&frame, SpotAnchor::Sensor, new_display, displayed).expect("valid drag");
+        let new_source = spot_stored(&frame, SpotAnchor::Sensor, new_display).expect("valid point");
+        assert!((sensor.x + delta[0] - new_source.x).abs() < 1e-7);
+        assert!((sensor.y + delta[1] - new_source.y).abs() < 1e-7);
+        // Existing image-anchored retouches are not moved through the warp.
+        assert_eq!(spot_display(&frame, SpotAnchor::Image, sensor), Some(sensor));
+        let image_delta = spot_delta(&frame, SpotAnchor::Image, new_display, displayed).expect("image delta");
+        assert!((image_delta[0] - 0.01).abs() < 1e-9 && (image_delta[1] - 0.02).abs() < 1e-9);
+    }
+
+    #[test]
+    fn new_sensor_anchors_are_opt_in_and_content_aware_is_unchanged() {
+        assert_eq!(new_spot_anchor(false, "heal"), SpotAnchor::Image);
+        assert_eq!(new_spot_anchor(true, "heal"), SpotAnchor::Sensor);
+        assert_eq!(new_spot_anchor(true, "clone"), SpotAnchor::Sensor);
+        assert_eq!(new_spot_anchor(true, "fill"), SpotAnchor::Image);
     }
 }

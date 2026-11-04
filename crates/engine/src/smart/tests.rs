@@ -166,6 +166,56 @@ fn facts_and_mattes_travel_with_the_proxy() {
     assert!(decode(&lying).map(|(_, _, i)| i.is_none()).unwrap_or(true), "an over-large tail is not trusted");
 }
 
+/// Old version-3 proxies have decoder facts but no sensor orientation.
+/// The catalog's orientation must survive an offline source fallback, while
+/// current proxies carry their own known orientation.
+#[test]
+fn legacy_smart_facts_keep_catalog_sensor_orientation_offline() {
+    use lightcraft_geom::Orientation;
+
+    let img = lightcraft_scenes::demo_library()[0].render(32, 20);
+    let stored = SourceInfo { sensor_orientation: Orientation::Normal, raw: true, ..Default::default() };
+    let bytes = encode(&img, Some(&stored)).unwrap();
+    let (_, _, modern) = decode(&bytes).unwrap();
+    let modern = modern.unwrap();
+    assert_eq!(modern.sensor_orientation, Orientation::Normal);
+    assert!(!modern.sensor_orientation_missing);
+
+    let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let mut head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
+    let tail = head["tail"].as_u64().unwrap() as usize;
+    let start = bytes.len() - tail;
+    let n = u32::from_le_bytes(bytes[start..start + 4].try_into().unwrap()) as usize;
+    let mut facts: serde_json::Value = serde_json::from_slice(&bytes[start + 4..start + 4 + n]).unwrap();
+    facts.as_object_mut().unwrap().remove("sensor_orientation");
+    let json = serde_json::to_vec(&facts).unwrap();
+    let mut tail_bytes = Vec::new();
+    tail_bytes.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    tail_bytes.extend_from_slice(&json);
+    tail_bytes.extend_from_slice(&bytes[start + 4 + n..]);
+    head["tail"] = serde_json::json!(tail_bytes.len());
+    head["enc"] = serde_json::json!(3);
+    let mut legacy = MAGIC.to_vec();
+    legacy.extend_from_slice(head.to_string().as_bytes());
+    legacy.push(b'\n');
+    legacy.extend_from_slice(&bytes[nl + 1..start]);
+    legacy.extend_from_slice(&tail_bytes);
+
+    let (image, _, info) = decode(&legacy).unwrap();
+    let info = info.unwrap();
+    assert!(info.sensor_orientation_missing, "a missing field is not a real Normal orientation");
+    let header = SourceInfo { sensor_orientation: Orientation::Rotate270, raw: true, ..Default::default() };
+    let source = crate::media::DecodedSource::new(Arc::new(image), Some(info));
+    let restored = source.info_or(header.clone());
+    assert_eq!(restored.sensor_orientation, Orientation::Rotate270);
+    assert!(!restored.sensor_orientation_missing);
+
+    // A modern proxy's stored Normal orientation must override a rotated
+    // catalog value instead of being mistaken for a missing field.
+    let source = crate::media::DecodedSource::new(Arc::new(img), Some(modern));
+    assert_eq!(source.info_or(header).sensor_orientation, Orientation::Normal);
+}
+
 #[test]
 fn roundtrip_keeps_the_picture() {
     let img = lightcraft_scenes::demo_library()[0].render(160, 100);
