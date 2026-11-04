@@ -699,9 +699,30 @@ impl Default for Optics {
 pub struct EmbeddedLens {
     pub warp: Option<EmbeddedWarp>,
     pub vignette: Option<EmbeddedVignette>,
+    /// Where the correction came from: the file itself, or a lens database looked up by the
+    /// lens named in the file (what the Optics panel says is loaded).
+    #[serde(skip_serializing_if = "LensSource::is_file")]
+    pub source: LensSource,
     /// A DNG 1.6 `WarpRectilinear2` chain (up to [`WARP_STAGES`] stages, in `OpcodeList3` order; each stage warps
     /// the result of the one before it). When any is set, `warp` is `None`: the chain holds every warp opcode.
     pub stages: [Option<EmbeddedWarpStage>; WARP_STAGES],
+}
+
+/// Where an [`EmbeddedLens`] came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LensSource {
+    /// The file's own correction (DNG opcodes, a camera's correction a raw reader converts).
+    #[default]
+    File,
+    /// A profile from a lensfun-format lens database, matched by the lens named in the file.
+    Database,
+}
+
+impl LensSource {
+    pub fn is_file(&self) -> bool {
+        *self == LensSource::File
+    }
 }
 
 /// Most warp stages an [`EmbeddedLens`] chain keeps.
@@ -1054,15 +1075,35 @@ pub struct Mask {
     /// Refine Edges 0..100: the mask's edges snap to the photo's (guided filter).
     #[serde(skip_serializing_if = "is_zero")]
     pub refine: f64,
+    /// Where its coordinates (gradients, brush strokes, AI selections) live: `true`, on the photo as
+    /// shot (user orientation, before lens corrections, Upright and Transform), so the mask stays
+    /// on the same content whatever those do; `false`, a mask from before that, on the corrected
+    /// frame. Read as `false` when absent; [`Mask::default`] (every new mask) is `true`, and an
+    /// edit converts an old one (`lightcraft_pipeline::mask_space::attach`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub on_photo: bool,
 }
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 impl Default for Mask {
     fn default() -> Self {
-        Self { id: 0, name: "Mask 1".into(), visible: true, invert: false, components: Vec::new(), adjust: LocalAdjustments::default(), refine: 0.0 }
+        Self {
+            id: 0,
+            name: "Mask 1".into(),
+            visible: true,
+            invert: false,
+            components: Vec::new(),
+            adjust: LocalAdjustments::default(),
+            refine: 0.0,
+            on_photo: true,
+        }
     }
 }
 
