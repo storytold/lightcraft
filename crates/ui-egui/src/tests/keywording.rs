@@ -1240,3 +1240,20 @@ fn enter_keywords_gives_up_a_hidden_edit_when_the_selection_changes_meanwhile() 
     assert!(none_has(&h, &ids, "harbor"), "the edit was not applied when the box came back");
     assert_eq!(enter_text(&mut h), "beach, Weddings*", "the box shows the photos' keywords");
 }
+
+/// Two selection changes between UI passes give the hidden edit up too, even when the first photos
+/// are selected again before the next pass.
+#[test]
+fn enter_keywords_gives_up_a_hidden_edit_when_the_selection_round_trips_between_passes() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "ui.set", json!({"right": "info"}));
+    h.step();
+    h.app.run("library.select", json!({"ids": [ids[1]]})).unwrap();
+    h.app.run("library.select", json!({"ids": ids})).unwrap();
+    h.step();
+    ask(&mut h, "ui.set", json!({"right": "keywords"}));
+    h.step();
+    assert!(none_has(&h, &ids, "harbor"), "the edit was not applied when the box came back");
+    assert_eq!(enter_text(&mut h), "beach, Weddings*", "the box shows the photos' keywords");
+}

@@ -390,6 +390,11 @@ pub(crate) fn typed_names(catalog: &Catalog, text: &str) -> Vec<String> {
 /// and no keyword of the library holds the name as written as whole levels of its path (`a > b`,
 /// `Inbox|a > b` or `a > b|c` for `a > b`).
 fn typed_levels(catalog: &Catalog, typed: &str) -> Option<String> {
+    typed_levels_among(catalog, typed, || catalog.photos().filter(|p| p.in_library()).flat_map(|p| p.meta.keywords.iter().map(String::as_str)))
+}
+
+/// [`typed_levels`], with `on_photos` giving the in-library photos' keywords when they are needed.
+fn typed_levels_among<'a, I: Iterator<Item = &'a str>>(catalog: &'a Catalog, typed: &str, on_photos: impl FnOnce() -> I) -> Option<String> {
     use lightcraft_catalog::keywords::{SEP, clean, same};
     let written = clean(typed);
     let leveled = clean(&levels(typed));
@@ -399,29 +404,30 @@ fn typed_levels(catalog: &Catalog, typed: &str) -> Option<String> {
     // whole levels of a path, anywhere in it
     let levels_of = format!("{SEP}{}{SEP}", written.to_lowercase());
     let spelled = |p: &str| same(p, &written) || format!("{SEP}{}{SEP}", p.to_lowercase()).contains(&levels_of);
-    // the listed keywords and the photos' own, one pass that stops at the first match
-    let listed = catalog.listed_keywords().map(|l| l.path.as_str());
-    let on_photos = catalog.photos().filter(|p| p.in_library()).flat_map(|p| p.meta.keywords.iter().map(String::as_str));
-    let known = listed.chain(on_photos).any(spelled);
+    // the listed keywords, then the photos' own, stopping at the first match
+    let known = catalog.listed_keywords().any(|l| spelled(&l.path)) || on_photos().any(spelled);
     (!known).then_some(leveled)
 }
 
 /// What the box offers for `typed`, for photos that all have the `current` keywords.
 pub(crate) fn offers(catalog: &Catalog, current: &[String], typed: &str) -> Offers {
     use lightcraft_catalog::keywords::{SEP, clean};
+    // the photos' keywords, gathered from the library once for the hierarchy check and the offers
+    let on_photos = std::cell::OnceCell::new();
     // `>` and `<` read as hierarchy marks, as Return reads them (see `typed_names`)
     let as_written = clean(typed);
-    let leveled = typed_levels(catalog, typed);
+    let leveled = typed_levels_among(catalog, typed, || on_photos.get_or_init(|| catalog.keywords()).iter().map(|(k, _)| k.as_str()));
     let name = leveled.clone().unwrap_or(as_written);
     if name.is_empty() {
         return Offers::default();
     }
+    let on_photos = on_photos.into_inner().unwrap_or_else(|| catalog.keywords());
     // (a keyword two photos spell differently is one offer, the first spelling)
     let mut seen = std::collections::HashSet::new();
     // with `>` or `<` read as levels, the keywords for that first, then those for the text as
     // written (a keyword whose own name holds `>` or `<`)
-    let mut keywords = leveled.as_deref().map(|l| catalog.keyword_suggestions(current, l, OFFERS)).unwrap_or_default();
-    keywords.extend(catalog.keyword_suggestions(current, typed, OFFERS));
+    let mut keywords = leveled.as_deref().map(|l| catalog.keyword_suggestions_among(on_photos.clone(), current, l, OFFERS)).unwrap_or_default();
+    keywords.extend(catalog.keyword_suggestions_among(on_photos, current, typed, OFFERS));
     keywords.retain(|k| seen.insert(k.to_lowercase()));
     keywords.truncate(OFFERS);
     // where Return would put a name the library lacks, as `Catalog::typed_keyword` does, without

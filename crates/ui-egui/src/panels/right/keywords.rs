@@ -215,6 +215,9 @@ struct EnterEdit {
     ids: Vec<u64>,
     /// The selection the edit was started on (`key_of`).
     selection: u64,
+    /// [`LightcraftApp::selection_changes`] when the edit started: the same photos selected again
+    /// after others are another selection.
+    changes: u64,
     /// The library the edit was started in ([`lightcraft_engine::Session::library_generation`]):
     /// photo ids are a library's own, so the same ids in another library are other photos.
     library: u64,
@@ -223,21 +226,23 @@ struct EnterEdit {
 }
 
 impl EnterEdit {
-    fn new(chips: &[crate::panels::keywording::Chip], selection: &[PhotoId], key: u64, library: u64) -> Self {
+    fn new(chips: &[crate::panels::keywording::Chip], selection: &[PhotoId], key: u64, changes: u64, library: u64) -> Self {
         let mut seen = std::collections::HashSet::new();
         EnterEdit {
             text: crate::panels::keywording::entered_text(chips),
             start: chips.to_vec(),
             ids: selection.iter().filter(|id| seen.insert(**id)).map(|id| id.0).collect(),
             selection: key,
+            changes,
             library,
             refused: false,
         }
     }
 
-    /// Whether the edit was started on `selection` (`key_of`) in the open library.
-    fn is_for(&self, app: &LightcraftApp, selection: u64) -> bool {
-        self.selection == selection && self.library == app.session.library_generation()
+    /// Whether the edit was started on `selection` (`key_of`) in the open library, with no other
+    /// selection since.
+    fn is_for(&self, app: &mut LightcraftApp, selection: u64) -> bool {
+        self.selection == selection && self.changes == app.selection_changes() && self.library == app.session.library_generation()
     }
 }
 
@@ -293,9 +298,10 @@ fn give_up_enter_keywords(ctx: &egui::Context) {
 /// Gives up an Enter Keywords edit once the selection or the library differs from the one it was
 /// started on, whether its box is drawn or not: the same photos selected again later do not bring
 /// it back.
-pub(crate) fn forget_stale_enter_keywords(app: &LightcraftApp, ctx: &egui::Context) {
+pub(crate) fn forget_stale_enter_keywords(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(edit) = ctx.data(|d| d.get_temp::<EnterEdit>(enter_id())) else { return };
-    if !edit.is_for(app, crate::key_of(app.session.selected())) {
+    let selection = crate::key_of(app.session.selected());
+    if !edit.is_for(app, selection) {
         give_up_enter_keywords(ctx);
     }
 }
@@ -309,6 +315,7 @@ pub(crate) fn forget_stale_enter_keywords(app: &LightcraftApp, ctx: &egui::Conte
 fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[PhotoId]) {
     let id = enter_id();
     let key = crate::key_of(selection);
+    let changes = app.selection_changes();
     let library = app.session.library_generation();
     let chips = app.caches.keyword_chips(&app.session.catalog, selection);
     let fid = crate::text_field::id(ENTER_FIELD);
@@ -320,7 +327,7 @@ fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[Photo
     }
     // (an edit kept without the cursor lost it while the box was not drawn, its panel hidden)
     let left_undrawn = !focused && kept.as_ref().is_some_and(|e| e.is_for(app, key) && !e.refused);
-    let mut edit = kept.filter(|e| e.is_for(app, key)).unwrap_or_else(|| EnterEdit::new(&chips, selection, key, library));
+    let mut edit = kept.filter(|e| e.is_for(app, key)).unwrap_or_else(|| EnterEdit::new(&chips, selection, key, changes, library));
     // Return applies the edit (Shift+Return or a pasted line break separates keywords as a comma does)
     let returned = focused
         && ui.input_mut(|i| {
