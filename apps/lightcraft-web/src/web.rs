@@ -218,13 +218,17 @@ async fn video_blob_metadata(blob: &web_sys::Blob, include_fragments: bool) -> R
         return Err("invalid video file size".into());
     }
     let size = size as u64;
-    let (mut at, mut out) = (0u64, Vec::new());
+    let (mut at, mut out, mut saw_moov) = (0u64, Vec::new(), false);
     for _ in 0..lightcraft_engine::files::MAX_VIDEO_TOP_LEVEL_BOXES {
         if at == size {
             return Ok(out);
         }
         let head = blob_range(blob, at, size.saturating_sub(at).min(32)).await?;
+        if lightcraft_engine::files::is_video_trailer(head.get(..head.len().min(16)).unwrap_or(&head), at, size, saw_moov, include_fragments) {
+            return Ok(out);
+        }
         let (kind, len) = lightcraft_engine::files::video_box_info(&head, at, size)?;
+        saw_moov |= &kind == b"moov";
         let header_len = lightcraft_engine::files::video_box_header_len(&head);
         let extended_type = if &kind == b"uuid" && len >= header_len + 16 { head.get(header_len as usize..header_len as usize + 16) } else { None };
         if lightcraft_engine::files::is_video_metadata_box(&kind, extended_type) || (include_fragments && &kind == b"moof") {

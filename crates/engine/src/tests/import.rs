@@ -4021,6 +4021,51 @@ fn the_metadata_reader_keeps_only_the_xmp_uuid_box() {
     assert!(kept.windows(16).any(|w| w == XMP_UUID));
 }
 
+/// Bytes after a complete `moov` that are no box (a camera's trailer, such as Insta360's, or a
+/// few stray bytes) end the movie for import; a known box cut short, or a trailer before any
+/// `moov`, is still an error, and the location check, which must read every byte, refuses both.
+#[test]
+fn a_trailer_after_the_movie_header_ends_the_clip_for_import_only() {
+    let clip = synthetic_mp4(1000, 2_000, 640, 360, 0);
+    let read = |bytes: &[u8], fragments: bool| {
+        crate::files::read_video_metadata_from_with_fragments(&mut std::io::Cursor::new(bytes), bytes.len() as u64, "clip.mp4", fragments)
+    };
+    // a size past the end of the file, under no known box type: not a box
+    let mut camera_trailer = b"\xff\xff\xff\xf0INSV-TRAILER".to_vec();
+    camera_trailer.extend_from_slice(&[0x5A; 120]);
+    camera_trailer.extend_from_slice(b"8db42d694ccc418790edff439fe026bf");
+    for (name, trailer) in
+        [("stray bytes", vec![0xEE; 5]), ("a non-box header", b"\x00\x00\x10\x00ZZZZ".to_vec()), ("a camera trailer", camera_trailer)]
+    {
+        let mut bytes = clip.clone();
+        bytes.extend_from_slice(&trailer);
+        assert_eq!(read(&bytes, false).unwrap(), clip, "{name}: the trailer is left out");
+        assert!(read(&bytes, true).is_err(), "{name}: the location check can't vouch for it");
+    }
+    // an mdat cut short after the moov is a truncated clip, not a trailer
+    let mut truncated = clip.clone();
+    truncated.extend_from_slice(&4096u32.to_be_bytes());
+    truncated.extend_from_slice(b"mdat");
+    truncated.extend_from_slice(&[0; 100]);
+    assert!(read(&truncated, false).is_err());
+    // stray bytes before any moov: the movie header is missing
+    let ftyp_len = u32::from_be_bytes([clip[0], clip[1], clip[2], clip[3]]) as usize;
+    let mut no_moov = clip[..ftyp_len].to_vec();
+    no_moov.extend_from_slice(&[0xEE; 5]);
+    assert!(read(&no_moov, false).is_err());
+
+    // and the clip with a trailer is catalogued
+    let src = temp_dir("video-trailer");
+    let mut bytes = clip.clone();
+    bytes.extend_from_slice(&[0xEE; 7]);
+    std::fs::write(src.join("clip.mp4"), &bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert!(s.catalog.photos().next().unwrap().is_video());
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// A catalogued video (and an old VIDEO entry) gets no render, thumb, face or smart-preview job.
 #[test]
 fn a_catalogued_video_asks_the_renderer_for_nothing() {

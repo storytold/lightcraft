@@ -99,9 +99,28 @@ pub fn looks_like_video_container(head: &[u8]) -> bool {
     if size != 0 && size != 1 && size < 8 {
         return false;
     }
-    let kind: &[u8] = &header[4..8];
+    is_top_level_video_box(&header[4..8])
+}
+
+/// A box type a movie's top level is made of.
+fn is_top_level_video_box(kind: &[u8]) -> bool {
     [&b"ftyp"[..], b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot", b"uuid", b"moof", b"mfra", b"sidx", b"styp", b"emsg", b"prft", b"meta"]
         .contains(&kind)
+}
+
+/// Whether the bytes at the end of a movie, from `head` (up to 16 bytes, fewer when the file ends
+/// sooner), are a trailer rather than a box: fewer than 8 bytes, or a header that is neither a valid
+/// box nor a truncated one of a known type (a camera's own trailer, such as Insta360's). Only after a
+/// complete `moov` and only for display: the location check reads every byte (`include_fragments`),
+/// since a trailer can carry GPS. A known box cut short (an `mdat` truncated mid-write) stays an error.
+pub fn is_video_trailer(head: &[u8], at: u64, file_len: u64, saw_moov: bool, include_fragments: bool) -> bool {
+    if !saw_moov || include_fragments {
+        return false;
+    }
+    match head.get(4..8) {
+        None => true,
+        Some(kind) => video_box_info(head, at, file_len).is_err() && !is_top_level_video_box(kind),
+    }
 }
 
 /// Validate one top-level video box header, shared by native and asynchronous browser readers.
@@ -160,22 +179,27 @@ pub(crate) fn read_video_metadata_from_with_fragments(
     let mut out = Vec::new();
     let mut at = 0u64;
     let mut budget = MAX_VIDEO_TOP_LEVEL_BOXES;
+    let mut saw_moov = false;
     const MAX_BOX_SIZE: u64 = 64 * 1024 * 1024;
 
-    while at.saturating_add(8) <= file_len && budget > 0 {
+    while at < file_len && budget > 0 {
         budget -= 1;
         f.seek(SeekFrom::Start(at)).map_err(|e| format!("{path}: {e}"))?;
         let mut hdr = [0u8; 16];
-        let short = hdr.get_mut(..8).ok_or("invalid video header buffer")?;
-        f.read_exact(short).map_err(|e| format!("{path}: {e}"))?;
-        if short.get(..4) == Some(&1u32.to_be_bytes()) {
-            f.read_exact(hdr.get_mut(8..).ok_or("invalid large video header buffer")?).map_err(|e| format!("{path}: {e}"))?;
+        let avail = usize::try_from((file_len - at).min(16)).unwrap_or(16);
+        let head = hdr.get_mut(..avail).ok_or("invalid video header buffer")?;
+        f.read_exact(head).map_err(|e| format!("{path}: {e}"))?;
+        let head = hdr.get(..avail).ok_or("invalid video header buffer")?;
+        if is_video_trailer(head, at, file_len, saw_moov, include_fragments) {
+            return Ok(out);
         }
-        let (kind, total_len) = video_box_info(&hdr, at, file_len).map_err(|e| format!("{path}: {e}"))?;
+        let (kind, total_len) = video_box_info(head, at, file_len).map_err(|e| format!("{path}: {e}"))?;
+        saw_moov |= &kind == b"moov";
         let end = at.checked_add(total_len).ok_or("video box offset overflow")?;
         let header_len = video_box_header_len(&hdr);
         let mut extended = [0u8; 16];
         let extended_type = if &kind == b"uuid" && total_len >= header_len + 16 {
+            f.seek(SeekFrom::Start(at.saturating_add(header_len))).map_err(|e| format!("{path}: {e}"))?;
             f.read_exact(&mut extended).map_err(|e| format!("{path}: {e}"))?;
             Some(&extended[..])
         } else {
