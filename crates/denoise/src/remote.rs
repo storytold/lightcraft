@@ -664,6 +664,35 @@ mod tests {
     }
 
     #[test]
+    fn remote_hello_restores_idle_timeout_on_pooled_connection() {
+        let addr = fake_server(|mut stream| {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            stream.write_all(&greeting()).unwrap();
+
+            request.clear();
+            reader.read_line(&mut request).unwrap();
+            let request: Value = serde_json::from_str(&request).unwrap();
+            let bytes = field(&request, "bytes").unwrap();
+            let input = read_payload(&mut reader, bytes, 4 * T * T).unwrap();
+
+            // This exceeds the greeting's deadline but remains within the normal idle timeout.
+            std::thread::sleep(Duration::from_millis(300));
+            let output = model(2.0)(&input).unwrap();
+            write_payload(&mut stream, json!({"ok": true, "tile": T}), &output).unwrap();
+        });
+        let remote = remote_with_header_timeout(&addr, Duration::from_millis(100));
+        remote.hello().unwrap();
+
+        let input = tile_input(0.3);
+        let result = remote.try_run(&input).unwrap().unwrap();
+        let expected = model(2.0)(&input).unwrap();
+        assert_eq!(result.len(), expected.len());
+        assert!(result.iter().zip(expected).all(|(actual, expected)| (actual - expected).abs() < 2e-3));
+    }
+
+    #[test]
     fn shared_runner_falls_back_and_gives_up_on_a_failing_server() {
         let local = Local(model(2.0), AtomicUsize::new(0));
         // nobody listening: every tile runs locally, and after a few the server is given up
