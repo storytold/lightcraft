@@ -61,6 +61,58 @@ fn write_png_with_metadata(path: &Path, seed: u8, exif: Option<&[u8]>, xmp: Opti
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
+fn rw2_iso_fixture(private_iso: u16, standard_iso: Option<u16>, preview_iso: Option<u16>) -> Vec<u8> {
+    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+
+    // JpgFromRaw (IFD0 tag 0x002e) carrying the full Exif of the camera JPEG, as newer Panasonic bodies write it.
+    let jpg_from_raw = preview_iso.map(|iso| {
+        let mut exif = IfdBuilder::new();
+        exif.set(t::ISO_SPEED, Value::Short(vec![iso]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::EXIF_IFD, exif);
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend(TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap());
+        let mut jpg = vec![0xff, 0xd8, 0xff, 0xe1];
+        jpg.extend(((app1.len() + 2) as u16).to_be_bytes());
+        jpg.extend(app1);
+        jpg.extend([0xff, 0xda, 0, 2, 0xff, 0xd9]);
+        jpg
+    });
+    let build = |raw_offset: u32| {
+        let mut exif = IfdBuilder::new();
+        if let Some(iso) = standard_iso {
+            exif.set(t::ISO_SPEED, Value::Short(vec![iso]));
+        }
+        let mut ifd0 = IfdBuilder::new();
+        for (tag, value) in [
+            (0x0002, 8),  // sensor width
+            (0x0003, 8),  // sensor height
+            (0x0009, 1),  // CFA pattern
+            (0x000a, 12), // bits per sample
+            (0x002d, 2),  // packed 12-bit raw blocks
+        ] {
+            ifd0.set(tag, Value::Short(vec![value]));
+        }
+        ifd0.set(0x0017, Value::Short(vec![private_iso]));
+        ifd0.set(0x0118, Value::Long(vec![raw_offset]));
+        if let Some(jpg) = &jpg_from_raw {
+            ifd0.set(0x002e, Value::Undefined(jpg.clone()));
+        }
+        ifd0.set(t::MAKE, Value::Ascii("Panasonic".into()));
+        ifd0.set(t::MODEL, Value::Ascii("DMC-GF6".into()));
+        ifd0.set_child(t::EXIF_IFD, exif);
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        bytes[2] = b'U'; // IIU\0 RW2 signature
+        bytes
+    };
+    let raw_offset = build(0).len().div_ceil(16) * 16;
+    let mut bytes = build(raw_offset as u32);
+    bytes.resize(raw_offset, 0);
+    // 8 x 8 samples in packed 12-bit blocks: ceil(64 / 10) 16-byte blocks.
+    bytes.resize(raw_offset + 7 * 16, 0);
+    bytes
+}
+
 fn ids(v: &Value, key: &str) -> usize {
     v[key].as_array().map(Vec::len).unwrap_or(0)
 }
@@ -2069,6 +2121,31 @@ fn folder_import_picks_up_undecodable_raw_containers_as_preview_only() {
     assert_eq!(ids(&r, "imported"), 7, "{r}");
     assert_eq!(ids(&r, "failed"), 0, "{r}");
     assert!(s.catalog.photos().all(|p| p.preview_only.is_some() && p.kind == lightcraft_catalog::MediaKind::Raw && (p.width, p.height) == (40, 30)));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// RW2 ISO that the raw's short Exif lacks reaches the catalog through import: from the Panasonic IFD0 tag, or
+/// from the Exif of its JpgFromRaw, while the raw's own standard Exif keeps precedence. Source bytes stay untouched.
+#[test]
+fn rw2_iso_imports_from_private_tag_and_embedded_jpeg_exif() {
+    let src = temp_dir("rw2-iso");
+    let cases = [
+        ("private.RW2", rw2_iso_fixture(160, None, None), 160),
+        ("preview.RW2", rw2_iso_fixture(160, None, Some(320)), 320),
+        ("standard.rw2", rw2_iso_fixture(160, Some(400), Some(320)), 400),
+    ];
+    for (name, bytes, _) in &cases {
+        std::fs::write(src.join(name), bytes).unwrap();
+    }
+
+    let mut session = Session::new().with_fs();
+    let result = session.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!((ids(&result, "imported"), ids(&result, "failed")), (3, 0), "{result}");
+    for (name, bytes, iso) in &cases {
+        let imported = session.catalog.photos().find(|photo| photo.file_name == *name).and_then(|photo| photo.meta.iso);
+        assert_eq!(imported, Some(*iso), "{name}");
+        assert_eq!(&std::fs::read(src.join(name)).unwrap(), bytes, "{name} source bytes changed");
+    }
     let _ = std::fs::remove_dir_all(&src);
 }
 
