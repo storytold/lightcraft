@@ -94,11 +94,15 @@ impl CameraTone {
 
 /// Scene EV over grey where [`ToneMap::hdr`] starts lifting highlights above the SDR curve.
 const HDR_FROM_EV: f32 = 1.5;
+/// Additive toe lift per unit `blacks / 100` when `blacks > 0`.
+const TOE_LIFT_SCALE: f32 = 0.03;
 
 #[derive(Clone, Debug)]
 pub struct ToneMap {
     lut: Vec<f32>,
     chroma: [f32; CHROMA_N],
+    /// Neutral lift of the toe (`k` in `o = k + (1 - k) * o0`); zero without an additive lift.
+    toe: f32,
 }
 
 impl ToneMap {
@@ -123,7 +127,7 @@ impl ToneMap {
                 if peak > 1.0 { (o + (peak - 1.0) * smooth(HDR_FROM_EV, top, ev)).clamp(0.0, peak) } else { o }
             })
             .collect();
-        ToneMap { lut, chroma: curve.chroma }
+        ToneMap { lut, chroma: curve.chroma, toe: 0.0 }
     }
     /// `contrast`, `whites`, `blacks` in −100..100 (Lightroom slider units).
     pub fn new(contrast: f64, whites: f64, blacks: f64) -> ToneMap {
@@ -159,7 +163,7 @@ impl ToneMap {
                     let soft = |v: f32| ((v - k) + ((v - k) * (v - k) + e * e).sqrt()) * 0.5;
                     o = (soft(o) - soft(0.0)) / (soft(1.0) - soft(0.0));
                 } else if b > 0.0 {
-                    let k = b * 0.03;
+                    let k = b * TOE_LIFT_SCALE;
                     o = k + (1.0 - k) * o;
                 }
                 if peak > 1.0 {
@@ -169,7 +173,8 @@ impl ToneMap {
                 o.clamp(0.0, peak)
             })
             .collect();
-        ToneMap { lut, chroma: NO_CHROMA }
+        let toe = if b > 0.0 { b * TOE_LIFT_SCALE } else { 0.0 };
+        ToneMap { lut, chroma: NO_CHROMA, toe }
     }
 
     /// Tone map for display-referred sources: identity at neutral settings.
@@ -218,7 +223,7 @@ impl ToneMap {
                 o.clamp(0.0, peak)
             })
             .collect();
-        ToneMap { lut, chroma: NO_CHROMA }
+        ToneMap { lut, chroma: NO_CHROMA, toe: 0.0 }
     }
 
     /// The table (`LUT_N` entries, see [`ToneMap::apply`]).
@@ -229,6 +234,18 @@ impl ToneMap {
     /// The chroma curve (`CHROMA_N` entries, see [`ToneMap::chroma_scale`]).
     pub fn chroma_lut(&self) -> &[f32] {
         &self.chroma
+    }
+
+    /// Neutral toe lift; zero unless `blacks > 0` on the generic raw curve.
+    pub fn toe(&self) -> f32 {
+        self.toe
+    }
+
+    /// The same tone map with the V1/V2 rendering of a lifted toe: the LUT keeps its lift, but
+    /// the per-pixel stage scales chromaticity up as before instead of fading towards grey (V3).
+    pub(crate) fn without_toe(mut self) -> Self {
+        self.toe = 0.0;
+        self
     }
 
     /// Chroma scale at display luminance `o` (exactly 1 everywhere unless a camera look sets it).
@@ -463,5 +480,13 @@ mod tests {
         assert!(ToneMap::new(0.0, 60.0, 0.0).apply(0.8) > base.apply(0.8));
         assert!(ToneMap::new(0.0, 0.0, -60.0).apply(0.01) < base.apply(0.01));
         assert!(ToneMap::new(0.0, 0.0, 60.0).apply(0.01) > base.apply(0.01));
+    }
+
+    #[test]
+    fn the_toe_lift_is_zero_unless_blacks_are_positive() {
+        assert_eq!(ToneMap::new(0.0, 0.0, 0.0).toe(), 0.0);
+        assert_eq!(ToneMap::new(0.0, 0.0, -40.0).toe(), 0.0);
+        assert_eq!(ToneMap::display(0.0, 0.0, 40.0).toe(), 0.0);
+        assert!((ToneMap::new(0.0, 0.0, 40.0).toe() - 0.012).abs() < 1e-6);
     }
 }

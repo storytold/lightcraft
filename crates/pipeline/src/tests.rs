@@ -29,6 +29,47 @@ fn grey_ramp_stays_neutral() {
     }
 }
 
+/// A lifted toe (`blacks > 0`) adds neutral light from V3: near-blacks render brighter but
+/// neutral instead of amplifying their cast.
+#[test]
+fn blacks_lift_fades_deep_shadows_to_neutral() {
+    let src = Rgb32f::from_fn(64, 64, |x, y| {
+        let n = (((x * 31 + y * 17) % 7) as f32 - 3.0) * 0.0002;
+        [0.005 + n, 0.0025, 0.006 - n]
+    });
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    assert_eq!(s.process.process(), lightcraft_develop::Process::V3);
+    s.light.blacks = 40.0;
+    let r = render(&src, &info, &s, &RenderRequest::fit(64, 64)).image;
+    let p = r.get(32, 32);
+    let (rr, gg, bb) = (p[0] as f32, p[1] as f32, p[2] as f32);
+    assert!(rr > 10.0 && gg > 10.0 && bb > 10.0, "not lifted: {p:?}");
+    assert!((rr - bb).abs() < 8.0 && (rr - gg).abs() < 8.0 && (gg - bb).abs() < 8.0, "cast amplified: {p:?}");
+}
+
+/// V1 and V2 keep the rendering they always had under a lifted toe: identical to each other, and
+/// still amplifying the cast (no fade), unlike V3.
+#[test]
+fn v1_and_v2_keep_the_old_lifted_toe() {
+    use lightcraft_develop::{Process, ProcessVersion};
+    let src = Rgb32f::from_fn(64, 64, |x, y| {
+        let n = (((x * 31 + y * 17) % 7) as f32 - 3.0) * 0.0002;
+        [0.005 + n, 0.0025, 0.006 - n]
+    });
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let on = |p: ProcessVersion| {
+        let mut s = DevelopSettings { process: p, ..DevelopSettings::default() };
+        s.light.blacks = 40.0;
+        render(&src, &info, &s, &RenderRequest::fit(64, 64)).image
+    };
+    let (v1, v2, v3) = (on(Process::V1.version()), on(Process::V2.version()), on(Process::V3.version()));
+    assert_eq!(v1.data, v2.data, "V1 and V2 render a lifted toe alike");
+    assert_ne!(v1.data, v3.data, "V3 fades the lifted toe");
+    let p = v1.get(32, 32);
+    assert!((p[1] as i32 - p[2] as i32).abs() >= 8, "V1/V2 keep the old cast: {p:?}");
+}
+
 #[test]
 fn every_slider_changes_or_keeps_output_without_panicking() {
     let src = scene();

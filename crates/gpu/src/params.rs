@@ -69,6 +69,7 @@ const FIELDS: &[(&str, usize)] = &[
     ("CALIB", 1),
     ("CALIB_M", 9),
     ("SHADOW_TINT", 1),
+    ("TOE", 1),
     ("OUT_M", 9),
     ("OUT_Y", 3),
     ("OUT_TRC", 1),
@@ -235,6 +236,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.fs("CALIB_M", m.as_flattened());
     }
     p.f("SHADOW_TINT", fp.shadow_tint);
+    p.f("TOE", fp.tone.toe());
     p.fs("OUT_M", fp.to_out.as_flattened());
     p.fs("OUT_Y", &fp.out_luma);
     let (trc, gamma) = fp.out_trc.code();
