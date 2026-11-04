@@ -741,7 +741,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
         }
         // several rows: one that can't be deleted or removed refuses them all; `several_run`
         // already toasted the reason, which says which
-        Err(_) if matches!(dlg, Dialog::Several(_)) => {}
+        Err(_) if matches!(dlg, Dialog::Several(_)) => closed = true,
         // the SAM 3 dialog stays open to show the download (or why it can't start)
         Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
             if let Dialog::SamModel { error, .. } = dlg {

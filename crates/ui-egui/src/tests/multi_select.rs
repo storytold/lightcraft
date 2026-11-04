@@ -651,6 +651,24 @@ fn a_refused_confirm_of_several_albums_answers_with_the_reason() {
     assert!(h.app.session.catalog.album(AlbumId(a)).is_some(), "refused as a whole");
 }
 
+/// A refused question about several rows closes: the reason is in the toast, and the window does
+/// not stay up with its button asking the same thing again.
+#[test]
+fn a_refused_question_about_several_rows_closes_its_dialog() {
+    let mut h = app("info");
+    let ([a, _, c, _], _) = four_albums(&mut h);
+    click(&mut h, &row(a));
+    cmd_click(&mut h, &row(c));
+    right_click(&mut h, &row(c));
+    click(&mut h, "sideMenu:albums:delete");
+    assert!(several_dialog(&h), "{:?}", h.app.ui.dialog);
+    // one of them goes while the question is up
+    h.app.session.execute("album.delete", &json!({"id": c})).unwrap();
+    click(&mut h, "button:dialogOk");
+    assert!(h.app.session.catalog.album(AlbumId(a)).is_some(), "refused as a whole");
+    assert!(!several_dialog(&h), "the question closes with its refusal: {:?}", h.app.ui.dialog);
+}
+
 /// A keyword that is gone is not picked any more: the row left alone has its own menu.
 #[test]
 fn a_keyword_that_is_gone_is_not_picked_any_more() {
