@@ -55,7 +55,7 @@ pub struct PrintUi {
     pub folder_edit: Option<FolderEdit>,
     /// The folder whose Delete Folder waits for a confirmation.
     pub delete_folder: Option<String>,
-    /// Template Browser folders shown closed, lowercase.
+    /// Template Browser folders shown closed, by [`folder_key`].
     pub closed_folders: Vec<String>,
     /// The template being dragged onto a folder.
     pub dragging_template: Option<String>,
@@ -218,6 +218,12 @@ fn folder_param(folder: Option<&str>) -> &str {
     folder.unwrap_or(DEFAULT_FOLDER)
 }
 
+/// The key a folder's open or closed state is kept under: its name in ASCII lowercase, the case the
+/// engine ignores when it keeps folder names unique.
+fn folder_key(folder: &str) -> String {
+    folder.to_ascii_lowercase()
+}
+
 /// How the Template Browser names `folder`: User Templates in the interface's language, a folder
 /// of the user's as it was typed.
 fn folder_label(folder: Option<&str>) -> String {
@@ -321,8 +327,8 @@ fn folder_editor(app: &mut LightcraftApp, ui: &mut Ui, ctx: &egui::Context, pu: 
             }
             if let (Some(from), Some(to)) = (&edit.from, &made) {
                 for c in &mut pu.closed_folders {
-                    if *c == from.to_lowercase() {
-                        *c = to.to_lowercase();
+                    if *c == folder_key(from) {
+                        *c = folder_key(to);
                     }
                 }
             }
@@ -343,7 +349,7 @@ fn folder_delete_confirmation(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, 
             && run(app, ctx, "print.template.folder.delete", json!({"name": name})).is_some()
         {
             pu.delete_folder = None;
-            pu.closed_folders.retain(|c| *c != name.to_lowercase());
+            pu.closed_folders.retain(|c| *c != folder_key(&name));
         }
         if text_button(ui, "printFolderDeleteCancel", "Cancel", false).clicked() {
             pu.delete_folder = None;
@@ -366,7 +372,7 @@ fn move_template(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, folde
 fn folder_rows(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, j: usize, folder: Option<&str>, folders: &[Option<String>]) {
     let ctx = ui.ctx().clone();
     let label = folder_label(folder);
-    let key = folder_param(folder).to_lowercase();
+    let key = folder_key(folder_param(folder));
     let open = !pu.closed_folders.contains(&key);
     let count = app.session.print_templates.iter().filter(|x| x.folder.as_deref() == folder).count();
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
@@ -1269,5 +1275,12 @@ mod tests {
         assert_eq!(current_paper("Custom"), "custom");
         assert_eq!(paper_label(current_paper("はがき")), "はがき (100 × 148 mm)");
         assert_eq!(paper_label(current_paper("a4")), "A4");
+    }
+
+    #[test]
+    fn folders_that_differ_only_in_non_ascii_case_keep_their_own_open_state() {
+        assert_eq!(folder_key("Work"), folder_key("work"));
+        assert_eq!(folder_key(folder_param(None)), folder_key("user templates"));
+        assert_ne!(folder_key("Été"), folder_key("été"));
     }
 }
