@@ -296,7 +296,12 @@ impl ExportOptions {
                         return Err(bad(format!("`{k}` can't contain a NUL character")));
                     }
                 }
-                "naming" | "subfolder" | "path" | "dir" | "preset" => {
+                "subfolder" => {
+                    if let Some(why) = super::place::subfolder_escapes(string(cmd, k, v)?) {
+                        return Err(bad(format!("`{k}` {why}")));
+                    }
+                }
+                "naming" | "path" | "dir" | "preset" => {
                     string(cmd, k, v)?;
                 }
                 "sharpen" => parses(k, v, |s| SharpenFor::parse(s).is_some(), &["none", "screen", "matte", "glossy"])?,
