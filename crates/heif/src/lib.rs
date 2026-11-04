@@ -271,7 +271,12 @@ pub fn decode_thumbnail(bytes: &[u8], min_edge: u32, options: &Options) -> Resul
             }
             // A grid whose tile would fail the same check must not win and then fail in
             // `decode_item`, with no fallback to a larger valid thumbnail.
-            if let Ok(Some((_, tiles))) = ctx.grid(r.from) {
+            let grid = match ctx.grid(r.from) {
+                Ok(grid) => grid,
+                // an unreadable grid fails in `decode_item` too: not a candidate
+                Err(_) => continue,
+            };
+            if let Some((_, tiles)) = grid {
                 let mut seen = std::collections::HashSet::new();
                 let tiles_ok = tiles.iter().filter(|t| seen.insert(**t)).all(|&t| {
                     item_visits(&ctx, t, 0, &mut candidate_visits).is_ok() && ctx.props(t).is_ok_and(|tp| check_item_parameter_sets(&tp).is_ok())
