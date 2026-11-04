@@ -2,12 +2,12 @@
 
 ## 2026-10-30
 
-### The web version no longer offers imports it can't do
-- In LightCraft in the browser, File ▸ Import Lightroom Catalog…, File ▸ Import from Folder… and Photo ▸ Auto-Tag
-  from Tracklog… did nothing when chosen: the browser build has no file paths to read them from. They are now left out
-  of its menus (the empty library already left the catalog import out), and run any other way (a key you gave them,
-  the command palette, an agent) without a path they, and Find Missing Photos…, say there is no file or folder dialog
-  instead of doing nothing (issue #3655). The desktop app is unchanged.
+### The web version no longer offers a Lightroom catalog import it can't do
+- In LightCraft in the browser, File ▸ Import Lightroom Catalog… did nothing when chosen: the browser build can't read a
+  Lightroom catalog and has no dialog to pick one. The item is now greyed out there, as Import from Folder… already
+  is without a folder dialog (the empty library already left the button out). Run any other way (a key you gave it,
+  the command palette, an agent) without a path, it and the folder and tracklog imports and Find Missing Photos… say
+  there is no file or folder dialog instead of doing nothing (issue #3655). The desktop app is unchanged.
 
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.

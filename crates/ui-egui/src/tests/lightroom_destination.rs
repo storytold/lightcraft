@@ -445,8 +445,11 @@ fn no_catalog_dialog_is_an_error_not_silence() {
         assert!(err.contains(says), "{command}: {err}");
     }
     assert!(app.lightroom.is_none() && destination_of(&app).is_none());
+    // the menu item is off there, as Import from Folder is without a folder dialog
+    assert!(!crate::menus::ui_enabled(&app, "file.importLightroom"));
     // a dialog that was there but came back empty (cancelled)
     app.services.pick_lightroom_catalog = Some(Box::new(|| None));
+    assert!(crate::menus::ui_enabled(&app, "file.importLightroom"));
     assert_eq!(app.run("file.importLightroom", json!({})).unwrap(), Value::Null);
     app.services.pick_folder = Some(Box::new(|| None));
     assert_eq!(app.run("file.addFolder", json!({})).unwrap(), Value::Null);
