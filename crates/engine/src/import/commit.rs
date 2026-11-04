@@ -9,6 +9,10 @@ use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Sour
 pub(super) struct Plan {
     pub(super) slots: Vec<Slot>,
     pub(super) transfers: Vec<Transfer>,
+    /// The content hashes and name families of [`Plan::transfers`], so each new file is checked against them in
+    /// constant time rather than by scanning the pending transfers.
+    pub(super) pending_hashes: std::collections::HashSet<String>,
+    pub(super) pending_families: std::collections::HashSet<(String, String)>,
 }
 
 pub(super) enum Slot {
@@ -26,9 +30,6 @@ pub(super) struct Transfer {
     pub(super) how: How,
     /// Copy as DNG.
     pub(super) dng: bool,
-    /// The folder (lowercase) and [`name_family`]: transfers of one family can take each other's
-    /// names, so they never run at the same time.
-    pub(super) family: (String, String),
 }
 
 pub(super) enum How {
