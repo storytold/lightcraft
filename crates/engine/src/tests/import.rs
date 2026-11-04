@@ -61,6 +61,39 @@ fn write_png_with_metadata(path: &Path, seed: u8, exif: Option<&[u8]>, xmp: Opti
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
+fn iptc_jpeg(seed: u8, time: &[u8], xmp: Option<&str>) -> Vec<u8> {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+
+    fn dataset(out: &mut Vec<u8>, id: u8, value: &[u8]) {
+        out.extend_from_slice(&[0x1c, 2, id]);
+        out.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        out.extend_from_slice(value);
+    }
+
+    let pixels: Vec<u8> = (0..48 * 32).flat_map(|i| [(i % 251) as u8, seed, 200]).collect();
+    let encoded =
+        encode_jpeg(&EncodeImage::new(48, 32, 3, Samples::U8(&pixels)), 90, ChromaSubsampling::S444, &EncodeMeta { xmp, ..Default::default() })
+            .unwrap();
+    let mut iim = Vec::new();
+    dataset(&mut iim, 55, b"20260101");
+    dataset(&mut iim, 60, time);
+    dataset(&mut iim, 5, b"retained IPTC title");
+    let mut photoshop = b"Photoshop 3.0\0".to_vec();
+    photoshop.extend_from_slice(b"8BIM\x04\x04\0\0");
+    photoshop.extend_from_slice(&(iim.len() as u32).to_be_bytes());
+    photoshop.extend_from_slice(&iim);
+    if iim.len() % 2 == 1 {
+        photoshop.push(0);
+    }
+    let mut jpeg = encoded[..2].to_vec();
+    jpeg.push(0xff);
+    jpeg.push(0xed);
+    jpeg.extend_from_slice(&((photoshop.len() + 2) as u16).to_be_bytes());
+    jpeg.extend_from_slice(&photoshop);
+    jpeg.extend_from_slice(&encoded[2..]);
+    jpeg
+}
+
 fn ids(v: &Value, key: &str) -> usize {
     v[key].as_array().map(Vec::len).unwrap_or(0)
 }
@@ -258,6 +291,94 @@ fn exif_clock_malformed_capture_cannot_fabricate_tracklog_match() {
     assert_eq!(s.undo.len(), undo_before + 1, "valid tagging is one undo step");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.photo(PhotoId(valid_id)).unwrap().meta.gps, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn iptc_time_created_import_fallback_and_tracklog_are_safe() {
+    use lightcraft_catalog::PhotoId;
+
+    const GPX: &str = r#"<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg><trkpt lat="45" lon="7"><time>2026-01-01T12:13:14Z</time></trkpt></trkseg></trk></gpx>"#;
+    let dir = temp_dir("iptc-time-created");
+    let xmp = lightcraft_meta::write_xmp(
+        &lightcraft_meta::Metadata {
+            capture_time: Some(lightcraft_meta::DateTime { year: 2026, month: 1, day: 2, hour: 10, offset_minutes: Some(0), ..Default::default() }),
+            ..Default::default()
+        },
+        None,
+    );
+    let cases = [
+        ("malformed-xmp.jpg", b"121314+01".as_slice(), Some(xmp.as_str()), "2026-01-02T10:00:00+00:00"),
+        ("malformed-file-date.jpg", b"121314junk".as_slice(), None, "2026-01-03T00:00:00"),
+        ("valid.jpg", b"121314+0000".as_slice(), None, "2026-01-01T12:13:14+00:00"),
+    ];
+    let mut originals = Vec::new();
+    for (index, (name, time, packet, _)) in cases.iter().enumerate() {
+        let path = dir.join(name);
+        let bytes = iptc_jpeg(index as u8 + 1, time, *packet);
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_767_398_400))
+            .unwrap(); // 2026-01-03T00:00:00Z, distinct from both embedded dates
+        originals.push((path, bytes));
+    }
+
+    let mut session = Session::new().with_fs();
+    let imported = session
+        .execute("library.import", &json!({"paths": originals.iter().map(|(path, _)| path.to_string_lossy().into_owned()).collect::<Vec<_>>()}))
+        .unwrap();
+    assert_eq!(ids(&imported, "imported"), cases.len(), "{imported}");
+
+    for (name, _, _, expected) in &cases[..2] {
+        let photo = session.catalog.photos().find(|photo| photo.file_name == *name).unwrap();
+        let id = photo.id.0;
+        assert_eq!(photo.captured.as_deref(), Some(*expected), "{name}");
+        assert_eq!(photo.meta.title.as_str(), "retained IPTC title", "malformed time must not discard other IPTC metadata");
+        session.execute("photo.setMeta", &json!({"ids": [id], "title": "history before"})).unwrap();
+        session.execute("photo.setMeta", &json!({"ids": [id], "title": "history after"})).unwrap();
+        session.execute("edit.undo", &json!({})).unwrap();
+        session.execute("library.select", &json!({"ids": [id]})).unwrap();
+        assert!(!session.undo.is_empty() && !session.redo.is_empty(), "history must be populated before no-match tagging");
+        let state = |session: &Session| {
+            (
+                session.catalog.to_snapshot(),
+                session.catalog.revision,
+                session.selection.clone(),
+                session.commits(),
+                session.undo.iter().map(|entry| (entry.label.clone(), entry.op.clone())).collect::<Vec<_>>(),
+                session.redo.iter().map(|entry| (entry.label.clone(), entry.op.clone())).collect::<Vec<_>>(),
+            )
+        };
+        let before = state(&session);
+        for dry_run in [true, false] {
+            let result = session.execute("photo.autoTagTracklog", &json!({"gpx": GPX, "ids": [id], "maxGap": 0, "dryRun": dry_run})).unwrap();
+            assert_eq!(result["tagged"], 0, "{name}: {result}");
+            assert_eq!(state(&session), before, "{name}: unmatched tagging changed catalog, selection or history");
+            assert_eq!(session.catalog.photo(PhotoId(id)).unwrap().meta.gps, None);
+        }
+    }
+
+    let valid = session.catalog.photos().find(|photo| photo.file_name == "valid.jpg").unwrap();
+    let valid_id = valid.id.0;
+    assert_eq!(valid.captured.as_deref(), Some(cases[2].3));
+    session.execute("library.select", &json!({"ids": [valid_id]})).unwrap();
+    let undo_depth = session.undo.len();
+    let commits = session.commits();
+    let result = session.execute("photo.autoTagTracklog", &json!({"gpx": GPX, "ids": [valid_id], "maxGap": 0})).unwrap();
+    assert_eq!(result["tagged"], 1, "{result}");
+    assert_eq!(session.catalog.photo(PhotoId(valid_id)).unwrap().meta.gps, Some((45.0, 7.0)));
+    assert_eq!(session.undo.len(), undo_depth + 1);
+    assert_eq!(session.commits(), commits + 1);
+    session.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(session.catalog.photo(PhotoId(valid_id)).unwrap().meta.gps, None);
+
+    for (path, original) in &originals {
+        assert_eq!(std::fs::read(path).unwrap(), *original, "import and tagging must leave source bytes unchanged");
+        assert!(lightcraft_meta::embedded(original).iptc.is_some(), "raw IPTC must remain in the source");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
