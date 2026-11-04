@@ -3853,6 +3853,8 @@ dependencies = [
 name = "lightcraft-meta"
 version = "0.18.0"
 dependencies = [
+ "brotli",
+ "brotli-decompressor 6.0.1",
  "chrono",
  "lightcraft-geom",
  "lightcraft-heif",

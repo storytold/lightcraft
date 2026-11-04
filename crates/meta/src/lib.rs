@@ -22,6 +22,7 @@ mod focus_read;
 mod gpx;
 pub mod heif;
 mod iptc;
+pub mod jxl;
 pub mod mrw;
 mod psd;
 pub mod tags;
