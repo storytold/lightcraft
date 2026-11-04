@@ -60,6 +60,14 @@ pub struct Face {
     pub landmarks: [(f32, f32); 5],
 }
 
+/// How far an accelerator's outputs may stray from the CPU's on the test input, relative to each output's largest value.
+pub const ACCELERATOR_TOLERANCE: f32 = 1e-3;
+
+/// A deterministic, photo-like test input (smooth gradients plus texture, in 0..255).
+pub fn probe_pixels(n: usize) -> Vec<f32> {
+    (0..n).map(|i| ((i % 640) as f32 * 0.3 + ((i * 7919) % 97) as f32 + (i / 640 % 480) as f32 * 0.2) % 255.0).collect()
+}
+
 pub struct Detector {
     net: Net,
     /// Side of the square network input.
@@ -88,6 +96,20 @@ impl Detector {
             }
         }
         Ok(Detector { net, side })
+    }
+
+    /// The network, e.g. to see which device it runs on.
+    pub fn net(&self) -> &Net {
+        &self.net
+    }
+
+    /// Run the network's convolutions on `accelerator` if it gives the CPU's outputs on a test picture (and, with `require_faster`,
+    /// runs it faster than the CPU); otherwise
+    /// (or on its first error) detection stays on the CPU. Returns why it was not used.
+    pub fn accelerate(&self, accelerator: std::sync::Arc<dyn crate::net::Accelerator>, require_faster: bool) -> Result<(), String> {
+        let side = self.side;
+        let probe = Tensor::new(vec![1, 3, side, side], probe_pixels(3 * side * side)).map_err(|e| e.to_string())?;
+        self.net.attach_checked(accelerator, &probe, ACCELERATOR_TOLERANCE, require_faster)
     }
 
     /// The square input side, used to check an installed manifest.

@@ -8,12 +8,12 @@
 //! * `print.get`, `print.set {layout?, image?, page?, guides?, job?}`, `print.reset`
 //! * `print.cell.add|move|resize|delete|stack|photo|page`, `print.layout.autoLayout|newPage|clear`
 //! * `print.exportPdf {path, ids?}`
-//! * `print.template.list|save|apply|delete`
+//! * `print.template.list|save|apply|delete`, `print.template.export|import` (`.lcprint` files)
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, f64_req};
 use crate::print::layout::{Layout, MAX_PAGES, Rect, Snap, Stack, paper_names, paper_size};
-use crate::print::template::{MAX_TEMPLATES, PrintSettings, PrintTemplate, clean_name};
+use crate::print::template::{FILE_EXT, MAX_FILE, MAX_TEMPLATES, PrintSettings, PrintTemplate, clean_name, unique_name};
 use crate::{Result, Session};
 
 fn rect_json(r: &Rect) -> Value {
@@ -277,10 +277,21 @@ fn template_name(p: &Value, id: &str) -> Result<String> {
     clean_name(p.get("name").and_then(Value::as_str).ok_or_else(|| bad(id, "missing `name`"))?).map_err(|e| bad(id, e))
 }
 
+/// Save the preferences after a change to the templates; if that fails, the templates go back to
+/// `before`, so the list matches what is saved and a retry does the same thing.
+fn save_templates(s: &mut Session, before: Vec<PrintTemplate>) -> Result<()> {
+    if let Err(e) = s.save_prefs() {
+        s.print_templates = before;
+        return Err(e);
+    }
+    Ok(())
+}
+
 fn template_save(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "print.template.save";
     let name = template_name(p, ID)?;
     let t = PrintTemplate::new(&name, &s.print).map_err(|e| bad(ID, e))?;
+    let before = s.print_templates.clone();
     match s.print_templates.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
         Some(x) => *x = t,
         None => {
@@ -290,7 +301,7 @@ fn template_save(s: &mut Session, p: &Value) -> Result<Value> {
             s.print_templates.push(t);
         }
     }
-    s.save_prefs()?;
+    save_templates(s, before)?;
     Ok(template_list(s))
 }
 
@@ -309,13 +320,64 @@ fn template_apply(s: &mut Session, p: &Value) -> Result<Value> {
 fn template_delete(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "print.template.delete";
     let name = template_name(p, ID)?;
-    let before = s.print_templates.len();
+    let before = s.print_templates.clone();
     s.print_templates.retain(|x| !x.name.eq_ignore_ascii_case(&name));
-    if s.print_templates.len() == before {
+    if s.print_templates.len() == before.len() {
         return Err(bad(ID, format!("no print template `{name}`")));
     }
-    s.save_prefs()?;
+    save_templates(s, before)?;
     Ok(template_list(s))
+}
+
+fn template_path<'a>(p: &'a Value, id: &str) -> Result<&'a str> {
+    p.get("path").and_then(Value::as_str).map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad(id, "missing `path`"))
+}
+
+fn template_export(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "print.template.export";
+    let name = template_name(p, ID)?;
+    let mut path = std::path::PathBuf::from(template_path(p, ID)?);
+    if path.extension().is_none() {
+        path.set_extension(FILE_EXT);
+    }
+    let t = s
+        .print_templates
+        .iter()
+        .find(|x| x.name.eq_ignore_ascii_case(&name))
+        .ok_or_else(|| bad(ID, format!("no print template `{name}` (see print.template.list)")))?;
+    let bytes = serde_json::to_vec_pretty(&t.to_file()).map_err(|e| crate::EngineError::Other(e.to_string()))?;
+    let name = t.name.clone();
+    let target = path.to_string_lossy();
+    s.check_write_target(&target).map_err(|e| bad(ID, e))?;
+    crate::export::write_file(&target, &bytes).map_err(|e| bad(ID, e))?;
+    Ok(json!({"name": name, "path": target}))
+}
+
+fn template_import(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "print.template.import";
+    let path = std::path::Path::new(template_path(p, ID)?);
+    let meta = std::fs::metadata(path).map_err(|e| bad(ID, format!("{}: {e}", path.display())))?;
+    if !meta.is_file() {
+        return Err(bad(ID, format!("{}: not a file", path.display())));
+    }
+    if meta.len() > MAX_FILE {
+        return Err(bad(ID, format!("{}: {} bytes is too large for a print template (at most {} KB)", path.display(), meta.len(), MAX_FILE / 1024)));
+    }
+    let bytes = std::fs::read(path).map_err(|e| bad(ID, format!("{}: {e}", path.display())))?;
+    let mut t = PrintTemplate::from_file(&bytes).map_err(|e| bad(ID, format!("{}: {e}", path.display())))?;
+    if s.print_templates.len() >= MAX_TEMPLATES {
+        return Err(bad(ID, format!("at most {MAX_TEMPLATES} templates; delete one first")));
+    }
+    let name = unique_name(&t.name, &s.print_templates);
+    let renamed = name != t.name;
+    t.name = name.clone();
+    let before = s.print_templates.clone();
+    s.print_templates.push(t);
+    save_templates(s, before)?;
+    let mut out = template_list(s);
+    out["name"] = json!(name);
+    out["renamed"] = json!(renamed);
+    Ok(out)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -324,7 +386,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?} → {settings: {layout, image, page, guides, job}, papers, pageWidth, pageHeight, printable, pageCount, cellsPerPage, gridCells?, overlaps}; lengths are inches",
             always, get),
         cmd!(query "print.set", "Set Print Settings", [], None,
-            "{layout?: {style: singleImage|contactSheet|picturePackage|customPackage, page: {paper, customWidth, customHeight, orientation: portrait|landscape, margins: {top,right,bottom,left}}, grid: {columns, rows, spacingX, spacingY, keepSquare}, spacing}, image?: {zoomToFill, rotateToFit, borderEnabled, borderWidth, borderColor: [r,g,b], strokeEnabled, strokeWidthPt, strokeColor}, page?: {background: [r,g,b]}, guides?: {showRulers, units: in|cm|mm|pt, snap: off|cells|grid, gridSize, showMargins, showBleed, showPageGrid, showCells, showDimensions}, job?: {ppi: 72..720, color?: {profile: {kind: managed, space: srgb|adobeRgb} | {kind: icc, path}, intent: perceptual|relative, blackPointCompensation, brightness: -100..100, contrast: -100..100, sharpen: off|low|standard|high, media: matte|glossy, sixteenBit}}} — merges into the current print; cells and pages change with print.cell.* / print.layout.*; → print.get",
+            "{layout?: {style: singleImage|contactSheet|picturePackage|customPackage, page: {paper, customWidth, customHeight, orientation: portrait|landscape, margins: {top,right,bottom,left}}, grid: {columns, rows, spacingX, spacingY, keepSquare}, spacing}, image?: {zoomToFill, rotateToFit, borderEnabled, borderWidth, borderColor: [r,g,b], strokeEnabled, strokeWidthPt, strokeColor}, page?: {background: [r,g,b], pageNumbers, pageInfo, cropMarks} (Page Options: single image and contact sheet only), guides?: {showRulers, units: in|cm|mm|pt, snap: off|cells|grid, gridSize, showMargins, showBleed, showPageGrid, showCells, showDimensions}, job?: {ppi: 72..720, color?: {profile: {kind: managed, space: srgb|adobeRgb} | {kind: icc, path}, intent: perceptual|relative, blackPointCompensation, brightness: -100..100, contrast: -100..100, sharpen: off|low|standard|high, media: matte|glossy, sixteenBit}}} — merges into the current print; cells and pages change with print.cell.* / print.layout.*; → print.get",
             always, set),
         cmd!(query "print.reset", "Reset Print Settings", [], None, "{} → print.get", always, reset),
         cmd!(query "print.cell.add", "Add Print Cell", [], None,
@@ -349,5 +411,11 @@ pub fn specs() -> Vec<CommandSpec> {
             always, template_save),
         cmd!(query "print.template.apply", "Apply Print Template", [], None, "{name} → print.get", always, template_apply),
         cmd!(query "print.template.delete", "Delete Print Template", [], None, "{name} → print.template.list", always, template_delete),
+        cmd!(query "print.template.export", "Export Print Template", [], None,
+            "{name, path}: writes the template as a .lcprint JSON file ({format, version, name, settings}; `.lcprint` is added when the path has no extension); replaces an existing file, never an original → {name, path}",
+            always, template_export),
+        cmd!(query "print.template.import", "Import Print Template", [], None,
+            "{path: a .lcprint file (at most 256 KB)}: checked like a saved template (format, version, name, every setting; cell photos and guides are dropped) and added under its name; a name taken (any case) gets \" (2)\"… → print.template.list + {name, renamed}",
+            always, template_import),
     ]
 }

@@ -143,6 +143,43 @@ SFace's builtin speed metadata now uses the measured 6.9× ratio. User `catalog.
 Older published tables for MobileFaceNet/R50/R100 came from a different runtime and are not measurements of this runner; architecture
 names alone do not guarantee the same speed, and those additional model files were not verified in this task.
 
+### On the GPU
+
+On a machine with a usable GPU, the whole detector and recogniser run on it through wgpu (`crates/gpu/src/faces.rs`).
+The interpreter lowers the graph to a flat program for the input's shape (`crates/faces/src/net/program.rs`): each
+convolution (`wgsl/faces_conv.wgsl`: an implicit matrix product that gathers the input straight into workgroup memory,
+cuts K into slices when a map is small, and a direct kernel for depthwise layers) and every other operator (activations,
+batch norm, PRelu, broadcasting add/sub/mul, max pooling, nearest upscaling, transposes, global pooling and the fully
+connected layer, `wgsl/faces_ops.wgsl`) is a kernel, every value stays on the device between layers in reused
+buffers, and a run is one upload, one submission and one read-back. Shape-only operators make no step. A model that
+needs something the program cannot express runs its convolutions one by one on the GPU instead. Several faces of one
+photo go together (`Embedder::embed_batch`, up to 16 per submission).
+
+The CPU interpreter remains the reference. After a model loads, a background check (a row in the activity stack, "Checking
+the GPU for faces") runs it once on the CPU and twice through the GPU on a fixed test input: the GPU is used only when
+every output is within 1e-3 of the CPU's (relative to the output's largest value) **and** it was faster; until then,
+and whenever the GPU is switched off (`LIGHTCRAFT_GPU=0`, `LIGHTCRAFT_GPU_BACKEND=off`, the GPU preference, or **Settings ▸
+Faces ▸ Run face models on the CPU only**), missing, wrong or slower, the model runs on the CPU. The first GPU error,
+or a result of the wrong size or with values that are not finite, drops it for that model. Settings ▸ Faces shows
+which device each model runs on (`faces.gpu`). The weights stay on a device of the scan's own (separate from the
+editor's) while the model is loaded, at most 768 MB per model.
+
+The background scan's pace also limits the GPU: paused or light, one model run at a time and the GPU busy at most a
+quarter of the time (the editor renders on the same GPU); normal, two at once and three quarters; full, as fast as it
+goes.
+
+Measured on Linux with a Radeon (Vulkan) and a 32-thread CPU, one call at a time, machine under very heavy load from
+other jobs (load average 100–250, so the absolute numbers are noisy):
+
+| Model | CPU | GPU, one layer at a time | GPU, whole network | Batch of 16, per face |
+| --- | ---: | ---: | ---: | ---: |
+| YuNet (640², one photo) | 58–60 ms | 85–89 ms | 21 ms | – |
+| SFace 2021dec | 40–42 ms | 47–51 ms | 9.6 ms | 8.1 ms |
+| AuraFace v1 | 295–308 ms | 165–172 ms | 70–73 ms | 71 ms |
+
+`LC_FACE_MODELS=<folder> cargo test --release -p lightcraft-gpu faces::tests -- --include-ignored --nocapture` checks
+agreement on the real models and every operator, and prints these timings.
+
 ### Agreement and regression coverage
 
 The public-crop embeddings match the reference runtime's outputs:

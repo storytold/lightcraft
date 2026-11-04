@@ -9,7 +9,7 @@
 
 use egui::{Color32, ColorImage, Pos2, Rect, TextureHandle, TextureOptions, pos2};
 use lightcraft_geom::Point;
-use lightcraft_pipeline::masks::{accumulate, dab_alpha, pressure_flow, pressure_radius, push_dabs, push_pressures};
+use lightcraft_pipeline::masks::{accumulate, dab_alpha, pressure_flow, pressure_radius, push_dabs_counted, push_pressures};
 
 /// The largest live-stroke buffer edge (pixels); a bigger canvas is painted at a lower resolution.
 const MAX_SIDE: usize = 4096;
@@ -41,6 +41,8 @@ pub struct LiveStroke {
     alpha: Vec<f32>,
     /// Samples stamped so far, and the last one (buffer pixels).
     placed: usize,
+    /// Total dabs emitted across every stamp, including the first sample.
+    emitted: usize,
     last: Option<Point>,
     /// The pen pressure of the last stamped sample.
     last_pressure: f32,
@@ -54,7 +56,7 @@ impl LiveStroke {
         let scale = buffer_scale(params.clip, params.scale);
         let params = LiveParams { scale, ..params };
         let (w, h) = buffer_size(params.clip, scale);
-        LiveStroke { params, w, h, alpha: vec![0.0; w * h], placed: 0, last: None, last_pressure: 1.0, dirty: None, texture: None }
+        LiveStroke { params, w, h, alpha: vec![0.0; w * h], placed: 0, emitted: 0, last: None, last_pressure: 1.0, dirty: None, texture: None }
     }
 
     /// Stroke coverage (0..1) at buffer pixel `(x, y)`; 0 outside.
@@ -86,7 +88,7 @@ impl LiveStroke {
         for (k, q) in new.iter().enumerate() {
             let q = Point::new(((q.x - clip.left()) * scale) as f64, ((q.y - clip.top()) * scale) as f64);
             let before = dabs.len();
-            if push_dabs(&mut dabs, self.last, q, r) {
+            if push_dabs_counted(&mut dabs, &mut self.emitted, self.last, q, r) {
                 let pq = pressure.get(first + k).or(pressure.last()).copied().unwrap_or(1.0);
                 let from = if self.last.is_some() { self.last_pressure } else { pq };
                 push_pressures(&mut pressures, dabs.len() - before, from, pq);
@@ -251,6 +253,39 @@ mod tests {
             steps.stamp(&pts[..n], &[]);
         }
         assert_eq!(once.alpha, steps.alpha);
+    }
+
+    /// Crossing the budget in separate frames must match one stamp, including pressure state.
+    #[test]
+    fn incremental_stamping_respects_the_whole_stroke_budget() {
+        use lightcraft_pipeline::masks::MAX_STROKE_DABS;
+
+        let pts = [pos2(20.0, 20.0), pos2(80.0, 20.0), pos2(200.0, 80.0), pos2(21.0, 20.0)];
+        let pressure = [0.2, 0.4, 1.0, 0.9];
+        let mut once = LiveStroke::new(LiveParams { flow: 0.4, ..params() });
+        once.emitted = MAX_STROKE_DABS - 3;
+        once.stamp(&pts, &pressure);
+        let mut steps = LiveStroke::new(once.params);
+        steps.emitted = MAX_STROKE_DABS - 3;
+        for n in 1..=pts.len() {
+            steps.stamp(&pts[..n], &pressure[..n]);
+        }
+        assert_eq!(once.alpha, steps.alpha);
+        assert_eq!(once.emitted, MAX_STROKE_DABS);
+        assert_eq!(steps.emitted, once.emitted);
+        assert_eq!(once.last, Some(Point::new(80.0, 20.0)));
+        assert_eq!(steps.last, once.last);
+        assert_eq!(once.last_pressure, pressure[1]);
+        assert_eq!(steps.last_pressure, once.last_pressure);
+        assert!(once.coverage(80, 20) > 0.0);
+        assert_eq!(once.coverage(200, 80), 0.0);
+        let alpha = steps.alpha.clone();
+        let more = [pts[0], pts[1], pts[2], pts[3], pos2(300.0, 100.0)];
+        steps.stamp(&more, &[1.0; 5]);
+        assert_eq!(steps.alpha, alpha, "later frames cannot paint or reconnect discarded samples");
+        assert_eq!(steps.last, once.last);
+        assert_eq!(steps.last_pressure, once.last_pressure);
+        assert_eq!(steps.emitted, MAX_STROKE_DABS);
     }
 
     #[test]

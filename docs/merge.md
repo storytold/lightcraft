@@ -8,7 +8,8 @@ All algorithms are our own implementations from published papers (cited in the m
 
 - **App:** select the photos, then *Photo Merge ▸ HDR…* (`Ctrl+H`), *Panorama…* (`Ctrl+M`) or
   *HDR Panorama…* from the photo context menu (or the `dialog.merge*` commands). The dialog previews
-  the merge at ≤ 1024 px and re-runs the preview when an option changes; *Merge* runs the full merge
+  the merge at ≤ 1024 px and re-runs the preview when an option changes; as in Lightroom, a click on the preview
+  zooms in on that point (drag to pan, click again to fit), and it stays there while options change; *Merge* runs the full merge
   in the background (a row in the activity stack shows its progress, with ✕ to stop it). The result is written next to the first photo as
   `<name>-HDR.dng`, `-Pano.dng` or `-HDR-Pano.dng`, imported and selected. *Photo Merge ▸ HDR for Each Bracket Set*
   merges many brackets in one go with the last HDR options: one HDR per stack among the selected photos, then per
@@ -27,10 +28,15 @@ All algorithms are our own implementations from published papers (cited in the m
 
 **HDR** (`hdr.rs`): frames ordered by EXIF exposure (or median luminance); the middle one is the
 reference. Auto Align: features on exposure-normalised luminance, RANSAC translation / similarity /
-homography (the simplest model that explains ≥ 97 % of the matches). Exposure ratios are measured
+homography (the simplest model that explains ≥ 97 % of the matches). Frames are resampled with Lanczos-3, held to
+the range of their 4 × 4 neighbours so edges don't ring (`lightcraft_raster::sample`); bilinear lost a third of the
+finest detail. Exposure ratios are measured
 (median log ratio of well-exposed pixels between brightness neighbours), EXIF is the fallback.
 Radiance is a weighted mean in linear light, weight `k · (1 − smoothstep(0.8·clip, 0.96·clip, max
-channel))`. Where the reference is at or near its clip the scene is at least that bright, so a frame that reads far
+channel within 1 px))`: a pixel next to clipped photosites was demosaiced from them and reads low in the clipped
+channel, so it goes with them (on real ARW brackets the brightest frame's green was 3–5 % low there, and bright
+windows took a magenta tinge). The frames are taken in brightness order (ties by content), so the result doesn't
+depend on the order they come in. Where the reference is at or near its clip the scene is at least that bright, so a frame that reads far
 darker there (an object moved: a star, the moon, a passing light) is left out and the clipped highlight stays (always
 on: a moving star otherwise left a black hole). Deghost: a per-pixel consistency test on ≤ 2048 px versions against the
 reference radiance (with a noise floor; the reference predicts down to 0.1 % of its clip, so a brighter frame's ghost in

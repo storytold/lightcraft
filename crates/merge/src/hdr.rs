@@ -1,18 +1,20 @@
 //! HDR merge of exposure brackets.
 //!
 //! 1. **Order and reference.** Frames are ordered by brightness (EXIF exposure, or median
-//!    luminance without EXIF); the middle one is the reference (geometry, colour and the output's
-//!    default brightness come from it).
+//!    luminance without EXIF; ties by content); the middle one is the reference (geometry, colour
+//!    and the output's default brightness come from it). Everything below runs in that order, so
+//!    the result is the same whatever order the frames come in.
 //! 2. **Auto align** ([`crate::align`]): each frame is registered to the reference and resampled
 //!    into its geometry.
 //! 3. **Exposure normalisation.** The exposure ratio between brightness-adjacent frames is
 //!    measured robustly — the median of log ratios over pixels well exposed in both — and chained
 //!    to the reference; EXIF is the fallback when too few pixels overlap. Radiance
 //!    `Rᵢ = vᵢ / kᵢ` is expressed in reference units.
-//! 4. **Weights.** `wᵢ = kᵢ · (1 − smoothstep(0.80·clip, 0.96·clip, max channel))`: longer
-//!    exposures get more weight (shot-noise optimal for a linear sensor), saturated pixels none
-//!    (all channels together, so a clipped channel never shifts colour). The darkest frame keeps a
-//!    tiny weight so fully saturated pixels still get a value. Where the reference is at or near its clip, the scene is
+//! 4. **Weights.** `wᵢ = kᵢ · (1 − smoothstep(0.80·clip, 0.96·clip, max channel within 1 px))`:
+//!    longer exposures get more weight (shot-noise optimal for a linear sensor), saturated pixels
+//!    none (all channels together, so a clipped channel never shifts colour), nor their neighbours,
+//!    which demosaicing interpolated from clipped photosites. The darkest frame keeps a tiny weight
+//!    so fully saturated pixels still get a value. Where the reference is at or near its clip, the scene is
 //!    at least that bright: a frame reading far darker there saw something that moved (a star, the moon, a light) and is
 //!    left out, so a clipped highlight of the reference is never replaced by content from another moment.
 //! 5. **Deghost** (None/Low/Medium/High): on a ≤ 2048 px version, a per-pixel consistency test
@@ -136,9 +138,25 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         Some(e) if e.iter().any(|v| (v - e[0]).abs() > 0.1) => e.clone(),
         _ => medians.iter().map(|m| (*m as f64).log2()).collect(),
     };
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| brightness[a].total_cmp(&brightness[b]).then(a.cmp(&b)));
-    let reference = order[n / 2];
+    // ties (equal brightness) by content, never by position
+    let fingerprint: Vec<f64> =
+        frames.par_iter().map(|f| f.image.data.iter().step_by(997).map(|p| p[0] as f64 + 2.0 * p[1] as f64 + 3.0 * p[2] as f64).sum()).collect();
+    let mut input: Vec<usize> = (0..n).collect();
+    input.sort_by(|&a, &b| {
+        brightness[a].total_cmp(&brightness[b]).then(medians[a].total_cmp(&medians[b])).then(fingerprint[a].total_cmp(&fingerprint[b]))
+    });
+    // From here on frames are in brightness order (`input[p]` is the caller's index of position `p`): alignment seeds,
+    // sums and deghost masks no longer depend on the order the caller passed. Per-frame results go back at the end.
+    let mut slots: Vec<Option<Frame>> = frames.into_iter().map(Some).collect();
+    let mut frames: Vec<Frame> = input.iter().filter_map(|&i| slots.get_mut(i).and_then(Option::take)).collect();
+    if frames.len() != n {
+        return Err(MergeError::Mismatch("HDR merge lost a frame while ordering them".into()));
+    }
+    let exif: Option<Vec<f64>> = exif.map(|e| input.iter().map(|&i| e[i]).collect());
+    let medians: Vec<f32> = input.iter().map(|&i| medians[i]).collect();
+    let brightness: Vec<f64> = input.iter().map(|&i| brightness[i]).collect();
+    let order: Vec<usize> = (0..n).collect();
+    let reference = n / 2;
 
     // 2. alignment
     let mut alignments = vec![Alignment::identity(); n];
@@ -209,6 +227,8 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
 
     let darkest = order[0];
     let clips: Vec<f32> = frames.iter().map(|f| f.clip).collect();
+    // how close each pixel of each frame is to saturation: its brightest channel within 1 px (see `saturation`)
+    let sat: Vec<Vec<f32>> = frames.par_iter().map(|f| saturation(&f.image)).collect();
     let mut out = Rgb32f::new(w, h);
     let fr = &frames;
     let vd = &valid;
@@ -226,7 +246,7 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
                     continue;
                 }
                 let v = fr[i].image.data[i_px];
-                let m = maxc(v);
+                let m = sat[i][i_px];
                 let mut wt = k[i] * (1.0 - smoothstep(0.80 * clips[i], 0.96 * clips[i], m));
                 if i == darkest {
                     wt += 1e-6;
@@ -275,6 +295,20 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
         }
         None => Plane::new(0, 0),
     };
+    // per-frame results in the caller's order
+    let mut ev_in = vec![0.0; n];
+    let mut alignments_in = vec![Alignment::identity(); n];
+    for (p, &i) in input.iter().enumerate() {
+        ev_in[i] = ev[p];
+        alignments_in[i] = alignments[p].clone();
+    }
+    let ev_exif = ev_exif.map(|e: Vec<f64>| {
+        let mut v = vec![0.0; n];
+        for (p, &i) in input.iter().enumerate() {
+            v[i] = e[p];
+        }
+        v
+    });
     let rf = &frames[reference];
     // the merge's white balance is the median of its inputs', as a panorama's: a CR2's or NEF's colour tags have none
     let wb_multipliers = consensus_multipliers(&frames);
@@ -285,10 +319,10 @@ pub fn merge_hdr(mut frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress)
     Ok(HdrResult {
         radiance: out,
         ghost,
-        reference,
-        ev,
+        reference: input[reference],
+        ev: ev_in,
         ev_exif,
-        alignments,
+        alignments: alignments_in,
         color,
         raw: rf.raw,
         orientation: rf.orientation,
@@ -469,5 +503,31 @@ fn dilate(p: &Plane, r: usize) -> Plane {
             out.data[y * w + x] = (a..=b).map(|yy| tmp.data[yy * w + x]).fold(0.0, f32::max);
         }
     }
+    out
+}
+
+/// A frame's saturation per pixel: the brightest channel within 1 px (3 × 3). A demosaiced pixel next to clipped
+/// photosites is interpolated from them and reads low in the channel that clipped (green, in camera RGB), so it loses
+/// its weight with them. On real ARW brackets the brightest frame's green was 3–5 % low within 2 px of clipped pixels
+/// (and linear to 1 % elsewhere), and as that frame carries the most weight, bright windows got magenta fringes.
+fn saturation(img: &Rgb32f) -> Vec<f32> {
+    let (w, h) = (img.width, img.height);
+    let m: Vec<f32> = img.data.iter().map(|p| maxc(*p)).collect();
+    if w == 0 || h == 0 {
+        return m;
+    }
+    let mut rows = vec![0f32; w * h];
+    rows.par_chunks_mut(w).zip(m.par_chunks(w)).for_each(|(out, src)| {
+        for (x, o) in out.iter_mut().enumerate() {
+            *o = src[x.saturating_sub(1)..=(x + 1).min(w - 1)].iter().copied().fold(0.0, f32::max);
+        }
+    });
+    let mut out = vec![0f32; w * h];
+    out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let (a, b) = (y.saturating_sub(1), (y + 1).min(h - 1));
+        for (x, v) in row.iter_mut().enumerate() {
+            *v = (a..=b).map(|yy| rows[yy * w + x]).fold(0.0, f32::max);
+        }
+    });
     out
 }

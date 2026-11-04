@@ -129,16 +129,18 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
 
 /// Install the model in `src`. A model that passes its self-test becomes the one in use (`activate`, the default): installing
 /// a model is how someone says they want it. `verified` is for a download whose hash was already checked.
-fn install_file(
-    dir: &Path,
-    loader: &crate::denoise::Loader,
+struct InstallFile<'a> {
+    dir: &'a Path,
     run_on: RunOn,
     accepted_at: String,
-    c: &str,
-    src: &Path,
+    command: &'a str,
+    src: &'a Path,
     acknowledged: bool,
     verified: bool,
-) -> Result<(Value, Arc<dyn crate::denoise::Model>)> {
+}
+
+fn install_file(loader: &crate::denoise::Loader, request: InstallFile<'_>) -> Result<(Value, Arc<dyn crate::denoise::Model>)> {
+    let InstallFile { dir, run_on, accepted_at, command: c, src, acknowledged, verified } = request;
     let ident = identify(src, c, None)?;
     let m = ident.manifest.clone();
     manifest::validate(&m).map_err(|e| bad(c, e.to_string()))?;
@@ -262,7 +264,8 @@ fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, veri
         .spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _held = crate::memory::work_gate().acquire(512 * 1024 * 1024);
-                install_file(&dir, &loader, run_on, at, C, &src, true, verified).map_err(|e| plain(&e))
+                install_file(&loader, InstallFile { dir: &dir, run_on, accepted_at: at, command: C, src: &src, acknowledged: true, verified })
+                    .map_err(|e| plain(&e))
             }))
             .unwrap_or_else(|_| Err("the model installation stopped unexpectedly".into()));
             if verified {
@@ -290,8 +293,18 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     if s.denoise.install.is_some() {
         return Err(bad(C, "another model is being installed"));
     }
-    let (result, model) =
-        install_file(&models_dir(s, C)?, &s.denoise.loader, s.denoise.settings.run_on(), (s.clock)(), C, Path::new(path), acknowledged, false)?;
+    let (result, model) = install_file(
+        &s.denoise.loader,
+        InstallFile {
+            dir: &models_dir(s, C)?,
+            run_on: s.denoise.settings.run_on(),
+            accepted_at: (s.clock)(),
+            command: C,
+            src: Path::new(path),
+            acknowledged,
+            verified: false,
+        },
+    )?;
     activate_install(s, &result, model, activate)
 }
 
@@ -513,10 +526,6 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"auto": st.auto(), "cacheGb": st.cache_bytes() >> 30, "threads": st.threads, "runOn": st.run_on().name()}))
 }
 
-fn ids_param(p: &Value) -> Option<Vec<PhotoId>> {
-    p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(PhotoId).collect())
-}
-
 fn status_json(s: &Session, photo: Option<PhotoId>) -> Value {
     let (files, bytes) = s.denoise_cache_usage();
     let st = &s.denoise.settings;
@@ -594,7 +603,7 @@ fn queue(s: &mut Session, p: &Value) -> Result<Value> {
     if s.denoise_products_dir().is_none() {
         return Err(bad(C, "denoise keeps its pictures in the library's folder: open a library on disk first"));
     }
-    let ids = match ids_param(p) {
+    let ids = match super::photo_ids(p, C)? {
         Some(ids) => ids,
         None => match str_param(p, "scope").unwrap_or("selected") {
             "selected" => s.selection.active.iter().chain(s.selection.ids.iter()).copied().collect(),
@@ -612,14 +621,14 @@ fn queue(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn cancel(s: &mut Session, p: &Value) -> Result<Value> {
-    let photo = p.get("id").and_then(Value::as_u64).map(PhotoId);
+    let photo = super::photo_id(p, "denoise.cancel")?;
     let n = s.denoise_cancel(photo, bool_or(p, "all", photo.is_none()));
     Ok(json!({"cancelled": n}))
 }
 
 fn status(s: &mut Session, p: &Value) -> Result<Value> {
     s.denoise_refresh_active(false);
-    Ok(status_json(s, p.get("id").and_then(Value::as_u64).map(PhotoId)))
+    Ok(status_json(s, super::photo_id(p, "denoise.status")?))
 }
 
 /// `denoise.pump {pace?}`: cheap to call every frame. Takes in what the background job has finished and keeps one going.
