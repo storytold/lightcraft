@@ -366,13 +366,13 @@ fn apply_auto(s: &mut DevelopSettings, src: &Rgb32f, info: &SourceInfo) {
     s.color.saturation = a.saturation;
 }
 
-/// `dir/<stem>-<suffix>.dng`, then `-2`, `-3`… (the candidates for a merge's output).
-fn output_names(first: &str, suffix: &str) -> impl Iterator<Item = std::path::PathBuf> {
+/// `dir/<stem>-<suffix>.<ext>`, then `-2`, `-3`… (the candidates for a merge's or an enhancement's output).
+pub(crate) fn output_names(first: &str, suffix: &str, ext: &str) -> impl Iterator<Item = std::path::PathBuf> {
     let p = std::path::Path::new(first);
     let dir = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Merge".into());
-    let suffix = suffix.to_string();
-    (1u64..).map(move |k| dir.join(if k == 1 { format!("{stem}-{suffix}.dng") } else { format!("{stem}-{suffix}-{k}.dng") }))
+    let (suffix, ext) = (suffix.to_string(), ext.to_string());
+    (1u64..).map(move |k| dir.join(if k == 1 { format!("{stem}-{suffix}.{ext}") } else { format!("{stem}-{suffix}-{k}.{ext}") }))
 }
 
 /// Parse `merge.*` command parameters into a kind and finishing options.
@@ -419,11 +419,15 @@ impl Session {
         if sources.len() < kind.min_photos() {
             return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
         }
-        let read: ByteReader = match &self.media.file_bytes {
+        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read: self.byte_reader() })
+    }
+
+    /// Reads photo files for a job detached from the session: the host's reader, else the file system.
+    pub(crate) fn byte_reader(&self) -> ByteReader {
+        match &self.media.file_bytes {
             Some(r) => r.clone(),
             None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
-        };
-        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read })
+        }
     }
 
     /// Write a finished (non-preview) merge next to its first source, import it, select it and
@@ -431,7 +435,7 @@ impl Session {
     pub fn finish_merge(&mut self, job: &MergeJob, out: MergeOutput) -> Result<Value> {
         let first = &job.sources.first().ok_or_else(|| EngineError::Other("nothing merged".into()))?.1;
         // a new file under a free name (never replacing one), complete and synced before it appears
-        let path = lightcraft_catalog::safe_file::write_new_unique(&mut output_names(first, job.kind.suffix()), &out.dng)
+        let path = lightcraft_catalog::safe_file::write_new_unique(&mut output_names(first, job.kind.suffix(), "dng"), &out.dng)
             .map_err(|e| EngineError::Other(format!("could not write the merged DNG next to {first}: {e}")))?
             .to_string_lossy()
             .to_string();

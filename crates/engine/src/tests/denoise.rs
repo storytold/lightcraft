@@ -55,7 +55,7 @@ fn dim_loader(runs: &Arc<AtomicUsize>) -> Loader {
     Arc::new(move |_, _| Ok(Arc::new(Dim { runs: runs.clone() }) as Arc<dyn Model>))
 }
 
-fn manifest(id: &str) -> DenoiserManifest {
+pub(super) fn manifest(id: &str) -> DenoiserManifest {
     DenoiserManifest {
         id: id.into(),
         name: "Stand-in".into(),
