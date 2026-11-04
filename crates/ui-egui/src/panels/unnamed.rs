@@ -19,6 +19,8 @@ use crate::widgets::register;
 pub struct UnnamedFace {
     pub photo: u64,
     pub index: usize,
+    /// Catalog geometry identifies the region even when recognition refines its display crop.
+    pub rect: lightcraft_geom::Rect,
     pub view: lightcraft_geom::Rect,
     pub suggestion: Option<String>,
 }
@@ -43,6 +45,7 @@ fn face_of(v: &Value) -> Option<UnnamedFace> {
     Some(UnnamedFace {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
+        rect: rect_of(&v["rect"])?,
         view: rect_of(&v["view"]).or_else(|| rect_of(&v["rect"]))?,
         suggestion: v["suggestion"]["name"].as_str().map(str::to_string),
     })
@@ -74,12 +77,12 @@ pub fn faces(app: &mut LightcraftApp, now: f64) -> Arc<Unnamed> {
         // Keep selections across unrelated edits and background detections, but never transfer
         // one to a different box that reuses its photo/index pair. Validate every refetch, since
         // recognition can also change display boxes/order without a catalog revision.
-        let before: std::collections::HashMap<_, _> = old.faces.iter().map(|f| ((f.photo, f.index), f.view)).collect();
-        let current: std::collections::HashMap<_, _> = list.faces.iter().map(|f| ((f.photo, f.index), f.view)).collect();
+        let before: std::collections::HashMap<_, _> = old.faces.iter().map(|f| ((f.photo, f.index), f.rect)).collect();
+        let current: std::collections::HashMap<_, _> = list.faces.iter().map(|f| ((f.photo, f.index), f.rect)).collect();
         app.ui.unnamed_selected.retain(|key| matches!((before.get(key), current.get(key)), (Some(a), Some(b)) if a == b));
         // The anchor refers to a position, not a face key. Rating/suggestion changes keep it;
         // changed ordering or geometry invalidates it before another Shift-click can use it.
-        if !old.faces.iter().map(|f| (f.photo, f.index, f.view)).eq(list.faces.iter().map(|f| (f.photo, f.index, f.view))) {
+        if !old.faces.iter().map(|f| (f.photo, f.index, f.rect)).eq(list.faces.iter().map(|f| (f.photo, f.index, f.rect))) {
             app.ui.unnamed_anchor = None;
         }
         if app.ui.unnamed_selected.is_empty() {
@@ -335,15 +338,28 @@ mod tests {
         assert!(app.ui.unnamed_selected.contains(&(ids[0].0, 0)));
         assert_eq!(app.ui.unnamed_anchor, Some(0));
         assert!(app.ui.unnamed_focus);
+        // A recognition-driven cache refresh changes only the display crop, not the catalog
+        // revision or region. Seed the prior display crop and expire its embedding-count stamp.
+        let revision = app.session.catalog.revision;
+        let (_, indexed, _, cached) = app.caches.unnamed.as_mut().unwrap();
+        *indexed = indexed.saturating_add(1);
+        let old_view = lightcraft_geom::Rect { x0: 0.12, y0: 0.12, x1: 0.28, y1: 0.38 };
+        Arc::make_mut(cached).faces[0].view = old_view;
+        let refreshed = faces(&mut app, 5.0);
+        assert_eq!(app.session.catalog.revision, revision);
+        assert_ne!(refreshed.faces[0].view, old_view, "the display crop was refreshed");
+        assert!(app.ui.unnamed_selected.contains(&(ids[0].0, 0)));
+        assert_eq!(app.ui.unnamed_anchor, Some(0));
+        assert!(app.ui.unnamed_focus);
         let mut meta = app.session.catalog.photo(ids[1]).unwrap().meta.clone();
         meta.regions = regions;
         app.session.commit("background detections", lightcraft_catalog::Op::SetMeta { id: ids[1], meta: Box::new(meta) }).unwrap();
-        faces(&mut app, 2.0);
+        faces(&mut app, 6.0);
         assert!(app.ui.unnamed_selected.contains(&(ids[0].0, 0)));
         assert!(app.ui.unnamed_anchor.is_none(), "a positional anchor cannot outlive a changed list");
         assert!(app.ui.unnamed_focus);
         app.session.execute("photo.removeRegion", &json!({"id": ids[0].0, "index": 0})).unwrap();
-        faces(&mut app, 3.0);
+        faces(&mut app, 7.0);
         assert!(app.ui.unnamed_selected.is_empty());
         assert!(app.ui.unnamed_anchor.is_none());
         assert!(!app.ui.unnamed_focus);
@@ -364,6 +380,7 @@ mod tests {
         assert_eq!((list.total, list.ordered, list.ready, list.faces.len()), (9, true, true, 2));
         assert_eq!(list.faces[0].suggestion.as_deref(), Some("Jane Doe"));
         assert_eq!(list.faces[0].view.x0, 0.12, "the view box is used when there is one");
+        assert_eq!(list.faces[0].rect.x0, 0.1, "the catalog box identifies the region independently of its display crop");
         assert_eq!((list.faces[1].view.x0, list.faces[1].suggestion.clone()), (0.1, None), "else the face's own box");
         for bad in [Value::Null, json!([]), json!({"faces": 5, "total": -1})] {
             assert_eq!(parse(&bad), Unnamed::default(), "{bad}");
