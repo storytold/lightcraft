@@ -915,7 +915,7 @@ pub fn import(s: &mut crate::Session, path: &Path, update_existing: bool) -> cra
     Ok(completion.report)
 }
 
-const RAW_FORMATS: [&str; 11] = ["RAW", "DNG", "ARW", "CR2", "CR3", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"];
+const RAW_FORMATS: [&str; 12] = ["RAW", "DNG", "ARW", "CR2", "CR3", "CRW", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"];
 
 /// The photo a catalog record becomes when its original couldn't be read (relinked later).
 pub(crate) fn catalog_photo(src: &CatalogPhoto, id: PhotoId, now: &str) -> Photo {
