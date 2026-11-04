@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### Photo Merge results join the album they were merged from
+- An HDR, panorama or HDR panorama merged while an album is open is added to that album, as Lightroom Classic
+  adds a merge to the collection it was started from, so it shows up next to its sources instead of only in
+  All Photos. A merge from All Photos, a smart album or a folder adds to no album (#3741).
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III
