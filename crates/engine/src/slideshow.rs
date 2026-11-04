@@ -605,6 +605,17 @@ impl Playback {
         PanZoom { current: self.motion_key(current).map(|k| Motion::new(k, amount).at(t)), from }
     }
 
+    /// Whether pan and zoom moves the current photo at `now`: on, playing (not paused, not a
+    /// manual slideshow), a photo up and its time not over. A slide whose time is over while the
+    /// next one is not ready yet stays at its end view.
+    pub fn pan_zoom_moving(&self, now: f64) -> bool {
+        self.settings.pan_and_zoom
+            && self.paused_at.is_none()
+            && !self.settings.manual
+            && self.current().photo().is_some()
+            && self.remaining(now) > 0.0
+    }
+
     /// What to draw at `now`.
     pub fn frame(&self, now: f64) -> Frame {
         let now = self.clock(now);

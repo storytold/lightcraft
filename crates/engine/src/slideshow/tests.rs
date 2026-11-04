@@ -319,6 +319,29 @@ fn pan_and_zoom_shows_the_start_the_middle_and_the_end_of_a_slide() {
 }
 
 #[test]
+fn pan_and_zoom_moves_only_while_a_photo_plays_out_its_time() {
+    let s = PlaybackSettings { pan_and_zoom: true, ..settings(4.0, 1.0) };
+    let mut p = Playback::new(ids(2), None, s.clone(), 5, 0.0).unwrap();
+    for now in [0.0, 2.0, 3.99] {
+        assert!(p.pan_zoom_moving(now), "moving at {now}");
+    }
+    // its time is over and the next slide is not ready: it holds its end view, so nothing moves
+    let next = p.upcoming(1)[0];
+    assert_eq!(p.tick(4.0, |i| i != next), Tick::Waiting(next));
+    assert!(!p.pan_zoom_moving(4.0) && !p.pan_zoom_moving(9.0));
+    assert_eq!(p.tick(9.0, all_ready), Tick::Advanced(next));
+    assert!(p.pan_zoom_moving(9.0), "the next photo moves");
+    p.toggle_pause(10.0);
+    assert!(!p.pan_zoom_moving(11.0), "paused");
+    let off = Playback::new(ids(2), None, settings(4.0, 1.0), 5, 0.0).unwrap();
+    assert!(!off.pan_zoom_moving(1.0), "off");
+    let manual = Playback::new(ids(2), None, PlaybackSettings { manual: true, ..s.clone() }, 5, 0.0).unwrap();
+    assert!(!manual.pan_zoom_moving(1.0), "a manual slideshow holds its start view");
+    let titled = Playback::new(ids(2), None, s, 5, 0.0).unwrap().with_titles(Some(2.0), None);
+    assert!(!titled.pan_zoom_moving(1.0), "a title screen does not move");
+}
+
+#[test]
 fn pan_and_zoom_stops_while_paused_and_carries_on_after() {
     let s = PlaybackSettings { pan_and_zoom: true, ..settings(4.0, 1.0) };
     let mut p = Playback::new(ids(2), None, s, 5, 0.0).unwrap();
