@@ -372,14 +372,14 @@ mod tests {
         let mut jpeg = vec![0xff, 0xd8];
         let packet = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
             <rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/"
-                tiff:ImageWidth="640.9" exif:PixelXDimension="640"/>
+                tiff:ImageWidth="640.9" exif:PixelXDimension="800"/>
         </rdf:RDF>"#;
         let mut xmp = XMP_SIG.to_vec();
         xmp.extend_from_slice(packet.as_bytes());
         jpeg.extend(seg(0xe1, &xmp));
         jpeg.extend_from_slice(&[0xff, 0xda, 0, 2]);
 
-        assert_eq!(crate::extract(&jpeg).width, Some(640));
+        assert_eq!(crate::extract(&jpeg).width, Some(800));
     }
 
     #[test]
