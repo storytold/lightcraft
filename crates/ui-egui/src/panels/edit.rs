@@ -318,12 +318,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             let mut lp = d.optics.lens_profile;
             if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
-                let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
+                let ok = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"})).is_ok();
+                // ticked on photos without a profile: look their lenses up again (a database that arrived
+                // since they were imported may know them now)
+                if ok && lp {
+                    let without = crate::lens_db::to_look_up(&app.session, id);
+                    app.ui.lens_lookup_ids.extend(without);
+                }
             }
-            if lp && !has_lens {
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr("No lens data embedded in this file.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim),
-                );
+            if lp && let Some(p) = app.session.catalog.photo(id).cloned() {
+                let text = crate::lens_db::readout(app, &p);
+                if !text.is_empty() {
+                    let r = ui.label(egui::RichText::new(text).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
+                    crate::widgets::register(ui, "optics:lensProfile", r.rect);
+                }
             }
         });
         if d.optics.lens_profile {
