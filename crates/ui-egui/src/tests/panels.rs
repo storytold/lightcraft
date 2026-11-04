@@ -1967,8 +1967,16 @@ fn show_in_album_context_target_is_the_clicked_photo() {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
     let visible = h.app.session.visible_cloned();
     let (clicked, other) = (visible[0], visible[1]);
+    let existing = h.app.session.catalog.albums_of(clicked);
+    for id in existing {
+        if h.app.session.catalog.album(id).is_some_and(|album| !album.is_smart()) {
+            h.app.session.execute("album.removePhotos", &json!({"id": id.0, "ids": [clicked.0]})).unwrap();
+        }
+    }
+    assert!(crate::menus::albums_for_photo(&h.app, clicked).is_empty(), "the clicked photo starts in no containing albums");
     let album = h.app.session.execute("album.create", &json!({"name": "Clicked photo", "addSelected": false})).unwrap()["id"].as_u64().unwrap();
     h.app.session.execute("album.addPhotos", &json!({"id": album, "ids": [clicked.0]})).unwrap();
+    assert_eq!(crate::menus::albums_for_photo(&h.app, clicked).iter().map(|(id, _)| id.0).collect::<Vec<_>>(), [album]);
     h.app.run("library.select", json!({"ids": [clicked.0, other.0], "active": other.0})).unwrap();
     assert_eq!(h.app.session.active(), Some(other));
 
@@ -2073,12 +2081,21 @@ fn show_in_album_menu_has_a_disabled_empty_state_without_an_active_photo() {
 fn show_in_album_menu_lists_containing_albums_with_user_names_as_data() {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
     let photo = h.app.session.active().expect("demo has an active photo");
+    let existing = h.app.session.catalog.albums_of(photo);
+    for id in existing {
+        if h.app.session.catalog.album(id).is_some_and(|album| !album.is_smart()) {
+            h.app.session.execute("album.removePhotos", &json!({"id": id.0, "ids": [photo.0]})).unwrap();
+        }
+    }
+    assert!(crate::menus::albums_for_photo(&h.app, photo).is_empty(), "start with no containing albums");
     let folder_a = h.app.session.execute("album.create", &json!({"name": "Folder A", "folder": true})).unwrap()["id"].as_u64().unwrap();
     let folder_b = h.app.session.execute("album.create", &json!({"name": "Folder B", "folder": true})).unwrap()["id"].as_u64().unwrap();
     let album =
         h.app.session.execute("album.create", &json!({"name": "A & B", "parent": folder_a, "addSelected": true})).unwrap()["id"].as_u64().unwrap();
     let album_b =
         h.app.session.execute("album.create", &json!({"name": "A & B", "parent": folder_b, "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+    let album_c =
+        h.app.session.execute("album.create", &json!({"name": "Other containing album", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
     let bar = crate::menus::menubar::menu_bar(&h.app);
     let photo_menu = &bar.iter().find(|(name, _)| name == "Photo").unwrap().1;
     let submenu = photo_menu
@@ -2096,6 +2113,15 @@ fn show_in_album_menu_lists_containing_albums_with_user_names_as_data() {
         crate::menus::menubar::MenuNode::Item { id, params, label, .. }
         if id == "app.showInAlbum" && params["album"] == album_b && label == "Folder B / A & B"
     )));
+    assert!(submenu.iter().any(|node| matches!(node,
+        crate::menus::menubar::MenuNode::Item { id, params, label, .. }
+        if id == "app.showInAlbum" && params["album"] == album_c && params["id"] == photo.0 && label == "Other containing album"
+    )));
+    assert_eq!(
+        submenu.iter().filter(|node| matches!(node, crate::menus::menubar::MenuNode::Item { id, .. } if id == "app.showInAlbum")).count(),
+        3,
+        "all three containing albums are listed"
+    );
     assert_eq!(crate::menubar::display_item_label("app.showInAlbum", &json!({"album": album}), "Folder A / A & B"), "Folder A / A & B");
 }
 

@@ -1668,11 +1668,19 @@ mod tests {
 
     #[test]
     fn show_in_album_context_parent_is_disabled_without_containing_albums() {
-        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        let photo = app.session.active().expect("demo has an active photo");
+        let existing = app.session.catalog.albums_of(photo);
+        for id in existing {
+            if app.session.catalog.album(id).is_some_and(|album| !album.is_smart()) {
+                app.session.execute("album.removePhotos", &json!({"id": id.0, "ids": [photo.0]})).unwrap();
+            }
+        }
+        assert!(crate::menus::albums_for_photo(&app, photo).is_empty(), "the test photo starts in no albums");
         let ctx = egui::Context::default();
         let mut response = None;
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            response = Some(context_menu_show_in_album(&mut app, ui, PhotoId(1)));
+            response = Some(context_menu_show_in_album(&mut app, ui, photo));
         });
         out.textures_delta.clear();
         assert!(response.is_some_and(|response| !response.enabled()));
