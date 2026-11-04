@@ -94,9 +94,10 @@ records already exist. Existing LightCraft
 edits are preserved by default; `updateExisting=true` explicitly replaces them. Settings read from an
 original's own XMP (embedded or a sidecar) while the import adds it, or while it was browsed, are not
 existing edits: a record the import itself adds, or a Local photo unchanged since browsing, takes the
-catalog's settings (#3434, #3707). They start from the camera's defaults, not from what the file's
-XMP, a default import preset or a virtual copy's master gave the record, since Lightroom leaves
-settings at zero out of its develop text. Any change after browsing, a rating or keyword included,
+catalog's settings (#3434, #3707). When the catalog has develop settings for the photo, they start
+from the camera's defaults, not from what the file's XMP, a default import preset or a virtual
+copy's master gave the record, since Lightroom leaves settings at zero out of its develop text;
+without any, the record keeps what it has. Any change after browsing, a rating or keyword included,
 makes a Local photo's settings count as existing. Persistent import
 identity prevents reimport from duplicating virtual copies and collections. One undo step reverses
 catalog changes; any saved recovery archives remain available.

@@ -787,6 +787,23 @@ fn ensure_read_active(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) { Err("Lightroom import cancelled".into()) } else { Ok(()) }
 }
 
+/// A catalog row's develop text, read: its settings as XMP properties, their values, and how many
+/// deferred adjustments (`-999999`) it held. Fails on text that isn't a Lua settings table.
+type CatalogSettings = (crate::crs::Props, crate::crs_masks::Values, usize);
+
+fn read_settings(text: &str) -> Result<CatalogSettings, String> {
+    let mut root = crate::preset_import::parse_lua(text)?;
+    let deferred = strip_lua_sentinels(&mut root);
+    let (props, mut values) = crate::preset_import::lua_settings_props(&root)?;
+    // Catalog Lua names the component inversion `Inverted` while XMP's is `MaskInverted`;
+    // rename it so an inverted mask keeps its inversion instead of importing as normal.
+    for v in values.values_mut() {
+        alias_catalog_inverted(v);
+    }
+    Ok((props, values, deferred))
+}
+
+#[cfg(test)]
 fn mapped_settings(
     text: &str,
     target: crate::crs::Target,
@@ -795,14 +812,19 @@ fn mapped_settings(
     stored_aspect: f64,
     user: Orientation,
 ) -> Result<(Value, Vec<String>), String> {
-    let mut root = crate::preset_import::parse_lua(text)?;
-    let deferred = strip_lua_sentinels(&mut root);
-    let (mut props, mut values) = crate::preset_import::lua_settings_props(&root)?;
-    // Catalog Lua names the component inversion `Inverted` while XMP's is `MaskInverted`;
-    // rename it so an inverted mask keeps its inversion instead of importing as normal.
-    for v in values.values_mut() {
-        alias_catalog_inverted(v);
-    }
+    Ok(mapped(read_settings(text)?, target, aspect, orientation, stored_aspect, user))
+}
+
+/// [`read_settings`]' settings as a develop patch for the photo.
+fn mapped(
+    settings: CatalogSettings,
+    target: crate::crs::Target,
+    aspect: f64,
+    orientation: Orientation,
+    stored_aspect: f64,
+    user: Orientation,
+) -> (Value, Vec<String>) {
+    let (mut props, values, deferred) = settings;
     // A catalog's develop settings carry the crop edges and angle but no `HasCrop` (XMP has it):
     // any crop field means the photo is cropped.
     const CROP: [&str; 5] = ["crs:CropLeft", "crs:CropTop", "crs:CropRight", "crs:CropBottom", "crs:CropAngle"];
@@ -819,7 +841,7 @@ fn mapped_settings(
     if deferred > 0 {
         unknown.push("Deferred Lightroom adjustments (-999999)".into());
     }
-    Ok((partial, unknown))
+    (partial, unknown)
 }
 
 /// Lightroom's `Adobe_images.orientation`: where the stored image's top-left and top-right corners
@@ -1419,11 +1441,14 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if keep_develop {
             preserved += 1;
         }
+        // the catalog's develop settings this photo takes, read once (none to take: no text, or
+        // the record's own edit is kept)
+        let settings = (!src.settings.is_empty() && !keep_develop).then(|| read_settings(&src.settings));
         // Lightroom leaves settings at zero (Clarity, Texture, …) out of its develop text, so the
         // catalog's settings for a record the job made start from the camera's defaults, not from
         // what its file's XMP, a default import preset or a virtual copy's master gave it (#3434).
-        // With no develop text there is nothing to replace.
-        if !origin.was_there() && !src.settings.is_empty() {
+        // With no develop text, or text that can't be read, there is nothing to replace them with.
+        if !origin.was_there() && matches!(settings, Some(Ok(_))) {
             p.develop = Arc::new(p.camera_defaults());
         }
         let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
@@ -1453,24 +1478,24 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if !src.keywords.is_empty() {
             p.meta.keywords = src.keywords.clone();
         }
-        if !src.settings.is_empty() && !keep_develop {
-            match mapped_settings(
-                &src.settings,
-                crate::crs::Target::for_photo(&p),
-                p.width.max(1) as f64 / p.height.max(1) as f64,
-                orientation,
-                stored_aspect,
-                p.develop.orientation,
-            ) {
-                Ok((partial, unknown)) => {
-                    p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, &partial, 1.0));
-                    p.edited = Some(now.clone());
-                    if !unknown.is_empty() {
-                        unmapped.insert(src.source_id, unknown);
-                    }
+        match settings {
+            Some(Ok(settings)) => {
+                let (partial, unknown) = mapped(
+                    settings,
+                    crate::crs::Target::for_photo(&p),
+                    p.width.max(1) as f64 / p.height.max(1) as f64,
+                    orientation,
+                    stored_aspect,
+                    p.develop.orientation,
+                );
+                p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, &partial, 1.0));
+                p.edited = Some(now.clone());
+                if !unknown.is_empty() {
+                    unmapped.insert(src.source_id, unknown);
                 }
-                Err(e) => warnings.push(format!("image {} settings: {e}", src.source_id)),
             }
+            Some(Err(e)) => warnings.push(format!("image {} settings: {e}", src.source_id)),
+            None => {}
         }
         if keep_develop {
             (p.develop, p.edited) = previous_develop;

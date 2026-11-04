@@ -1051,6 +1051,22 @@ mod tests {
         }
     }
 
+    /// A record the job made whose catalog develop text can't be read keeps what its file gave it:
+    /// the reset to the camera's defaults waits for settings to replace them with, so the warning
+    /// is the only change.
+    #[test]
+    fn unreadable_catalog_settings_leave_a_made_record_as_its_file_gave_it() {
+        let (dir, path, mut session) = file_with_develop_sidecar("lr-job-unreadable-settings", "unreadable-bytes");
+        let prepared = prepared_for(&session, &path, 3);
+        let report = run_job_with(&mut session, prepared, vec![path.clone()], false, "s = {");
+        let id = lightcraft_catalog::PhotoId(report["mapping"]["1"].as_u64().unwrap());
+        let photo = session.catalog.photo(id).unwrap();
+        assert_eq!((photo.develop.light.exposure, photo.develop.effects.clarity), (2.0, 30.0), "the sidecar's settings: {report}");
+        assert!(report["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|w| w.contains("settings"))), "{report}");
+        assert_eq!(report["preservedExistingEdits"], 0, "{report}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A new virtual copy is a record the job makes too: its catalog settings start from the
     /// camera's defaults, not from its master's, so a setting the copy's develop text leaves out
     /// (Lightroom omits those at zero) is zero, while the master keeps its own.
