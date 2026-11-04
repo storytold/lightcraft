@@ -411,6 +411,77 @@ fn pan_and_zoom_moves_an_old_render_whole_until_the_new_one_lands() {
     h.settle(SETTLE);
 }
 
+/// A photo cropped to its cell's shape, a very narrow one (aspect 0.01) and a very wide one
+/// (aspect 50): the part that moves is the photo's visible part of the slide, so the backdrop
+/// beside it stays where it is and the photo still shows inside it.
+#[test]
+fn pan_and_zoom_moves_only_the_visible_photo_at_any_aspect() {
+    let mut h = grid();
+    run(&mut h, "slideshow.layout", json!({"margins": 0.1, "backdropColor": "#ff0000"}));
+    run(&mut h, "slideshow.playback", json!({"panAndZoom": true, "panAndZoomAmount": 1.0}));
+    let id = h.app.session.visible_cloned()[0];
+    let own = h.app.session.slide_photo_aspect(id).unwrap();
+    // 70 px margins around a 860 × 560 cell
+    for aspect in [860.0 / 560.0, 0.01, 50.0] {
+        let mut d = (*h.app.session.develop_of(id).expect("settings")).clone();
+        d.crop.geometry.rect = if aspect < own {
+            let f = aspect / own;
+            lightcraft_geom::Rect::new(0.5 - f / 2.0, 0.0, 0.5 + f / 2.0, 1.0)
+        } else {
+            let f = own / aspect;
+            lightcraft_geom::Rect::new(0.0, 0.5 - f / 2.0, 1.0, 0.5 + f / 2.0)
+        };
+        h.app.session.set_develop(id, d, "Test").expect("edit");
+        let shown = h.app.session.slide_photo_aspect(id).unwrap();
+        assert!((shown / aspect - 1.0).abs() < 0.01, "{aspect}: the crop shows at {shown}");
+        run(&mut h, "library.select", json!({"ids": [id.0]}));
+        run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "manual": true, "seed": 3}));
+        assert_eq!(photo_up(&h), id);
+        let slot = Slot::Slide(id.into());
+        assert!(h.step_until(SETTLE, |h| has_slide(h, id) && h.app.renderer.wanted(slot) == h.app.renderer.textures.get(&slot).map(|t| t.key)));
+        h.step();
+        let s = run(&mut h, "slideshow.togglePause", json!({}));
+        assert!(s["view"].is_array(), "{aspect}: a manual slideshow holds the photo at its start view: {s}");
+        let tex = h.app.renderer.textures.get(&slot).unwrap();
+        assert_eq!(tex.size, [1000, 700]);
+        let v = lightcraft_slideshow::layout(&h.app.session.slide_layout, shown, 1000, 700).visible;
+        let part = crate::panels::slideshow::moving_part(&h.app, id.into(), tex);
+        let px = |r: egui::Rect| [r.min.x * 1000.0, r.min.y * 700.0, r.max.x * 1000.0, r.max.y * 700.0];
+        for (got, want) in px(part).into_iter().zip([v.x0, v.y0, v.x1, v.y1]) {
+            assert!((f64::from(got) - want).abs() < 0.01, "{aspect}: moves {part:?}, the photo shows at {v:?}");
+        }
+        if aspect < 1.0 {
+            assert!(v.width() < 8.0, "{aspect}: a strip of {v:?}");
+        } else if aspect > 10.0 {
+            assert!(v.height() < 20.0, "{aspect}: a strip of {v:?}");
+        } else {
+            assert!((v.width() - 860.0).abs() <= 1.0 && (v.height() - 560.0).abs() <= 1.0, "{aspect}: fills its cell: {v:?}");
+        }
+        let img = h.paint();
+        let (cx, cy) = (((v.x0 + v.x1) / 2.0) as usize, ((v.y0 + v.y1) / 2.0) as usize);
+        assert_ne!(painted(&img, cx, cy), [255, 0, 0], "{aspect}: the photo shows in its part");
+        let (x0, y0, x1, y1) = (v.x0 as usize, v.y0 as usize, v.x1 as usize, v.y1 as usize);
+        // the backdrop just beside the photo stays (away from the top center, where the
+        // slideshow's controls draw over it)
+        let (sx, sy) = (if v.width() > 200.0 { x0 + 100 } else { cx }, if v.height() > 200.0 { y0 + 100 } else { cy });
+        let mut beside = vec![(x0 - 3, sy), (x1 + 2, sy)];
+        if v.width() > 200.0 {
+            beside.extend([(sx, y0 - 3), (sx, y1 + 2)]);
+        }
+        for (x, y) in beside {
+            assert_eq!(painted(&img, x, y), [255, 0, 0], "{aspect}: backdrop at ({x}, {y})");
+        }
+        // and no backdrop shows inside the photo's edges
+        if aspect > 1.0 && aspect < 10.0 {
+            for (x, y) in [(x0 + 3, sy), (x1 - 4, sy), (sx, y0 + 3), (sx, y1 - 4)] {
+                assert_ne!(painted(&img, x, y), [255, 0, 0], "{aspect}: photo at ({x}, {y})");
+            }
+        }
+        run(&mut h, "slideshow.end", json!({}));
+    }
+    h.settle(SETTLE);
+}
+
 /// The amount set on the Low to High slider is saved with the library: the slider writes the
 /// live value as it moves, which leaves `slideshow.playback` nothing to change when it ends.
 #[test]
