@@ -69,7 +69,9 @@ Photographs counts them), and these add up to it:
 | `pathRefused` | have an original the import doesn't look at (below), with their virtual copies; no record is made |
 | `incomplete` | have incomplete catalog records (`skipped`) |
 
-Should the counts not add up, a warning says by how much. `imported` (records added, as before) stays in the report
+Catalog photos at one path (a catalog can list a file twice) share one record: the first is counted for it and the
+others as `alreadyInLibrary`, and each goes on from what the earlier ones gave the record, so one without develop
+settings doesn't undo another's. Should the counts not add up, a warning says by how much. `imported` (records added, as before) stays in the report
 and normally equals `added`. The toast says, for example, "45091 photos in the catalog: 16521 added, 812 already in
 the library" (only the outcomes some photo had); then, apart, how many originals couldn't be read, since each of
 those is also one of the outcomes (a new one is added as a placeholder). The result window has one line per outcome.

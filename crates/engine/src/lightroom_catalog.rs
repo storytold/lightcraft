@@ -1324,6 +1324,11 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     let copy_masters: HashSet<_> = data.photos.iter().map(|p| number(&p.image, "masterImage")).filter(|id| *id != 0).collect();
     let refused: HashSet<_> = data.photos.iter().filter(|p| matches!(p.original, Original::Refused(_))).map(|p| p.source_id).collect();
     let mut planned: HashMap<PhotoId, Photo> = HashMap::new();
+    // Masters that share a path land on one record: a later one goes on from what an earlier one
+    // staged for it, not from the record as it was before the batch (whose develop settings would
+    // then replace the earlier one's) or, for a record the batch adds, from no record at all
+    // (which made a second one).
+    let mut shared = SharedPaths::of(&data);
     for src in photos {
         let master = number(&src.image, "masterImage");
         // A refused path must not become a library record the app would look at later; its
@@ -1347,14 +1352,17 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         let mut trashed = false;
         // the warnings of the XMP sidecar that gave this record its develop settings, if one did
         let mut from_sidecar = Vec::new();
-        let (mut p, origin) = if let Some(found) = existing_id.and_then(|id| s.catalog.photo(id)) {
+        // (what an earlier master at its path staged for the record, else the record)
+        let found = existing_id.and_then(|id| shared.staged(id).or_else(|| s.catalog.photo(id).map(|p| &**p)));
+        let (mut p, origin) = if let Some(found) = found {
             trashed = found.deleted;
-            // what the job already says of it (a record its file import made or promoted), else
-            // what it was before the job: browsed in Local (untouched since or changed, as for an
-            // offline original, which never reaches the file import) or in the library
+            // what the job already says of it (a record its file import made or promoted, or one
+            // an earlier master at its path landed on), else what it was before the job: browsed
+            // in Local (untouched since or changed, as for an offline original, which never
+            // reaches the file import) or in the library
             let origin = origins.record(found.id, Origin::of(found));
             from_sidecar = made_from_file(&mut sidecar_warnings, origin, master, &src.path);
-            ((**found).clone(), origin)
+            (found.clone(), origin)
         } else if master != 0 {
             let master_id = ids.get(&master).copied().ok_or_else(|| error(format!("virtual copy {}: missing master", src.source_id)))?;
             let mut p = planned
@@ -1443,7 +1451,9 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         index.photos.insert(identity(&data, src), p.id.0);
         // Only a record that was there before the job can hold an edit made in the library. One the
         // job made has what its file and XMP sidecar gave it: the catalog's settings apply (#3707).
-        let keep_develop = origin.was_there() && p.edited.is_some() && !update_existing;
+        // (whether it has an edit is what it had before the job: an earlier master at its path may
+        // have given it the catalog's settings)
+        let keep_develop = origin.was_there() && s.catalog.photo(p.id).is_some_and(|old| old.edited.is_some()) && !update_existing;
         let previous_develop = (p.develop.clone(), p.edited.clone());
         if keep_develop {
             preserved += 1;
@@ -1521,6 +1531,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             planned.insert(photo_id, p.clone());
         }
         if let Some(old) = s.catalog.photo(p.id) {
+            shared.stage(master, &src.path, &p, None);
             if old.kind != p.kind {
                 // Repair older imports with existing reversible operations. Removing just the
                 // record leaves album/stack membership intact; the enclosing batch is atomic.
@@ -1549,9 +1560,12 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             ]);
             ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
         } else {
-            imported += 1;
-            added += 1;
-            ops.push(Op::AddPhoto { photo: Box::new(p) });
+            // a record the batch adds, unless an earlier master at this path added it: then it is
+            // already there
+            let new = usize::from(shared.add(master, &src.path, p, &mut ops));
+            imported += new;
+            added += new;
+            already += 1 - new;
         }
         by_path.entry(key(&src.path)).or_insert(photo_id);
     }
@@ -1575,6 +1589,59 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             "missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
+}
+
+/// The catalog masters that share a path, and what each staged for its record in a Lightroom
+/// import's batch, so that a later one goes on from it (see [`apply_prepared`]). Only masters at a
+/// shared path keep their photo here, with the place in the batch of the record's `AddPhoto` when
+/// the batch adds it.
+struct SharedPaths {
+    /// the paths ([`key`]) more than one master has
+    paths: HashSet<String>,
+    staged: HashMap<PhotoId, (Photo, Option<usize>)>,
+}
+
+impl SharedPaths {
+    fn of(data: &CatalogImport) -> Self {
+        let mut seen = HashSet::new();
+        let paths = data
+            .photos
+            .iter()
+            .filter(|p| number(&p.image, "masterImage") == 0)
+            .map(|p| key(&p.path))
+            .filter(|path| !seen.insert(path.clone()))
+            .collect();
+        SharedPaths { paths, staged: HashMap::new() }
+    }
+
+    /// What an earlier master at its path staged for record `id`.
+    fn staged(&self, id: PhotoId) -> Option<&Photo> {
+        self.staged.get(&id).map(|(p, _)| p)
+    }
+
+    /// Keeps `p` as staged by a `master` at `path` (the `AddPhoto` at `added_at` in the batch, when
+    /// the batch adds it), if that path is shared.
+    fn stage(&mut self, master: i64, path: &str, p: &Photo, added_at: Option<usize>) {
+        if master == 0 && self.paths.contains(&key(path)) {
+            self.staged.insert(p.id, (p.clone(), added_at));
+        }
+    }
+
+    /// Adds `p`, a record a `master` at `path` lands on that isn't in the library, to the batch
+    /// `ops`, and says whether it is new: when an earlier master at its path added it, `p`
+    /// replaces that `AddPhoto` instead.
+    fn add(&mut self, master: i64, path: &str, p: Photo, ops: &mut Vec<Op>) -> bool {
+        if let Some((staged, Some(at))) = self.staged.get_mut(&p.id) {
+            *staged = p.clone();
+            if let Some(op) = ops.get_mut(*at) {
+                *op = Op::AddPhoto { photo: Box::new(p) };
+            }
+            return false;
+        }
+        self.stage(master, path, &p, Some(ops.len()));
+        ops.push(Op::AddPhoto { photo: Box::new(p) });
+        true
+    }
 }
 
 /// The file import's XMP sidecar warnings, by path ([`key`]).

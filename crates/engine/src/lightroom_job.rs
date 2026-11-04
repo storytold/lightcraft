@@ -836,11 +836,12 @@ mod tests {
         }
     }
 
-    /// Two catalog photos at the same path whose file is a content duplicate: the second lands on
-    /// no library record (the first one's is still being made), so the job makes another one from
-    /// the file and its sidecar. That record is the job's own too: the catalog's settings apply and
+    /// Two catalog photos at the same path whose file is a content duplicate: the file import adds
+    /// no record for it, the first catalog photo's record is made from the file and its sidecar,
+    /// and the second lands on that record (the job's own): the catalog's settings apply and
     /// nothing counts as preserved. (Before, finding the path among the records being made read as
-    /// "there before", and the sidecar's develop settings were kept as an existing edit.)
+    /// "there before", and the sidecar's develop settings were kept as an existing edit; and the
+    /// second photo made a record of its own.)
     #[test]
     fn a_second_catalog_photo_at_a_path_the_job_is_adding_takes_the_catalog_develop() {
         let (dir, path, mut session) = file_with_develop_sidecar("lr-job-origin-same-path", "same-path-bytes");
@@ -853,6 +854,7 @@ mod tests {
         prepared.data.photos.push(second);
         prepared.data.images = 2;
         let report = run_job(&mut session, prepared, vec![path.clone()], false);
+        assert_eq!(report["mapping"]["1"], report["mapping"]["2"], "one record: {report}");
         for source in ["1", "2"] {
             let id = lightcraft_catalog::PhotoId(report["mapping"][source].as_u64().unwrap());
             let photo = session.catalog.photo(id).unwrap();
@@ -905,6 +907,51 @@ mod tests {
             assert_eq!(report["imported"], imported, "{before:?}: {report}");
             std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    /// Two catalog masters at one path, the first with develop text and the second with none: the
+    /// record keeps the first one's settings. The second goes on from what the first gave the
+    /// record; before, it started from the record as the file import made it, and that record's
+    /// develop settings (its XMP sidecar's) replaced the catalog's in the same batch.
+    #[test]
+    fn a_later_master_at_a_path_keeps_what_an_earlier_one_gave_the_record() {
+        let (dir, path, mut session) = file_with_develop_sidecar("lr-job-shared-path-develop", "shared-path-bytes");
+        let mut prepared = with_second_photo(prepared_for(&session, &path, 3), &path);
+        let mut job = LightroomJob::new(&mut session, PathBuf::from("fixture.lrcat"), false).unwrap();
+        prepared.normal = job.import.prepare_files(vec![path.clone()], &AtomicBool::new(false));
+        prepared.missing_sources.clear();
+        prepared.data.photos[0].settings = "s = { Exposure2012 = -1.0 }".into();
+        let report = commit_prepared(&mut session, prepared).unwrap().report;
+        assert_eq!(session.catalog.len(), 1, "{report}");
+        assert_eq!(report["mapping"]["1"], report["mapping"]["2"], "{report}");
+        let photo = session.catalog.photo(lightcraft_catalog::PhotoId(report["mapping"]["2"].as_u64().unwrap())).unwrap();
+        assert_eq!(photo.develop.light.exposure, -1.0, "the first master's settings, not the sidecar's +2: {report}");
+        assert_eq!(photo.develop.effects.clarity, 0.0, "not the sidecar's +30: {report}");
+        assert_eq!((report["added"].as_u64(), report["alreadyInLibrary"].as_u64()), (Some(1), Some(1)), "{report}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Two catalog masters at one offline path land on one record, as two at a path the file
+    /// import read do: the second finds the record the first is adding. Before, that record wasn't
+    /// in the library yet, so the second made another one and both counted as added.
+    #[test]
+    fn two_offline_masters_at_one_path_share_a_record() {
+        let path = "/missing/lr-job-offline-twice.jpg";
+        let mut session = crate::Session::new();
+        let mut prepared = with_second_photo(prepared_for(&session, path, 3), path);
+        prepared.data.photos[0].settings = "s = { Exposure2012 = -1.0 }".into();
+        prepared.data.photos[1].image.insert("rating".into(), serde_json::json!(5));
+        let report = commit_prepared(&mut session, prepared).unwrap().report;
+        assert_eq!(session.catalog.len(), 1, "{report}");
+        assert_eq!(report["mapping"]["1"], report["mapping"]["2"], "{report}");
+        assert_eq!(
+            (report["added"].as_u64(), report["alreadyInLibrary"].as_u64(), report["imported"].as_u64()),
+            (Some(1), Some(1), Some(1)),
+            "{report}"
+        );
+        let photo = session.catalog.photo(lightcraft_catalog::PhotoId(report["mapping"]["1"].as_u64().unwrap())).unwrap();
+        assert_eq!(photo.develop.light.exposure, -1.0, "the first master's settings: {report}");
+        assert_eq!(photo.rating, 5, "the second master's rating, the last one written: {report}");
     }
 
     /// A catalog photo whose original is offline never reaches the job's file import, so the
