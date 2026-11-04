@@ -690,6 +690,9 @@ mod tests_connect {
         let mut slices = Vec::new();
         let r = lookup_waiting("slow.example", resolve, Instant::now() + Duration::from_secs(3600), &limits(&cancel), |_, slice| {
             slices.push(slice);
+            // the fake wait returns at once and the deadline is an hour away: a lookup that never looked at Cancel
+            // would loop here until memory ran out, long before a hang guard; fail it after a few waits instead
+            assert!(slices.len() <= 10, "the lookup went on {} waits after Cancel came during the third", slices.len() - 3);
             if slices.len() == 3 {
                 cancel.store(true, Ordering::Relaxed);
             }
