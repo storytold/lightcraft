@@ -50,6 +50,23 @@ fn full() -> Metadata {
 }
 
 #[test]
+fn merge_xmp_arrays_preserves_preferred_then_fallback_items() {
+    let preferred = XmpValue::Array(vec![XmpValue::Text("standard-1".into()), XmpValue::Text("standard-2".into())]);
+    let fallback = XmpValue::Array(vec![XmpValue::Text("extended-1".into()), XmpValue::Text("extended-2".into())]);
+
+    assert_eq!(
+        merge_xmp_value(&preferred, &fallback),
+        XmpValue::Array(vec![
+            XmpValue::Text("standard-1".into()),
+            XmpValue::Text("standard-2".into()),
+            XmpValue::Text("extended-1".into()),
+            XmpValue::Text("extended-2".into()),
+        ])
+    );
+    assert_eq!(merge_xmp_value(&preferred, &XmpValue::Text("fallback".into())), preferred);
+}
+
+#[test]
 fn roundtrip_all_fields() {
     let m = full();
     let json = r#"{"version":1,"exposure":0.5,"note":"<&>"}"#;

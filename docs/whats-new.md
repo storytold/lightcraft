@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### JPEG Extended XMP metadata reaches the library
+- Import and All Metadata now compose the standard JPEG XMP packet with its referenced Extended XMP packet, so fields split across packets remain available together. Extension chunks are matched by GUID and checked for complete coverage. Original export with **Remove Location Info** refuses embedded XMP it cannot inspect. The separately bounded Read Metadata from File JPEG reader remains standard-APP1-only.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III
