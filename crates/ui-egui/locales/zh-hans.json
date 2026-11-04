@@ -2391,5 +2391,15 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "Super Resolution": "超分辨率",
+  "AI Sharpen": "AI 锐化",
+  "Enhance": "增强",
+  "Upscaling": "正在放大",
+  "Writing": "正在写入",
+  "an enhancement is already running": "已有增强任务在运行",
+  "select a photo": "请选择一张照片",
+  "select a single photo": "请只选择一张照片",
+  "Super resolution": "超分辨率",
+  "AI sharpening": "AI 锐化"
 }

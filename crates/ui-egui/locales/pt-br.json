@@ -2236,5 +2236,15 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de ferramentas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)",
+  "Super Resolution": "Super resolução",
+  "AI Sharpen": "Nitidez com IA",
+  "Enhance": "Aprimorar",
+  "Upscaling": "Ampliando",
+  "Writing": "Gravando",
+  "an enhancement is already running": "um aprimoramento já está em andamento",
+  "select a photo": "selecione uma foto",
+  "select a single photo": "selecione uma única foto",
+  "Super resolution": "Super resolução",
+  "AI sharpening": "Nitidez com IA"
 }

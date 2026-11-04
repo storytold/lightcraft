@@ -317,5 +317,8 @@
   "Panel layout could not be restored: {error}": "無法還原面板配置：{error}",
   "Panel move was not applied: {error}": "面板移動未套用：{error}",
   "{name} is installed": "{name} 已安裝",
-  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟"
+  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟",
+  "{what} added: {w} × {h}": "已加入{what}：{w} × {h}",
+  "{what} cancelled": "已取消{what}",
+  "{what} failed: {e}": "{what}失敗：{e}"
 }

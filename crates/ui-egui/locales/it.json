@@ -2558,5 +2558,15 @@
   "Unit": "Unità",
   "Top bar": "Barra superiore",
   "Tool strip": "Barra degli strumenti",
-  "Bottom bar": "Barra inferiore"
+  "Bottom bar": "Barra inferiore",
+  "Super Resolution": "Super risoluzione",
+  "AI Sharpen": "Nitidezza IA",
+  "Enhance": "Migliora",
+  "Upscaling": "Ingrandimento",
+  "Writing": "Scrittura",
+  "an enhancement is already running": "un miglioramento è già in corso",
+  "select a photo": "seleziona una foto",
+  "select a single photo": "seleziona una sola foto",
+  "Super resolution": "Super risoluzione",
+  "AI sharpening": "Nitidezza IA"
 }

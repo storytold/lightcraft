@@ -2388,5 +2388,15 @@
   "Top bar": "Верхня панель",
   "Tool strip": "Панель інструментів",
   "Bottom bar": "Нижня панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)",
+  "Super Resolution": "Суперроздільність",
+  "AI Sharpen": "ШІ: різкість",
+  "Enhance": "Покращити",
+  "Upscaling": "Збільшення",
+  "Writing": "Запис",
+  "an enhancement is already running": "покращення вже виконується",
+  "select a photo": "виберіть фото",
+  "select a single photo": "виберіть одне фото",
+  "Super resolution": "Суперроздільність",
+  "AI sharpening": "ШІ: різкість"
 }

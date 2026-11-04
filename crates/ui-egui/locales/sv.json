@@ -2461,5 +2461,15 @@
   "The Tags button lists placeholders for the template, such as {date} or {seq}. Each file is renamed on disk along with its XMP sidecar; a name that is taken gets -1, -2…": "Knappen Taggar visar platshållare för mallen, till exempel {date} eller {seq}. Varje fil byter namn på disken tillsammans med sin XMP-sidofil; ett namn som redan finns får -1, -2…",
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
-  "Bottom bar": "Nedre fältet"
+  "Bottom bar": "Nedre fältet",
+  "Super Resolution": "Superupplösning",
+  "AI Sharpen": "AI-skärpa",
+  "Enhance": "Förbättra",
+  "Upscaling": "Förstorar",
+  "Writing": "Skriver",
+  "an enhancement is already running": "en förbättring pågår redan",
+  "select a photo": "välj ett foto",
+  "select a single photo": "välj ett enda foto",
+  "Super resolution": "Superupplösning",
+  "AI sharpening": "AI-skärpning"
 }

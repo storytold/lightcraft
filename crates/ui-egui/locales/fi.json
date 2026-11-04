@@ -2358,5 +2358,15 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "Super Resolution": "Superresoluutio",
+  "AI Sharpen": "Tekoälyterävöinti",
+  "Enhance": "Paranna",
+  "Upscaling": "Suurennetaan",
+  "Writing": "Kirjoitetaan",
+  "an enhancement is already running": "parannus on jo käynnissä",
+  "select a photo": "valitse kuva",
+  "select a single photo": "valitse yksi kuva",
+  "Super resolution": "Superresoluutio",
+  "AI sharpening": "Tekoälyterävöinti"
 }

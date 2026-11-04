@@ -1,5 +1,15 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### Super Resolution and AI Sharpen
+- Photo ▸ Enhance ▸ Super Resolution makes a copy of the selected photo with twice its pixels across, filled in by a
+  neural upscaler; AI Sharpen runs the same upscaler and brings the result back to the photo's size, for finer detail
+  and slightly sharper edges. Both write a new 16-bit TIFF next to the photo (`-Enhanced-SR.tif`), stacked with it, in
+  the background with a row in the activity stack. The photo is rendered without its edits first, so a raw's edits do
+  not carry over. No upscaler is bundled: install one in Settings ▸ AI Denoise (see docs/super-resolution.md). The
+  commands are `enhance.superResolution` (also 4×) and `enhance.aiSharpen`.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus

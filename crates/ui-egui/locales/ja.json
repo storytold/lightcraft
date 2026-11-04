@@ -2390,5 +2390,15 @@
   "Top bar": "上部バー",
   "Tool strip": "ツールバー",
   "Bottom bar": "下部バー",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）",
+  "Super Resolution": "スーパー解像度",
+  "AI Sharpen": "AI シャープ",
+  "Enhance": "強化",
+  "Upscaling": "拡大中",
+  "Writing": "書き込み中",
+  "an enhancement is already running": "強化はすでに実行中です",
+  "select a photo": "写真を選択してください",
+  "select a single photo": "写真を 1 枚だけ選択してください",
+  "Super resolution": "スーパー解像度",
+  "AI sharpening": "AI シャープ"
 }

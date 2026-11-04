@@ -2686,5 +2686,15 @@
   "Set up name suggestions…": "Thiết lập gợi ý tên…",
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
-  "Bottom bar": "Thanh dưới cùng"
+  "Bottom bar": "Thanh dưới cùng",
+  "Super Resolution": "Siêu phân giải",
+  "AI Sharpen": "Làm nét AI",
+  "Enhance": "Cải thiện",
+  "Upscaling": "Đang phóng to",
+  "Writing": "Đang ghi",
+  "an enhancement is already running": "một tác vụ cải thiện đang chạy",
+  "select a photo": "hãy chọn một ảnh",
+  "select a single photo": "hãy chọn đúng một ảnh",
+  "Super resolution": "Siêu phân giải",
+  "AI sharpening": "Làm nét AI"
 }

@@ -3661,5 +3661,15 @@
   "Top bar": "ზედა ზოლი",
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
+  "Super Resolution": "სუპერგარჩევადობა",
+  "AI Sharpen": "AI სიმკვეთრე",
+  "Enhance": "გაუმჯობესება",
+  "Upscaling": "გადიდება",
+  "Writing": "ჩაწერა",
+  "an enhancement is already running": "გაუმჯობესება უკვე მიმდინარეობს",
+  "select a photo": "აირჩიეთ ფოტო",
+  "select a single photo": "აირჩიეთ მხოლოდ ერთი ფოტო",
+  "Super resolution": "სუპერგარჩევადობა",
+  "AI sharpening": "AI სიმკვეთრე"
 }

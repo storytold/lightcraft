@@ -44,6 +44,9 @@ RGGB planes `[1, 4, tile, tile]` produce camera RGB `[1, 3, 2*tile, 2*tile]`.
 RawNIND uses a 512-cell tile, 64-cell overlap and a mean-matched nominal gain of 1e6.
 See `DenoiserManifest` for the validated JSON schema.
 
+The same folder keeps upscalers for Super Resolution (`domain: "rgbToRgb4x"`, the `upscaleModel` slot, and the
+`realesrgan-model` feature for a download): see [super-resolution.md](super-resolution.md).
+
 ## Photos, previews and exports
 
 Original RAW files stay untouched. A cleaned picture is cached under

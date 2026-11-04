@@ -23,6 +23,7 @@ pub mod destination;
 pub mod dialogs;
 pub mod docking;
 mod drop_overlay;
+pub mod enhance;
 pub mod export_task;
 mod focus_scan;
 mod frame_rate;
@@ -308,6 +309,8 @@ pub struct LightcraftApp {
     pub(crate) compare_hold_until: f64,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
+    /// Super Resolution / AI Sharpen running in the background.
+    pub enhance: enhance::EnhanceState,
     /// An import in progress (the import review dialog's batches).
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
