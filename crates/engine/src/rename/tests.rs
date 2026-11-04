@@ -588,3 +588,37 @@ fn number_folder_and_metadata_tokens() {
     // a bare {seq} is padded to the caller's width
     assert_eq!(expand_tokens("{seq}|{seq:2}", &p, 7, 3), "007|07");
 }
+
+/// Many photos wanting one name take its suffixes in order without each starting over at the bare name.
+#[test]
+fn photos_sharing_a_target_name_do_not_rescan_the_suffixes_already_claimed() {
+    let photos: Vec<std::sync::Arc<Photo>> = (0..300)
+        .map(|i| {
+            std::sync::Arc::new(Photo::new(
+                PhotoId(i + 1),
+                Source::File { path: format!("/lib/src{i}.jpg") },
+                &format!("src{i}.jpg"),
+                "JPEG",
+                0,
+                0,
+                "2024-01-01T00:00:00Z",
+            ))
+        })
+        .collect();
+    let checks = std::cell::Cell::new(0usize);
+    let plans = plan::plan_rename_core(
+        &photos,
+        "same",
+        1,
+        &|_| {
+            checks.set(checks.get() + 1);
+            false
+        },
+        &|_, _| false,
+    );
+    let mut names: Vec<&str> = plans.iter().map(|p| p.to.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), 300);
+    assert!(checks.get() <= 3 * 300, "{} disk checks", checks.get());
+}
