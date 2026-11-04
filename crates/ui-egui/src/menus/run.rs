@@ -363,11 +363,11 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(json!({"people": app.session.catalog.people().len()}))
         }
         "view.person" => {
-            app.ui.ignored_faces = None;
             // {name}: one person's page in the People view: their faces, and the faces that look like them
             let Some(name) = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) else {
                 return Some(Err("view.person: missing `name`".into()));
             };
+            app.ui.ignored_faces = None;
             app.ui.view = ViewMode::People;
             app.ui.person_from = None;
             app.ui.person_page = Some(name.to_string());
@@ -375,9 +375,11 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         }
         "view.ignoredFaces" => {
             app.ui.view = ViewMode::People;
+            app.ui.person_from = None;
             app.ui.person_page = None;
             app.ui.ignored_faces = Some(crate::panels::ignored_faces::View::default());
             app.ui.unnamed_selected.clear();
+            app.ui.unnamed_anchor = None;
             Ok(json!({}))
         }
         "view.survey" => {

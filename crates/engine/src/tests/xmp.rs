@@ -656,6 +656,45 @@ const MWG_REGIONS: &str = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 </x:xmpmeta>
 <?xpacket end="w"?>"#;
 
+/// Local rejections survive foreign region replacement, including explicit removal in XMP.
+#[test]
+fn rereading_xmp_preserves_ignored_regions_and_other_metadata() {
+    let src = temp_dir("ignored-reread");
+    write_png(&src.join("portrait.png"), 9);
+    let path = src.join("portrait.xmp");
+    std::fs::write(&path, MWG_REGIONS).unwrap();
+    let mut s = Session::new().with_fs();
+    let library = src.join("library");
+    s.open_library(&library, true).unwrap();
+    s.execute("library.import", &json!({"paths": [src.join("portrait.png").to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    s.execute("faces.ignore", &json!({"faces": [{"photo": id.0, "index": 0}]})).unwrap();
+    let ignored = s.catalog.photo(id).unwrap().meta.regions.clone();
+    let empty = MWG_REGIONS.replacen("<rdf:Bag>", "<rdf:Bag><!--", 1).replacen("</rdf:Bag>", "--></rdf:Bag>", 1);
+    let absent = lightcraft_meta::write_xmp(&lightcraft_meta::Metadata::default(), None);
+    let moved = MWG_REGIONS.replace("stArea:x=\"0.5\"", "stArea:x=\"0.2\"");
+    for packet in [MWG_REGIONS, MWG_REGIONS, &empty, &absent, &moved] {
+        std::fs::write(&path, packet).unwrap();
+        let read = s.execute("photo.readMetadataFromFile", &json!({})).unwrap();
+        assert!(read["failed"].as_array().unwrap().is_empty(), "{read}");
+        let regions = &s.catalog.photo(id).unwrap().meta.regions;
+        assert_eq!(regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::IgnoredFace).cloned().collect::<Vec<_>>(), ignored);
+        assert_eq!(regions.len(), if packet == moved { 2 } else { 1 });
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), packet);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().meta.regions, ignored);
+        s.execute("edit.redo", &json!({})).unwrap();
+    }
+    s.close_library().unwrap();
+    drop(s);
+    let mut reopened = Session::new().with_fs();
+    reopened.open_library(&library, false).unwrap();
+    assert_eq!(reopened.execute("faces.ignored", &json!({})).unwrap()["total"], 1);
+    assert_eq!(reopened.catalog.photo(id).unwrap().meta.regions.iter().find(|r| r.kind == lightcraft_meta::RegionKind::IgnoredFace), ignored.first());
+    reopened.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// A face region written by Lightroom (MWG-RS) into a sidecar reaches `Photo.meta.regions` on
 /// import — the same path real catalogs use, exercised end to end rather than just at the parser.
 #[test]

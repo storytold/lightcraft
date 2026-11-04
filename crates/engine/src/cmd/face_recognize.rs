@@ -1161,6 +1161,15 @@ mod imp {
             assert!(r.items[0]["score"].as_f64().unwrap() > r.items[1]["score"].as_f64().unwrap());
             assert_eq!(similar(&mut s, "ann", 1).items.len(), 1, "capped");
             assert!(similar(&mut s, "nobody", 10).items.is_empty());
+            // The positive control above produces both candidates. Ignoring a candidate excludes
+            // that exact pair; ignoring Ann's only exemplar must exclude the remaining candidate.
+            s.execute("faces.ignore", &json!({"faces": [{"photo": b.0, "index": 0}]})).unwrap();
+            let pairs = |r: Similar| r.items.iter().map(|i| (i["photo"].as_u64().unwrap(), i["index"].as_u64().unwrap())).collect::<Vec<_>>();
+            assert_eq!(pairs(similar(&mut s, "ann", 10)), vec![(c.0, 0)]);
+            s.execute("faces.ignore", &json!({"faces": [{"photo": a.0, "index": 0}]})).unwrap();
+            assert!(pairs(similar(&mut s, "ann", 10)).is_empty());
+            s.execute("faces.ignore", &json!({"faces": [{"photo": a.0, "index": 0}], "ignored": false})).unwrap();
+            assert_eq!(pairs(similar(&mut s, "ann", 10)), vec![(c.0, 0)], "restoring the exemplar restores its suggestion");
             let _ = std::fs::remove_dir_all(&d);
         }
     }

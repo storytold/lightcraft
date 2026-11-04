@@ -45,7 +45,29 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let Some(mut view) = app.ui.ignored_faces.take() else { return };
     let t = crate::theme::Tokens::get(ui.ctx());
     if view.revision.is_some_and(|revision| revision != app.session.catalog.revision) {
-        view.invalidate();
+        // Refetch on catalog changes, but only discard selection when the displayed entries
+        // change. Background detections elsewhere must not move the review back to page one.
+        match app.session.execute("faces.ignored", &json!({"offset": view.offset, "limit": PAGE_SIZE})) {
+            Ok(response) => {
+                let faces = response["faces"].as_array().cloned().unwrap_or_default();
+                view.total = response["total"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or_default();
+                if view.faces.as_deref() != Some(&faces) {
+                    view.selected.clear();
+                    view.anchor = None;
+                }
+                view.faces = Some(std::sync::Arc::new(faces));
+                view.error = None;
+                if view.offset >= view.total && view.offset > 0 {
+                    view.page(view.total.saturating_sub(1) / PAGE_SIZE * PAGE_SIZE);
+                }
+            }
+            Err(error) => {
+                view.selected.clear();
+                view.anchor = None;
+                view.faces = None;
+                view.error = Some(error.to_string());
+            }
+        }
     }
     view.revision = Some(app.session.catalog.revision);
     let mut back = false;
@@ -193,6 +215,29 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn ignored_navigation_discards_old_destinations_but_invalid_person_preserves_review() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let id = app.session.catalog.photos().next().unwrap().id.0;
+        app.ui.person_from = Some((Some("Earlier".into()), id));
+        app.ui.unnamed_selected.insert((id, 0));
+        app.ui.unnamed_anchor = Some(42);
+        app.run("view.ignoredFaces", json!({})).unwrap();
+        assert!(app.ui.person_from.is_none());
+        assert!(app.ui.unnamed_selected.is_empty());
+        assert!(app.ui.unnamed_anchor.is_none());
+        app.ui.ignored_faces.as_mut().unwrap().offset = PAGE_SIZE;
+        for params in [json!({}), json!({"name": "   "}), json!({"name": 5})] {
+            assert!(app.run("view.person", params).is_err());
+            assert_eq!(app.ui.ignored_faces.as_ref().unwrap().offset, PAGE_SIZE);
+        }
+        app.run("view.detail", json!({})).unwrap();
+        app.run("view.back", json!({})).unwrap();
+        assert_eq!(app.ui.view, crate::state::ViewMode::PhotoGrid);
+        app.run("view.person", json!({"name": "Person"})).unwrap();
+        assert!(app.ui.ignored_faces.is_none());
+    }
+
     fn screenshot_if_requested(h: &mut crate::headless::Headless, variable: &str) {
         let Some(path) = std::env::var_os(variable) else { return };
         let timeout = std::time::Duration::from_secs(15);
@@ -210,52 +255,60 @@ mod tests {
     #[test]
     fn unnamed_range_can_be_ignored_and_restored_as_batches() {
         use lightcraft_meta::{Region, RegionKind};
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
-        let id = app.session.catalog.photos().next().unwrap().id;
-        let mut meta = app.session.catalog.photo(id).unwrap().meta.clone();
-        meta.regions = (0..3)
-            .map(|i| Region {
-                rect: lightcraft_geom::Rect { x0: 0.1 + f64::from(i) * 0.2, y0: 0.2, x1: 0.25 + f64::from(i) * 0.2, y1: 0.5 },
-                kind: RegionKind::Face,
-                name: None,
-                description: Some("retained".into()),
-            })
-            .collect();
-        let original = meta.regions.clone();
-        app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
-        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
-        let timeout = std::time::Duration::from_secs(15);
-        h.step();
-        h.app.run("view.people", json!({})).unwrap();
-        h.settle(timeout);
-        for (index, shift) in [(0, false), (2, true)] {
-            let r = h.request("ui.clickWidget", json!({"id": format!("unnamed-face:{}:{index}", id.0), "shift": shift}), timeout);
-            assert_eq!(r["ok"], true, "{r}");
+        for language in ["english", "german"] {
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+            app.run(&format!("app.language.{language}"), json!({})).unwrap();
+            let id = app.session.catalog.photos().next().unwrap().id;
+            let mut meta = app.session.catalog.photo(id).unwrap().meta.clone();
+            meta.regions = (0..3)
+                .map(|i| Region {
+                    rect: lightcraft_geom::Rect { x0: 0.1 + f64::from(i) * 0.2, y0: 0.2, x1: 0.25 + f64::from(i) * 0.2, y1: 0.5 },
+                    kind: RegionKind::Face,
+                    name: None,
+                    description: Some("retained".into()),
+                })
+                .collect();
+            let original = meta.regions.clone();
+            app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+            // At this width the naming controls must wrap for Ignore to remain clickable.
+            let mut h = crate::headless::Headless::new(app, crate::window_place::MIN_SIZE, 1.0);
+            let timeout = std::time::Duration::from_secs(15);
             h.step();
-        }
-        assert_eq!(h.app.ui.unnamed_selected.len(), 3);
-        screenshot_if_requested(&mut h, "LIGHTCRAFT_UNNAMED_SCREENSHOT");
-        let before = h.app.session.undo.len();
-        assert_eq!(h.request("ui.clickWidget", json!({"id": "unnamed:ignore"}), timeout)["ok"], true);
-        h.step();
-        assert_eq!(h.app.session.undo.len(), before + 1);
-        assert!(h.app.ui.unnamed_selected.is_empty());
-        assert!(h.app.session.catalog.photo(id).unwrap().meta.regions.iter().all(|r| r.kind == RegionKind::IgnoredFace));
-        assert_eq!(h.app.session.execute("faces.unnamed", &json!({})).unwrap()["total"], 0);
-        h.app.run("edit.undo", json!({})).unwrap();
-        assert_eq!(h.app.session.catalog.photo(id).unwrap().meta.regions, original);
-        h.app.run("edit.redo", json!({})).unwrap();
-        h.app.run("view.ignoredFaces", json!({})).unwrap();
-        h.settle(timeout);
-        screenshot_if_requested(&mut h, "LIGHTCRAFT_IGNORED_BATCH_SCREENSHOT");
-        let before = h.app.session.undo.len();
-        for widget in ["ignoredFaces:selectAll", "ignoredFaces:restore"] {
-            let r = h.request("ui.clickWidget", json!({"id": widget}), timeout);
-            assert_eq!(r["ok"], true, "{r}");
+            h.app.run("view.people", json!({})).unwrap();
+            h.settle(timeout);
+            for (index, shift) in [(0, false), (2, true)] {
+                let r = h.request("ui.clickWidget", json!({"id": format!("unnamed-face:{}:{index}", id.0), "shift": shift}), timeout);
+                assert_eq!(r["ok"], true, "{r}");
+                h.step();
+            }
+            assert_eq!(h.app.ui.unnamed_selected.len(), 3);
+            screenshot_if_requested(
+                &mut h,
+                if language == "german" { "LIGHTCRAFT_UNNAMED_GERMAN_SCREENSHOT" } else { "LIGHTCRAFT_UNNAMED_SCREENSHOT" },
+            );
+            let before = h.app.session.undo.len();
+            assert_eq!(h.request("ui.clickWidget", json!({"id": "unnamed:ignore"}), timeout)["ok"], true);
             h.step();
+            assert_eq!(h.app.session.undo.len(), before + 1);
+            assert!(h.app.ui.unnamed_selected.is_empty());
+            assert!(h.app.session.catalog.photo(id).unwrap().meta.regions.iter().all(|r| r.kind == RegionKind::IgnoredFace));
+            assert_eq!(h.app.session.execute("faces.unnamed", &json!({})).unwrap()["total"], 0);
+            h.app.run("edit.undo", json!({})).unwrap();
+            assert_eq!(h.app.session.catalog.photo(id).unwrap().meta.regions, original);
+            h.app.run("edit.redo", json!({})).unwrap();
+            h.app.run("view.ignoredFaces", json!({})).unwrap();
+            h.settle(timeout);
+            screenshot_if_requested(&mut h, "LIGHTCRAFT_IGNORED_BATCH_SCREENSHOT");
+            let before = h.app.session.undo.len();
+            for widget in ["ignoredFaces:selectAll", "ignoredFaces:restore"] {
+                let r = h.request("ui.clickWidget", json!({"id": widget}), timeout);
+                assert_eq!(r["ok"], true, "{r}");
+                h.step();
+            }
+            assert_eq!(h.app.session.undo.len(), before + 1);
+            assert_eq!(h.app.session.catalog.photo(id).unwrap().meta.regions, original);
+            h.app.run("app.language.english", json!({})).unwrap();
         }
-        assert_eq!(h.app.session.undo.len(), before + 1);
-        assert_eq!(h.app.session.catalog.photo(id).unwrap().meta.regions, original);
     }
 
     /// Removing a region must not transfer its selection to the face that takes its index.
@@ -321,6 +374,22 @@ mod tests {
         assert_eq!(view.offset, PAGE_SIZE);
         assert_eq!(view.faces.as_ref().unwrap().len(), 1);
         assert!(view.selected.is_empty());
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "ignoredFaces:selectAll"}), timeout)["ok"], true);
+        h.step();
+        h.app.session.execute("photo.rate", &json!({"ids": [id.0], "rating": 3})).unwrap();
+        h.step();
+        let view = h.app.ui.ignored_faces.as_ref().unwrap();
+        assert_eq!(view.offset, PAGE_SIZE, "an unrelated catalog revision keeps the page");
+        assert_eq!(view.selected.len(), 1, "and its selection");
+        let other = h.app.session.catalog.photos().find(|p| p.id != id).unwrap().id;
+        let mut meta = h.app.session.catalog.photo(other).unwrap().meta.clone();
+        let mut detected = h.app.session.catalog.photo(id).unwrap().meta.regions[0].clone();
+        detected.kind = lightcraft_meta::RegionKind::Face;
+        meta.regions.push(detected);
+        h.app.session.commit("background detections", lightcraft_catalog::Op::SetMeta { id: other, meta: Box::new(meta) }).unwrap();
+        h.step();
+        assert_eq!(h.app.ui.ignored_faces.as_ref().unwrap().offset, PAGE_SIZE);
+        assert_eq!(h.app.ui.ignored_faces.as_ref().unwrap().selected.len(), 1);
         if let Some(path) = std::env::var_os("LIGHTCRAFT_IGNORED_PAGED_SCREENSHOT") {
             let shot = h.snapshot(timeout);
             let image = lightcraft_raster::Rgba8::from_fn(shot.size[0], shot.size[1], |x, y| shot.pixels[y * shot.size[0] + x].to_array());

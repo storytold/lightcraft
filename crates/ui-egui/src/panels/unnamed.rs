@@ -135,7 +135,7 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut submit: Option<String> = None;
     let mut clear = false;
     let mut ignore = false;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.add_space(super::people::PAD - 4.0);
         let n = selected.len();
         ui.label(RichText::new(if n == 1 { "1 face selected".to_string() } else { format!("{n} faces selected") }).color(t.text));

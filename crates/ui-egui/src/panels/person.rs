@@ -23,7 +23,7 @@ pub struct Selection {
     faces: std::collections::HashSet<(u64, usize)>,
     anchor: Option<(usize, bool)>,
     before_click: Option<BeforeClick>,
-    revision: Option<u64>,
+    confirmed: Vec<Face>,
 }
 
 #[derive(Clone, Debug)]
@@ -200,12 +200,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         app.ui.person_selection = Selection { name: shown_name.clone(), ..Default::default() };
     }
     let selection = &mut app.ui.person_selection;
-    if selection.revision.is_some_and(|revision| revision != app.session.catalog.revision) {
+    // A background scan can change the catalog without changing this person's face identities.
+    // Compare the confirmed list, not the global revision; changed indices/boxes still reset it.
+    if selection.confirmed != page.confirmed {
         selection.faces.clear();
         selection.anchor = None;
         selection.before_click = None;
+        selection.confirmed = page.confirmed.clone();
     }
-    selection.revision = Some(app.session.catalog.revision);
     if !app.ui.person_selection.faces.is_empty() {
         let valid: std::collections::HashSet<_> = page.confirmed.iter().map(|f| (f.photo, f.index)).collect();
         app.ui.person_selection.faces.retain(|key| valid.contains(key));
@@ -443,7 +445,11 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     let t = Tokens::get(ui.ctx());
     let salt = if more { "more-face" } else { "person-face" };
     let resp = ui.interact(r, egui::Id::unique((salt, f.photo, f.index)), Sense::click());
-    crate::widgets::announce(&resp, name.to_string());
+    if more {
+        crate::widgets::announce(&resp, name.to_string());
+    } else {
+        crate::widgets::announce_selected(&resp, name.to_string(), app.ui.person_selection.faces.contains(&(f.photo, f.index)));
+    }
     register(ui, format!("{salt}:{}:{}", f.photo, f.index), r);
     // the × is added after the tile, so it wins where they overlap
     let x_rect = Rect::from_min_size(pos2(r.right() - 24.0, r.top() + 4.0), vec2(20.0, 20.0));
@@ -465,7 +471,7 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
         p.rect_stroke(r, 3.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
     }
     let mut hit = Hit::Nothing;
-    resp.context_menu(|ui| {
+    crate::widgets::context_menu(&resp, |ui| {
         let button = ui.button(crate::i18n::tr("Ignore face (blurry / not a face)"));
         register(ui, "person:ignoreFace", button.rect);
         if button.clicked() {
@@ -583,6 +589,82 @@ mod tests {
         assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].kind, lightcraft_meta::RegionKind::Face);
         h.app.run("edit.redo", json!({})).unwrap();
         assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].kind, lightcraft_meta::RegionKind::IgnoredFace);
+    }
+
+    /// Confirmed tiles expose both states to screen readers, not only their names.
+    #[test]
+    fn confirmed_tiles_announce_selection() {
+        use egui_kittest::{Harness, kittest::NodeT};
+        for selected in [false, true] {
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+            if selected {
+                app.ui.person_selection.faces.insert((99, 0));
+            }
+            let h = Harness::builder().build_ui_state(
+                |ui, app: &mut LightcraftApp| {
+                    let face = Face { photo: 99, index: 0, rect: lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.4 }, score: 0.0 };
+                    tile(
+                        app,
+                        ui,
+                        &TileSpec {
+                            r: Rect::from_min_size(ui.cursor().min, vec2(100.0, 100.0)),
+                            f: &face,
+                            ppp: 1.0,
+                            more: false,
+                            name: "Person",
+                            above_count: 0,
+                        },
+                    );
+                },
+                app,
+            );
+            let node = h.root().children_recursive().find(|n| n.accesskit_node().label().as_deref() == Some("Person")).unwrap();
+            assert_eq!(
+                node.accesskit_node().toggled(),
+                Some(if selected { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False })
+            );
+        }
+    }
+
+    /// An unrelated catalog revision keeps selection, but a different face at the same index does not.
+    #[test]
+    fn confirmed_selection_survives_unrelated_changes_but_not_reused_indices() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let id = app.session.catalog.photos().next().unwrap().id;
+        let mut meta = app.session.catalog.photo(id).unwrap().meta.clone();
+        meta.regions = (0..2)
+            .map(|i| lightcraft_meta::Region {
+                rect: lightcraft_geom::Rect { x0: 0.1 + f64::from(i) * 0.3, y0: 0.1, x1: 0.3 + f64::from(i) * 0.3, y1: 0.4 },
+                kind: lightcraft_meta::RegionKind::Face,
+                name: Some("Person".into()),
+                description: None,
+            })
+            .collect();
+        app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        let timeout = std::time::Duration::from_secs(15);
+        h.app.run("view.person", json!({"name": "Person"})).unwrap();
+        h.settle(timeout);
+        h.app.ui.person_selection.active = true;
+        let faces = h.app.ui.person_selection.confirmed.clone();
+        select_confirmed(&mut h.app.ui.person_selection, &faces, &faces[0], false);
+        h.app.session.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+        h.step();
+        assert_eq!(h.app.ui.person_selection.faces.len(), 1);
+        assert!(h.app.ui.person_selection.anchor.is_some());
+        let other = h.app.session.catalog.photos().find(|p| p.id != id).unwrap().id;
+        let mut meta = h.app.session.catalog.photo(other).unwrap().meta.clone();
+        let mut detected = h.app.session.catalog.photo(id).unwrap().meta.regions[0].clone();
+        detected.name = None;
+        meta.regions.push(detected);
+        h.app.session.commit("background detections", lightcraft_catalog::Op::SetMeta { id: other, meta: Box::new(meta) }).unwrap();
+        h.step();
+        assert_eq!(h.app.ui.person_selection.faces.len(), 1);
+        assert!(h.app.ui.person_selection.anchor.is_some());
+        h.app.session.execute("photo.removeRegion", &json!({"id": id.0, "index": 0})).unwrap();
+        h.step();
+        assert!(h.app.ui.person_selection.faces.is_empty());
+        assert!(h.app.ui.person_selection.anchor.is_none());
     }
 
     /// Double-click navigation restores the whole pre-click range and anchor on return.
