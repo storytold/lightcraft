@@ -3,6 +3,7 @@
 //! Pure Rust (std + serde_json; flate2/brotli for the web bundle). External tools (`cargo`, `curl`, `tar`) are
 //! invoked through `std::process::Command`.
 
+mod ai_bench;
 mod assets;
 mod bench;
 mod ci_lock;
@@ -33,6 +34,9 @@ usage: cargo xtask <command>
 
 commands:
   assets          every image/icon/font/media file is attributed in assets/ATTRIBUTION.md; no Adobe assets
+  ai-bench fetch|run
+                  reproduce the face-detection accuracy on WIDER FACE validation and the face-recognition
+                  accuracy on LFW; see docs/faces.md
   bench [FILE] [--strict] [--threshold PCT]
                   run the render benchmark, append to target/bench/history.jsonl, compare CPU time with
                   the previous run (default input: corpus/raw/arw-sony-a7m3-compressed.arw)
@@ -75,6 +79,7 @@ fn main() -> ExitCode {
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("layers") => cmd_layers(),
+        Some("ai-bench") => ai_bench::run(&root(), &rest),
         Some("assets") => assets::run(&root()),
         Some("bench") => bench::run(&root(), &rest),
         Some("parity") => parity::run(&root(), rest.contains(&"--write")),

@@ -10,6 +10,10 @@ workspace = true
 
 [dependencies]
 serde_json = { workspace = true }
+# `cargo xtask ai-bench` (pure Rust): LightCraft's own face detector and JPEG decoder, both already in the lockfile
+lightcraft-faces = { workspace = true }
+zune-jpeg = { workspace = true }
+zune-core = { workspace = true }
 # corpus download checksums
 sha2 = { workspace = true }
 # precompressed web bundle (`cargo xtask web`); pure Rust
