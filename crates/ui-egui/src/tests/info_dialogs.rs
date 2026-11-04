@@ -72,7 +72,8 @@ fn location_view_action_is_available_without_a_photo_selection() {
 #[test]
 fn fill_location_is_on_when_any_selected_photo_has_gps() {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    // tall enough that Fill Location, low in the Info panel, is on screen
+    let mut h = Headless::new(app, [1300.0, 2000.0], 1.0);
     let ids: Vec<_> = h.app.session.visible_cloned().into_iter().take(2).collect();
     let (no_gps, with_gps) = (ids[0], ids[1]);
     for (id, gps) in [(no_gps, None), (with_gps, Some((48.86, 2.34)))] {

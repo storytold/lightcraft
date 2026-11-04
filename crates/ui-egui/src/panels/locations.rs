@@ -6,7 +6,7 @@ use serde_json::json;
 /// Advance a running Fill view (`metadata.pumpLocations`): every 0.1 s while it runs, else every 5 s.
 /// Background work: `now` is the host's clock, not the frame's input.
 pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
-    let key = egui::Id::new("location-fill-next-pump");
+    let key = egui::Id::unique("location-fill-next-pump");
     if ctx.data(|d| d.get_temp::<f64>(key)).is_some_and(|next| now < next) {
         return;
     }
@@ -45,7 +45,7 @@ pub fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, has_gps: bool) {
         if fill_view.on_hover_text(crate::i18n::tr("Fill missing places for every GPS photo in the current view. Respects the folder, subfolders and filters; preserves existing values.")).clicked() {
             match app.run("metadata.fillLocations",json!({})) {
                 Ok(v) if v["started"]==false => app.toast(ui.ctx(),crate::i18n::tr("No missing places to fill in this view.")),
-                Ok(_) => {ui.ctx().data_mut(|d|d.remove::<f64>(egui::Id::new("location-fill-next-pump")));},
+                Ok(_) => {ui.ctx().data_mut(|d|d.remove::<f64>(egui::Id::unique("location-fill-next-pump")));},
                 Err(e) => app.toast_error(ui.ctx(),e),
             }
         }
