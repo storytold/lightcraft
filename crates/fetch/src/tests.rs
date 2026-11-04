@@ -30,6 +30,8 @@ fn pinned() -> FileSpec<'static> {
 struct Server {
     base: String,
     hits: Arc<AtomicUsize>,
+    /// A held connection ("stall", "held") outlasted its hang guard: the client never hung up.
+    forced: Arc<AtomicBool>,
 }
 
 /// Serve on 127.0.0.1; the first path segment picks the behaviour.
@@ -37,17 +39,43 @@ fn server() -> Server {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", l.local_addr().unwrap());
     let hits = Arc::new(AtomicUsize::new(0));
-    let h = hits.clone();
+    let forced = Arc::new(AtomicBool::new(false));
+    let (h, f) = (hits.clone(), forced.clone());
     std::thread::spawn(move || {
         for s in l.incoming().flatten() {
-            let h = h.clone();
-            std::thread::spawn(move || handle(s, &h));
+            let (h, f) = (h.clone(), f.clone());
+            std::thread::spawn(move || handle(s, &h, &f));
         }
     });
-    Server { base, hits }
+    Server { base, hits, forced }
 }
 
-fn handle(mut s: TcpStream, hits: &AtomicUsize) {
+/// Send nothing more until the client hangs up. Only a hang guard ends it otherwise (a minute, stretched by
+/// `LIGHTCRAFT_TIME_SCALE`), noted in `forced`: a client that waited for the server to hang up fails the test
+/// instead of hanging it.
+fn hold_until_the_client_hangs_up(s: &mut TcpStream, forced: &AtomicBool) {
+    let guard = stretched(Duration::from_secs(60));
+    let started = Instant::now();
+    let mut sink = [0u8; 1024];
+    loop {
+        let left = guard.saturating_sub(started.elapsed());
+        if left.is_zero() {
+            forced.store(true, Ordering::SeqCst);
+            return;
+        }
+        if s.set_read_timeout(Some(left)).is_err() {
+            return;
+        }
+        match std::io::Read::read(s, &mut sink) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+            Err(_) => return,
+        }
+    }
+}
+
+fn handle(mut s: TcpStream, hits: &AtomicUsize, forced: &AtomicBool) {
     let n = hits.fetch_add(1, Ordering::SeqCst);
     let mut r = BufReader::new(s.try_clone().unwrap());
     let mut first = String::new();
@@ -99,19 +127,26 @@ fn handle(mut s: TcpStream, hits: &AtomicUsize) {
             let _ = s.write_all(b"0\r\nX-Trailer: 1\r\n\r\n");
         }
         "stall" => {
-            // half the file, then nothing
+            // half the file, then nothing until the client gives up on it
             let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
             let _ = s.write_all(&body[..body.len() / 2]);
-            // (stretched with the client's timeouts, so it stays well past the stall timeout)
-            std::thread::sleep(stretched(Duration::from_secs(5)));
+            hold_until_the_client_hangs_up(&mut s, forced);
         }
-        "slow" => {
+        "held" => {
+            // a kilobyte, then a byte every 50 ms (never a stall) until the client hangs up: a transfer that is
+            // never done (a hang guard ends it otherwise, noted in `forced`)
             let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
-            for c in body.chunks(1000) {
-                if s.write_all(c).is_err() {
+            let _ = s.write_all(&body[..1000]);
+            let (guard, started) = (stretched(Duration::from_secs(60)), Instant::now());
+            for b in &body[1000..] {
+                if started.elapsed() >= guard {
+                    forced.store(true, Ordering::SeqCst);
                     return;
                 }
-                std::thread::sleep(Duration::from_millis(20));
+                if s.write_all(std::slice::from_ref(b)).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
             }
         }
         "flaky" if n.is_multiple_of(2) && range.is_none() => {
@@ -302,11 +337,10 @@ fn a_server_sending_too_much_is_cut_off() {
 fn a_stalled_server_times_out_and_the_next_mirror_finishes() {
     let srv = server();
     let dir = tmp("stall");
-    let t = Instant::now();
     let (r, _) = run(&[pinned()], &[format!("{}/stall", srv.base), format!("{}/good", srv.base)], &dir, &AtomicBool::new(false));
     r.unwrap();
-    // two stalled tries (600 ms each) and the good mirror, not two waits for the server to hang up (5 s each)
-    assert!(t.elapsed() < stretched(Duration::from_secs(4)), "{:?}", t.elapsed());
+    // two stalled tries, each given up at the stall timeout: the stalled server never hangs up itself
+    assert!(!srv.forced.load(Ordering::SeqCst), "the client waited for the stalled server to hang up");
     assert_eq!(std::fs::read(dir.join("model.bin")).unwrap(), payload());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -318,21 +352,21 @@ fn cancel_stops_quickly_and_keeps_the_part_for_later() {
     let cancel = Arc::new(AtomicBool::new(false));
     let c = cancel.clone();
     let part = part_path(&dir, "model.bin");
-    // cancel once part of the file is written (the slow server takes 6 s for the whole of it)
+    // cancel once part of the file is written (the held server never sends the rest)
     let canceller = std::thread::spawn(move || {
         lightcraft_testkit::wait_until(Duration::from_secs(30), "the first bytes of the part", || {
             std::fs::metadata(&part).is_ok_and(|m| m.len() > 0)
         });
         c.store(true, Ordering::SeqCst);
     });
-    let t = Instant::now();
-    let (r, _) = run(&[pinned()], &[format!("{}/slow", srv.base)], &dir, &cancel);
+    let (r, _) = run(&[pinned()], &[format!("{}/held", srv.base)], &dir, &cancel);
     // a part that never got bytes fails the test with the wait's message, not the result's
     if let Err(panic) = canceller.join() {
         std::panic::resume_unwind(panic);
     }
+    // stopped by Cancel, not by the stall timeout (that would be an error) or the server (it never hangs up)
     assert_eq!(r, Err(DownloadError::Cancelled));
-    assert!(t.elapsed() < stretched(Duration::from_secs(3)), "{:?}", t.elapsed());
+    assert!(!srv.forced.load(Ordering::SeqCst), "the client hung up only when the server's hang guard ran out");
     assert!(!dir.join("model.bin").exists());
     let kept = std::fs::metadata(part_path(&dir, "model.bin")).map(|m| m.len()).unwrap_or(0);
     assert!(kept > 0 && kept < 300_000, "{kept}");
