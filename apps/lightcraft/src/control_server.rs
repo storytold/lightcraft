@@ -113,20 +113,52 @@ fn serve_stream(stream: TcpStream, handle: impl FnMut(String, Value) -> Option<V
 /// (LochLogic).
 fn close_gracefully(stream: &TcpStream) {
     let _ = stream.shutdown(std::net::Shutdown::Write);
-    let start = std::time::Instant::now();
     let mut sink = [0u8; 8192];
-    let mut left = MAX_LINE;
     let mut reader = stream;
+    drain(std::time::Instant::now, |wait| {
+        stream.set_read_timeout(Some(wait))?;
+        reader.read(&mut sink)
+    });
+}
+
+/// Read and drop what a closing connection's peer still sends: [`MAX_LINE`] bytes, 500 ms per read and
+/// [`DRAIN_TIME`] in all, on the clock `now`. `read` reads once, waiting `wait` at most (`Ok(0)` at the end, an
+/// error when nothing came). The tests pass a clock and a peer of their own, which shows how long the drain
+/// goes on without timing it.
+fn drain(now: impl Fn() -> std::time::Instant, mut read: impl FnMut(Duration) -> std::io::Result<usize>) {
+    let start = now();
+    let mut left = MAX_LINE;
     while left > 0 {
         // a peer that keeps trickling bytes must not hold the connection slot past DRAIN_TIME
-        let wait = DRAIN_TIME.saturating_sub(start.elapsed()).min(Duration::from_millis(500));
-        if wait.is_zero() || stream.set_read_timeout(Some(wait)).is_err() {
+        let wait = DRAIN_TIME.saturating_sub(now().saturating_duration_since(start)).min(Duration::from_millis(500));
+        if wait.is_zero() {
             break;
         }
-        match reader.read(&mut sink) {
+        match read(wait) {
             Ok(0) | Err(_) => break,
             Ok(n) => left = left.saturating_sub(n),
         }
+    }
+}
+
+/// Where [`await_reply_on`] gets the time and waits for a reply: the wall clock in the app, a clock of their own in
+/// the tests (which shows when a request is given up without timing it).
+trait ReplyClock {
+    fn now(&self) -> std::time::Instant;
+    /// Wait for the reply, `slice` at most.
+    fn wait(&mut self, rrx: &Receiver<Value>, slice: Duration) -> Result<Value, std::sync::mpsc::RecvTimeoutError>;
+}
+
+/// The wall clock.
+struct WallClock;
+
+impl ReplyClock for WallClock {
+    fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
+    fn wait(&mut self, rrx: &Receiver<Value>, slice: Duration) -> Result<Value, std::sync::mpsc::RecvTimeoutError> {
+        rrx.recv_timeout(slice)
     }
 }
 
@@ -141,24 +173,37 @@ fn await_reply(
     no_frames: Duration,
     timeout: Duration,
 ) -> Value {
-    let start = std::time::Instant::now();
+    await_reply_on(&mut WallClock, rrx, state, frames, wake, no_frames, timeout)
+}
+
+/// [`await_reply`] on `clock`.
+fn await_reply_on(
+    clock: &mut impl ReplyClock,
+    rrx: &Receiver<Value>,
+    state: &std::sync::atomic::AtomicU8,
+    frames: impl Fn() -> u64,
+    wake: impl Fn(),
+    no_frames: Duration,
+    timeout: Duration,
+) -> Value {
+    let start = clock.now();
     let slice = (no_frames / 10).max(Duration::from_millis(1));
-    let (mut last, mut since) = (frames(), std::time::Instant::now());
+    let (mut last, mut since) = (frames(), clock.now());
     loop {
-        match rrx.recv_timeout(slice) {
+        match clock.wait(rrx, slice) {
             Ok(v) => return v,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return json!({"ok": false, "error": "the app dropped the request"}),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
         let now = frames();
         if now != last {
-            (last, since) = (now, std::time::Instant::now());
+            (last, since) = (now, clock.now());
         }
         let taken = state.load(Ordering::SeqCst) == lightcraft_ui_egui::control::TAKEN;
-        if !taken && since.elapsed() >= no_frames && ControlRequest::abandon(state) {
+        if !taken && clock.now().saturating_duration_since(since) >= no_frames && ControlRequest::abandon(state) {
             return json!({"ok": false, "error": HIDDEN_WINDOW_ERROR});
         }
-        if start.elapsed() >= timeout {
+        if clock.now().saturating_duration_since(start) >= timeout {
             // not run yet: make sure it never is; already running: it may still finish
             ControlRequest::abandon(state);
             return json!({"ok": false, "error": "timeout"});
@@ -401,20 +446,64 @@ mod tests {
     #[test]
     fn a_request_to_an_app_drawing_no_frames_is_given_up_with_a_reason() {
         let (req, rrx) = ControlRequest::new("ui.inspect", json!({}));
-        // The overall timeout and the bound on giving up both stretch with LIGHTCRAFT_TIME_SCALE,
-        // so the bound stays half the timeout on a loaded machine. Neither shrinks below its
-        // unscaled value: at LIGHTCRAFT_TIME_SCALE=0.1 the bound would be 0.5 s, which a loaded
-        // machine can miss even when the 50 ms frame window works.
-        let timeout = lightcraft_testkit::scaled(Duration::from_secs(10)).max(Duration::from_secs(10));
-        let t0 = std::time::Instant::now();
+        // Given up by the frame window (50 ms): the timeout (a hang guard, a minute stretched by
+        // LIGHTCRAFT_TIME_SCALE) answers "timeout".
+        let timeout = lightcraft_testkit::scaled(Duration::from_secs(60)).max(Duration::from_secs(60));
         let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(50), timeout);
-        // Given up by the frame window (50 ms), not the timeout, which answers "timeout". The
-        // reason alone can't tell: a wait that slept out the whole timeout before checking the
-        // frame window would still answer "not visible", so the return is bounded too.
-        assert!(t0.elapsed() < timeout / 2, "given up after {:?} (timeout {timeout:?})", t0.elapsed());
         assert_eq!(r["ok"], false);
         assert!(r["error"].as_str().unwrap().contains("not visible"), "{r}");
         assert!(!req.take(), "the app does not run it once it shows up");
+        // When: on a clock that moves only while the wait waits, it is given up as soon as the frame window has
+        // passed (the waits are slices of a tenth of it), not after waiting out more of the timeout first.
+        let (req, rrx) = ControlRequest::new("ui.inspect", json!({}));
+        let mut clock = Virtual::new();
+        let r = await_reply_on(&mut clock, &rrx, &req.state, || 7, || {}, Duration::from_millis(50), Duration::from_secs(3600));
+        assert!(r["error"].as_str().unwrap().contains("not visible"), "{r}");
+        assert_eq!(clock.waits, [Duration::from_millis(5); 10], "given up after the 50 ms frame window");
+        assert!(!req.take());
+        // and with frames coming, at the timeout
+        let (req, rrx) = ControlRequest::new("ui.inspect", json!({}));
+        let mut clock = Virtual::new();
+        let n = std::sync::atomic::AtomicU64::new(0);
+        let r = await_reply_on(
+            &mut clock,
+            &rrx,
+            &req.state,
+            || n.fetch_add(1, Ordering::SeqCst),
+            || {},
+            Duration::from_millis(50),
+            Duration::from_secs(1),
+        );
+        assert_eq!(r["error"], "timeout", "{r}");
+        assert_eq!(clock.at, Duration::from_secs(1), "given up at the timeout");
+        assert!(!req.take());
+    }
+
+    /// A clock that moves only while [`await_reply_on`] waits, by the slice it waits (no reply comes), and records
+    /// the slices.
+    struct Virtual {
+        /// (any instant will do as the start: only the time since it counts)
+        base: std::time::Instant,
+        at: Duration,
+        waits: Vec<Duration>,
+    }
+
+    impl Virtual {
+        fn new() -> Self {
+            Virtual { base: std::time::Instant::now(), at: Duration::ZERO, waits: Vec::new() }
+        }
+    }
+
+    impl ReplyClock for Virtual {
+        fn now(&self) -> std::time::Instant {
+            self.base + self.at
+        }
+
+        fn wait(&mut self, _: &Receiver<Value>, slice: Duration) -> Result<Value, std::sync::mpsc::RecvTimeoutError> {
+            self.at += slice;
+            self.waits.push(slice);
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        }
     }
 
     /// A request the app is running is not given up because frames stopped (a long command
@@ -552,26 +641,27 @@ mod tests {
             let (s, _) = listener.accept().unwrap();
             serve(s, &tx, &egui::Context::default(), IDLE_TIMEOUT);
         });
-        // the program lives about 4 s, stretched by LIGHTCRAFT_TIME_SCALE (never shrunk)
-        let lives = lightcraft_testkit::scaled(Duration::from_secs(4)).max(Duration::from_secs(4));
+        // the program lives until the test ends it (`ping -n 3600` waits a second between pings: an hour). The
+        // client's read timeout is a hang guard (a minute, stretched by LIGHTCRAFT_TIME_SCALE): a connection the
+        // program held open would end only with the program, so the read would time out instead.
+        let guard = lightcraft_testkit::scaled(Duration::from_secs(60)).max(Duration::from_secs(60));
         let mut c = TcpStream::connect(addr).unwrap();
-        c.set_read_timeout(Some(lives * 5)).unwrap();
-        // the connection is being served: start the program (`ping -n` waits a second between pings)
+        c.set_read_timeout(Some(guard)).unwrap();
+        // the connection is being served: start the program
         std::thread::sleep(Duration::from_millis(200));
-        let ping = format!("ping -n {} 127.0.0.1 >nul", lives.as_secs().saturating_add(1));
-        let mut child = std::process::Command::new("cmd").args(["/c", ping.as_str()]).spawn().unwrap();
+        let mut child = std::process::Command::new("ping").args(["-n", "3600", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
         std::thread::sleep(Duration::from_millis(200));
         // junk makes the server answer once and close
         c.write_all(b"hello\n").unwrap();
-        let t0 = std::time::Instant::now();
         let mut text = String::new();
         let read = c.read_to_string(&mut text);
-        let waited = t0.elapsed();
-        server.join().unwrap();
+        let still_running = child.try_wait().is_ok_and(|status| status.is_none());
+        let _ = child.kill();
         let _ = child.wait();
-        assert!(read.is_ok(), "the close must be clean, not a reset: {read:?}");
+        server.join().unwrap();
+        assert!(read.is_ok(), "the close must be clean, not a reset or a wait for the program to exit: {read:?}");
         assert!(text.contains("closing the connection"), "{text}");
-        assert!(waited < lives / 2, "the client saw the close only after {waited:?}, when the program exited (it lives {lives:?})");
+        assert!(still_running, "the client saw the close while the program still ran");
     }
 
     #[test]
@@ -613,25 +703,65 @@ mod tests {
         let server_done = Arc::clone(&done);
         let server = std::thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            let t0 = std::time::Instant::now();
             close_gracefully(&s);
             server_done.store(true, Ordering::SeqCst);
-            t0.elapsed()
         });
         let mut c = TcpStream::connect(addr).unwrap();
-        // one byte every 100 ms: each read returns well within its 500 ms timeout. The peer keeps it up for
-        // 10 s, and the drain must end well before: within DRAIN_TIME and a second. Both stretch with
-        // LIGHTCRAFT_TIME_SCALE (never shrunk), so the trickle always lasts five times the bound.
-        let at_least = |d: Duration| lightcraft_testkit::scaled(d).max(d);
-        let (trickle, bound) = (at_least(Duration::from_secs(10)), at_least(DRAIN_TIME + Duration::from_secs(1)));
+        // one byte every 100 ms (each read returns well within its 500 ms timeout) until the server is done. The
+        // peer gives up only after a hang guard (a minute, stretched by LIGHTCRAFT_TIME_SCALE): a drain that
+        // ignored DRAIN_TIME would last until then.
+        let guard = lightcraft_testkit::scaled(Duration::from_secs(60)).max(Duration::from_secs(60));
         let t0 = std::time::Instant::now();
-        while t0.elapsed() < trickle {
-            if done.load(Ordering::SeqCst) || c.write_all(b"x").is_err() {
-                break;
-            }
+        while !done.load(Ordering::SeqCst) && c.write_all(b"x").is_ok() {
+            assert!(t0.elapsed() < guard, "the drain went on while the peer trickled");
             std::thread::sleep(Duration::from_millis(100));
         }
-        let drained = server.join().unwrap();
-        assert!(drained < bound, "drained for {drained:?} (bound {bound:?}, the peer trickles for {trickle:?})");
+        server.join().unwrap();
+    }
+
+    /// How long the drain goes on, on a clock that moves only while it reads: a peer that trickles a byte every
+    /// 100 ms is drained for DRAIN_TIME (each read waiting 500 ms at most), one that sends nothing for one read,
+    /// one that hangs up not at all.
+    #[test]
+    fn the_drain_ends_at_drain_time_however_the_peer_trickles() {
+        let base = std::time::Instant::now();
+        let at = std::cell::Cell::new(Duration::ZERO);
+        let mut waits = Vec::new();
+        drain(
+            || base + at.get(),
+            |wait| {
+                waits.push(wait);
+                at.set(at.get() + Duration::from_millis(100));
+                Ok(1)
+            },
+        );
+        assert_eq!(at.get(), DRAIN_TIME, "drained for DRAIN_TIME");
+        assert!(waits.len() == 10 && waits.iter().all(|w| *w <= Duration::from_millis(500)), "{waits:?}");
+        let (mut quiet, mut closed) = (0, 0);
+        drain(
+            || base,
+            |_| {
+                quiet += 1;
+                Err(std::io::ErrorKind::WouldBlock.into())
+            },
+        );
+        drain(
+            || base,
+            |_| {
+                closed += 1;
+                Ok(0)
+            },
+        );
+        assert_eq!((quiet, closed), (1, 1));
+        // and at most MAX_LINE bytes, however fast they come
+        let mut reads = 0;
+        drain(
+            || base,
+            |_| {
+                reads += 1;
+                Ok(MAX_LINE / 4)
+            },
+        );
+        assert_eq!(reads, 4);
     }
 }
