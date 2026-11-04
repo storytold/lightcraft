@@ -448,9 +448,12 @@ fn a_slow_import_runs_as_a_job_and_refuses_a_second_one() {
     let (dir, paths) = files("job", 2);
     let (runner, go) = delayed();
     let imports = Imports::default();
+    let t0 = std::time::Instant::now();
     let job = import_job(&runner, &imports, paths.clone(), " Trip ", true, None).unwrap();
     // Photos is held until `go`: had the caller waited for it, the job would be over by now
     assert!(!job.finished(), "the caller doesn't wait for Photos");
+    // and no bounded wait in front of it either (the gate can't see one)
+    lightcraft_testkit::assert_responsive(t0, "starting a background Photos import");
     assert_eq!(job.json(), json!({"job": 1, "running": true, "requested": 2, "album": "Trip"}));
     assert_eq!(imports.running().map(|j| j.id), Some(1));
     let e = import_job(&runner, &imports, paths.clone(), "", true, None).unwrap_err();

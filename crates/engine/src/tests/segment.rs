@@ -115,7 +115,9 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
     let again = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap();
     assert!(again["started"] == false || again["downloading"] == false);
     // AI mask requests meanwhile: an error while the mirror still holds the download, never a wait for it
+    let q = Instant::now();
     let e = s.execute("mask.add", &json!({"kind": "prompt", "text": "sky"})).unwrap_err().to_string();
+    lightcraft_testkit::assert_responsive(q, "an AI mask request during the download");
     assert!(e.contains(NOT_INSTALLED), "{e}");
     assert!(s.segmenter.download_status().running, "the AI mask request did not wait for the download");
     let _ = release.send(());
@@ -191,6 +193,7 @@ fn damaged_model_requests_are_queued_while_the_model_loads(s: &mut Session, id: 
             f.store(true, Ordering::SeqCst);
         }
     });
+    let t0 = std::time::Instant::now();
     s.execute("mask.add", &json!({"kind": "object"})).unwrap();
     let r = s.execute("mask.objectPoint", &json!({"x": 0.5, "y": 0.5})).unwrap();
     assert_eq!(r["pending"], true);
@@ -202,6 +205,8 @@ fn damaged_model_requests_are_queued_while_the_model_loads(s: &mut Session, id: 
     assert_eq!(r["pending"], true);
     // every request has returned, and the worker is (or is about to be) held at the load
     assert!(!forced.load(Ordering::SeqCst), "a request waited for the model");
+    // and none waited a bounded while in front of the queue either (the gate can't see that)
+    lightcraft_testkit::assert_responsive(t0, "queueing four AI mask requests while the model loads");
     assert!(s.segmenter.busy(), "the requests are queued on the worker");
     lightcraft_testkit::wait_until(Duration::from_secs(30), "the worker reaches the model load", || entered.load(Ordering::SeqCst));
     assert!(s.segment_poll().messages.is_empty(), "nothing came back while the load is held");
