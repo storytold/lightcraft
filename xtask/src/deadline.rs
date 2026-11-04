@@ -498,8 +498,9 @@ pub struct Watched {
     pub ended: Ended,
     pub stdout: String,
     pub stderr_tail: Vec<String>,
-    /// A process the run started still held its output open [`DRAIN`] after the run ended (one
-    /// that outlived it); what that process writes from then on is read and dropped, not shown.
+    /// The run's output wasn't done [`DRAIN`] after the run ended: a process it started still held
+    /// a pipe open, or a reader was still writing to a stalled sink. From then on what is read is
+    /// dropped, not shown (a write already under way still completes).
     pub held_open: bool,
 }
 
@@ -577,10 +578,11 @@ fn watch_into(mut cmd: Command, limit: Duration, clock: Clock, output: Output, s
         readers += 1;
     }
     drop(done_tx);
-    // Whether every reader saw its pipe close within `drain`. A process the run started that
-    // outlives it may hold a pipe open longer: past `drain` the readers stop forwarding (they
-    // keep reading, so that process never blocks on a full pipe), and later binaries' and steps'
-    // output isn't interleaved with its.
+    // Whether every reader was done (its pipe closed, its last write made) within `drain`. A
+    // process the run started that outlives it may hold a pipe open longer: past `drain` the
+    // readers stop forwarding (they keep reading, so that process never blocks on a full pipe),
+    // and later binaries' and steps' output isn't interleaved with its, but for a write already
+    // under way.
     let drained = |readers: usize| {
         let until = Instant::now() + drain;
         let closed = (0..readers).all(|_| done_rx.recv_timeout(until.saturating_duration_since(Instant::now())).is_ok());
@@ -619,8 +621,10 @@ fn watch_into(mut cmd: Command, limit: Duration, clock: Clock, output: Output, s
 
 /// Copy `pipe` to the sink as it arrives (or keep it, bounded), feeding whole lines to the
 /// progress. The sink is written outside the lock: a reader of xtask's output that stalls blocks
-/// only this thread (and, through the pipe, the run), never [`watch`]'s check of the clock. Once
-/// `watch` has returned what is read is dropped.
+/// only this thread (and, through the pipe, the run), never [`watch`]'s check of the clock, so a
+/// hung run is still killed on time. (xtask's own later writes to that stalled stream, the
+/// timeout report say, block like any write to it until it is read again.) Once `watch` has
+/// returned what is read is dropped; a write already under way completes.
 fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, output: Output, shared: &Shared) {
     let mut buf = [0u8; 8192];
     let mut lines = Lines::default();
@@ -665,7 +669,10 @@ fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, output: O
 
 /// The note when a run's output was still held open after it ended ([`Watched::held_open`]).
 fn held_open_note() -> String {
-    format!("note: a process the run started still held its output open {} after the run ended; xtask no longer shows what it writes", show(DRAIN))
+    format!(
+        "note: the run's output wasn't done {} after it ended (a process it started may still hold it open); xtask shows no more of it",
+        show(DRAIN)
+    )
 }
 
 /// Whether a NUL-separated environment block holds exactly `entry` (`KEY=VALUE`), not as part of
@@ -1460,10 +1467,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let done = dir.join("done");
-        let script = format!("(sleep 1; echo late; echo late >&2; touch '{}') & echo early; echo early >&2", done.display());
+        let go = dir.join("go");
+        // the leftover writes only once the test says so (after watch returned), waiting 20 s at most
+        let script = format!(
+            "(i=0; while [ ! -e '{}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done; echo late; echo late >&2; touch '{}') & \
+             echo early; echo early >&2",
+            go.display(),
+            done.display()
+        );
         let watched = watch_into(sh(&script), MIN, Clock::Start, Output::Stream, sink, Duration::from_millis(300)).unwrap();
         assert!(matches!(watched.ended, Ended::Exited(s) if s.success()));
         assert!(watched.held_open, "the subshell still held the pipes");
+        std::fs::write(&go, b"").unwrap();
         let until = Instant::now() + Duration::from_secs(10);
         while !done.exists() && Instant::now() < until {
             std::thread::sleep(TICK);
@@ -1472,7 +1487,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         let got = got.lock().unwrap();
         assert_eq!((got.0.as_slice(), got.1.as_slice()), (&b"early\n"[..], &b"early\n"[..]), "what came during the drain only");
-        assert!(held_open_note().contains("no longer shows what it writes"));
+        assert!(held_open_note().contains("shows no more of it"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
