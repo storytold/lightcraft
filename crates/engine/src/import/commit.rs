@@ -229,7 +229,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     ops.push(Op::SetLocal { id, local: false });
                 }
                 report.imported.push(id.0);
-                report.origins.record(id, Origin::Promoted);
+                // (read before the promotion is committed: a promoted record is no longer Local)
+                report.origins.record(id, s.catalog.photo(id).map_or(Origin::Promoted, |p| Origin::of(p)));
             }
             PreparedItem::Duplicate { path, existing, reason, hash, file } => {
                 let existing = existing.or_else(|| {
