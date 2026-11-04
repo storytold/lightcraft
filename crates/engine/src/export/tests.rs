@@ -1569,13 +1569,13 @@ fn original_xmp_gps_guard_checks_extended_packets() {
     let packet = xmp_with_gps();
     let bytes = jpeg_with_extended_xmp(&packet);
     assert_eq!(lightcraft_meta::embedded(&bytes).xmp_extended.as_deref(), Some(packet.as_str()));
-    assert!(super::prepare::original_embeds_xmp_gps(&bytes, "test.jpg").unwrap());
+    assert!(super::prepare::original_embeds_xmp_location(&bytes, "test.jpg").unwrap());
 }
 
 #[test]
 fn original_xmp_gps_guard_rejects_unreadable_extended_packets() {
     let bytes = jpeg_with_extended_xmp("<x:xmpmeta><broken");
-    assert!(super::prepare::original_embeds_xmp_gps(&bytes, "test.jpg").is_err());
+    assert!(super::prepare::original_embeds_xmp_location(&bytes, "test.jpg").is_err());
 }
 
 #[test]
@@ -1585,5 +1585,5 @@ fn original_xmp_gps_guard_fails_closed_when_properties_are_truncated() {
     let parsed = lightcraft_meta::parse_xmp(&packet).unwrap();
     assert!(!parsed.properties.contains_key("exif:GPSLatitude"), "fixture reaches the key budget before GPS");
     assert!(parsed.properties_truncated);
-    assert!(super::prepare::original_embeds_xmp_gps(&bytes, "test.png").is_err());
+    assert!(super::prepare::original_embeds_xmp_location(&bytes, "test.png").is_err());
 }

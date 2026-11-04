@@ -42,8 +42,8 @@ if repeated use of a long namespace URI would exceed that budget.
 
 XMP GPS latitude and longitude are projected into `Metadata` only when each supplied minute and second
 component is in `[0, 60)` and the resulting coordinate is within its axis range. Invalid coordinate
-properties remain available in `XmpData::properties`, but are not applied as GPS and cannot override
-valid EXIF GPS during extraction.
+properties remain available in `XmpData::properties` unless `properties_truncated` is set, but are not
+applied as GPS and cannot override valid EXIF GPS during extraction.
 
 ## Robustness
 

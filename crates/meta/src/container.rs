@@ -94,9 +94,20 @@ const XMP_EXT_SIG: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
 
 /// Walk JPEG markers up to SOS and collect APP1 Exif / XMP, APP2 ICC and APP13 IPTC.
 pub fn jpeg_segments(b: &[u8]) -> Embedded {
+    jpeg_segments_inner(b, false).0
+}
+
+/// Walk JPEG metadata and return every ordinary XMP APP1 packet in segment order, along with the
+/// usual [`Embedded`] projection (which retains only the first ordinary packet).
+pub fn jpeg_segments_with_all_xmp(b: &[u8]) -> (Embedded, Vec<String>) {
+    jpeg_segments_inner(b, true)
+}
+
+fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String>) {
     let mut out = Embedded::default();
+    let mut xmp_packets = Vec::new();
     if !b.starts_with(&[0xff, 0xd8]) {
-        return out;
+        return (out, xmp_packets);
     }
     let mut icc_parts: [Option<&[u8]>; 255] = [None; 255];
     let mut icc_total = None;
@@ -131,7 +142,14 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
         match marker {
             0xe1 if payload.starts_with(b"Exif\0") && out.exif.is_none() => out.exif = Some(payload.get(6..).unwrap_or(&[]).to_vec()),
             0xe1 if payload.starts_with(XMP_SIG) && out.xmp.is_none() => {
-                out.xmp = Some(String::from_utf8_lossy(&payload[XMP_SIG.len()..]).into_owned());
+                let packet = String::from_utf8_lossy(&payload[XMP_SIG.len()..]).into_owned();
+                if collect_all_xmp {
+                    xmp_packets.push(packet.clone());
+                }
+                out.xmp = Some(packet);
+            }
+            0xe1 if payload.starts_with(XMP_SIG) && collect_all_xmp => {
+                xmp_packets.push(String::from_utf8_lossy(&payload[XMP_SIG.len()..]).into_owned());
             }
             0xe1 if payload.starts_with(XMP_EXT_SIG) => {
                 // GUID (32) + full length (4) + offset (4) + data
@@ -204,7 +222,7 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
         ext.sort_by_key(|p| p.0);
         out.xmp_extended = Some(String::from_utf8_lossy(&ext.into_iter().flat_map(|p| p.1).collect::<Vec<u8>>()).into_owned());
     }
-    out
+    (out, xmp_packets)
 }
 
 /// IPTC-IIM block (resource 0x0404) from a Photoshop image-resource stream (`8BIM` records).

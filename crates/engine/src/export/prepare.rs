@@ -18,30 +18,41 @@ pub struct Exported {
     pub gpu_fallback: Option<String>,
 }
 
-/// Recognized raw XMP GPS properties still make an Original unsafe to copy when their values are
-/// malformed and therefore cannot be projected into `Metadata`. Parse canonical properties from
-/// the source packet; don't infer metadata from XML substrings. A packet that can't be inspected
-/// fails closed, like the existing extraction guard above.
-pub(super) fn original_embeds_xmp_gps(bytes: &[u8], label: &str) -> Result<bool, String> {
-    if bytes.starts_with(b"8BPS") {
-        return Ok(false);
-    }
-    let embedded = lightcraft_meta::embedded(bytes);
-    let mut found_gps = false;
-    for packet in [embedded.xmp.as_deref(), embedded.xmp_extended.as_deref()].into_iter().flatten() {
+/// Recognized raw XMP location properties still make an Original unsafe to copy when their values
+/// are malformed or live in an ordinary packet not projected into `Metadata`. Parse canonical
+/// properties from each source packet; don't infer metadata from XML substrings. A packet that
+/// can't be inspected fails closed, like the existing extraction guard above.
+pub(super) fn original_embeds_xmp_location(bytes: &[u8], label: &str) -> Result<bool, String> {
+    let (embedded, ordinary_packets) = if bytes.starts_with(&[0xff, 0xd8]) {
+        lightcraft_meta::jpeg_segments_with_all_xmp(bytes)
+    } else {
+        let embedded = lightcraft_meta::embedded(bytes);
+        let packets = embedded.xmp.iter().cloned().collect();
+        (embedded, packets)
+    };
+    let mut found_location = false;
+    for packet in ordinary_packets.iter().map(String::as_str).chain(embedded.xmp_extended.as_deref()) {
         let xmp = lightcraft_meta::parse_xmp(packet)
             .map_err(|e| format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}"))?;
         if xmp.properties_truncated {
             return Err(format!("{label}: can't verify location metadata in this original file: embedded XMP property limit was exceeded"));
         }
-        found_gps |= ["exif:GPSLatitude", "exif:GPSLongitude"]
-            .into_iter()
-            .any(|key| xmp.properties.get(key).is_some_and(|values| values.iter().any(|value| !value.trim().is_empty())));
+        found_location |= [
+            "exif:GPSLatitude",
+            "exif:GPSLongitude",
+            "exif:GPSAltitude",
+            "photoshop:City",
+            "photoshop:State",
+            "photoshop:Country",
+            "Iptc4xmpCore:Location",
+        ]
+        .into_iter()
+        .any(|key| xmp.properties.get(key).is_some_and(|values| values.iter().any(|value| !value.trim().is_empty())));
     }
     if embedded.chunk_walk_incomplete {
         return Err(format!("{label}: can't verify location metadata in this original file: embedded PNG/WebP chunk stream is incomplete"));
     }
-    Ok(found_gps)
+    Ok(found_location)
 }
 
 /// Output size of photo `p` under `o` (its cropped full size when `o.resize` is `None`).
@@ -253,13 +264,13 @@ impl PreparedExport {
                     if remove_location {
                         let metadata = lightcraft_meta::try_extract(&bytes)
                             .map_err(|e| format!("{label}: can't verify location metadata in this original file: {e}"))?;
-                        let embeds_xmp_gps = original_embeds_xmp_gps(&bytes, &label)?;
+                        let embeds_xmp_location = original_embeds_xmp_location(&bytes, &label)?;
                         let embeds_place_name =
                             [metadata.sublocation.as_deref(), metadata.city.as_deref(), metadata.state.as_deref(), metadata.country.as_deref()]
                                 .into_iter()
                                 .flatten()
                                 .any(|value| !value.trim().is_empty());
-                        if metadata.gps.is_some() || embeds_xmp_gps || embeds_place_name {
+                        if metadata.gps.is_some() || embeds_xmp_location || embeds_place_name {
                             return Err(format!(
                                 "{label}: can't remove the location from an original file that embeds GPS or place names; export as JPEG or TIFF, or as DNG for a raw photo"
                             ));
@@ -502,6 +513,69 @@ mod tests {
         webp
     }
 
+    fn jpeg_with_app1_segments(segments: &[Vec<u8>]) -> Vec<u8> {
+        let image = lightcraft_raster::Rgba8::from_fn(8, 8, |x, y| [x as u8, y as u8, 32, 255]);
+        let mut jpeg = lightcraft_codecs::encode_jpeg(
+            &lightcraft_codecs::EncodeImage::rgba8(&image),
+            90,
+            lightcraft_codecs::ChromaSubsampling::S444,
+            &lightcraft_codecs::EncodeMeta::default(),
+        )
+        .unwrap();
+        let scan = jpeg.windows(2).position(|window| window == [0xff, 0xda]).unwrap();
+        let mut app1 = Vec::new();
+        for payload in segments {
+            let length = u16::try_from(payload.len() + 2).unwrap().to_be_bytes();
+            app1.extend_from_slice(&[0xff, 0xe1, length[0], length[1]]);
+            app1.extend_from_slice(payload);
+        }
+        jpeg.splice(scan..scan, app1);
+        jpeg
+    }
+
+    fn ordinary_xmp_segment(packet: &str) -> Vec<u8> {
+        [b"http://ns.adobe.com/xap/1.0/\0".as_slice(), packet.as_bytes()].concat()
+    }
+
+    fn extended_xmp_segment(packet: &str) -> Vec<u8> {
+        let mut payload = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
+        payload.extend_from_slice(b"0123456789ABCDEF0123456789ABCDEF");
+        payload.extend_from_slice(&(packet.len() as u32).to_be_bytes());
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(packet.as_bytes());
+        payload
+    }
+
+    fn psd_with_xmp(version: u16, packet: &str) -> Vec<u8> {
+        let mut resource = b"8BIM".to_vec();
+        resource.extend_from_slice(&1060u16.to_be_bytes());
+        resource.extend_from_slice(&[0, 0]); // empty Pascal name, padded to an even length
+        resource.extend_from_slice(&(packet.len() as u32).to_be_bytes());
+        resource.extend_from_slice(packet.as_bytes());
+        if !packet.len().is_multiple_of(2) {
+            resource.push(0);
+        }
+
+        let mut psd = b"8BPS".to_vec();
+        psd.extend_from_slice(&version.to_be_bytes());
+        psd.extend_from_slice(&[0; 6]); // reserved
+        psd.extend_from_slice(&3u16.to_be_bytes()); // channels
+        psd.extend_from_slice(&1u32.to_be_bytes()); // height
+        psd.extend_from_slice(&1u32.to_be_bytes()); // width
+        psd.extend_from_slice(&8u16.to_be_bytes()); // depth
+        psd.extend_from_slice(&3u16.to_be_bytes()); // RGB
+        psd.extend_from_slice(&0u32.to_be_bytes()); // colour-mode data
+        psd.extend_from_slice(&(resource.len() as u32).to_be_bytes());
+        psd.extend_from_slice(&resource);
+        psd
+    }
+
+    fn xmp_with_place_property(name: &str, value: &str) -> String {
+        format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" xmlns:Iptc4xmpCore="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"><rdf:Description {name}="{value}"/></rdf:RDF>"#
+        )
+    }
+
     fn prepared_original(bytes: Vec<u8>, file_name: &str, remove_location: bool) -> PreparedExport {
         let bytes = std::sync::Arc::new(bytes);
         let read: crate::merge::ByteReader = std::sync::Arc::new(move |_| Ok(bytes.as_ref().clone()));
@@ -525,25 +599,39 @@ mod tests {
         }
     }
 
+    fn assert_original_export_refused(bytes: Vec<u8>, file_name: &str) {
+        let options = ExportOptions::from_json(&json!({"format": "original", "removeLocation": true}));
+        let destination = Destination { dir: "unused-output".into(), exact: None };
+        let item = prepared_original(bytes, file_name, true);
+        let mut writes = Vec::new();
+        let mut write = |path: &str, _bytes: &[u8]| {
+            writes.push(path.to_owned());
+            Ok(())
+        };
+        let results = run_batch(vec![item], &options, &destination, &mut write, &|_| false, false, &mut |_, _| true).unwrap();
+        assert!(results[0]["error"].as_str().is_some_and(|error| error.contains("can't remove the location")), "{file_name}: {results:?}");
+        assert!(writes.is_empty(), "{file_name}: the Original and its sidecar must not be written");
+    }
+
     #[test]
     fn original_xmp_gps_guard_rejects_truncated_png_chunks() {
         let bytes = png_with_truncated_chunk_after_xmp();
         assert!(lightcraft_meta::embedded(&bytes).xmp.is_some());
-        assert!(original_embeds_xmp_gps(&bytes, "test.png").is_err());
+        assert!(original_embeds_xmp_location(&bytes, "test.png").is_err());
     }
 
     #[test]
     fn original_xmp_gps_guard_rejects_truncated_webp_chunks() {
         let bytes = webp_with_truncated_chunk_after_xmp();
         assert!(lightcraft_meta::embedded(&bytes).xmp.is_some());
-        assert!(original_embeds_xmp_gps(&bytes, "test.webp").is_err());
+        assert!(original_embeds_xmp_location(&bytes, "test.webp").is_err());
     }
 
     #[test]
     fn original_xmp_gps_guard_rejects_xmp_chunks_truncated_before_extraction() {
         for (name, bytes) in [("test.png", png_with_truncated_xmp_chunk()), ("test.webp", webp_with_truncated_xmp_chunk())] {
             assert!(lightcraft_meta::embedded(&bytes).xmp.is_none(), "{name}: truncated packet should not be extracted");
-            assert!(original_embeds_xmp_gps(&bytes, name).is_err(), "{name}: incomplete extraction must fail closed");
+            assert!(original_embeds_xmp_location(&bytes, name).is_err(), "{name}: incomplete extraction must fail closed");
         }
     }
 
@@ -551,7 +639,46 @@ mod tests {
     fn original_xmp_gps_guard_rejects_trailing_data_after_png_iend() {
         let bytes = png_with_truncated_chunk_after_iend();
         assert!(lightcraft_meta::embedded(&bytes).chunk_walk_incomplete);
-        assert!(original_embeds_xmp_gps(&bytes, "test.png").is_err());
+        assert!(original_embeds_xmp_location(&bytes, "test.png").is_err());
+    }
+
+    #[test]
+    fn original_xmp_gps_guard_checks_every_ordinary_jpeg_packet() {
+        let first = lightcraft_meta::write_xmp(&Metadata::default(), None);
+        let second = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:GPSLatitude="45,60N"/></rdf:RDF>"#;
+        let bytes = jpeg_with_app1_segments(&[ordinary_xmp_segment(&first), ordinary_xmp_segment(second)]);
+        let embedded = lightcraft_meta::embedded(&bytes);
+        assert_eq!(embedded.xmp.as_deref(), Some(first.as_str()), "the public projection keeps the first ordinary packet");
+        let (_, ordinary_packets) = lightcraft_meta::jpeg_segments_with_all_xmp(&bytes);
+        assert_eq!(ordinary_packets, [first.as_str(), second].map(str::to_owned));
+        assert!(original_embeds_xmp_location(&bytes, "two-packets.jpg").unwrap());
+        assert_original_export_refused(bytes, "two-packets.jpg");
+    }
+
+    #[test]
+    fn original_xmp_location_guard_checks_altitude_only_and_place_names() {
+        let altitude = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:GPSAltitude="123/1"/></rdf:RDF>"#;
+        let bytes = jpeg_with_app1_segments(&[ordinary_xmp_segment(altitude)]);
+        assert!(original_embeds_xmp_location(&bytes, "altitude.jpg").unwrap());
+        assert_original_export_refused(bytes, "altitude.jpg");
+
+        for property in ["photoshop:City", "photoshop:State", "photoshop:Country", "Iptc4xmpCore:Location"] {
+            let packet = xmp_with_place_property(property, "Somewhere");
+            let bytes = jpeg_with_app1_segments(&[extended_xmp_segment(&packet)]);
+            assert!(original_embeds_xmp_location(&bytes, "place-name.jpg").unwrap(), "{property}");
+            assert_original_export_refused(bytes, "place-name.jpg");
+        }
+    }
+
+    #[test]
+    fn original_xmp_location_guard_checks_psd_and_psb_xmp() {
+        let packet = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:exif="http://ns.adobe.com/exif/1.0/" exif:GPSLatitude="45,60N"/></rdf:RDF>"#;
+        for (version, name) in [(1, "malformed-gps.psd"), (2, "malformed-gps.psb")] {
+            let bytes = psd_with_xmp(version, packet);
+            assert_eq!(lightcraft_meta::embedded(&bytes).xmp.as_deref(), Some(packet), "{name}: fixture XMP is parsed");
+            assert!(original_embeds_xmp_location(&bytes, name).unwrap(), "{name}");
+            assert_original_export_refused(bytes, name);
+        }
     }
 
     #[test]
