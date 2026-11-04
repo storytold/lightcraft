@@ -30,6 +30,20 @@ pub fn waits_behind_export(id: &str) -> bool {
     lightcraft_engine::find_command(id).is_none_or(|spec| spec.journal)
 }
 
+/// The `app.export` params an export that has to wait runs with later: its `resolved` settings
+/// (a preset expanded, or the previous export's), with the targets frozen in `params`. A preset or
+/// a previous export changed during the wait no longer changes what this export writes.
+pub fn frozen_export(resolved: &Value, params: &Value) -> Value {
+    let mut frozen = resolved.clone();
+    if let Some(o) = frozen.as_object_mut() {
+        o.remove("preset");
+        if let Some(ids) = params.get("ids").filter(|ids| !ids.is_null()) {
+            o.insert("ids".into(), ids.clone());
+        }
+    }
+    frozen
+}
+
 /// How long an Original export waits for its videos before it runs anyway (and reports the one
 /// still loading), so a storage read that never settles can't hold the commands behind it forever.
 pub const EXPORT_WAIT_MS: f64 = 30_000.0;
@@ -38,6 +52,14 @@ pub const EXPORT_WAIT_MS: f64 = 30_000.0;
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_waiting_export_keeps_its_resolved_settings_and_targets() {
+        let resolved = json!({"format": "original", "dir": "out", "preset": "Mine"});
+        let frozen = frozen_export(&resolved, &json!({"preset": "Mine", "ids": [4, 5]}));
+        assert_eq!(frozen, json!({"format": "original", "dir": "out", "ids": [4, 5]}));
+        assert_eq!(frozen_export(&json!({"format": "original"}), &json!({})), json!({"format": "original"}));
+    }
 
     #[test]
     fn library_changes_wait_behind_a_waiting_export_and_queries_do_not() {

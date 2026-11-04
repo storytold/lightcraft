@@ -1188,7 +1188,7 @@ impl WebApp {
         // wait for a storage read to settle. The wait is bounded by `EXPORT_WAIT_MS`.
         let mut export_waiting = false;
         let now = lightcraft_ui_egui::monotonic_ms();
-        for (id, mut params, (resolve, reject)) in queue {
+        for (mut id, mut params, (resolve, reject)) in queue {
             let parsed = crate::automation::params(&params);
             let mut p = match parsed {
                 Ok(p) => p,
@@ -1211,14 +1211,21 @@ impl WebApp {
                     p["ids"] = json!(self.export_target_ids());
                     params = p.to_string();
                 }
+                // A rendered export reads no Original: only a copy can be waiting for storage.
+                let copies_original =
+                    resolved.as_ref().is_some_and(|r| ExportOptions::export_format(r, ExportFormat::default()) == ExportFormat::Original);
+                let must_wait = export_waiting || (copies_original && !self.export_videos_loaded(&p));
+                // Freeze the settings too: a preset or the previous export may change during the wait.
+                if must_wait && let Some(r) = &resolved {
+                    id = "app.export".into();
+                    p = crate::automation::frozen_export(r, &p);
+                    params = p.to_string();
+                }
                 if export_waiting {
                     retry.push_back((id, params, (resolve, reject)));
                     continue;
                 }
-                // A rendered export reads no Original: only a copy can be waiting for storage.
-                let copies_original =
-                    resolved.as_ref().is_some_and(|r| ExportOptions::export_format(r, ExportFormat::default()) == ExportFormat::Original);
-                if copies_original && !self.export_videos_loaded(&p) {
+                if must_wait {
                     let since = EXPORT_WAITING_SINCE.with(|w| {
                         let since = w.get().unwrap_or(now);
                         w.set(Some(since));

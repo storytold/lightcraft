@@ -108,6 +108,28 @@ fn grid_cells_mark_videos_with_their_format_and_running_time() {
     }
 }
 
+/// At the smallest thumbnails a clip's two pills never cover each other: the running time stays
+/// and the container gives way when they would touch (square grid, filename line hidden).
+#[test]
+fn small_square_cells_keep_the_format_and_duration_pills_apart() {
+    let mut h = video_app(ViewMode::SquareGrid);
+    h.app.ui.show_filenames = false;
+    for size in [crate::state::THUMB_SIZE_MIN, crate::state::THUMB_SIZE_MIN + 20.0, 180.0] {
+        h.app.ui.thumb_size = size;
+        h.settle(SETTLE);
+        let rect = |name: &str| h.app.widgets.iter().find(|(w, _)| w == name).map(|(_, r)| *r);
+        for id in [1, 3] {
+            let duration = rect(&format!("badge:videoDuration:{id}"));
+            if let (Some(d), Some(f)) = (duration, rect(&format!("badge:videoFormat:{id}"))) {
+                assert!(!d.intersects(f), "{size}: clip {id}'s pills overlap: {d:?} {f:?}");
+            }
+            if size >= 180.0 {
+                assert!(duration.is_some(), "{size}: clip {id} shows its running time");
+            }
+        }
+    }
+}
+
 /// A virtual copy's tag holds the cell's top right corner: a clip's container pill moves below it
 /// rather than under it, in both grids (the square grid with its filename line hidden).
 #[test]

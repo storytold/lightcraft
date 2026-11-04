@@ -932,13 +932,12 @@ fn paint_video_badges(
     if !is_clip(photo) {
         return;
     }
+    // the running time first: in a short cell it is the pill that stays
+    let duration = photo.duration.and_then(|d| video_duration_badge(ui, p, t, id, d, img_rect));
     if !(square && app.ui.show_filenames) && !photo.format.is_empty() {
         // a virtual copy's tag holds the top right corner: the container sits just below it
         let below = if photo.copy_name.is_some() { COPY_TAG_HEIGHT + 4.0 } else { 0.0 };
-        video_format_badge(ui, p, t, id, &photo.format, img_rect, below);
-    }
-    if let Some(d) = photo.duration {
-        video_duration_badge(ui, p, t, id, d, img_rect);
+        video_format_badge(ui, p, t, id, &photo.format, img_rect, below, duration);
     }
 }
 
@@ -1074,11 +1073,12 @@ struct BadgeFlags {
 /// A clip's container (`MP4`, `MOV`) in a dark pill at the thumbnail's top right, `below` points
 /// lower when something else holds the corner.
 #[allow(clippy::too_many_arguments)]
-fn video_format_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, format: &str, img_rect: Rect, below: f32) {
+fn video_format_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, format: &str, img_rect: Rect, below: f32, clear_of: Option<Rect>) {
     let g = p.layout_no_wrap(format.to_uppercase(), t.semibold(9.0), Color32::WHITE);
     let br = Rect::from_min_size(pos2(img_rect.right() - g.size().x - 14.0, img_rect.top() + 6.0 + below), g.size() + vec2(8.0, 3.0));
     // A pill that doesn't fit the cell would spill over its neighbours: skip it instead.
-    if br.left() < img_rect.left() + 4.0 || br.bottom() > img_rect.bottom() - 4.0 {
+    // nor cover the running-time pill (short square cells bring the two together)
+    if br.left() < img_rect.left() + 4.0 || br.bottom() > img_rect.bottom() - 4.0 || clear_of.is_some_and(|r| r.expand(2.0).intersects(br)) {
         return;
     }
     p.rect_filled(br, 3.0, Color32::from_black_alpha(170));
@@ -1087,17 +1087,17 @@ fn video_format_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId,
 }
 
 /// A clip's running time (video icon + `MM:SS`) in a dark pill at the thumbnail's lower edge,
-/// above the rating bar so neither hides the other.
-fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, seconds: f64, img_rect: Rect) {
+/// above the rating bar so neither hides the other. Its rect, when drawn.
+fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, seconds: f64, img_rect: Rect) -> Option<Rect> {
     let text = crate::widgets::format_duration(seconds);
     if text.is_empty() {
-        return;
+        return None;
     }
     let g = p.layout_no_wrap(text, t.semibold(10.0), Color32::WHITE);
     let w = g.size().x + 26.0;
     // A pill wider or taller than the cell's margins would spill over its neighbours: skip it instead.
     if w > img_rect.width() - 10.0 || img_rect.height() < 21.0 {
-        return;
+        return None;
     }
     let x = (img_rect.right() - 6.0 - w).max(img_rect.left() + 4.0);
     let y = (img_rect.bottom() - 24.0 - 20.0).max(img_rect.top() + 4.0);
@@ -1106,6 +1106,7 @@ fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoI
     paint(p, Rect::from_center_size(pos2(br.left() + 11.0, br.center().y), vec2(12.0, 12.0)), Icon::Video, Color32::WHITE);
     p.galley(pos2(br.left() + 19.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
     register(ui, format!("badge:videoDuration:{}", id.0), br);
+    Some(br)
 }
 
 /// The header of a library view (All Photos, an album, a library folder…): the source's title and
