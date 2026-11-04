@@ -437,13 +437,7 @@ pub fn export_batch(
 mod tests {
     use super::*;
     use crate::export::{Destination, run_batch};
-    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta};
-    use lightcraft_raster::Rgba8;
     use serde_json::json;
-
-    fn image() -> Rgba8 {
-        Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255])
-    }
 
     fn png_with_truncated_chunk_after_xmp() -> Vec<u8> {
         let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
