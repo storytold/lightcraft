@@ -446,3 +446,30 @@ fn the_smart_album_editor_counts_photos_of_every_folder_the_album_was_made_from(
     let text = h.painted_text().join(" ");
     assert!(text.contains("2 photos match"), "{text}");
 }
+
+/// A smart album made from a view of albums stays limited to them (`album.setRules` with `replace`
+/// keeps its albums): the editor counts the photos the saved album shows, not the whole library.
+#[test]
+fn the_smart_album_editor_counts_within_the_albums_the_album_was_made_from() {
+    let mut h = app("info");
+    let ([a, b, c, _], _) = four_albums(&mut h);
+    let library = h.app.session.catalog.photos().count();
+    assert!(library > 3, "the demo library has more photos than the albums hold: {library}");
+    // Given a smart album made from the view of two albums (three photos between them, one in both)
+    run(&mut h, "library.source", json!({"kind": "album", "ids": [a, c]}));
+    let several = run(&mut h, "album.createSmart", json!({"name": "Both"}))["id"].as_u64().unwrap();
+    // When its editor opens with no rule of its own
+    h.app.ui.dialog = Some(Dialog::SmartRules { id: Some(several), name: "Both".into(), rules: Default::default(), parent: None });
+    h.settle(SETTLE);
+    // Then it counts those three photos
+    let text = h.painted_text().join(" ");
+    assert!(text.contains("3 photos match"), "{text}");
+    // and one album alone, the photo that one holds
+    h.app.ui.dialog = None;
+    run(&mut h, "library.source", json!({"kind": "album", "id": b}));
+    let one = run(&mut h, "album.createSmart", json!({"name": "One"}))["id"].as_u64().unwrap();
+    h.app.ui.dialog = Some(Dialog::SmartRules { id: Some(one), name: "One".into(), rules: Default::default(), parent: None });
+    h.settle(SETTLE);
+    let text = h.painted_text().join(" ");
+    assert!(text.contains("1 photo match"), "{text}");
+}
