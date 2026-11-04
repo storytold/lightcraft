@@ -56,8 +56,9 @@ impl Default for MediaCache {
             thumbs: Lru::new(THUMB_SOURCE_BYTES.min(budget)),
             previews: Vec::new(),
             full: Vec::new(),
-            full_capacity: 1,
             on_screen: None,
+            on_screen_full: None,
+            quiet: false,
             preview_capacity: 0,
             budget,
             file_loader: None,
@@ -104,31 +105,36 @@ impl MediaCache {
         self.thumbs = Lru::new(THUMB_SOURCE_BYTES.min(self.budget));
         self.previews.clear();
         self.full.clear();
+        self.on_screen = None;
+        self.on_screen_full = None;
     }
 
-    /// How many full-resolution originals to keep at once (at least one). Compare and Reference
-    /// views zoomed to 1:1 cut windows from two photos' originals: with room for one, every window
-    /// render of one side would evict the other side's original and decode its own again. Lowering
-    /// it drops the least recently used originals at once.
-    pub fn set_full_capacity(&mut self, n: usize) {
-        self.full_capacity = n.max(1);
-        self.trim_full();
-    }
-
-    /// The photo the loupe shows (the frontend sets it every frame; `None` in other views). Its original stays
-    /// even over budget: a 64 MP original (797 MB as linear float) alone exceeds the default share, and evicting it
-    /// made every pan of a zoomed view decode the raw again. Showing another photo lets it go at once.
+    /// Protect the foreground full-resolution original from budget eviction. While its decode
+    /// is pending, retain the newest full source as a single oversize fallback (not once the
+    /// foreground is drawn at Fit without one, [`Self::foreground_fits`]).
     pub fn set_on_screen(&mut self, id: Option<PhotoId>) {
         if self.on_screen != id {
             self.on_screen = id;
+            self.on_screen_full = None;
             self.enforce_budget();
         }
     }
 
-    fn trim_full(&mut self) {
-        while self.full.len() > self.full_capacity {
-            let oldest = self.full.iter().enumerate().min_by_key(|(_, e)| e.2).map(|(i, _)| i).unwrap_or(0);
-            self.full.remove(oldest);
+    /// A render of `id` reads its original (a window past 1:1, a tight crop): when `id` is the
+    /// foreground, its fallback stays until that decode lands.
+    pub fn foreground_needs_full(&mut self, id: PhotoId) {
+        if self.on_screen == Some(id) {
+            self.on_screen_full = Some(true);
+        }
+    }
+
+    /// The view draws `id` whole, with no window past what its preview holds (Fit). A foreground
+    /// that hasn't asked for its original needs no fallback then: an earlier photo's original
+    /// counts against the budget again instead of staying pinned while the user browses at Fit.
+    pub fn foreground_fits(&mut self, id: PhotoId) {
+        if self.on_screen == Some(id) && self.on_screen_full.is_none() {
+            self.on_screen_full = Some(false);
+            self.enforce_budget();
         }
     }
 
@@ -151,22 +157,26 @@ impl MediaCache {
         t.bytes + p.bytes + f.bytes + self.rendered.mem_usage().1
     }
 
-    /// Evict least recently used entries across the source caches and the rendered previews
-    /// until they fit the budget. The newest preview-level source (the photo on screen, or the
-    /// one just decoded) is never evicted here, nor is the original of the photo on screen
-    /// ([`Self::set_on_screen`]).
+    /// Evict least recently used sources and rendered previews until they fit the budget. The
+    /// newest preview and foreground original (or its previous-photo fallback) are protected.
+    /// Without a foreground, all originals count against the budget.
     pub fn enforce_budget(&mut self) {
-        // The on-screen original is never evicted here, so it does not count either: counted, a 64 MP original (760 MiB)
-        // nearly fills the default share (768 MiB) alone and everything else went instead — the photo's preview and
-        // thumbnail sources and the neighbours' were decoded again from the raw on every edit, zoom-out and step.
-        let pinned: usize = self.full.iter().filter(|e| Some(e.0) == self.on_screen).map(|e| e.1.bytes()).sum();
+        // The protected original cannot be evicted, so its complete cost (including twins)
+        // does not count against the budget. Apply that equally to the foreground and to the
+        // previous original kept while the foreground has no native source yet (not once it is
+        // known to render without one).
+        let fallback = self.on_screen.filter(|_| self.on_screen_full != Some(false));
+        let protected_full =
+            self.full.iter().find(|e| Some(e.0) == self.on_screen).or_else(|| fallback.and_then(|_| self.full.iter().max_by_key(|e| e.2)));
+        let pinned = protected_full.map_or(0, |e| e.1.bytes());
+        let protected_full = protected_full.map(|e| e.0);
         let mut held = self.held().saturating_sub(pinned);
         while held > self.budget {
             let newest_preview = self.previews.iter().map(|e| e.2).max();
             let candidates = [
                 self.thumbs.oldest_tick().map(|t| (t, 0)),
                 self.previews.iter().filter(|e| Some(e.2) != newest_preview).map(|e| e.2).min().map(|t| (t, 1)),
-                self.full.iter().filter(|e| Some(e.0) != self.on_screen).map(|e| e.2).min().map(|t| (t, 2)),
+                self.full.iter().filter(|e| Some(e.0) != protected_full).map(|e| e.2).min().map(|t| (t, 2)),
                 self.rendered.oldest_tick().map(|t| (t, 3)),
             ];
             let Some((tick, which)) = candidates.into_iter().flatten().min() else { break };
@@ -190,14 +200,24 @@ impl MediaCache {
     pub(super) fn get_source(&mut self, id: PhotoId, level: SourceLevel) -> Option<DecodedSource> {
         match level {
             SourceLevel::Thumb => self.thumbs.get(&id).cloned(),
-            SourceLevel::Preview => self.previews.iter_mut().find(|e| e.0 == id).map(|e| {
-                e.2 = lightcraft_preview::next_tick();
-                e.1.clone()
-            }),
-            SourceLevel::Full => self.full.iter_mut().find(|e| e.0 == id).map(|e| {
-                e.2 = lightcraft_preview::next_tick();
-                e.1.clone()
-            }),
+            SourceLevel::Preview => {
+                let quiet = self.quiet;
+                self.previews.iter_mut().find(|e| e.0 == id).map(|e| {
+                    if !quiet {
+                        e.2 = lightcraft_preview::next_tick();
+                    }
+                    e.1.clone()
+                })
+            }
+            SourceLevel::Full => {
+                let quiet = self.quiet;
+                self.full.iter_mut().find(|e| e.0 == id).map(|e| {
+                    if !quiet {
+                        e.2 = lightcraft_preview::next_tick();
+                    }
+                    e.1.clone()
+                })
+            }
         }
     }
 
@@ -240,7 +260,6 @@ impl MediaCache {
             SourceLevel::Full => {
                 self.full.retain(|e| e.0 != id);
                 self.full.push((id, img, tick));
-                self.trim_full();
             }
         }
         self.enforce_budget();
@@ -314,6 +333,15 @@ impl MediaCache {
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
             && let Some(big) = self.get_source(p.id, SourceLevel::Preview)
+        {
+            return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
+        }
+        // A preview of a warmed neighbour can reuse its decoded original instead of decoding
+        // its file again; a denoised twin must not be cut away.
+        if cached
+            && level == SourceLevel::Preview
+            && self.denoise.spec(p.id).is_none()
+            && let Some(big) = self.get_source(p.id, SourceLevel::Full)
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }

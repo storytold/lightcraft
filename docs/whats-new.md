@@ -1,5 +1,18 @@
 # What's new in LightCraft
 
+## 2026-11-03
+
+### Revisit large RAW photos without decoding them again
+- Full-resolution originals now share the memory cache's byte budget instead of being limited to
+  one in Detail or two in Compare/Reference. Recent originals remain reusable while they fit;
+  a late background result cannot evict the current photo's original.
+- When Detail needs a sharp zoom window and the budget has room, it prepares native sources for
+  adjacent filmstrip photos. Fit browsing and insufficient-budget preparation stay at preview
+  resolution. First uncached loads and low-memory cache misses still require RAW development.
+- A protected previous-photo original no longer evicts affordable previews and thumbnails when
+  the newly selected photo has no native source, including at Fit. Its complete pinned cost is
+  excluded just like the foreground's; oversized originals are still released outside Detail.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III

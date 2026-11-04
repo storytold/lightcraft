@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (KEYC-METADATA: ⌘⌥⇧K Set Keyword Shortcut and ⇧K; KEYC-METADATA: ⌘⇧K Edit Keywords; KEYC-METADATA: ⌘⌥K Enable Painting; KEYC-METADATA: ⌘⌥⇧C / ⌘⌥⇧V Copy / Paste Metadata; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌥0 / ⌥⇧0 next / previous keyword set; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌘K Add Keywords; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-03 · **Change:** minor (budgeted native-original reuse for RAW browsing; KEYC-METADATA: ⌘⌥⇧K Set Keyword Shortcut and ⇧K; KEYC-METADATA: ⌘⇧K Edit Keywords; KEYC-METADATA: ⌘⌥K Enable Painting; KEYC-METADATA: ⌘⌥⇧C / ⌘⌥⇧V Copy / Paste Metadata; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌥0 / ⌥⇧0 next / previous keyword set; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌘K Add Keywords; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -150,6 +150,27 @@ unnamed was in the way.
 Not done: brush strokes and red-eye ellipses still need a pointer. Nobody has tried the app with
 a real screen reader on any platform yet.
 
+## Budgeted native RAW browsing
+
+Detail, Compare and Reference reuse decoded originals within the existing shared cache byte
+budget instead of discarding them at one-/two-original count limits. Source pixels, decoder
+facts and denoised twins stay together. The current original is protected from late background
+completion; while the foreground has no native source, the newest original remains the single oversize fallback.
+The protected original's pinned bytes, including denoised twins and their reserved mix, are
+excluded from the eviction budget whether it is the foreground or the previous-photo fallback.
+Switching to a photo with no native source at Fit therefore keeps affordable previews and
+thumbnails instead of repeatedly evicting them. Leaving Detail releases originals that cannot
+fit the budget; recent originals that fit remain reusable across views.
+
+Detail prepares adjacent native sources only while no editing interaction is active, when a sharp
+zoom window is needed and the cache budget can accommodate the current photo, neighbours and
+preview rendering. Prefetched views remain preview-sized; tight crops cannot force native
+preparation at Fit or a low budget.
+The memory settings and automatic budget policy are unchanged. Reusing a cached original
+avoids decoding it again; first uncached RAW development and uninterrupted rapid scrolling
+still require development. This neighbour policy does not add idle preparation of the current
+photo before its first zoom.
+
 ## Reference view lifecycle
 
 Escape leaves Reference for Detail, preserving the active photo and its edits; a second Escape
@@ -172,6 +193,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Native sources share the cache byte budget; sharp-zoom neighbour preparation is budget-qualified; pinned originals preserve affordable previews, with Fit and uncached-load limits unchanged |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⌥K / Ctrl+Alt+K (Photo ▸ Enable Painting) paints the painter box's keyword, stops painting when pressed again, and with the box empty opens the Keywords panel |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⇧K / Ctrl+Shift+K (Edit Keywords) opens the keyword picked in the Keyword List in Edit Keyword Tag |
 | 2026-10-25 | minor | KEYC-METADATA: ⌘⌥⇧K / Ctrl+Alt+Shift+K (Set Keyword Shortcut) and ⇧K add and remove the keyword shortcut's keywords; the Keyword List marks them with a + |

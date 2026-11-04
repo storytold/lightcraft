@@ -112,6 +112,11 @@ pub struct Twin {
     mix: std::sync::Mutex<Option<(u32, Arc<Rgb32f>)>>,
 }
 
+/// Cache cost per pixel of a decoded source's picture (`Rgb32f`).
+const SOURCE_PIXEL_BYTES: usize = 12;
+/// Cache cost per pixel reserved for a denoised twin and room for its lazy mix.
+const TWIN_PIXEL_BYTES: usize = 24;
+
 impl Twin {
     pub fn new(image: Arc<Rgb32f>) -> Twin {
         Twin { image, mix: std::sync::Mutex::new(None) }
@@ -119,7 +124,7 @@ impl Twin {
 
     /// Bytes reserved for the twin and its lazy mix, before either cache cost can grow.
     fn bytes(&self) -> usize {
-        self.image.data.len().saturating_mul(24)
+        self.image.data.len().saturating_mul(TWIN_PIXEL_BYTES)
     }
 }
 
@@ -177,7 +182,18 @@ impl DecodedSource {
     pub fn bytes(&self) -> usize {
         let mattes = self.info.as_ref().and_then(|i| i.mattes.as_ref()).map_or(0, |m| m.bytes());
         let mattes = mattes + self.info.as_ref().and_then(|i| i.local_tone.as_ref()).map_or(0, |t| t.map.gains.len() * 4);
-        self.image.data.len() * 12 + 64 + std::mem::size_of::<SourceInfo>() + mattes + self.denoised.as_ref().map_or(0, |t| t.bytes())
+        self.image.data.len() * SOURCE_PIXEL_BYTES + 64 + std::mem::size_of::<SourceInfo>() + mattes + self.denoised.as_ref().map_or(0, |t| t.bytes())
+    }
+
+    /// [`Self::bytes`] of a `width × height` source before it is decoded (mattes aside), with a
+    /// denoised twin when `denoised`. `None` while the size is not known (0).
+    pub fn estimated_bytes(width: u32, height: u32, denoised: bool) -> Option<usize> {
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let px = (width as usize).saturating_mul(height as usize);
+        let per_px = SOURCE_PIXEL_BYTES + if denoised { TWIN_PIXEL_BYTES } else { 0 };
+        Some(px.saturating_mul(per_px).saturating_add(64 + std::mem::size_of::<SourceInfo>()))
     }
 
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)

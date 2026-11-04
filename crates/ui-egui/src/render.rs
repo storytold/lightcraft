@@ -1042,13 +1042,13 @@ impl Renderer {
                     self.discarded += 1;
                     continue;
                 }
-                session.accept(&r);
+                session.accept_shown(&r);
                 (None, completed_look) // retain the geometry of these pixels, never borrow the newer request’s identity
             } else {
                 let request = self.requests.remove(&slot);
                 let look = request.as_ref().and_then(|request| request.look);
                 let source = request.and_then(|request| request.source);
-                session.accept(&r);
+                session.accept_shown(&r);
                 (source, look)
             };
             if slot.is_view() {

@@ -237,9 +237,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
     // once it is ready (nothing is committed)
     let hover_key = request_hover(app, &ask, [sw, sh]);
-    if !interacting {
-        prefetch_neighbours(app, id, main_area, ppp, texture_side, !crop_tool);
+    // Drawn whole: an earlier photo's original need not stay pinned as a fallback.
+    if plan.window_edge.is_none() {
+        app.session.media.foreground_fits(id);
     }
+    prefetch_neighbours(app, id, main_area, ppp, texture_side, !crop_tool, plan.window_edge.is_some());
     // until the loupe has this photo: show its cached render / embedded preview / a thumbnail
     request_stand_in(app, id, want, !crop_tool);
     let show_before = app.ui.before_after == BeforeAfter::Original || ui.input(|i| i.key_down(egui::Key::Backslash));
@@ -454,18 +456,20 @@ fn draw_wipe_before(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, img_rec
     }
 }
 
-/// Once a photo is on screen, prepare its neighbours in filmstrip order (source decoded and kept,
-/// view render cached) so stepping to them is instant.
-fn prefetch_neighbours(app: &mut LightcraftApp, id: PhotoId, main_area: Rect, ppp: f32, texture_side: usize, with_crop: bool) {
-    // only once this photo is on screen
-    if app.renderer.is_pending(Slot::Main) || app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id) {
+/// Prepare neighbours in filmstrip order after the foreground is shown and no edit is active.
+/// Native sources are warmed only for sharp zoom windows with enough budget; views stay small.
+fn prefetch_neighbours(app: &mut LightcraftApp, id: PhotoId, main_area: Rect, ppp: f32, texture_side: usize, with_crop: bool, warm_full: bool) {
+    if app.session.interaction.is_some()
+        || app.renderer.is_pending(Slot::Main)
+        || app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id)
+    {
         return;
     }
     let ids = app.session.visible_cloned();
     if let Some(i) = ids.iter().position(|p| *p == id) {
         let next = ids.get(i + 1).copied();
         let prev = i.checked_sub(1).and_then(|j| ids.get(j)).copied();
-        for (n, nid) in [next, prev].into_iter().enumerate() {
+        for (n, (nid, beside)) in [(next, prev), (prev, next)].into_iter().enumerate() {
             let Some(nid) = nid else { continue };
             let Some(np) = app.session.catalog.photo(nid).cloned() else { continue };
             let nf = Frame::with_lens(np.width.max(1) as usize, np.height.max(1) as usize, &np.develop, with_crop, np.embedded_lens.as_ref());
@@ -473,7 +477,7 @@ fn prefetch_neighbours(app: &mut LightcraftApp, id: PhotoId, main_area: Rect, pp
             let nr = fit_rect(main_area, na, app.ui.zoom, output_px(&nf), ppp, app.ui.pan);
             let nw = app.ui.settings.prefetch_edge(nr.width().max(nr.height()) * ppp, output_px(&nf).into_iter().max().unwrap_or(1), texture_side);
             let (w, h) = if na >= 1.0 { (nw, (nw as f32 / na) as usize) } else { ((nw as f32 * na) as usize, nw) };
-            if let Some(job) = app.session.loupe_job(nid, w.max(8), h.max(8), with_crop) {
+            if let Some(job) = app.session.prefetch_job(nid, w.max(8), h.max(8), with_crop, warm_full, beside) {
                 app.renderer.prefetch(Slot::Prefetch(n as u8), job, PREFETCH_PRIORITY);
             }
         }

@@ -2,7 +2,7 @@
 //!
 //! Sources are decoded (or generated) once per level and cached in memory LRUs: `Thumb` (≤ 512 px
 //! long edge) for the grid and filmstrip, `Preview` (≤ 2560 px) for the loupe, `Full` (native
-//! resolution, the last one only) for exports larger than a preview. A [`RenderJob`] is
+//! resolution) for 1:1 views and exports larger than a preview. A [`RenderJob`] is
 //! self-contained and `Send`: frontends run it on a worker thread; if the source wasn't cached yet
 //! the job loads it and hands it back in the [`RenderResult`] so the cache can keep it.
 //!
@@ -50,13 +50,17 @@ pub struct MediaCache {
     thumbs: Lru<PhotoId, DecodedSource>,
     /// Decoded preview-level sources with their last use ([`lightcraft_preview::next_tick`]).
     previews: Vec<(PhotoId, DecodedSource, u64)>,
-    /// The last full-resolution originals (exports, zoomed views; ~300 MB each at 24 MP), with
-    /// their last use. Normally one; see [`Self::set_full_capacity`].
+    /// Decoded full-resolution originals with their last use, sharing the cache's byte budget.
     full: Vec<(PhotoId, DecodedSource, u64)>,
-    /// How many full-resolution originals to keep (LRU, at least one).
-    full_capacity: usize,
     /// The photo the loupe shows ([`Self::set_on_screen`]): its original is not evicted for the budget.
     on_screen: Option<PhotoId>,
+    /// Whether the foreground's renders read its original: `None` until a render asks for it or
+    /// the view draws it at Fit ([`Self::foreground_needs_full`], [`Self::foreground_fits`]).
+    /// Another original is kept as its fallback unless it is known to need none (`Some(false)`).
+    on_screen_full: Option<bool>,
+    /// Lookups don't refresh recency: a prefetch job rebuilt every idle frame must not keep its
+    /// neighbours' sources looking newest.
+    quiet: bool,
     /// How many previews to keep (LRU).
     pub preview_capacity: usize,
     /// Bytes all decoded sources and rendered previews in memory may take together (the cache

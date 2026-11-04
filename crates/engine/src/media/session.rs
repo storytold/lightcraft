@@ -1,6 +1,9 @@
 use super::quick::{QuickJob, content_key, source_info};
 use super::render::{RenderJob, RenderResult};
-use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
+use super::source::{
+    DecodedSource, PreviewLoader, RENDER_CACHE_VERSION, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed,
+    thumb_bucket,
+};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
 impl crate::Session {
@@ -254,8 +257,90 @@ impl crate::Session {
     /// photo's view preview (memory, and disk with a library) for [`Self::quick_view_job`].
     pub fn loupe_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
+        if job.level == SourceLevel::Full {
+            self.media.foreground_needs_full(id);
+        }
         let p = self.catalog.photo(id)?;
         job.view_cache = Some((self.media.rendered.clone(), Self::view_key(p, apply_crop)));
+        Some(job)
+    }
+
+    /// Prepare a neighbour's view, optionally decoding its native source for sharp zooming.
+    /// The rendered view stays preview-sized. Native sources are warmed only when the cache
+    /// can hold the foreground, this neighbour and the one `beside` it (the other side of the
+    /// foreground; this one's size again when there is none), the decoded previews and
+    /// thumbnails it holds and rendered previews, without replacing any of them. A photo whose
+    /// size isn't known yet is never warmed. Building the job leaves the cache's recency as it
+    /// was: it runs every idle frame.
+    pub fn prefetch_job(
+        &mut self,
+        id: PhotoId,
+        max_w: usize,
+        max_h: usize,
+        apply_crop: bool,
+        warm_full: bool,
+        beside: Option<PhotoId>,
+    ) -> Option<RenderJob> {
+        self.media.quiet = true;
+        let job = self.prefetch_job_quiet(id, max_w, max_h, apply_crop, warm_full, beside);
+        self.media.quiet = false;
+        job
+    }
+
+    fn prefetch_job_quiet(
+        &mut self,
+        id: PhotoId,
+        max_w: usize,
+        max_h: usize,
+        apply_crop: bool,
+        warm_full: bool,
+        beside: Option<PhotoId>,
+    ) -> Option<RenderJob> {
+        let mut job = self.loupe_job(id, max_w.min(SourceLevel::Preview.max_edge()), max_h.min(SourceLevel::Preview.max_edge()), apply_crop)?;
+        let p = self.catalog.photo(id)?;
+        let full_fits = warm_full && {
+            let estimate = |p: &Photo| DecodedSource::estimated_bytes(p.width, p.height, self.media.denoise.spec(p.id).is_some());
+            let foreground = match self.active().and_then(|id| self.catalog.photo(id)) {
+                Some(f) => estimate(f),
+                None => Some(0),
+            };
+            let this = estimate(p);
+            let other = match beside.and_then(|id| self.catalog.photo(id)) {
+                Some(b) => estimate(b),
+                None => this,
+            };
+            let (thumbs, previews, _) = self.media.usage();
+            match (foreground, this, other) {
+                (Some(f), Some(t), Some(o)) => {
+                    let need = f
+                        .saturating_add(t)
+                        .saturating_add(o)
+                        .saturating_add(thumbs.bytes)
+                        .saturating_add(previews.bytes)
+                        .saturating_add(RENDERED_MEM_BYTES);
+                    need <= self.media.budget()
+                }
+                _ => false,
+            }
+        };
+        let level = if full_fits {
+            SourceLevel::Full
+        } else if job.level == SourceLevel::Full {
+            SourceLevel::Preview
+        } else {
+            job.level
+        };
+        if level != job.level {
+            // A crop the loupe would draw from the native source looks soft from the preview
+            // level: warm the source, but don't keep that render as the photo's view preview.
+            if matches!((job.level, level), (SourceLevel::Full, SourceLevel::Preview)) {
+                job.view_cache = None;
+            }
+            let p = p.clone();
+            job.key ^= ((job.level as u64) ^ (level as u64)) << 60;
+            job.level = level;
+            job.source = self.media.source_ref(&p, level);
+        }
         Some(job)
     }
 
@@ -297,6 +382,9 @@ impl crate::Session {
         before: bool,
     ) -> Option<RenderJob> {
         let mut job = self.render_job(id, full_w, full_h, before, apply_crop)?;
+        if job.level == SourceLevel::Full {
+            self.media.foreground_needs_full(id);
+        }
         // what the window's spots and Auto Mask strokes read must fit in one render: else the
         // caller keeps the whole-frame render (a window alone would come out wrong)
         let p = self.catalog.photo(id)?;
@@ -395,6 +483,14 @@ impl crate::Session {
     /// Accept a finished job's loaded source into the cache. What the decode learnt about the file that the catalog
     /// has wrong is corrected too ([`Self::learn_as_shot_wb`]).
     pub fn accept(&mut self, r: &RenderResult) {
+        // The engine alone (headless, tests) has no view: the active photo is the foreground.
+        self.media.set_on_screen(self.active());
+        self.accept_shown(r);
+    }
+
+    /// [`Self::accept`] for a UI that sets the foreground from its view: a late completion
+    /// outside the loupe must not pin the active photo and evict what the view still uses.
+    pub fn accept_shown(&mut self, r: &RenderResult) {
         if let Some(src) = &r.loaded
             && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| super::quick::source_identity(p) == key))
         {
