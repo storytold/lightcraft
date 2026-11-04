@@ -215,7 +215,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let maker = static_maker.as_ref().and_then(|m| m.ifds.first());
     // Retain only the first useful timed maker note: repeated CTMD records must not accumulate
     // independent copies of every bounded TIFF value in memory.
-    // Records aliasing the same bytes are parsed once, and all parses share a budget of twice the file (at least 1 MiB).
+    // Records aliasing the same bytes are parsed once, and all parses share a budget of twice the file (at least 1 MiB);
+    // a record past what is left is skipped, a later smaller one still parsed.
     let mut seen = std::collections::HashSet::new();
     let mut left = bytes.len().saturating_mul(2).max(1 << 20);
     let timed_maker = container
@@ -223,7 +224,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         .into_iter()
         .filter(|b| b.tag == 0x927c)
         .filter(|b| seen.insert((b.data.as_ptr() as usize, b.data.len())))
-        .take_while(|b| match left.checked_sub(b.data.len()) {
+        .filter(|b| match left.checked_sub(b.data.len()) {
             Some(rest) => {
                 left = rest;
                 true
