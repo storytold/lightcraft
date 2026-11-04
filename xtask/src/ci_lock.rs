@@ -135,13 +135,19 @@ fn wait_for_slot(dir: &Path, slots: usize, owner: &str, wait: Option<Duration>, 
         eprintln!("  running: {h}");
     }
     loop {
-        // never past the limit: a sleep ends by it, and the limit is checked before each try, so
-        // a slot freed after it isn't taken
+        // never past the limit: a sleep ends by it, and the limit is checked before each try and
+        // after one that took a slot, so a slot freed after it isn't kept
         std::thread::sleep(wait.map_or(poll, |w| poll.min(w.saturating_sub(waiting.elapsed()))));
         if let Some(wait) = wait.filter(|w| waiting.elapsed() >= *w) {
             return Err(gave_up(wait, &holders(dir, slots)));
         }
         if let Some(held) = try_acquire(dir, slots, owner)? {
+            // the try scans every slot file: one freed only after the limit, while it scanned,
+            // is given back rather than taken late
+            if let Some(wait) = wait.filter(|w| waiting.elapsed() >= *w) {
+                drop(held);
+                return Err(gave_up(wait, &holders(dir, slots)));
+            }
             eprintln!("=== ci: waited {:.0} s for a CI slot ===", waiting.elapsed().as_secs_f64());
             return Ok(Some(held));
         }
