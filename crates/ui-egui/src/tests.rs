@@ -11,6 +11,7 @@ mod canvas_pan;
 mod capture_time;
 mod carried_right_click;
 mod carried_text_field_menu;
+mod color_mixer;
 mod compare;
 mod copy_paste_dialogs;
 mod crop_rotate;
