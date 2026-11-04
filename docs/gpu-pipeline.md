@@ -196,8 +196,9 @@ full-render preservation and benchmark (issue #1146).
   per-plane radii) and lives in it as an extension, so the UI needs no change. The uploaded source is
   kept per view. Tone and colour edits reuse these stages. Exposure also re-evaluates any mask
   whose selection reads it.
-- Mask alphas stay in the CPU and GPU stage caches, keyed by their definitions, work-frame
-  geometry and the image or Exposure when their selection reads those inputs. Refine Edges
+- Mask alphas stay in the CPU and GPU stage caches, keyed by their definitions, the frame their
+  coordinates are on (`on_photo`), work-frame geometry and the image or Exposure when their
+  selection reads those inputs (stored AI selections read the image). Refine Edges
   reads pre-exposure luminance; the engine uses the CPU for visible refined masks.
 - Dehaze windows cache each renderer's full-resolution full-frame airlight statistic. The
   statistic includes the same upstream stages and every-seventh-value dark-channel selection
