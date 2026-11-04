@@ -189,6 +189,38 @@ mod cancellation_tests {
     }
 
     #[test]
+    fn recheck_progress_counts_failed_probes_as_completed() {
+        const FILES: usize = 3;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let probe_calls = calls.clone();
+        let probe: FileProbe = Arc::new(move |path| {
+            probe_calls.fetch_add(1, Ordering::Relaxed);
+            if path == "unreadable.raw" { Err("injected probe failure".into()) } else { Ok(ProbeInfo::default()) }
+        });
+        let stale: Vec<_> = ["first.raw", "unreadable.raw", "last.raw"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, path)| Stale {
+                id: PhotoId(i as u64),
+                path: path.into(),
+                preview_only: Some("preview".into()),
+                preview_checked: "0.5.0".into(),
+            })
+            .collect();
+        let cancel = AtomicBool::new(false);
+        let progress = Mutex::new(Vec::new());
+
+        let results = probe_cancellable_with_progress(&probe, stale, &cancel, &|done| {
+            progress.lock().unwrap_or_else(|e| e.into_inner()).push(done);
+        });
+
+        assert_eq!(calls.load(Ordering::Relaxed), FILES);
+        assert_eq!(results.iter().filter(|(_, result)| result.is_err()).count(), 1);
+        assert_eq!(results.len(), FILES);
+        assert_eq!(progress.lock().unwrap_or_else(|e| e.into_inner()).last(), Some(&FILES));
+    }
+
+    #[test]
     fn cancelled_recheck_probe_does_not_start_remaining_files_and_reports_progress() {
         const FILES: usize = 32;
         let calls = Arc::new(AtomicUsize::new(0));
