@@ -246,12 +246,25 @@ impl MergeJob {
         // (and every photo checked so far): a raw's sensor can be larger than its picture, which the
         // catalog keeps, and a file can have changed since it was imported
         let seen = std::sync::Mutex::new(planned.clone());
+        // each photo's own size: its header's, read before its decode, else the catalog's (never a
+        // stand-in the plan took for one it didn't know, [`fill_unknown`])
+        let real = std::sync::Mutex::new(
+            (0..self.sources.len())
+                .map(|i| self.sizes.get(i).copied().flatten().and_then(|s| PhotoSize::new(s.width, s.height, s.bytes)))
+                .collect::<Vec<_>>(),
+        );
         let threads = self.preview.map(|_| if load.parallel { rayon::current_num_threads() } else { 1 });
         let check = |i: usize, bytes: &[u8]| -> std::result::Result<(), String> {
+            let header = PhotoSize::from_header(bytes);
+            if let Some(now) = header
+                && let Some(s) = real.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(i)
+            {
+                *s = Some(now);
+            }
             if !memory.known {
                 return Ok(());
             }
-            let (Some(&was), Some(now)) = (planned.get(i), PhotoSize::from_header(bytes)) else { return Ok(()) };
+            let (Some(&was), Some(now)) = (planned.get(i), header) else { return Ok(()) };
             let mut sizes = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(s) = sizes.get_mut(i) {
                 *s = now;
@@ -263,7 +276,7 @@ impl MergeJob {
             } else {
                 String::new()
             };
-            let changed = if (now.width, now.height, now.bytes) == (was.width, was.height, was.bytes) {
+            let changed = if !changed_since_import(was, now) {
                 String::new()
             } else {
                 "; if it changed since it was imported, synchronize its folder and merge again".to_owned()
@@ -284,12 +297,9 @@ impl MergeJob {
             if !reduced {
                 return Vec::new();
             }
-            let b = (planned.len() / frames.len().max(1)).max(1).min(groups.max(1));
-            planned
-                .chunks(b)
-                .zip(frames)
-                .map(|(set, f)| (set.iter().map(|s| f64::from(s.width) * f64::from(s.height)).fold(0.0, f64::max), (f.width() * f.height()) as f64))
-                .collect()
+            let real = real.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let b = (real.len() / frames.len().max(1)).max(1).min(groups.max(1));
+            photo_areas(&real, &frames.iter().map(|f| (f.width() * f.height()) as f64).collect::<Vec<_>>(), b)
         };
         // the reference frame's lens corrections (HDR); panoramas carry none
         let mut lens = Vec::new();
@@ -394,6 +404,27 @@ impl MergeJob {
         progress(1.0, "Done");
         Ok(MergeOutput { dng, preview, crop, info })
     }
+}
+
+/// Whether a file's header says another photo than the catalog recorded at import: another size
+/// (in either orientation: the catalog keeps a photo's size upright, a raw's header before it is
+/// turned) or another file size.
+pub(crate) fn changed_since_import(catalog: PhotoSize, header: PhotoSize) -> bool {
+    let shape = |s: PhotoSize| (s.width.min(s.height), s.width.max(s.height), s.bytes);
+    shape(catalog) != shape(header)
+}
+
+/// Each stitched frame's photo pixels (the largest of its `group` photos: an HDR panorama's
+/// bracket) and its own pixels (`frames`). A photo whose own size isn't known counts as its frame,
+/// so `nativeMegapixels` is never made up from the size the plan took for it.
+pub(crate) fn photo_areas(real: &[Option<PhotoSize>], frames: &[f64], group: usize) -> Vec<(f64, f64)> {
+    real.chunks(group.max(1))
+        .zip(frames)
+        .map(|(set, &frame)| {
+            let photos = set.iter().try_fold(0.0f64, |m, s| s.map(|s| m.max(f64::from(s.width) * f64::from(s.height))));
+            (photos.unwrap_or(frame), frame)
+        })
+        .collect()
 }
 
 /// `asked` is what the command asked for, `fit` what ran (held to memory): when the panorama came

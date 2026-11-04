@@ -730,3 +730,27 @@ fn a_panorama_just_over_its_memory_is_made_only_a_little_smaller() {
     assert!((stitch(edge) - room / 68e6).abs() < 1e-9, "as large as memory allows: {}", stitch(edge));
     assert!(stitch(edge + 100) < stitch(edge), "larger frames make it smaller");
 }
+
+/// The check before a decode says a file may have changed since import only when its header
+/// disagrees with the catalog in size or file size, not when it is a portrait photo the catalog
+/// keeps upright and its raw header doesn't.
+#[test]
+fn a_portrait_photo_is_not_taken_as_changed_since_import() {
+    use crate::merge::{PhotoSize, changed_since_import};
+    let catalog = PhotoSize::new(4000, 6000, 30_000_000).unwrap();
+    assert!(!changed_since_import(catalog, PhotoSize::new(6000, 4000, 30_000_000).unwrap()), "turned");
+    assert!(!changed_since_import(catalog, PhotoSize { samples: 30_000_000, ..catalog }), "its sensor");
+    assert!(changed_since_import(catalog, PhotoSize::new(6000, 4500, 30_000_000).unwrap()));
+    assert!(changed_since_import(catalog, PhotoSize::new(4000, 6000, 31_000_000).unwrap()));
+}
+
+/// `nativeMegapixels` comes from the photos' own sizes: a photo the plan sized as the largest
+/// known (its own unknown) counts as its frame, not as that stand-in.
+#[test]
+fn native_megapixels_come_only_from_real_sizes() {
+    use crate::merge::{PhotoSize, photo_areas};
+    let (big, small) = (PhotoSize::new(6000, 4000, 9), PhotoSize::new(3000, 2000, 9));
+    assert_eq!(photo_areas(&[big, None, small], &[1e6, 2e6, 3e6], 1), vec![(24e6, 1e6), (2e6, 2e6), (6e6, 3e6)]);
+    // an HDR panorama's brackets: the largest photo of each, or its frame when one is unknown
+    assert_eq!(photo_areas(&[big, small, small, None], &[1e6, 2e6], 2), vec![(24e6, 1e6), (2e6, 2e6)]);
+}
