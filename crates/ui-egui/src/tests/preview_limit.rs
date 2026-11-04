@@ -773,6 +773,17 @@ mod in_the_loupe {
         h.step();
         let region = h.app.region_view.expect("the final window arrives after the hold expires");
         assert_eq!(region.full.0.max(region.full.1), native);
+        // main's window comes first at a new location, then the exact one replaces it
+        let exact = h.app.session.region_job(region.photo, region.full.0, region.full.1, region.window, true).unwrap();
+        let exact = h.app.renderer.job_for(Slot::Region, exact);
+        for _ in 0..60 {
+            if h.app.renderer.textures.get(&Slot::Region).is_some_and(|t| t.key == exact.key) {
+                break;
+            }
+            complete_pinch_jobs(&mut h, &work);
+        }
+        let region = h.app.region_view.unwrap();
+        assert_eq!(region.key, exact.key);
         assert_eq!(h.app.renderer.textures.get(&Slot::Region).unwrap().key, region.key);
         assert!(!h.app.renderer.is_pending(Slot::Main) && !h.app.renderer.is_pending(Slot::Region));
         assert_ne!(h.app.renderer.wanted(Slot::Main), Some(original_key));
