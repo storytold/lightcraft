@@ -599,3 +599,57 @@ fn the_crop_tools_vignette_survives_degenerate_crops() {
         assert_eq!(shown.data, expected.data, "{rect:?}");
     }
 }
+
+// Given lens corrections, which shrink the export's crop inside the corrected photo with or without
+// Constrain Crop (#2361), the crop tool's vignette frames that shrunk crop
+#[test]
+fn the_crop_tools_vignette_frames_the_lens_corrected_crop() {
+    let mut s = crop_tool_vignette();
+    s.optics.distortion = -80.0;
+    s.crop.geometry.rect = Rect { x0: 0.0, y0: 0.0, x1: 0.7, y1: 0.8 };
+    let export = crate::geometry::Frame::new(480, 320, &s, true);
+    assert!(export.crop.rect.width() < 0.65, "the export's crop is shrunk: {:?}", export.crop.rect);
+    let shown = uncropped(&s, None);
+    let max = crop_tool_vs_cropped(&s, &shown, PixelWindow { x: 0, y: 0, w: shown.width, h: shown.height });
+    assert!(max <= 2, "the crop tool's vignette differs from the export's by {max} levels");
+}
+
+// Given lens corrections, perspective, the automatic lateral CA estimate (a second shrink after it)
+// and crops so far out that nothing fits (the shrink's floor, reached twice), the crop tool frames
+// the vignette by exactly the crop the export has
+#[test]
+fn the_crop_tools_vignette_crop_is_exactly_the_exports() {
+    let src = crate::optics::tests::ca_grid(480, 320, 0.004, -0.003);
+    assert_ne!(crate::optics::estimate_lateral_ca(&src), [0.0; 2], "the photo has lateral CA to estimate");
+    let info = SourceInfo::default();
+    let corner = Rect { x0: 0.0, y0: 0.0, x1: 0.05, y1: 0.05 };
+    let cases: [(&str, f64, f64, f64, bool, bool, Rect); 8] = [
+        ("distortion", -80.0, 0.0, 0.0, false, false, Rect::UNIT),
+        ("distortion + keystone", -80.0, 0.0, -40.0, false, false, Rect::UNIT),
+        ("constrained keystone", 0.0, 0.0, -40.0, true, false, Rect::UNIT),
+        ("estimated CA", 0.0, 0.0, 0.0, false, true, Rect::UNIT),
+        ("manual + estimated CA", 0.0, 60.0, 0.0, false, true, Rect::UNIT),
+        ("distortion + estimated CA, constrained", 80.0, 0.0, -30.0, true, true, Rect::UNIT),
+        ("nothing fits", -100.0, 0.0, 0.0, false, false, corner),
+        ("nothing fits, twice", -100.0, 0.0, 0.0, false, true, corner),
+    ];
+    for (name, distortion, ca, vertical, constrain, remove_ca, rect) in cases {
+        let mut s = DevelopSettings::default();
+        s.optics.distortion = distortion;
+        s.optics.ca_red = ca;
+        s.optics.remove_ca = remove_ca;
+        s.geometry.vertical = vertical;
+        s.geometry.constrain_crop = constrain;
+        s.crop.geometry.rect = rect;
+        let export = crate::frame_for(&src, &info, &s, true);
+        let tool = crate::frame_for(&src, &info, &s, false);
+        assert!(export.crop.rect.width() < rect.width() * 0.999, "{name}: the export's crop is shrunk");
+        assert_eq!(tool.export_crop(&s).crop, export.crop, "{name}");
+        let (_, size) = tool.vignette_frame(&s, W, H);
+        assert_eq!(size, export.native_size(), "{name}");
+    }
+    // the floor is reached twice when the estimate shrinks the crop again
+    let mut s = DevelopSettings::default();
+    (s.optics.distortion, s.optics.remove_ca, s.crop.geometry.rect) = (-100.0, true, corner);
+    assert!(crate::frame_for(&src, &info, &s, true).crop.rect.width() < corner.width() * 0.001);
+}
