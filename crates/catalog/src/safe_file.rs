@@ -22,6 +22,8 @@
 //!   and sync, plus a read-back check, and the file then appears under its final name **without
 //!   replacing anything** (a hard link, which fails on a taken name; where the volume has no hard
 //!   links, an exclusive create that claims the name, then a rename over that placeholder).
+//! - [`read_regular`] reads a file named by a library or a user: the OPENED file must be a regular
+//!   file within a byte cap (a link to an endless source, a FIFO or a device is refused).
 //! - [`same_file`] tells whether two paths name the same file on disk (device + inode on Unix,
 //!   volume serial number + file index on Windows,
 //!   resolved paths elsewhere), for "is this target an original?" checks.
@@ -31,6 +33,26 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// The whole of the regular file at `path`, at most `max` bytes: a link to a device, a FIFO or a
+/// file that grows while it is read is refused, never read to EOF.
+pub fn read_regular(path: impl AsRef<Path>, max: u64) -> io::Result<Vec<u8>> {
+    use std::io::Read;
+    let file = File::open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"));
+    }
+    if meta.len() > max {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{} bytes is more than the {max} allowed", meta.len())));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+    file.take(max.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("more than the {max} bytes allowed")));
+    }
+    Ok(bytes)
+}
 
 thread_local! {
     static FAIL_AFTER: Cell<Option<u64>> = const { Cell::new(None) };
@@ -510,5 +532,21 @@ mod tests {
             assert!(same_file_id(a, b, true).is_err(), "strict comparison must reject an unavailable identity: {a:?}, {b:?}");
             assert!(!same_file_id(a, b, false).unwrap(), "lenient comparison can fall back to resolved paths");
         }
+    }
+
+    #[test]
+    fn read_regular_refuses_what_is_not_a_regular_file_within_the_cap() {
+        let d = temp("read-regular");
+        let p = d.join("a");
+        fs::write(&p, b"abcd").unwrap();
+        assert_eq!(read_regular(&p, 4).unwrap(), b"abcd");
+        assert!(read_regular(&p, 3).is_err());
+        assert!(read_regular(&d, 100).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/dev/zero", d.join("z")).unwrap();
+            assert!(read_regular(d.join("z"), 1 << 20).is_err());
+        }
+        let _ = fs::remove_dir_all(&d);
     }
 }

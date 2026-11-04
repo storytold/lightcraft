@@ -80,6 +80,25 @@ pub struct DiskCache {
     read: Mutex<std::collections::HashSet<u128>>,
 }
 
+/// Most bytes of one cache entry read into memory (a thumbnail is a few hundred KB).
+const MAX_ENTRY_BYTES: u64 = 64 << 20;
+
+/// The entry at `path`: the OPENED file must be a regular file within [`MAX_ENTRY_BYTES`] (a link planted in the cache
+/// to an endless source or a FIFO is not read to EOF).
+fn read_regular(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let f = std::fs::File::open(path)?;
+    if !f.metadata()?.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file"));
+    }
+    let mut b = Vec::new();
+    f.take(MAX_ENTRY_BYTES + 1).read_to_end(&mut b)?;
+    if b.len() as u64 > MAX_ENTRY_BYTES {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "cache entry too large"));
+    }
+    Ok(b)
+}
+
 impl DiskCache {
     pub fn new(dir: &Path, budget: u64) -> DiskCache {
         DiskCache {
@@ -127,13 +146,13 @@ impl DiskCache {
         if !p.parent().is_some_and(is_real_dir) {
             return None;
         }
-        if let Ok(bytes) = std::fs::read(&p) {
+        if let Ok(bytes) = read_regular(&p) {
             return Some((p, bytes));
         }
         let old = self.named(key, OLD_EXT);
-        let Ok(bytes) = std::fs::read(&old) else {
+        let Ok(bytes) = read_regular(&old) else {
             // (taken over by the tidying between the two looks: it is under the new name now)
-            return std::fs::read(&p).ok().map(|bytes| (p, bytes));
+            return read_regular(&p).ok().map(|bytes| (p, bytes));
         };
         // (taken over; if that can't be done it is read where it is, and tried again next time)
         match std::fs::rename(&old, &p) {
@@ -428,6 +447,9 @@ pub fn encode_jpeg(img: &Rgba8) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Most pixels of a cached thumbnail (a 5120 x 6400 image; thumbnails and previews are far smaller).
+const MAX_THUMB_PIXELS: usize = 32 << 20;
+
 /// Decode a cached thumbnail (see [`encode_jpeg`]).
 pub fn decode_jpeg(bytes: &[u8]) -> Option<Rgba8> {
     use zune_core::bytestream::ZCursor;
@@ -435,9 +457,14 @@ pub fn decode_jpeg(bytes: &[u8]) -> Option<Rgba8> {
     use zune_core::options::DecoderOptions;
     let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), opts);
-    let px = d.decode().ok()?;
+    // (the size is read from the header and checked before any pixel is allocated)
+    d.decode_headers().ok()?;
     let info = d.info()?;
     let (w, h) = (info.width as usize, info.height as usize);
+    if w.checked_mul(h)? > MAX_THUMB_PIXELS {
+        return None;
+    }
+    let px = d.decode().ok()?;
     if px.len() < w * h * 3 {
         return None;
     }
