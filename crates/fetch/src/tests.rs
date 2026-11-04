@@ -425,3 +425,10 @@ fn hostile_file_specs_are_rejected_before_touching_disk() {
         assert!(!dir.exists());
     }
 }
+
+#[test]
+fn names_differing_only_in_case_are_one_file() {
+    let spec = |name| FileSpec { name, size: Some(1), sha256: None, max: 1 };
+    assert!(super::validate_files(&[spec("Model.bin")]).is_ok());
+    assert!(super::validate_files(&[spec("Model.bin"), spec("model.BIN")]).is_err());
+}
