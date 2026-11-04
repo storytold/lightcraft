@@ -31,6 +31,7 @@ pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::res
 
 /// [`write_dng_for`] without the session (imports convert on a worker thread).
 pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path: &str, packet: String) -> std::result::Result<String, String> {
+    crate::file_access::check_read(path)?;
     let bytes = match file_bytes {
         Some(r) => r(path)?,
         None => std::fs::read(path).map_err(|e| format!("{path}: {e}"))?,
@@ -52,6 +53,8 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
         return Err(format!("{path}: the DNG written for it doesn't hold the same raw data; the raw is kept"));
     }
     drop((raw, back));
+    let dir = Path::new(path).parent().unwrap_or(Path::new(""));
+    crate::file_access::check_write(dir)?;
     let out = lightcraft_catalog::safe_file::write_new_unique(&mut dng_names(path), &dng)
         .map_err(|e| format!("{path}: could not write its DNG ({e}); the raw is kept"))?;
     Ok(out.to_string_lossy().to_string())
@@ -69,6 +72,9 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
             skipped.push(json!([id.0, "not a file"]));
             continue;
         };
+        crate::file_access::check_read(path).map_err(|e| bad(C, e))?;
+        let dir = Path::new(path).parent().unwrap_or(Path::new(""));
+        crate::file_access::check_write(dir).map_err(|e| bad(C, e))?;
         if ph.kind != MediaKind::Raw || ph.format.eq_ignore_ascii_case("DNG") || ph.copy_of.is_some() {
             skipped.push(json!([
                 id.0,
@@ -336,12 +342,14 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         let stem = src.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "photo".into());
         let ext = src.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
         let dir = src.parent().unwrap_or(Path::new(""));
+        crate::file_access::check_read(src).map_err(|e| bad(C, e))?;
         let mut dst = dir.join(format!("{stem}-copy{ext}"));
         let mut n = 2;
         while dst.exists() {
             dst = dir.join(format!("{stem}-copy-{n}{ext}"));
             n += 1;
         }
+        crate::file_access::check_write(&dst).map_err(|e| bad(C, e))?;
         std::fs::copy(src, &dst).map_err(|e| bad(C, format!("{path}: {e}")))?;
         let new = s.catalog.alloc_photo_id();
         let mut q = ph.clone();

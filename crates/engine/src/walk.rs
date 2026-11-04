@@ -138,9 +138,15 @@ fn walk(
     let mut stack: Vec<(PathBuf, usize, bool)> = vec![(root.to_path_buf(), 0, true)];
     while let Some((path, depth, is_dir)) = stack.pop() {
         if !is_dir {
+            if crate::file_access::check_read(&path).is_err() {
+                continue;
+            }
             if keep(&path) {
                 out.files.push(path);
             }
+            continue;
+        }
+        if crate::file_access::check_read(&path).is_err() {
             continue;
         }
         if skip.is_some_and(|s| path == s) || skip_canonical.as_ref().is_some_and(|s| std::fs::canonicalize(&path).is_ok_and(|p| p.starts_with(s))) {
@@ -193,7 +199,7 @@ fn walk(
                     Ok(m) if m.is_dir() => {
                         // (asked before the folder is marked as entered, so a folder turned down
                         // here can still be entered through another link to it)
-                        if !enter(&p) {
+                        if !enter(&p) || crate::file_access::check_read(&p).is_err() {
                             continue;
                         }
                         let Ok(c) = std::fs::canonicalize(&p) else { continue };
