@@ -156,6 +156,15 @@
   inside the corrected photo, as in Lightroom, so no grey corners or edge marks show. Perspective corrections still
   need Constrain Crop to do the same.
 
+### A Lightroom catalog's edits win over the settings saved in its raws
+- Importing a Lightroom Classic catalog gives every photo it adds, and every photo only browsed and not changed
+  since, the catalog's develop settings. Before, a photo whose file held XMP settings (embedded in a DNG, or in a
+  `.xmp` sidecar) kept those instead, so any edit made in Lightroom since its metadata was last saved to the file
+  was lost, and the import report counted the photo as one whose existing edits it had preserved. A setting the
+  catalog leaves at zero is zero, not what the file's XMP or a default import preset said. A photo edited in the
+  library still keeps its settings, and so does a browsed one changed in any way since browsing (a rating or a
+  keyword counts), unless `library.importLightroom` is run with `updateExisting`.
+
 ### A Lightroom catalog import says where every photo went
 - When a catalog import finishes, the message counts the catalog's photos (virtual copies included) and how many
   were added, and also how many were already in the library, are in Recently Deleted, aren't a file type LightCraft

@@ -994,6 +994,63 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A photo browsed in Local joins the library through the job's file import, or, when its
+    /// original is offline, through the catalog step alone. Untouched since browsing, it holds only
+    /// what browsing read from its file (Created): the catalog's settings replace it, from the
+    /// camera's defaults, and nothing counts as preserved. Changed after browsing (Promoted), it
+    /// keeps its settings whole. Either way it is added. (Adapted from #3435.)
+    #[test]
+    fn a_browsed_photo_keeps_only_edits_made_after_browsing() {
+        for (changed, offline) in [(false, false), (true, false), (false, true), (true, true)] {
+            let case = format!("changed {changed} offline {offline}");
+            let (dir, file, mut session) = file_with_develop_sidecar(&format!("lr-job-browsed-{changed}-{offline}"), "browsed-bytes");
+            let path = if offline { "/missing/lr-job-browsed.jpg".to_string() } else { file };
+            let id = session.catalog.alloc_photo_id();
+            let mut browsed =
+                lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path: path.clone() }, "photo.jpg", "JPEG", 20, 10, "before");
+            browsed.local = true;
+            // as browsing a file whose XMP holds develop settings leaves it, with a setting the
+            // catalog's develop text leaves out (Clarity)
+            let mut from_file = (*browsed.develop).clone();
+            from_file.effects.dehaze = 10.0;
+            from_file.effects.clarity = 15.0;
+            browsed.develop = Arc::new(from_file);
+            browsed.edited = Some("before".into());
+            browsed.set_local_baseline();
+            session.commit("Browse folder", crate::Op::AddPhoto { photo: Box::new(browsed) }).unwrap();
+            assert!(session.catalog.photo(id).unwrap().untouched_local(), "{case}");
+            if changed {
+                let mut edit = (*session.catalog.photo(id).unwrap().develop).clone();
+                edit.effects.dehaze = 25.0;
+                session.set_develop(id, edit, "Personal edit").unwrap();
+            }
+            let settings = "s = { Dehaze = -50 }";
+            let report = if offline {
+                let mut prepared = prepared_for(&session, &path, 3);
+                prepared.data.photos[0].settings = settings.into();
+                commit_prepared(&mut session, prepared).unwrap().report
+            } else {
+                let prepared = prepared_for(&session, &path, 3);
+                run_job_with(&mut session, prepared, vec![path.clone()], false, settings)
+            };
+            assert_eq!(report["mapping"]["1"].as_u64(), Some(id.0), "{case}: {report}");
+            assert_eq!(report["imported"], 1, "{case}: the browsed photo joins the library: {report}");
+            assert_eq!((report["added"].as_u64(), report["alreadyInLibrary"].as_u64()), (Some(1), Some(0)), "{case}: {report}");
+            let photo = session.catalog.photo(id).unwrap();
+            assert!(!photo.local, "{case}");
+            if changed {
+                assert_eq!(report["preservedExistingEdits"], 1, "{case}: the edit came before the import: {report}");
+                assert_eq!(photo.develop.effects.dehaze, 25.0, "{case}: the library's edit is kept");
+                assert_eq!(photo.develop.effects.clarity, 15.0, "{case}: the kept settings are kept whole");
+            } else {
+                assert_eq!(report["preservedExistingEdits"], 0, "{case}: browsing read the file, nobody edited it: {report}");
+                assert_eq!(photo.develop.effects.dehaze, -50.0, "{case}: the catalog's settings replace the file's");
+                assert_eq!(photo.develop.effects.clarity, 0.0, "{case}: a setting the catalog leaves out is not the file's");
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
     /// A new virtual copy is a record the job makes too: its catalog settings start from the
     /// camera's defaults, not from its master's, so a setting the copy's develop text leaves out
     /// (Lightroom omits those at zero) is zero, while the master keeps its own.

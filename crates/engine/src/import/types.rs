@@ -105,16 +105,33 @@ pub enum SameContent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
     /// This job made it, from a file (its metadata, the import defaults, its XMP sidecar) or from a
-    /// Lightroom catalog: nothing in it is an edit made in the library.
+    /// Lightroom catalog, or it is a photo browsed in Local and not changed since, which holds only
+    /// what browsing read from its file, as a record made from that file would (#3434): nothing in
+    /// it is an edit made in the library.
     Created,
-    /// A photo browsed in Local that this job brought into the library: there before the job,
-    /// with whatever was done to it while it was browsed.
+    /// A photo browsed in Local and changed since browsing that this job brought into the library:
+    /// there before the job, with the user's changes.
     Promoted,
     /// In the library before the job.
     Existing,
 }
 
 impl Origin {
+    /// The origin of `p`, a record that was in the library or browsed in Local when the job found
+    /// it: [`Origin::Created`] if browsed and untouched since ([`Photo::untouched_local`]: any
+    /// change counts, a rating or keyword too), [`Origin::Promoted`] if browsed and changed,
+    /// [`Origin::Existing`] otherwise. Read before the job promotes it (a promoted record is no
+    /// longer Local).
+    pub fn of(p: &Photo) -> Origin {
+        if p.untouched_local() {
+            Origin::Created
+        } else if p.local {
+            Origin::Promoted
+        } else {
+            Origin::Existing
+        }
+    }
+
     /// There before the job: what it has may be the user's own work.
     pub fn was_there(self) -> bool {
         self != Origin::Created

@@ -1322,8 +1322,9 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         let (mut p, origin) = if let Some(found) = existing_id.and_then(|id| s.catalog.photo(id)) {
             trashed = found.deleted;
             // what the job already says of it (a record its file import made or promoted), else
-            // it was there before the job: browsed in Local or in the library
-            let origin = origins.record(found.id, if found.local { Origin::Promoted } else { Origin::Existing });
+            // what it was before the job: browsed in Local (untouched since or changed, as for an
+            // offline original, which never reaches the file import) or in the library
+            let origin = origins.record(found.id, Origin::of(found));
             ((**found).clone(), origin)
         } else if master != 0 {
             let master_id = ids.get(&master).copied().ok_or_else(|| error(format!("virtual copy {}: missing master", src.source_id)))?;
