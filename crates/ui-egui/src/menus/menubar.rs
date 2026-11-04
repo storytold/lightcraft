@@ -1059,15 +1059,18 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         ui.spacing_mut().item_spacing.x = TITLE_GAP;
         // All titles first, then their popups, so a title the pointer moves onto can take over
         // from the open menu before either is drawn (no frame with two menus or none).
-        let titles: Vec<egui::Response> = bar
+        let (titles, fills): (Vec<egui::Response>, Vec<egui::layers::ShapeIdx>) = bar
             .iter()
             .map(|(title, _)| {
-                let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(title)).font(font.clone()).color(t.text_label)).frame(false));
+                let (r, fill) = title_button(ui, crate::i18n::tr(title), &font);
                 crate::widgets::register(ui, format!("menu:{title}"), r.rect);
-                r
+                (r, fill)
             })
-            .collect();
+            .unzip();
         let confirmed = switch_open_title(ui.ctx(), &titles);
+        for (r, fill) in titles.iter().zip(fills) {
+            title_fill(ui, r, fill);
+        }
         for ((_, items), r) in bar.iter().zip(&titles) {
             // (opening and closing by click is done in `switch_open_title`)
             // (the click confirming a menu a hover opened must not close it again)
@@ -1083,8 +1086,9 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         }
         ui.spacing_mut().item_spacing.x = saved;
     } else {
-        let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Menu")).font(font.clone()).color(t.text_label)).frame(false));
+        let (r, fill) = title_button(ui, crate::i18n::tr("Menu"), &font);
         crate::widgets::register(ui, "menu:all", r.rect);
+        title_fill(ui, &r, fill);
         egui::Popup::menu(&r).show(|ui| {
             crate::menu_level::level(ui, 1, bar_bottom, |ui| {
                 for (title, items) in &bar {
@@ -1104,6 +1108,25 @@ pub fn show_in_window(app: &mut LightcraftApp, ui: &mut egui::Ui, max_width: f32
         }
     }
     ui.cursor().left() - start
+}
+
+/// A top-level menu title: frameless text like a native menu bar, with the pointing hand. It
+/// reserves the paint slot under itself for [`title_fill`], which knows only after
+/// [`switch_open_title`] whether the title's menu is open.
+fn title_button(ui: &mut egui::Ui, text: &str, font: &egui::FontId) -> (egui::Response, egui::layers::ShapeIdx) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let fill = ui.painter().add(egui::Shape::Noop);
+    let r = ui.add(egui::Button::new(egui::RichText::new(text).font(font.clone()).color(t.text_label)).frame(false));
+    (r.on_hover_cursor(egui::CursorIcon::PointingHand), fill)
+}
+
+/// The theme's hover fill behind a menu title while the pointer is on it or its menu is open, so
+/// the bar shows which title a click would open and which menu is showing.
+fn title_fill(ui: &egui::Ui, r: &egui::Response, fill: egui::layers::ShapeIdx) {
+    if r.hovered() || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(r)) {
+        let t = crate::theme::Tokens::get(ui.ctx());
+        ui.painter().set(fill, egui::epaint::RectShape::filled(r.rect.expand2(egui::vec2(TITLE_GAP / 3.0, 4.0)), 4.0, t.hover));
+    }
 }
 
 /// Native menu-bar behaviour for the top-level titles: while one menu is open, resting the pointer

@@ -160,6 +160,8 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
     let t = Tokens::get(ui.ctx());
     let indent = drawn_indent(ui, indent);
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), sense);
+    // a row a click opens shows the hand, like a photo in the grid (a drag's own cursor comes later)
+    let resp = if sense.senses_click() { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp };
     if scroll_asked(ui, id) {
         ui.scroll_to_rect_animation(r, None, egui::style::ScrollAnimation::none());
     }
@@ -276,7 +278,7 @@ fn disclosure_chevron(ui: &mut egui::Ui, row: &egui::Response, indent: f32, open
     let t = Tokens::get(ui.ctx());
     let c = pos2(row.rect.left() + 10.0 + indent_x(ui.ctx(), indent), row.rect.center().y);
     let tri = Rect::from_center_size(c, vec2(16.0, 16.0));
-    let tr = ui.interact(tri, id, Sense::click());
+    let tr = ui.interact(tri, id, Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     register(ui, widget, tri);
     let col = if tr.hovered() { t.text } else { t.text_dim };
     paint(ui.painter(), Rect::from_center_size(c, vec2(16.0, 16.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, col);
