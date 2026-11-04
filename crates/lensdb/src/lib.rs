@@ -30,6 +30,11 @@ pub use model::{Distortion, Tca, Vignetting};
 const MAX_FILE_BYTES: u64 = 16 << 20;
 /// Most files read from one directory.
 const MAX_FILES: usize = 2000;
+/// Most bytes of lens names that profiles may copy per parsed document (each calibration owns a copy): a real
+/// database copies about a megabyte.
+const MAX_PROFILE_COPY_BYTES: usize = 32 << 20;
+/// What one copied name costs besides its bytes: the `String` slot in its `Vec` and the allocator's header and rounding.
+const NAME_ALLOCATION: usize = std::mem::size_of::<String>() + 32;
 /// Largest radial error (half-diagonal units) accepted when converting a distortion to the DNG polynomial.
 pub const MAX_WARP_ERROR: f64 = 0.001;
 /// Largest relative error accepted when converting vignetting to the DNG polynomial.
@@ -144,7 +149,8 @@ impl LensDb {
         let root = xml::parse(xml)?;
         let Some(top) = root.kid("lensdatabase") else { return Err(Error::Xml("no <lensdatabase> element".into())) };
         let cameras = top.kids("camera").filter_map(camera).collect();
-        let lenses = top.kids("lens").flat_map(lens).collect();
+        let mut budget = MAX_PROFILE_COPY_BYTES;
+        let lenses = top.kids("lens").flat_map(|n| lens(n, &mut budget)).collect();
         Ok(LensDb { cameras, lenses })
     }
 
@@ -272,11 +278,26 @@ fn exif_focal_range(exif: &[String]) -> Option<(f64, f64)> {
 }
 
 fn read_capped(path: &Path) -> Result<String, Error> {
-    let len = std::fs::metadata(path).map_err(|e| Error::Io(e.to_string()))?.len();
-    if len > MAX_FILE_BYTES {
+    use std::io::Read;
+    let io = |e: std::io::Error| Error::Io(e.to_string());
+    // the pathname is checked before opening (opening a FIFO for reading blocks until a writer appears), then the
+    // opened file again: a link or FIFO swapped in after the pathname check is refused too
+    if !std::fs::metadata(path).map_err(io)?.is_file() {
+        return Err(Error::Io(format!("{}: not a regular file", path.display())));
+    }
+    let file = std::fs::File::open(path).map_err(io)?;
+    let meta = file.metadata().map_err(io)?;
+    if !meta.is_file() {
+        return Err(Error::Io(format!("{}: not a regular file", path.display())));
+    }
+    if meta.len() > MAX_FILE_BYTES {
         return Err(Error::TooLarge);
     }
-    let bytes = std::fs::read(path).map_err(|e| Error::Io(e.to_string()))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(Error::TooLarge);
+    }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -388,7 +409,7 @@ fn positive(v: Option<f64>) -> Option<f64> {
 }
 
 /// One `<lens>` element → one profile per `<calibration>` (newer files give each its own crop factor and aspect).
-fn lens(n: &xml::Node) -> Vec<Profile> {
+fn lens(n: &xml::Node, copy_budget: &mut usize) -> Vec<Profile> {
     let Some(maker) = n.kid_text("maker") else { return Vec::new() };
     let models: Vec<String> = n.kids("model").map(|m| m.text.trim().to_string()).filter(|m| !m.is_empty()).collect();
     if models.is_empty() {
@@ -398,50 +419,66 @@ fn lens(n: &xml::Node) -> Vec<Profile> {
     let aspect = aspect_of(n.kid_text("aspect-ratio")).unwrap_or(1.5);
     let rectilinear = n.kid_text("type").is_none_or(|t| t.eq_ignore_ascii_case("rectilinear"));
     let mounts = n.kids("mount").map(|m| m.text.trim().to_string()).filter(|m| !m.is_empty()).collect::<Vec<_>>();
-    n.kids("calibration")
-        .map(|cal| {
-            let mut p = Profile {
-                maker: maker.to_string(),
-                models: models.clone(),
-                mounts: mounts.clone(),
-                crop_factor: crop_of(cal.attr("cropfactor")).unwrap_or(crop),
-                aspect_ratio: aspect_of(cal.attr("aspect-ratio")).unwrap_or(aspect),
-                rectilinear,
-                distortion: Vec::new(),
-                tca: Vec::new(),
-                vignetting: Vec::new(),
-            };
-            for c in &cal.children {
-                let Some(focal) = positive(c.num("focal")) else { continue };
-                let k = |name: &str| c.num(name).unwrap_or(0.0);
-                match (c.name.as_str(), c.attr("model")) {
-                    ("distortion", Some("poly3")) => p.distortion.push((focal, Distortion::Poly3 { k1: k("k1") })),
-                    ("distortion", Some("poly5")) => p.distortion.push((focal, Distortion::Poly5 { k1: k("k1"), k2: k("k2") })),
-                    ("distortion", Some("ptlens")) => p.distortion.push((focal, Distortion::PtLens { a: k("a"), b: k("b"), c: k("c") })),
-                    ("tca", Some("linear")) => {
-                        let one = |name: &str| c.num(name).unwrap_or(1.0);
-                        p.tca.push((focal, Tca::Linear { kr: one("kr"), kb: one("kb") }));
-                    }
-                    ("tca", Some("poly3")) => {
-                        let one = |name: &str| c.num(name).unwrap_or(1.0);
-                        p.tca.push((focal, Tca::Poly3 { vr: one("vr"), vb: one("vb"), cr: k("cr"), cb: k("cb"), br: k("br"), bb: k("bb") }));
-                    }
-                    ("vignetting", Some("pa")) => {
-                        let (Some(aperture), distance) = (positive(c.num("aperture")), positive(c.num("distance")).unwrap_or(1000.0)) else {
-                            continue;
-                        };
-                        let model = Vignetting { k1: k("k1"), k2: k("k2"), k3: k("k3") };
-                        p.vignetting.push(VignettingPoint { focal, aperture, distance, model });
-                    }
-                    _ => {}
+    // every kept calibration owns a copy of the lens's names, charged to the document's shared copy budget (the
+    // strings' own allocations count, not only their bytes): when it can't cover another copy, the rest are left out
+    let meta_bytes = std::mem::size_of::<Profile>()
+        + NAME_ALLOCATION
+        + maker.len()
+        + models.iter().chain(&mounts).map(|m| m.len() + NAME_ALLOCATION).sum::<usize>();
+    let mut out = Vec::new();
+    for cal in n.kids("calibration") {
+        if *copy_budget < meta_bytes {
+            break;
+        }
+        let mut p = Profile {
+            maker: String::new(),
+            models: Vec::new(),
+            mounts: Vec::new(),
+            crop_factor: crop_of(cal.attr("cropfactor")).unwrap_or(crop),
+            aspect_ratio: aspect_of(cal.attr("aspect-ratio")).unwrap_or(aspect),
+            rectilinear,
+            distortion: Vec::new(),
+            tca: Vec::new(),
+            vignetting: Vec::new(),
+        };
+        for c in &cal.children {
+            let Some(focal) = positive(c.num("focal")) else { continue };
+            let k = |name: &str| c.num(name).unwrap_or(0.0);
+            match (c.name.as_str(), c.attr("model")) {
+                ("distortion", Some("poly3")) => p.distortion.push((focal, Distortion::Poly3 { k1: k("k1") })),
+                ("distortion", Some("poly5")) => p.distortion.push((focal, Distortion::Poly5 { k1: k("k1"), k2: k("k2") })),
+                ("distortion", Some("ptlens")) => p.distortion.push((focal, Distortion::PtLens { a: k("a"), b: k("b"), c: k("c") })),
+                ("tca", Some("linear")) => {
+                    let one = |name: &str| c.num(name).unwrap_or(1.0);
+                    p.tca.push((focal, Tca::Linear { kr: one("kr"), kb: one("kb") }));
                 }
+                ("tca", Some("poly3")) => {
+                    let one = |name: &str| c.num(name).unwrap_or(1.0);
+                    p.tca.push((focal, Tca::Poly3 { vr: one("vr"), vb: one("vb"), cr: k("cr"), cb: k("cb"), br: k("br"), bb: k("bb") }));
+                }
+                ("vignetting", Some("pa")) => {
+                    let (Some(aperture), distance) = (positive(c.num("aperture")), positive(c.num("distance")).unwrap_or(1000.0)) else {
+                        continue;
+                    };
+                    let model = Vignetting { k1: k("k1"), k2: k("k2"), k3: k("k3") };
+                    p.vignetting.push(VignettingPoint { focal, aperture, distance, model });
+                }
+                _ => {}
             }
-            p.distortion.sort_by(|a, b| a.0.total_cmp(&b.0));
-            p.tca.sort_by(|a, b| a.0.total_cmp(&b.0));
-            p
-        })
-        .filter(|p| !p.distortion.is_empty() || !p.tca.is_empty() || !p.vignetting.is_empty())
-        .collect()
+        }
+        // a calibration with nothing to apply is dropped before its names are copied or charged
+        if p.distortion.is_empty() && p.tca.is_empty() && p.vignetting.is_empty() {
+            continue;
+        }
+        *copy_budget -= meta_bytes;
+        p.maker = maker.to_string();
+        p.models = models.clone();
+        p.mounts = mounts.clone();
+        p.distortion.sort_by(|a, b| a.0.total_cmp(&b.0));
+        p.tca.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out.push(p);
+    }
+    out
 }
 
 /// Linear interpolation weights in a sorted key list: the bracketing indices and the weight of the upper one.
