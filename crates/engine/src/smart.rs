@@ -144,6 +144,12 @@ fn stored_facts(head: &serde_json::Value, bytes: &[u8]) -> Option<(SmartFacts, M
 /// Encode a source image and its decoder facts (the camera tone curve and the [`SourceInfo`] the
 /// render interprets settings against, if given) as a smart preview.
 pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String> {
+    encode_with_lens_key(img, info, crate::lens_profiles::cache_key())
+}
+
+/// Encode pixels with the database identity captured by their producer, rather than a later
+/// database that may have replaced it while the image was decoded or encoded.
+pub(crate) fn encode_with_lens_key(img: &Rgb32f, info: Option<&SourceInfo>, lens_key: u64) -> Result<Vec<u8>, String> {
     // scale so all but the brightest 0.05 % fit into 0..1
     let mut lum: Vec<f32> = img.data.iter().map(|c| c[0].max(c[1]).max(c[2])).filter(|v| v.is_finite()).collect();
     let scale = if lum.is_empty() {
@@ -176,7 +182,7 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
         "h": img.height,
         "scale": scale,
         LOOK_FIELD: crate::camera_preview::LOOK_VERSION,
-        LENS_FIELD: crate::lens_profiles::cache_key(),
+        LENS_FIELD: lens_key,
         ENC_FIELD: ENCODE_VERSION,
     });
     // The tail: the decoder facts (and the file's semantic mattes) after the JPEG, so the header
@@ -514,8 +520,13 @@ fn marker_is_current(text: &str, lens_key: u64) -> bool {
 /// Record that the proxies in `dir` were checked at this build's camera-look fit version and encode
 /// version and loaded lens database identity.
 pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
+    mark_look_checked_with_lens_key(dir, crate::lens_profiles::cache_key())
+}
+
+/// Stamp the identity captured before scanning, so a later database is never marked checked.
+pub(crate) fn mark_look_checked_with_lens_key(dir: &Path, lens_key: u64) -> Result<(), String> {
     let path = dir.join(LOOK_MARKER);
-    let text = format!("{} {} {}\n", crate::camera_preview::LOOK_VERSION, ENCODE_VERSION, crate::lens_profiles::cache_key());
+    let text = format!("{} {} {}\n", crate::camera_preview::LOOK_VERSION, ENCODE_VERSION, lens_key);
     lightcraft_catalog::safe_file::write_atomic(&path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 

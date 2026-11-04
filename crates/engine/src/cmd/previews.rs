@@ -411,7 +411,10 @@ fn smart_run(
             if damaged && !stale && crate::smart::is_valid(&path) {
                 n.built += 1;
             } else {
-                // Every encode stamps current identities, including repairs and missing targets.
+                // Capture provenance before decoding. A reload during that decode makes its
+                // pixels ambiguous; a later reload must leave the captured identity on the bytes.
+                let generation = crate::lens_profiles::generation();
+                let lens_key = crate::lens_profiles::cache_key();
                 // Never relabel pixels from a proxy, even when the destination has no readable header.
                 let source = source.and_then(original_only);
                 // atomic: a failed write leaves no partial proxy that would pass for a built one;
@@ -424,8 +427,11 @@ fn smart_run(
                         if src.from_proxy || src.reduced {
                             return Err("smart previews need the original source".to_string());
                         }
+                        if crate::lens_profiles::generation() != generation {
+                            return Err("lens database changed while decoding the smart preview; retry the build".to_string());
+                        }
                         let info = src.info_or(Default::default());
-                        crate::smart::encode(&src.image, Some(&info))
+                        crate::smart::encode_with_lens_key(&src.image, Some(&info), lens_key)
                     })
                     .and_then(|b| {
                         let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
@@ -490,7 +496,9 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
-        let source = (!discard).then(|| s.media.source_ref(&ph, crate::media::SourceLevel::Preview));
+        // A cached source can predate a runtime lens database replacement. Read the original
+        // afresh so smart_run's captured provenance describes the pixels being encoded.
+        let source = (!discard).then(|| s.media.origin_ref(&ph.source, crate::media::SourceLevel::Preview.max_edge()));
         jobs.push((id, path, source, preview_fitted_look(&ph)));
     }
     let custom = s.smart_previews_dir.is_some();
@@ -548,6 +556,8 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
 /// The body of [`refresh_stale_smart_previews`]: rebuild the stale proxies among `jobs`.
 #[cfg(not(target_arch = "wasm32"))]
 fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
+    let generation = crate::lens_profiles::generation();
+    let lens_key = crate::lens_profiles::cache_key();
     let stale: Vec<SmartJob> = jobs
         .into_iter()
         .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
@@ -564,7 +574,10 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
             }
         }
     }
-    if let Err(e) = crate::smart::mark_look_checked(dir) {
+    if crate::lens_profiles::generation() != generation {
+        return;
+    }
+    if let Err(e) = crate::smart::mark_look_checked_with_lens_key(dir, lens_key) {
         log::warn!("smart previews: {e}");
     }
 }
@@ -840,5 +853,127 @@ mod smart_provenance_tests {
         assert_eq!((counts.built, counts.repaired, counts.failed.len()), (1, 0, 0));
         assert_eq!(std::fs::read(&legacy).unwrap(), bytes);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn smart_command_reads_original_instead_of_cached_pixels() {
+        let dir = temp("fresh-original");
+        let photo = Photo::new(
+            PhotoId(1),
+            Source::File { path: dir.join("original.arw").to_string_lossy().into_owned() },
+            "original.arw",
+            "ARW",
+            32,
+            24,
+            "2026-11-04T00:00:00",
+        );
+        let path = crate::smart::sharded_file_path(&dir, &photo);
+        let mut session = crate::Session::new();
+        session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        session.media.smart_dir = Some(dir.clone());
+        session.media.insert(PhotoId(1), SourceLevel::Preview, Arc::new(lightcraft_raster::Rgb32f::new(32, 24)));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        session.media.file_loader = Some(Arc::new(move |_, _| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut pixels = lightcraft_raster::Rgb32f::new(32, 24);
+            pixels.data.fill([0.4; 3]);
+            Ok((pixels, Default::default()))
+        }));
+        let result = session.execute("library.smartPreviews", &serde_json::json!({"ids": [1]})).unwrap();
+        assert_eq!(result["built"], 1, "{result}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1, "the original must be decoded afresh");
+        let loaded = crate::smart::load(&path).unwrap();
+        assert!(loaded.image.data[0][0] > 0.3, "cached black pixels must not be relabeled as a current fit");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn runtime_lens_reload_during_smart_decode_preserves_destinations_and_scan_marker() {
+        const CHILD: &str = "LIGHTCRAFT_TEST_SMART_RELOAD_CHILD";
+        const DB: &str = r#"<lensdatabase><lens><maker>Test</maker><model>18mm</model><mount>T</mount>
+            <cropfactor>1.5</cropfactor><calibration><distortion model="poly3" focal="18" k1="-0.03" />
+            </calibration></lens></lensdatabase>"#;
+        if std::env::var_os(CHILD).is_none() {
+            let dir = temp("runtime-reload-child");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cmd::previews::smart_provenance_tests::runtime_lens_reload_during_smart_decode_preserves_destinations_and_scan_marker",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env(crate::lens_profiles::ENV, &dir)
+                .env("LIGHTCRAFT_CONFIG_DIR", &dir)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(dir).unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        let dir = std::path::PathBuf::from(std::env::var_os(crate::lens_profiles::ENV).unwrap());
+        let database = dir.join("lens.xml");
+        let image = lightcraft_raster::Rgb32f::new(32, 24);
+        let old = crate::smart::encode_with_lens_key(&image, None, 0).unwrap();
+        for replace in [false, true] {
+            for existing in [None, Some(b"broken".to_vec()), Some(old.clone())] {
+                std::fs::write(&database, DB).unwrap();
+                crate::lens_profiles::reload();
+                let before = crate::lens_profiles::cache_key();
+                assert_ne!(before, 0);
+                let target = dir.join("target.lcsp");
+                if let Some(bytes) = &existing {
+                    std::fs::write(&target, bytes).unwrap();
+                } else {
+                    let _ = std::fs::remove_file(&target);
+                }
+                let db_path = database.clone();
+                let pixels = image.clone();
+                let mut session = crate::Session::new();
+                session.media.file_loader = Some(Arc::new(move |_, _| {
+                    std::fs::write(&db_path, DB.replace("-0.03", "-0.05")).map_err(|e| e.to_string())?;
+                    if replace {
+                        crate::lens_profiles::replaced();
+                    } else {
+                        crate::lens_profiles::reload();
+                    }
+                    Ok((pixels.clone(), Default::default()))
+                }));
+                let origin = Source::File { path: dir.join("original.arw").to_string_lossy().into_owned() };
+                let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
+                let counts = smart_run(&dir, false, false, vec![(PhotoId(1), target.clone(), Some(source), true)], None).unwrap();
+                assert_ne!(crate::lens_profiles::cache_key(), before);
+                if let Some(bytes) = &existing {
+                    assert_eq!(std::fs::read(&target).unwrap(), *bytes, "a reload never replaces the previous destination");
+                } else {
+                    assert!(!target.exists(), "a reload never creates a mislabeled proxy");
+                }
+                if existing.as_ref() == Some(&old) {
+                    assert_eq!(counts.stale_kept, 1);
+                } else {
+                    assert_eq!(counts.failed.len(), 1);
+                    assert!(counts.failed[0][1].as_str().unwrap().contains("lens database changed"));
+                }
+
+                // The same change inside the actual background refresh cannot stamp the new DB checked.
+                std::fs::write(&database, DB).unwrap();
+                crate::lens_profiles::reload();
+                std::fs::write(&target, &old).unwrap();
+                let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
+                super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), true)]);
+                assert_eq!(std::fs::read(&target).unwrap(), old);
+                assert!(!crate::smart::look_checked(&dir));
+
+                // A subsequent stable decode writes B's identity and can complete the scan.
+                let pixels = image.clone();
+                session.media.file_loader = Some(Arc::new(move |_, _| Ok((pixels.clone(), Default::default()))));
+                let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
+                super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), true)]);
+                assert!(!crate::smart::is_stale_for(&target, true));
+                assert!(crate::smart::look_checked(&dir));
+                // Reset the marker before the next race attempt.
+                crate::smart::mark_look_checked_with_lens_key(&dir, 0).unwrap();
+            }
+        }
     }
 }

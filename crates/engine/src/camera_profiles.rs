@@ -161,8 +161,17 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
 /// keys, so thumbnails rendered before a profile existed are not reused after. Includes the
 /// loaded lens database: its geometry determines which sensor/JPEG samples fit the camera look.
 pub fn cache_key() -> u64 {
-    static KEY: OnceLock<u64> = OnceLock::new();
-    *KEY.get_or_init(|| cache_key_with_lens(dir().as_deref(), crate::lens_profiles::cache_key()))
+    static KEY: Mutex<Option<(u64, u64)>> = Mutex::new(None);
+    let lens_key = crate::lens_profiles::cache_key();
+    let mut key = KEY.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((previous_lens, value)) = *key
+        && previous_lens == lens_key
+    {
+        return value;
+    }
+    let value = cache_key_with_lens(dir().as_deref(), lens_key);
+    *key = Some((lens_key, value));
+    value
 }
 
 #[cfg(test)]
@@ -275,7 +284,7 @@ mod tests {
                 <calibration><distortion model="poly3" focal="18" k1="-0.03" /></calibration></lens></lensdatabase>"#,
             )
             .unwrap();
-            // Both OnceLocks and the configured camera-profile folder belong to the child only.
+            // The loaded snapshots and configured camera-profile folder belong to the child only.
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "camera_profiles::tests::public_cache_key_includes_the_configured_lens_database", "--nocapture"])
                 .env(CHILD, "1")
@@ -294,6 +303,17 @@ mod tests {
         let directory = dir();
         assert_eq!(cache_key(), cache_key_with_lens(directory.as_deref(), lens_key));
         assert_ne!(cache_key(), cache_key_with_lens(directory.as_deref(), 0), "public camera key must forward the loaded lens key");
+        let first = cache_key();
+        let file = directory.unwrap().join("lens.xml");
+        let xml = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, xml.replace("-0.03", "-0.05")).unwrap();
+        assert_eq!(cache_key(), first, "unreloaded files do not change the loaded database");
+        crate::lens_profiles::replaced();
+        assert_ne!(cache_key(), first, "camera keys follow runtime lens replacements too");
+        assert_eq!(cache_key(), cache_key_with_lens(dir().as_deref(), crate::lens_profiles::cache_key()));
+        std::fs::write(&file, xml).unwrap();
+        crate::lens_profiles::reload();
+        assert_eq!(cache_key(), first, "restored semantic data restores the camera key");
     }
 
     #[test]

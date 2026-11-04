@@ -259,7 +259,7 @@ is recorded here yet. Whether they should come before the file-local fit for the
 
 A smart preview keeps the result of the fit twice: the colour matrix is baked into its pixels and the tone and chroma curves are stored in its header. When the fit changes, a preview built earlier keeps the old look until it is rebuilt, and the render cache version does not reach it (renders are keyed on the library's files, proxies are files of their own).
 
-The synchronized geometry-gated external-profile correspondence fit uses `LOOK_VERSION = 14` and `RENDER_CACHE_VERSION = 74`, after upstream versions 13 and 73, invalidating both stale smart-preview looks and rendered thumbnails. The private-file observations above predate this synchronization; they have not been repeated on this merged source state.
+The synchronized geometry-gated external-profile correspondence fit uses `LOOK_VERSION = 14` and `RENDER_CACHE_VERSION = 75`, after upstream versions 13 and 74, invalidating both stale smart-preview looks and rendered thumbnails. The private-file observations above predate this synchronization; they have not been repeated on this merged source state.
 
 The fit therefore has a version, `LOOK_VERSION` in `crates/engine/src/camera_preview.rs`, and every smart preview records the version that wrote it in its header line (`look_version`). **Bump the constant in any change that makes the fit give a different result for the same file**: the matrix, hue/saturation, tone or chroma fit, their gates and fallbacks, or how a camera profile feeds them. Changes that leave the fitted look alone don't need it. A header without the field (everything built before it existed) counts as version 0, and so does a value that is not a non-negative integer; a value from a newer build is left alone.
 
@@ -343,11 +343,15 @@ differently from the crop the file records (`CropLeft`/`CropTop` 36, 34); the fi
 
 ### Database identity and DNG colour tags (PR #2675 review)
 
-The loaded lens database is immutable for a process. Its matching and calibration values, including profile order,
+Each loaded lens database snapshot is immutable. Its matching and calibration values, including profile order,
 form a semantic identity in camera-look render/view cache keys and smart-preview headers and scan markers.
-Changing, adding or removing the database takes effect after restarting; fitted smart previews then rebuild when
+A download, replacement or explicit reload selects a new snapshot and updates that identity; fitted smart previews then rebuild when
 their originals are available. Existing offline proxies remain readable. Missing legacy identities require one
 new check; proxies from newer fit/encoding versions retain the existing downgrade protection.
+Smart-preview builds decode the original afresh and capture its database identity before decoding. A reload
+or replacement during decoding rejects that write; a later change during encoding leaves the captured identity
+on the proxy so it can still be recognized as stale. A scan interrupted by a database change does not mark the
+new database as checked. Existing destinations remain untouched when a build is rejected.
 
 DNG conversion and merge resolve the file's own lens warp and correction before removing lens opcodes from the
 colour-only sensor fit. The opcodes remain in standalone DNGs and in merge reference corrections. Synthetic tests

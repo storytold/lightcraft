@@ -412,3 +412,20 @@ fn smart_preview_from_another_database_stays_decodable_offline() {
     assert_eq!((decoded.image.width, decoded.image.height), (image.width, image.height));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn explicit_lens_identity_is_kept_by_encoder_and_scan_marker() {
+    let dir = temp("captured-lens");
+    let image = Rgb32f::new(16, 16);
+    let captured = crate::lens_profiles::cache_key().wrapping_add(1);
+    let bytes = encode_with_lens_key(&image, None, captured).unwrap();
+    let start = MAGIC.len();
+    let end = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+    let head: serde_json::Value = serde_json::from_slice(&bytes[start..end]).unwrap();
+    assert_eq!(head[LENS_FIELD], serde_json::json!(captured), "encoding must not read a later identity");
+    mark_look_checked_with_lens_key(&dir, captured).unwrap();
+    let marker = std::fs::read_to_string(dir.join(LOOK_MARKER)).unwrap();
+    assert!(marker_is_current(&marker, captured));
+    assert!(!look_checked(&dir), "a captured older identity does not mark the current database checked");
+    std::fs::remove_dir_all(dir).unwrap();
+}
