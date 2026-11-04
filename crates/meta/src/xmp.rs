@@ -341,13 +341,7 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
-fn collect_description(
-    d: &Node,
-    prefix: &str,
-    props: &mut BTreeMap<String, Vec<String>>,
-    budget: &mut usize,
-    truncated: &mut bool,
-) {
+fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, truncated: &mut bool) {
     for (k, v) in &d.attrs {
         if !is_rdf_meta_attr(k) {
             let key = format!("{prefix}{k}");

@@ -433,7 +433,6 @@ pub fn export_batch(
     run_batch(items, o, to, write, exists, true, &mut |_, _| true)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,14 +568,20 @@ mod tests {
         for (name, bytes) in [("truncated.png", png_with_truncated_chunk_after_xmp()), ("truncated.webp", webp_with_truncated_chunk_after_xmp())] {
             let item = prepared_original(bytes.clone(), name, true);
             let mut writes = Vec::new();
-            let mut write = |path: &str, _bytes: &[u8]| { writes.push(path.to_owned()); Ok(()) };
+            let mut write = |path: &str, _bytes: &[u8]| {
+                writes.push(path.to_owned());
+                Ok(())
+            };
             let results = run_batch(vec![item], &options, &destination, &mut write, &|_| false, false, &mut |_, _| true).unwrap();
             assert!(results[0]["error"].as_str().is_some_and(|e| e.contains("chunk stream is incomplete")), "{name}: {results:?}");
             assert!(writes.is_empty(), "{name}: incomplete Original must not write bytes or a sidecar");
 
             let item = prepared_original(bytes, name, false);
             let mut copied = Vec::new();
-            let mut write = |path: &str, bytes: &[u8]| { copied.push((path.to_owned(), bytes.to_vec())); Ok(()) };
+            let mut write = |path: &str, bytes: &[u8]| {
+                copied.push((path.to_owned(), bytes.to_vec()));
+                Ok(())
+            };
             let results = run_batch(vec![item], &copy_options, &destination, &mut write, &|_| false, false, &mut |_, _| true).unwrap();
             assert!(results[0]["error"].is_null(), "{name}: location removal is disabled: {results:?}");
             assert_eq!(copied.len(), 2, "{name}: copy Original and sidecar");
