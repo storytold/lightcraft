@@ -93,6 +93,8 @@ pub struct Tex {
     pub quick: Option<QuickSource>,
     /// CPU copy of the pixels (only with [`Renderer::keep_pixels`]; for headless screenshots).
     pub pixels: Option<std::sync::Arc<egui::ColorImage>>,
+    /// An HDR display job's HDR rendition, painted instead of the 8-bit image.
+    pub hdr: Option<std::sync::Arc<crate::hdr_view::HdrPixels>>,
 }
 
 /// Runs render jobs outside this thread's job pool (the browser build: Web Workers, each with its
@@ -273,6 +275,12 @@ pub struct Renderer {
     pub(crate) stage_budget_override: Option<usize>,
     /// The monitor profile textures are made for (`app.displayProfile`; `None`: sRGB).
     display: Option<Arc<lightcraft_engine::display::Display>>,
+    /// The monitor profile chosen (the setting or the screen's), kept while `scrgb_window`
+    /// sets it aside.
+    wanted_display: Option<Arc<lightcraft_engine::display::Display>>,
+    /// The window is HDR (scRGB): its pixels are sRGB primaries the system converts for the
+    /// panel, so textures are sRGB and no monitor profile applies (it would convert twice).
+    scrgb_window: bool,
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
@@ -358,6 +366,8 @@ impl Renderer {
             #[cfg(test)]
             stage_budget_override: None,
             display: None,
+            wanted_display: None,
+            scrgb_window: false,
             #[cfg(not(target_arch = "wasm32"))]
             idle: None,
         }
@@ -536,7 +546,28 @@ impl Renderer {
 
     /// Show previews through `display` from now on (`app.displayProfile`): when it changes, every
     /// texture is made again for the new one.
+    /// On an HDR (scRGB) window the profile is kept but not used ([`Self::set_scrgb_window`]).
     pub fn set_display(&mut self, display: Option<Arc<lightcraft_engine::display::Display>>) {
+        self.wanted_display = display;
+        self.apply_display();
+    }
+
+    /// The window is HDR (scRGB, sRGB primaries the system converts for the panel): textures are
+    /// made in sRGB and the monitor profile is set aside until it isn't.
+    pub fn set_scrgb_window(&mut self, on: bool) {
+        if self.scrgb_window != on {
+            self.scrgb_window = on;
+            self.apply_display();
+        }
+    }
+
+    /// Whether the window is HDR and the monitor profile is set aside.
+    pub fn scrgb_window(&self) -> bool {
+        self.scrgb_window
+    }
+
+    fn apply_display(&mut self) {
+        let display = if self.scrgb_window { None } else { self.wanted_display.clone() };
         if display.as_ref().map(|d| d.id()) != self.display_id() {
             self.forget_all();
         }
@@ -1065,7 +1096,7 @@ impl Renderer {
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
             }
-            let rendered = match r.rendered {
+            let mut rendered = match r.rendered {
                 Ok(x) => {
                     self.failed.remove(&slot);
                     x
@@ -1106,6 +1137,7 @@ impl Renderer {
             let img = &rendered.image;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             let pixels = self.keep_pixels.then(|| color.clone());
+            let hdr = rendered.deep.take().and_then(|d| crate::hdr_view::HdrPixels::of(r.key, d)).map(std::sync::Arc::new);
             let name = format!("{slot:?}");
             match self.textures.get_mut(&slot) {
                 Some(t) => {
@@ -1118,6 +1150,7 @@ impl Renderer {
                     t.histogram = Some(rendered.histogram);
                     t.ms = ms;
                     t.quick = r.quick;
+                    t.hdr = hdr;
                 }
                 None => {
                     let tex = ctx.load_texture(name, color, egui::TextureOptions::LINEAR);
@@ -1133,6 +1166,7 @@ impl Renderer {
                             ms,
                             quick: r.quick,
                             pixels,
+                            hdr,
                         },
                     );
                 }
@@ -1196,9 +1230,11 @@ impl Renderer {
         let gpu: usize = self.stages.values().map(|s| lightcraft_engine::gpu::stage_bytes(s)).sum();
         let tex: usize = self.textures.values().map(|t| t.size[0] * t.size[1] * 4).sum();
         let copies: usize = self.textures.values().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
+        // HDR display: the HDR renditions kept for the presenter (float RGB)
+        let hdr: usize = self.textures.values().filter_map(|t| t.hdr.as_ref()).map(|p| p.bytes()).sum();
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
-            "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies},
+            "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies, "hdrBytes": hdr},
         })
     }
 
@@ -1286,7 +1322,7 @@ mod stage_budget_tests {
         let tex = ctx.load_texture("window", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
         r.textures.insert(
             Slot::Region,
-            Tex { look: None, key: 1, photo: PhotoId(1), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+            Tex { look: None, key: 1, photo: PhotoId(1), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None, hdr: None },
         );
         let long_ago = std::time::Instant::now().checked_sub(IDLE_TRIM * 2).unwrap();
         r.idle = Some((long_ago, false));

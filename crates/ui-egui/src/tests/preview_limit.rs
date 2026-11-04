@@ -657,6 +657,54 @@ mod in_the_loupe {
         assert!(tile(&h, Slot::RegionBefore).is_some() && tile(&h, Slot::Region).is_none());
     }
 
+    // Given an HDR edit on an HDR display (LR-VIEW-HDR-DISPLAY, review on #1221) at 1:1: the plain
+    // view paints the whole-frame HDR rendition, so it has no 8-bit window over it; but a soft
+    // proof, a mask overlay or the Before view alone paint only the 8-bit image, so they keep
+    // their sharp window instead of a capped whole-frame texture
+    #[test]
+    fn an_hdr_edit_on_an_hdr_display_windows_only_its_sdr_views() {
+        struct Nothing;
+        impl crate::hdr_view::HdrPresenter for Nothing {
+            fn paint(&self, _: &egui::Painter, _: egui::Rect, _: &std::sync::Arc<crate::hdr_view::HdrPixels>) {}
+        }
+        let (_fx, mut h, _) = detail();
+        h.app.hdr_presenter = Some(Box::new(Nothing));
+        let r = h.request("engine.execute", json!({"command": "develop.hdr", "params": {"enabled": true}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        assert_eq!((h.app.region_view, h.app.region_before_view), (None, None), "the HDR view has no 8-bit window");
+
+        let r = h.request("engine.execute", json!({"command": "view.softProof", "params": {"on": true}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert!(h.app.region_view.is_some(), "a soft proof of an HDR edit is a window");
+        h.request("engine.execute", json!({"command": "view.softProof", "params": {"on": false}}), T);
+        h.settle(SETTLE);
+        assert_eq!(h.app.region_view, None, "back to the HDR view");
+
+        for (command, params) in [("panel.masking", json!({})), ("mask.add", json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2}))] {
+            let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
+            assert_eq!(r["ok"], true, "{command}: {r}");
+        }
+        h.app.ui.mask_overlay = true;
+        h.settle(SETTLE);
+        let id = h.app.session.active().expect("a photo");
+        let d = h.app.session.develop_of(id).expect("settings");
+        assert!(matches!(crate::panels::detail::view_overlay(&h.app, &d), lightcraft_pipeline::Overlay::Mask { .. }), "the mask overlay is shown");
+        assert!(h.app.region_view.is_some(), "a mask overlay on an HDR edit is a window");
+        h.app.ui.mask_overlay = false;
+
+        h.app.ui.before_after = crate::state::BeforeAfter::Original;
+        h.settle(SETTLE);
+        assert!(h.app.region_before_view.is_some(), "the Before alone (8-bit) is a window");
+        assert_eq!(h.app.region_view, None);
+
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+        h.settle(SETTLE);
+        assert_eq!((h.app.region_view, h.app.region_before_view), (None, None), "next to the HDR After, no windows");
+    }
+
     // Given a wipe (Split), both sides are windows, drawn over the same rect
     #[test]
     fn a_wipe_windows_both_sides() {

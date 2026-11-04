@@ -628,8 +628,11 @@ fail. Error 1603 has other causes too; if this doesn't help, open an issue with 
 
 RISC-V (riscv64): `lightcraft-<ver>-linux-riscv64.tar.gz`, a tarball only (glibc 2.39 or newer, e.g. Ubuntu 24.04+).
 
-On a Wayland desktop LightCraft runs through XWayland when it is available, because only X11 gives
-windows file drag-and-drop; set `LIGHTCRAFT_WAYLAND=1` to use native Wayland (sharper fractional scaling, no drop).
+On a Wayland desktop LightCraft uses native Wayland while **Show HDR photos in HDR on HDR displays**
+(Settings ▸ Performance; off by default on Linux, turn it on for an HDR monitor) is on, because only Wayland windows get an HDR surface. With
+it off, LightCraft runs through XWayland when it is available, because only X11 gives windows file
+drag-and-drop from the file manager. `LIGHTCRAFT_WAYLAND=1` forces native Wayland (sharper
+fractional scaling, HDR, no drop) and `LIGHTCRAFT_WAYLAND=0` forces XWayland (drop, no HDR).
 
 ### FreeBSD
 

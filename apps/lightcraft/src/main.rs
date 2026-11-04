@@ -236,7 +236,14 @@ fn main() -> eframe::Result {
         prefs.as_ref().map_or_else(|| lightcraft_ui_egui::state::AppSettings::default().compose_window, |ui| ui.settings.compose_window)
             && std::env::var_os("WGPU_BACKEND").is_none();
     let win_files = std::sync::Arc::new(window_files(in_memory));
-    let window_gpu::Chosen { renderer, wgpu_options, which: window_renderer, notice: window_notice } = window_gpu::choose(&win_files, compose_window);
+    let window_gpu::Chosen { renderer, mut wgpu_options, which: window_renderer, notice: window_notice } =
+        window_gpu::choose(&win_files, compose_window);
+    // HDR display (LR-VIEW-HDR-DISPLAY): ask for an HDR (scRGB) surface, taken when offered
+    let hdr_display = hdr_display::surface_wanted(
+        std::env::var("LIGHTCRAFT_HDR_DISPLAY").ok().as_deref(),
+        prefs.as_ref().map_or(lightcraft_ui_egui::state::HDR_DISPLAY_DEFAULT, |u| u.settings.hdr_display),
+    );
+    wgpu_options.surface.prefer_hdr = hdr_display;
     win_files.arm(window_renderer);
     let win_files_app = win_files.clone();
     // the window came up: a failure after this is LightCraft stopping, not a start that failed
@@ -264,10 +271,9 @@ fn main() -> eframe::Result {
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut options = options;
     // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; LIGHTCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
+    // manager showed a "no" cursor; but X11 windows get no HDR surface. See `hdr_display::use_xwayland`.
     #[cfg(all(unix, not(target_os = "macos")))]
-    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("LIGHTCRAFT_WAYLAND").is_none() {
+    if hdr_display::use_xwayland(std::env::var_os("DISPLAY").is_some(), std::env::var("LIGHTCRAFT_WAYLAND").ok().as_deref(), hdr_display) {
         options.event_loop_builder = Some(Box::new(|b| {
             use winit::platform::x11::EventLoopBuilderExtX11;
             b.with_x11();
@@ -286,8 +292,18 @@ fn main() -> eframe::Result {
                 // (never required: without it, AI masks offer to download it; see docs/ai-masks.md)
                 // and the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
                 session = session.with_default_sam3_model();
-                // HDR display: SDR unless the surface, platform and display all allow HDR
-                hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
+                // HDR display: the scRGB presenter when the window took an HDR surface
+                // (lightcraft-hdr-display); otherwise SDR unless the surface, platform and display
+                // all allow HDR
+                let hdr_presenter = if hdr_display { lightcraft_hdr_display::HdrDisplay::new(cc.wgpu_render_state.as_ref()) } else { None };
+                if hdr_presenter.is_some() {
+                    log::info!("HDR display: on (scRGB window)");
+                } else {
+                    if hdr_display {
+                        log::info!("HDR display: not offered by this window");
+                    }
+                    hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
+                }
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
                 app.set_startup_update_check(true);
                 if let Some(ui) = prefs {
@@ -300,6 +316,7 @@ fn main() -> eframe::Result {
                 app.alt_asks_for_library = matches!(launch, Launch::Open { alt_asks: true, .. });
                 lightcraft_ui_egui::i18n::set_language(app.ui.language);
                 app.integrated_titlebar = cfg!(target_os = "macos");
+                app.hdr_presenter = hdr_presenter.map(|h| Box::new(h) as Box<dyn lightcraft_ui_egui::hdr_view::HdrPresenter>);
                 app.notices.extend(prefs_warning);
                 app.notices.extend(launch_notices);
                 app.notices.extend(window_notice);

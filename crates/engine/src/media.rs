@@ -27,6 +27,7 @@ use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
 
 mod cache;
+mod hdr_display;
 mod quick;
 mod render;
 mod session;
@@ -34,6 +35,7 @@ mod settings_hash;
 mod source;
 
 pub use cache::DenoiseIndex;
+pub use hdr_display::view_paints_hdr;
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
 pub use render::{RenderJob, RenderResult, develop, develop_reporting, fit_for_display};
 #[cfg(test)]

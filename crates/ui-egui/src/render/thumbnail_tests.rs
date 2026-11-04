@@ -206,6 +206,7 @@ fn larger_texture_for_another_key_does_not_count_as_current() {
         ms: 0.0,
         quick: None,
         pixels: None,
+        hdr: None,
     };
     let mut r = Renderer::default();
     // A completed larger bucket: the remembered request is bucket 512, key 77.
