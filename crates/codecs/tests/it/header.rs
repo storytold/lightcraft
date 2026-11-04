@@ -434,3 +434,23 @@ fn mutated_files_agree_with_decode() {
     assert!(decodable > 1000, "{decodable}");
     assert!(disagreements.is_empty(), "{disagreements:#?}");
 }
+
+/// `read_size` gives every format's `read_header` size, and a JPEG XL's from its headers alone (a
+/// merge plans its memory with it before decoding; `read_header` decodes a JPEG XL, small): the
+/// size a decode reports, also when the file is cut after its headers.
+#[test]
+fn read_size_reads_a_jpeg_xl_from_its_headers() {
+    for (name, bytes) in fixtures(160, 96) {
+        let h = read_header(&bytes).unwrap();
+        assert_eq!(read_size(&bytes).unwrap(), (h.width, h.height), "{name}");
+    }
+    for (w, h) in [(160usize, 96usize), (96, 160)] {
+        let e = encode_jxl(&EncodeImage::rgba8(&pixels(w, h)), &JxlOptions { lossless: true, ..Default::default() }, &EncodeMeta::default()).unwrap();
+        let d = decode(&e, DecodeOptions::default()).unwrap();
+        assert_eq!(read_size(&e).unwrap(), (d.source_width, d.source_height), "{w}×{h}");
+        assert_eq!(read_size(&e).unwrap(), (w as u32, h as u32));
+        assert!(decode(&e[..e.len() / 2], DecodeOptions::default()).is_err());
+        assert_eq!(read_size(&e[..e.len() / 2]).ok(), Some((w as u32, h as u32)), "headers alone");
+        assert!(read_size(&e[..8]).is_err(), "no headers");
+    }
+}

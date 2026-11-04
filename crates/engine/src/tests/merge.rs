@@ -684,3 +684,30 @@ fn a_small_crop_of_a_large_sensor_is_counted_with_its_whole_demosaic() {
     assert_eq!((header.width, header.height, header.active, header.whole), (480, 320, 480 * 320, true), "{header:?}");
     assert_eq!(header.decoding(None, false), PhotoSize { whole: false, ..header }.decoding(None, false));
 }
+
+/// A JPEG XL the catalog has no size for is sized from its headers before the merge decodes it
+/// (its `read_header` is a small decode), so it is planned and checked like any photo. A preview
+/// none of whose photos has a size known runs unplanned, and then decodes one photo at a time.
+#[test]
+fn a_jpeg_xl_is_planned_from_its_headers_and_an_unplanned_preview_decodes_one_at_a_time() {
+    use lightcraft_codecs::{EncodeImage, EncodeMeta, JxlOptions, encode_jxl};
+    use std::sync::Arc;
+    let img = lightcraft_raster::Rgba8::from_fn(600, 400, |x, y| [(x % 256) as u8, (y % 256) as u8, 90, 255]);
+    let jxl = encode_jxl(&EncodeImage::rgba8(&img), &JxlOptions::default(), &EncodeMeta::default()).unwrap();
+    let size = crate::merge::PhotoSize::from_header(&jxl).expect("sized from its headers");
+    assert_eq!((size.width, size.height, size.bytes), (600, 400, jxl.len() as u64));
+    let job = |bytes: Vec<u8>| crate::merge::MergeJob {
+        kind: panorama(),
+        finish: Default::default(),
+        sources: (1..=3).map(|i| (lightcraft_catalog::PhotoId(i), format!("/photos/{i}.jxl"))).collect(),
+        preview: Some(crate::merge::PREVIEW_EDGE),
+        read: Arc::new(move |_: &str| Ok(bytes.clone())),
+        sizes: vec![None; 3],
+        memory: None,
+    };
+    let (load, planned) = job(jxl).plan(known(1e12)).unwrap();
+    assert_eq!(planned, vec![size; 3]);
+    assert!(load.parallel, "planned: in parallel when that fits");
+    let (load, planned) = job(b"not a photo".to_vec()).plan(known(1e12)).unwrap();
+    assert!(planned.is_empty() && !load.parallel, "unplanned: one at a time");
+}

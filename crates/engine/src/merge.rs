@@ -171,7 +171,8 @@ impl MergeJob {
             f
         };
         // Full-size photos are decoded one at a time: decoding several 60 MP raws at once multiplied the decoders'
-        // scratch memory, and a 7-frame bracket ran out of memory. A preview's are too, when several don't fit.
+        // scratch memory, and a 7-frame bracket ran out of memory. A preview's are too, when several don't fit or it is
+        // unplanned.
         if load.parallel { self.sources.par_iter().enumerate().map(one).collect() } else { self.sources.iter().enumerate().map(one).collect() }
     }
 
@@ -197,7 +198,9 @@ impl MergeJob {
     pub(crate) fn plan(&self, memory: Memory) -> std::result::Result<(Load, Vec<PhotoSize>), String> {
         let orient = matches!(self.kind, MergeKind::Panorama { .. });
         let Some(sizes) = self.known_sizes()? else {
-            return Ok((Load { edge: self.preview, parallel: self.preview.is_some(), orient }, Vec::new()));
+            // unplanned: one photo at a time, a preview's too (several full-size decodes at once are
+            // what the plan would have had to allow)
+            return Ok((Load { edge: self.preview, parallel: false, orient }, Vec::new()));
         };
         let room = memory.bytes;
         let load = match self.preview {

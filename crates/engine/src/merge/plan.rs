@@ -85,11 +85,11 @@ impl PhotoSize {
             return Some(PhotoSize { samples: size.samples.max(sensor), active: size.active.max(active), whole: !windowed, ..size });
         }
         match lightcraft_codecs::sniff(bytes)? {
-            Format::Jpeg | Format::Png | Format::Tiff | Format::WebP | Format::Psd | Format::Heif | Format::Gif | Format::Bmp => {}
+            Format::Jpeg | Format::Png | Format::Tiff | Format::WebP | Format::Psd | Format::Heif | Format::Gif | Format::Bmp | Format::Jxl => {}
             _ => return None,
         }
-        let h = lightcraft_codecs::read_header(bytes).ok()?;
-        PhotoSize::new(h.width, h.height, file)
+        let (w, h) = lightcraft_codecs::read_size(bytes).ok()?;
+        PhotoSize::new(w, h, file)
     }
 
     fn px(self) -> f64 {

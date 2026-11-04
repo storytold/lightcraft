@@ -212,6 +212,25 @@ pub fn read_header(bytes: &[u8]) -> Result<Header> {
         .unwrap_or_else(|_| Err(Error::Malformed(format, "header reader panicked".into())))
 }
 
+/// A file's width and height (orientation applied as a decode reports it) as cheaply as its
+/// format allows, for planning memory before a decode: [`read_header`]'s, except for JPEG XL, whose
+/// `read_header` is a small decode (an import validates the file with it), and whose size comes
+/// from its headers alone here. Formats without a header reader decode, as in [`read_header`].
+pub fn read_size(bytes: &[u8]) -> Result<(u32, u32)> {
+    let format = sniff(bytes).ok_or(Error::UnknownFormat)?;
+    std::panic::catch_unwind(|| read_size_unguarded(bytes, format)).unwrap_or_else(|_| Err(Error::Malformed(format, "header reader panicked".into())))
+}
+
+/// [`read_size`] without the panic guard (for fuzzing our own code paths).
+#[doc(hidden)]
+pub fn read_size_unguarded(bytes: &[u8], format: Format) -> Result<(u32, u32)> {
+    match format {
+        #[cfg(feature = "jxl")]
+        Format::Jxl => jxl::size(bytes),
+        _ => read_header_unguarded(bytes, format).map(|h| (h.width, h.height)),
+    }
+}
+
 /// [`read_header`] without the panic guard (for fuzzing our own code paths).
 #[doc(hidden)]
 pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
