@@ -1,3 +1,4 @@
+use super::colour::previewless_tone;
 use super::tone::{ELASTICITY_BLACK, MAX_TONE_ELASTICITY, TONE_REPAIR_ELASTICITY, limit_elasticity};
 use super::*;
 
@@ -2605,4 +2606,40 @@ fn a_narrow_black_and_white_curve_that_darkens_the_bright_areas_is_refused() {
         let sky = luma(displayed(look.matrix.apply([0.9; 3]), &ToneMap::camera(&look.tone, 0.0, 0.0, 0.0)));
         assert!(sky > 0.8, "an accepted curve must not darken what the camera renders at 0.93: {sky}");
     }
+}
+
+/// A Canon CR3 with no embedded JPEG (the HDR-PQ shots keep only an HEVC preview) and spectral matrices starts
+/// from the median Canon camera tone; nothing else does.
+#[test]
+fn a_previewless_canon_cr3_gets_the_median_camera_tone() {
+    let tone = |format, model: &str, bytes: &[u8], own: bool, look: &Option<CameraLook>| {
+        let mut raw = raw_of(format, "Canon", model, Default::default());
+        let (_, t, _) = starting_colour(&mut raw, bytes, None, None);
+        previewless_tone(&raw, bytes, own, &t, look)
+    };
+    let got = tone(RawFormat::Cr3, "Canon EOS R5 Mark II", &[], false, &None).expect("spectral CR3 without a preview");
+    // the median look puts scene 0.18 near display 0.45, far above LightCraft's default curve there
+    let mid = got.apply(0.18);
+    assert!((0.40..0.55).contains(&mid), "{mid}");
+    assert!(got.chroma().iter().all(|c| (0.8..=1.1).contains(c)));
+    // a file's own matrices, a fitted look, a model outside the spectral table or another format keep their look
+    assert!(tone(RawFormat::Cr3, "Canon EOS R5 Mark II", &[], true, &None).is_none());
+    let fitted = dro_test_look(&std::array::from_fn(|i| 0.006 * 1.13f32.powi(i as i32)), &|x| x.sqrt());
+    assert!(tone(RawFormat::Cr3, "Canon EOS R5 Mark II", &[], false, &Some(fitted)).is_none());
+    assert!(tone(RawFormat::Cr3, "Canon EOS 7D", &[], false, &None).is_none());
+    assert!(tone(RawFormat::Cr2, "Canon EOS 600D", &[], false, &None).is_none());
+}
+
+#[test]
+fn previewless_tone_reaches_the_shared_start_and_dng_tags() {
+    let original = raw_of(RawFormat::Cr3, "Canon", "Canon EOS R5 Mark II", Default::default());
+    let mut loaded = original.clone();
+    let (_, transform, look) = starting_colour(&mut loaded, &[], None, None);
+    assert!(!transform.matrix_is_fallback);
+    let look = look.expect("the starting-colour chain supplies the fallback tone");
+    assert!((0.40..0.55).contains(&look.tone.apply(0.18)));
+    let mut exported = original;
+    with_starting_colour(&mut exported, &[]);
+    let curve = exported.color.profile.tone_curve.expect("the same tone is written to DNG");
+    assert!((curve.eval(0.18) - look.tone.apply(0.18)).abs() < 0.01);
 }
