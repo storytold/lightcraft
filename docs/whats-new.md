@@ -10,6 +10,11 @@
   it; photos imported before this pick it up with Photo ▸ Reload from Disk. Vignetting and chromatic aberration
   from Sony files are not applied yet.
 
+### Lens corrections without grey corners
+- Lens profiles, the camera's own distortion correction, manual Distortion and Chromatic Aberration now crop just
+  inside the corrected photo, as in Lightroom, so no grey corners or edge marks show. Perspective corrections still
+  need Constrain Crop to do the same.
+
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.
 
