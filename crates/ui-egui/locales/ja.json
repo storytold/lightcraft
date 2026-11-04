@@ -2378,6 +2378,7 @@
   "Finish Lightroom catalog import before adding photos": "写真を追加する前に Lightroom カタログの読み込みを完了してください",
   "For raw photos": "RAW写真用",
   "For JPEG and other finished pictures": "JPEG などの仕上がった画像用",
+  "For Super Resolution and AI Sharpen": "スーパー解像度と AI シャープ用",
   "Profile: from the file (the camera's own correction)": "プロファイル: ファイル内（カメラ自身の補正）",
   "Downloading the lens database…": "レンズデータベースをダウンロード中…",
   "This file names no lens.": "このファイルにはレンズ名がありません。",

@@ -81,12 +81,16 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Ok(r) => {
             let Some(t) = app.enhance.task.take() else { return };
             let what = tr(title(t.job.factor()));
+            // a cancel counts until the result is written, also one pressed while the job was encoding
+            if t.cancel.load(Ordering::Relaxed) {
+                app.toast(ctx, tr_format!("{what} cancelled", what = what));
+                return;
+            }
             match r.map_err(lightcraft_engine::EngineError::Other).and_then(|out| app.session.finish_enhance(&t.job, out)) {
                 Ok(v) => {
                     let message = tr_format!("{what} added: {w} × {h}", what = what, w = v["width"], h = v["height"]);
                     app.toast(ctx, message);
                 }
-                Err(_) if t.cancel.load(Ordering::Relaxed) => app.toast(ctx, tr_format!("{what} cancelled", what = what)),
                 Err(e) => {
                     app.ui.status = e.to_string();
                     app.toast_error(ctx, tr_format!("{what} failed: {e}", what = what, e = e));

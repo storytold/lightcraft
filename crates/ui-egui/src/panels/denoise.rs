@@ -457,6 +457,24 @@ fn device_line(d: &Value, run_on: &str) -> String {
     }
 }
 
+/// What kind of photo a model is made for, as its row says it.
+fn made_for(m: &Value) -> &'static str {
+    tr(match m["domain"].as_str() {
+        Some("rgbToRgb") => "For JPEG and other finished pictures",
+        Some("rgbToRgb4x") => "For Super Resolution and AI Sharpen",
+        _ => "For raw photos",
+    })
+}
+
+/// The settings slot a model fills (`kind` of `denoise.models.select`).
+fn slot_kind(m: &Value) -> &'static str {
+    match m["domain"].as_str() {
+        Some("rgbToRgb") => "rgb",
+        Some("rgbToRgb4x") => "upscale",
+        _ => "raw",
+    }
+}
+
 fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
     let id = m["id"].as_str().unwrap_or("").to_string();
     let (installed, selected) = (m["installed"].as_bool() == Some(true), m["selected"].as_bool() == Some(true));
@@ -477,8 +495,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         ui.label(RichText::new(tr("installed")).color(t.text_dim));
                     }
                 });
-                let made_for = if m["domain"] == "rgbToRgb" { tr("For JPEG and other finished pictures") } else { tr("For raw photos") };
-                ui.label(RichText::new(made_for).font(t.font(11.5)).color(t.text_dim));
+                ui.label(RichText::new(made_for(m)).font(t.font(11.5)).color(t.text_dim));
                 ui.label(RichText::new(licence_line(m)).font(t.font(11.5)).color(if m["licence"]["commercial"] == "yes" {
                     t.text_dim
                 } else {
@@ -532,7 +549,7 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         let r = ui.button(tr("Turn off"));
                         register(ui, format!("denoise:off:{id}"), r.rect);
                         if r.clicked() {
-                            let kind = if m["domain"] == "rgbToRgb" { "rgb" } else { "raw" };
+                            let kind = slot_kind(m);
                             let _ = app.run("denoise.models.select", json!({"id": null, "kind": kind}));
                             app.caches.denoise.epoch += 1;
                         }

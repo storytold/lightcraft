@@ -2348,6 +2348,7 @@
   "Import dropped files without review": "Tuo pudotetut tiedostot ilman tarkistusta",
   "For raw photos": "Raw-kuville",
   "For JPEG and other finished pictures": "JPEG- ja muille valmiille kuville",
+  "For Super Resolution and AI Sharpen": "Superresoluutioon ja tekoälyterävöintiin",
   "Lens Profiles": "Objektiiviprofiilit",
   "Download lens profiles?": "Ladataanko objektiiviprofiilit?",
   "LightCraft can correct distortion and vignetting for many lenses using the open lens database (lensfun, about {size} MB).": "LightCraft voi korjata monien objektiivien vääristymän ja vinjetoinnin avoimen objektiivitietokannan avulla (lensfun, noin {size} Mt).",

@@ -2223,6 +2223,7 @@
   "Finish Lightroom catalog import before adding photos": "添加照片前，请先完成 Lightroom 目录的导入",
   "For raw photos": "用于 RAW 照片",
   "For JPEG and other finished pictures": "用于 JPEG 及其他成品图片",
+  "For Super Resolution and AI Sharpen": "用于超分辨率和 AI 锐化",
   "Profile: from the file (the camera's own correction)": "配置文件：来自文件（相机自身的校正）",
   "Downloading the lens database…": "正在下载镜头数据库…",
   "This file names no lens.": "此文件未注明镜头。",

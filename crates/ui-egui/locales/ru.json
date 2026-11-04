@@ -2586,6 +2586,7 @@
   "Finish Lightroom catalog import before adding photos": "Завершите импорт каталога Lightroom, прежде чем добавлять фото",
   "For raw photos": "Для RAW-фото",
   "For JPEG and other finished pictures": "Для JPEG и других готовых изображений",
+  "For Super Resolution and AI Sharpen": "Для суперразрешения и ИИ-резкости",
   "Profile: from the file (the camera's own correction)": "Профиль: из файла (коррекция самой камеры)",
   "Downloading the lens database…": "Загружается база объективов…",
   "This file names no lens.": "В этом файле не указан объектив.",

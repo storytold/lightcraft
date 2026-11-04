@@ -2411,6 +2411,7 @@
   "This library couldn't be checked:": "Impossible de vérifier cette bibliothèque :",
   "For raw photos": "Pour les photos RAW",
   "For JPEG and other finished pictures": "Pour les JPEG et autres images finies",
+  "For Super Resolution and AI Sharpen": "Pour la super résolution et la netteté IA",
   "Profile: from the file (the camera's own correction)": "Profil : du fichier (correction de l'appareil)",
   "Downloading the lens database…": "Téléchargement de la base de données d'objectifs…",
   "This file names no lens.": "Ce fichier n'indique aucun objectif.",

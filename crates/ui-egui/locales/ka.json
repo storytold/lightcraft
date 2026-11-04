@@ -2755,6 +2755,7 @@
   "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
   "For raw photos": "raw ფოტოებისთვის",
   "For JPEG and other finished pictures": "JPEG-ისა და სხვა მზა სურათებისთვის",
+  "For Super Resolution and AI Sharpen": "სუპერგარჩევადობისა და AI სიმკვეთრისთვის",
   "Profile: from the file (the camera's own correction)": "პროფილი: ფაილიდან (კამერის საკუთარი კორექცია)",
   "Downloading the lens database…": "ობიექტივების ბაზა იტვირთება…",
   "This file names no lens.": "ამ ფაილში ობიექტივი არ არის მითითებული.",

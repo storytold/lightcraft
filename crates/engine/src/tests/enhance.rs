@@ -85,7 +85,7 @@ fn super_resolution_writes_a_larger_tiff_stacked_on_top_of_its_photo() {
 
     // a 16-bit TIFF of the picture, every pixel twice as large (the stand-in repeats, averaged down by 2)
     let d = decoded(&path);
-    assert_eq!((d.image.width, d.image.height), (300, 200));
+    assert_eq!((d.image.width, d.image.height, d.bit_depth), (300, 200, 16));
     let srgb = crate::denoise::srgb_encoded(&d);
     for (x, y) in [(0, 0), (149, 99), (75, 50), (10, 90)] {
         let want = [(40 + x) as f32, (60 + y) as f32, 120.0].map(|v| v / 255.0);
@@ -100,6 +100,7 @@ fn super_resolution_writes_a_larger_tiff_stacked_on_top_of_its_photo() {
     // again: a new file beside it, never the first one replaced; 4× on request
     let r = s.execute("enhance.superResolution", &json!({"id": original.0, "scale": 4})).unwrap();
     assert!(r["path"].as_str().unwrap().ends_with("ramp-Enhanced-SR-2.tif"), "{r}");
+    let id4 = r["id"].as_u64().unwrap();
     assert_eq!((r["width"].clone(), r["height"].clone()), (json!(600), json!(400)));
 
     // the same request gives the same bytes: the photo that has them is the result, and no copy is left behind
@@ -109,6 +110,14 @@ fn super_resolution_writes_a_larger_tiff_stacked_on_top_of_its_photo() {
     assert_eq!(s.catalog.photos().count(), photos);
     assert!(!Path::new(&path.replace("ramp-Enhanced-SR.tif", "ramp-Enhanced-SR-3.tif")).exists());
     assert_eq!(s.selected(), vec![id]);
+
+    // a reused result that went into a stack of its own stays there: that stack's photos don't join the original's
+    s.execute("stack.ungroup", &json!({"ids": [original.0]})).unwrap();
+    s.execute("stack.group", &json!({"ids": [id4, id.0], "top": id4})).unwrap();
+    let again = s.execute("enhance.superResolution", &json!({"id": original.0})).unwrap();
+    assert_eq!(again["id"], json!(id.0));
+    assert!(s.catalog.stack_of(original).is_none());
+    assert_eq!(s.catalog.stack_of(id).unwrap().photos.len(), 2);
     drop(s);
     let _ = std::fs::remove_dir_all(dir);
 }

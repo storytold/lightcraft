@@ -1211,7 +1211,12 @@ mod tests {
         for scale in [2u64, 4] {
             let n = upscaler(8, 2, scale, 17 + scale);
             for tile in [1usize, 3, 8, 20] {
-                let Some(g) = gpu(&n, tile) else { return };
+                // only a missing card skips: a card that is there must take the upscaler
+                if let Err(e) = dev() {
+                    lightcraft_testkit::skip!(Gpu, "no GPU here ({e})");
+                    return;
+                }
+                let g = runner(&n, tile).expect("the planner takes this upscaler");
                 // values around [0, 1], so the clip and both sides of every slope are exercised
                 let x: Vec<f32> = picture(3 * tile * tile, tile as u64).iter().map(|v| v + 0.5).collect();
                 let want = reference::run(&n, tile, &x).unwrap();

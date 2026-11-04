@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use lightcraft_catalog::{PhotoId, Source};
 use lightcraft_denoise_core::manifest::{DenoiserManifest, Domain};
-use lightcraft_denoise_core::run::{Control, Params, Scales, upscale_rgb};
+use lightcraft_denoise_core::run::{Control, MAX_PIXELS, Params, Scales, upscale_rgb};
 use lightcraft_develop::DevelopSettings;
 use lightcraft_pipeline::{DeepImage, DeepSamples, OutputDepth, OutputSpace, Quality, RenderRequest};
 use lightcraft_raster::Rgb32f;
@@ -88,6 +88,7 @@ impl EnhanceJob {
     fn render(&self) -> std::result::Result<Rgb32f, String> {
         let (src, info) = crate::files::load_vec((self.read)(&self.path)?, usize::MAX)?;
         let (w, h) = lightcraft_pipeline::native_output_size(src.width, src.height, &self.settings);
+        check_result_size(w, h, self.factor)?;
         let req = RenderRequest {
             quality: Quality::Full,
             apply_crop: false,
@@ -142,6 +143,18 @@ impl EnhanceJob {
     }
 }
 
+/// Refuse a result over [`MAX_PIXELS`] before the full-size render of a `w` × `h` photo rather than after it. The
+/// render may come out a pixel smaller, so only a result too large even then is refused here; the tiling checks the
+/// rest.
+fn check_result_size(w: f64, h: f64, factor: usize) -> std::result::Result<(), String> {
+    let least = |v: f64| if v.is_finite() { (v.floor() as usize).saturating_sub(1) } else { 0 };
+    let pixels = least(w).saturating_mul(least(h)).saturating_mul(factor.saturating_mul(factor));
+    if pixels > MAX_PIXELS {
+        return Err(format!("the result would have {} megapixels, more than the {} a result may have", pixels / 1_000_000, MAX_PIXELS / 1_000_000));
+    }
+    Ok(())
+}
+
 fn tiff_options() -> ExportOptions {
     ExportOptions { format: ExportFormat::Tiff, ..Default::default() }
 }
@@ -183,7 +196,14 @@ impl Session {
             .map_err(|e| fail(format!("could not write the enhanced TIFF next to {}: {e}", job.path)))?
             .to_string_lossy()
             .to_string();
-        let report = crate::import::import(self, std::slice::from_ref(&path), crate::import::ImportMode::Add)?;
+        let report = match crate::import::import(self, std::slice::from_ref(&path), crate::import::ImportMode::Add) {
+            Ok(report) => report,
+            Err(e) => {
+                // nothing took the file: a retry would only leave another one beside it
+                let _ = std::fs::remove_file(&path);
+                return Err(e);
+            }
+        };
         let (id, path) = match (report.imported.first(), report.duplicates.first()) {
             (Some(&id), _) => (PhotoId(id), path),
             // the upscaler gives the same answer for the same photo: a photo with these bytes is the result already, and
@@ -197,9 +217,18 @@ impl Session {
                 };
                 (existing, existing_path)
             }
-            _ => return Err(fail(format!("the enhanced file {path} could not be imported: {:?}", report.failed))),
+            _ => {
+                // a photo restored from Recently Deleted may have been relinked to the file: then it stays
+                if report.restored.is_empty() {
+                    let _ = std::fs::remove_file(&path);
+                }
+                return Err(fail(format!("the enhanced file {path} could not be imported: {:?}", report.failed)));
+            }
         };
-        if let Some(op) = self.catalog.stack_with_ops(id, &[job.photo]) {
+        // a result reused from an earlier run may sit in a stack of its own now: its photos don't join the original's
+        let own_stack = self.catalog.stack_of(id).map(|s| s.id);
+        let joins = own_stack.is_none() || own_stack == self.catalog.stack_of(job.photo).map(|s| s.id);
+        if joins && let Some(op) = self.catalog.stack_with_ops(id, &[job.photo]) {
             self.commit("Stack with Original", op)?;
         }
         self.selection = crate::Selection::single(id);
@@ -211,5 +240,20 @@ impl Session {
         let job = self.plan_enhance(id, factor)?;
         let out = job.run(&|_, _| true).map_err(EngineError::Other)?;
         self.finish_enhance(&job, out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_result_size;
+
+    #[test]
+    fn a_result_too_large_is_refused_before_the_render() {
+        // 45 MP: too large at 2×, fine as AI Sharpen
+        assert!(check_result_size(8256.0, 5504.0, 2).unwrap_err().contains("more than the 110"));
+        assert!(check_result_size(8256.0, 5504.0, 1).is_ok());
+        // 27.5 MP at 2× (110 MP) may come out a pixel smaller after the render: the tiling decides
+        assert!(check_result_size(6400.0, 4297.5, 2).is_ok());
+        assert!(check_result_size(f64::NAN, f64::INFINITY, 4).is_ok());
     }
 }

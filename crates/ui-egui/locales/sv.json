@@ -2445,6 +2445,7 @@
   "Import dropped files without review": "Importera släppta filer utan granskning",
   "For raw photos": "För raw-foton",
   "For JPEG and other finished pictures": "För JPEG och andra färdiga bilder",
+  "For Super Resolution and AI Sharpen": "För superupplösning och AI-skärpa",
   "Lens Profiles": "Objektivprofiler",
   "Download lens profiles?": "Hämta objektivprofiler?",
   "LightCraft can correct distortion and vignetting for many lenses using the open lens database (lensfun, about {size} MB).": "LightCraft kan korrigera distorsion och vinjettering för många objektiv med den öppna objektivdatabasen (lensfun, cirka {size} MB).",

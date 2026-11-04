@@ -44,8 +44,11 @@ fn allocate<T: Clone>(n: usize, value: T) -> Result<Vec<T>, Error> {
 
 /// Something that runs the model on one tile.
 pub trait TileRunner: Sync {
-    /// `input` is the tile as four planes `[R, G1, G2, B]` of `tile × tile` cells (NCHW, batch 1); the answer is
-    /// camera RGB, three planes of `2·tile × 2·tile` pixels (CHW), in the model's own scale.
+    /// `input` is one tile, NCHW with batch 1; the answer is three planes (CHW), in the model's own scale. For a raw
+    /// model ([`denoise_bayer`]) the tile is four planes `[R, G1, G2, B]` of `tile × tile` cells and the answer camera
+    /// RGB of `2·tile × 2·tile` pixels; for a finished-picture model ([`denoise_rgb`]) three planes of `tile × tile`
+    /// pixels in and out; for an upscaler ([`upscale_rgb`]) three planes of `tile × tile` pixels in and of
+    /// `scale·tile × scale·tile` pixels out ([`Scales::model`]).
     fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error>;
 }
 
