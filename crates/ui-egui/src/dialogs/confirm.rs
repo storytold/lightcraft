@@ -178,9 +178,12 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::install(app, info, *accepted),
         Dialog::FaceModel { path, info, accepted } => crate::panels::faces::install(app, path, info, *accepted),
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
-        Dialog::Cull { reject_below, pick_best, burst_gap, similarity } => {
+        Dialog::Cull { reject_below, pick_best, burst_gap, similarity, reanalyze } => {
             app.ui.cull_burst = Some((*burst_gap, *similarity));
-            app.run("photo.analyze", cull_params(*reject_below, *pick_best, *burst_gap, *similarity))
+            let mut p = cull_params(*reject_below, *pick_best, *burst_gap, *similarity);
+            p["reanalyze"] = json!(reanalyze);
+            p["background"] = json!(true);
+            app.run("photo.analyze", p)
         }
         Dialog::SmartRules { id, name, rules, parent } => {
             // refused before anything changes (not even the name)

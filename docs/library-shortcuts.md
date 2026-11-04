@@ -92,6 +92,23 @@ Survey and Reference, and leave text fields alone, so the search box still types
 commands (`view.thumbSizeUp`, `view.thumbSizeDown`, reachable from the control channel and MCP, which
 return `{"size"}`); the size is saved with the other interface settings.
 
+## Assisted Culling
+
+Photo → Assisted Culling… scores the selected photos, or all photos in the current view when
+zero or one is selected; the dialog shows that scope before confirmation. On native platforms,
+decoding and scoring run on a worker with progress and Cancel in the activity stack. The browser
+analyzes at most one photo per frame, yielding to navigation and cancellation between photos;
+a single source decode remains synchronous and cannot be interrupted mid-photo.
+Cancellation discards the run's scores and flag changes. A completed run is one undoable catalog change.
+
+During the current session, unchanged source-content measurements are reused on subsequent runs.
+Changing Reject below focus, Pick best, the selected photos or capture times recomputes groups
+and flags without decoding those sources again. Re-analyse unchanged photos forces fresh reads.
+Another library, a removed photo or changed source never receives a stale worker result.
+The measurement cache is not persisted across application restarts; saved scores remain on photos.
+Smart-preview measurements serve the current run only and are not cached as original-source data.
+Smart albums include photos added to My Photos, not files only browsed in Local.
+
 ## Keyword painter
 
 `⌘⌥K` (`Ctrl+Alt+K` on Windows and Linux) is Photo ▸ Enable Painting (`tool.enablePainting`). It
@@ -111,6 +128,8 @@ with no saved sets the keys leave Recent Keywords current. The shortcut list doe
 past either end; wrapping around is LightCraft's choice. The same steps are the Next / Previous
 Keyword Set commands (`keyword.nextSet`, `keyword.previousSet`), which return what `keyword.sets`
 returns, and both keys can be reassigned in Help → Keyboard Shortcuts.
+
+## References
 
 Public behavior references, checked 2026-10-08 (thumbnail size: 2026-10-13; keyword painter and keyword sets: 2026-10-24):
 

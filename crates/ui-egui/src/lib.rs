@@ -19,6 +19,7 @@ pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
 pub mod control;
+pub mod culling;
 pub mod destination;
 pub mod dialogs;
 pub mod docking;
@@ -320,6 +321,9 @@ pub struct LightcraftApp {
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
     pub sync_run: Option<sync::SyncRun>,
+    /// Assisted Culling decoding and scoring on its worker.
+    pub culling: Option<culling::CullTask>,
+    pub last_culling_result: Option<Value>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.

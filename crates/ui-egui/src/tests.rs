@@ -15,6 +15,7 @@ mod compare;
 mod copy_paste_dialogs;
 mod crop_rotate;
 mod crop_tool;
+mod culling;
 mod curve;
 mod date_picker;
 mod dialog_copy;

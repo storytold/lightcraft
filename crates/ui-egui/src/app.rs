@@ -110,6 +110,8 @@ impl LightcraftApp {
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
+            culling: None,
+            last_culling_result: None,
             lightroom: None,
             lightroom_last: None,
             lightroom_result: None,
