@@ -9,7 +9,7 @@ use lightcraft_pipeline::{RenderRequest, SourceInfo, StageCache};
 #[test]
 fn stages_are_counted_and_the_pool_is_bounded_and_trimmed() {
     if !lightcraft_gpu::available() {
-        eprintln!("skipped: no GPU adapter");
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
         return;
     }
     let limit = 64u64 << 20;

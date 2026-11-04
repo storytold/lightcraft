@@ -1,7 +1,7 @@
 # Lens profiles from a lens database
 
 Raws that carry no lens correction of their own (DNG `OpcodeList3`, or a camera correction a raw reader converts,
-see [sony-lens-corrections.md](sony-lens-corrections.md)) can be corrected from a **lens database in the lensfun
+see [sony-lens-corrections.md](sony-lens-corrections.md) and [nikon-lens-corrections.md](nikon-lens-corrections.md)) can be corrected from a **lens database in the lensfun
 XML format** that you supply. The app does not ship any lens database: lensfun's data is licensed CC-BY-SA 3.0 and
 stays a separate download. Adobe LCP profiles are never used.
 
@@ -17,9 +17,18 @@ changes.
 ## What is applied
 
 The lens is identified from EXIF: camera make / model (for the mount and crop factor; the 35 mm equivalent focal
-length is used when the camera isn't listed) and the lens model string. Lens names match on their words; every
+length is used when the camera isn't listed or its crop factor is unknown) and the lens model string. Lens names match on their words; every
 number (focal lengths, apertures) in the database name must appear in the EXIF name, and the lens maker must agree
 when the file names one.
+
+Some cameras record no lens model at all, only the lens specification: Nikon DSLRs write the lens's focal range and
+maximum apertures in their maker note (tag `0x0084`) and no Exif `LensModel`, whatever lens is mounted. For such a
+file the lens is looked up by a name built from the specification, `24-70mm f/2.8` (`18-55mm f/3.5-5.6`,
+`85mm f/1.8`), and a profile is used only when one of its names is exactly that (ignoring case and punctuation).
+The specification fits every maker's lens with that range (a Nikkor, a Sigma, a Tamron), so neither a partial match
+nor a name with a maker in it ("Samyang 85mm f/1.4" for "85mm f/1.4") is taken; a database that should correct such
+files names its profile that way, e.g. a lensfun entry with an extra `<model>24-70mm f/2.8</model>` for the one
+24-70 f/2.8 the photographer owns. lensfun's own database has no such names, so it doesn't correct these files.
 
 | Correction | Models | Interpolated over |
 |---|---|---|
@@ -35,7 +44,12 @@ half diagonal, or that would fold the image, is not applied.
 
 Normalisation follows lensfun's documentation: distortion and TCA radii are 1 at half the shorter side of the
 calibration frame (its `cropfactor` and `aspect-ratio`), vignetting radii 1 at its corner; the optical centre is
-the image centre (lensfun's `<center>` offsets are not read).
+the image centre (lensfun's `<center>` offsets are not read). Missing or invalid crop factors remain unknown;
+only finite values from 0.05 through 20 are accepted. A calibration inherits the lens's crop factor only when its
+`cropfactor` attribute is omitted; an explicit invalid override remains unknown. Profiles with an unknown
+calibration crop factor are not applied. An explicit crop factor of 1 still means full frame.
+On exact lookup-score ties, both named and built-in fixed-lens matching prefer a known calibration crop; a higher
+match score still wins even when its crop is unknown.
 
 ## Limits
 

@@ -140,6 +140,39 @@ pub fn legacy_to_kelvin(temp: f64, tint: f64, as_shot: (f64, f64)) -> (f64, f64)
     }
 }
 
+/// The relative-scale `(temp, tint)` that [`legacy_to_kelvin`] would read as the Kelvin `(temp, tint)` on a source
+/// whose real as-shot white is `as_shot`: the inverse of [`legacy_white`]'s composition. It runs the Bradford step
+/// backwards — the old target's cone response times the old reference's over the as-shot white's — and reads the
+/// result back through [`xy_to_temp_tint`]. `(6500, 0)` is the relative scale's as-shot reference, so the Kelvin
+/// white of the source itself maps exactly to it. `None` when the arithmetic has nowhere to go (a non-finite input,
+/// a white outside the chromaticity plane, or an as-shot cone response of zero, where the forward step discarded it).
+pub fn kelvin_to_legacy(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<(f64, f64)> {
+    use lightcraft_color::{BRADFORD, Xy};
+    if !(temp.is_finite() && tint.is_finite() && as_shot.0.is_finite() && as_shot.1.is_finite()) {
+        return None;
+    }
+    if (temp - as_shot.0).abs() < 1e-9 && (tint - as_shot.1).abs() < 1e-9 {
+        // the source's own white: the relative scale's as-shot reference, exactly
+        return Some((6500.0, 0.0));
+    }
+    let cones = |t: f64, tint: f64| BRADFORD.apply(temp_tint_to_xy(t, tint).to_xyz());
+    let (target, reference, shot) = (cones(temp, tint), cones(6500.0, 0.0), cones(as_shot.0, as_shot.1));
+    let inverse = BRADFORD.inverse()?;
+    let mut old = [0.0; 3];
+    for i in 0..3 {
+        if shot[i].abs() < 1e-12 {
+            return None;
+        }
+        old[i] = target[i] * reference[i] / shot[i];
+    }
+    let xy = Xy::from_xyz(inverse.apply(old));
+    if !(xy.x.is_finite() && xy.y.is_finite() && xy.y > 0.0) {
+        return None;
+    }
+    let (t, tint) = xy_to_temp_tint(xy);
+    (t.is_finite() && tint.is_finite()).then_some((t, tint))
+}
+
 /// Bring the white balance of `d` onto the scale `info` is edited on, before a new value is written into it: on a
 /// raw with a Kelvin scale the values are marked Kelvin, and ones still on the relative scale become the Custom
 /// Kelvin / tint that renders the same ([`legacy_to_kelvin`]; a preset mode's look is kept as that custom
@@ -147,7 +180,7 @@ pub fn legacy_to_kelvin(temp: f64, tint: f64, as_shot: (f64, f64)) -> (f64, f64)
 /// edited on a rendered photo or a raw without matrices never pass for Kelvin when pasted onto one that has them.
 pub fn normalize_wb(d: &mut DevelopSettings, info: &SourceInfo) {
     use lightcraft_develop::{WbMode, WbScale};
-    if !(info.raw && !info.relative_wb) {
+    if !info.raw || info.relative_wb {
         d.wb.scale = WbScale::Legacy;
         return;
     }
@@ -178,10 +211,55 @@ fn guided_coeffs(p: &Plane, sigma: f32, eps: f32) -> (Plane, Plane) {
     par_join(|| gaussian(&a, sigma), || gaussian(&b, sigma))
 }
 
-/// `q = a·p + b` per pixel.
+/// `q = a·p + b` per pixel. Reduced coefficients are sampled with the same separable
+/// weights and accumulation order as a bilinear resize, without full-size coefficient planes.
 fn guided_apply(p: &Plane, a: &Plane, b: &Plane) -> Plane {
     let mut q = Plane::new(p.width, p.height);
     let w = p.width;
+    if (a.width, a.height) != (p.width, p.height) {
+        use lightcraft_raster::resample::{Filter, weights};
+        let wx = weights(a.width, w, Filter::Bilinear);
+        let wy = weights(a.height, p.height, Filter::Bilinear);
+        // Bilinear upsampling has at most four taps (including zero-weight boundary taps).
+        // Keep only those horizontally sampled rows per band, reusing them for neighbouring
+        // output rows. Scratch scales with width and active bands, not image area.
+        const BAND: usize = 32;
+        for_rows(&mut q.data, w.saturating_mul(BAND), |band, rows| {
+            let mut cache: [(usize, Vec<f32>, Vec<f32>); 4] = std::array::from_fn(|_| (usize::MAX, vec![0.0; w], vec![0.0; w]));
+            let mut bias = vec![0.0; w];
+            for (dy, row) in rows.chunks_mut(w).enumerate() {
+                let y = band * BAND + dy;
+                let (top, ys) = &wy[y];
+                bias.fill(0.0);
+                for (dy, yw) in ys.iter().enumerate() {
+                    let cy = top + dy;
+                    let (cached_y, aa, bb) = &mut cache[cy % 4];
+                    if *cached_y != cy {
+                        let (ar, br) = (a.row(cy), b.row(cy));
+                        for ((av, bv), (left, xs)) in aa.iter_mut().zip(bb.iter_mut()).zip(&wx) {
+                            *av = 0.0;
+                            *bv = 0.0;
+                            for (dx, xw) in xs.iter().enumerate() {
+                                *av += ar[left + dx] * xw;
+                                *bv += br[left + dx] * xw;
+                            }
+                        }
+                        *cached_y = cy;
+                    }
+                    for (av, ax) in row.iter_mut().zip(aa) {
+                        *av += *ax * yw;
+                    }
+                    for (bv, bx) in bias.iter_mut().zip(bb) {
+                        *bv += *bx * yw;
+                    }
+                }
+                for ((v, pv), bv) in row.iter_mut().zip(p.row(y)).zip(&bias) {
+                    *v = *v * pv + bv;
+                }
+            }
+        });
+        return q;
+    }
     for_rows(&mut q.data, w, |y, row| {
         for ((v, pv), (av, bv)) in row.iter_mut().zip(p.row(y)).zip(a.row(y).iter().zip(b.row(y))) {
             *v = av * pv + bv;
@@ -191,7 +269,7 @@ fn guided_apply(p: &Plane, a: &Plane, b: &Plane) -> Plane {
 }
 
 /// Fast guided filter (He & Sun 2015): coefficients computed on a `s×` subsampled plane and
-/// bilinearly upsampled; the output keeps full-resolution edges. Equivalent to [`guided`] for
+/// sampled bilinearly at full resolution; the output keeps full-resolution edges. Equivalent to [`guided`] for
 /// large windows at a fraction of the cost.
 pub fn guided_fast(p: &Plane, sigma: f32, eps: f32) -> Plane {
     use lightcraft_raster::resample::{Filter, resize};
@@ -202,8 +280,7 @@ pub fn guided_fast(p: &Plane, sigma: f32, eps: f32) -> Plane {
     let (lw, lh) = (p.width.div_ceil(s).max(1), p.height.div_ceil(s).max(1));
     let lo = resize(p, lw, lh, Filter::Box);
     let (ma, mb) = guided_coeffs(&lo, sigma / s as f32, eps);
-    let up = |c: &Plane| resize(c, p.width, p.height, Filter::Bilinear);
-    guided_apply(p, &up(&ma), &up(&mb))
+    guided_apply(p, &ma, &mb)
 }
 
 /// Separable median (`2r+1` px along each row, then each column; clamped edges). It keeps the
@@ -227,20 +304,45 @@ fn median_row(src: &[f32], out: &mut [f32], r: usize) {
     if n == 0 {
         return;
     }
-    let at = |i: isize| src[i.clamp(0, n as isize - 1) as usize];
+    let at = |i: isize| total_key(src[i.clamp(0, n as isize - 1) as usize]);
     let r_ = r as isize;
-    let mut win: Vec<f32> = (-r_..=r_).map(at).collect();
-    win.sort_unstable_by(f32::total_cmp);
+    let mut win: Vec<i32> = (-r_..=r_).map(at).collect();
+    win.sort_unstable();
     for (x, o) in out.iter_mut().enumerate() {
-        *o = win[r];
+        *o = f32::from_bits(total_key_inv(win[r]));
         let (old, new) = (at(x as isize - r_), at(x as isize + r_ + 1));
-        if old.to_bits() != new.to_bits() {
-            let i = win.binary_search_by(|v| v.total_cmp(&old)).unwrap_or_else(|i| i.min(win.len() - 1));
-            win.remove(i);
-            let j = win.binary_search_by(|v| v.total_cmp(&new)).unwrap_or_else(|j| j);
-            win.insert(j, new);
+        if old != new {
+            // Ranks by counting the smaller keys in one branch-free pass the compiler vectorizes.
+            // Binary searches here mispredicted on most steps and, with `remove` + `insert`, cost
+            // 2.4 s per 24 MP at r = 9 on one core.
+            let (mut i, mut j) = (0u32, 0u32);
+            for &v in &win {
+                i += u32::from(v < old);
+                j += u32::from(v < new);
+            }
+            let (i, j) = (i as usize, j as usize);
+            // `old` sits at `i`; shift the keys between the two ranks by one over it
+            if j > i {
+                win.copy_within(i + 1..j, i);
+                win[j - 1] = new;
+            } else {
+                win.copy_within(j..i, j + 1);
+                win[j] = new;
+            }
         }
     }
+}
+
+/// `v`'s bits as an `i32` that orders like [`f32::total_cmp`] (the same transform it applies), so
+/// equal keys are equal bits.
+fn total_key(v: f32) -> i32 {
+    let b = v.to_bits() as i32;
+    b ^ (((b >> 31) as u32) >> 1) as i32
+}
+
+/// The bits [`total_key`] came from (the transform is its own inverse: it keeps the sign bit).
+fn total_key_inv(k: i32) -> u32 {
+    (k ^ (((k >> 31) as u32) >> 1) as i32) as u32
 }
 
 fn transpose(p: &Plane) -> Plane {
@@ -306,28 +408,64 @@ pub struct NrColor {
     pub t: f32,
 }
 
-/// Noise-reduction parameters at an output long edge of `out_long` px (see [`denoise`]).
-pub fn nr_params(s: &DevelopSettings, src_long: usize, out_long: usize) -> (Option<NrLum>, Option<NrColor>) {
+/// Output pixels per pixel of the original photo for an output of `px_per_long` pixels per unit
+/// of the long edge of an original `native_long` pixels long, at most 1 ([`crate::Plan::detail_scale`]).
+pub fn detail_scale(px_per_long: f64, native_long: usize) -> f32 {
+    let k = (px_per_long / native_long.max(1) as f64) as f32;
+    if k.is_finite() { k.clamp(0.0, 1.0) } else { 1.0 }
+}
+
+/// Smallest radius (px) noise reduction filters a preview with: [`gaussian`] makes no blur below
+/// about 0.58 px and one 3-px box from there ([`lightcraft_raster::blur::box_sigma`]).
+const NR_MIN_SIGMA: f32 = 1.0;
+
+/// Below this fade a preview's noise reduction is not drawn at all (less than 1 % of a 1-px blur).
+const NR_MIN_BLEND: f32 = 0.01;
+
+/// Radius and blend weight that stand in for a blur of `sigma` px: below [`NR_MIN_SIGMA`] the
+/// smallest blur the filter makes, blended in by the ratio of their variances, which keeps the
+/// smoothing's second moment (how much it softens the finest detail) that of `sigma`.
+fn nr_radius(sigma: f32) -> (f32, f32) {
+    if sigma >= NR_MIN_SIGMA {
+        return (sigma, 1.0);
+    }
+    let made = lightcraft_raster::blur::box_sigma(NR_MIN_SIGMA);
+    (NR_MIN_SIGMA, (sigma / made).powi(2).min(1.0))
+}
+
+/// Noise-reduction parameters at `scale` output pixels per pixel of the original
+/// ([`crate::Plan::detail_scale`]; see [`denoise`]). Noise lives at the original's pixels, so the
+/// radii are the full-size radii times `scale`, and the guided filter's `eps` (the variance it
+/// treats as noise) follows the noise variance, which averaging `1/scale × 1/scale` pixels into one
+/// multiplies by `scale²`. A radius below [`NR_MIN_SIGMA`] fades instead ([`nr_radius`]): previews look like
+/// the full-size render scaled down (issue #960). At `scale` 1 these are the full-size parameters.
+pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrColor>) {
     let lum = (s.detail.nr_luminance / 100.0) as f32;
     let col = (s.detail.nr_color / 100.0) as f32;
-    let scale = (out_long as f32 / src_long.max(1) as f32).clamp(0.05, 1.0);
-    let l = (lum > 0.0).then(|| {
+    let scale = if scale.is_finite() { scale.clamp(0.0, 1.0) } else { 1.0 };
+    let l = (lum > 0.0).then(|| nr_radius((1.0 + 2.5 * lum) * scale)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
         let detail = (s.detail.nr_detail / 100.0) as f32;
-        NrLum { sigma: (1.0 + 2.5 * lum) * scale.max(0.4), eps: 0.002 + lum * lum * 0.25 * (1.0 - 0.7 * detail), k: lum.sqrt() }
+        let eps = ((0.002 + lum * lum * 0.25 * (1.0 - 0.7 * detail)) * scale * scale).max(1e-7);
+        NrLum { sigma, eps, k: lum.sqrt() * w }
     });
-    let c = (col > 0.0).then(|| {
-        let sigma = (1.5 + 6.0 * col) * scale.max(0.35) * (1.0 + (s.detail.nr_color_smoothness / 100.0) as f32);
+    let smooth = 1.0 + (s.detail.nr_color_smoothness / 100.0) as f32;
+    let c = (col > 0.0).then(|| nr_radius((1.5 + 6.0 * col) * scale * smooth)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
         let keep = (s.detail.nr_color_detail / 100.0) as f32 * 0.5;
-        NrColor { sigma, t: col * (1.0 - keep) }
+        NrColor { sigma, t: col * (1.0 - keep) * w }
     });
     (l, c)
 }
 
 /// Noise reduction at output resolution: luminance via an edge-aware self-guided filter on
 /// log-luminance, colour by blurring chromaticity (rgb / Y) and re-applying the original luminance.
-/// Radii scale with how much the source was downsampled (preview noise is already averaged out).
-pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, src_long: usize, out_long: usize) {
-    let (lum, col) = nr_params(s, src_long, out_long);
+/// `scale`: output pixels per pixel of the original ([`nr_params`]).
+pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, scale: f32) {
+    let (lum, col) = nr_params(s, scale);
+    apply_nr(img, lum, col);
+}
+
+/// Noise reduction with explicit parameters (see [`denoise`]).
+pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
     let w = img.width;
     if let Some(nr) = lum {
         let _t = crate::profiling().then(std::time::Instant::now);
@@ -452,11 +590,20 @@ pub struct PlaneSigmas {
     pub chroma: Option<f32>,
 }
 
+/// Gaussian sigma (pixels) of the texture / sharpening band at `px_per_long`.
+pub fn texture_sigma(px_per_long: f64) -> f32 {
+    (0.0018 * px_per_long as f32).max(0.6)
+}
+
 pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
-    let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
-    let tone_active =
-        s.light.highlights != 0.0 || s.light.shadows != 0.0 || s.masks.iter().any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
+    // A hidden mask, or one with no components, does not change the picture. Its sliders must
+    // not pick the tone base Clarity reads (#1214).
+    let live = |m: &&lightcraft_develop::Mask| m.visible && !m.components.is_empty();
+    let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().filter(live).any(|m| f(&m.adjust) != 0.0);
+    let tone_active = s.light.highlights != 0.0
+        || s.light.shadows != 0.0
+        || s.masks.iter().filter(live).any(|m| m.adjust.highlights != 0.0 || m.adjust.shadows != 0.0);
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
     // From V2 it is taken of the median at 0.15%: lines and texture finer than that are detail,
     // not tone (#632).
@@ -471,10 +618,10 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
         || local_any(|a| a.texture)
         || local_any(|a| a.sharpness)
         || local_any(|a| a.noise)
-        || s.masks.iter().any(|m| m.adjust.defringe > 0.0))
-    .then(|| (0.0018 * ppl).max(0.6));
+        || s.masks.iter().filter(live).any(|m| m.adjust.defringe > 0.0))
+    .then(|| texture_sigma(px_per_long));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
-    let chroma = (local_any(|a| a.moire) || s.masks.iter().any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
+    let chroma = (local_any(|a| a.moire) || s.masks.iter().filter(live).any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
     let base_detail = if base.is_some() { tone_base_detail(s, px_per_long) } else { 0 };
     PlaneSigmas { base, base_detail, clarity, texture, dark, chroma }
 }
@@ -543,10 +690,33 @@ pub(crate) fn prepare(
 /// The airlight of the whole output frame, estimated on a small render of it (`proxy_w` px wide):
 /// a windowed render must dehaze with the frame's airlight, not that of the pixels it holds.
 pub(crate) fn frame_airlight(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame, proxy_w: usize, proxy_h: usize) -> f32 {
-    let mut img = frame.sample(src, proxy_w, proxy_h);
+    let mut img = Rgb32f::clone(&frame_proxy(src, frame, proxy_w, proxy_h));
     white_balance(&mut img, info, s);
     let sigma = (0.02 * frame.px_per_long(proxy_w)).max(1.0) as f32;
     airlight(&gaussian(&img.map(dark_of), sigma))
+}
+
+/// How many airlight proxies [`frame_proxy`] keeps (one per photo and frame being zoomed into; each ≤ 1.8 MB).
+const FRAME_PROXIES_KEPT: usize = 4;
+
+/// `frame.sample(src, w, h)`, kept for the last few (source, frame, size): sampling a 64 MP original down to the
+/// airlight proxy reads all of it (~190 ms of CPU), and every window of a zoomed view with Dehaze asked for it again,
+/// on each pan and slider tick. The proxy is taken before white balance, so a WB change still hits.
+fn frame_proxy(src: &Rgb32f, frame: &Frame, w: usize, h: usize) -> Arc<Rgb32f> {
+    type Entry = (u64, Frame, usize, usize, Arc<Rgb32f>);
+    static CACHE: std::sync::Mutex<Vec<Entry>> = std::sync::Mutex::new(Vec::new());
+    let key = crate::optics::fingerprint(src);
+    let found = |c: &[Entry]| c.iter().find(|e| e.0 == key && e.1 == *frame && (e.2, e.3) == (w, h)).map(|e| e.4.clone());
+    if let Some(img) = found(&CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
+        return img;
+    }
+    let img = Arc::new(frame.sample(src, w, h));
+    let mut c = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    c.push((key, frame.clone(), w, h, img.clone()));
+    if c.len() > FRAME_PROXIES_KEPT {
+        c.remove(0);
+    }
+    img
 }
 
 /// The airlight is estimated from every `AIRLIGHT_STEP`-th value of the dark channel.
@@ -571,6 +741,7 @@ pub fn airlight_of(mut v: Vec<f32>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightcraft_color::cct::xy_to_uv;
 
     #[test]
     fn guided_preserves_step_edges_and_flattens_texture() {
@@ -600,6 +771,62 @@ mod tests {
         assert!((luminance_2020(c) - 0.3).abs() < 0.01);
     }
 
+    // A windowed render's airlight proxy is kept per (source, frame, size): the airlight is the one sampling anew gives,
+    // and another source or frame of the same size gets its own, never the proxy kept for the last one
+    #[test]
+    fn the_kept_airlight_proxy_matches_a_fresh_one_and_misses_on_another_source_or_frame() {
+        let (info, s) = (SourceInfo::default(), DevelopSettings::default());
+        let hazy = Rgb32f::from_fn(300, 200, |x, y| {
+            let v = 0.05 + 0.6 * x as f32 / 300.0;
+            [v, v * 0.95, v * (0.8 + 0.2 * y as f32 / 200.0)]
+        });
+        let other = Rgb32f::from_fn(300, 200, |x, y| [0.02 + 0.1 * ((x + y) % 7) as f32 / 7.0; 3]);
+        let fresh = |src: &Rgb32f, frame: &Frame| {
+            let mut img = frame.sample(src, 48, 32);
+            white_balance(&mut img, &info, &s);
+            airlight(&gaussian(&img.map(dark_of), (0.02 * frame.px_per_long(48)).max(1.0) as f32))
+        };
+        let frame = crate::frame_for(&hazy, &info, &s, true);
+        let kept = frame_proxy(&hazy, &frame, 48, 32);
+        assert!(Arc::ptr_eq(&kept, &frame_proxy(&hazy, &frame, 48, 32)), "the second ask is served from the cache");
+        assert_eq!(frame_airlight(&hazy, &info, &s, &frame, 48, 32).to_bits(), fresh(&hazy, &frame).to_bits());
+        assert_eq!(frame_airlight(&hazy, &info, &s, &frame, 48, 32).to_bits(), fresh(&hazy, &frame).to_bits());
+        // another source of the same size
+        assert_ne!(fresh(&other, &frame), fresh(&hazy, &frame));
+        assert_eq!(frame_airlight(&other, &info, &s, &frame, 48, 32).to_bits(), fresh(&other, &frame).to_bits());
+        // the same source, cropped to its darker half
+        let mut cropped = frame.clone();
+        cropped.crop.rect.x1 = 0.5;
+        assert_ne!(fresh(&hazy, &cropped), fresh(&hazy, &frame));
+        assert_eq!(frame_airlight(&hazy, &info, &s, &cropped, 48, 32).to_bits(), fresh(&hazy, &cropped).to_bits());
+    }
+
+    #[test]
+    fn a_hidden_or_empty_mask_does_not_request_the_tone_base() {
+        use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+        use lightcraft_geom::Point;
+        let shape = MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) };
+        let component = MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+        let mut s = DevelopSettings::default();
+        s.masks.push(Mask {
+            visible: false,
+            components: vec![component],
+            adjust: lightcraft_develop::LocalAdjustments { highlights: 40.0, ..Default::default() },
+            ..Default::default()
+        });
+        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        s.masks[0].visible = true;
+        s.masks[0].components.clear();
+        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        s.masks[0].components.push(MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) },
+        });
+        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_some());
+    }
+
     #[test]
     fn exposure_doubles() {
         let mut s = DevelopSettings::default();
@@ -608,11 +835,129 @@ mod tests {
         scene_linear_pre(&mut img, &SourceInfo::default(), &s);
         assert!((img.get(1, 1)[2] - 0.6).abs() < 1e-5);
     }
+
+    /// [`kelvin_to_legacy`] inverts [`legacy_to_kelvin`] over the whole relative slider range and back: the
+    /// round trip returns the start, in both directions, to the precision of the Kelvin / tint parametrisation.
+    #[test]
+    fn kelvin_to_legacy_inverts_legacy_to_kelvin() {
+        for as_shot in [(4986.0, -2.0), (6500.0, 0.0), (3200.0, 14.0), (9500.0, -12.0)] {
+            // the relative slider's whole reach: temp 0..100 (2000–13550 K around 6500), tint −150..150
+            for pct in [0.0, 12.5, 25.0, 50.0, 75.0, 100.0] {
+                for tint in [-150.0, -40.0, 0.0, 33.0, 150.0] {
+                    let (lt, ltint) = controls_relative(pct, tint);
+                    let (kt, ktint) = legacy_to_kelvin(lt, ltint, as_shot);
+                    // past the Kelvin parametrisation's own reach (its search runs 1000–50000 K) the forward
+                    // conversion has already clamped, so the pair is not expected to come back
+                    if !(1050.0..=49_000.0).contains(&kt) {
+                        continue;
+                    }
+                    let back = kelvin_to_legacy(kt, ktint, as_shot).unwrap();
+                    let (x1, y1) = xy_to_uv(temp_tint_to_xy(lt, ltint));
+                    let (x2, y2) = xy_to_uv(temp_tint_to_xy(back.0, back.1));
+                    // the pair may differ by more than the slider's own step at the extreme corners (the Kelvin
+                    // parametrisation is read back through a search), but never by much, and the white it renders
+                    // is the same
+                    assert!(
+                        (back.0 - lt).abs() <= lt.abs() * 0.01 && (back.1 - ltint).abs() < 0.5,
+                        "as shot {as_shot:?}: relative ({lt}, {ltint}) -> kelvin ({kt}, {ktint}) -> {back:?}"
+                    );
+                    assert!((x1 - x2).hypot(y1 - y2) < 1e-3, "as shot {as_shot:?}: relative ({lt}, {ltint}) -> kelvin ({kt}, {ktint}) -> {back:?}");
+                }
+            }
+            // the other direction: every white the relative scale can hold maps back to a pair that renders the same
+            for kt in [as_shot.0, 2500.0, 4200.0, 6500.0, 12000.0] {
+                for ktint in [-60.0, 0.0, 45.0] {
+                    let Some((lt, ltint)) = kelvin_to_legacy(kt, ktint, as_shot) else { continue };
+                    // outside the slider's reach the relative scale has no value for this white: the forward
+                    // conversion would clamp, so the round trip is not expected to close there
+                    if !(2000.0..=13550.0).contains(&lt) || ltint.abs() > 150.0 {
+                        continue;
+                    }
+                    let (kt2, ktint2) = legacy_to_kelvin(lt, ltint, as_shot);
+                    let (x1, y1) = xy_to_uv(temp_tint_to_xy(kt, ktint));
+                    let (x2, y2) = xy_to_uv(temp_tint_to_xy(kt2, ktint2));
+                    assert!(
+                        (x1 - x2).hypot(y1 - y2) < 1e-3,
+                        "as shot {as_shot:?}: kelvin ({kt}, {ktint}) -> relative ({lt}, {ltint}) -> ({kt2}, {ktint2})"
+                    );
+                }
+            }
+            // the source's own white is the relative scale's as-shot reference, exactly
+            assert_eq!(kelvin_to_legacy(as_shot.0, as_shot.1, as_shot), Some((6500.0, 0.0)));
+        }
+        // the exact inverse of the special case inside legacy_to_kelvin
+        assert_eq!(kelvin_to_legacy(4986.0, -2.0, (4986.0, -2.0)), Some((6500.0, 0.0)));
+        assert_eq!(legacy_to_kelvin(6500.0, 0.0, (4986.0, -2.0)), (4986.0, -2.0));
+        // hostile numbers answer None, never a panic or a plausible lie
+        assert_eq!(kelvin_to_legacy(f64::NAN, 0.0, (5000.0, 0.0)), None);
+        assert_eq!(kelvin_to_legacy(5000.0, f64::INFINITY, (5000.0, 0.0)), None);
+        assert_eq!(kelvin_to_legacy(5000.0, 0.0, (f64::NAN, 0.0)), None);
+    }
+
+    /// The relative scale's `(temp, tint)` for a slider temperature at `pct` % (2000–7000 K fill the left half) and tint.
+    fn controls_relative(pct: f64, tint: f64) -> (f64, f64) {
+        let t = if pct <= 50.0 { 2000.0 + pct * 100.0 } else { 7000.0 + (pct - 50.0) * 131.0 };
+        (t, tint)
+    }
 }
 
 #[cfg(test)]
 mod fast_tests {
     use super::*;
+
+    /// The previous fast path, including its two materialized coefficient resizes.
+    fn resized_reference(p: &Plane, sigma: f32, eps: f32) -> Plane {
+        use lightcraft_raster::resample::{Filter, resize};
+        let s = guided_fast_step(sigma);
+        if s <= 1 {
+            return guided(p, sigma, eps);
+        }
+        let lo = resize(p, p.width.div_ceil(s).max(1), p.height.div_ceil(s).max(1), Filter::Box);
+        let (a, b) = guided_coeffs(&lo, sigma / s as f32, eps);
+        let (a, b) = (resize(&a, p.width, p.height, Filter::Bilinear), resize(&b, p.width, p.height, Filter::Bilinear));
+        Plane::from_fn(p.width, p.height, |x, y| a.get(x, y) * p.get(x, y) + b.get(x, y))
+    }
+
+    #[test]
+    fn sampled_coefficients_match_materialized_resizes() {
+        for (w, h) in [(0, 0), (1, 1), (1, 19), (23, 1), (2, 3), (17, 13), (64, 48), (161, 119)] {
+            let planes = [
+                Plane::filled(w, h, -3.25),
+                Plane::from_fn(w, h, |x, y| ((x * 7919 + y * 104729) % 97) as f32 / 7.0 - 8.0),
+                Plane::from_fn(w, h, |x, y| {
+                    if x == w / 2 && y == h / 2 {
+                        9.0
+                    } else if x < w / 2 {
+                        -5.0
+                    } else {
+                        2.0
+                    }
+                }),
+            ];
+            // Step 1 fallback, every small step, Draft's cap, and the maximum step (16).
+            for sigma in [0.0, 2.99, 5.99, 6.0, 9.0, 12.0, 24.0, 48.0, 200.0] {
+                for eps in [BASE_EPS, CLARITY_EPS, 0.0001] {
+                    for p in &planes {
+                        let expected = resized_reference(p, sigma, eps);
+                        let actual = guided_fast(p, sigma, eps);
+                        assert_eq!((actual.width, actual.height), (w, h));
+                        assert_eq!(actual.data, expected.data, "{w}x{h}, sigma {sigma}, eps {eps}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sampled_tone_base_keeps_the_median_before_the_guided_filter() {
+        let p = Plane::from_fn(73, 51, |x, y| if x % 9 == 0 { 3.0 } else { -4.0 + ((x + y) % 7) as f32 * 0.03 });
+        for sigma in [6.0, 24.0, 120.0] {
+            for detail in [0, 1, 3, BASE_DETAIL_MAX] {
+                let median = median_hv(&p, detail);
+                assert_eq!(tone_base(&p, sigma, detail).data, resized_reference(&median, sigma, BASE_EPS).data, "{sigma}, {detail}");
+            }
+        }
+    }
 
     #[test]
     fn fast_guided_close_to_reference() {
@@ -641,7 +986,7 @@ mod nr_tests {
         let (v0, m0) = var(&img);
         let mut s = DevelopSettings::default();
         s.detail.nr_luminance = 80.0;
-        denoise(&mut img, &s, 64, 64);
+        denoise(&mut img, &s, 1.0);
         let (v1, m1) = var(&img);
         assert!(v1 < v0 * 0.5, "{v0} -> {v1}");
         assert!((m1 - m0).abs() < 0.01);

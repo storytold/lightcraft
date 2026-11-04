@@ -16,6 +16,9 @@ use candle_nn::var_builder::SimpleBackend;
 use crate::{Error, Result};
 
 struct Entry {
+    /// `Err`: the header's name for a dtype LightCraft doesn't read (Meta's original checkpoint
+    /// stores its RoPE tables as C64); the tensor is listed, and reading it fails
+    dtype: std::result::Result<DType, String>,
     shape: Vec<usize>,
     start: u64,
     end: u64,
@@ -48,8 +51,8 @@ impl Weights {
                 continue;
             }
             let dtype = match v.get("dtype").and_then(|d| d.as_str()) {
-                Some("F32") => DType::F32,
-                other => return Err(Error::Model(format!("{name}: unsupported dtype {other:?} (the SAM 3 checkpoint is F32)"))),
+                Some("F32") => Ok(DType::F32),
+                other => Err(format!("{other:?}")),
             };
             let shape: Vec<usize> = v
                 .get("shape")
@@ -59,15 +62,18 @@ impl Weights {
             let offsets: Vec<u64> =
                 v.get("data_offsets").and_then(|s| s.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64()).collect()).unwrap_or_default();
             let [start, end] = offsets[..] else { return Err(Error::Model(format!("{name}: bad data_offsets"))) };
-            let want = shape.iter().try_fold(dtype.size_in_bytes(), |a, d| a.checked_mul(*d));
-            if end.checked_sub(start) != want.map(|w| w as u64) {
-                return Err(Error::Model(format!("{name}: size does not match its shape")));
+            // an unreadable tensor's size isn't checked: its bytes are never read
+            if let Ok(dtype) = dtype {
+                let want = shape.iter().try_fold(dtype.size_in_bytes(), |a, d| a.checked_mul(*d));
+                if end.checked_sub(start) != want.map(|w| w as u64) {
+                    return Err(Error::Model(format!("{name}: size does not match its shape")));
+                }
             }
             // the bytes must be in the file (a damaged or truncated download fails here, not later)
             if (8 + n).checked_add(end).is_none_or(|e| e > file_len) {
                 return Err(Error::Model(format!("{}: tensor {name} lies outside the file (incomplete or damaged download?)", path.display())));
             }
-            entries.insert(name, Entry { shape, start, end });
+            entries.insert(name, Entry { dtype, shape, start, end });
         }
         Ok(Arc::new(Self { file: Mutex::new(file), entries, data_start: 8 + n }))
     }
@@ -76,9 +82,22 @@ impl Weights {
         self.entries.contains_key(name)
     }
 
+    /// Whether any tensor's name starts with `prefix`.
+    pub fn has_prefix(&self, prefix: &str) -> bool {
+        self.entries.keys().any(|k| k.starts_with(prefix))
+    }
+
+    /// The shape stored in the header for `name`, without reading its data.
+    pub fn shape(&self, name: &str) -> Option<&[usize]> {
+        self.entries.get(name).map(|e| e.shape.as_slice())
+    }
+
     /// Tensor `name` as stored, on the CPU.
     pub fn read(&self, name: &str) -> Result<Tensor> {
         let e = self.entries.get(name).ok_or_else(|| Error::Model(format!("missing tensor `{name}`")))?;
+        if let Err(dtype) = &e.dtype {
+            return Err(Error::Model(format!("{name}: unsupported dtype {dtype} (the SAM 3 checkpoint is F32)")));
+        }
         // checked against the file's length in `open`
         let len = usize::try_from(e.end.saturating_sub(e.start)).map_err(|_| Error::Model(format!("{name}: too large")))?;
         let mut bytes = vec![0u8; len];
@@ -97,11 +116,13 @@ pub struct Backend(pub Arc<Weights>);
 
 impl SimpleBackend for Backend {
     fn get(&self, s: Shape, name: &str, _h: candle_nn::Init, dtype: DType, dev: &Device) -> candle_core::Result<Tensor> {
-        let t = self.get_unchecked(name, dtype, dev)?;
-        if t.shape() != &s {
-            candle_core::bail!("shape mismatch for {name}: expected {s:?}, got {:?}", t.shape())
+        // compare against the header first, so a wrong-shaped tensor is never read or copied to the device
+        if let Some(stored) = self.0.shape(name)
+            && stored != s.dims()
+        {
+            candle_core::bail!("shape mismatch for {name}: expected {s:?}, got {stored:?}")
         }
-        Ok(t)
+        self.get_unchecked(name, dtype, dev)
     }
 
     fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> candle_core::Result<Tensor> {
@@ -115,16 +136,45 @@ impl SimpleBackend for Backend {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn write(name: &str, header: &str, data_len: usize) -> std::path::PathBuf {
+    pub(crate) fn write(name: &str, header: &str, data_len: usize) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!("lc-weights-{name}-{}.safetensors", std::process::id()));
         let mut b = (header.len() as u64).to_le_bytes().to_vec();
         b.extend_from_slice(header.as_bytes());
         b.extend(std::iter::repeat_n(0u8, data_len));
         std::fs::write(&p, b).unwrap();
         p
+    }
+
+    #[test]
+    fn wrong_expected_shape_fails_before_the_data_is_read() {
+        let p = write("shape", r#"{"a":{"dtype":"F32","shape":[2,2],"data_offsets":[0,16]}}"#, 16);
+        let backend = Backend(Weights::open(&p).unwrap());
+        let ok = backend.get(Shape::from((2, 2)), "a", candle_nn::Init::Const(0.0), DType::F32, &Device::Cpu).unwrap();
+        assert_eq!(ok.dims(), &[2, 2]);
+        // cut the data off after opening: a read would now fail with an I/O error instead of a shape error
+        std::fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(8).unwrap();
+        let err = backend.get(Shape::from((3, 3)), "a", candle_nn::Init::Const(0.0), DType::F32, &Device::Cpu).unwrap_err().to_string();
+        assert!(err.contains("shape mismatch"), "{err}");
+        let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn a_tensor_of_another_dtype_fails_when_read_not_when_opened() {
+        // Meta's original checkpoint stores RoPE tables as C64 next to its F32 weights (#3378)
+        let p = write(
+            "c64",
+            r#"{"freqs_cis":{"dtype":"C64","shape":[2],"data_offsets":[0,16]},"a":{"dtype":"F32","shape":[2],"data_offsets":[16,24]}}"#,
+            24,
+        );
+        let w = Weights::open(&p).unwrap();
+        assert!(w.contains("freqs_cis"));
+        let err = w.read("freqs_cis").unwrap_err().to_string();
+        assert!(err.contains("unsupported dtype") && err.contains("C64"), "{err}");
+        assert_eq!(w.read("a").unwrap().dims(), &[2]);
+        let _ = std::fs::remove_file(p);
     }
 
     #[test]

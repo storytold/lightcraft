@@ -45,8 +45,9 @@
 //! through the generic TIFF path.
 
 use super::arw6;
+use crate::lens_metadata::SonyLensGeometry;
 use crate::tiffraw::{Packing, check_image, read_image_in};
-use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
+use crate::{BlackLevel, Cfa, ColorData, LensMetadata, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
 use lightcraft_tiff::tags::{self as t, photometric};
@@ -244,7 +245,9 @@ fn tag2010_wb(model: &str, block: &[u8], order: lightcraft_tiff::ByteOrder) -> O
 /// DSLR-A900 sample this is the whole strip (36 917 760 = 6080 × 4048 × 1.5) and it ends at the end of the file.
 fn is_packed12(info: &ImageInfo, strip_count: usize, strip_len: u64) -> bool {
     let (w, h) = (info.width as u64, info.height as u64);
-    info.bits() == 12 && strip_count == 1 && w % 2 == 0 && w > 0 && h > 0 && strip_len == w * h * 3 / 2
+    // checked_mul chain: a wrapping `w · h · 3` must refuse the strip, not compare against a wrapped length
+    let packed_len = w.checked_mul(h).and_then(|n| n.checked_mul(3)).map(|n| n / 2);
+    info.bits() == 12 && strip_count == 1 && w % 2 == 0 && w > 0 && h > 0 && packed_len == Some(strip_len)
 }
 
 /// Unpack plain 12-bit samples stored least-significant-bit first: two pixels per three bytes, the first being
@@ -553,6 +556,14 @@ fn dng_default_crop(raw: &Ifd, w: usize, h: usize) -> Option<Rect> {
     None
 }
 
+/// A rectangle exactly as an origin tag and a size tag record it (two values each), when both exist and fit `usize`.
+fn recorded_rect(raw: &Ifd, origin: u16, size: u16) -> Option<Rect> {
+    let (Some(origin), Some(size)) = (raw.u64s(origin), raw.u64s(size)) else { return None };
+    let (&[x, y], &[w, h]) = (origin.as_slice(), size.as_slice()) else { return None };
+    let n = |v: u64| usize::try_from(v).ok();
+    Some(Rect::new(n(x)?, n(y)?, n(w)?, n(h)?))
+}
+
 /// The image area for files without Sony's crop tags (`0x74c7/0x74c8`, written since about 2017): the DNG-style
 /// default crop when the raw IFD has one, else the image size the camera records (see [`recorded_size_crop`]).
 ///
@@ -606,23 +617,40 @@ fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
         .max_by_key(|i| i.u64(t::IMAGE_WIDTH).unwrap_or(0).saturating_mul(i.u64(t::IMAGE_LENGTH).unwrap_or(0)))
 }
 
+/// The ILCE-7RM6's lateral CA as the pre-demosaic map, within the same validated 3:2 scope as its distortion
+/// (`arw_lens_rm6::lateral_ca`), centred on the tables' `reference` crop; marks the CA record applied when there is one.
+fn rm6_lateral_ca(
+    raw: &Ifd,
+    model: &str,
+    crop: Rect,
+    reference: Rect,
+    sony_lens: &mut Option<crate::lens_metadata::SonyLensCorrections>,
+) -> Option<crate::LateralCa> {
+    let map = super::arw_lens::is_3_2(crop).then(|| super::arw_lens_rm6::lateral_ca(raw, model, reference)).flatten();
+    if map.is_some()
+        && let Some(record) = sony_lens.as_mut()
+    {
+        record.chromatic_aberration.status = crate::lens_metadata::SonyLensStatus::Applied;
+    }
+    map
+}
+
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
     let raw = raw_ifd(&tiff).ok_or_else(|| RawError::Unsupported("ARW without a CFA image IFD (old ARW or SR2)".into()))?;
     let info = raw.image()?;
     let (w, h) = (info.width as usize, info.height as usize);
-    if w * h > crate::MAX_SAMPLES {
-        return Err(RawError::Limit("image too large"));
-    }
+    // the cap (≤ 2^30) keeps every downstream usize product (w·h·2, w·h·3/2, y·w) inside range on 32-bit targets
+    let samples = crate::checked_pixel_count(w as u64, h as u64).ok_or(RawError::Limit("image too large"))?;
     let bits = info.bits() as u32;
     let linear_rgb = info.compression == 7 && info.photometric == photometric::YCBCR;
     let chunks = info.chunks(bytes.len() as u64);
-    let strip_len: u64 = chunks.iter().map(|c| c.len).sum();
+    let strip_len = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len));
     // The row-per-w-bytes (ARW2) layout stores exactly one byte per pixel in a single strip; all 108 such files in the test
     // archive measure exactly width x height. A200/A230/A350 files carry a strip 4-23 % larger than that (and A290/A390 one
     // smaller), which is a different packing, so they are refused rather than read with the wrong layout.
-    let one_byte_per_sample = chunks.len() == 1 && strip_len == (w * h) as u64;
+    let one_byte_per_sample = chunks.len() == 1 && strip_len == samples;
     let packed12 = info.compression == 32767 && is_packed12(&info, chunks.len(), strip_len);
     let (data, out_bits) = match info.compression {
         7 if linear_rgb => (RawData::U16(read_ycbcr_tiles(bytes, &info, raw, mode)?), 14),
@@ -632,8 +660,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         }
         32767 if one_byte_per_sample => {
             let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
+            if src.len() as u64 != strip_len {
+                return Err(RawError::Corrupt("raw strip shorter than its rows".into()));
+            }
             let curve = code_curve(&raw.u64s(TONE_CURVE).unwrap_or_else(|| vec![8000, 10400, 12900, 14100]));
-            let mut data = vec![0u16; w * h];
+            let mut data = vec![0u16; samples as usize];
             data.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
                 let row = src.get(y * w..((y + 1) * w).min(src.len())).unwrap_or(&[]);
                 if row.len() == w {
@@ -649,8 +680,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         }
         32767 if packed12 => {
             let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
+            if src.len() as u64 != strip_len {
+                return Err(RawError::Corrupt("raw strip shorter than its rows".into()));
+            }
             let row_bytes = w / 2 * 3;
-            let mut data = vec![0u16; w * h];
+            let mut data = vec![0u16; samples as usize];
             data.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
                 if let Some(row) = src.get(y * row_bytes..(y + 1) * row_bytes) {
                     unpack_row12(row, out);
@@ -749,11 +783,41 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
-    // DefaultCrop can retain native geometry while Sony's tags select an aspect crop.
-    // Both the image framing and the table geometry must stay within the validated 3:2 scope.
-    let three_two = crop.height > 0 && (crop.width as f64 / crop.height as f64 - 1.5).abs() <= 0.005;
-    let lens_crop = (!linear_rgb && three_two).then(|| dng_default_crop(raw, w, h).unwrap_or(crop));
-    let active = Rect::new(0, 0, w, h);
+    // The lens-correction record. The distortion table is centred on the DNG-style default crop when the file has
+    // one: on the ILCE-7RM4A it starts at x = 32 where Sony's crop tags (the image crop, unchanged) start at 0, and
+    // the warp was validated against Sony's exports with that centre. The opcode's centre is in active-area
+    // coordinates, so it stays on the optical centre whichever crop frames the image.
+    let reference = dng_default_crop(raw, w, h).unwrap_or(crop);
+    let geometry = SonyLensGeometry {
+        storage_width: w,
+        storage_height: h,
+        sony_crop: recorded_rect(raw, CROP_TOP_LEFT, CROP_SIZE),
+        default_crop: recorded_rect(raw, t::DEFAULT_CROP_ORIGIN, t::DEFAULT_CROP_SIZE),
+        image_crop: crop,
+        reference,
+        compression: info.compression,
+        linear_ycbcr: linear_rgb,
+        native_3_2: super::arw_lens::is_3_2(crop) && super::arw_lens::is_3_2(reference),
+    };
+    // decrypted for the copies' agreement check too, not only when a plain field is missing: a few dozen kB, found by
+    // reading only three `SR2Private` entries (see `sr2::SubIfd::read`)
+    let (mut sony_lens, warp) = super::arw_lens::corrections(bytes, tiff.order, (raw, tiff.bigtiff), sr2(), &model, geometry);
+    // The ILCE-7RM6's tables follow other conventions, measured against its camera JPEGs ([`super::arw_lens_rm6`]);
+    // its allowlist and `arw_lens`'s are disjoint, so at most one of them produces an opcode. Both the image framing
+    // and the table geometry must stay within the validated 3:2 scope.
+    let rm6: Vec<crate::Opcode> = if linear_rgb || !super::arw_lens::is_3_2(crop) {
+        Vec::new()
+    } else {
+        let lens = metadata.lens_model.as_deref();
+        super::arw_lens_rm6::lens_opcodes(raw, &model, lens, metadata.focal_length, Rect::new(0, 0, w, h), reference)
+    };
+    if !rm6.is_empty()
+        && let Some(record) = sony_lens.as_mut()
+    {
+        // distortion only: its lateral CA is the pre-demosaic map below, not warp planes (see `arw_lens_rm6::lens_opcodes`)
+        record.distortion.status = crate::lens_metadata::SonyLensStatus::Applied;
+    }
+    let lateral_ca = if linear_rgb { None } else { rm6_lateral_ca(raw, &model, crop, reference, &mut sony_lens) };
     let img = RawImage {
         format: RawFormat::Arw,
         width: w,
@@ -773,26 +837,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         // makes a neutral surface magenta. WB edits remain relative to this as-shot RGB.
         wb_multipliers: if linear_rgb { Some([1.0; 3]) } else { wb },
         linearized: false,
-        // The distortion table is centred on the DNG-style default crop when the file has one: on the ILCE-7RM4A
-        // it starts at x = 32 where Sony's crop tags (the image crop, unchanged) start at 0, and the warp was
-        // validated against Sony's exports with that centre. The opcode's centre is in active-area coordinates, so
-        // it stays on the optical centre whichever crop frames the image. The ILCE-7RM6's tables follow other
-        // conventions, measured against its camera JPEGs ([`super::arw_lens_rm6`]); the two allowlists are
-        // disjoint, so at most one of them produces an opcode.
-        // The ILCE-7RM6's lateral CA is a map on the mosaic, applied before demosaic whatever Lens Corrections says.
-        opcodes: OpcodeLists {
-            list3: lens_crop
-                .map(|g| {
-                    super::arw_lens::distortion(&model, raw, active, g)
-                        .into_iter()
-                        .chain(super::arw_lens_rm6::lens_opcodes(raw, &model, active, g))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            lateral_ca: lens_crop.and_then(|g| super::arw_lens_rm6::lateral_ca(raw, &model, g)),
-            ..Default::default()
-        },
+        pixel_aspect: 1.0,
+        // only validated components become opcodes (see `arw_lens`, and `arw_lens_rm6` for the ILCE-7RM6); the
+        // ILCE-7RM6's lateral CA is a map on the mosaic, applied before demosaic whatever Lens Corrections says
+        opcodes: OpcodeLists { list3: warp.into_iter().chain(rm6).collect(), lateral_ca, ..Default::default() },
         metadata,
+        lens_metadata: LensMetadata { sony: sony_lens },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -890,6 +940,15 @@ mod tests {
         raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
         raw.set_image(ImageData::Strips { rows_per_strip: 4, strips: vec![vec![0u8; strip]] });
         TiffWriter::default().write(&[raw]).unwrap()
+    }
+
+    /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow.
+    #[test]
+    fn strip_byte_counts_past_u64_max_do_not_overflow() {
+        let file = crate::vendor::tests::huge_strip_counts(arw_with_strip(32 * 4));
+        for mode in [Mode::Header, Mode::Full] {
+            let _ = super::decode(&file, mode);
+        }
     }
 
     /// The ILCE-7RM6's distortion table reaches `OpcodeList3`, in the headers-only probe and in the full decode, as
@@ -1572,5 +1631,29 @@ mod tests {
         };
         assert!(is_quad_tiled(&file, &info));
         assert_eq!(read_quad_tiles(&file, &info).unwrap(), mosaic);
+    }
+
+    /// #2561: a small file whose one-byte or packed 12-bit strip declares a large frame is refused before the full
+    /// decode allocates the frame.
+    #[test]
+    fn a_strip_cut_short_is_refused_before_allocating() {
+        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        let (w, h) = (3000u32, 2000u32);
+        for declared in [w * h, w * h / 2 * 3] {
+            let mut raw = IfdBuilder::new();
+            raw.set(t::MAKE, Value::Ascii("SONY".into()));
+            raw.set(t::MODEL, Value::Ascii("DSLR-A100".into()));
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+            raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+            raw.set(t::COMPRESSION, Value::Short(vec![32767]));
+            raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
+            raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![vec![0u8; 12]] });
+            let mut f = TiffWriter::default().write(&[raw]).unwrap();
+            crate::vendor::declare_strip_len(&mut f, 12, declared);
+            assert!(matches!(decode(&f, Mode::Full), Err(RawError::Corrupt(_))), "{declared} bytes declared");
+        }
     }
 }

@@ -178,7 +178,7 @@ impl Rect {
     }
     /// Largest rectangle of aspect `a` (w/h) centred in `self`.
     pub fn fit_aspect(&self, a: f64) -> Rect {
-        if a <= 0.0 || self.is_empty() {
+        if !(a.is_finite() && a > 0.0) || self.is_empty() {
             return *self;
         }
         let (w, h) = (self.width(), self.height());

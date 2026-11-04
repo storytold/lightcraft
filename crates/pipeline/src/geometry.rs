@@ -16,7 +16,7 @@ use crate::optics::{Warp, reorient_lens};
 pub const BLANK: [f32; 3] = [0.55, 0.55, 0.55];
 
 /// The geometric frame of a render.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
     /// Source (EXIF-oriented) dimensions in pixels.
     pub src_w: usize,
@@ -33,6 +33,10 @@ pub struct Frame {
     pub warp: Option<Warp>,
     /// Set when this frame draws only a window of a larger output (see [`Frame::window`]).
     pub view: Option<ViewWindow>,
+    /// Mask coordinates are on the photo before the warp ([`Frame::for_mask`],
+    /// `lightcraft_develop::Mask::on_photo`); otherwise they are normalized coordinates of this
+    /// frame's transformed image, like spots and the crop.
+    pub masks_on_photo: bool,
 }
 
 /// Where a windowed [`Frame`]'s pixels sit in the full output: its offset and the full output's
@@ -54,7 +58,8 @@ impl Frame {
     pub fn with_lens(src_w: usize, src_h: usize, s: &DevelopSettings, apply_crop: bool, lens: Option<&EmbeddedLens>) -> Frame {
         let orient = s.orientation;
         let (ow, oh) = if orient.swaps_axes() { (src_h as f64, src_w as f64) } else { (src_w as f64, src_h as f64) };
-        let crop = if apply_crop { s.crop.geometry } else { CropGeometry::default() };
+        // bounded: a crop from a sidecar or an agent can reach far past the photo (issue #2555)
+        let crop = if apply_crop { s.crop.geometry.bounded(ow, oh) } else { CropGeometry::default() };
         let lens = lens.map(|l| reorient_lens(l, orient, src_w as f64, src_h as f64));
         let mut warp = Warp::from_settings(ow, oh, s, lens.as_ref());
         let persp = perspective(s, ow, oh);
@@ -76,16 +81,34 @@ impl Frame {
             flip_v: s.crop.flip_v,
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
+            masks_on_photo: false,
         };
-        if apply_crop && s.geometry.constrain_crop {
-            f.constrain_to_image();
+        if apply_crop {
+            f.constrain_to_image(s.geometry.constrain_crop);
         }
         f
     }
 
-    /// "Constrain Crop": shrink the crop about its centre until it contains no area outside the warped source.
-    fn constrain_to_image(&mut self) {
-        let Some(wp) = self.warp.as_ref().filter(|w| w.moves_pixels()) else { return };
+    /// Shrink the crop about its centre until it contains no area outside the warped source. Lens
+    /// corrections (profile, embedded camera warp, manual distortion, lateral CA) always do this, as
+    /// a corrected lens never shows the blank past the photo's edge (issue #2361); perspective only
+    /// with "Constrain Crop" (`with_persp`), so a keystone fix can keep its corners.
+    pub(crate) fn constrain_to_image(&mut self, with_persp: bool) {
+        let Some(full) = self.warp.as_ref().filter(|w| w.moves_pixels()) else { return };
+        let optics;
+        let wp = if with_persp || full.persp == Homography::IDENTITY {
+            full
+        } else {
+            let mut o = full.clone();
+            o.persp = Homography::IDENTITY;
+            o.persp_inv = Homography::IDENTITY;
+            optics = o;
+            &optics
+        };
+        if !wp.moves_pixels() {
+            return;
+        }
+        let planes: &[usize] = if wp.per_channel() { &[0, 1, 2] } else { &[1] };
         let a = self.crop.output_to_source(self.ow, self.oh, 1.0, 1.0);
         let (w, h) = (self.ow, self.oh);
         let fits = |t: f64| {
@@ -93,8 +116,10 @@ impl Frame {
                 let u = i as f64 / 48.0;
                 [(u, 0.0), (u, 1.0), (0.0, u), (1.0, u)].iter().all(|&(x, y)| {
                     let p = Point::new(0.5 + t * (x - 0.5), 0.5 + t * (y - 0.5));
-                    let s = wp.to_source(a.apply(p), 1);
-                    s.x >= -1e-6 * w && s.y >= -1e-6 * h && s.x <= w * (1.0 + 1e-6) && s.y <= h * (1.0 + 1e-6)
+                    planes.iter().all(|&ch| {
+                        let s = wp.to_source(a.apply(p), ch);
+                        s.x >= -1e-6 * w && s.y >= -1e-6 * h && s.x <= w * (1.0 + 1e-6) && s.y <= h * (1.0 + 1e-6)
+                    })
                 })
             })
         };
@@ -167,10 +192,12 @@ impl Frame {
         }
     }
 
-    /// Aspect ratio (w/h) of the output.
+    /// Aspect ratio (w/h) of the output. A crop narrower than a source pixel (or of no size, from
+    /// an agent or a sidecar) counts each side as one pixel, so the aspect stays finite: 0/0 made
+    /// it NaN, and the loupe laid the photo out at a NaN size.
     pub fn aspect(&self) -> f64 {
         let r = self.crop.rect_px(self.ow, self.oh);
-        r.width() / r.height()
+        r.width().max(1.0) / r.height().max(1.0)
     }
 
     /// Size of the (cropped) output at the source's own resolution, in pixels.
@@ -218,6 +245,61 @@ impl Frame {
     /// Normalized oriented coords → output pixel (inverse of `out_to_norm`).
     pub fn norm_to_out(&self, out_w: usize, out_h: usize) -> Affine {
         self.out_to_norm(out_w, out_h).inverse().unwrap_or(Affine::IDENTITY)
+    }
+
+    /// This frame for evaluating mask `m`: whether its coordinates are on the photo before the
+    /// warp ([`lightcraft_develop::Mask::on_photo`]).
+    pub fn for_mask(&self, on_photo: bool) -> std::borrow::Cow<'_, Frame> {
+        if self.masks_on_photo == on_photo {
+            std::borrow::Cow::Borrowed(self)
+        } else {
+            std::borrow::Cow::Owned(Frame { masks_on_photo: on_photo, ..self.clone() })
+        }
+    }
+
+    /// The warp mask coordinates go through: the lens / perspective warp when masks are on the
+    /// photo and the warp moves pixels, else none (mask coordinates are then this frame's
+    /// normalized coordinates).
+    pub fn mask_warp(&self) -> Option<&Warp> {
+        self.warp.as_ref().filter(|w| self.masks_on_photo && w.moves_pixels())
+    }
+
+    /// Output pixel → mask coordinates (see [`Frame::masks_on_photo`]).
+    pub fn out_to_mask(&self, out_w: usize, out_h: usize) -> MaskMap {
+        MaskMap {
+            o2t: self.out_to_oriented(out_w, out_h),
+            to_norm: self.out_to_norm(out_w, out_h),
+            ow: self.ow,
+            oh: self.oh,
+            warp: self.mask_warp().cloned(),
+        }
+    }
+
+    /// Mask coordinates → output pixel (the inverse of [`Frame::out_to_mask`]); `None` for a
+    /// point the warp can't invert (far outside a strong one), which has no place in the output.
+    pub fn mask_to_out(&self, out_w: usize, out_h: usize) -> impl Fn(Point) -> Option<Point> + use<> {
+        let to_out = self.norm_to_out(out_w, out_h);
+        let (warp, ow, oh) = (self.mask_warp().cloned(), self.ow, self.oh);
+        move |n: Point| match &warp {
+            Some(w) => w.from_source(Point::new(n.x * ow, n.y * oh)).map(|t| to_out.apply(Point::new(t.x / ow, t.y / oh))),
+            None => Some(to_out.apply(n)),
+        }
+    }
+
+    /// Normalized coordinates of this frame's transformed image → mask coordinates.
+    pub fn norm_to_mask(&self, n: Point) -> Point {
+        match self.mask_warp() {
+            Some(w) => {
+                let s = w.to_source(Point::new(n.x * self.ow, n.y * self.oh), 1);
+                Point::new(s.x / self.ow, s.y / self.oh)
+            }
+            None => n,
+        }
+    }
+
+    /// Mask coordinates → normalized coordinates of this frame's transformed image.
+    pub fn mask_to_norm(&self, n: Point) -> Point {
+        mask_to_norm(self.mask_warp(), self.ow, self.oh, n)
     }
 
     /// Convert normalized oriented coordinates to "long-edge units" (isotropic), used by mask shapes.
@@ -281,6 +363,40 @@ impl Frame {
             let q = back.apply(p);
             Point::new(q.x / self.ow, q.y / self.oh)
         })
+    }
+}
+
+/// Mask coordinates `n` (on the photo before `warp`, normalized to `ow × oh`) → normalized
+/// transformed coordinates. A point the warp can't invert (far outside a strong one) stays put.
+fn mask_to_norm(warp: Option<&Warp>, ow: f64, oh: f64, n: Point) -> Point {
+    match warp.and_then(|w| w.from_source(Point::new(n.x * ow, n.y * oh))) {
+        Some(t) => Point::new(t.x / ow, t.y / oh),
+        None => n,
+    }
+}
+
+/// Output pixel → mask coordinates of a frame ([`Frame::out_to_mask`]).
+#[derive(Clone, Debug)]
+pub struct MaskMap {
+    /// Output px → transformed px, and → normalized transformed coordinates.
+    o2t: Affine,
+    to_norm: Affine,
+    ow: f64,
+    oh: f64,
+    warp: Option<Warp>,
+}
+
+impl MaskMap {
+    /// The mask coordinates at output position `p` (px; pixel centres at `x + 0.5`).
+    #[inline]
+    pub fn apply(&self, p: Point) -> Point {
+        match &self.warp {
+            Some(w) => {
+                let s = w.to_source(self.o2t.apply(p), 1);
+                Point::new(s.x / self.ow, s.y / self.oh)
+            }
+            None => self.to_norm.apply(p),
+        }
     }
 }
 
@@ -353,6 +469,18 @@ pub const FULL: Rect = Rect::UNIT;
 mod tests {
     use super::*;
 
+    /// Issue #2555: a turned crop rect of 0..1000 (from a sidecar or an agent) made the native size
+    /// of a 6000 × 4000 photo ~2.4·10¹³ pixels, which a full-size export allocated.
+    #[test]
+    fn a_crop_far_past_the_photo_keeps_the_native_size_near_the_source() {
+        let mut s = DevelopSettings::default();
+        s.crop.geometry = lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(0.0, 0.0, 1000.0, 1000.0), angle: 5.0 };
+        let (w, h) = crate::native_output_size(6000, 4000, &s);
+        assert!(w <= 12_000.0 && h <= 8_000.0, "{w} x {h}");
+        // an untouched photo is its own size
+        assert_eq!(crate::native_output_size(6000, 4000, &DevelopSettings::default()), (6000.0, 4000.0));
+    }
+
     #[test]
     fn default_frame_is_identity() {
         let s = DevelopSettings::default();
@@ -381,6 +509,25 @@ mod tests {
         assert!((p.x - 0.5).abs() < 1e-9 && p.y.abs() < 1e-9);
         let back = f.norm_to_out(100, 100).apply(Point::new(0.75, 0.5));
         assert!((back.x - 50.0).abs() < 1e-6 && (back.y - 50.0).abs() < 1e-6);
+    }
+
+    /// A crop of no size (or under a pixel wide) gave a NaN or infinite aspect; each side now
+    /// counts as at least one source pixel.
+    #[test]
+    fn degenerate_crops_have_a_finite_aspect() {
+        let mut s = DevelopSettings::default();
+        for (rect, want) in [
+            (Rect::new(0.5, 0.5, 0.5, 0.5), 1.0),
+            (Rect::new(0.0, 0.0, 1e-9, 1.0), 1.0 / 200.0),
+            (Rect::new(0.0, 0.5, 1.0, 0.5), 400.0),
+            (Rect::new(0.25, 0.0, 0.75, 1.0), 1.0),
+        ] {
+            s.crop.geometry.rect = rect;
+            let f = Frame::new(400, 200, &s, true);
+            assert!((f.aspect() - want).abs() < 1e-9, "{rect:?}: {}", f.aspect());
+            let (w, h) = f.fit(1000, 1000);
+            assert!((1..=1000).contains(&w) && (1..=1000).contains(&h), "{rect:?}: {w}×{h}");
+        }
     }
 
     #[test]

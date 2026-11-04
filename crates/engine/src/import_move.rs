@@ -128,7 +128,10 @@ pub(crate) fn sidecars_of(src: &Path) -> Vec<(PathBuf, bool)> {
             if !ext.eq_ignore_ascii_case("xmp") || !e.path().is_file() {
                 return None;
             }
-            if base == name {
+            // `IMG_1.cr3.xmp` names `IMG_1.CR3` too: some apps lower-case the photo's extension
+            let full = base == name
+                || base.rsplit_once('.').is_some_and(|(s, x)| s == stem && name.rsplit_once('.').is_some_and(|(_, y)| x.eq_ignore_ascii_case(y)));
+            if full {
                 Some((e.path(), false))
             } else if base == stem {
                 Some((e.path(), true))
@@ -223,11 +226,12 @@ pub(crate) fn rollback(p: &Placed) {
 }
 
 /// Remove a placed photo's source (its catalog record is committed and saved): only when the
-/// destination is still there with the same size. Then its sidecars, unless another photo still
+/// destination is still there with the same bytes. Then its sidecars, unless another photo still
 /// uses a shared one. `Err` = the source was kept (why); `Ok` lists sidecars kept (path, why).
 pub(crate) fn finish(p: &Placed) -> Result<Vec<(String, String)>, String> {
+    // compare the bytes now: either file may have changed since the copy was verified
     let same = match (fs::metadata(&p.src), fs::metadata(&p.dst)) {
-        (Ok(s), Ok(d)) => s.is_file() && d.is_file() && s.len() == d.len(),
+        (Ok(s), Ok(d)) => s.is_file() && d.is_file() && same_bytes(&p.src, &p.dst).unwrap_or(false),
         _ => false,
     };
     if !same {

@@ -12,8 +12,9 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let mut merged = Vec::new();
     let mut backups = Vec::new();
     let mut failed = Vec::new();
-    let owners = crate::sidecar::StemOwners::of(&s.catalog);
-    for id in s.targets(p) {
+    let ids = s.targets(p)?;
+    let owners = crate::sidecar::StemOwners::among(&s.catalog, &ids);
+    for id in ids {
         match s.save_sidecar_with(id, &owners) {
             Ok(r) => {
                 let path = r.path.display().to_string();
@@ -36,7 +37,7 @@ fn read(s: &mut Session, p: &Value) -> Result<Value> {
     let mut read = Vec::new();
     let mut failed = Vec::new();
     let mut warnings = Vec::new();
-    for id in s.targets(p) {
+    for id in s.targets(p)? {
         match s.read_sidecar_op_with_warnings(id) {
             Ok(Some((op, from, mut photo_warnings))) => {
                 ops.push(op);
@@ -94,7 +95,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Read Metadata from File",
             ["Photo"],
             None,
-            "{ids?} — reads each photo's XMP sidecar (or a raw/DNG's embedded XMP): metadata and develop settings, one undo step; never writes the sidecar, even with auto-write on → {read, failed, warnings?: [{path, code, profile?, mode?, fields?}]}",
+            "{ids?} — reads each photo's XMP sidecar, or embedded XMP in raw/DNG and JPEG files when no sidecar exists: metadata and develop settings, one undo step; never writes the sidecar, even with auto-write on; JPEG uses the first complete standard XMP APP1 before SOS/EOI, within 16 MiB of headers and 4096 marker/fill steps; an unreadable sidecar fails without embedded fallback → {read, failed, warnings?: [{path, code, profile?, mode?, fields?}]}",
             has_selection,
             read
         ),
@@ -106,6 +107,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "{autoWrite?: bool, naming?: stem (IMG_1.xmp, default) | full (IMG_1.CR3.xmp)} → current preferences (saved with the library)",
             always,
             prefs
+        ),
+        cmd!(
+            "library.retrySidecars",
+            "Write Waiting XMP Sidecars",
+            [],
+            None,
+            "{} — writes again the automatic XMP sidecars that failed (folder offline, read-only or full) whose originals are reachable now → {written, waiting}",
+            always,
+            |s, _| {
+                let written = s.retry_unsaved_sidecars();
+                Ok(json!({"written": written, "waiting": s.unsaved_sidecars()}))
+            }
         ),
         cmd!("library.toggleAutoWriteXmp", "Automatically Write Changes into XMP", ["File"], None, "{} → {autoWrite}", always, |s, _| {
             let on = !s.xmp.auto_write;

@@ -1,10 +1,11 @@
 //! Recognition commands: `faces.index` (embed the faces in the library), `faces.suggest` (who might an unnamed
 //! face be?), `faces.person` (one person's faces, and the unnamed faces that look like them), `faces.unnamed` (every
 //! unnamed face, look-alikes together) and `faces.setName` / `faces.nameFaces` (name one face, or many at once, which is
-//! what teaches the suggestions).
+//! what teaches the suggestions). `faces.renamePerson` renames every in-library face of one person, or merges two
+//! people when asked.
 //!
 //! Everything here is a suggestion for the user to confirm; nothing is ever named automatically. All of it is
-//! catalog-only (no sidecar is written) and `faces.setName` is undoable.
+//! catalog-only (no sidecar is written) and naming is undoable.
 
 use lightcraft_catalog::Op;
 use serde_json::{Value, json};
@@ -81,7 +82,7 @@ fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
 /// makes the face yours: a later "Detect Faces" run no longer replaces it.
 fn set_name(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.setName";
-    let id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
+    let id = super::photo_id(p, C)?.or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
     let index = p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "missing or invalid `index`"))?;
     let name = name_param(p, C)?;
     let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
@@ -90,6 +91,97 @@ fn set_name(s: &mut Session, p: &Value) -> Result<Value> {
     s.commit(if name.is_some() { "Name Face" } else { "Clear Face Name" }, Op::SetMeta { id, meta: Box::new(meta) })?;
     s.skip_auto_write = true;
     Ok(json!({"id": id.0, "index": index, "name": name}))
+}
+
+/// `faces.renamePerson {from, to, merge?}`: give every in-library face of `from` the exact name `to`, as one undo
+/// step. Names match the People view (trimmed, case-insensitive). A `to` that is already someone else is refused
+/// unless `merge` is set, and then the two people become one. The sidecar is not touched, and a refusal changes nothing.
+fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.renamePerson";
+    let from = match p.get("from") {
+        Some(Value::String(v)) => {
+            let t = v.trim();
+            if t.is_empty() {
+                return Err(bad(C, "missing `from`"));
+            }
+            t.to_string()
+        }
+        Some(_) => return Err(bad(C, "`from` must be text")),
+        None => return Err(bad(C, "missing `from`")),
+    };
+    let to = match p.get("to") {
+        Some(Value::String(v)) => {
+            let t = v.trim();
+            if t.is_empty() {
+                return Err(bad(C, "`to` must be a name"));
+            }
+            if t.chars().count() > 200 || t.chars().any(char::is_control) {
+                return Err(bad(C, "a name is at most 200 characters, without control characters"));
+            }
+            t.to_string()
+        }
+        Some(_) => return Err(bad(C, "`to` must be text")),
+        None => return Err(bad(C, "missing `to`")),
+    };
+    let merge = super::bool_or(p, "merge", false);
+    let from_key = from.to_lowercase();
+    let to_key = to.to_lowercase();
+    let mut matched = 0usize;
+    let mut other = false;
+    let mut faces = 0usize;
+    let mut ops = Vec::new();
+    let ids: Vec<_> = s.catalog.photos().filter(|ph| ph.in_library()).map(|ph| ph.id).collect();
+    for id in ids {
+        let Some(ph) = s.catalog.photo(id) else { continue };
+        let mut indexes = Vec::new();
+        for (i, r) in ph.meta.regions.iter().enumerate() {
+            if r.kind != lightcraft_meta::RegionKind::Face {
+                continue;
+            }
+            let Some(n) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
+            let key = n.to_lowercase();
+            if key == from_key {
+                matched += 1;
+                if r.name.as_deref() != Some(to.as_str()) {
+                    indexes.push(i);
+                }
+            } else if key == to_key {
+                other = true;
+            }
+        }
+        if indexes.is_empty() {
+            continue;
+        }
+        let mut meta = ph.meta.clone();
+        for i in indexes {
+            if let Some(region) = meta.regions.get_mut(i) {
+                region.name = Some(to.clone());
+                faces += 1;
+            }
+        }
+        ops.push(Op::SetMeta { id, meta: Box::new(meta) });
+    }
+    if matched == 0 {
+        return Err(bad(C, format!("no person named {from}")));
+    }
+    if faces == 0 {
+        return Err(bad(C, format!("{to} is already their name")));
+    }
+    if other && !merge {
+        return Err(bad(C, format!("{to} is already another person; pass merge: true to combine them")));
+    }
+    let photos = ops.len();
+    s.commit(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
+    s.skip_auto_write = true;
+    if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
+        s.filter.person = Some(to.clone());
+    }
+    if let Some(f) = s.shelved_filter.as_mut()
+        && f.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key)
+    {
+        f.person = Some(to.clone());
+    }
+    Ok(json!({"faces": faces, "photos": photos, "from": from, "to": to, "merged": other}))
 }
 
 /// Most faces `faces.unnamed` lists.
@@ -188,6 +280,7 @@ mod imp {
     use lightcraft_faces::runtime::Embedder;
     use lightcraft_geom::Rect;
     use lightcraft_meta::{Region, RegionKind};
+    use rayon::prelude::*;
     use serde_json::{Value, json};
 
     use super::super::bad;
@@ -234,6 +327,8 @@ mod imp {
             return Ok(e.clone());
         }
         let embedder = Arc::new(Embedder::load(&dir.join(&id).join("model.onnx"), &installed.manifest).map_err(|e| bad(cmd, e.to_string()))?);
+        let net = embedder.clone();
+        super::super::face_detect::offer_gpu(s, "recognition", move |gpu| net.accelerate(gpu, true).map_err(|e| e.to_string()));
         let dim = match installed.manifest.output {
             lightcraft_faces::OutputSpec::Embedding { dim } => dim as usize,
             _ => return Err(bad(cmd, "the chosen model is not a recognition model")),
@@ -251,10 +346,12 @@ mod imp {
         current_with(s, cmd, true)
     }
 
-    /// Whether the background scan should look for faces in this photo: it is in the library, has no face regions at all
-    /// (nothing from XMP, nothing drawn or named, no earlier detection) and has not been searched yet.
+    /// Whether the background scan should look for faces in this photo: it is in the library, is not a video (the image
+    /// decoders can't read one, [`Photo::is_video`]), has no face regions at all (nothing from XMP, nothing drawn or
+    /// named, no earlier detection) and has not been searched yet.
     fn needs_search(s: &Session, photo: &Photo) -> bool {
         photo.in_library()
+            && !photo.is_video()
             && !photo.meta.regions.iter().any(|r| r.kind == RegionKind::Face)
             && !s.faces.scanned.contains(photo.id.0)
             && !s.faces.scan_failed.contains(&photo.id.0)
@@ -275,7 +372,7 @@ mod imp {
         }
         let job = s.preview_job(id, EDGE, EDGE, false, &DevelopSettings::default())?;
         let preview = s.scan_preview_of(&photo);
-        Some(Prepared { tag, epoch: s.faces.epoch, id, job, preview, todo, detect, detector })
+        Some(Prepared { tag, epoch: s.faces.epoch, id, content: crate::media::content_key(&photo), job, preview, todo, detect, detector })
     }
 
     /// The faces the detector found in a photo that had none become its face regions: unnamed, marked as detected (so a
@@ -299,11 +396,14 @@ mod imp {
         }
     }
 
-    /// Take a finished photo into the index (ignored when it was made for another model or another library). Returns
-    /// (embedded, failed).
+    /// Take a finished photo into the index (ignored when it was made for another model or another library, or from
+    /// a file the photo no longer has: issue #1524). Returns (embedded, failed).
     fn ingest(s: &mut Session, d: Done) -> (usize, usize) {
         s.faces.in_flight.remove(&d.id);
         if d.epoch != s.faces.epoch || d.tag != s.faces.index.tag {
+            return (0, 0);
+        }
+        if s.catalog.photo(d.id).is_none_or(|p| crate::media::content_key(p) != d.content) {
             return (0, 0);
         }
         if d.detect_wanted {
@@ -378,8 +478,7 @@ mod imp {
         let embedder = current(s, C)?;
         collect(s);
         let budget = Duration::from_millis(p.get("budgetMs").and_then(Value::as_u64).unwrap_or(200).min(600_000));
-        let first: Vec<PhotoId> =
-            p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(PhotoId).collect()).unwrap_or_default();
+        let first: Vec<PhotoId> = super::super::photo_ids(p, C)?.unwrap_or_default();
         let todo = pending(s, &first, false);
         let started = Instant::now();
         let (mut embedded, mut failed, mut done) = (0, 0, 0);
@@ -417,13 +516,12 @@ mod imp {
         if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
             return None;
         }
-        // days from civil (proleptic Gregorian)
-        let y = if m <= 2 { y - 1 } else { y };
-        let era = y.div_euclid(400);
-        let yoe = y - era * 400;
-        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        Some((era * 146_097 + doe - 719_468) * 86_400 + hh * 3600 + mm * 60 + ss)
+        // Days since 1970-01-01 (proleptic Gregorian); a day past the month's length rolls over as
+        // the old Hinnant arithmetic did.
+        let first = chrono::NaiveDate::from_ymd_opt(i32::try_from(y).ok()?, u32::try_from(m).ok()?, 1)?;
+        let date = first.checked_add_days(chrono::Days::new(u64::try_from(d - 1).ok()?))?;
+        let days = (date - chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?).num_days();
+        Some(days * 86_400 + hh * 3600 + mm * 60 + ss)
     }
 
     /// `faces.evaluate`: leave-one-out over the library's named faces, to see how well recognition works on *your*
@@ -582,6 +680,9 @@ mod imp {
         if let Some(w) = &s.faces.worker {
             w.allow(target, pace);
         }
+        // the GPU is held back the same way: a light pace leaves it mostly free for the window's own renders
+        let (runs, share) = crate::faces_worker::gpu_pace(pace);
+        lightcraft_gpu::faces::set_pace(runs, share);
         while target > 0 && s.faces.in_flight.len() < target + PREFETCH {
             let Some(id) = s.faces.queue.pop() else { break };
             let Some(job) = prepare(s, id, true) else { continue };
@@ -633,11 +734,13 @@ mod imp {
             return ready;
         }
         let bar = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD) * 0.8;
-        let refs: Vec<(&str, &[f32])> = gallery.iter().map(|e| ("person", &e[..])).collect();
+        let refs: Vec<&[f32]> = gallery.iter().map(|e| &e[..]).collect();
+        // every unnamed face against every face of theirs: some 400 million comparisons for a person with 4 000 faces
+        // in a library of 90 000, so on every core (minutes on one)
         let mut scored: Vec<(f32, u64, usize, Rect)> = candidates
-            .into_iter()
+            .into_par_iter()
             .filter_map(|(photo, index, rect, e)| {
-                let score = matching::rank(&e, &refs).first()?.score;
+                let score = matching::person_score(&e, &refs, matching::TOP_FACES)?;
                 (score >= bar).then_some((score, photo, index, rect))
             })
             .collect();
@@ -751,7 +854,7 @@ mod imp {
         const C: &str = "faces.suggest";
         let embedder = current(s, C)?;
         collect(s);
-        let targets = s.targets(p);
+        let targets = s.targets(p)?;
         let model_threshold = embedder.manifest().thresholds.match_cosine;
         let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v as f32);
         let threshold = num("threshold").or(model_threshold).unwrap_or(DEFAULT_THRESHOLD);
@@ -830,7 +933,8 @@ mod imp {
         }
 
         fn finished(s: &Session, id: PhotoId, found: Option<Vec<Rect>>, results: Vec<(Rect, Option<Vec<f32>>, Rect)>) -> Done {
-            Done { tag: s.faces.index.tag.clone(), epoch: s.faces.epoch, id, results, detect_wanted: true, found }
+            let content = s.catalog.photo(id).map(|p| crate::media::content_key(p)).unwrap_or_default();
+            Done { tag: s.faces.index.tag.clone(), epoch: s.faces.epoch, id, content, results, detect_wanted: true, found }
         }
 
         #[test]
@@ -869,6 +973,22 @@ mod imp {
             assert!(!s.faces.scanned.contains(a.0), "not remembered as searched: the file may come back");
             assert!(!needs_search(&s, s.catalog.photo(a).unwrap()), "but not retried on every pass");
             assert!(!pending(&s, &[], true).contains(&a));
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        /// A video went to the image decoders to be searched for faces and failed, once each launch: it is skipped, as the
+        /// grid's thumbnails skip it (issue #2682 is about those).
+        #[test]
+        fn a_video_is_not_searched_for_faces() {
+            let (mut s, d) = loaded("video");
+            let (a, _) = two_photos(&s);
+            let id = s.catalog.alloc_photo_id();
+            let path = d.join("clip.mp4").to_string_lossy().into_owned();
+            let clip = Photo::new(id, lightcraft_catalog::Source::File { path }, "clip.mp4", "VIDEO", 1920, 1080, "2026-10-24T00:00:00");
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(clip) }).unwrap();
+            assert!(needs_search(&s, s.catalog.photo(a).unwrap()), "a photo is searched");
+            assert!(!needs_search(&s, s.catalog.photo(id).unwrap()));
+            assert!(!pending(&s, &[], true).contains(&id));
             let _ = std::fs::remove_dir_all(&d);
         }
 
@@ -912,6 +1032,42 @@ mod imp {
             // a worker that was still busy with the old library cannot put its faces into the new one
             assert_eq!(ingest(&mut s, old), (0, 0));
             assert!(s.faces.index.len() == 0 && !s.faces.scanned.contains(a.0));
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        /// A Reload that finds the file replaced (an outside edit) gives the photo other pixels: what a worker made from
+        /// the old file is dropped when it comes back, the faces already embedded from it are forgotten and the photo is
+        /// searched again (issue #1524).
+        #[test]
+        fn faces_made_from_a_replaced_file_are_dropped() {
+            let (mut s, d) = loaded("replaced");
+            let (a, b) = two_photos(&s);
+            let rect = region(0.2, None).rect;
+            s.faces.index.insert(a.0, &rect, unit(&[(0, 1.0)]));
+            s.faces.scanned.insert(a.0);
+            s.faces.index.insert(b.0, &rect, unit(&[(1, 1.0)]));
+            s.faces.scanned.insert(b.0);
+            let old = finished(&s, a, Some(vec![rect]), vec![(rect, Some(unit(&[(2, 1.0)])), rect)]);
+            let (width, height) = s.catalog.photo(a).map(|p| (p.width, p.height)).unwrap();
+            let replace = Op::SetContent {
+                id: a,
+                width,
+                height,
+                file_size: 1234,
+                content_hash: Some("edited".into()),
+                preview_only: None,
+                preview_checked: String::new(),
+            };
+            s.commit("Reload Changed Files", replace).unwrap();
+            assert!(s.faces.index.get(a.0, &rect).is_none() && !s.faces.scanned.contains(a.0), "the old file's faces are forgotten");
+            assert!(needs_search(&s, s.catalog.photo(a).unwrap()), "and the photo is searched again");
+            assert!(s.faces.index.get(b.0, &rect).is_some() && s.faces.scanned.contains(b.0), "other photos keep theirs");
+            assert_eq!(ingest(&mut s, old), (0, 0), "a result made from the old file is dropped");
+            assert!(s.catalog.photo(a).unwrap().meta.regions.is_empty() && !s.faces.scanned.contains(a.0));
+            // what is made from the new file is taken in
+            let new = finished(&s, a, Some(vec![rect]), vec![(rect, Some(unit(&[(3, 1.0)])), rect)]);
+            assert_eq!(ingest(&mut s, new), (1, 0));
+            assert!(s.faces.scanned.contains(a.0) && s.faces.index.get(a.0, &rect).is_some());
             let _ = std::fs::remove_dir_all(&d);
         }
 
@@ -1046,6 +1202,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id?, index, name} — name a face region (null or empty clears it); undoable; the sidecar is not touched",
             super::always,
             set_name
+        ),
+        cmd!(
+            "faces.renamePerson",
+            "Rename Person",
+            [],
+            None,
+            "{from, to, merge?: bool} → {faces, photos, from, to, merged} — give every in-library face of `from` the name `to` (trimmed, any capitalization), one undo step; refused when `to` is already someone else unless `merge` is true, which combines the two; the sidecar is not touched",
+            super::always,
+            rename_person
         ),
     ]
 }

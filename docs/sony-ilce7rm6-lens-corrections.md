@@ -6,8 +6,10 @@ reaches the same **Optics ▸ Enable Lens Corrections** (`optics.lens_profile`) 
 RW2 distortion data. **Lateral CA is corrected on the raw mosaic, before demosaic** ([Lateral CA before
 demosaic](#lateral-ca-before-demosaic)), for every Bayer ILCE-7RM6 file framed 3:2. Enable Lens Corrections does not
 govern it (it governs distortion only), as Lightroom applies a raw's built-in corrections whatever its profile
-switch says (inferred, as for imported presets' `LensProfileEnable=0`). Vignetting is read but not applied (below).
-The conversion is verified on the **ILCE-7RM6** only; the ILCE-7RM4A has its own conversion, with other conventions
+switch says (inferred, as for imported presets' `LensProfileEnable=0`). As the warp's red and blue planes, after
+demosaic, it made the render's CA worse (Verification), so those planes stay off. Vignetting is read but not applied
+(below). The conversion is verified on the **ILCE-7RM6** and, for distortion only, the **ILCE-6700**
+([ILCE-6700](#ilce-6700)); the ILCE-7RM4A has its own conversion, with other conventions
 ([Two conventions](#two-conventions)), and other Sony bodies' tables give no correction until they are verified.
 
 The correction is on by default for new imports, as for any file with embedded lens data (`Photo::camera_defaults`).
@@ -132,14 +134,68 @@ DNG.
 
 ## Which bodies get it
 
-Only bodies listed in `FULL_FRAME_CROP` (`arw_lens_rm6.rs`) get an opcode and the CA map: today `ILCE-7RM6` (9984 ×
-6656). The unit and
-the knot spacing are verified on that body alone; the spacing is defined by its full-frame crop, and a body with
-another sensor size or another unit would be warped wrongly. Other bodies get no correction from this conversion; the
-ILCE-7RM4A gets its own, with other conventions (below). To add a body: collect photos of it shot with distortion
+Only bodies on one of two allowlists in `arw_lens_rm6.rs` get an opcode: `FULL_FRAME_CROP` (today `ILCE-7RM6`,
+9984 × 6656) and `APSC_BODIES` (today `ILCE-6700`, below); only `FULL_FRAME_CROP` bodies get the CA map. The unit and
+the knot spacing are verified per body; a body
+with another sensor size or another unit would be warped wrongly. Other bodies get no correction from this conversion;
+the ILCE-7RM4A gets its own, with other conventions (below). To add a body: collect photos of it shot with distortion
 correction on (several lenses and focal lengths), repeat the camera-JPEG registration below against the uncorrected
-render, confirm the unit, the knot spacing and the zoom rule (or measure the body's own), then add its full-frame
-default crop to the table with a test.
+render, confirm the unit, the knot spacing and the zoom rule (or measure the body's own). Then add a full-frame body's
+default crop to `FULL_FRAME_CROP`, or an APS-C body whose knots span its own crop (as measured for the ILCE-6700) to
+`APSC_BODIES`, with a test; an APS-C body also needs its fit gate checked against the camera JPEG (see *ILCE-6700*).
+
+For bodies in `APSC_BODIES` (today `ILCE-6700`), the knots span the file's own default crop: spacing = its half
+diagonal / (knot count − 1). This crop-based rule applies only to that list. The ILCE-7RM6 keeps its sensor-fixed
+400 px in both modes; in full frame (16 knots) the crop-based rule gives the same 400 px, and in its APS-C mode
+(11 knots) it would give 392 px, which was only an alternative measurement there (it fits as well, above).
+
+## ILCE-6700
+
+The ILCE-6700 (APS-C, 6192 × 4128 default crop) writes 11-knot tables like the ILCE-7RM6's APS-C mode. Measured as
+above on 30 photos shot with distortion correction Auto: Sigma 10–18 mm F2.8 DC DN (9 photos, 10–18 mm), Tamron
+17–70 mm F2.8 B070 (13, 17–70 mm) and Sony E 70–350 mm G (8, 70–350 mm), all private, only the summary numbers here.
+The convention is the ILCE-7RM6's (corrected-radius index, unit 15000, frame-filling zoom), with the knot spacing
+the APS-C half diagonal / 10 = 372.09 px:
+
+| | p95 residual at 1440 px |
+|---|---|
+| Uncorrected | 3.8–5.6 px (19 photos; on the other 11 the shift exceeds the method's ±20 px search) |
+| Sensor-fixed 400 px (the ILCE-7RM6's pixel spacing) | 0.56–3.71 px (passes only at 10 mm) |
+| **Half diagonal / 10 = 372 px, unit 15000** (exact table) | **0.23–0.68 px on 27 photos (median 0.43); 1.34–1.42 px on the three 10 mm photos** |
+| The same as LightCraft renders it (`lightcraft-cli render`, Enable Lens Corrections on, fitted polynomial) | **0.22–0.73 px on 27 photos (median 0.44); 1.36–1.38 px at 10 mm** |
+
+Units 14000–17000 and a reading that drops the first table value as a non-knot (10 knots over the half diagonal,
+413 px) were also scanned; none keeps all 30 within 0.75 px, and 15000 gives the lowest worst case at 372 px. The
+residual is radial (tangential median ≤ 0.02 px, so the centre is right) and has the same shape on every lens,
+positive at mid radii and negative at the corners, growing with the table's magnitude (10 mm: last knot −1333, 1.3 px
+at the corners). Fitted per photo, the best spacing and unit trade off against each other and drift with the lens
+(10 mm about 400 px, 18 mm about 365 px): the same lens-dependent effect as the per-lens units above. The 10 mm end
+stays within the 0.5–1.5 px accepted for Nikon Z lenses (`docs/nikon-lens-corrections.md`) and removes about 75 % of
+the uncorrected 5.6 px.
+
+**Fit gate.** The 11 knots over the smaller crop bend more sharply than `WarpRectilinear`'s polynomial follows: on the
+decoded geometry (active area 6656 × 4608) it fits the 30 tables within 0.08–0.44 px, and 13 of them exceed the
+full-frame 0.25 px gate. Measured against the camera JPEG, the fitted polynomial is as good as the exact table (p95
+0.22–0.73 px against 0.23–0.68 px on the 27 photos, 1.35–1.38 px at 10 mm), so APS-C bodies use a 0.5 px gate
+(`APSC_FIT_ERROR_PX_AT_1440`).
+
+**Lens exception: Sigma 10–18 mm F2.8 DC DN at 10–10.5 mm** (`LENS_EXCEPTIONS`, matched on Exif `LensModel`
+`10-18mm F2.8 DC DN | Contemporary 023` and `FocalLength` ≤ 10.5 mm). Its wide end keeps 1.36–1.38 px under the
+body's rule. On 115 further private photos of this lens (97 at 10 mm, 2 at 10.4–10.5 mm, 16 at 11.7–12.5 mm), a grid
+over spacing 372–426 px and unit 14000–16500 was measured on the exact table. The photos at 10 mm were split by
+shooting location: 63 to choose the values, 34 to check them. A larger spacing with a smaller unit fits about as well
+(a ridge in the grid): 420 px / 14000 was best on the 63 choice photos (0.445 px worst) but put 2 of the 34 check photos
+above 0.75 px, so the pick is **416 px / 14250**, within 0.51 px on both sets.
+As rendered (`lightcraft-cli render`, Enable Lens Corrections on):
+
+| Sigma 10–18 mm | p95 at 1440 px |
+|---|---|
+| 10 mm, 97 photos (one night photo has too little detail to measure) | 0.38–0.55 px, median 0.44 (body's rule: about 1.4 px) |
+| 10.4–10.5 mm, 2 photos | 0.36 px |
+| 11.7–12.5 mm, 16 photos (body's rule, the exception does not apply) | 0.48–0.72 px, median 0.57 |
+
+At 11.7 mm and longer an exception of this kind fits worse than the body's rule (412 px / 14500 on the grid: 0.73–1.19 px against 0.48–0.69 px), so it stops at
+10.5 mm, the longest measured focal length where it helps; 10.6–11.6 mm is unmeasured and takes the body's rule.
 
 ## Two conventions
 
@@ -383,10 +439,18 @@ about 55 ms more per 1920 px render and about 2.9 s more per full-size render (n
 
 ## Limits
 
-- **ILCE-7RM6 only.** Other Sony bodies record the same tags; their knot spacing (defined here by the full-frame crop),
-  unit and zoom rule are unverified, so they get no correction from this conversion (the ILCE-7RM4A's distortion has
+- **ILCE-7RM6 and ILCE-6700 only.** Other Sony bodies record the same tags; their knot spacing (defined here by the
+  full-frame crop, or an APS-C body's own crop), unit and zoom rule are unverified, so they get no correction from this conversion (the ILCE-7RM4A's distortion has
   its own: [Two conventions](#two-conventions)).
-- **APS-C distortion is unverified in camera:** no APS-C photo with distortion correction on was available; the APS-C
+- **ILCE-6700 at strong barrel distortion:** the body's rule leaves 1.36–1.38 px at the Sigma 10–18 mm's 10 mm end;
+  that lens has a measured exception (above). The two public raw.pixls.us ILCE-6700 files (one scene, E 16–55 mm
+  F2.8 G at 16 mm, not used for fitting) both carry the same table (−1829 at the last knot). On the compressed file
+  the correction leaves p95 3.1 px (uncorrected 5.1 px, exact table 3.4 px); with the same spacing this lens fits at
+  unit 16000 (0.43 px), another lens-dependent unit (below). On the lossless file the table, on its padded
+  6656 × 4608 frame, misses the 0.5 px fit gate, so that photo stays uncorrected (5.3 px). Other wide lenses with
+  similarly strong tables are unmeasured. Its vignetting and lateral CA tables are read, not applied: measured in
+  #2801 (the camera JPEG doesn't compensate vignetting, as on the ILCE-7RM6).
+- **APS-C distortion is unverified in camera on the ILCE-7RM6:** no APS-C photo with distortion correction on was available; the APS-C
   knot spacing is verified on CA only, and the APS-C zoom follows the full-frame rule.
 - **Aspect-ratio crops** (in-camera 4:3, 16:9, 1:1) were not measured, so they get no correction: neither the
   distortion warp nor the CA map. Neither do linear (downsized lossless M and S) files, which have no mosaic.

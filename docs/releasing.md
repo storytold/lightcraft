@@ -64,6 +64,16 @@ whose glyph-coverage test checks the characters in available faces. `CRAFT_FONTS
 the native build fail if the pinned manifest lacks Noto Sans CJK SC Regular (`Hans`) or BIZ UDPGothic Regular;
 the web build requires BIZ UDPGothic Regular and packages Noto Sans CJK SC as a separate asset.
 
+Local macOS, Linux and Windows packaging scripts automatically use the sibling `../craft-fonts`
+checkout. If it is absent, they clone it at revision
+`b076417b5880bd4154bd22f00695b1d28c6bea83` (keep the pins in `packaging/fonts.sh` and
+`packaging/windows/fonts.ps1` in sync with the release workflow). Existing checkouts are left untouched.
+Set `CRAFT_FONTS_DIR` to use another
+checkout; relative paths resolve from the workspace root. The script requires the Chinese and Japanese
+UI faces and includes their OFL licences in the package. Download failures or incomplete checkouts
+stop packaging with an error. `--skip-build` (`-SkipBuild` on Windows) packages existing binaries without downloading fonts or
+changing what they embed; pass the same `CRAFT_FONTS_DIR` used to compile them so their licences ship.
+
 ## Signing credentials
 
 All credentials are stored as secrets in the GitHub `release` environment. Signing is optional:

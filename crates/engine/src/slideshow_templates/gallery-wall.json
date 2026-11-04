@@ -1,0 +1,20 @@
+{
+  "format": "lightcraft.slideshowTemplate",
+  "version": 1,
+  "name": "Gallery Wall",
+  "description": "A light grey wall with a white mat and a soft shadow; the caption and the rating under the photo.",
+  "playback": {"slideDuration": 5, "fadeDuration": 1.2, "fadeColor": null, "randomOrder": false, "repeat": true},
+  "layout": {
+    "linkMargins": false, "marginLeft": 0.1, "marginRight": 0.1, "marginTop": 0.08, "marginBottom": 0.16,
+    "strokeBorder": true, "strokeColor": "#ffffff", "strokeWidth": 0.012,
+    "castShadow": true, "shadowOpacity": 0.35, "shadowOffset": 0.012, "shadowRadius": 0.02, "shadowAngle": -60,
+    "backdropColor": "#dcd9d4"
+  },
+  "overlays": {
+    "ratingStars": {"enabled": true, "color": "#55524d", "size": 0.03, "anchor": "bottomRight", "offsetX": 0, "offsetY": 0.075, "relativeTo": "photo"},
+    "texts": [
+      {"text": "{caption}", "size": 0.032, "color": "#3c3a36", "opacity": 1, "anchor": "bottomLeft", "offsetX": 0, "offsetY": 0.08, "relativeTo": "photo", "shadow": false}
+    ]
+  },
+  "titles": {}
+}
