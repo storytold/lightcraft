@@ -1222,3 +1222,21 @@ fn enter_keywords_gives_up_an_edit_when_the_selection_is_cleared() {
     assert!(none_has(&h, &ids, "harbor"), "the edit was not applied when the photos came back");
     assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"]);
 }
+
+/// An edit kept while its box was hidden with its panel is given up when other photos are selected
+/// meanwhile, even when the first photos are selected again before the box comes back.
+#[test]
+fn enter_keywords_gives_up_a_hidden_edit_when_the_selection_changes_meanwhile() {
+    let (mut h, ids) = two_selected();
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "ui.set", json!({"right": "info"}));
+    h.step();
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": [ids[1]]}}));
+    h.step();
+    ask(&mut h, "engine.execute", json!({"command": "library.select", "params": {"ids": ids}}));
+    h.step();
+    ask(&mut h, "ui.set", json!({"right": "keywords"}));
+    h.step();
+    assert!(none_has(&h, &ids, "harbor"), "the edit was not applied when the box came back");
+    assert_eq!(enter_text(&mut h), "beach, Weddings*", "the box shows the photos' keywords");
+}

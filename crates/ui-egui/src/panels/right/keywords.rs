@@ -285,9 +285,19 @@ fn leave_enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &
 }
 
 /// Gives up an Enter Keywords edit, applied or not, and the cursor in its box.
-pub(super) fn give_up_enter_keywords(ui: &mut egui::Ui) {
-    ui.memory_mut(|m| m.surrender_focus(crate::text_field::id(ENTER_FIELD)));
-    ui.data_mut(|d| d.remove::<EnterEdit>(enter_id()));
+fn give_up_enter_keywords(ctx: &egui::Context) {
+    ctx.memory_mut(|m| m.surrender_focus(crate::text_field::id(ENTER_FIELD)));
+    ctx.data_mut(|d| d.remove::<EnterEdit>(enter_id()));
+}
+
+/// Gives up an Enter Keywords edit once the selection or the library differs from the one it was
+/// started on, whether its box is drawn or not: the same photos selected again later do not bring
+/// it back.
+pub(crate) fn forget_stale_enter_keywords(app: &LightcraftApp, ctx: &egui::Context) {
+    let Some(edit) = ctx.data(|d| d.get_temp::<EnterEdit>(enter_id())) else { return };
+    if !edit.is_for(app, crate::key_of(app.session.selected())) {
+        give_up_enter_keywords(ctx);
+    }
 }
 
 /// Enter Keywords: the selection's keywords as text, separated by commas, one only some of the

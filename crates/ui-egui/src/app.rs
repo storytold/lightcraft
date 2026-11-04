@@ -614,6 +614,7 @@ impl LightcraftApp {
             frame_rate::forget(ctx);
         }
         panels::edit::wheel_pointer_frame_end(ctx);
+        panels::right::forget_stale_enter_keywords(self, ctx);
         ctx.output(|o| {
             for c in &o.commands {
                 if let egui::OutputCommand::CopyText(text) = c {

@@ -26,6 +26,7 @@ use history::{activity, versions};
 use info::info;
 #[cfg(test)]
 pub(crate) use info::mixed_meta;
+pub(crate) use keywords::forget_stale_enter_keywords;
 use keywords::keywords;
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -35,8 +36,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // (taken on every pass the panel is drawn; one from earlier than the pass before is forgotten)
         let held = held_offset(ui.ctx());
         let Some(id) = app.session.active() else {
-            // (no selection: an Enter Keywords edit is given up, as another selection gives it up)
-            keywords::give_up_enter_keywords(ui);
             // the Keyword List is the library's, not a photo's: it is there without a selection
             if app.ui.right == RightPanel::Keywords {
                 // (without a selection there is no Add keyword box for Add Keywords to put the cursor in)
