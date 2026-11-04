@@ -678,12 +678,19 @@ mod tests {
             let input = read_payload(&mut reader, bytes, 4 * T * T).unwrap();
 
             // This exceeds the greeting's deadline but remains within the normal idle timeout.
-            std::thread::sleep(Duration::from_millis(300));
+            std::thread::sleep(Duration::from_millis(1000));
             let output = model(2.0)(&input).unwrap();
             write_payload(&mut stream, json!({"ok": true, "tile": T}), &output).unwrap();
         });
-        let remote = remote_with_header_timeout(&addr, Duration::from_millis(100));
+        let remote = remote_with_header_timeout(&addr, Duration::from_millis(500));
         remote.hello().unwrap();
+
+        let pooled_read_timeout = {
+            let pool = remote.pool.lock().unwrap_or_else(PoisonError::into_inner);
+            let (reader, _) = pool.first().expect("hello should retain its connection in the pool");
+            reader.get_ref().read_timeout().expect("pooled socket should expose its read timeout")
+        };
+        assert_eq!(pooled_read_timeout, Some(remote.timeout));
 
         let input = tile_input(0.3);
         let result = remote.try_run(&input).unwrap().unwrap();
