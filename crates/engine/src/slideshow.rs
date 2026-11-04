@@ -109,7 +109,7 @@ impl PlaybackSettings {
                 "manual" => s.manual = boolean(k, v)?,
                 "panAndZoom" => s.pan_and_zoom = boolean(k, v)?,
                 "panAndZoomAmount" => match v.as_f64() {
-                    Some(x) if x.is_finite() => s.pan_and_zoom_amount = x,
+                    Some(x) if (0.0..=1.0).contains(&x) => s.pan_and_zoom_amount = x,
                     _ => return Err(format!("`{k}` must be a finite number from 0 (low) to 1 (high), not {v}")),
                 },
                 other => {

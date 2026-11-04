@@ -293,8 +293,13 @@ fn pan_and_zoom_settings_round_trip_and_are_checked() {
     let m = d.merged(&json!({"panAndZoom": true, "panAndZoomAmount": 0.8})).unwrap();
     assert!(m.pan_and_zoom);
     assert_eq!((m.to_json()["panAndZoom"].clone(), m.to_json()["panAndZoomAmount"].clone()), (json!(true), json!(0.8)));
-    assert_eq!(d.merged(&json!({"panAndZoomAmount": 3})).unwrap().pan_and_zoom_amount, 1.0, "clamped");
-    assert_eq!(d.merged(&json!({"panAndZoomAmount": -1})).unwrap().pan_and_zoom_amount, 0.0);
+    for out in [json!(3), json!(-1), json!(1.0001), json!(-0.0001)] {
+        assert!(d.merged(&json!({"panAndZoomAmount": out})).is_err(), "{out} is outside 0 to 1");
+    }
+    assert_eq!(d.merged(&json!({"panAndZoomAmount": 0})).unwrap().pan_and_zoom_amount, 0.0);
+    assert_eq!(d.merged(&json!({"panAndZoomAmount": 1})).unwrap().pan_and_zoom_amount, 1.0);
+    let saved = PlaybackSettings { pan_and_zoom_amount: 3.0, ..d.clone() }.sanitized();
+    assert_eq!(saved.pan_and_zoom_amount, 1.0, "a saved value outside the range is clamped when read");
     assert!(d.merged(&json!({"panAndZoom": "on"})).is_err());
     assert!(d.merged(&json!({"panAndZoomAmount": "high"})).is_err());
     let s = PlaybackSettings { pan_and_zoom_amount: f64::NAN, ..d.clone() }.sanitized();
