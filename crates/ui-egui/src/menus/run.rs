@@ -457,7 +457,8 @@ fn ui_commands_3(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                 // Through `slideshow::end`: it also releases the held slide textures. Clearing the
                 // two fields directly left every rendered slide in the renderer.
                 crate::panels::slideshow::end(app);
-            } else {
+            } else if app.session.active().is_some() {
+                crate::panels::slideshow::begin_full_screen_preview(app);
                 app.ui.fullscreen = true;
                 app.ui.zoom = Zoom::Fit;
                 app.ui.tool.clear();
@@ -479,7 +480,8 @@ fn ui_commands_3(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         "view.enterFullScreen" => {
             // applied by the host's frame logic (it knows the window's current state)
             let on = p.get("on").and_then(Value::as_bool);
-            app.ui.window_fullscreen = Some(on.unwrap_or(!app.window_is_fullscreen));
+            let current = app.ui.window_fullscreen.unwrap_or(app.window_is_fullscreen);
+            app.ui.window_fullscreen = Some(on.unwrap_or(!current));
             Ok(json!({"windowFullscreen": app.ui.window_fullscreen}))
         }
         "view.infoOverlay" => {

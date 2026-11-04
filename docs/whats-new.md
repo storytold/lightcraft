@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-11-04
+
+### Full Screen Preview enters native full screen
+- Pressing F now opens the photo-only preview and asks the operating system to make the window full screen. Press F
+  again or Escape to leave; if the preview changed a windowed window to full screen, LightCraft restores the windowed
+  state. A window that was already full screen stays that way. The full-screen preview layout still leaves room below
+  the macOS window controls when the window remains in its windowed presentation.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III

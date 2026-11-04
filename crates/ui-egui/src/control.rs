@@ -418,8 +418,14 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                     u.toast = app.ui.toast.clone();
                     u.dialog = app.ui.dialog.clone();
                     u.status = app.ui.status.clone();
+                    let ends_full_screen = app.ui.fullscreen && !u.fullscreen;
+                    u.window_fullscreen = app.ui.window_fullscreen;
+                    u.full_screen_preview_window_was_fullscreen = app.ui.full_screen_preview_window_was_fullscreen;
                     crate::docking::cancel_replaced_gesture(app, u.docking.as_ref());
                     app.ui = u;
+                    if ends_full_screen {
+                        crate::panels::slideshow::end(app);
+                    }
                     crate::i18n::set_language(app.ui.language);
                     ctx.request_repaint();
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())
