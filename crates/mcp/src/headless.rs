@@ -29,7 +29,9 @@ impl Drop for Headless {
 
 impl Default for Headless {
     fn default() -> Self {
-        let session = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models();
+        // the lens database the desktop app downloaded, when it is there (a headless session never fetches it)
+        let session =
+            Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models().with_default_lens_database();
         Self::new(session.with_default_sam3_model().with_default_slide_templates())
     }
 }
@@ -202,6 +204,15 @@ pub fn write_image(path: &Path, img: &Rgba8, quality: u8) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A headless session reads the lens database the desktop app downloaded, as the desktop does (the same raw gets
+    /// the same profile everywhere), but never fetches it by itself.
+    #[test]
+    fn a_headless_session_reads_the_downloaded_lens_database() {
+        let h = Headless::default();
+        assert_eq!(lightcraft_engine::lens_profiles::host_dir(), lightcraft_engine::lensfun_download::default_dir());
+        assert!(!h.session.lens_auto_download, "selecting it is not permission to download it");
+    }
 
     #[test]
     fn folder_discovery_matches_engine_extensions() {
