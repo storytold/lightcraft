@@ -114,7 +114,9 @@ impl PhotoSize {
     }
 
     /// The bytes it holds at the peak of its decode, its frame included (`preview`: a preview's
-    /// decode, which demosaics a raw's whole active area).
+    /// decode, which demosaics a raw's whole active area). A JPEG a preview decodes at a reduced
+    /// DCT scale is still counted at full size: a deliberate margin, since the scale depends on details
+    /// the catalog doesn't keep (the format, whether it's progressive).
     pub(crate) fn decoding(self, edge: Option<usize>, preview: bool) -> f64 {
         let resample = if self.reduced(edge) { RESAMPLE_BYTES } else { 0.0 };
         // a raw demosaicing more than its picture holds the demosaiced active area beside its

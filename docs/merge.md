@@ -117,7 +117,7 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   floor was kept whatever the memory, and could run out of it).
 - Photos for a panorama that don't fit at full size are decoded smaller, but only while the stitch still reaches
   its floor (which follows the photos' own size, not the smaller frames'); a merge that would have to go below it is
-  refused before any photo is read. They keep at least twice the floor's pixels (a panorama is taken to keep half
+  refused before any photo is decoded (only the header of a photo the catalog has no size for is read first). They keep at least twice the floor's pixels (a panorama is taken to keep half
   its frames' pixels, their overlap aside; for an HDR panorama, in whichever bracket makes the fewest), and a
   panorama of smaller frames that still comes out under its floor (the overlap is known only after the stitch) is
   refused then. They are decoded as large as fits and still leaves the panorama as large as

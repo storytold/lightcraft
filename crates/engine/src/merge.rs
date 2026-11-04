@@ -51,6 +51,27 @@ pub enum MergeKind {
 }
 
 impl MergeKind {
+    /// Refuse what the options alone rule out, before any photo is read: a panorama cap below the
+    /// 0.1 MP the stitch makes at the least (`parse` refuses it too; a [`MergeKind`] can also be built
+    /// directly), and an HDR panorama whose set bracket doesn't divide the photos into at least two
+    /// positions (a bracket left to EXIF is checked once the photos are read).
+    pub(crate) fn check_before_reading(&self, photos: usize) -> std::result::Result<(), String> {
+        let pano = match self {
+            MergeKind::Panorama { pano } | MergeKind::HdrPanorama { pano, .. } => pano,
+            MergeKind::Hdr { .. } => return Ok(()),
+        };
+        if pano.max_megapixels > 0.0 && pano.max_megapixels < 0.1 {
+            return Err(format!("maxMegapixels: {} is below the 0.1 MP a panorama has at the least", pano.max_megapixels));
+        }
+        if let MergeKind::HdrPanorama { bracket, .. } = self
+            && *bracket >= 2
+            && (!photos.is_multiple_of(*bracket) || photos / *bracket < 2)
+        {
+            return Err(format!("{photos} photos don't form brackets of {bracket} for at least two positions"));
+        }
+        Ok(())
+    }
+
     fn suffix(&self) -> &'static str {
         match self {
             MergeKind::Hdr { .. } => "HDR",
@@ -231,6 +252,8 @@ impl MergeJob {
         if self.sources.len() < self.kind.min_photos() {
             return Err(format!("select at least {} photos", self.kind.min_photos()));
         }
+        // what can be refused from the options alone is refused before any photo is read
+        self.kind.check_before_reading(self.sources.len())?;
         if !progress(0.0, "Reading photos") {
             return Err("cancelled".into());
         }

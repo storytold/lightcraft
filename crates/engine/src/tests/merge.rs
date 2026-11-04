@@ -540,6 +540,32 @@ fn a_refused_merge_decodes_nothing() {
     }
 }
 
+/// What the options alone rule out is refused before any photo is read: brackets of 4 that don't
+/// divide six photos into positions, and (a `MergeKind` built directly, not through `parse`) a
+/// panorama cap below the 0.1 MP the stitch makes at the least.
+#[test]
+fn options_that_cant_work_are_refused_before_any_photo_is_read() {
+    use std::sync::atomic::Ordering;
+    let known = || photos_24mp(6).into_iter().map(Some).collect::<Vec<_>>();
+    let (job, reads) = counted_job(hdr_panorama(4), known(), None, 1e12);
+    let e = job.run(&|_, _| true).err().unwrap_or_default();
+    assert!(e.contains("don't form brackets of 4"), "{e}");
+    assert_eq!(reads.load(Ordering::SeqCst), 0, "no photo read");
+    let tiny = lightcraft_merge::PanoOptions { max_megapixels: 0.05, ..Default::default() };
+    for kind in [
+        crate::merge::MergeKind::Panorama { pano: tiny.clone() },
+        crate::merge::MergeKind::HdrPanorama { hdr: lightcraft_merge::HdrOptions::default(), pano: tiny.clone(), bracket: 3 },
+    ] {
+        let (job, reads) = counted_job(kind.clone(), known(), None, 1e12);
+        let e = job.run(&|_, _| true).err().unwrap_or_default();
+        assert!(e.contains("below the 0.1 MP"), "{kind:?}: {e}");
+        assert_eq!(reads.load(Ordering::SeqCst), 0, "{kind:?}: no photo read");
+    }
+    // brackets of 3 divide six photos into two positions: on to reading them (which can't here)
+    let (job, _) = counted_job(hdr_panorama(3), known(), None, 1e12);
+    assert_eq!(job.run(&|_, _| true).err().as_deref(), Some("/photos/0.ARW: read"));
+}
+
 /// Three 480 × 320 bracketed DNGs in a library, and a merge of them planned by the session.
 fn bracketed_dngs(tag: &str) -> (std::path::PathBuf, crate::merge::MergeJob) {
     let dir = temp_dir(tag);
