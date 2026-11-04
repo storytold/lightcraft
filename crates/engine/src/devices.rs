@@ -287,11 +287,14 @@ mod tests {
             c.fetch_add(1, Ordering::SeqCst);
         });
         // cold: served at once (empty) while one scan runs in the background
+        let t0 = std::time::Instant::now();
         for _ in 0..50 {
             assert!(watch.get().is_empty());
         }
         // the scan is still held: a get() that waited for it could not have returned yet
         assert_eq!(finished.load(Ordering::SeqCst), 0, "get() waited for the scan");
+        // nor did any wait a bounded while first (the menus call get() every frame)
+        lightcraft_testkit::assert_responsive(t0, "50 cold DeviceWatch::get() calls");
         assert!(watch.refreshing());
         gate.store(true, Ordering::SeqCst);
         assert!(until(|| !watch.refreshing()));
@@ -301,7 +304,9 @@ mod tests {
         gate.store(false, Ordering::SeqCst);
         mounted.lock().unwrap().push(card("EOS_DIGITAL"));
         std::thread::sleep(Duration::from_millis(40));
+        let t1 = std::time::Instant::now();
         assert!(watch.get().is_empty(), "the old list is served while rescanning");
+        lightcraft_testkit::assert_responsive(t1, "a warm DeviceWatch::get() during a rescan");
         assert_eq!(finished.load(Ordering::SeqCst), 1, "warm get() waited for the rescan");
         gate.store(true, Ordering::SeqCst);
         assert!(until(|| changes.load(Ordering::SeqCst) == 1), "a changed scan notifies");

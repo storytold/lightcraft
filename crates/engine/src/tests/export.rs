@@ -1334,7 +1334,10 @@ mod apple_photos {
         });
         s.apple_photos = Some(runner);
         s.apple_photos_background = true; // as in the desktop app
+        let t0 = std::time::Instant::now();
         let r = s.execute("export.addToPhotos", &json!({"paths": paths, "album": "Slow"})).unwrap();
+        // no bounded wait in front of the background job either (the gate below can't see one)
+        lightcraft_testkit::assert_responsive(t0, "export.addToPhotos in the background");
         assert_eq!(r, json!({"job": 1, "running": true, "requested": 2, "album": "Slow"}));
         let status = |s: &mut Session| s.execute("export.photosImports", &json!({"job": 1})).unwrap();
         // Photos is held until `go`: had the call waited for it, the import would be over by now

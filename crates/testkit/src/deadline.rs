@@ -79,6 +79,24 @@ pub fn wait_until(timeout: Duration, what: &str, cond: impl FnMut() -> bool) {
     poll(scaled(timeout), &format!("{timeout:?} × {TIME_SCALE_ENV} {}", time_scale()), what, cond);
 }
 
+/// How long a call that must answer at once may take before [`assert_responsive`] fails the test.
+pub const RESPONSIVE: Duration = Duration::from_secs(2);
+
+/// A responsiveness guard, not a hang guard: fails the test when more than [`RESPONSIVE`] (stretched
+/// by `LIGHTCRAFT_TIME_SCALE`, never shrunk) has passed since `started`. For a call that must not wait
+/// on something slow and has no timed wait of its own to observe: the test's gate shows the call
+/// didn't wait for the slow side to finish, and this catches a bounded wait added in front of it
+/// (wait a few seconds, then go on), which the gate can't see. `what` names the call.
+#[track_caller]
+#[allow(clippy::panic)] // failing the test with what was slow is the point
+pub fn assert_responsive(started: Instant, what: &str) {
+    let limit = scaled(RESPONSIVE).max(RESPONSIVE);
+    let took = started.elapsed();
+    if took >= limit {
+        panic!("{what} took {took:.2?}, but it must answer at once (limit {limit:?}: {RESPONSIVE:?}, scaled, never shrunk)");
+    }
+}
+
 /// [`wait_until`] whose limit never shrinks below `timeout`: [`scaled`]`(timeout)` or `timeout`,
 /// whichever is longer. For a wait the test itself ends, such as a probe a worker holds until the
 /// test opens its gate: a `LIGHTCRAFT_TIME_SCALE` under 1 shortens the test's own limits, and must
@@ -171,6 +189,16 @@ mod tests {
         assert_eq!(scale_by(Duration::from_secs(10), f64::NAN), Duration::from_secs(10));
         assert_eq!(scale_by(Duration::from_secs(10), -1.0), Duration::from_secs(10));
         assert_eq!(scale_by(Duration::ZERO, 3.0), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_prompt_call_is_responsive_and_a_slow_one_fails_naming_it() {
+        super::assert_responsive(Instant::now(), "a prompt call");
+        let Some(long_ago) = Instant::now().checked_sub(Duration::from_secs(10_000)) else { return };
+        let failed = std::panic::catch_unwind(|| super::assert_responsive(long_ago, "the slow call"));
+        let message = failed.expect_err("a call 10,000 s ago isn't responsive");
+        let message = message.downcast_ref::<String>().map(String::as_str).unwrap_or_default();
+        assert!(message.contains("the slow call took") && message.contains("must answer at once"), "{message}");
     }
 
     #[test]
