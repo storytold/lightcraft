@@ -1484,6 +1484,30 @@ fn review_metadata_reread_refreshes_pixels_after_exif_changes() {
 }
 
 #[test]
+fn review_metadata_reread_keeps_the_camera_fields_its_reload_fills() {
+    let dir = temp_dir("review-reread-meta-fill");
+    let mut s = Session::new().with_fs();
+    let xmp = crop_packet(r#"crs:Exposure2012="0.3""#);
+    let id = import_jpeg(&mut s, &dir, "filled", 1, Some(&xmp));
+    assert!(s.catalog.photo(id).unwrap().meta.camera.is_empty(), "the synthetic JPEG names no camera");
+    // the changed file names its camera and lens, which the catalog lacks
+    let probe = s.media.file_probe.clone().unwrap();
+    s.media.file_probe = Some(std::sync::Arc::new(move |path: &str| {
+        let mut info = probe(path)?;
+        info.meta.camera = "Synthetic Camera".into();
+        info.meta.lens = "Synthetic Lens".into();
+        Ok(info)
+    }));
+    write_jpeg(&dir.join("filled.jpg"), 60, 40, 1);
+    let r = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(r["failed"].as_array().unwrap().is_empty(), "{r}");
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!((p.meta.camera.as_str(), p.meta.lens.as_str()), ("Synthetic Camera", "Synthetic Lens"));
+    assert_eq!(p.develop.light.exposure, 0.3, "and the sidecar's settings still apply");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn review_mirrored_sidecar_crops_use_exif_4_5_and_7() {
     for (exif, expected) in [(4, [0.1, 0.1, 0.6, 0.8]), (5, [0.2, 0.1, 0.9, 0.6]), (7, [0.1, 0.4, 0.8, 0.9])] {
         let dir = temp_dir(&format!("review-mirrored-crop-{exif}"));

@@ -997,7 +997,16 @@ impl Session {
         for warning in &mut warnings {
             warning.path = orig.to_string();
         }
-        content.push(self.sidecar_op(id, sc)?);
+        // the sidecar's metadata goes on top of the camera fields the reload just filled, not on
+        // the catalog's copy from before it (its `SetMeta` comes last and would empty them again)
+        let mut base = (**p).clone();
+        if let Some(meta) = content.iter().rev().find_map(|op| match op {
+            Op::SetMeta { id: of, meta } if *of == id => Some(meta),
+            _ => None,
+        }) {
+            base.meta = (**meta).clone();
+        }
+        content.push(self.sidecar_op_on(id, &base, sc));
         Ok(Some((Op::Batch { ops: content }, from, warnings)))
     }
 
@@ -1005,8 +1014,13 @@ impl Session {
     /// thread) to photo `id`: the sidecar wins. No file is read.
     pub fn sidecar_op(&self, id: PhotoId, sc: SidecarData) -> Result<Op> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        Ok(self.sidecar_op_on(id, p, sc))
+    }
+
+    /// [`Self::sidecar_op`] with `p` as photo `id`'s state before the sidecar is merged in.
+    fn sidecar_op_on(&self, id: PhotoId, p: &lightcraft_catalog::Photo, sc: SidecarData) -> Op {
         let sc = sc.resolve_label(&self.catalog);
-        let mut q = (**p).clone();
+        let mut q = p.clone();
         let develop_changed = merge_into(&mut q, &sc, &(self.clock)());
         let mut ops = vec![
             Op::SetRating { id, rating: q.rating },
@@ -1020,7 +1034,7 @@ impl Session {
         if develop_changed {
             ops.extend(self.develop_op(id, (*q.develop).clone(), "Read Metadata from File"));
         }
-        Ok(Op::Batch { ops })
+        Op::Batch { ops }
     }
 
     /// Auto-write: sidecars for photos changed by `ops` (errors are logged, not returned).
