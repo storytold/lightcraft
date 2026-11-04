@@ -85,24 +85,31 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   not patch synthesis.
 - *Create Stack*: the result goes on top of a collapsed stack of its sources (`Catalog::stack_with_ops`); its
   caption also lists them.
-- Memory is planned before a full-size merge decodes anything, from the photos' sizes in the catalog (or, when it
-  has none, their files' headers), against the merge's memory: three quarters of the RAM, less the cache budget.
-  Photos are decoded one at a time, at full size (~20 bytes a pixel beside the frames already held, 12 bytes a pixel
-  each). Issue #3708: until then a merge was sized only after every photo was decoded, which could run out of memory
-  first. A merge that fits runs as it always did; one whose header can't be read runs unplanned.
+- Memory is planned before a merge decodes anything (`crates/engine/src/merge/plan.rs`), from each photo's size and
+  file size in the catalog (when it has none, its file's header; when that can't be read either, the largest known),
+  against the merge's memory: three quarters of the RAM, less the cache budget. Each phase is followed in the order
+  it runs. Photos are decoded one at a time, always at full size, then made smaller: each holds its file and ~36 bytes
+  a pixel (48 when it is made smaller) beside the frames already held (12 bytes a pixel each). Issue #3708: until then
+  a merge was sized only after every photo was decoded, which could run out of memory first. A merge that fits runs
+  as it always did; one with no size known at all runs unplanned. Just before each photo is decoded its header is
+  read again: a file larger than the catalog says (changed since it was imported) is planned again, and when the
+  plan no longer holds the merge stops before decoding it, naming the file.
+- A preview's photos are decoded at full size too, several at once: one at a time when several don't fit, and the
+  preview is refused when not even one fits.
 - HDR memory: every frame is held as 32-bit float RGB (~0.86 GB per 67 MP frame at the peak, plus ~1.2 GB); full-size
   photos are decoded one at a time. Measured on 67 MP raws: 3 frames 3.8 GB, 4 frames 4.7 GB, 5 frames 5.5 GB (was
-  4.8 / 6.3 GB for 3 / 4); planned as 14 bytes a pixel of every photo and 20 of the largest. An HDR keeps its photos'
-  resolution: one that doesn't fit is refused with the memory it needs and has. Half-float frames would halve the
-  per-frame share.
+  4.8 / 6.3 GB for 3 / 4). Planned as 17 bytes a pixel of every frame and 12 of the largest, plus deghosting's 2048 px
+  maps (20 bytes a pixel): 3.9 / 5.0 / 6.1 GB for those without deghosting, 3–10 % above the measurements. An HDR
+  keeps its photos' resolution: one that doesn't fit is refused with the memory it needs and has. Half-float frames
+  would halve the per-frame share.
 - Panorama output keeps the photos' resolution, up to `maxMegapixels` (default 512) and what fits in the merge's
   memory: the blend peaks at ~68 bytes per output pixel, and projecting needs ~36 beside the photos' 12. When that is
   less than the photos' resolution, the result says `limit: "memory"`. It is made no smaller than its floor: 40 MP,
   or the smaller `maxMegapixels` asked for (at least 0.1 MP), or the photos' own pixels when they have less. A merge
   whose memory can't hold the floor is refused with the memory it needs and has (issue #3708; until then the 40 MP
   floor was kept whatever the memory, and could run out of it). Photos that don't fit at full
-  size (an HDR panorama holds all its brackets' photos before merging them) are decoded smaller, as large as fits
-  beside a panorama as large as they are, and never under 1024 px on the long side (the preview's frames): the result
-  says `limit: "memory"`, and `nativeMegapixels` is still the photos' own resolution. One that doesn't fit even then
-  is refused.
+  size are decoded smaller, as large as fits beside a panorama as large as they are, and never under 1024 px on the
+  long side (the preview's frames): the result says `limit: "memory"`, and `nativeMegapixels` is still the photos' own
+  resolution. One that doesn't fit even then is refused. An HDR panorama holds all its brackets' photos before merging
+  them, one bracket at a time; with the bracket left to EXIF, every size it could be is planned for.
 - The browser build has no file access for merges yet.
