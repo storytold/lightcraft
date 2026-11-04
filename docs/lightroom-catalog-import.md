@@ -102,12 +102,14 @@ copy's master gave the record, since Lightroom leaves settings at zero out of it
 without any, the record keeps what it has, and the result's warnings say what its XMP sidecar
 names that LightCraft doesn't apply (a camera profile, Upright geometry, unmapped adjustments).
 The catalog also keeps an XMP packet for each photo, which can be older than its develop settings. When
-the catalog has develop settings LightCraft can read, they win over that packet for every photo whose
-settings the import applies, a photo already in the library included: a setting they leave out is not
-taken from the packet (it is the camera's default on a photo the import adds, and what the photo had on
-one already in the library), and the packet gives only what LightCraft can't read from the develop
-settings (heal and clone spots), besides its metadata (title, caption, creator, location…). Without
-develop settings, or with ones that can't be read, the packet's settings apply as before.
+the catalog has develop settings LightCraft can read, they decide every setting they can carry, for every
+photo whose settings the import applies (a photo already in the library included, with `updateExisting`
+or when it has no edit of its own): a setting they leave out is at the camera's default, not what the
+packet or the photo had. The packet still gives the photo its metadata (title, caption, creator,
+location…) and what LightCraft can't read from the develop settings (heal and clone spots, and the parts of
+LightCraft's own settings they don't cover); the photo keeps the rest (its rotation in LightCraft, its
+process version). Without develop settings, or with ones that can't be read, the packet's settings apply
+as before.
 Any change after browsing, a rating or keyword included, makes a Local photo's settings count as
 existing. Persistent import
 identity prevents reimport from duplicating virtual copies and collections. One undo step reverses

@@ -2027,13 +2027,18 @@ fn oversized_optional_table_warns_and_is_skipped() {
 }
 
 /// A catalog XMP packet older than the develop text: settings Lightroom has since set back to zero
-/// (and so leaves out of the text) still at their old values, a spot (which only the XMP gives the
-/// import: the text's `RetouchAreas` isn't read), and metadata.
+/// (and so leaves out of the text) still at their old values, a mask, a spot (which only the XMP
+/// gives the import: the text's `RetouchAreas` isn't read), and metadata.
 const STALE_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"
  xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4" crs:Exposure2012="+2" crs:Clarity2012="+30" crs:Texture="+12" crs:LuminanceSmoothing="25">
  <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:title>
  <dc:creator><rdf:Seq><rdf:li>Example Photographer</rdf:li></rdf:Seq></dc:creator>
+ <crs:MaskGroupBasedCorrections><rdf:Seq>
+  <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="-0.25">
+   <crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Gradient" crs:FullX="0.1" crs:FullY="0.2" crs:ZeroX="0.3" crs:ZeroY="0.6"/></rdf:Seq></crs:CorrectionMasks>
+  </rdf:Description></rdf:li>
+ </rdf:Seq></crs:MaskGroupBasedCorrections>
  <crs:RetouchAreas><rdf:Seq>
   <rdf:li><rdf:Description crs:SpotType="heal" crs:SourceState="sourceSetExplicitly" crs:SourceX="0.45" crs:OffsetY="0.3" crs:Opacity="1" crs:Feather="0">
    <crs:Masks><rdf:Seq><rdf:li crs:What="Mask/Ellipse" crs:X="0.4" crs:Y="0.3" crs:SizeX="0.01" crs:SizeY="0.015"/></rdf:Seq></crs:Masks>
@@ -2051,17 +2056,18 @@ fn stale_xmp_catalog(settings: &str) -> CatalogImport {
     data
 }
 
-/// (exposure, clarity, texture, luminance noise reduction, spots) of `p`'s develop settings.
-fn stale_xmp_develop(p: &Photo) -> (f64, f64, f64, f64, usize) {
+/// (exposure, clarity, texture, luminance noise reduction, masks, spots) of `p`'s develop settings.
+fn stale_xmp_develop(p: &Photo) -> (f64, f64, f64, f64, usize, usize) {
     let d = &p.develop;
-    (d.light.exposure, d.effects.clarity, d.effects.texture, d.detail.nr_luminance, d.spots.len())
+    (d.light.exposure, d.effects.clarity, d.effects.texture, d.detail.nr_luminance, d.masks.len(), d.spots.len())
 }
 
-/// Lightroom leaves settings at zero out of a photo's develop text, and the catalog's XMP can be
-/// older than the text: the text wins for every setting it carries, and one it leaves out is at
-/// its default, not the XMP's value. The XMP still gives the photo its metadata and what the
-/// import can't read from the text (spots). For a record the import makes (here an offline
-/// original) and for every record found before it whose develop settings take the catalog's.
+/// Lightroom leaves settings at their defaults out of a photo's develop text, and the catalog's
+/// XMP can be older than the text: the text decides every setting it can carry, so one it leaves
+/// out is at its default, not the XMP's value nor what the record had. The XMP still gives the
+/// photo its metadata and what the import can't read from the text (spots). For a record the
+/// import makes (here an offline original) and for every record found before it whose develop
+/// settings take the catalog's.
 #[test]
 fn the_catalog_develop_text_wins_over_its_xmp() {
     let text = "s = { Exposure2012 = 0.5 }";
@@ -2073,9 +2079,10 @@ fn the_catalog_develop_text_wins_over_its_xmp() {
     got.push(("new record", stale_xmp_develop(p), p.meta.title.clone()));
     assert_eq!(p.meta.creator, "Example Photographer");
     assert_eq!(p.rating, 2, "the catalog's rating, over the XMP's");
-    // records there before: in the library unedited (Existing), browsed in Local and changed
-    // since (Promoted), and either with an edit made in LightCraft, which "update existing"
-    // replaces with the catalog's settings
+    // records there before, each with settings of its own the text leaves out (Clarity 15,
+    // Texture 5, a mask): in the library unedited (Existing), browsed in Local and changed since
+    // (Promoted), and either with an edit made in LightCraft, which "update existing" replaces
+    // with the catalog's settings
     let cases: [(&str, bool, bool, bool); 4] = [
         ("library, unedited", false, false, false),
         ("Local, changed", true, false, false),
@@ -2087,20 +2094,24 @@ fn the_catalog_develop_text_wins_over_its_xmp() {
         let id = library_photo(&mut s, "/missing/test.ARW", |p| {
             p.local = local;
             p.rating = 3;
+            let mask = json!({"masks": [{"name": "Sky", "components": [{"shape": {"kind": "linear", "start": {"x": 0.5, "y": 0.0}, "end": {"x": 0.5, "y": 0.5}}}]}]});
+            let mut d = p.develop.merged(&mask).unwrap();
+            d.effects.clarity = 15.0;
+            d.effects.texture = 5.0;
             if edited {
-                let mut d = (*p.develop).clone();
                 d.light.exposure = -1.0;
-                p.develop = Arc::new(d);
                 p.edited = Some("before".into());
             }
+            p.develop = Arc::new(d);
         });
+        assert_eq!(s.catalog.photo(id).unwrap().develop.masks.len(), 1, "{case}: the record's own mask");
         let r = apply(&mut s, stale_xmp_catalog(text), update_existing).unwrap();
         assert_eq!(r["preservedExistingEdits"], 0, "{case}");
         let p = s.catalog.photo(id).unwrap();
         got.push((case, stale_xmp_develop(p), p.meta.title.clone()));
     }
     let want = ["new record", "library, unedited", "Local, changed", "library, edited", "Local, edited"]
-        .map(|case| (case, (0.5, 0.0, 0.0, 0.0, 1), "Harbour at dawn".to_string()));
+        .map(|case| (case, (0.5, 0.0, 0.0, 0.0, 0, 1), "Harbour at dawn".to_string()));
     assert_eq!(got, want);
 }
 
@@ -2119,38 +2130,98 @@ fn a_kept_edit_takes_neither_the_catalog_text_nor_its_xmp() {
     let r = apply(&mut s, stale_xmp_catalog("s = { Exposure2012 = 0.5 }"), false).unwrap();
     assert_eq!(r["preservedExistingEdits"], 1);
     let p = s.catalog.photo(id).unwrap();
-    assert_eq!(stale_xmp_develop(p), (-1.0, 15.0, 0.0, 0.0, 0));
+    assert_eq!(stale_xmp_develop(p), (-1.0, 15.0, 0.0, 0.0, 0, 0));
     assert_eq!(p.meta.title, "Harbour at dawn");
 }
 
-/// Without develop text the catalog can read, its XMP is all there is: its settings apply, as
-/// before.
+/// Without develop text the catalog can read, its XMP is all there is: its settings apply, masks
+/// included, as before.
 #[test]
 fn without_readable_develop_text_the_catalog_xmp_develops_the_photo() {
     for text in ["", "s = {"] {
         let mut s = crate::Session::new();
         apply(&mut s, stale_xmp_catalog(text), false).unwrap();
         let p = s.catalog.photos().next().unwrap();
-        assert_eq!(stale_xmp_develop(p), (2.0, 30.0, 12.0, 25.0, 1), "text {text:?}");
+        assert_eq!(stale_xmp_develop(p), (2.0, 30.0, 12.0, 25.0, 1, 1), "text {text:?}");
         assert_eq!(p.meta.title, "Harbour at dawn", "text {text:?}");
     }
 }
 
 /// LightCraft's own settings in the catalog's XMP (`lc:settings`, kept there from a sidecar
-/// LightCraft wrote) are a whole develop older than the text, so the text wins over them too.
+/// LightCraft wrote) are older than the text too: the text decides what it carries (Clarity, at
+/// its default), and the rest of them (a spot) stays.
 #[test]
 fn the_catalog_develop_text_wins_over_lightcraft_settings_in_its_xmp() {
-    let mut old = lightcraft_develop::DevelopSettings::default();
-    old.effects.clarity = 30.0;
+    let spot = json!({"effects": {"clarity": 30.0}, "spots": [{"mode": "heal", "points": [{"x": 0.4, "y": 0.3}], "size": 0.01, "feather": 0.0, "opacity": 100.0, "source_offset": null}]});
+    let old = lightcraft_develop::DevelopSettings::default().merged(&spot).unwrap();
+    assert_eq!((old.effects.clarity, old.spots.len()), (30.0, 1));
     let meta = lightcraft_meta::Metadata { title: Some("Harbour at dawn".into()), ..Default::default() };
     let packet = lightcraft_meta::write_xmp(&meta, Some(&serde_json::to_string(&old).unwrap()));
-    for (text, clarity) in [("s = { Exposure2012 = 0.5 }", 0.0), ("", 30.0)] {
+    for (text, want) in [("s = { Exposure2012 = 0.5 }", (0.5, 0.0, 1)), ("", (0.0, 30.0, 1))] {
         let mut data = stale_xmp_catalog(text);
         data.photos[0].xmp = packet.clone();
         let mut s = crate::Session::new();
         apply(&mut s, data, false).unwrap();
         let p = s.catalog.photos().next().unwrap();
-        assert_eq!(p.develop.effects.clarity, clarity, "text {text:?}");
+        assert_eq!((p.develop.light.exposure, p.develop.effects.clarity, p.develop.spots.len()), want, "text {text:?}");
         assert_eq!(p.meta.title, "Harbour at dawn", "text {text:?}");
     }
+}
+
+/// A catalog XMP packet marked `crs:AlreadyApplied` (its settings are in the pixels) develops
+/// nothing, with or without develop text.
+#[test]
+fn an_already_applied_catalog_xmp_develops_nothing() {
+    for text in ["s = { Exposure2012 = 0.5 }", ""] {
+        let mut data = stale_xmp_catalog(text);
+        data.photos[0].xmp = STALE_XMP.replace(r#"xmp:Rating="4""#, r#"xmp:Rating="4" crs:AlreadyApplied="True""#);
+        let mut s = crate::Session::new();
+        apply(&mut s, data, false).unwrap();
+        let p = s.catalog.photos().next().unwrap();
+        let exposure = if text.is_empty() { 0.0 } else { 0.5 };
+        assert_eq!(stale_xmp_develop(p), (exposure, 0.0, 0.0, 0.0, 0, 0), "text {text:?}");
+        assert_eq!(p.meta.title, "Harbour at dawn", "text {text:?}");
+    }
+}
+
+/// What the develop text can write is what the import starts at the camera's defaults: every
+/// setting a text with each kind of field maps to (masks included) is among them, and a spot,
+/// which the text reader doesn't read, isn't written. If it ever is, `text_defaults` must name it.
+#[test]
+fn the_text_defaults_cover_everything_the_text_writes() {
+    let text = r#"s = { Exposure2012 = 0.5, Clarity2012 = 10, WhiteBalance = "Custom", Temperature = 5000, Tint = 3,
+        ConvertToGrayscale = true, HueAdjustmentRed = 4, GrayMixerBlue = 5, ParametricShadows = 6, ToneCurvePV2012 = {0,0,128,150,255,255},
+        ToneCurvePV2012Red = {0,0,255,255}, ToneCurvePV2012Green = {0,0,255,255}, ToneCurvePV2012Blue = {0,0,255,255},
+        ColorGradeMidtoneHue = 30, Sharpness = 40, PostCropVignetteAmount = -10, PostCropVignetteStyle = 2, GrainAmount = 5,
+        LensProfileEnable = 1, AutoLateralCA = 1, DefringePurpleAmount = 2, RedHue = 3, PerspectiveVertical = 4, PerspectiveUpright = 2,
+        HDREditMode = true, CropLeft = 0.1, CropTop = 0.1, CropRight = 0.9, CropBottom = 0.9, CropAngle = 2,
+        MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+            { What = "Mask/Gradient", FullX = 0.1, FullY = 0.2, ZeroX = 0.3, ZeroY = 0.6 } } } },
+        RetouchAreas = { { SpotType = "heal", Masks = { { What = "Mask/Ellipse", X = 0.4, Y = 0.3, SizeX = 0.01, SizeY = 0.01 } } } } }"#;
+    let (partial, _) = mapped_settings(text, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
+    assert!(partial.get("masks").is_some() && partial.get("spots").is_none(), "{partial}");
+    assert!(partial.pointer("/light/exposure").is_some() && partial.pointer("/crop/geometry").is_some() && partial.pointer("/curve/red").is_some());
+    let paths: Vec<&str> = text_paths().collect();
+    fn uncovered(v: &Value, at: &str, paths: &[&str], out: &mut Vec<String>) {
+        match v {
+            _ if paths.contains(&at) => {}
+            Value::Object(m) => m.iter().for_each(|(k, v)| uncovered(v, &if at.is_empty() { k.clone() } else { format!("{at}.{k}") }, paths, out)),
+            _ => out.push(at.to_string()),
+        }
+    }
+    let mut out = Vec::new();
+    uncovered(&partial, "", &paths, &mut out);
+    assert!(out.is_empty(), "the text writes {out:?}, which the import doesn't start at its default");
+    // and a photo with all of it (and a spot, a red eye, a rotation, which the text doesn't carry)
+    // starts at the camera's defaults for all of it, the rest kept
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "/a.dng".into() }, "a.dng", "DNG", 30, 20, "now");
+    p.kind = lightcraft_catalog::MediaKind::Raw;
+    p.as_shot_wb = Some((5200.0, 4.0));
+    p.develop = Arc::new(p.camera_defaults());
+    let others = json!({"orientation": Orientation::Rotate90, "spots": [{"mode": "heal", "points": [{"x": 0.4, "y": 0.3}], "size": 0.01, "feather": 0.0, "opacity": 100.0, "source_offset": null}]});
+    let start = p.develop.merged(&others).unwrap();
+    assert_eq!((start.spots.len(), start.orientation), (1, Orientation::Rotate90));
+    p.develop = Arc::new(start.merged(&partial).unwrap());
+    assert_ne!(*p.develop, start);
+    assert_eq!(at_text_defaults(&p).unwrap(), start);
 }

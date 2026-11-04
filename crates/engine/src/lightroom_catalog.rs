@@ -844,6 +844,37 @@ fn mapped(
     (partial, unknown)
 }
 
+/// Every develop setting a catalog's develop text can carry (dotted paths: `effects.clarity`): what
+/// the `crs:` mapping writes ([`crate::crs::mapped_paths`]) and the masks of the local corrections
+/// [`crate::preset_import::lua_settings_props`] reads (it reads no spots).
+fn text_paths() -> impl Iterator<Item = &'static str> {
+    crate::crs::mapped_paths().iter().map(String::as_str).chain(["masks"])
+}
+
+/// `p`'s develop settings with every setting a catalog's develop text can carry ([`text_paths`]) at
+/// the camera's default (`Photo::camera_defaults`), the others as they are.
+fn at_text_defaults(p: &Photo) -> Result<lightcraft_develop::DevelopSettings, String> {
+    let defaults = p.camera_defaults().to_json();
+    let mut out = p.develop.to_json();
+    for path in text_paths() {
+        let mut parts: Vec<&str> = path.split('.').collect();
+        let Some(leaf) = parts.pop() else { continue };
+        let value = defaults.pointer(&format!("/{}", path.replace('.', "/"))).cloned();
+        let mut at = &mut out;
+        for part in parts {
+            let Value::Object(fields) = at else { break };
+            at = fields.entry(part.to_string()).or_insert_with(|| json!({}));
+        }
+        let Value::Object(fields) = at else { continue };
+        match value {
+            Some(value) => fields.insert(leaf.to_string(), value),
+            // (a setting at its default isn't always written: left out, it reads as its default)
+            None => fields.remove(leaf),
+        };
+    }
+    lightcraft_develop::DevelopSettings::from_json(&out).map_err(|e| e.to_string())
+}
+
 /// Lightroom's `Adobe_images.orientation`: where the stored image's top-left and top-right corners
 /// land in the displayed photo, naming the displayed corners A, B, C, D clockwise from the top left
 /// (`AB` upright, `BC` a quarter turn clockwise, `DA` a quarter turn counter-clockwise, `BA` mirrored).
@@ -967,8 +998,8 @@ fn catalog_masks(partial: &mut Value, orientation: Orientation) {
 }
 
 /// The catalog's XMP masks in LightCraft's frame, as [`catalog_masks`] puts the develop row's: they
-/// are on the same stored image (the XMP gives masks only to a photo without develop text the
-/// import can read; the text's own replace them otherwise). The packet's
+/// are on the same stored image (they stay only on a photo without develop text the import can
+/// read: the text decides its masks otherwise). The packet's
 /// radials come fitted to the sidecar default aspect and `sidecar::merge_into` re-fits them to the
 /// photo's size, so they are fitted to the stored image to be turned (a quarter turn swaps the
 /// radii) and handed back in the default aspect, for that re-fit to undo.
@@ -1474,14 +1505,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         }
         let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
         let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
-        // The catalog's XMP can be older than its develop text, and the text leaves settings at
-        // zero out: the text, read, is the photo's develop settings, so the XMP gives only what the
-        // text can't carry (spot removal), with its metadata. A setting the text leaves out stays
-        // what the record has: the camera's defaults for a record the job made (above).
-        let text_read = matches!(settings, Some(Ok(_)));
-        let from_xmp = |crs: &str| !text_read || !crate::preset_import::lua_settings_carry(crs);
         if !src.xmp.is_empty() {
-            match crate::sidecar::parse_sidecar_where(&src.xmp, crate::crs::Target::for_photo(&p), from_xmp) {
+            match crate::sidecar::parse_sidecar(&src.xmp, crate::crs::Target::for_photo(&p)) {
                 Ok(mut sc) => {
                     if let Some(crate::sidecar::DevelopPatch::Partial(partial)) = &mut sc.develop {
                         strip_xmp_sentinels(partial);
@@ -1507,6 +1532,15 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         }
         match settings {
             Some(Ok(settings)) => {
+                // The develop text is the photo's settings, and Lightroom leaves a setting at its
+                // default out of it: so every setting the text can carry starts at the camera's
+                // default, not at what the record had or the catalog's XMP (older than the text, and
+                // merged above) said. The XMP still gives what the text can't (spots, LightCraft's
+                // own settings), and the record keeps the rest (its rotation, process version).
+                match at_text_defaults(&p) {
+                    Ok(develop) => p.develop = Arc::new(develop),
+                    Err(e) => warnings.push(format!("image {} settings: {e}", src.source_id)),
+                }
                 let (partial, unknown) = mapped(
                     settings,
                     crate::crs::Target::for_photo(&p),
