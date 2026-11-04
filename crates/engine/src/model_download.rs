@@ -71,17 +71,9 @@ impl Shared {
 const QUIT_WAIT: Duration = Duration::from_secs(1);
 
 /// The downloads of one session, by model id.
+#[derive(Default)]
 pub struct Downloads {
     jobs: HashMap<String, Arc<Shared>>,
-    /// How long dropping it waits for running downloads to stop: [`QUIT_WAIT`]. Tests give it a longer
-    /// one, so that a check that quitting doesn't wait it out can't be failed by a slow machine.
-    quit_wait: Duration,
-}
-
-impl Default for Downloads {
-    fn default() -> Self {
-        Self { jobs: HashMap::new(), quit_wait: QUIT_WAIT }
-    }
 }
 
 impl Downloads {
@@ -174,16 +166,34 @@ impl Downloads {
     }
 }
 
-impl Drop for Downloads {
-    /// Quitting while a download runs stops it instead of leaving it behind.
-    fn drop(&mut self) {
+impl Downloads {
+    /// Tell every download to stop.
+    fn cancel_all(&self) {
         for job in self.jobs.values() {
             job.cancel.store(true, Ordering::Relaxed);
         }
+    }
+
+    /// Wait while a download still runs: `nap` waits a moment and says whether to look again. The
+    /// tests pass a `nap` that counts, which shows what quitting waits for without timing it.
+    fn wait_while_running(&self, mut nap: impl FnMut() -> bool) {
+        while self.running() && nap() {}
+    }
+}
+
+impl Drop for Downloads {
+    /// Quitting while a download runs stops it instead of leaving it behind, waiting [`QUIT_WAIT`] at most for it
+    /// to notice.
+    fn drop(&mut self) {
+        self.cancel_all();
         let started = web_time::Instant::now();
-        while self.running() && started.elapsed() < self.quit_wait {
+        self.wait_while_running(|| {
+            if started.elapsed() >= QUIT_WAIT {
+                return false;
+            }
             std::thread::sleep(Duration::from_millis(10));
-        }
+            true
+        });
     }
 }
 
@@ -407,24 +417,49 @@ mod tests {
         // a stand-in for the download thread: notices the cancel flag the way the downloader does
         let worker = shared.clone();
         let handle = std::thread::spawn(move || {
-            while !worker.cancel.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            lightcraft_testkit::wait_until(Duration::from_secs(10), "dropping tells the download to stop", || worker.cancel.load(Ordering::Relaxed));
             worker.set(State::Cancelled);
         });
         let mut d = Downloads::default();
         d.jobs.insert("m".into(), shared.clone());
         assert!(d.running());
-        // quitting may wait 20 s here (stretched by LIGHTCRAFT_TIME_SCALE, never shrunk): returning well inside
-        // that shows it waited only for the stand-in to stop, not out its limit
-        let quit_wait = lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
-        d.quit_wait = quit_wait;
-        let started = web_time::Instant::now();
         drop(d);
-        let waited = started.elapsed();
-        assert!(waited < quit_wait / 4, "quitting must not wait for a transfer to finish: {waited:?} (limit {quit_wait:?})");
-        assert_eq!(shared.get(), State::Cancelled);
+        // the stand-in ends only once it was told to stop (what quitting waits for: the next test)
         handle.join().unwrap();
+        assert_eq!(shared.get(), State::Cancelled);
+    }
+
+    /// Quitting tells a running download to stop and waits while it runs, no longer: the wait is counted in naps
+    /// (each 10 ms, up to [`QUIT_WAIT`]), not timed. Here the download stops during the first nap, so quitting naps
+    /// once; nothing running, it never naps.
+    #[test]
+    fn quitting_waits_only_while_a_download_still_runs() {
+        let shared = Arc::new(Shared::new(10));
+        let mut d = Downloads::default();
+        d.jobs.insert("m".into(), shared.clone());
+        d.cancel_all();
+        let mut naps = 0;
+        d.wait_while_running(|| {
+            naps += 1;
+            assert!(shared.cancel.load(Ordering::Relaxed), "the download is told to stop before quitting waits");
+            // (the download thread notices the cancel)
+            shared.set(State::Cancelled);
+            naps < 100
+        });
+        assert_eq!(naps, 1, "quitting kept waiting after the download stopped");
+        let mut naps = 0;
+        d.wait_while_running(|| {
+            naps += 1;
+            naps < 100
+        });
+        assert_eq!(naps, 0, "nothing runs: no wait");
+        let mut idle = Downloads::default();
+        idle.set_outcome("m", State::Failed("x".into()));
+        idle.wait_while_running(|| {
+            naps += 1;
+            naps < 100
+        });
+        assert_eq!(naps, 0, "a finished download is not waited for");
     }
 
     #[test]

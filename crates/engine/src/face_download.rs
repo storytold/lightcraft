@@ -67,21 +67,13 @@ impl Shared {
 }
 
 /// How long dropping [`Downloads`] (quitting) waits for its running downloads to notice the cancel.
+#[cfg(not(target_arch = "wasm32"))]
 const QUIT_WAIT: Duration = Duration::from_secs(1);
 
 /// The downloads of one session, by model id.
+#[derive(Default)]
 pub struct Downloads {
     jobs: HashMap<String, Arc<Shared>>,
-    /// How long dropping it waits for running downloads to stop: [`QUIT_WAIT`]. Tests give it a longer
-    /// one, so that a check that quitting doesn't wait it out can't be failed by a slow machine.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    quit_wait: Duration,
-}
-
-impl Default for Downloads {
-    fn default() -> Self {
-        Self { jobs: HashMap::new(), quit_wait: QUIT_WAIT }
-    }
 }
 
 impl Downloads {
@@ -187,22 +179,40 @@ impl Downloads {
     }
 }
 
-impl Drop for Downloads {
-    /// Quitting while a download runs stops it instead of leaving it behind.
-    fn drop(&mut self) {
+impl Downloads {
+    /// Tell every download to stop.
+    fn cancel_all(&self) {
         for job in self.jobs.values() {
             job.cancel.store(true, Ordering::Relaxed);
         }
-        // Give a running download a moment to notice. Not on the web: there are no download
-        // threads, and `Instant::now` / `thread::sleep` panic on wasm32 ("time not implemented"),
-        // which killed the page when a `Session` was replaced after its library failed to open
-        // (issue #1507).
+    }
+
+    /// Wait while a download still runs: `nap` waits a moment and says whether to look again. The
+    /// tests pass a `nap` that counts, which shows what quitting waits for without timing it.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn wait_while_running(&self, mut nap: impl FnMut() -> bool) {
+        while self.running() && nap() {}
+    }
+}
+
+impl Drop for Downloads {
+    /// Quitting while a download runs stops it instead of leaving it behind.
+    fn drop(&mut self) {
+        self.cancel_all();
+        // Give a running download a moment to notice ([`QUIT_WAIT`] at most). Not on the web: there
+        // are no download threads, and `Instant::now` / `thread::sleep` panic on wasm32 ("time not
+        // implemented"), which killed the page when a `Session` was replaced after its library
+        // failed to open (issue #1507).
         #[cfg(not(target_arch = "wasm32"))]
         {
             let started = std::time::Instant::now();
-            while self.running() && started.elapsed() < self.quit_wait {
+            self.wait_while_running(|| {
+                if started.elapsed() >= QUIT_WAIT {
+                    return false;
+                }
                 std::thread::sleep(Duration::from_millis(10));
-            }
+                true
+            });
         }
     }
 }
@@ -337,21 +347,21 @@ mod tests {
     }
 
     /// Dropping a `Downloads` with nothing running (every session has one) returns at once: the
-    /// wait for running threads is the only part that takes time, and the web has no threads.
+    /// wait for running threads is the only part that takes time, and the web has no threads. The
+    /// wait is counted in naps, not timed: it never naps.
     #[test]
     fn dropping_idle_downloads_returns_at_once() {
-        // each may wait 20 s (stretched, never shrunk) for a running download: returning well inside that shows
-        // nothing was waited for
-        let quit_wait = lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
-        let t = std::time::Instant::now();
-        let mut idle = Downloads::default();
-        idle.quit_wait = quit_wait;
-        drop(idle);
+        let mut naps = 0;
+        let mut count = || {
+            naps += 1;
+            naps < 100
+        };
+        Downloads::default().wait_while_running(&mut count);
         let mut d = Downloads::default();
-        d.quit_wait = quit_wait;
         d.set_outcome("m", State::Failed("x".into()));
-        drop(d);
-        assert!(t.elapsed() < quit_wait / 4, "{:?} (limit {quit_wait:?})", t.elapsed());
+        d.cancel_all();
+        d.wait_while_running(&mut count);
+        assert_eq!(naps, 0, "nothing runs: quitting waits for nothing");
     }
 
     #[test]
@@ -446,24 +456,36 @@ mod tests {
         // a stand-in for the download thread: notices the cancel flag the way the downloader does
         let worker = shared.clone();
         let handle = std::thread::spawn(move || {
-            while !worker.cancel.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            lightcraft_testkit::wait_until(Duration::from_secs(10), "dropping tells the download to stop", || worker.cancel.load(Ordering::Relaxed));
             worker.set(State::Cancelled);
         });
         let mut d = Downloads::default();
         d.jobs.insert("m".into(), shared.clone());
         assert!(d.running());
-        // quitting may wait 20 s here (stretched by LIGHTCRAFT_TIME_SCALE, never shrunk): returning well inside
-        // that shows it waited only for the stand-in to stop, not out its limit
-        let quit_wait = lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
-        d.quit_wait = quit_wait;
-        let started = std::time::Instant::now();
         drop(d);
-        let waited = started.elapsed();
-        assert!(waited < quit_wait / 4, "quitting must not wait for a transfer to finish: {waited:?} (limit {quit_wait:?})");
-        assert_eq!(shared.get(), State::Cancelled);
+        // the stand-in ends only once it was told to stop (what quitting waits for: the next test)
         handle.join().unwrap();
+        assert_eq!(shared.get(), State::Cancelled);
+    }
+
+    /// Quitting tells a running download to stop and waits while it runs, no longer: the wait is counted in naps
+    /// (each 10 ms, up to [`QUIT_WAIT`]), not timed. Here the download stops during the first nap, so quitting naps
+    /// once.
+    #[test]
+    fn quitting_waits_only_while_a_download_still_runs() {
+        let shared = Arc::new(Shared::new(10));
+        let mut d = Downloads::default();
+        d.jobs.insert("m".into(), shared.clone());
+        d.cancel_all();
+        let mut naps = 0;
+        d.wait_while_running(|| {
+            naps += 1;
+            assert!(shared.cancel.load(Ordering::Relaxed), "the download is told to stop before quitting waits");
+            // (the download thread notices the cancel)
+            shared.set(State::Cancelled);
+            naps < 100
+        });
+        assert_eq!(naps, 1, "quitting kept waiting after the download stopped");
     }
 
     #[test]
