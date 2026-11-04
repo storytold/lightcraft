@@ -4096,6 +4096,115 @@ mod tests {
         }
     }
 
+    /// HDR display output, zoomed in: past what the whole-frame render holds, the window of the
+    /// photo that is on screen is also rendered as linear float and goes to the HDR output's window
+    /// texture, so it isn't drawn clipped from the 8-bit window render.
+    #[test]
+    fn an_hdr_display_shows_the_zoomed_window_from_a_float_render() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Fake(Rc<RefCell<Vec<f32>>>);
+        impl crate::HdrOutput for Fake {
+            fn headroom(&mut self) -> Option<f32> {
+                Some(4.0)
+            }
+            fn upload(&mut self, _: usize, _: usize, _: &[f32]) -> Result<egui::TextureId, String> {
+                Ok(egui::TextureId::User(7))
+            }
+            fn upload_region(&mut self, width: usize, height: usize, rgb: &[f32]) -> Result<egui::TextureId, String> {
+                assert_eq!(rgb.len(), width * height * 3);
+                self.0.borrow_mut().push(rgb.iter().copied().fold(0.0, f32::max));
+                Ok(egui::TextureId::User(8))
+            }
+        }
+        let t = Duration::from_secs(10);
+        let uploads = Rc::new(RefCell::new(Vec::new()));
+        let services = crate::Services { png: None, hdr_output: Some(Box::new(Fake(uploads.clone()))), ..Default::default() };
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        app.ui.view = crate::state::ViewMode::PhotoGrid;
+        let mut h = Headless::new(app, [1000.0, 700.0], 1.0);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.request("engine.execute", json!({"command": "develop.hdr", "params": {"enabled": true}}), t);
+        h.request("engine.execute", json!({"command": "develop.set", "params": {"values": {"light.exposure": 2.0}}}), t);
+        // fit: no window render
+        h.settle(SETTLE);
+        assert!(uploads.borrow().is_empty() && h.app.hdr_region_wanted.is_none(), "fit view: whole-frame HDR only");
+        // far zoomed in: the window is rendered as float and shown from the HDR texture
+        h.request("ui.set", json!({"zoom": {"percent": 400.0}, "pan": [0.5, 0.5]}), t);
+        let shown = |h: &Headless| h.app.hdr_region_wanted.is_some_and(|(k, _)| h.app.renderer.hdr_region.is_some_and(|r| r.key == k));
+        assert!(h.step_until(SETTLE, shown), "the zoomed window is drawn from the HDR texture");
+        assert!(uploads.borrow().iter().any(|m| *m > 1.0), "highlights above SDR white in the window: {:?}", uploads.borrow());
+    }
+
+    /// Zoomed in, the float window render is only for an HDR edit on an HDR display; its upload
+    /// failing falls back to the 8-bit window; and a window that is no longer the one wanted is
+    /// dropped, not uploaded.
+    #[test]
+    fn the_hdr_window_follows_the_display_the_edit_and_what_is_wanted() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Fake(Option<f32>, bool, Rc<RefCell<u32>>);
+        impl crate::HdrOutput for Fake {
+            fn headroom(&mut self) -> Option<f32> {
+                self.0
+            }
+            fn upload(&mut self, _: usize, _: usize, _: &[f32]) -> Result<egui::TextureId, String> {
+                Ok(egui::TextureId::User(7))
+            }
+            fn upload_region(&mut self, _: usize, _: usize, _: &[f32]) -> Result<egui::TextureId, String> {
+                *self.2.borrow_mut() += 1;
+                if self.1 { Err("no texture".into()) } else { Ok(egui::TextureId::User(8)) }
+            }
+        }
+        let t = Duration::from_secs(10);
+        let zoomed = |headroom: Option<f32>, hdr_edit: bool, fail: bool| {
+            let calls = Rc::new(RefCell::new(0));
+            let services = crate::Services { png: None, hdr_output: Some(Box::new(Fake(headroom, fail, calls.clone()))), ..Default::default() };
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+            app.ui.view = crate::state::ViewMode::PhotoGrid;
+            let mut h = Headless::new(app, [1000.0, 700.0], 1.0);
+            h.request("ui.set", json!({"view": "detail"}), t);
+            if hdr_edit {
+                h.request("engine.execute", json!({"command": "develop.hdr", "params": {"enabled": true}}), t);
+                h.request("engine.execute", json!({"command": "develop.set", "params": {"values": {"light.exposure": 2.0}}}), t);
+            }
+            h.request("ui.set", json!({"zoom": {"percent": 400.0}, "pan": [0.5, 0.5]}), t);
+            (h, calls)
+        };
+        // an SDR display, or an SDR edit: no float window
+        for (headroom, hdr_edit) in [(None, true), (Some(4.0), false)] {
+            let (mut h, calls) = zoomed(headroom, hdr_edit, false);
+            h.settle(SETTLE);
+            assert!(h.app.hdr_region_wanted.is_none() && h.app.renderer.hdr_region.is_none() && *calls.borrow() == 0, "{headroom:?} {hdr_edit}");
+        }
+        // an upload that fails is not retried every frame, and the 8-bit window is drawn instead
+        let (mut h, calls) = zoomed(Some(4.0), true, true);
+        assert!(h.step_until(SETTLE, |h| h.app.renderer.hdr_region_tried.is_some()), "the failed upload is remembered");
+        h.settle(SETTLE);
+        assert!(h.app.renderer.hdr_region.is_none());
+        // (a different window of the same view is a new job, so it may be tried once more)
+        let tried = *calls.borrow();
+        for _ in 0..10 {
+            h.step();
+        }
+        assert_eq!(*calls.borrow(), tried, "a failed window is not retried every frame");
+        // a result for a window that is not the wanted one is dropped
+        let (mut h, calls) = zoomed(Some(4.0), true, false);
+        assert!(h.step_until(SETTLE, |h| h.app.renderer.hdr_region.is_some()));
+        let before = *calls.borrow();
+        let id = h.app.session.active().unwrap();
+        let deep = lightcraft_pipeline::DeepImage {
+            width: 1,
+            height: 1,
+            space: lightcraft_pipeline::OutputSpace::Srgb,
+            samples: lightcraft_pipeline::DeepSamples::F32(vec![0.0; 3]),
+        };
+        h.app.renderer.hdr_region_result = Some((id, 0xdead_beef, deep));
+        h.step();
+        assert!(h.app.renderer.hdr_region_result.is_none(), "taken");
+        assert_eq!(*calls.borrow(), before, "a stale window is not uploaded");
+    }
+
     /// HDR display output touches the loupe only: the navigator / filmstrip thumbnail and the
     /// loupe's 8-bit render of an HDR edit are the same pixels with and without an HDR display
     /// (8-bit SDR rendition, drawn at SDR white), so nothing but the loupe's HDR image can go

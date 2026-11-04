@@ -1,6 +1,6 @@
 # Lightroom parity checklist
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** minor (LR-VIEW-HDR-DISPLAY: BT.2100 PQ float fallback for GNOME / Mutter) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (LR-VIEW-HDR-DISPLAY: BT.2100 PQ float fallback for GNOME / Mutter; zoomed-in window in HDR) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 The measured, row-by-row checklist: one row per Lightroom feature, menu item and shortcut, what we
 have and what is missing. It answers *does the feature exist?* (feature breadth). Whether it is good
@@ -142,7 +142,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-VIEW-SECONDWINDOW | Second display window [Classic] | P2 | ✅ | `cmd:view.secondWindow`, `crates/ui-egui/src/panels/second.rs` | Window ▸ Second Window (⌘F11): the active photo fitted in its own native window with its own render (a floating panel where there are no native windows); loupe view only (no grid / compare / survey there) |
 | LR-VIEW-CLIPPING | Clipping indicators | P0 | ✅ | `cmd:view.clipping` | |
 | LR-VIEW-HISTOGRAM | Histogram | P0 | ✅ | `cmd:view.histogram`, `crates/ui-egui/src/panels/edit.rs`, `crates/pipeline/src/lib.rs` (`hdr_histogram`) | HDR edits: SDR on the left half, the HDR range (0 to 5 stops above SDR white, a fixed scale) on the right with the headroom limit marked; colour bar (white, or Visualize HDR range's colours when that is on) and SDR / HDR labels; no drag-to-adjust on the histogram; it follows slider drags live (a small render beside the drafts, `Slot::HdrHistogram`) and never drops to the SDR layout mid-drag |
-| LR-VIEW-HDR-DISPLAY | HDR display output | P2 | 🟡 | `apps/lightcraft/src/hdr_display.rs` (`levels`, `encode_pixel`, `WindowHdr`), `apps/lightcraft/src/hdr_probe.rs`, `vendor/egui-wgpu` (`hdr_surface_format`), `crates/ui-egui/src/panels/detail.rs` (`hdr_view_job`) | An HDR edit shows above SDR white on an HDR display (Windows HDR via scRGB; Wayland: headroom from the compositor's colour management, HDR metadata via `crates/hdrmeta`; macOS EDR, confirmed on an M1 Max Liquid Retina XDR screen): `Rgba16Float` extended-linear surface where offered, UI at paper white, highlights up to the display's headroom; SDR displays unchanged; `LIGHTCRAFT_HDR_DISPLAY=0` opts out; BT.2100 PQ float fallback where the compositor offers no extended-linear colour space (GNOME / Mutter); `--hdr-probe` diagnostic; the HDR button's tooltip says when the window shows the SDR rendition. Not yet: zoomed tiles, Before/After, Compare and the second window stay SDR; no HDR preview toggle (MENU-VIEW-HDR); the X11 / XWayland window is SDR |
+| LR-VIEW-HDR-DISPLAY | HDR display output | P2 | 🟡 | `apps/lightcraft/src/hdr_display.rs` (`levels`, `encode_pixel`, `WindowHdr`), `apps/lightcraft/src/hdr_probe.rs`, `vendor/egui-wgpu` (`hdr_surface_format`), `crates/ui-egui/src/panels/detail.rs` (`hdr_view_job`) | An HDR edit shows above SDR white on an HDR display (Windows HDR via scRGB; Wayland: headroom from the compositor's colour management, HDR metadata via `crates/hdrmeta`; macOS EDR, confirmed on an M1 Max Liquid Retina XDR screen): `Rgba16Float` extended-linear surface where offered, UI at paper white, highlights up to the display's headroom; SDR displays unchanged; `LIGHTCRAFT_HDR_DISPLAY=0` opts out; BT.2100 PQ float fallback where the compositor offers no extended-linear colour space (GNOME / Mutter); `--hdr-probe` diagnostic; the HDR button's tooltip says when the window shows the SDR rendition. The zoomed-in window on screen is also a float render (`Slot::HdrRegion`). Not yet: Before/After, Compare and the second window stay SDR; no HDR preview toggle (MENU-VIEW-HDR); the X11 / XWayland window is SDR |
 
 ## D. Search & filter (FILT)
 
@@ -798,6 +798,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | patch | LR-EXP-TYPE: opaque 8-bit PNG/TIFF/WebP use RGB; transparent exports retain alpha (#1670). Statuses and feature counts unchanged. |
+| 2026-11-05 | minor | LR-VIEW-HDR-DISPLAY: the zoomed-in loupe window is rendered as float too (`Slot::HdrRegion`); still 🟡 |
 | 2026-11-04 | minor | LR-VIEW-HDR-DISPLAY: `Rgba16Float` BT.2100 PQ surface fallback (GNOME / Mutter), PQ screenshot capture; still 🟡 |
 | 2026-10-20 | minor | LR-VIEW-HDR-DISPLAY ⬜ → 🟡: HDR display output (extended-linear float surface via vendored egui-wgpu, paper-white UI, loupe up to the display's headroom, `--hdr-probe`); LR-HDR-EDIT note updated |
 | 2026-10-15 | minor | LRC-PRINT-PAGE: Page Options (Page Numbers, Page Info, Crop Marks) on Single Image and Contact Sheet pages, in the Print dialog, `print.set` and templates; still 🟡 (no identity plate, watermark, photo info or Cut Guides) |

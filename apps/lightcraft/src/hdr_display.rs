@@ -314,7 +314,8 @@ pub struct WindowHdr {
     paper_white_override: Option<f32>,
     levels: Option<Levels>,
     upload_headroom: Option<f32>,
-    texture: Option<(wgpu::Texture, egui::TextureId, [usize; 2])>,
+    /// The loupe's whole-frame texture and the zoomed window's ([`Self::upload_to`]).
+    texture: [Option<(wgpu::Texture, egui::TextureId, [usize; 2])>; 2],
 }
 
 impl WindowHdr {
@@ -335,7 +336,7 @@ impl WindowHdr {
             paper_white_override: env_f32("HDR_PAPER_WHITE"),
             levels: None,
             upload_headroom: None,
-            texture: None,
+            texture: [None, None],
         }
     }
 
@@ -378,6 +379,17 @@ impl lightcraft_ui_egui::HdrOutput for WindowHdr {
     }
 
     fn upload(&mut self, width: usize, height: usize, rgb: &[f32]) -> Result<egui::TextureId, String> {
+        self.upload_to(0, width, height, rgb)
+    }
+
+    fn upload_region(&mut self, width: usize, height: usize, rgb: &[f32]) -> Result<egui::TextureId, String> {
+        self.upload_to(1, width, height, rgb)
+    }
+}
+
+impl WindowHdr {
+    /// Upload `rgb` into texture `which` (0: the whole frame, 1: the zoomed window).
+    fn upload_to(&mut self, which: usize, width: usize, height: usize, rgb: &[f32]) -> Result<egui::TextureId, String> {
         // clipped to the headroom bucket the loupe's render key carries, so a display that gains
         // headroom re-renders instead of keeping highlights clipped to the old range
         let headroom = self.upload_headroom.unwrap_or_else(|| lightcraft_ui_egui::clip_headroom(self.levels.and_then(|l| l.headroom).unwrap_or(1.0)));
@@ -385,7 +397,8 @@ impl lightcraft_ui_egui::HdrOutput for WindowHdr {
         let (device, queue) = (&self.state.device, &self.state.queue);
         let size = [width, height];
         let (w, h) = (u32::try_from(width).map_err(|e| e.to_string())?, u32::try_from(height).map_err(|e| e.to_string())?);
-        if self.texture.as_ref().is_none_or(|(_, _, s)| *s != size) {
+        let slot = self.texture.get_mut(which).ok_or("no such HDR texture")?;
+        if slot.as_ref().is_none_or(|(_, _, s)| *s != size) {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("loupe HDR"),
                 size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -398,16 +411,16 @@ impl lightcraft_ui_egui::HdrOutput for WindowHdr {
             });
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
             let mut r = self.state.renderer.write();
-            let id = match self.texture.take() {
+            let id = match slot.take() {
                 Some((_, id, _)) => {
                     r.update_egui_texture_from_wgpu_texture(device, &view, wgpu::FilterMode::Linear, id);
                     id
                 }
                 None => r.register_native_texture(device, &view, wgpu::FilterMode::Linear),
             };
-            self.texture = Some((tex, id, size));
+            *slot = Some((tex, id, size));
         }
-        let Some((tex, id, _)) = self.texture.as_ref() else { return Err("no HDR texture".into()) };
+        let Some((tex, id, _)) = slot.as_ref() else { return Err("no HDR texture".into()) };
         queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             bytemuck::cast_slice(&texels),
@@ -420,8 +433,10 @@ impl lightcraft_ui_egui::HdrOutput for WindowHdr {
 
 impl Drop for WindowHdr {
     fn drop(&mut self) {
-        if let Some((_, id, _)) = self.texture.take() {
-            self.state.renderer.write().free_texture(&id);
+        for slot in &mut self.texture {
+            if let Some((_, id, _)) = slot.take() {
+                self.state.renderer.write().free_texture(&id);
+            }
         }
     }
 }
@@ -517,6 +532,29 @@ mod tests {
             luminance: Some(DisplayLuminance { max_nits: Some(max), sdr_white_nits: Some(white), ..Default::default() }),
             coarse: Some(DisplayCoarseRange { high_dynamic_range: Some(hdr), gamut: None }),
             ..Default::default()
+        }
+    }
+
+    /// The vendored egui-wgpu's PQ shader and its screenshot decoder (`capture.rs`, whose own tests
+    /// don't run in the workspace) agree on the ST 2084 constants and the BT.2020 matrix.
+    #[test]
+    fn the_pq_shader_uses_the_st_2084_constants_and_bt2020_primaries() {
+        let shader = include_str!("../../../vendor/egui-wgpu/src/egui.wgsl");
+        for c in [
+            "0.1593017578125",
+            "78.84375",
+            "0.8359375",
+            "18.8515625",
+            "18.6875",
+            "0.627404, 0.329283, 0.043313",
+            "0.069097, 0.919540, 0.011362",
+            "0.016391, 0.088013, 0.895595",
+        ] {
+            assert!(shader.contains(c), "egui.wgsl lacks {c}");
+        }
+        let capture = include_str!("../../../vendor/egui-wgpu/src/capture.rs");
+        for c in ["0.159_301_76", "78.84375", "0.835_937_5", "18.851_562", "18.6875", "1.660_491", "1.132_900", "1.118_730"] {
+            assert!(capture.contains(c), "capture.rs lacks {c}");
         }
     }
 

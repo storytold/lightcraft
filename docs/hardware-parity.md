@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** minor (HDR display output on GNOME / Mutter: BT.2100 PQ float surface fallback); previously major (created from the code, gpu-pipeline.md and the parity checklist) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (HDR display output on GNOME / Mutter: BT.2100 PQ float surface fallback; zoomed-in loupe window in HDR); previously major (created from the code, gpu-pipeline.md and the parity checklist) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 What Lightroom does with the machine's hardware, per platform, and what LightCraft does. Sources:
 [gpu-pipeline.md](gpu-pipeline.md), [display-profiles.md](display-profiles.md), [denoise.md](denoise.md),
@@ -36,7 +36,7 @@ NVIDIA, Intel and Windows DX12 still rely on user reports.
 
 | Work | Hours | Needs |
 |---|---:|---|
-| HDR display (EDR on macOS, Windows HDR, Linux where possible) | done (2026-10-20) | the vendored egui-wgpu (`vendor/egui-wgpu`, see `vendor/README.md`) configures an `Rgba16Float` surface in extended linear sRGB (scRGB / EDR) where offered, reads the display's headroom and SDR white (`wgpu::DisplayHdrInfo`), and draws the UI at paper white; the loupe shows HDR edits from a float render up to the headroom (whole-frame render; zoomed tiles stay SDR). On Wayland the headroom comes from the compositor's colour-management protocol (`apps/lightcraft/src/wayland_hdr.rs`), the app then runs native Wayland instead of XWayland (no file drag-and-drop there; `LIGHTCRAFT_HDR_DISPLAY=0` restores XWayland, SDR), and `crates/hdrmeta` sets Vulkan HDR metadata so KWin shows the range; where the compositor lacks `extended_target_volume` (GNOME's Mutter: Mesa then offers no extended-linear colour space) the window uses an `Rgba16Float` BT.2100 PQ surface instead (the shader PQ-encodes, converts to BT.2020, SDR white at 203 cd/m² or `LIGHTCRAFT_HDR_PAPER_WHITE`); overrides `LIGHTCRAFT_HDR_HEADROOM` / `LIGHTCRAFT_HDR_PAPER_WHITE`. `lightcraft --hdr-probe` reports what a machine offers. Verified on Windows 11 / RTX 4090 (DX12 scRGB, headroom ≈ 12.9×) and KDE Plasma 6.7.5 Wayland (AMD RADV, laptop panel with KWin EDR) and macOS EDR (M1 Max, built-in Liquid Retina XDR) |
+| HDR display (EDR on macOS, Windows HDR, Linux where possible) | done (2026-10-20) | the vendored egui-wgpu (`vendor/egui-wgpu`, see `vendor/README.md`) configures an `Rgba16Float` surface in extended linear sRGB (scRGB / EDR) where offered, reads the display's headroom and SDR white (`wgpu::DisplayHdrInfo`), and draws the UI at paper white; the loupe shows HDR edits from a float render up to the headroom (whole-frame render, and the zoomed-in window on screen as a second float render; Compare, Before and the second window stay SDR). On Wayland the headroom comes from the compositor's colour-management protocol (`apps/lightcraft/src/wayland_hdr.rs`), the app then runs native Wayland instead of XWayland (no file drag-and-drop there; `LIGHTCRAFT_HDR_DISPLAY=0` restores XWayland, SDR), and `crates/hdrmeta` sets Vulkan HDR metadata so KWin shows the range; where the compositor lacks `extended_target_volume` (GNOME's Mutter: Mesa then offers no extended-linear colour space) the window uses an `Rgba16Float` BT.2100 PQ surface instead (the shader PQ-encodes, converts to BT.2020, SDR white at 203 cd/m² or `LIGHTCRAFT_HDR_PAPER_WHITE`); overrides `LIGHTCRAFT_HDR_HEADROOM` / `LIGHTCRAFT_HDR_PAPER_WHITE`. `lightcraft --hdr-probe` reports what a machine offers. Verified on Windows 11 / RTX 4090 (DX12 scRGB, headroom ≈ 12.9×) and KDE Plasma 6.7.5 Wayland (AMD RADV, laptop panel with KWin EDR) and macOS EDR (M1 Max, built-in Liquid Retina XDR) |
 | OS monitor profile: Windows WCS (an FFI helper crate, like `crates/sysmem`), follow the window across displays on Linux | 4–8 | multi-monitor setup |
 | Pen pressure for brush masks: done where winit reports a touch force; macOS and Linux tablets need winit tablet events (or a pure-Rust tablet layer) | 3–8 | a tablet |
 | Remaining stages on GPU (defringe, spot removal, masks) | 10–20 | |
@@ -49,6 +49,7 @@ NVIDIA, Intel and Windows DX12 still rely on user reports.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | HDR display row: the zoomed-in loupe window is also rendered as float (`Slot::HdrRegion`), so zooming in no longer falls back to SDR |
 | 2026-11-04 | minor | HDR display row: PQ float surface fallback for compositors without extended-linear (GNOME / Mutter, confirmed by eye with `--hdr-probe` on a 700 cd/m² OLED) |
 | 2026-10-20 | minor | HDR display row: vendored egui-wgpu patch, loupe in HDR on Windows HDR, Wayland and macOS EDR (all confirmed by eye), `--hdr-probe` |
 | 2026-10-12 | minor | Monitor profile: Linux reads the display profile from colord; macOS row reflects #787 |

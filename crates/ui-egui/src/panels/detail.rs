@@ -343,6 +343,9 @@ struct WindowCtx {
     look: u64,
     /// A pinch or two-finger scroll is running: keep the windows there are.
     holding: bool,
+    /// An HDR display shows an HDR edit here (the loupe's HDR render is drawn): the After window
+    /// is also rendered as float, clipped to this headroom ([`crate::clip_headroom`]).
+    hdr_clip: Option<f32>,
 }
 
 /// One side of the loupe that gets a window render.
@@ -408,6 +411,8 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
     let job = job.with_overlay(overlay).with_proof(if v.before { None } else { proof });
     // keyed as the renderer keys the texture (a display profile changes the key)
     let job = app.renderer.job_for(v.slot, job);
+    // an HDR display: the After window also as linear float (an HDR edit; no overlay or proof)
+    let hdr_job = c.hdr_clip.filter(|_| !v.before).map(|clip| hdr_view_job(job.clone(), clip));
     // The overlay and the proof are part of the tile's identity too, so changing mask view/colour
     // or the proof never leaves a stale region tile on screen while its replacement renders.
     let proof_key = if v.before { 0 } else { proof.map_or(0, |p| p.key()) };
@@ -417,12 +422,35 @@ fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Opt
     app.region_tiles.retain(|(before, _), t| *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting));
     app.region_tiles.insert((v.before, job.key), view);
     app.renderer.request(v.slot, job, 99);
+    if let Some(hdr_job) = hdr_job {
+        let key = hdr_job.key;
+        app.hdr_region_wanted = Some((key, view));
+        if app.renderer.hdr_region.is_none_or(|h| h.key != key) && app.renderer.hdr_region_tried != Some(key) {
+            app.renderer.request(Slot::HdrRegion, hdr_job, 97);
+        }
+    }
     Some(view)
 }
 
 /// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
 /// drag, an earlier draft of it).
-fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) {
+fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView, hdr_frame: bool) {
+    // an HDR display: the window's float render, else (until it is there) the whole-frame HDR
+    // render under it, magnified, rather than an 8-bit tile that would show the photo clipped
+    if !v.before
+        && let Some((hkey, hv)) = app.hdr_region_wanted.filter(|(_, hv)| hv.photo == c.id)
+    {
+        if let Some(h) = app.renderer.hdr_region.filter(|h| h.photo == c.id && h.key == hkey) {
+            let (fw, fh) = (hv.full.0 as f32, hv.full.1 as f32);
+            let at = v.img.min + vec2(hv.window.x as f32 / fw * v.img.width(), hv.window.y as f32 / fh * v.img.height());
+            let dst = Rect::from_min_size(at, vec2(hv.window.w as f32 / fw * v.img.width(), hv.window.h as f32 / fh * v.img.height()));
+            p.image(h.tex, dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            return;
+        }
+        if hdr_frame && app.renderer.hdr_region_tried != Some(hkey) {
+            return;
+        }
+    }
     let Some(tex) = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id) else { return };
     let Some(tile) = app.region_tiles.get(&(v.before, tex.key)).filter(|t| t.is_current(c.id, wanted.full, wanted.settings, c.interacting)) else {
         return;
@@ -660,7 +688,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         interacting,
         look,
         holding: navigating || app.size_hold.holding(now),
+        hdr_clip: (app.hdr_headroom.is_some()
+            && d.hdr.enabled
+            && !interacting
+            && overlay == lightcraft_pipeline::Overlay::None
+            && !app.ui.soft_proof)
+            .then(|| crate::clip_headroom(app.hdr_headroom.unwrap_or(1.0))),
     };
+    if window_ctx.frame_edge.is_none() || window_ctx.hdr_clip.is_none() {
+        app.hdr_region_wanted = None;
+    }
     // (slot, before side?, rect to draw in, rect it is requested for, area whose pixels show)
     let mut window_views: Vec<WindowView> = Vec::new();
     if window_ctx.frame_edge.is_some() {
@@ -683,6 +720,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             windows.push((v, view));
         }
     }
+    upload_hdr_region(app);
     for (slot, before) in [(Slot::Region, false), (Slot::RegionBefore, true)] {
         let shown = windows.iter().find(|(v, _)| v.before == before).map(|(_, view)| *view);
         if before {
@@ -796,7 +834,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // (holding `\` in a wipe shows the Before everywhere: it is the Before view alone then)
         let mode = if show_before { BeforeAfter::Original } else { app.ui.before_after };
         let clip = crate::region::window_clip(mode, v.before, v.visible, canvas, img_rect);
-        draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view);
+        draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view, hdr_view.is_some());
     }
     // the line of a wipe over both
     if app.ui.before_after == BeforeAfter::Split {
@@ -1394,6 +1432,24 @@ fn upload_hdr_view(app: &mut LightcraftApp) {
             // don't re-render the same frame every repaint
             app.renderer.hdr_view_tried = Some(key);
             log::warn!("HDR loupe texture: {e}");
+        }
+    }
+}
+
+/// Hand a finished [`Slot::HdrRegion`] render to the window's HDR output, if it is the window
+/// that is wanted now (a stale one is dropped).
+fn upload_hdr_region(app: &mut LightcraftApp) {
+    let Some((photo, key, deep)) = app.renderer.hdr_region_result.take() else { return };
+    if app.hdr_region_wanted.is_none_or(|(k, _)| k != key) {
+        return;
+    }
+    let Some(out) = app.services.hdr_output.as_mut() else { return };
+    let lightcraft_pipeline::DeepSamples::F32(rgb) = &deep.samples else { return };
+    match out.upload_region(deep.width, deep.height, rgb) {
+        Ok(tex) => app.renderer.hdr_region = Some(crate::render::HdrRegionTex { photo, key, tex }),
+        Err(e) => {
+            app.renderer.hdr_region_tried = Some(key);
+            log::warn!("HDR window texture: {e}");
         }
     }
 }

@@ -362,6 +362,29 @@ mod tests {
         assert!(w.iter().all(|v| (v - 1.0).abs() < 1e-3), "{w:?}");
     }
 
+    /// The shader's `pq_from_nits` (egui.wgsl), written out here: the decoder must undo it.
+    fn pq_from_nits(nits: f32) -> f32 {
+        let y = (nits.clamp(0.0, 10_000.0) / 10_000.0).powf(0.159_301_76);
+        ((0.835_937_5 + 18.851_562 * y) / (1.0 + 18.6875 * y)).powf(78.84375)
+    }
+
+    #[test]
+    fn pq_encoding_round_trips_and_the_shader_uses_the_same_constants() {
+        assert!((pq_from_nits(203.0) - 0.5807).abs() < 1e-3);
+        assert!(pq_from_nits(0.0) < 1e-5, "PQ(0) is ~7e-7 by the standard");
+        assert_eq!(pq_to_nits(pq_from_nits(0.0)), 0.0);
+        assert!((pq_from_nits(10_000.0) - 1.0).abs() < 1e-5);
+        for nits in [0.5, 10.0, 100.0, 203.0, 650.0, 1000.0, 4000.0] {
+            let back = pq_to_nits(pq_from_nits(nits));
+            assert!((back - nits).abs() / nits < 5e-3, "{nits} -> {back}");
+        }
+        // the shader carries the same ST 2084 constants and BT.2020 matrix rows
+        let shader = include_str!("egui.wgsl");
+        for c in ["0.1593017578125", "78.84375", "0.8359375", "18.8515625", "18.6875", "0.627404, 0.329283, 0.043313", "0.069097, 0.919540, 0.011362", "0.016391, 0.088013, 0.895595"] {
+            assert!(shader.contains(c), "egui.wgsl lacks {c}");
+        }
+    }
+
     #[test]
     fn half_decoding_and_encoding() {
         assert_eq!(f16_bits_to_f32(0x3c00), 1.0);
