@@ -569,7 +569,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 })
                 .collect();
             v.push(MenuNode::Separator);
-            let clear_key = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.clearLabel");
+            let clear_key = crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "photo.clearLabel");
             v.push(item("photo.clearLabel", Value::Null, "None", clear_key, has, Some(active.as_ref().is_some_and(|p| p.label.is_none()))));
             v.push(MenuNode::Separator);
             // label sets: each a checkable item; Edit… names them

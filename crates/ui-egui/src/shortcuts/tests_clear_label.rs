@@ -27,7 +27,7 @@ fn app() -> lightcraft_engine::Result<LightcraftApp> {
     s.execute("library.sort", &json!({"key": "fileName", "ascending": true}))?;
     s.execute("library.select", &json!({"ids": [2]}))?;
     let mut app = LightcraftApp::new(s, crate::Services { png: None, ..Default::default() });
-    super::assign(&mut app.ui.settings.keymap, "photo.clearLabel", Some(KEY)).unwrap();
+    super::assign(app.ui.settings.profile(), &mut app.ui.settings.keymap, "photo.clearLabel", Some(KEY)).unwrap();
     Ok(app)
 }
 
@@ -57,10 +57,10 @@ fn press(app: &mut LightcraftApp, ctx: &egui::Context) {
 
 #[test]
 fn clearing_a_label_has_no_key_until_one_is_given() {
-    assert_eq!(super::shortcut_of(&Default::default(), "photo.clearLabel"), None);
+    assert_eq!(super::shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, &Default::default(), "photo.clearLabel"), None);
     assert!(super::find_bindable("photo.clearLabel").is_some(), "the shortcuts editor lists it");
     let mut app = app().unwrap();
-    assert_eq!(super::shortcut_of(&app.ui.settings.keymap, "photo.clearLabel"), Some(KEY));
+    assert_eq!(super::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "photo.clearLabel"), Some(KEY));
     // the number keys keep Lightroom's meaning: 6-9 set a label, nothing is taken from them
     app.ui.view = ViewMode::PhotoGrid;
     let ctx = egui::Context::default();

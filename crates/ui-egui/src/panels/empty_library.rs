@@ -53,7 +53,7 @@ pub fn hint(profile: crate::keymap_profiles::KeyProfile, keymap: &Keymap, mac: b
 /// the way in is File → Import Photos…, with the shortcut that command is bound to now, written as
 /// menus write it. With no shortcut the sentence leaves it out.
 pub fn no_photos_body(keymap: &Keymap, mac: bool) -> String {
-    match crate::shortcuts::shortcut_of(keymap, "file.addPhotos") {
+    match crate::shortcuts::shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, keymap, "file.addPhotos") {
         Some(sc) => {
             crate::i18n::tr_format!("Import photos with File → Import Photos… ({}), or drop them here", crate::menubar::shortcut_text(sc, mac))
         }

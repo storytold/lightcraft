@@ -422,12 +422,12 @@ fn the_empty_view_names_the_import_shortcut_of_this_platform() {
     }
     assert_eq!(import_way_in(&keymap, false).1.as_deref(), Some("Ctrl+Shift+I"));
     // a remapped key is the one shown
-    crate::shortcuts::assign(&mut keymap, "file.addPhotos", Some("Cmd+Alt+I")).unwrap();
+    crate::shortcuts::assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "file.addPhotos", Some("Cmd+Alt+I")).unwrap();
     for mac in [true, false] {
         assert_eq!(import_way_in(&keymap, mac).1, Some(shortcut_text("Cmd+Alt+I", mac)));
     }
     // and none at all names no key
-    crate::shortcuts::assign(&mut keymap, "file.addPhotos", None).unwrap();
+    crate::shortcuts::assign(crate::keymap_profiles::KeyProfile::Lightroom, &mut keymap, "file.addPhotos", None).unwrap();
     assert_eq!(import_way_in(&keymap, true).1, None);
 }
 
