@@ -203,3 +203,59 @@ fn a_hand_edited_prefs_file_loads_only_valid_ratios() {
     s.close_library().unwrap();
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+/// A change to the saved ratios that prefs.json can't take isn't kept in the session either: the
+/// command fails and the menu still lists what is on disk.
+#[test]
+fn a_ratio_change_that_cant_be_saved_is_not_kept() {
+    use lightcraft_catalog::{MemStore, Store};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    #[derive(Clone, Default)]
+    struct Failing {
+        files: MemStore,
+        fail: Arc<AtomicBool>,
+    }
+    impl Store for Failing {
+        fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+            self.files.read(name)
+        }
+        fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            if self.fail.load(Ordering::Relaxed) && name == "prefs.json" {
+                return Err(std::io::Error::other("disk full"));
+            }
+            self.files.write_atomic(name, data)
+        }
+        fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            self.files.append(name, data)
+        }
+        fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+            self.files.truncate(name, len)
+        }
+        fn describe(&self) -> String {
+            "failing".into()
+        }
+    }
+    let files = Failing::default();
+    let mut s = Session::new();
+    let stores =
+        crate::library::LibraryStores { dir: "failing".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    s.execute("crop.saveAspect", &json!({"name": "Pano", "aspect": [3, 1]})).unwrap();
+    s.execute("crop.saveAspect", &json!({"name": "Story", "aspect": [9, 16]})).unwrap();
+    let kept = s.crop_aspects.clone();
+    files.fail.store(true, Ordering::Relaxed);
+    for (command, params) in [
+        ("crop.saveAspect", json!({"name": "Wide", "aspect": [21, 9]})),
+        ("crop.deleteAspect", json!({"name": "Pano"})),
+        ("crop.moveAspect", json!({"name": "Story", "to": 0})),
+        ("crop.hideAspect", json!({"aspect": "4x5"})),
+    ] {
+        let e = s.execute(command, &params).unwrap_err().to_string();
+        assert!(e.contains("disk full"), "{command}: {e}");
+        assert_eq!(s.crop_aspects, kept, "{command} kept a change prefs.json doesn't hold");
+    }
+    files.fail.store(false, Ordering::Relaxed);
+    s.execute("crop.deleteAspect", &json!({"name": "Pano"})).unwrap();
+    assert_eq!(s.crop_aspects.custom.len(), 1);
+}

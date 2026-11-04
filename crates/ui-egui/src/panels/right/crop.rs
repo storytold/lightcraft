@@ -108,7 +108,9 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let r = ui.checkbox(&mut shown, crate::i18n::tr(label));
             register(ui, format!("check:cropAspectShow:{key}"), r.rect);
             if r.changed() {
-                let _ = app.run("crop.hideAspect", json!({"aspect": key, "hidden": !shown}));
+                if let Err(e) = app.run("crop.hideAspect", json!({"aspect": key, "hidden": !shown})) {
+                    app.toast_error(ui.ctx(), e);
+                }
             }
         } else if !hidden {
             let r = ui.button(crate::i18n::tr(label));
@@ -130,13 +132,19 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ui.label(&a.name);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if text_button(ui, &format!("cropAspectDelete-{i}"), "Delete", false).clicked() {
-                        let _ = app.run("crop.deleteAspect", json!({"name": a.name}));
+                        if let Err(e) = app.run("crop.deleteAspect", json!({"name": a.name})) {
+                    app.toast_error(ui.ctx(), e);
+                }
                     }
                     if i < last && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked() {
-                        let _ = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1}));
+                        if let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1})) {
+                    app.toast_error(ui.ctx(), e);
+                }
                     }
                     if i > 0 && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked() {
-                        let _ = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1}));
+                        if let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1})) {
+                    app.toast_error(ui.ctx(), e);
+                }
                     }
                 });
             });

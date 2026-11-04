@@ -136,8 +136,19 @@ fn list(s: &Session) -> Value {
     json!({"aspects": v})
 }
 
+/// Write prefs.json after a change to the saved ratios, and the new list. When the write fails the
+/// change is undone (`before`), so the menu never shows a ratio prefs.json doesn't hold.
+fn persist(s: &mut Session, before: CropAspects) -> Result<Value> {
+    if let Err(e) = s.save_prefs() {
+        s.crop_aspects = before;
+        return Err(e);
+    }
+    Ok(list(s))
+}
+
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "crop.saveAspect";
+    let before = s.crop_aspects.clone();
     let name = name_param(p, C)?;
     check_name(&name).map_err(|e| bad(C, e))?;
     let aspect = ratio_param(p, C)?;
@@ -146,36 +157,36 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(a) => *a = entry,
         None => s.crop_aspects.custom.push(entry),
     }
-    s.save_prefs()?;
-    Ok(list(s))
+    persist(s, before)
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "crop.deleteAspect";
+    let before = s.crop_aspects.clone();
     let name = name_param(p, C)?;
     if is_builtin_name(&name) {
         return Err(bad(C, "built-in ratios can't be deleted (crop.hideAspect hides them)"));
     }
     let i = position(s, &name).ok_or_else(|| bad(C, format!("no saved ratio `{name}`")))?;
     s.crop_aspects.custom.remove(i);
-    s.save_prefs()?;
-    Ok(list(s))
+    persist(s, before)
 }
 
 fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "crop.moveAspect";
+    let before = s.crop_aspects.clone();
     let name = name_param(p, C)?;
     let to = p.get("to").and_then(Value::as_u64).ok_or_else(|| bad(C, "missing `to` (a position from 0)"))?;
     let from = position(s, &name).ok_or_else(|| bad(C, format!("no saved ratio `{name}`")))?;
     let a = s.crop_aspects.custom.remove(from);
     let to = usize::try_from(to).unwrap_or(usize::MAX).min(s.crop_aspects.custom.len());
     s.crop_aspects.custom.insert(to, a);
-    s.save_prefs()?;
-    Ok(list(s))
+    persist(s, before)
 }
 
 fn hide(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "crop.hideAspect";
+    let before = s.crop_aspects.clone();
     let key = str_param(p, "aspect").ok_or_else(|| bad(C, "missing `aspect` (a built-in ratio's key, like \"4x5\")"))?;
     if !hideable(key) {
         return Err(bad(C, format!("`{key}` is not a built-in ratio that can be hidden (Free and Original always show)")));
@@ -185,8 +196,7 @@ fn hide(s: &mut Session, p: &Value) -> Result<Value> {
     if hidden {
         s.crop_aspects.hidden.push(key.to_string());
     }
-    s.save_prefs()?;
-    Ok(list(s))
+    persist(s, before)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
