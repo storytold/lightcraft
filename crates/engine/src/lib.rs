@@ -81,6 +81,7 @@ pub mod slideshow_export;
 pub mod smart;
 pub mod sync;
 pub mod text;
+pub mod trash;
 mod view;
 pub mod walk;
 
