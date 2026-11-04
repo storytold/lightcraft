@@ -561,9 +561,27 @@ fn options_that_cant_work_are_refused_before_any_photo_is_read() {
         assert!(e.contains("below the 0.1 MP"), "{kind:?}: {e}");
         assert_eq!(reads.load(Ordering::SeqCst), 0, "{kind:?}: no photo read");
     }
+    // a bracket left to EXIF: five photos can't be divided into two positions by any bracket
+    let five = photos_24mp(5).into_iter().map(Some).collect::<Vec<_>>();
+    let (job, reads) = counted_job(hdr_panorama(0), five, None, 1e12);
+    let e = job.run(&|_, _| true).err().unwrap_or_default();
+    assert!(e.contains("5 photos don't form brackets of two or more"), "{e}");
+    assert_eq!(reads.load(Ordering::SeqCst), 0, "no photo read");
     // brackets of 3 divide six photos into two positions: on to reading them (which can't here)
     let (job, _) = counted_job(hdr_panorama(3), known(), None, 1e12);
     assert_eq!(job.run(&|_, _| true).err().as_deref(), Some("/photos/0.ARW: read"));
+}
+
+/// Cancelled while its photos are read, a merge reads no more of them.
+#[test]
+fn a_merge_cancelled_while_reading_reads_no_more_photos() {
+    use std::sync::atomic::Ordering;
+    let (dir, job) = bracketed_dngs("cancel-reading");
+    let (job, reads) = counted(&job, job.sizes.clone(), 1e12, false);
+    let e = job.run(&|f, s| !(s == "Reading photos" && f > 0.0)).err();
+    assert_eq!(e.as_deref(), Some("cancelled"));
+    assert_eq!(reads.load(Ordering::SeqCst), 1, "only the photo being read when it was cancelled");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// Three 480 × 320 bracketed DNGs in a library, and a merge of them planned by the session.

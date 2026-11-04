@@ -99,7 +99,8 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   size, one photo at a time. Just before each photo is decoded its header is read again and the plan checked with it
   (the catalog doesn't keep a raw's sensor size, and a file can have changed since it was imported): when the plan no
   longer holds the merge stops before decoding it, naming the file.
-- A preview's photos are decoded at full size too, several at once: one at a time when several don't fit, and the
+- A preview's photos are planned at full size too (a JPEG other than a lossless one may decode at a smaller DCT scale;
+  the plan keeps the full size as a margin), and decoded several at once: one at a time when several don't fit, and the
   preview is refused when not even that, or the merge or stitch of its small frames after it, fits. A preview's
   panorama is made down to 1 MP (or its frames' size, when less), not to the floor of the panorama it previews.
 - HDR memory: every frame is held as 32-bit float RGB (~0.86 GB per 67 MP frame at the peak, plus ~1.2 GB); full-size
@@ -122,8 +123,9 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   panorama of smaller frames that still comes out under its floor (the overlap is known only after the stitch) is
   refused then. They are decoded as large as fits and still leaves the panorama as large as
   memory allows (frames above about 1/25 of the memory in pixels leave less room for projecting it), and never under
-  1024 px on the long side (the preview's frames): the result says `limit: "memory"`, and `nativeMegapixels` is
-  still the photos' own resolution. On a guessed memory a panorama the stitch would refuse is made at its floor, as
+  1024 px on the long side (the preview's frames): the result says `limit: "memory"` (or `"asked"`, when a
+  smaller `maxMegapixels` holds it below what memory allows), and `nativeMegapixels` is still the photos' own
+  resolution. On a guessed memory a panorama the stitch would refuse is made at its floor, as
   before merges were planned. An HDR panorama holds all its brackets' photos before merging them, one bracket at a
   time; with the bracket left to EXIF, every size it could be is planned for.
 - The browser build has no file access for merges yet.

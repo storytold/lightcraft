@@ -54,7 +54,7 @@ impl MergeKind {
     /// Refuse what the options alone rule out, before any photo is read: a panorama cap below the
     /// 0.1 MP the stitch makes at the least (`parse` refuses it too; a [`MergeKind`] can also be built
     /// directly), and an HDR panorama whose set bracket doesn't divide the photos into at least two
-    /// positions (a bracket left to EXIF is checked once the photos are read).
+    /// positions, or (a bracket left to EXIF) can't be divided so by any bracket of two or more.
     pub(crate) fn check_before_reading(&self, photos: usize) -> std::result::Result<(), String> {
         let pano = match self {
             MergeKind::Panorama { pano } | MergeKind::HdrPanorama { pano, .. } => pano,
@@ -68,6 +68,12 @@ impl MergeKind {
             && (!photos.is_multiple_of(*bracket) || photos / *bracket < 2)
         {
             return Err(format!("{photos} photos don't form brackets of {bracket} for at least two positions"));
+        }
+        // a bracket left to EXIF is one of the sizes that divide the photos into at least two positions
+        if let MergeKind::HdrPanorama { bracket: 0 | 1, .. } = self
+            && !(2..=photos / 2).any(|b| photos.is_multiple_of(b))
+        {
+            return Err(format!("{photos} photos don't form brackets of two or more for at least two positions"));
         }
         Ok(())
     }
@@ -192,7 +198,10 @@ impl MergeJob {
             )
             .map_err(|e| format!("{path}: {e}"));
             let k = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            progress(span.0 + (span.1 - span.0) * k as f32 / n as f32, "Reading photos");
+            // cancelled: the photos not read yet aren't
+            if !progress(span.0 + (span.1 - span.0) * k as f32 / n as f32, "Reading photos") {
+                return Err("cancelled".into());
+            }
             f
         };
         // Full-size photos are decoded one at a time: decoding several 60 MP raws at once multiplied the decoders'
