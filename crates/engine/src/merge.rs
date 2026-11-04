@@ -366,10 +366,15 @@ fn apply_auto(s: &mut DevelopSettings, src: &Rgb32f, info: &SourceInfo) {
     s.color.saturation = a.saturation;
 }
 
+/// The folder a merge is written to: the one `first` is named in, not the one a link there leads to.
+pub(crate) fn output_dir(first: &str) -> &std::path::Path {
+    std::path::Path::new(first).parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."))
+}
+
 /// `dir/<stem>-<suffix>.dng`, then `-2`, `-3`… (the candidates for a merge's output).
 fn output_names(first: &str, suffix: &str) -> impl Iterator<Item = std::path::PathBuf> {
     let p = std::path::Path::new(first);
-    let dir = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    let dir = output_dir(first).to_path_buf();
     let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Merge".into());
     let suffix = suffix.to_string();
     (1u64..).map(move |k| dir.join(if k == 1 { format!("{stem}-{suffix}.dng") } else { format!("{stem}-{suffix}-{k}.dng") }))
@@ -421,7 +426,7 @@ impl Session {
         }
         // the merged file goes next to the first photo: refused before the work, not after it
         if !preview && let Some((_, first)) = sources.first() {
-            crate::file_access::check_write(first).map_err(EngineError::Other)?;
+            crate::file_access::check_write(output_dir(first)).map_err(EngineError::Other)?;
         }
         let read: ByteReader = match &self.media.file_bytes {
             Some(r) => r.clone(),
@@ -437,7 +442,7 @@ impl Session {
     /// apply Auto Settings / the auto crop. Returns `{id, path, …info}`.
     pub fn finish_merge(&mut self, job: &MergeJob, out: MergeOutput) -> Result<Value> {
         let first = &job.sources.first().ok_or_else(|| EngineError::Other("nothing merged".into()))?.1;
-        crate::file_access::check_write(first).map_err(EngineError::Other)?;
+        crate::file_access::check_write(output_dir(first)).map_err(EngineError::Other)?;
         // a new file under a free name (never replacing one), complete and synced before it appears
         let path = lightcraft_catalog::safe_file::write_new_unique(&mut output_names(first, job.kind.suffix()), &out.dng)
             .map_err(|e| EngineError::Other(format!("could not write the merged DNG next to {first}: {e}")))?

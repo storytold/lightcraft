@@ -250,3 +250,46 @@ fn a_photo_named_twice_is_merged_once() {
     assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![a, b]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_merge_of_a_bare_file_name_is_written_in_the_current_folder() {
+    assert_eq!(crate::merge::output_dir("IMG_0.dng"), std::path::Path::new("."));
+    assert_eq!(crate::merge::output_dir("in/IMG_0.dng"), std::path::Path::new("in"));
+}
+
+/// The merged file goes in the folder the first photo is named in, which a link to a photo inside
+/// the automation roots can put outside them: that folder is what has to be writable, when the
+/// merge is planned and when its file is written.
+#[cfg(unix)]
+#[test]
+fn a_link_from_outside_the_write_root_does_not_take_the_merge_out() {
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("link-out");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let frames = lightcraft_merge::synth::bracket_dngs(96, 64, &[-1.0, 1.0]).unwrap();
+    std::fs::write(root.join("target.dng"), &frames[0]).unwrap();
+    std::fs::write(root.join("IMG_1.dng"), &frames[1]).unwrap();
+    let link = outside.join("IMG_0.dng");
+    std::os::unix::fs::symlink(root.join("target.dng"), &link).unwrap();
+    let paths = vec![link.to_string_lossy().to_string(), root.join("IMG_1.dng").to_string_lossy().to_string()];
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    let only_the_link = || std::fs::read_dir(&outside).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>() == ["IMG_0.dng"];
+
+    let mut s = Session::new().with_fs();
+    let ids = confine(Some(&roots), || import(&mut s, paths));
+    assert_eq!(ids.len(), 2, "the link is inside the read root once followed");
+    let e = confine(Some(&roots), || s.execute("merge.hdr", &json!({"ids": ids}))).expect_err("planned outside the write root");
+    assert!(e.to_string().contains("outside the write root"), "{e}");
+    assert!(only_the_link(), "nothing is created outside");
+
+    // planned before the roots came into force: the write itself is still refused
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    let job = s.plan_merge(kind, finish, &ids.iter().copied().map(lightcraft_catalog::PhotoId).collect::<Vec<_>>(), false).unwrap();
+    let out = job.run(&|_, _| true).unwrap();
+    let e = confine(Some(&roots), || s.finish_merge(&job, out)).expect_err("written outside the write root");
+    assert!(e.to_string().contains("outside the write root"), "{e}");
+    assert!(only_the_link(), "nothing is created outside");
+    let _ = std::fs::remove_dir_all(&base);
+}
