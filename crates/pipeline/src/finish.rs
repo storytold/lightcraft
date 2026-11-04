@@ -297,6 +297,12 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
         },
+        // V3 rolls a raw's camera tone curve off in stops past its last knot (issue #1632)
+        Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+            Some(curve) => ToneMap::camera_rolloff_hdr(curve, l.contrast, l.whites, l.blacks, peak),
+            None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
+            None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
+        },
     }
 }
 

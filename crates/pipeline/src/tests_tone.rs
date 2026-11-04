@@ -264,3 +264,35 @@ fn the_base_plane_is_cached_per_process() {
     assert_ne!(local::base_key(&s1, sg, 0), local::base_key(&s2, sg, 0), "the process is part of the key");
     assert_ne!(local::base_key(&s2, sg, 0), local::base_key(&s2, sg, sig.base_detail));
 }
+
+/// Issue #1632: past its last fitted knot (here 1.0 stop below the sensor's white, scene 1.0, at
+/// 8-bit 233, as on the CC0 ILCE-7CR file) a raw's camera tone curve closed on white exponentially
+/// in linear light, so Exposure +1 rendered the sensor's white at 255 and Exposure +2 left the top
+/// stop it recorded (scene 0.5..1.0) under one 8-bit code. The latest process rolls off in stops
+/// and keeps both apart; V1 and V2 keep their look.
+#[test]
+fn exposure_keeps_the_highlights_a_camera_curve_recorded() {
+    use lightcraft_color::transfer::linear_to_srgb;
+    let knots = std::array::from_fn(|i| {
+        let x = 0.003 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-3.3 * x).exp()]
+    });
+    let info = SourceInfo { raw: true, camera_tone: crate::tone::CameraTone::new(knots), ..SourceInfo::default() };
+    let at = |process: Process, ev: f32, y: f32| {
+        let o = crate::finish::base_tone(&on(process), &info, 1.0).apply(y * ev.exp2());
+        (linear_to_srgb(o.clamp(0.0, 1.0)) * 255.0).round()
+    };
+    for ev in [0.0, 1.0, 2.0] {
+        let (white, half) = (at(Process::LATEST, ev, 1.0), at(Process::LATEST, ev, 0.5));
+        assert!(white <= 254.0, "Exposure {ev:+}: the sensor's white renders at {white}");
+        assert!(white - half >= 1.5, "Exposure {ev:+}: the top stop spans {half}..{white}");
+    }
+    // the earlier processes are frozen: the sensor's white at 255 from Exposure +1
+    assert_eq!(at(Process::V2, 1.0, 1.0), 255.0);
+    assert_eq!(at(Process::V1, 1.0, 1.0), 255.0);
+    // up to the last knot every process renders the camera's curve
+    for y in [0.003, 0.02, 0.18, 0.4, 0.5] {
+        let (v2, v3) = (crate::finish::base_tone(&on(Process::V2), &info, 1.0), crate::finish::base_tone(&on(Process::LATEST), &info, 1.0));
+        assert!((v2.apply(y) - v3.apply(y)).abs() < 1e-6, "{y}");
+    }
+}

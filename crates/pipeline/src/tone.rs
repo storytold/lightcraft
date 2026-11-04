@@ -90,7 +90,41 @@ impl CameraTone {
         let slope = ((b[1] - a[1]) / (b[0] - a[0])).clamp(0.1, 16.0);
         1.0 - (1.0 - b[1]) * (-(y - b[0]) * slope / (1.0 - b[1]).max(0.01)).exp()
     }
+
+    /// [`CameraTone::apply`] as process V3 extends it past the last knot (issue #1632). The curve is
+    /// fitted only to camera JPEG tones below 0.85, so its last knot lies 1 to 3 stops below the
+    /// sensor's white on most photos and everything above it is extrapolated. [`CameraTone::apply`]
+    /// closes the gap to white exponentially in linear light: it reaches 8-bit 255 within about a
+    /// stop past the sensor's white, and Exposure +1 turns the top stop the sensor recorded white.
+    /// Here the gap shrinks in stops instead, `gap / (1 + c·(2^(k·t) − 1))` at `t` stops past the
+    /// knot, with `c` matching the curve's slope there (so the join is smooth) and the gap halving
+    /// every [`ROLLOFF_STOPS`] stops in the end. Same value as [`CameraTone::apply`] up to the last
+    /// knot, monotone, finite, and at most 1 (it reaches 1 only by rounding, hundreds of stops up).
+    pub fn apply_rolloff(&self, y: f32) -> f32 {
+        let (a, b) = (self.knots[30], self.knots[31]);
+        if !y.is_finite() || y <= b[0] {
+            return self.apply(y);
+        }
+        // the last segment's own slope, so the join is smooth; a flatter one than 0.1 rises at 0.1
+        // (still continuous and monotone) instead of staying flat below white
+        let slope = ((b[1] - a[1]) / (b[0] - a[0])).max(0.1);
+        // `CameraTone::new` keeps the last knot below 1, so the gap is positive (no floor: one
+        // would step the curve down past a knot within it of white)
+        let gap = 1.0 - b[1];
+        let k = 1.0 / ROLLOFF_STOPS;
+        // d(display)/d(stop) at the knot is slope · x · ln 2; the shoulder's is gap · c · k · ln 2
+        // (bounded, so `c · 0` right past the knot stays 0 for a gap of a few ulps)
+        let c = (slope * b[0] / (gap * k)).min(1e30);
+        let t = (y / b[0]).log2();
+        1.0 - gap / (1.0 + c * ((k * t).exp2() - 1.0))
+    }
 }
+
+/// Stops in which the gap between a V3 camera curve and white halves, far past its last knot
+/// ([`CameraTone::apply_rolloff`]). With 1, the sensor's white renders at 8-bit 239–250 on the CC0
+/// corpus files (Sony, Nikon, Fujifilm) at Exposure 0 and below 254 up to Exposure +2, where the
+/// extension of [`CameraTone::apply`] reaches 254–255 by Exposure +1 (issue #1632).
+pub const ROLLOFF_STOPS: f32 = 1.0;
 
 /// Scene EV over grey where [`ToneMap::hdr`] starts lifting highlights above the SDR curve.
 const HDR_FROM_EV: f32 = 1.5;
@@ -111,6 +145,16 @@ impl ToneMap {
     /// gain map only lifts highlights), then the highlights gain up to `peak − 1` more as in
     /// [`ToneMap::hdr`].
     pub fn camera_hdr(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        ToneMap::camera_with(|y| curve.apply(y), curve.chroma, contrast, whites, blacks, peak)
+    }
+
+    /// [`ToneMap::camera_hdr`] of process V3: past its last knot the camera curve rolls off in stops
+    /// ([`CameraTone::apply_rolloff`]) instead of closing on white within a stop of the sensor's.
+    pub fn camera_rolloff_hdr(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        ToneMap::camera_with(|y| curve.apply_rolloff(y), curve.chroma, contrast, whites, blacks, peak)
+    }
+
+    fn camera_with(curve: impl Fn(f32) -> f32, chroma: [f32; CHROMA_N], contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
         let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
         let adjustment = Self::display(contrast, whites, blacks);
         let neutral = contrast == 0.0 && whites == 0.0 && blacks == 0.0;
@@ -118,12 +162,12 @@ impl ToneMap {
         let lut = (0..LUT_N)
             .map(|i| {
                 let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
-                let y = curve.apply(GREY * 2f32.powf(ev));
+                let y = curve(GREY * 2f32.powf(ev));
                 let o = if neutral { y } else { adjustment.apply(y) };
                 if peak > 1.0 { (o + (peak - 1.0) * smooth(HDR_FROM_EV, top, ev)).clamp(0.0, peak) } else { o }
             })
             .collect();
-        ToneMap { lut, chroma: curve.chroma }
+        ToneMap { lut, chroma }
     }
     /// `contrast`, `whites`, `blacks` in −100..100 (Lightroom slider units).
     pub fn new(contrast: f64, whites: f64, blacks: f64) -> ToneMap {
@@ -322,6 +366,68 @@ mod tests {
         invalid[1][0] = invalid[0][0];
         assert!(CameraTone::new(invalid).is_none());
         assert!(serde_json::from_value::<CameraTone>(serde_json::json!({"knots": invalid})).is_err());
+    }
+
+    #[test]
+    fn rolloff_joins_the_curve_smoothly_and_never_reaches_white() {
+        let curve = CameraTone::new(knots()).unwrap();
+        let last = curve.knots()[31];
+        // the camera's curve up to the last knot
+        for i in 0..200 {
+            let y = last[0] * i as f32 / 199.0;
+            assert_eq!(curve.apply_rolloff(y), curve.apply(y), "{y}");
+        }
+        // continuous, with the slope of the last segment, at the knot
+        let a = curve.knots()[30];
+        let slope = (last[1] - a[1]) / (last[0] - a[0]);
+        let h = last[0] * 1e-3;
+        let after = (curve.apply_rolloff(last[0] + h) - curve.apply_rolloff(last[0])) / h;
+        assert!((after - slope).abs() < 0.02 * slope, "{after} vs {slope}");
+        // monotone, below white, and slower to close on it than the V1/V2 extension
+        let mut previous = last[1];
+        for i in 1..3000 {
+            let y = last[0] * 1.005f32.powi(i);
+            let o = curve.apply_rolloff(y);
+            assert!(o >= previous && o < 1.0, "{y}: {o}");
+            assert!(o <= curve.apply(y) + 1e-6, "{y}");
+            previous = o;
+        }
+        assert!(1.0 - curve.apply_rolloff(last[0] * 8.0) > 4.0 * (1.0 - curve.apply(last[0] * 8.0)));
+        // a steep last segment joins with its own slope, and a last knot next to white without a step
+        for top in [0.9, 0.99995, 1.0 - f32::EPSILON] {
+            let mut k = knots();
+            k[31] = [k[30][0] * 1.01, top];
+            let c = CameraTone::new(k).unwrap();
+            let slope = (k[31][1] - k[30][1]) / (k[31][0] - k[30][0]);
+            assert!(slope > 16.0 || top < 0.99, "{slope}");
+            let mut prev = c.apply_rolloff(k[31][0]);
+            assert_eq!(prev, top);
+            for i in 1..2000 {
+                let o = c.apply_rolloff(k[31][0] * 1.0001f32.powi(i));
+                assert!(o.is_finite() && o >= prev && o <= 1.0, "{top} {i}: {o} < {prev}");
+                prev = o;
+            }
+            if top == 0.9 {
+                let h = k[31][0] * 1e-5;
+                let after = (c.apply_rolloff(k[31][0] + h) - top) / h;
+                assert!((after - slope).abs() < 0.02 * slope, "{after} vs {slope}");
+            }
+        }
+        // hostile input
+        for y in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0, f32::MAX] {
+            let o = curve.apply_rolloff(y);
+            assert!(o.is_finite() && (0.0..=1.0).contains(&o), "{y}: {o}");
+        }
+        // the tone map built from it is monotone and bounded, SDR and HDR
+        for peak in [1.0f32, 4.0] {
+            let t = ToneMap::camera_rolloff_hdr(&curve, 0.0, 0.0, 0.0, peak);
+            let mut prev = -1.0;
+            for i in 0..2400 {
+                let o = t.apply(1e-5 * 1.01f32.powi(i));
+                assert!((0.0..=peak).contains(&o) && o >= prev - 1e-6, "{peak} {i}: {o}");
+                prev = o;
+            }
+        }
     }
 
     #[test]
