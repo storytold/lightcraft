@@ -10,10 +10,11 @@
 //!   timed from its start.
 //! - A `cargo test` run ([`run_cargo_tests`]: the full `ci`'s test and heif steps, doctests) is timed
 //!   per test binary, from the `Running` (or `Doc-tests`) line cargo prints as it starts each one,
-//!   and again from the binary's own `running N tests` line; the build before the first one isn't
-//!   bounded. Cargo runs loud for this (`CARGO_TERM_QUIET=false`, no `-q`): a quiet cargo prints no
+//!   and again from the binary's own first `running N tests` line (later ones are a test's own
+//!   output); the build before the first one isn't bounded. Cargo runs loud for this (`CARGO_TERM_QUIET=false`, no `-q`): a quiet cargo prints no
 //!   `Running` lines. Under `cargo nextest run` (no such lines) nextest's own `slow-timeout` in
-//!   `.config/nextest.toml` ends a hung test instead.
+//!   `.config/nextest.toml` ends a hung test instead, whatever [`TEST_BINARY_TIMEOUT_ENV`] says
+//!   ([`nextest_note`]).
 //!
 //! The output streams through as it arrives, and is read on the way for libtest's lines: `running N
 //! tests`, `test NAME ... ok` as each test finishes (or `test NAME ... ` as it starts, when one runs
@@ -113,6 +114,19 @@ pub fn minutes_from_env(var: &str, default_min: u64) -> Result<Option<Duration>,
 /// The per-binary test limit from [`TEST_BINARY_TIMEOUT_ENV`].
 pub fn test_binary_timeout() -> Result<Option<Duration>, String> {
     minutes_from_env(TEST_BINARY_TIMEOUT_ENV, DEFAULT_TEST_BINARY_TIMEOUT_MIN)
+}
+
+/// What to say when the tests run under `cargo nextest run` and [`TEST_BINARY_TIMEOUT_ENV`] is
+/// set: nextest prints no `Running` lines for xtask's clock, so its own `slow-timeout`
+/// (`.config/nextest.toml`, 30 minutes per test) applies instead, whatever the variable says (`0`
+/// included). `None` when the variable isn't set.
+pub fn nextest_note(value: Option<&std::ffi::OsStr>) -> Option<String> {
+    let value = value.filter(|v| !v.is_empty())?;
+    Some(format!(
+        "note: {TEST_BINARY_TIMEOUT_ENV}={} doesn't apply under cargo nextest: .config/nextest.toml's slow-timeout ends a test \
+         after 30 minutes instead (a profile there without terminate-after, chosen with NEXTEST_PROFILE, runs without it)",
+        value.to_string_lossy()
+    ))
 }
 
 /// `30 min`, `1.5 min`, `20 s`, `1.2 s`, `300 ms`: a limit as the reports show it.
@@ -292,6 +306,9 @@ pub struct Progress {
     pub active: Option<String>,
     /// The unfinished last line of stdout: `test NAME ... ` while a single-threaded run runs NAME.
     pub pending: String,
+    /// A `running N tests` line counted for the clock since cargo's last `Running` / `Doc-tests`
+    /// line (or since the start): later ones are a test's own output and don't restart it.
+    pub header_seen: bool,
 }
 
 impl Progress {
@@ -316,6 +333,13 @@ impl Progress {
             if let (Some(n), Some("test" | "tests"), None) = (words.next().and_then(|n| n.parse().ok()), words.next(), words.next()) {
                 self.reset();
                 self.total = Some(n);
+                // one per binary restarts the clock: uncaptured test output can print the same
+                // line, and must not keep a hung binary alive. The binary's header can be read
+                // before cargo's `Running` line for it (stdout and stderr are read apart); then
+                // that `Running` line restarts the clock instead.
+                if std::mem::replace(&mut self.header_seen, true) {
+                    return Event::Other;
+                }
                 return Event::Tests;
             }
             return Event::Other;
@@ -355,6 +379,7 @@ impl Progress {
     fn start_binary(&mut self, name: String, exe: Option<PathBuf>) {
         self.binary = Some(name);
         self.exe = exe;
+        self.header_seen = false;
     }
 
     fn reset(&mut self) {
@@ -385,8 +410,8 @@ impl Progress {
 pub enum Clock {
     /// When the process starts: a test binary run directly.
     Start,
-    /// At each test binary cargo starts (its `Running` / `Doc-tests` line, and its own `running N
-    /// tests` line): the limit is per binary, and the build before the first isn't bounded.
+    /// At each test binary cargo starts (its `Running` / `Doc-tests` line, and its own first `running
+    /// N tests` line): the limit is per binary, and the build before the first isn't bounded.
     EachBinary,
 }
 
@@ -473,6 +498,9 @@ pub struct Watched {
     pub ended: Ended,
     pub stdout: String,
     pub stderr_tail: Vec<String>,
+    /// A process the run started still held its output open [`DRAIN`] after the run ended (one
+    /// that outlived it); what that process writes from then on is read and dropped, not shown.
+    pub held_open: bool,
 }
 
 struct Watch {
@@ -483,17 +511,51 @@ struct Watch {
     stderr_tail: std::collections::VecDeque<String>,
 }
 
+/// Where a streamed run's output goes (`true`: stdout): xtask's own stdout and stderr ([`stdio`]),
+/// or a test's writer.
+type Sink = Arc<dyn Fn(bool, &[u8]) + Send + Sync>;
+
+/// xtask's stdout and stderr, flushed after each chunk.
+fn stdio() -> Sink {
+    Arc::new(|is_stdout, chunk| {
+        if is_stdout {
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(chunk).and_then(|()| out.flush());
+        } else {
+            let mut err = std::io::stderr().lock();
+            let _ = err.write_all(chunk).and_then(|()| err.flush());
+        }
+    })
+}
+
+/// What a watched run's output readers share with [`watch`].
+struct Shared {
+    state: Mutex<Watch>,
+    sink: Sink,
+    /// Set once `watch` returns: from then on the readers drop what they read (see [`pump`]).
+    closed: AtomicBool,
+}
+
 /// Run `cmd` with its output streamed through (or captured) and read for libtest's lines, until it
 /// exits or `limit` runs out (timed as `clock` says); then kill it and every process it started.
-pub fn watch(mut cmd: Command, limit: Duration, clock: Clock, output: Output) -> Result<Watched, String> {
+pub fn watch(cmd: Command, limit: Duration, clock: Clock, output: Output) -> Result<Watched, String> {
+    watch_into(cmd, limit, clock, output, stdio(), DRAIN)
+}
+
+/// [`watch`], streaming to `sink` and waiting `drain` for the output pipes to close after the run.
+fn watch_into(mut cmd: Command, limit: Duration, clock: Clock, output: Output, sink: Sink, drain: Duration) -> Result<Watched, String> {
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let (mut child, marker) = spawn_marked(&mut cmd).map_err(|e| format!("failed to start: {e}"))?;
-    let state = Arc::new(Mutex::new(Watch {
-        progress: Progress::default(),
-        since: (clock == Clock::Start).then(Instant::now),
-        stdout: Vec::new(),
-        stderr_tail: std::collections::VecDeque::new(),
-    }));
+    let shared = Arc::new(Shared {
+        state: Mutex::new(Watch {
+            progress: Progress::default(),
+            since: (clock == Clock::Start).then(Instant::now),
+            stdout: Vec::new(),
+            stderr_tail: std::collections::VecDeque::new(),
+        }),
+        sink,
+        closed: AtomicBool::new(false),
+    });
     let (done_tx, done_rx) = mpsc::channel();
     let mut readers = 0;
     let pipes: [(Option<Box<dyn Read + Send>>, bool); 2] = [
@@ -502,58 +564,64 @@ pub fn watch(mut cmd: Command, limit: Duration, clock: Clock, output: Output) ->
     ];
     for (pipe, is_stdout) in pipes {
         let Some(pipe) = pipe else { continue };
-        let (state, done) = (Arc::clone(&state), done_tx.clone());
+        let (reader, done) = (Arc::clone(&shared), done_tx.clone());
         let spawned = std::thread::Builder::new().name("xtask-output".into()).spawn(move || {
-            pump(pipe, is_stdout, clock, output, &state);
+            pump(pipe, is_stdout, clock, output, &reader);
             let _ = done.send(());
         });
         if let Err(e) = spawned {
+            shared.closed.store(true, Ordering::Release);
             kill_run(Some(&mut child), &marker);
             return Err(format!("could not start a thread to read its output: {e}"));
         }
         readers += 1;
     }
     drop(done_tx);
-    let drain = |readers: usize| {
-        let until = Instant::now() + DRAIN;
-        for _ in 0..readers {
-            if done_rx.recv_timeout(until.saturating_duration_since(Instant::now())).is_err() {
-                break;
-            }
-        }
+    // Whether every reader saw its pipe close within `drain`. A process the run started that
+    // outlives it may hold a pipe open longer: past `drain` the readers stop forwarding (they
+    // keep reading, so that process never blocks on a full pipe), and later binaries' and steps'
+    // output isn't interleaved with its.
+    let drained = |readers: usize| {
+        let until = Instant::now() + drain;
+        let closed = (0..readers).all(|_| done_rx.recv_timeout(until.saturating_duration_since(Instant::now())).is_ok());
+        shared.closed.store(true, Ordering::Release);
+        closed
     };
-    let finish = |ended: Ended| {
-        let mut w = lock(&state);
+    let finish = |ended: Ended, held_open: bool| {
+        let mut w = lock(&shared.state);
         let stdout = String::from_utf8_lossy(&std::mem::take(&mut w.stdout)).into_owned();
-        Watched { ended, stdout, stderr_tail: w.stderr_tail.drain(..).collect() }
+        Watched { ended, stdout, stderr_tail: w.stderr_tail.drain(..).collect(), held_open }
     };
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                drain(readers);
-                return Ok(finish(Ended::Exited(status)));
+                let held_open = !drained(readers);
+                return Ok(finish(Ended::Exited(status), held_open));
             }
             Ok(None) => {}
             Err(e) => {
+                shared.closed.store(true, Ordering::Release);
                 kill_run(Some(&mut child), &marker);
                 return Err(format!("waiting for it failed: {e}"));
             }
         }
-        if lock(&state).since.is_some_and(|since| since.elapsed() >= limit) {
+        if lock(&shared.state).since.is_some_and(|since| since.elapsed() >= limit) {
             TIMED_OUT.store(true, Ordering::Relaxed);
             // not reaped yet (try_wait said it runs): its pid is still its own
             let killed = kill_run(Some(&mut child), &marker);
-            drain(readers);
-            let progress = Box::new(lock(&state).progress.clone());
-            return Ok(finish(Ended::TimedOut(progress, killed)));
+            let held_open = !drained(readers);
+            let progress = Box::new(lock(&shared.state).progress.clone());
+            return Ok(finish(Ended::TimedOut(progress, killed), held_open));
         }
         std::thread::sleep(TICK);
     }
 }
 
-/// Copy `pipe` to xtask's stdout or stderr as it arrives (or keep it, bounded), feeding whole lines
-/// to the progress.
-fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, output: Output, state: &Mutex<Watch>) {
+/// Copy `pipe` to the sink as it arrives (or keep it, bounded), feeding whole lines to the
+/// progress. The sink is written outside the lock: a reader of xtask's output that stalls blocks
+/// only this thread (and, through the pipe, the run), never [`watch`]'s check of the clock. Once
+/// `watch` has returned what is read is dropped.
+fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, output: Output, shared: &Shared) {
     let mut buf = [0u8; 8192];
     let mut lines = Lines::default();
     loop {
@@ -563,39 +631,41 @@ fn pump(mut pipe: Box<dyn Read + Send>, is_stdout: bool, clock: Clock, output: O
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
+        if shared.closed.load(Ordering::Acquire) {
+            continue;
+        }
         let chunk = buf.get(..n).unwrap_or_default();
-        let mut watch = lock(state);
-        match (output, is_stdout) {
-            (Output::Stream, true) => {
-                let mut out = std::io::stdout().lock();
-                let _ = out.write_all(chunk).and_then(|()| out.flush());
-            }
-            (Output::Stream, false) => {
-                let mut err = std::io::stderr().lock();
-                let _ = err.write_all(chunk).and_then(|()| err.flush());
-            }
-            (Output::Capture, true) => {
+        {
+            let mut watch = lock(&shared.state);
+            if output == Output::Capture && is_stdout {
                 let room = CAPTURE_MAX.saturating_sub(watch.stdout.len());
                 watch.stdout.extend_from_slice(chunk.get(..room.min(chunk.len())).unwrap_or_default());
             }
-            (Output::Capture, false) => {}
-        }
-        lines.feed(chunk, |line| {
-            let event = watch.progress.line(line);
-            if clock == Clock::EachBinary && event != Event::Other {
-                watch.since = Some(Instant::now());
-            }
-            if output == Output::Capture && !is_stdout {
-                if watch.stderr_tail.len() >= STDERR_TAIL {
-                    watch.stderr_tail.pop_front();
+            lines.feed(chunk, |line| {
+                let event = watch.progress.line(line);
+                if clock == Clock::EachBinary && event != Event::Other {
+                    watch.since = Some(Instant::now());
                 }
-                watch.stderr_tail.push_back(line.trim_end().to_owned());
+                if output == Output::Capture && !is_stdout {
+                    if watch.stderr_tail.len() >= STDERR_TAIL {
+                        watch.stderr_tail.pop_front();
+                    }
+                    watch.stderr_tail.push_back(line.trim_end().to_owned());
+                }
+            });
+            if is_stdout {
+                watch.progress.pending = lines.rest();
             }
-        });
-        if is_stdout {
-            watch.progress.pending = lines.rest();
+        }
+        if output == Output::Stream && !shared.closed.load(Ordering::Acquire) {
+            (shared.sink)(is_stdout, chunk);
         }
     }
+}
+
+/// The note when a run's output was still held open after it ended ([`Watched::held_open`]).
+fn held_open_note() -> String {
+    format!("note: a process the run started still held its output open {} after the run ended; xtask no longer shows what it writes", show(DRAIN))
 }
 
 /// Whether a NUL-separated environment block holds exactly `entry` (`KEY=VALUE`), not as part of
@@ -782,7 +852,11 @@ fn test_binary(mut cmd: Command, label: &str, limit: Option<Duration>, shown: &m
     if std::io::stdout().is_terminal() && !sets_color(&cmd) {
         cmd.args(["--color", "always"]);
     }
-    match watch(cmd, limit, Clock::Start, Output::Stream)?.ended {
+    let watched = watch(cmd, limit, Clock::Start, Output::Stream)?;
+    if watched.held_open {
+        shown.push(held_open_note());
+    }
+    match watched.ended {
         Ended::Exited(status) if status.success() => Ok(()),
         Ended::Exited(status) => Err(crate::test::describe(status)),
         Ended::TimedOut(progress, killed) => {
@@ -821,6 +895,14 @@ fn loud(cmd: &Command) -> Command {
     c
 }
 
+/// What `cmd`, a cargo command, passes each test binary: its arguments after `--` (filters,
+/// `--exact`, `--skip`, …), so the `--list` of a timed-out binary names only the tests the run
+/// selected. A filter among cargo's own arguments (`cargo test NAME`) isn't seen: callers put it
+/// after `--`.
+fn lister_args(cmd: &Command) -> Vec<std::ffi::OsString> {
+    cmd.get_args().skip_while(|a| *a != "--").skip(1).map(std::ffi::OsStr::to_os_string).collect()
+}
+
 /// Run `cmd`, a `cargo test` (or `cargo nextest run`) command, with each test binary it starts
 /// under `limit` ([`Clock::EachBinary`]; `None`: no limit, and the output isn't piped).
 pub fn run_cargo_tests(cmd: Command, limit: Option<Duration>) -> Result<(), String> {
@@ -843,7 +925,12 @@ fn cargo_tests(cmd: Command, limit: Option<Duration>, shown: &mut Vec<String>) -
         cmd.env("CARGO_TERM_COLOR", "always");
     }
     let dir = cmd.get_current_dir().map(Path::to_path_buf);
-    match watch(cmd, limit, Clock::EachBinary, Output::Stream)?.ended {
+    let filters = lister_args(&cmd);
+    let watched = watch(cmd, limit, Clock::EachBinary, Output::Stream)?;
+    if watched.held_open {
+        shown.push(held_open_note());
+    }
+    match watched.ended {
         Ended::Exited(status) if status.success() => Ok(()),
         Ended::Exited(status) => Err(format!("exited with {status}")),
         Ended::TimedOut(progress, killed) => {
@@ -852,7 +939,9 @@ fn cargo_tests(cmd: Command, limit: Option<Duration>, shown: &mut Vec<String>) -
                     Some(dir) if exe.is_relative() => dir.join(exe),
                     _ => exe.clone(),
                 };
-                list_tests(Command::new(exe), LIST_LIMIT, LIST_MAX_BYTES)
+                let mut lister = Command::new(exe);
+                lister.args(&filters);
+                list_tests(lister, LIST_LIMIT, LIST_MAX_BYTES)
             });
             let binary = progress.binary.clone().unwrap_or_else(|| "a test binary".to_owned());
             let (lines, error) = report(limit, &binary, &progress, listed.as_ref(), &killed);
@@ -1305,6 +1394,130 @@ mod tests {
         // and without any Running line at all, the binary's own `running N tests` starts it
         let err = cargo_tests(sh("echo 'running 1 test'; sleep 300"), Some(Duration::from_secs(1)), &mut Vec::new()).unwrap_err();
         assert_eq!(err, "timed out after 1 s: a test binary");
+    }
+
+    /// A sink that keeps what it gets, and blocks a stdout write while `gate` is shut.
+    #[cfg(unix)]
+    fn sink(gate: Arc<(Mutex<bool>, std::sync::Condvar)>) -> (Sink, Arc<Mutex<(Vec<u8>, Vec<u8>)>>) {
+        let got = Arc::new(Mutex::new((Vec::new(), Vec::new())));
+        let kept = Arc::clone(&got);
+        let sink: Sink = Arc::new(move |is_stdout, chunk| {
+            if is_stdout {
+                let (open, cv) = &*gate;
+                let mut open = open.lock().unwrap();
+                while !*open {
+                    open = cv.wait(open).unwrap();
+                }
+            }
+            let mut got = kept.lock().unwrap();
+            if is_stdout { &mut got.0 } else { &mut got.1 }.extend_from_slice(chunk);
+        });
+        (sink, got)
+    }
+
+    #[cfg(unix)]
+    fn open_gate(gate: &(Mutex<bool>, std::sync::Condvar)) {
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+    }
+
+    /// A reader of xtask's output that stops reading (a paused terminal, a full pipe) blocks the
+    /// thread that forwards the output, never the check of the clock: the run still times out.
+    #[cfg(unix)]
+    #[test]
+    fn a_blocked_output_sink_cannot_stop_the_timeout() {
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let (sink, got) = sink(Arc::clone(&gate));
+        let (tx, rx) = mpsc::channel();
+        let t = Instant::now();
+        let watcher = std::thread::spawn(move || {
+            let watched =
+                watch_into(sh("echo out; exec sleep 300"), Duration::from_secs(1), Clock::Start, Output::Stream, sink, Duration::from_millis(300));
+            let _ = tx.send(watched.map(|w| matches!(w.ended, Ended::TimedOut(..))));
+        });
+        let timed_out = rx.recv_timeout(Duration::from_secs(15));
+        let took = t.elapsed();
+        open_gate(&gate);
+        watcher.join().unwrap();
+        assert_eq!(timed_out, Ok(Ok(true)), "the limit ended the run while the sink was blocked ({took:?})");
+        assert!(took < Duration::from_secs(10), "{took:?}");
+        // the blocked write goes through once the reader reads again
+        let until = Instant::now() + Duration::from_secs(5);
+        while got.lock().unwrap().0.is_empty() && Instant::now() < until {
+            std::thread::sleep(TICK);
+        }
+        assert_eq!(got.lock().unwrap().0, b"out\n");
+    }
+
+    /// A process that outlives the run and holds its output: what it writes once the run is over
+    /// isn't forwarded into what xtask runs next, and the run says so.
+    #[cfg(unix)]
+    #[test]
+    fn output_after_the_run_ended_is_not_forwarded() {
+        let gate = Arc::new((Mutex::new(true), std::sync::Condvar::new()));
+        let (sink, got) = sink(gate);
+        let dir = std::env::temp_dir().join(format!("xtask-deadline-late-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let done = dir.join("done");
+        let script = format!("(sleep 1; echo late; echo late >&2; touch '{}') & echo early; echo early >&2", done.display());
+        let watched = watch_into(sh(&script), MIN, Clock::Start, Output::Stream, sink, Duration::from_millis(300)).unwrap();
+        assert!(matches!(watched.ended, Ended::Exited(s) if s.success()));
+        assert!(watched.held_open, "the subshell still held the pipes");
+        let until = Instant::now() + Duration::from_secs(10);
+        while !done.exists() && Instant::now() < until {
+            std::thread::sleep(TICK);
+        }
+        assert!(done.exists(), "the leftover wrote its lines (it never blocked on the pipe)");
+        std::thread::sleep(Duration::from_millis(300));
+        let got = got.lock().unwrap();
+        assert_eq!((got.0.as_slice(), got.1.as_slice()), (&b"early\n"[..], &b"early\n"[..]), "what came during the drain only");
+        assert!(held_open_note().contains("no longer shows what it writes"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_the_first_header_after_each_running_line_restarts_the_clock() {
+        let mut p = Progress::default();
+        assert_eq!(p.line("running 2 tests"), Event::Tests, "before any Running line (a quiet cargo)");
+        assert_eq!(p.line("running 1 test"), Event::Other, "a test's own output");
+        assert_eq!(p.line("     Running unittests src/lib.rs (target/debug/deps/a-1)"), Event::Binary);
+        assert_eq!(p.line("running 3 tests"), Event::Tests);
+        assert_eq!(p.total, Some(3));
+        p.line("test x ... ok");
+        for _ in 0..3 {
+            assert_eq!(p.line("running 9 tests"), Event::Other, "printed by a test, again and again");
+        }
+        // the next binary's header read before cargo's line for it: that line restarts the clock
+        assert_eq!(p.line("running 4 tests"), Event::Other);
+        assert_eq!(p.line("     Running tests/it/main.rs (target/debug/deps/it-2)"), Event::Binary);
+        assert_eq!(p.line("\u{1b}[1m\u{1b}[92m   Doc-tests\u{1b}[0m a"), Event::Binary);
+        assert_eq!(p.line("running 5 tests"), Event::Tests, "rustdoc's header, after it compiled them");
+        assert_eq!(p.line("running 2 tests"), Event::Other);
+    }
+
+    #[test]
+    fn a_timed_out_binary_is_listed_with_the_runs_filters() {
+        let mut c = Command::new("cargo");
+        c.args(["test", "-p", "lightcraft-engine", "--lib", "--", "heic", "--skip", "slow", "--exact"]);
+        assert_eq!(lister_args(&c), ["heic", "--skip", "slow", "--exact"]);
+        let mut c = Command::new("cargo");
+        c.args(["test", "--workspace"]);
+        assert!(lister_args(&c).is_empty(), "no filter: every test");
+        let mut c = Command::new("cargo");
+        c.args(["test", "--", "--", "x"]);
+        assert_eq!(lister_args(&c), ["--", "x"], "only the first `--` is cargo's");
+    }
+
+    #[test]
+    fn a_limit_set_under_nextest_is_noted_as_not_applying() {
+        assert_eq!(nextest_note(None), None);
+        assert_eq!(nextest_note(Some(std::ffi::OsStr::new(""))), None);
+        let note = nextest_note(Some(std::ffi::OsStr::new("0"))).unwrap();
+        assert!(
+            note.starts_with("note: LIGHTCRAFT_TEST_BINARY_TIMEOUT=0 doesn't apply under cargo nextest") && note.contains("NEXTEST_PROFILE"),
+            "{note}"
+        );
     }
 
     #[cfg(unix)]
