@@ -239,9 +239,9 @@ walks the drive.
   kept per view. A tone / colour / exposure drag re-runs one dispatch of `finish` plus the readback.
   Mask alphas are cached too, on both sides (`masks::AlphaCache`, one plane per visible mask of the
   last render), each keyed by `masks::alpha_key`: the mask's components, Refine Edges, Invert and
-  Amount, `geo`, plus `lin_key` when it reads the image (range masks, Sky / Subject / Background
-  heuristics, Auto Mask brushes, Refine Edges) and the exposure when it reads that (luminance and
-  colour range, Sky). An Exposure drag over gradient and brush masks, or a drag of a mask's own
+  Amount, the frame its coordinates are on (`on_photo`), `geo`, plus `lin_key` when it reads the
+  image (range masks, Sky / Subject / Background heuristics, stored AI selections, Auto Mask
+  brushes, Refine Edges) and the exposure when it reads that (luminance and colour range, Sky). An Exposure drag over gradient and brush masks, or a drag of a mask's own
   sliders, evaluates no mask; a cached alpha is the buffer a fresh evaluation produced, so warm and
   fresh renders stay bit-identical. Both caches' `bytes()` count the alphas and the blurred
   chromaticity.

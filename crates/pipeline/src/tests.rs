@@ -385,6 +385,9 @@ fn stage_cache_with_masks_matches_uncached_render_through_a_slider_session() {
         Box::new(|s| s.effects.clarity = -20.0),
         Box::new(|s| s.masks[5].visible = true),
         Box::new(|s| s.crop.geometry.rect = lightcraft_geom::Rect::new(0.05, 0.1, 0.9, 0.85)),
+        // a perspective warp, then an old mask (on the corrected frame) with the same coordinates
+        Box::new(|s| s.geometry.vertical = 25.0),
+        Box::new(|s| s.masks[0].on_photo = false),
         Box::new(|s| s.light.exposure = 0.9),
         // (last: a draft then keeps the wide planes of the image before noise reduction)
         Box::new(|s| s.detail.nr_luminance = 40.0),
@@ -459,6 +462,11 @@ fn mask_alphas_are_reused_until_what_they_read_changes() {
     // the frame changes (a flip: same size): all of them
     s.crop.flip_h = true;
     assert_eq!(step(&s), [false, false, false]);
+    // under a perspective warp, the frame a mask's coordinates are on (#3550): that mask only
+    s.geometry.vertical = 25.0;
+    assert_eq!(step(&s), [false, false, false]);
+    s.masks[1].on_photo = false;
+    assert_eq!(step(&s), [true, false, true]);
     // a hidden mask's alpha is let go: only the visible masks' are held
     s.masks[2].visible = false;
     render_cached(&src, &info, &s, &req, &cache);

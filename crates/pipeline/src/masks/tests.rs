@@ -711,8 +711,10 @@ fn alpha_keys_change_with_every_input_of_the_alpha() {
     }
     let empty = one(MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0 });
     assert_eq!(alpha_key(&empty, AlphaKeys { image: 4, ..keys }, 0.0), key(&empty), "nothing computed yet reads nothing");
-    let edits: [fn(&mut Mask); 7] = [
+    let edits: [fn(&mut Mask); 8] = [
         |m| m.refine = 10.0,
+        // (#3550: under a warp, the same coordinates on the photo and on the corrected frame differ)
+        |m| m.on_photo = !m.on_photo,
         |m| m.invert = true,
         |m| m.adjust.amount = 50.0,
         |m| m.components[0].invert = true,
