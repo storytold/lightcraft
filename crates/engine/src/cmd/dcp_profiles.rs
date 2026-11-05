@@ -69,9 +69,14 @@ pub fn register_all(s: &mut Session, profiles: Option<&Path>) {
 
 /// Whether `file` is the library's own copy: directly in its profiles folder `dir`, neither of them a link. The operator
 /// chose the library, so it isn't confined, wherever the automation roots are; a link there is judged like any other path.
-fn library_owned(dir: Option<&Path>, file: &Path) -> bool {
+pub(super) fn library_owned(dir: Option<&Path>, file: &Path) -> bool {
     let is_link = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
     dir.is_some_and(|d| file.parent() == Some(d) && !is_link(d) && !is_link(file))
+}
+
+/// Whether the profile file `file` may be written or removed, with `dir` the library's profiles folder.
+pub(super) fn write_allowed(dir: Option<&Path>, file: &Path) -> std::result::Result<(), String> {
+    if library_owned(dir, file) { Ok(()) } else { crate::file_access::check_write(file) }
 }
 
 /// The bytes of the profile file `file`, with `dir` the library's profiles folder; outside the automation roots a file
@@ -153,8 +158,7 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
         let file = match &dir {
             Some(d) => {
                 let to = d.join(format!("{}.dcp", id.trim_start_matches(DCP_PREFIX)));
-                let allowed = if library_owned(Some(d), &to) { Ok(()) } else { crate::file_access::check_write(&to) };
-                if let Err(e) = allowed {
+                if let Err(e) = write_allowed(Some(d), &to) {
                     failed.push(json!([shown, format!("{}: {e}", to.display())]));
                     continue;
                 }
@@ -194,9 +198,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         && !Path::new(&entry.file).components().any(|c| c == std::path::Component::ParentDir)
     {
         // (a `Profiles` folder that is a link isn't the library's own: it may lead out of the automation roots)
-        if !library_owned(Some(&d), Path::new(&entry.file)) {
-            crate::file_access::check_write(&entry.file).map_err(|e| bad(C, format!("{}: {e}", entry.file)))?;
-        }
+        write_allowed(Some(&d), Path::new(&entry.file)).map_err(|e| bad(C, format!("{}: {e}", entry.file)))?;
         match std::fs::remove_file(&entry.file) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
