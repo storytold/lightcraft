@@ -1,6 +1,6 @@
 # Process versions
 
-> **Last updated:** 2026-10-12 · **Change:** minor (calibrated Contrast and Blacks)
+> **Changes:** [revision history](#revision-history)
 
 Every photo's develop settings record the **rendering process** they are interpreted by
 (`DevelopSettings::process`, a `ProcessVersion` in `crates/develop/src/settings.rs`). Lightroom calls
