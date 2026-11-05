@@ -1,7 +1,7 @@
 # X-Trans demosaic
 
-> **Last updated:** 2026-10-24 · **Code:** `crates/raw/src/demosaic/xtrans_ri.rs`, filters in `xtrans_taps.rs` ·
-> **Tools:** `crates/raw/examples/xtrans_truth.rs`, `crates/raw/examples/xtrans_bench/`
+> **Code:** `crates/raw/src/demosaic/xtrans_ri.rs`, filters in `xtrans_taps.rs` ·
+> **Tools:** `crates/raw/examples/xtrans_truth.rs`, `crates/raw/examples/xtrans_bench/` · **Changes:** [revision history](#revision-history)
 
 Fujifilm's X-Trans sensors use a 6 × 6 colour pattern instead of Bayer's 2 × 2. Bayer methods (AHD, PPG) don't apply,
 and the obvious generalisations lose to plain bilinear interpolation. This page describes what LightCraft does, how it
@@ -89,3 +89,10 @@ Measured on the same bench, each against the method above at the time:
 - A 5 × 5 residual window: 10 % faster, −0.08 dB and more colour noise at high ISO.
 
 Open: measuring against Lightroom's own X-Trans rendering; a lighter path for 1:1 previews if the extra 0.35 s shows.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-01 | patch | The corpus list is `RAW_SAMPLES` in `xtask/src/raw_samples.rs` (moved out of `main.rs`) |
+| 2026-10-24 | major | Page added: classified LMMSE green + residual interpolation, ground truth by pattern-block binning, bench results and what was tried |
