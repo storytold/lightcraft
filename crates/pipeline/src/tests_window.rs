@@ -848,3 +848,42 @@ fn ordinary_crops_keep_their_vignette_frame() {
         assert_eq!(frame.vignette_frame(&s, w, h), before(&frame, &s, w, h), "{name}");
     }
 }
+
+#[test]
+fn dithering_keeps_the_output_origin_when_the_vignette_uses_a_crop() {
+    let src = Rgb32f::filled(480, 320, [0.123456; 3]);
+    let info = SourceInfo::default();
+    let mut s = DevelopSettings::default();
+    s.crop.geometry.rect = Rect { x0: 0.12, y0: 0.15, x1: 0.6, y1: 0.75 };
+    s.crop.geometry.angle = 5.0;
+    let req = RenderRequest { apply_crop: false, ..RenderRequest::fit(480, 480) };
+    let at = PixelWindow { x: 7, y: 12, w: 120, h: 80 };
+    let full = render(&src, &info, &s, &req).image;
+    let part = render(&src, &info, &s, &RenderRequest { window: Some(at), ..req }).image;
+    assert_eq!((part.width, part.height), (at.w, at.h));
+    assert!(full.data.iter().any(|p| p[0] != full.data[0][0]), "the flat image must exercise Bayer quantization");
+    for y in 0..at.h {
+        for x in 0..at.w {
+            assert_eq!(part.get(x, y), full.get(at.x + x, at.y + y), "Bayer phase at {x},{y}");
+        }
+    }
+    // Enabling an off-centre crop vignette must never replace the dithering origin.
+    for amount in [0.0, -80.0] {
+        s.vignette.amount = amount;
+        let mut frame = crate::frame_for(&src, &info, &s, false);
+        frame.view = Some(crate::geometry::ViewWindow { x: 7.0, y: 12.0, full_w: 480.0, full_h: 320.0 });
+        let fp = crate::finish::FinishParams::new(crate::finish::FinishParamsInput {
+            settings: &s,
+            frame: &frame,
+            info: &info,
+            image_size: (120, 80),
+            px_per_long: 480.0,
+            air_pre: 1.0,
+            space: crate::OutputSpace::Srgb,
+        });
+        assert_eq!(fp.view, [7.0, 12.0, 480.0, 320.0]);
+        if amount != 0.0 {
+            assert_ne!(&fp.vig_aff[4..6], &fp.view[..2], "the crop vignette has a different origin");
+        }
+    }
+}

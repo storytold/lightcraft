@@ -451,7 +451,11 @@ mod tests {
         let mut core = WorkerCore::default();
         assert_eq!(core.needs_original(&wire), None, "demo scenes are generated");
         let a = core.render(&wire, None).unwrap();
-        let b = job.run().rendered.unwrap();
+        // Worker serialization is compared exactly with the engine's CPU path. A native
+        // thumbnail job can select the GPU once ready, whose documented rounding may differ.
+        let decoded = job.source.load_source().unwrap();
+        let info = decoded.info_or(job.info.clone());
+        let b = lightcraft_engine::media::develop(&decoded.image, &info, &job.settings, &job.request, job.stages.as_deref(), false);
         assert_eq!((a.image.width, a.image.height), (b.image.width, b.image.height));
         assert_eq!(a.image.data, b.image.data);
         assert_eq!(a.histogram, b.histogram);
