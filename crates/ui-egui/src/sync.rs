@@ -184,7 +184,7 @@ pub fn body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
     }
     let choice = |ui: &mut egui::Ui, on: &mut bool, n: usize, text: String, widget: &str| {
         let r = ui.add_enabled(n > 0, egui::Checkbox::new(on, text));
-        crate::widgets::register(ui.ctx(), widget, r.rect);
+        crate::widgets::register(ui, widget, r.rect);
     };
     let count = |text: &str, n: usize| format!("{} ({n})", crate::i18n::tr(text));
     let dim = |ui: &mut egui::Ui, s: &str| ui.label(egui::RichText::new(s).color(t.text_dim));
@@ -313,6 +313,28 @@ impl Drop for SyncRun {
     fn drop(&mut self) {
         self.progress.files.cancel.store(true, Ordering::Relaxed);
     }
+}
+
+/// Tests: a synchronize that stays running while the returned sender lives, so a drop that is
+/// released when another barrier goes meets a running Synchronize Folder deterministically
+/// (without waiting for a real folder's walk). The caller clears `sync_run` when done.
+#[cfg(test)]
+pub(crate) fn stall_run(app: &mut LightcraftApp, name: &str) -> Box<dyn std::any::Any> {
+    let progress = Arc::new(SyncProgress::default());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let guard = app.session.activity.start("sync", "Synchronizing folder", Cancel::Flag(progress.files.cancel.clone()));
+    guard.detail(name);
+    app.sync_run = Some(SyncRun {
+        name: name.to_string(),
+        progress,
+        crashed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        rx,
+        commit: None,
+        stopping: false,
+        not_saved: Vec::new(),
+        guard,
+    });
+    Box::new(tx)
 }
 
 /// Commit what the worker readied (called every frame); when it is done, one undo step and a

@@ -90,10 +90,13 @@ impl Options {
             })
             .collect();
         let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        let bench = get("bench").is_some();
         Options {
-            bench: get("bench").is_some(),
-            store: get("store").filter(|s| s == "idb" || s == "memory").unwrap_or_else(|| "opfs".into()),
-            workers: get("workers").and_then(|v| v.parse().ok()),
+            bench,
+            // the benchmark edits the first photo it finds: a link with `?bench` must never reach
+            // the library in browser storage, so it always runs on the demo photos in an unsaved library
+            store: if bench { "memory".into() } else { get("store").filter(|s| s == "idb" || s == "memory").unwrap_or_else(|| "opfs".into()) },
+            workers: get("workers").and_then(|v| v.parse().ok()).map(|n: usize| n.min(crate::workers::MAX_WORKERS)),
             reset: get("reset").is_some(),
         }
     }
@@ -168,10 +171,14 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Build the browser host's `Services`: library backup/restore through browser storage and a
+/// download, asynchronous file picking, downloads for writes, and PNG encoding. Desktop-only
+/// services (native pickers, reveal, model folders) stay unset.
 fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen: Rc<Cell<bool>>, ctx: egui::Context) -> Services {
     let (backup_backend, backup_files) = (backend.clone(), files);
     let restore_backend = backend.clone();
     Services {
+        local_places: None,
         picker: None,
         pick_display_profile: None,
         screen_profile: None,
@@ -228,7 +235,12 @@ fn services(originals: Originals, backend: Option<Backend>, files: Files, frozen
         save_curve_preset_file: None,
         pick_slideshow_templates: None,
         save_slideshow_template: None,
+        pick_print_templates: None,
+        save_print_template: None,
         write: Some(Box::new(download)),
+        // the browser download path has no meaningful create-new file write; the control channel
+        // (and therefore screenshot paths) is not available on the web
+        write_new: None,
         // downloads happen on the main thread: exports run in the foreground on the web
         write_shared: None,
         png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
@@ -271,7 +283,7 @@ async fn flush(files: Files, backend: Backend, dir: String, flushing: Rc<Cell<bo
                 log::error!("saving {} failed: {e}", op.name());
                 files.failed(&ops[i..]);
                 files.set_error(Some(e));
-                failed_at.set(perf_now());
+                failed_at.set(lightcraft_ui_egui::monotonic_ms());
                 break 'outer;
             }
         }
@@ -414,7 +426,37 @@ struct WebApp {
     ui_written: Vec<u8>,
 }
 
+/// The browser host's drop queues, taken only through the shared gate: a prompt or blocking
+/// library window leaves both untouched for a later UI pass.
+impl crate::drop_gate::QueuedDrops for WebApp {
+    type Dropped = egui::DroppedFileHandle;
+    type Pending = String;
+
+    fn drops_wait(&self) -> bool {
+        crate::drop_gate::drops_wait(&self.app)
+    }
+
+    fn defer_dropped(&mut self) {
+        self.app.defer_dropped_files();
+    }
+
+    fn take_dropped(&mut self) -> Vec<Self::Dropped> {
+        self.app.take_dropped_files()
+    }
+
+    fn take_unprotected_dropped(&mut self) -> Vec<Self::Dropped> {
+        self.app.take_unprotected_dropped_files()
+    }
+
+    fn take_pending(&mut self) -> Vec<Self::Pending> {
+        self.originals.take_pending()
+    }
+}
+
 impl WebApp {
+    /// Construct the web app from the boot options: install originals and open the library from
+    /// browser storage (a read failure starts an empty session and a blocking `LibraryProblem`),
+    /// load the stored UI state, start render workers and the optional benchmark.
     fn new(cc: &eframe::CreationContext<'_>, boot: Boot, chinese_font: Vec<u8>) -> Self {
         let Boot { opts, backend, files, index, lib_dir, load_error } = boot;
         let originals = Originals::default();
@@ -457,6 +499,10 @@ impl WebApp {
                 });
             }
         }
+        // `?bench` never has storage (see `Options::from_url`): it measures the generated demo photos
+        if opts.bench && backend.is_none() && session.catalog.len() == 0 {
+            lightcraft_engine::demo::load(&mut session);
+        }
         if backend.is_some() {
             notice(
                 "LightCraft in the browser is experimental. Your library is kept in this browser's storage: keep your original photos \
@@ -470,7 +516,12 @@ impl WebApp {
         let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
             .with_chinese_font(chinese_font);
         let ui_written = files.get("ui.json").unwrap_or_default();
-        if let Ok(ui) = serde_json::from_slice::<UiState>(&ui_written) {
+        // an arrangement from an older docking version starts again from the default
+        let mut saved = serde_json::from_slice::<serde_json::Value>(&ui_written).unwrap_or_default();
+        if let Some(fields) = saved.as_object_mut() {
+            lightcraft_ui_egui::docking::drop_outdated(fields);
+        }
+        if let Ok(ui) = serde_json::from_value::<UiState>(saved) {
             app.ui = ui;
         }
         app.ui = app.ui.sanitized();
@@ -496,7 +547,7 @@ impl WebApp {
         }
         log::info!("lightcraft: {n} render workers");
         CTX.with(|c| *c.borrow_mut() = Some(cc.egui_ctx.clone()));
-        let origin = lightcraft_ui_egui::now_ms() - perf_now();
+        let origin = lightcraft_ui_egui::monotonic_ms();
         WebApp {
             app,
             originals,
@@ -515,25 +566,31 @@ impl WebApp {
         }
     }
 
+    /// Consume the drops the raw-input hook queued once (never re-read `raw.dropped_files` in a
+    /// hidden logic tick), and add originals whose bytes have arrived.
     fn import_dropped(&mut self, ctx: &egui::Context) {
-        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        // A prompt or the blocking library window (including the chooser's own New Library name
+        // prompt or asynchronous folder picker) holds both queues for a later UI pass: nothing is
+        // read or imported behind it. `drain_ready` is the same orchestration the native tests run.
+        let dialog_open = self.app.ui.dialog.is_some();
+        let Some(drained) = crate::drop_gate::drain_ready(self, dialog_open) else { return };
         // a dialog is on screen (the card said so while the files hovered): nothing is read or imported
         // (files read from an earlier drop still finish below)
-        if !dropped.is_empty() && self.app.ui.dialog.is_some() {
+        if !drained.dropped.is_empty() && dialog_open {
             self.app.toast(ctx, lightcraft_ui_egui::i18n::tr("Close the open dialog, then drop the files again"));
             return;
         }
-        for f in dropped {
+        for f in drained.dropped {
             let (originals, backend, ctx) = (self.originals.clone(), self.backend.clone(), ctx.clone());
             wasm_bindgen_futures::spawn_local(async move {
-                let name = f.path().to_string_lossy().to_string();
-                match f.bytes_async().await {
+                let name = egui::DroppedFile::path(f.as_ref()).to_string_lossy().to_string();
+                match egui::DroppedFile::bytes_async(f.as_ref()).await {
                     Ok(bytes) => store_file(originals, backend, name, bytes, ctx).await,
                     Err(e) => notice(lightcraft_ui_egui::i18n::dropped_file_unreadable(&name, &e.to_string())),
                 }
             });
         }
-        let paths = self.originals.take_pending();
+        let Some(paths) = drained.pending else { return };
         if !paths.is_empty() {
             match self.app.run("library.import", json!({"paths": paths})) {
                 // what the import did, not what was submitted: duplicates and unsupported files add nothing,
@@ -587,7 +644,7 @@ impl WebApp {
         if self.frozen.get() {
             return;
         }
-        let now = perf_now();
+        let now = lightcraft_ui_egui::monotonic_ms();
         if now - self.last_save >= SAVE_EVERY_MS {
             self.last_save = now;
             self.app.session.save_view();
@@ -677,13 +734,14 @@ impl WebApp {
 }
 
 impl eframe::App for WebApp {
+    /// eframe's non-drawing pass for the browser host: drain safety notices and queued inbox work,
+    /// load originals the UI requested, apply the cache budget, run the app's logic, then save.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         for text in safety::take_notices() {
-            let now = ctx.input(|i| i.time);
+            let now = self.app.tick_now();
             self.app.ui.toast = Some((text, now + NOTICE_SECS, None));
         }
         self.run_inbox();
-        self.import_dropped(ctx);
         self.load_originals(ctx);
         if let Some(w) = &self.workers {
             // `library.preferences ▸ cacheMb` is read by the session; the worker index prunes on
@@ -692,26 +750,22 @@ impl eframe::App for WebApp {
         }
         self.app.logic(ctx);
         self.save();
-        if let Some(b) = self.bench.as_mut()
-            && let Some(report) = b.step(&mut self.app)
-        {
-            log::info!("lightcraft-bench {report}");
-            if let Some((alive, ready, remote, inline)) = self.workers.as_ref().map(Workers::stats) {
-                log::info!("lightcraft-workers {{\"alive\":{alive},\"ready\":{ready},\"remote_jobs\":{remote},\"inline_jobs\":{inline}}}");
-            }
-            set_status(&format!("bench: {report}"));
-            self.bench = None;
-        }
-        if self.bench.is_some() {
-            ctx.request_repaint();
-        }
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.app.raw_input_hook(raw);
+    /// Pass the browser's raw input to the app hook before egui processes it, so prompt barriers
+    /// and synthetic or dropped input are applied consistently with the desktop host.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.app.raw_input_hook(ctx, raw);
     }
 
+    /// eframe's UI pass: import queued drops unless a prompt blocks input, draw the app, update the
+    /// page title, and advance the benchmark once per root pass.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Drops are the UI phase's: a hidden `logic`/`run_logic` tick must not import them twice.
+        // `import_dropped` itself takes both queues only through the gate, so a prompt or the
+        // blocking library window (over an already open library) keeps a stored drop queued.
+        let ctx = ui.ctx().clone();
+        self.import_dropped(&ctx);
         self.app.ui(ui);
         // eframe's web runner ignores `ViewportCommand::Title`: name the open photo in the page title
         let title = self.app.page_title(self.files.is_dirty() || self.flushing.get());
@@ -720,6 +774,22 @@ impl eframe::App for WebApp {
         {
             doc.set_title(&title);
             self.title = title;
+        }
+        // The benchmark is a UI-phase step: a second layout pass or a hidden tick must not count a frame.
+        if ui.ctx().current_pass_index() == 0 {
+            if let Some(b) = self.bench.as_mut()
+                && let Some(report) = b.step(&mut self.app)
+            {
+                log::info!("lightcraft-bench {report}");
+                if let Some((alive, ready, remote, inline)) = self.workers.as_ref().map(Workers::stats) {
+                    log::info!("lightcraft-workers {{\"alive\":{alive},\"ready\":{ready},\"remote_jobs\":{remote},\"inline_jobs\":{inline}}}");
+                }
+                set_status(&format!("bench: {report}"));
+                self.bench = None;
+            }
+            if self.bench.is_some() {
+                ctx.request_repaint();
+            }
         }
         if !self.first_frame_logged && !self.app.widgets.is_empty() {
             self.first_frame_logged = true;

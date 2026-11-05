@@ -184,7 +184,8 @@ impl WorkerCore {
                 let src = match (&job.origin, original) {
                     (Source::File { .. }, Some(bytes)) => {
                         let outliers = job.settings.removes_hot_pixels();
-                        let (image, info) = lightcraft_engine::files::load_bytes_with(bytes, job.max_edge, outliers)?;
+                        let with = lightcraft_engine::media::RawDecode { dcp: None, outliers };
+                        let (image, info) = lightcraft_engine::files::load_bytes_decoded(bytes, job.max_edge, with)?;
                         DecodedSource { outliers, ..DecodedSource::new(Arc::new(image), Some(info)) }
                     }
                     (Source::File { path }, None) => return Err(format!("{path}: original not found in browser storage")),
