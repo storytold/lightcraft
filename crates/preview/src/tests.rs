@@ -792,3 +792,14 @@ fn deferred_writes_are_bounded_and_drain_to_disk() {
     assert!(keys.iter().all(|k| cache.get(*k).is_some()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_thumbnail_header_past_the_pixel_cap_is_refused_before_decoding() {
+    let img = Rgba8 { width: 8, height: 8, data: vec![[10, 20, 30, 255]; 64] };
+    let mut jpeg = encode_jpeg(&img).unwrap();
+    assert!(decode_jpeg(&jpeg).is_some());
+    // the frame header's height and width, patched to 65535 x 65535 (4 gigapixels)
+    let sof = jpeg.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+    jpeg[sof + 5..sof + 9].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    assert!(decode_jpeg(&jpeg).is_none());
+}

@@ -95,9 +95,12 @@ pub(crate) fn create_staging(tmp: &std::path::Path) -> io::Result<std::fs::File>
     std::fs::OpenOptions::new().write(true).create_new(true).open(tmp)
 }
 
+/// Most bytes of one catalog file read into memory.
+const MAX_READ: u64 = 8 << 30;
+
 impl Store for FsStore {
     fn read(&mut self, name: &str) -> io::Result<Option<Vec<u8>>> {
-        match std::fs::read(self.path(name)) {
+        match crate::safe_file::read_regular(self.path(name), MAX_READ) {
             Ok(b) => Ok(Some(b)),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
