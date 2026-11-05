@@ -761,6 +761,209 @@ fn backup(path: &Path, stamp: &str) -> std::io::Result<PathBuf> {
     Err(std::io::Error::other("no free backup name"))
 }
 
+/// Escape text for an XMP attribute value. The values written here are numbers, so
+/// this is a safeguard rather than a feature.
+fn escape_attr(v: &str) -> String {
+    v.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+/// Index of the `>` closing the tag that starts at `start`, respecting quoted
+/// attribute values (a `>` inside quotes does not end the tag), or `None` when
+/// the tag is not closed.
+fn tag_end(data: &str, start: usize) -> Option<usize> {
+    let bytes = data.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = start;
+    while i < data.len() {
+        let b = *bytes.get(i)?;
+        match quote {
+            Some(q) if b == q => quote = None,
+            None if b == b'"' || b == b'\'' => quote = Some(b),
+            None if b == b'>' => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Whether the tag ending at `end` (index of `>`) is self-closing: the last
+/// non-whitespace byte before `>` is `/`.
+fn is_self_closing(data: &str, end: usize) -> bool {
+    data.get(..end).is_some_and(|s| s.trim_end().ends_with('/'))
+}
+
+/// Whether `data.get(range)` contains a standalone `token` (not part of a
+/// longer attribute name or value word).
+fn tag_contains(data: &str, start: usize, end: usize, token: &str) -> bool {
+    let Some(tag) = data.get(start..=end) else { return false };
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':');
+    let bytes = token.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = tag[from..].find(token) {
+        let at = from + rel;
+        let before_ok = at == 0 || !is_word(tag.as_bytes()[at - 1]);
+        let after = at + token.len();
+        let after_ok = after >= tag.len() || !is_word(tag.as_bytes()[after]);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = after.max(at + bytes.len());
+    }
+    false
+}
+
+/// Whether the `rdf:Description` tag at `start..end` declares the `crs`
+/// namespace or already carries a `crs:` attribute.
+fn crs_block(data: &str, start: usize, end: usize) -> bool {
+    // Cheap substring check first; the token check rejects accidents.
+    tag_contains(data, start, end, "xmlns:crs=") || tag_contains(data, start, end, "crs:")
+}
+
+/// Value range of attribute `crs:name` in the `rdf:Description` tag at
+/// `start..end`, handling single or double quotes and whitespace around `=`.
+/// Outer `None`: attribute absent. `Some(None)`: present but malformed, so no
+/// duplicate is inserted alongside it.
+fn attr_value_range(data: &str, start: usize, end: usize, name: &str) -> Option<Option<(usize, usize)>> {
+    let wanted = format!("crs:{name}");
+    let bytes = data.as_bytes();
+    let at = |i: usize| bytes.get(i).copied();
+    let mut i = start + "<rdf:Description".len();
+    while i < end {
+        // Skip whitespace and the `/` of a self-closing tag.
+        while i < end && matches!(at(i), Some(b) if b.is_ascii_whitespace() || b == b'/') {
+            i += 1;
+        }
+        if i >= end {
+            break;
+        }
+        let name_start = i;
+        while i < end && matches!(at(i), Some(b) if !b.is_ascii_whitespace() && b != b'=' && b != b'/') {
+            i += 1;
+        }
+        let is_wanted = data.get(name_start..i).is_some_and(|s| s == wanted);
+        while i < end && matches!(at(i), Some(b) if b.is_ascii_whitespace()) {
+            i += 1;
+        }
+        if i >= end || at(i) != Some(b'=') {
+            continue;
+        }
+        i += 1;
+        while i < end && matches!(at(i), Some(b) if b.is_ascii_whitespace()) {
+            i += 1;
+        }
+        if i >= end || !matches!(at(i), Some(b'"') | Some(b'\'')) {
+            return if is_wanted { Some(None) } else { None };
+        }
+        let quote = at(i)?;
+        let value_start = i + 1;
+        let mut j = value_start;
+        while j < end && at(j) != Some(quote) {
+            j += 1;
+        }
+        if j >= end {
+            return if is_wanted { Some(None) } else { None };
+        }
+        if is_wanted {
+            return Some(Some((value_start, j)));
+        }
+        i = j + 1;
+    }
+    None
+}
+
+/// Update an existing `crs:name` field in place and report whether one was
+/// found: as an attribute of a `rdf:Description` tag, or as an element
+/// `<crs:name>value</crs:name>`. Returns `true` for a malformed occurrence
+/// too, so a duplicate is not inserted alongside it.
+fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
+    let mut from = 0;
+    while let Some(rel) = data[from..].find("<rdf:Description") {
+        let start = from + rel;
+        let Some(end) = tag_end(data, start) else { return true };
+        if let Some(found) = attr_value_range(data, start, end, name) {
+            if let Some((vs, ve)) = found {
+                data.replace_range(vs..ve, &escape_attr(value));
+            }
+            return true;
+        }
+        from = end + 1;
+        if from >= data.len() {
+            break;
+        }
+    }
+    let open = format!("<crs:{name}");
+    let Some(rel) = data.find(&open) else { return false };
+    let start = rel;
+    let after = start + open.len();
+    let next = data.get(after..).and_then(|s| s.chars().next());
+    if !matches!(next, Some(c) if c.is_whitespace() || c == '>' || c == '/') {
+        return false;
+    }
+    let Some(end) = tag_end(data, start) else { return true };
+    let escaped = escape_attr(value);
+    if is_self_closing(data, end) {
+        data.replace_range(start..end + 1, &format!("<crs:{name}>{escaped}</crs:{name}>"));
+        return true;
+    }
+    let close = format!("</crs:{name}>");
+    let Some(rel) = data[end + 1..].find(&close) else { return true };
+    data.replace_range(end + 1..end + 1 + rel, &escaped);
+    true
+}
+
+/// Update the `crs:` attributes carried by the packet's descriptions in place, adding any
+/// that are missing. Only a `rdf:Description` that declares the `crs` namespace or already
+/// carries `crs:` attributes is used; if none exists, one is created with the namespace
+/// declared. Attribute form keeps each field to a single occurrence (an element
+/// would appear twice, as opening and closing tag), so the other application reads our edit
+/// in the same attribute it wrote its own. Everything else in the packet is kept byte for
+/// byte (issue #934).
+fn update_crs_attributes(data: &mut String, crs: &[(&'static str, String)]) {
+    for (name, value) in crs {
+        if !update_existing_crs(data, name, value) {
+            insert_crs_attribute(data, name, value);
+        }
+    }
+}
+
+/// Insert `crs:name="value"` into the `rdf:Description` that declares the `crs`
+/// namespace or already carries `crs:` attributes, creating such a block when
+/// none exists. It never inserts into an unrelated first block, where the
+/// `crs:` prefix may be unbound.
+fn insert_crs_attribute(data: &mut String, name: &str, value: &str) {
+    let attr = format!(" crs:{name}=\"{}\"", escape_attr(value));
+    let mut from = 0;
+    while let Some(rel) = data[from..].find("<rdf:Description") {
+        let pos = from + rel;
+        let Some(end) = tag_end(data, pos) else { return };
+        if crs_block(data, pos, end) {
+            // For a self-closing tag the `/` must immediately precede `>`, so the new
+            // attribute goes before the `/`, not before the `>`.
+            let insert_at = if is_self_closing(data, end) { data.get(..end).and_then(|s| s.rfind('/')).unwrap_or(end) } else { end };
+            data.insert_str(insert_at, &attr);
+            return;
+        }
+        from = end + 1;
+        if from >= data.len() {
+            break;
+        }
+    }
+    let block = format!(
+        "<rdf:Description rdf:about=\"\" xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"{attr}/>"
+    );
+    if let Some(pos) = data.find("<rdf:RDF") {
+        let Some(end) = tag_end(data, pos) else { return };
+        if is_self_closing(data, end) {
+            return;
+        }
+        data.insert_str(end + 1, &block);
+    } else if let Some(pos) = data.find("<x:xmpmeta") {
+        let Some(end) = tag_end(data, pos) else { return };
+        data.insert_str(end + 1, &block);
+    }
+}
+
 /// What [`Session::save_sidecar`] did.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SidecarSaved {
@@ -1154,7 +1357,20 @@ impl Session {
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let (mut data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        // Write the develop settings other applications understand as `crs:` fields back into
+        // their existing block, updating it in place so the next read from that application
+        // sees our edit instead of preferring our `lc:settings` over its stale `crs:` values
+        // (issue #934). Fields we don't state are left as the other application wrote them.
+        let crs = crate::crs::crs_settings(&*p.develop);
+        if !crs.is_empty() {
+            // Write the develop settings other applications understand as `crs:` attributes back
+            // into the packet, updating them in place so the edit reaches the other application
+            // instead of being shadowed by our `lc:settings` (issue #934). Attribute form keeps
+            // each field to a single occurrence; element form would appear twice (opening and
+            // closing tag). Fields we don't state are left as the other application wrote them.
+            update_crs_attributes(&mut data, &crs);
+        }
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })

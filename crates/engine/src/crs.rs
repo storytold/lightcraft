@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use lightcraft_develop::{MIXER_BANDS, Preset};
+use lightcraft_develop::{DevelopSettings, MIXER_BANDS, Preset};
 use serde_json::{Map, Value, json};
 
 /// Properties keyed `prefix:name` (as produced by [`lightcraft_meta::parse_xmp`]).
@@ -535,6 +535,26 @@ pub fn has_saved_upright_transform(props: &Props) -> bool {
     })
 }
 
+/// The `crs:` develop fields LightCraft writes back into another application's sidecar, so an
+/// edit made here (`light.exposure` → `crs:Exposure2012`, and so on) reaches the other
+/// application instead of being shadowed by our `lc:settings`. Only fields set to a non-default
+/// value are written: a field at its default is not distinguished from an untouched one, so
+/// writing it would overwrite a foreign value or insert a field the packet never had. Fields
+/// not in this list are kept byte for byte, and the existing block is updated in place rather
+/// than duplicated.
+pub fn crs_settings(settings: &DevelopSettings) -> Vec<(&'static str, String)> {
+    let light = &settings.light;
+    let all = [
+        ("Exposure2012", light.exposure),
+        ("Contrast2012", light.contrast),
+        ("Highlights2012", light.highlights),
+        ("Shadows2012", light.shadows),
+        ("Whites2012", light.whites),
+        ("Blacks2012", light.blacks),
+    ];
+    all.into_iter().filter(|(_, v)| *v != 0.0).map(|(name, v)| (name, v.to_string())).collect()
+}
+
 /// Read an XMP preset (`crs:` fields + `crs:Name` / `crs:Group`) into one of our presets.
 /// Returns `None` when the packet has no adjustments we understand.
 pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
@@ -553,3 +573,47 @@ pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod crs_write_tests {
+    use super::*;
+
+    /// A develop edit must reach the other application's `crs:` fields: writing the sidecar
+    /// updates the existing `crs:` block in place, so the app that wrote it sees our edit
+    /// (issue #934).
+    #[test]
+    fn crs_write_updates_the_existing_block_in_place() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+
+        /// A sidecar as another raw developer writes it: its own develop settings in `crs:`.
+        const FOREIGN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            xmp:CreatorTool="Other App" crs:Version="15.0" crs:Exposure2012="0.5"/>
+          </rdf:RDF></x:xmpmeta>"#;
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-crs-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let sidecar = dir.join("IMG_1.xmp");
+        std::fs::write(&sidecar, FOREIGN).unwrap();
+
+        // our edit: the exposure the other application is told about
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.9;
+        let mut photo =
+            Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
+        photo.develop = std::sync::Arc::new(develop);
+        let mut s = crate::Session::new();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
+        assert_eq!(num(&props, "crs:Exposure2012"), Some(0.9), "the edit reaches the other application's field:\n{text}");
+        assert_eq!(text.matches("crs:Exposure2012").count(), 1, "the existing block is updated, not written twice:\n{text}");
+        assert!(text.contains(r#"xmp:CreatorTool="Other App""#), "the rest of the packet is kept:\n{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
