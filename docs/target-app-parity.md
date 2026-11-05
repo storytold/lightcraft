@@ -47,7 +47,7 @@ phase #85, duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | Dimension | Breadth | Ready for real work | Remaining | Doc |
 |---|---:|---:|---:|---|
 | Features (weighted areas below) | ~77% (checklist 81.6%, measured) | ~62% | 600–1,100 h | [Features](#features) |
-| ↳ RAW cameras, colour and lens profiles (part of features) | 85% of Adobe's 1,446 models decode (39% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
+| ↳ RAW cameras, colour and lens profiles (part of features) | 89% of Adobe's 1,446 models decode (39% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
 | UI/UX fidelity | ~85% | ~70% | 32–54 h | [ui-parity.md](ui-parity.md) |
 | File formats (non-raw: images, sidecars, presets, catalogs) | ~85% | ~70% | 30–55 h | [file-format-parity.md](file-format-parity.md) |
 | Hardware | ~50% | ~40% | 40–80 h (+ tethering and printing, counted under Classic modules) | [hardware-parity.md](hardware-parity.md) |
@@ -119,7 +119,7 @@ work. Each has its own hours to ~95%, calibrated as in [How hours are calibrated
 | Audience | Ready | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---:|---:|---|
 | Full target (ready for real work) | **~62%** | **980–1,750 h** (~70% parallelizes) | raw colour, lens and camera data; AI models; Classic output modules; localization; plug-in ecosystem |
-| Mainstream practitioner | **~51%** | **440–820 h** (~60% parallelizes) | camera colour and render fidelity; CR3 / ORF / HE NEF; lens database; subject / sky masks; Lightroom XMP exchange; stability |
+| Mainstream practitioner | **~51%** | **440–820 h** (~60% parallelizes) | camera colour and render fidelity; CR3 / HE NEF; per-model ORF verification; lens database; subject / sky masks; Lightroom XMP exchange; stability |
 | Essentials user | **~65%** | **160–300 h** (~50% parallelizes) | default raw look for popular cameras; launch stability; basic-slider feel; opening CR3 / HEIC files people send |
 
 ### Full target (ready for real work): ~62%
