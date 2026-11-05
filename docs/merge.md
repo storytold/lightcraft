@@ -17,7 +17,7 @@ All algorithms are our own implementations from published papers (cited in the m
   one exposure is skipped), one after the other in the activity stack.
 - **Commands** (CLI, MCP, control channel):
   - `merge.hdr {ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false, preview=false, showOverlay=false, previewPath?}`
-  - `merge.panorama {ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, maxMegapixels (default: the photos' own resolution), preview, previewPath?}`
+  - `merge.panorama {ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, maxMegapixels=512 (also the most: a larger one, or 0 or less, is taken as 512; the output keeps the photos' own resolution up to it), preview, previewPath?}`
   - `merge.hdrPanorama {ids?, bracket=0 (from EXIF), …both sets of options}`
   - `merge.hdrBatch {ids?, align, deghost, autoSettings, stack}` → `{merged: [{id, path, …}], failed: [{photos, error}]}`
 - **CLI:** `lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch [options] FILES…` (`hdr-batch` finds the brackets
@@ -87,7 +87,7 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   caption also lists them.
 - Memory is planned before a merge decodes anything (`crates/engine/src/merge/plan.rs`), from each photo's size and
   file size in the catalog (when it has none, its file's header; when that can't be read either, the largest known),
-  against the merge's memory: three quarters of the RAM, less the cache budget. Each phase is followed in the order it
+  against the merge's memory: three-quarters of the RAM, less the cache budget. Each phase is followed in the order it
   runs. Photos are decoded one at a time, always at full size, then made smaller: each holds its file and ~36 bytes a
   pixel (48 when it is made smaller; a raw whose sensor has many more samples than its picture has pixels, 8 bytes a
   sample instead when that is more; and one that demosaics its whole active area before cropping it, 12 bytes a pixel
@@ -95,8 +95,8 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   frames already held (12 bytes a pixel each). Issue #3708: until then a merge was sized only after every photo was
   decoded, which could run out of memory first. A merge that fits runs as it always did; one with no size known at all
   runs unplanned. When the computer's memory can't be read (Windows, for now) the merge's memory is a guess (that of 8
-  GB of RAM): the plan follows it but refuses nothing on it, and what it would refuse runs as it did before, at full
-  size, one photo at a time. Just before each photo is decoded its header is read again and the plan checked with it
+  GB of RAM): the plan follows it but refuses nothing on it, and what it would refuse runs as it did before, one
+  photo at a time: a full merge at full size, a preview at its 1024 px frames. Just before each photo is decoded its header is read again and the plan checked with it
   (the catalog doesn't keep a raw's sensor size, and a file can have changed since it was imported): when the plan no
   longer holds the merge stops before decoding it, naming the file.
 - A preview's photos are planned at full size too (a JPEG other than a lossless one may decode at a smaller DCT scale;
@@ -110,11 +110,14 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   at once) when that is more: 3.9 / 5.0 / 6.1 GB for those without deghosting, 3–10 % above the measurements. An HDR
   keeps its photos' resolution: one that doesn't fit is refused with the memory it needs and has. Half-float frames
   would halve the per-frame share.
-- Panorama output keeps the photos' resolution, up to `maxMegapixels` (default 512) and what fits in the merge's
-  memory: the blend peaks at ~68 bytes per output pixel, and projecting needs ~36 beside the photos' 12. When that is
-  less than the photos' resolution, the result says `limit: "memory"`. It is made no smaller than its floor: 40 MP,
-  or the smaller `maxMegapixels` asked for (a `maxMegapixels` below 0.1 is refused: the stitch keeps no smaller size
-  limit), or the photos' own pixels when they have less, even under 0.1 MP (the stitch never scales photos up). A
+- Panorama output keeps the photos' resolution, up to `maxMegapixels` (default and most 512: a larger one, or 0 or
+  less, is taken as 512), a longest edge of 65,000 px, and what fits in the merge's memory: the blend peaks at ~68
+  bytes per output pixel, and projecting needs ~36 beside the photos' 12. When the result comes out smaller than the
+  photos' resolution, `limit` says why: `"memory"` when what fits in memory is below both the `maxMegapixels` asked
+  for and the photos' resolution; otherwise `"asked"` when a `maxMegapixels` below 512 is below the photos'
+  resolution (so `maxMegapixels: 20` with 50 MP fitting in memory and 100 MP of photos says `"asked"`); otherwise
+  `"size"`, the 512 MP or 65,000 px cap. It is made no smaller than its floor: 40 MP, or the smaller `maxMegapixels` asked for (a positive `maxMegapixels` below 0.1 is refused:
+  the stitch keeps no smaller size limit), or the photos' own pixels when they have less, even under 0.1 MP (the stitch never scales photos up). A
   merge whose memory can't hold the floor is refused with the memory it needs and has (issue #3708; until then the
   40 MP floor was kept whatever the memory, and could run out of it).
 - Photos for a panorama that don't fit at full size are decoded smaller, but only while the stitch still reaches
@@ -122,7 +125,7 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   refused before any photo is decoded (only the header of a photo the catalog has no size for is read first). They keep at least twice the floor's pixels (a panorama is taken to keep half
   its frames' pixels, their overlap aside; for an HDR panorama, in whichever bracket makes the fewest), and a
   panorama of smaller frames that still comes out under its floor (the overlap is known only after the stitch) is
-  refused then. They are decoded as large as fits and still leaves the panorama as large as
+  refused then, when the memory is known; on a guessed memory it is kept, below its floor. They are decoded as large as fits and still leaves the panorama as large as
   memory allows (frames above about 1/25 of the memory in pixels leave less room for projecting it), and never under
   1024 px on the long side (the preview's frames): the result says `limit: "memory"` (or `"asked"`, when a
   smaller `maxMegapixels` holds it below what memory allows), and `nativeMegapixels` is still the photos' own
