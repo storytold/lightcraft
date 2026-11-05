@@ -82,6 +82,7 @@ pub fn load(s: &mut Session) {
             smart: None,
             quick: false,
             order: None,
+            photo_order: vec![],
         },
     });
     let by_kw = |kw: &str| -> Vec<_> { scenes.iter().zip(&ids).filter(|(sc, _)| sc.meta.keywords.contains(&kw)).map(|(_, id)| *id).collect() };
@@ -96,7 +97,7 @@ pub fn load(s: &mut Session) {
         let id = s.catalog.alloc_album_id();
         let cover = photos.first().copied();
         ops.push(Op::AddAlbum {
-            album: Album { id, name: name.into(), parent, folder: false, photos, cover, smart: None, quick: false, order: None },
+            album: Album { id, name: name.into(), parent, folder: false, photos, cover, smart: None, quick: false, order: None, photo_order: vec![] },
         });
     }
     for op in ops {

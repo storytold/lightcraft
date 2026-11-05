@@ -2408,5 +2408,10 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "Custom Order": "自定义顺序",
+  "Move in Custom Order": "按自定义顺序移动",
+  "Set Custom Order": "设置自定义顺序",
+  "Duplicate Album": "复制相册",
+  "Another album with the same photos, to arrange in its own order": "包含相同照片的另一个相册，可按自己的顺序排列"
 }

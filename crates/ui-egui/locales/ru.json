@@ -2615,5 +2615,10 @@
   "Top bar": "Верхняя панель",
   "Tool strip": "Панель инструментов",
   "Bottom bar": "Нижняя панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Предотвращать мерцание G-SYNC/FreeSync (после перезапуска)",
+  "Custom Order": "Пользовательский порядок",
+  "Move in Custom Order": "Переместить в пользовательском порядке",
+  "Set Custom Order": "Задать пользовательский порядок",
+  "Duplicate Album": "Дублировать альбом",
+  "Another album with the same photos, to arrange in its own order": "Ещё один альбом с теми же фото, чтобы упорядочить их по-своему"
 }

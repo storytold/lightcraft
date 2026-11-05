@@ -262,3 +262,55 @@ pub(super) fn select_by(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn has_library(s: &Session) -> std::result::Result<(), String> {
     if s.library.is_some() { Ok(()) } else { Err("no library is open (in-memory session)".into()) }
 }
+
+/// The regular album the library shows, if any (the one Custom Order sorts).
+pub(super) fn custom_album(s: &Session) -> Option<AlbumId> {
+    match s.source {
+        crate::LibrarySource::Album(a) if s.catalog.has_custom_order(a) => Some(a),
+        _ => None,
+    }
+}
+
+/// The album's photos in the order the user sees them: its Custom Order, or — while the album is
+/// shown in another sort — the shown photos first, in the grid's order, then the rest.
+pub(super) fn shown_order(s: &mut Session, a: AlbumId) -> Vec<PhotoId> {
+    let saved = s.catalog.album_photo_order(a);
+    if custom_album(s) != Some(a) || s.sort.key == lightcraft_catalog::SortKey::Custom {
+        return saved;
+    }
+    let members: std::collections::HashSet<PhotoId> = saved.iter().copied().collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<PhotoId> = s.visible().iter().copied().filter(|x| members.contains(x) && seen.insert(*x)).collect();
+    out.extend(saved.into_iter().filter(|x| seen.insert(*x)));
+    out
+}
+
+/// `ids` for an ordering command: album members, repeats dropped; an id not in the album is an error.
+pub(super) fn order_ids(s: &Session, a: AlbumId, p: &Value, c: &str) -> Result<Vec<PhotoId>> {
+    let Some(raw) = p.get("ids").and_then(Value::as_array) else { return Err(bad(c, "missing `ids` (an array of photo ids)")) };
+    let al = s.catalog.album(a).ok_or_else(|| bad(c, "no such album"))?;
+    let members: std::collections::HashSet<PhotoId> = al.photos.iter().copied().collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for v in raw {
+        let id = v.as_u64().map(PhotoId).ok_or_else(|| bad(c, "`ids` must be photo ids"))?;
+        if !members.contains(&id) {
+            return Err(bad(c, format!("photo {} is not in the album", id.0)));
+        }
+        if seen.insert(id) {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
+/// Saves the album's Custom Order (one undo step) and sorts the view by it when it's shown.
+pub(super) fn set_custom_order(s: &mut Session, a: AlbumId, order: Vec<PhotoId>, label: &str) -> Result<Value> {
+    if s.catalog.album(a).is_some_and(|al| al.photo_order != order) {
+        s.commit(label, Op::SetAlbumPhotoOrder { id: a, order: order.clone() })?;
+    }
+    if custom_album(s) == Some(a) && s.sort.key != lightcraft_catalog::SortKey::Custom {
+        s.sort = lightcraft_catalog::Sort { key: lightcraft_catalog::SortKey::Custom, ascending: true, ..s.sort };
+    }
+    Ok(json!({"order": order.iter().map(|x| x.0).collect::<Vec<_>>()}))
+}

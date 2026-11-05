@@ -2,8 +2,8 @@ use super::filters::{covers_other_disks, merge_rules, view_rules};
 use super::gps::parse_gps;
 use super::import::{import_batch_done, import_params, list_auto_import_folder};
 use super::selection::{
-    album_param, album_targets, album_targets_or_err, change_flag, change_rating, cull, flip, for_targets, has_library, mark_deleted,
-    opt_album_param, rotate, row_step, select_after_deletion, select_by, step, strs,
+    album_param, album_targets, album_targets_or_err, change_flag, change_rating, cull, custom_album, flip, for_targets, has_library, mark_deleted,
+    opt_album_param, order_ids, rotate, row_step, select_after_deletion, select_by, set_custom_order, shown_order, step, strs,
 };
 use super::{
     Album, AlbumId, ColorLabel, CommandSpec, CopyrightStatus, Filter, Flag, GroupBy, LibrarySource, Op, PhotoId, Result, Selection, Sort, SortKey,
@@ -233,7 +233,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort",
             ["View", "Sort"],
             None,
-            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
+            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random|custom (Custom Order: a regular album's order set by hand), ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
             always,
             |s, p| {
                 let key: SortKey = match p.get("key") {
@@ -246,11 +246,23 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 let mut seed = seed_param(p, "library.sort", s.sort.seed)?;
                 let explicit = p.get("seed").is_some_and(|v| !v.is_null());
+                let mut ascending = bool_or(p, "ascending", s.sort.ascending);
+                if key == SortKey::Custom && s.sort.key != SortKey::Custom {
+                    let Some(a) = custom_album(s) else {
+                        return Err(bad("library.sort", "Custom Order sorts a regular album: open one first"));
+                    };
+                    // no order of its own yet: it starts from what is shown now
+                    if s.catalog.album(a).is_some_and(|al| al.photo_order.is_empty()) {
+                        let order = shown_order(s, a);
+                        s.commit("Custom Order", Op::SetAlbumPhotoOrder { id: a, order })?;
+                    }
+                    ascending = bool_or(p, "ascending", true);
+                }
                 if key == SortKey::Random && s.sort.key != SortKey::Random && !explicit {
                     // switching to Random is a fresh shuffle, not whatever seed was left behind
                     seed = next_seed(seed, &(s.clock)());
                 }
-                s.sort = Sort { key, ascending: bool_or(p, "ascending", s.sort.ascending), group, seed };
+                s.sort = Sort { key, ascending, group, seed };
                 ok()
             }
         ),
@@ -808,14 +820,55 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let folder = bool_or(p, "folder", false);
                 let parent = p.get("parent").and_then(Value::as_u64).map(AlbumId);
-                let (photos, skipped) = if !folder && bool_or(p, "addSelected", false) { album_targets(s, s.selected()) } else { (vec![], 0) };
+                let (mut photos, skipped) = if !folder && bool_or(p, "addSelected", false) { album_targets(s, s.selected()) } else { (vec![], 0) };
+                // in the order they are shown (a Custom Order or sort carries over), not selection order
+                if photos.len() > 1 {
+                    let pos: std::collections::HashMap<PhotoId, usize> = s.visible().iter().enumerate().map(|(i, p)| (*p, i)).collect();
+                    photos.sort_by_key(|p| pos.get(p).copied().unwrap_or(usize::MAX));
+                }
                 let id = s.catalog.alloc_album_id();
                 let cover = photos.first().copied();
                 s.commit(
                     if folder { "New Folder" } else { "New Album" },
-                    Op::AddAlbum { album: Album { id, name, parent, folder, photos, cover, smart: None, quick: false, order: None } },
+                    Op::AddAlbum {
+                        album: Album { id, name, parent, folder, photos, cover, smart: None, quick: false, order: None, photo_order: vec![] },
+                    },
                 )?;
                 Ok(json!({"id": id.0, "skipped": skipped}))
+            }
+        ),
+        cmd!(
+            "album.duplicate",
+            "Duplicate Album",
+            [],
+            None,
+            "{id, name?} — a new regular album beside it with the same photos and Custom Order (a second order of the same photos) → {id}",
+            always,
+            |s, p| {
+                const C: &str = "album.duplicate";
+                let id = p.get("id").and_then(Value::as_u64).map(AlbumId).ok_or_else(|| bad(C, "missing `id`"))?;
+                let a = s.catalog.album(id).cloned().ok_or_else(|| bad(C, format!("no album {}", id.0)))?;
+                if a.folder || a.smart.is_some() || a.quick {
+                    return Err(bad(C, "only a regular album can be duplicated"));
+                }
+                let name =
+                    str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| format!("{} copy", a.name));
+                let new = s.catalog.alloc_album_id();
+                let photo_order = s.catalog.album_photo_order(id);
+                let album = Album {
+                    id: new,
+                    name,
+                    parent: a.parent,
+                    folder: false,
+                    photos: a.photos.clone(),
+                    cover: a.cover,
+                    smart: None,
+                    quick: false,
+                    order: None,
+                    photo_order,
+                };
+                s.commit("Duplicate Album", Op::AddAlbum { album })?;
+                Ok(json!({"id": new.0}))
             }
         ),
         cmd!(
@@ -1018,6 +1071,76 @@ pub fn specs() -> Vec<CommandSpec> {
                 let changed = ops.len();
                 s.commit("Reorder Album", Op::Batch { ops })?;
                 Ok(json!({"changed": changed}))
+            }
+        ),
+        cmd!(
+            "album.orderPhotos",
+            "Move in Custom Order",
+            [],
+            None,
+            "{album?: albumId (default: the album shown), ids: [photoIds], before?: photoId (default: to the end)} — moves the photos, in their current order, before `before`; sorts the view by Custom Order → {order}",
+            always,
+            |s, p| {
+                const C: &str = "album.orderPhotos";
+                let a = match opt_album_param(p, "album", C)? {
+                    Some(a) => a,
+                    None => custom_album(s).ok_or_else(|| bad(C, "missing `album` (no album is shown)"))?,
+                };
+                if !s.catalog.has_custom_order(a) {
+                    return Err(bad(C, "only regular albums have a custom order"));
+                }
+                // `before` means "left of it in the grid": a descending Custom Order shows the saved order
+                // reversed, so the drop is worked out on the shown list and saved back in forward order
+                let reversed = custom_album(s) == Some(a) && s.sort.key == SortKey::Custom && !s.sort.ascending;
+                let mut base = shown_order(s, a);
+                if reversed {
+                    base.reverse();
+                }
+                let moved = order_ids(s, a, p, C)?;
+                if moved.is_empty() {
+                    return Err(bad(C, "missing `ids`"));
+                }
+                let before = match p.get("before") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => {
+                        let b = v.as_u64().map(PhotoId).ok_or_else(|| bad(C, "`before` must be a photo id or null"))?;
+                        if !base.contains(&b) {
+                            return Err(bad(C, format!("photo {} is not in the album", b.0)));
+                        }
+                        Some(b)
+                    }
+                };
+                // the moved photos keep their order among themselves
+                let moving: std::collections::HashSet<PhotoId> = moved.iter().copied().collect();
+                let in_order: Vec<PhotoId> = base.iter().copied().filter(|x| moving.contains(x)).collect();
+                // dropping before one of the moved photos: before the first photo after it that stays
+                let anchor = before.and_then(|b| base.iter().skip_while(|x| **x != b).find(|x| !moving.contains(x)).copied());
+                let mut order: Vec<PhotoId> = base.iter().copied().filter(|x| !moving.contains(x)).collect();
+                let at = anchor.and_then(|b| order.iter().position(|x| *x == b)).unwrap_or(order.len());
+                order.splice(at..at, in_order);
+                if reversed {
+                    order.reverse();
+                }
+                set_custom_order(s, a, order, "Move in Custom Order")
+            }
+        ),
+        cmd!(
+            "album.setPhotoOrder",
+            "Set Custom Order",
+            [],
+            None,
+            "{album: albumId, ids: [photoIds]} — the album's Custom Order (repeats ignored; members not listed follow in their current order) → {order}",
+            always,
+            |s, p| {
+                const C: &str = "album.setPhotoOrder";
+                let a = album_param(p, "album", C)?;
+                if !s.catalog.has_custom_order(a) {
+                    return Err(bad(C, "only regular albums have a custom order"));
+                }
+                let mut order = order_ids(s, a, p, C)?;
+                let listed: std::collections::HashSet<PhotoId> = order.iter().copied().collect();
+                order.extend(s.catalog.album_photo_order(a).into_iter().filter(|x| !listed.contains(x)));
+                set_custom_order(s, a, order, "Set Custom Order")
             }
         ),
         cmd!(

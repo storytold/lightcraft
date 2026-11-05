@@ -999,6 +999,8 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
     // only the primary button drags, so a right-button drag leaves the selection alone
     if resp.drag_started_by(egui::PointerButton::Primary) {
         begin_photo_drag(app, id);
+    } else if let Some(dragged) = app.ui.dragging_photos.clone() {
+        reorder_drop(app, ui, id, resp.rect, &dragged);
     }
     crate::widgets::context_menu(resp, |ui| context_menu(app, ui, id));
 }
@@ -1014,6 +1016,46 @@ struct BadgeFlags {
     square: bool,
     selected: bool,
     hovered: bool,
+}
+
+/// The regular album the library shows: the one whose photos can be put in Custom Order.
+pub fn custom_order_album(app: &LightcraftApp) -> Option<lightcraft_catalog::AlbumId> {
+    match app.session.source {
+        lightcraft_engine::LibrarySource::Album(a) if app.session.catalog.has_custom_order(a) => Some(a),
+        _ => None,
+    }
+}
+
+/// Photos dragged over a thumbnail of a regular album: a line on the side they would land
+/// (before this photo, or after it), and on release they move there in Custom Order (switching the
+/// sort to it, as Lightroom Classic does).
+fn reorder_drop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, dragged: &[u64]) {
+    let Some(album) = custom_order_album(app).filter(|_| !dragged.contains(&id.0)) else { return };
+    let (pos, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
+    let Some(pos) = pos.filter(|p| r.contains(*p) && ui.clip_rect().contains(*p)) else { return };
+    let t = Tokens::get(ui.ctx());
+    let left = pos.x < r.center().x;
+    let x = if left { r.left() - 2.0 } else { r.right() + 2.0 };
+    ui.painter().line_segment([egui::pos2(x, r.top()), egui::pos2(x, r.bottom())], Stroke::new(3.0, t.accent));
+    if !released {
+        return;
+    }
+    let before = if left {
+        Some(id)
+    } else {
+        let vis = app.session.visible_cloned();
+        vis.iter().position(|v| *v == id).and_then(|i| vis.get(i + 1).copied())
+    };
+    app.ui.dragging_photos = None;
+    // a stale selection can hold photos that are not in the album; the command rejects those
+    let members: Vec<u64> =
+        app.session.catalog.album(album).map(|a| dragged.iter().copied().filter(|d| a.photos.contains(&PhotoId(*d))).collect()).unwrap_or_default();
+    if members.is_empty() {
+        return;
+    }
+    if let Err(e) = app.run("album.orderPhotos", json!({"album": album.0, "ids": members, "before": before.map(|b| b.0)})) {
+        app.toast(ui.ctx(), e);
+    }
 }
 
 /// The header of a Local folder view: the path as a breadcrumb (each part opens that folder),

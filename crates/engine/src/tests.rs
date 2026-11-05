@@ -11,6 +11,7 @@ mod color;
 mod constrain_crop;
 mod crop_angle;
 mod crop_aspect;
+mod custom_order;
 mod denoise;
 mod export;
 mod face_models;

@@ -2253,5 +2253,10 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de ferramentas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)",
+  "Custom Order": "Ordem personalizada",
+  "Move in Custom Order": "Mover na ordem personalizada",
+  "Set Custom Order": "Definir ordem personalizada",
+  "Duplicate Album": "Duplicar álbum",
+  "Another album with the same photos, to arrange in its own order": "Outro álbum com as mesmas fotos, para organizar em ordem própria"
 }
