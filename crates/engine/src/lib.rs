@@ -152,6 +152,18 @@ pub struct UndoEntry {
     pub(crate) retry_inverse: Vec<Op>,
     /// Sidecars still separated from their photo after a failed move or rollback.
     pub(crate) retry_sidecars: Vec<rename::SidecarMove>,
+    /// What people had chosen before this step changed it (a rename or merge of people): put back with the catalog,
+    /// since those choices live in people.json, outside it.
+    pub(crate) people: Vec<PersonChoices>,
+}
+
+/// One person's choices kept outside the catalog (people.json), as an undo step puts them back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PersonChoices {
+    /// The lower-cased name.
+    pub key: String,
+    /// The face that shows them in People; `None` for their largest one.
+    pub cover: Option<lightcraft_catalog::PersonCover>,
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
@@ -744,7 +756,14 @@ impl Session {
             Err(e) => return Err(e),
         };
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        self.undo.push(UndoEntry {
+            label: label.to_string(),
+            op: inv,
+            folder: None,
+            retry_inverse: Vec::new(),
+            retry_sidecars: Vec::new(),
+            people: Vec::new(),
+        });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             let mut dropped = self.undo.remove(0);
@@ -875,7 +894,7 @@ impl Session {
         }
         let Some(entries) = self.undo.get(self.undo.len() - n..) else { return };
         // Folder moves and partially applied file steps stay on their own.
-        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()) {
+        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty() || !e.people.is_empty()) {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
@@ -886,6 +905,7 @@ impl Session {
             folder: None,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            people: Vec::new(),
         });
     }
 
@@ -915,12 +935,14 @@ impl Session {
         };
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
+        let people = self.swap_people(std::mem::take(&mut e.people));
         self.redo.push(UndoEntry {
             label: e.label.clone(),
             op: redo,
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            people,
         });
         Ok(e.label)
     }
@@ -940,7 +962,7 @@ impl Session {
             }
             op => Op::Batch { ops: std::iter::once(op).chain(std::mem::take(&mut e.retry_inverse)).collect() },
         };
-        Some(UndoEntry { label: e.label.clone(), op, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() })
+        Some(UndoEntry { label: e.label.clone(), op, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new(), people: Vec::new() })
     }
 
     pub fn redo_step(&mut self) -> Result<String> {
@@ -961,14 +983,37 @@ impl Session {
         };
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
+        let people = self.swap_people(std::mem::take(&mut e.people));
         self.undo.push(UndoEntry {
             label: e.label.clone(),
             op: undo,
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            people,
         });
         Ok(e.label)
+    }
+
+    /// Give each of `people` the choices it lists, and return what they had instead (what the opposite step puts
+    /// back). Saved like a rename's: the step stands even when people.json can't take it now.
+    fn swap_people(&mut self, people: Vec<PersonChoices>) -> Vec<PersonChoices> {
+        if people.is_empty() {
+            return people;
+        }
+        let back = people
+            .into_iter()
+            .map(|c| {
+                let cover = match c.cover {
+                    Some(v) => self.person_covers.insert(c.key.clone(), v),
+                    None => self.person_covers.remove(&c.key),
+                };
+                PersonChoices { key: c.key, cover }
+            })
+            .collect();
+        self.people_gen = self.people_gen.wrapping_add(1);
+        self.save_people_or_keep_unsaved();
+        back
     }
 
     /// After an undo or redo that changed one photo (its edit, rating, flag, label, metadata or

@@ -177,11 +177,16 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
     // counts only when someone bears that name (a merge, where theirs is kept); otherwise it is left over from an
     // earlier rename and is replaced, or dropped when they have no chosen picture
     if from_key != to_key && !(other && s.person_covers.contains_key(&to_key)) {
+        let before = crate::PersonChoices { key: to_key.clone(), cover: s.person_covers.get(&to_key).copied() };
         let changed = match s.person_covers.get(&from_key).copied() {
             Some(c) => s.person_covers.insert(to_key.clone(), c) != Some(c),
             None => s.person_covers.remove(&to_key).is_some(),
         };
         if changed {
+            // undoing the rename gives the new name back what it had (a merge undone leaves the other person as they were)
+            if let Some(step) = s.undo.last_mut() {
+                step.people = vec![before];
+            }
             s.people_gen = s.people_gen.wrapping_add(1);
             // the rename stands; a people.json that cannot take it now counts as unsaved
             s.save_people_or_keep_unsaved();

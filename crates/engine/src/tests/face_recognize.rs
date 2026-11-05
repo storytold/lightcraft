@@ -796,6 +796,55 @@ fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
 /// A people.json that couldn't be read when the library opened is never overwritten that session (#3246): a picture
 /// can't be chosen, and a rename carrying one counts as unsaved, without the frame loop trying to write the file.
 #[test]
+fn undoing_a_merge_gives_the_other_person_back_their_picture_and_a_switch_waits_for_people_json() {
+    use lightcraft_catalog::{Filter, Photo, Source};
+    let d = temp("cover-merge");
+    let lib = d.join("lib");
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let add = |s: &mut Session, name: &str, regions: Vec<Region>| {
+        let id = s.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+        p.meta.regions = regions;
+        s.commit("add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    let a = add(&mut s, "a.jpg", vec![region(0.1, Some("Ann"))]);
+    let big = Region { rect: Rect { x0: 0.05, y0: 0.05, x1: 0.95, y1: 0.95 }, ..region(0.0, Some("Bea")) };
+    let b = add(&mut s, "b.jpg", vec![big]);
+    let picture = |s: &Session, name: &str| {
+        s.catalog.people_in_with(&Filter::default(), &s.person_covers).into_iter().find(|p| p.name.eq_ignore_ascii_case(name)).map(|p| p.photo)
+    };
+    let saved = |lib: &std::path::Path| -> Value { serde_json::from_slice(&std::fs::read(lib.join("people.json")).unwrap()).unwrap() };
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 0})).unwrap();
+    // Bea has no picture of her own: merged, she takes Ann's; undone, she has none again, and Ann keeps hers
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Bea", "merge": true})).unwrap();
+    assert_eq!(s.person_covers.get("bea").map(|c| c.photo), Some(a));
+    let generation = s.people_gen;
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((s.person_covers.get("bea"), picture(&s, "Bea"), picture(&s, "Ann")), (None, Some(b), Some(a)), "{:?}", s.person_covers);
+    assert_ne!(s.people_gen, generation, "the People view is told");
+    assert_eq!(saved(&lib)["covers"].get("bea"), None, "and people.json says so");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.person_covers.get("bea").map(|c| c.photo), Some(a), "redone, she has it again");
+    assert_eq!(saved(&lib)["covers"]["bea"]["photo"], a.0);
+    s.execute("edit.undo", &json!({})).unwrap();
+    // a rename people.json can't take keeps the library open when another one is opened, as when it is closed
+    std::fs::remove_file(lib.join("people.json")).unwrap();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    let other = d.join("other");
+    let e = s.open_library(&other, false).map(|_| ()).unwrap_err();
+    assert!(matches!(e, crate::EngineError::NotSaved(_)), "{e}");
+    assert_eq!((picture(&s, "Ada"), s.person_covers.get("ada").map(|c| c.photo)), (Some(a), Some(a)), "still open, the choice kept");
+    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
+    s.open_library(&other, false).unwrap();
+    assert_eq!(saved(&lib)["covers"]["ada"]["photo"], a.0, "written before the switch");
+    assert!(s.person_covers.is_empty(), "and the other library has its own");
+    let _ = std::fs::remove_dir_all(d);
+}
+
+#[test]
 fn a_rename_counts_as_unsaved_when_people_json_was_unreadable_at_opening() {
     use lightcraft_catalog::{Filter, Photo, Source};
     let d = temp("cover-blocked");
