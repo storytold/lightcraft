@@ -92,8 +92,11 @@ fn fill_location_is_on_when_any_selected_photo_has_gps() {
     let r = h.request("ui.clickWidget", json!({"id": "button:fillLocation"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    // the command ran (this test has no place-name data, so it says what's missing): an enabled
-    // button, though the active photo has no GPS
+    // the command ran: it filled the photo with GPS, or (with no place-name data here) says what's
+    // missing; either way the button was on, though the active photo has no GPS
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert!(!toast.is_empty(), "Fill Location did nothing for a selection with GPS");
+    assert!(
+        toast.starts_with("Locations saved to catalog") || toast.contains("place names") || toast.contains("settings folder"),
+        "Fill Location did nothing for a selection with GPS: {toast:?}"
+    );
 }

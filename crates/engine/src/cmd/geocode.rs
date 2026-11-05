@@ -54,6 +54,9 @@ pub struct PlaceNames {
 pub(crate) struct FillJob {
     epoch: u64,
     todo: Vec<(PhotoId, LatLon)>,
+    /// Each photo's City, State and Country when the job started: true where empty. Only those are filled, so a
+    /// field the user clears while the lookup runs stays cleared (and one typed meanwhile stays as typed).
+    empty: std::collections::HashMap<PhotoId, [bool; 3]>,
     cursor: usize,
     found: Vec<(PhotoId, LatLon, lightcraft_geocode::Place)>,
     names: Arc<GeoNames>,
@@ -65,7 +68,8 @@ fn start_fill(s: &mut Session, p: &Value) -> Result<Value> {
     if s.place_names.fill_job.is_some() {
         return Err(bad(C, "location filling is already running"));
     }
-    let mut ids = if p.get("ids").is_some() { s.targets(p)? } else { s.visible_cloned() };
+    // `id` or `ids` name the photos, as for metadata.reverseGeocode; otherwise the current view
+    let mut ids = if crate::cmd::names_photos(p) { s.targets(p)? } else { s.visible_cloned() };
     ids.sort_unstable();
     ids.dedup();
     let todo: Vec<_> = ids
@@ -83,12 +87,19 @@ fn start_fill(s: &mut Session, p: &Value) -> Result<Value> {
     if todo.is_empty() {
         return Ok(json!({"started":false,"total":0}));
     }
+    let empty = todo
+        .iter()
+        .filter_map(|(id, _)| {
+            let m = &s.catalog.photo(*id)?.meta;
+            Some((*id, [m.city.trim().is_empty(), m.state.trim().is_empty(), m.country.trim().is_empty()]))
+        })
+        .collect();
     let dir = dataset_dir(p).ok_or_else(|| bad(C, "no settings folder: give `dataset`"))?;
     let names = s.place_names.load(&dir).map_err(|e| bad(C, format!("{e}: download the place names first (Photo → Download Place Names)")))?;
     let total = todo.len();
     let task = s.activity.start("geocode", "Filling locations", Cancel::Yes);
     task.progress(0, total as u64);
-    s.place_names.fill_job = Some(FillJob { epoch: s.library_generation(), todo, cursor: 0, found: Vec::new(), names, task });
+    s.place_names.fill_job = Some(FillJob { epoch: s.library_generation(), todo, empty, cursor: 0, found: Vec::new(), names, task });
     Ok(json!({"started":true,"total":total}))
 }
 
@@ -120,6 +131,15 @@ fn pump_fill(s: &mut Session, _: &Value) -> Result<Value> {
         }
         let mut meta = ph.meta.clone();
         fill(&mut meta, &place, false);
+        // a field that had a value when the job started is the user's: left as it is now, even if cleared since
+        let was_empty = job.empty.get(&id).copied().unwrap_or([true; 3]);
+        for (empty, (now, before)) in
+            was_empty.into_iter().zip([(&mut meta.city, &ph.meta.city), (&mut meta.state, &ph.meta.state), (&mut meta.country, &ph.meta.country)])
+        {
+            if !empty {
+                now.clone_from(before);
+            }
+        }
         if meta != ph.meta {
             ops.push(Op::SetMeta { id, meta: Box::new(meta) });
         }
@@ -523,6 +543,65 @@ mod tests {
         assert!(s.catalog.photo(PhotoId(2)).unwrap().meta.city.is_empty(), "Changed GPS must not receive a stale lookup");
         assert_eq!(s.catalog.photo(PhotoId(3)).unwrap().meta.city, "Paris");
         assert!(s.activity.list().is_empty());
+    }
+
+    /// CodeRabbit on #3761: a place field that had a value when Fill view started, and that the user clears while
+    /// the lookup runs, stays cleared; the fields that were empty are filled.
+    #[test]
+    fn a_field_cleared_during_a_fill_stays_cleared() {
+        let dir = dataset("cleared-during-fill");
+        let mut s = Session::new();
+        for id in 1..=300 {
+            view_photo(&mut s, id, &format!("/photos/{id}.jpg"), Some((48.86, 2.34)));
+        }
+        let mut meta = s.catalog.photo(PhotoId(1)).unwrap().meta.clone();
+        meta.country = "Somewhere".into();
+        s.commit("test", Op::SetMeta { id: PhotoId(1), meta: Box::new(meta) }).unwrap();
+        s.source = crate::LibrarySource::Folder;
+        s.browse = Some(crate::Browse { path: "/photos".into(), subfolders: true });
+        s.execute("metadata.fillLocations", &json!({"dataset": dir})).unwrap();
+        assert_eq!(s.execute("metadata.pumpLocations", &json!({})).unwrap()["done"], 256);
+        // cleared by the user while the job runs
+        let mut meta = s.catalog.photo(PhotoId(1)).unwrap().meta.clone();
+        meta.country.clear();
+        s.commit("test", Op::SetMeta { id: PhotoId(1), meta: Box::new(meta) }).unwrap();
+        assert_eq!(s.execute("metadata.pumpLocations", &json!({})).unwrap()["complete"], true);
+        let m = &s.catalog.photo(PhotoId(1)).unwrap().meta;
+        assert_eq!((m.city.as_str(), m.country.as_str()), ("Paris", ""), "the cleared country stays cleared");
+        assert_eq!(s.catalog.photo(PhotoId(2)).unwrap().meta.country, "France");
+    }
+
+    /// `metadata.fillLocations {id}` fills that photo, as `ids` and `metadata.reverseGeocode` do, not the view.
+    #[test]
+    fn a_single_id_fills_that_photo() {
+        let dir = dataset("single-id");
+        let mut s = Session::new();
+        for id in 1..=3 {
+            view_photo(&mut s, id, &format!("/photos/{id}.jpg"), Some((48.86, 2.34)));
+        }
+        s.source = crate::LibrarySource::Folder;
+        s.browse = Some(crate::Browse { path: "/photos".into(), subfolders: true });
+        let r = s.execute("metadata.fillLocations", &json!({"id": 2, "dataset": dir})).unwrap();
+        assert_eq!(r["total"], 1, "{r}");
+        s.execute("metadata.pumpLocations", &json!({})).unwrap();
+        let cities: Vec<String> = (1..=3).map(|i| s.catalog.photo(PhotoId(i)).unwrap().meta.city.clone()).collect();
+        assert_eq!(cities, ["", "Paris", ""]);
+    }
+
+    /// All Metadata shows what the catalog saved (GPS and copyright status too) when the original can't be read.
+    #[test]
+    fn all_metadata_shows_the_catalog_when_the_file_is_gone() {
+        let mut s = Session::new();
+        view_photo(&mut s, 1, "/nowhere/gone.jpg", Some((48.86, 2.34)));
+        let mut meta = s.catalog.photo(PhotoId(1)).unwrap().meta.clone();
+        meta.city = "Paris".into();
+        meta.copyright_status = lightcraft_catalog::CopyrightStatus::Copyrighted;
+        s.commit("test", Op::SetMeta { id: PhotoId(1), meta: Box::new(meta) }).unwrap();
+        let r = s.execute("photo.allMetadata", &json!({"id": 1})).unwrap();
+        let rows = r["catalog"].as_array().unwrap();
+        let has = |name: &str, value: &str| rows.iter().any(|r| r["name"] == name && r["value"] == value);
+        assert!(has("City", "Paris") && has("GPS", "48.860000, 2.340000") && has("Copyright Status", "Copyrighted"), "{r}");
+        assert!(r["note"].as_str().unwrap().contains("can't be read"), "{r}");
     }
 
     #[test]

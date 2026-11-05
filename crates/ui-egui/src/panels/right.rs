@@ -52,7 +52,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
             if app.ui.right == RightPanel::Info && !super::empty_library::shown(&app.session) {
                 header(ui, "Info");
-                padded(ui, |ui| super::locations::controls(app, ui, false));
+                let any_gps = lightcraft_engine::cmd::geocode::has_usable_gps(&app.session, &app.session.selected());
+                padded(ui, |ui| super::locations::controls(app, ui, any_gps));
                 return;
             }
             let r = ui.max_rect();
