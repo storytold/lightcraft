@@ -362,6 +362,12 @@
 
 ## 2026-10-23
 
+### Export subfolders stay inside the export folder
+- An export subfolder (typed in the Export dialog, saved in a preset or passed to `export`) can no longer lead
+  outside the chosen folder (issue #2571). `..` and `.` parts and a leading `/` are dropped, and `\` and `:` become
+  `_`, so a shared preset with `../..` in its subfolder writes inside your folder instead of elsewhere on disk.
+  Nested subfolders such as `Client/Jobs` still work.
+
 ### Place names always download into the settings folder
 - Download Place Names (for Fill Location from GPS) always saves the GeoNames files in the settings folder (issue
   #2575). An agent or script driving LightCraft could name another folder and another server, and have that
