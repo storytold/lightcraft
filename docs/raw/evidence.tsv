@@ -270,6 +270,29 @@ Nikon	COOLPIX 8800	unsupported	bulk: raw.pixls.us CC0 file decodes wrongly (two 
 Olympus	E-1	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Olympus	EVOLT E-400	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Olympus	Stylus XZ-2 iHS	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
+Olympus	E-3	verified	crates/raw/tests/it/orf_corpus.rs: CC0 1803, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	EVOLT E-410	verified	crates/raw/tests/it/orf_corpus.rs: CC0 1173, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	E-620	verified	crates/raw/tests/it/orf_corpus.rs: CC0 1805, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M1	verified	crates/raw/tests/it/orf_corpus.rs: CC0 1051, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M1 Mark II	verified	crates/raw/tests/it/orf_corpus.rs: CC0 1993, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M1 Mark III	verified	crates/raw/tests/it/orf_corpus.rs: CC0 3800, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M5 Mark II	verified	crates/raw/tests/it/orf_corpus.rs: CC0 2857 ORI companion (compressed ORF container), full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M5 Mark III	verified	crates/raw/tests/it/orf_corpus.rs: CC0 3573 compressed 80 MP high-res, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M10 Mark III	verified	crates/raw/tests/it/orf_corpus.rs: CC0 1787, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M10 Mark IV	verified	crates/raw/tests/it/orf_corpus.rs: CC0 4126, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-P1	verified	crates/raw/tests/it/orf_corpus.rs: CC0 5099, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-P3	verified	crates/raw/tests/it/orf_corpus.rs: CC0 241, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-P7	verified	crates/raw/tests/it/orf_corpus.rs: CC0 5980, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-PL7	verified	crates/raw/tests/it/orf_corpus.rs: CC0 1431, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN-F	verified	crates/raw/tests/it/orf_corpus.rs: CC0 2977 80 MP 12.8-bpp high-res, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	Stylus SH-2	verified	crates/raw/tests/it/orf_corpus.rs: CC0 792, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	Stylus Tough TG-6	verified	crates/raw/tests/it/orf_corpus.rs: CC0 3210, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-1	verified	crates/raw/tests/it/orf_corpus.rs: CC0 5283, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-1 MARK II	verified	crates/raw/tests/it/orf_corpus.rs: CC0 7262, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-3	verified	crates/raw/tests/it/orf_corpus.rs: CC0 7796, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-5	verified	crates/raw/tests/it/orf_corpus.rs: CC0 6343, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM-5 Mark II	verified	crates/raw/tests/it/orf_corpus.rs: CC0 8549, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System TG - 7	verified	crates/raw/tests/it/orf_corpus.rs: CC0 6946, full sensor SHA256 exact against unprocessed_raw 0.22.2
 Panasonic	LUMIX DC - G97 (DC-G99M2)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
 Panasonic	LUMIX DC-FZ1000M2 (DC-FZ10002)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
 Panasonic	LUMIX DC-FZ80 (DC-FZ82, DC-FZ85)	verified	PR #215: 178 raw.pixls.us files from 118 Panasonic / Leica bodies, every RW2 format
