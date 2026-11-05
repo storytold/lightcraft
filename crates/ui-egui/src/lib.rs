@@ -36,7 +36,6 @@ pub mod links;
 pub mod loupe_timing;
 pub mod menus;
 mod missing_sweep;
-mod model_setup;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -146,7 +145,6 @@ impl QuitPrompt {
 }
 
 pub struct LightcraftApp {
-    pub(crate) model_setup: model_setup::Pending,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
     pub caches: Caches,
@@ -375,6 +373,8 @@ pub struct LightcraftApp {
     pub(crate) disk_notice: Option<(u64, String)>,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
+    /// The hot pixel limit last applied (percent).
+    hot_pixels_applied: Option<f32>,
     /// The display profile setting last applied (`app.displayProfile`).
     pub(crate) display_applied: Option<String>,
     /// Why the display profile setting could not be applied (shown in Settings ▸ Display).
