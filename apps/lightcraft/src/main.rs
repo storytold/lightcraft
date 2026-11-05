@@ -35,8 +35,12 @@ mod hdr_display;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+#[cfg(any(target_os = "linux", windows))]
+mod profile_file;
 #[cfg(target_os = "macos")]
 mod screen_profile;
+#[cfg(windows)]
+mod win_screen_profile;
 mod window_gpu;
 
 use dialog_filter::FileDialogExt as _;
@@ -371,6 +375,7 @@ fn main() -> eframe::Result {
                 app.notices.extend(launch_notices);
                 app.notices.extend(window_notice);
                 app.gpu_notice = true;
+                app.disk_space_notice = true;
                 // an empty library opens where Import is offered (a grid, with the sidebar); before
                 // the snapshot below, so this alone isn't written to the settings file
                 if problem.is_none() && files.is_empty() {
