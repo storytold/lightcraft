@@ -246,8 +246,10 @@ fn box_pass(cx: &mut Cx<'_>, horizontal: bool, src: &Buf, dst: &Buf, (w, h): (us
     cx.run(plan.kernel, &p, &[Some(src), Some(dst)], groups);
 }
 
-/// Radius from which the horizontal box pass slides a running sum ([`box_plan`]).
-const BOX_H_SLIDE_FROM: usize = 32;
+/// Radius from which the horizontal box pass slides a running sum ([`box_plan`]). Below it the per-pixel
+/// window is faster (measured on a GTX 1070 / DX12: sliding was up to 2x slower for radius 32..80, equal
+/// at 80, faster from 96); above it sliding keeps the work bounded.
+const BOX_H_SLIDE_FROM: usize = 96;
 
 /// How one box pass runs: its kernel, the run of pixels each sliding thread covers, and the source
 /// reads it costs per output pixel.
@@ -1248,6 +1250,16 @@ mod tests {
                 assert!(p.chunk >= 1);
             }
         }
+    }
+
+    /// Small horizontal radii keep the per-pixel window kernel (faster there on some GPUs); larger ones and
+    /// every vertical pass slide a running sum.
+    #[test]
+    fn small_horizontal_radii_keep_the_window_kernel() {
+        assert_eq!(box_plan(true, BOX_H_SLIDE_FROM - 1).kernel, "box_h");
+        assert_eq!(box_plan(true, BOX_H_SLIDE_FROM).kernel, "box_h_slide");
+        assert_eq!(box_plan(true, 50).kernel, "box_h");
+        assert_eq!(box_plan(false, 3).kernel, "box_v");
     }
 
     /// The blur against `lightcraft_raster::blur::gaussian`: widths that do and don't fill the last
