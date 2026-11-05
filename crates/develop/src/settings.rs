@@ -84,17 +84,25 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
+    /// Pixel-scale sharpening with working Radius and Detail controls.
+    V3,
+    /// V3, with Contrast and Blacks on a raw's camera look calibrated to Lightroom: the
+    /// camera curve keeps V2 Whites and fitted pointwise operators follow it
+    /// (`lightcraft_pipeline::light_v3`, `docs/light-v3.md`).
+    V4,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
-    pub const LATEST: Process = Process::V2;
+    pub const ALL: [Process; 4] = [Process::V1, Process::V2, Process::V3, Process::V4];
+    pub const LATEST: Process = Process::V4;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
+            Process::V4 => ProcessVersion(4),
         }
     }
 }
@@ -699,9 +707,30 @@ impl Default for Optics {
 pub struct EmbeddedLens {
     pub warp: Option<EmbeddedWarp>,
     pub vignette: Option<EmbeddedVignette>,
+    /// Where the correction came from: the file itself, or a lens database looked up by the
+    /// lens named in the file (what the Optics panel says is loaded).
+    #[serde(skip_serializing_if = "LensSource::is_file")]
+    pub source: LensSource,
     /// A DNG 1.6 `WarpRectilinear2` chain (up to [`WARP_STAGES`] stages, in `OpcodeList3` order; each stage warps
     /// the result of the one before it). When any is set, `warp` is `None`: the chain holds every warp opcode.
     pub stages: [Option<EmbeddedWarpStage>; WARP_STAGES],
+}
+
+/// Where an [`EmbeddedLens`] came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LensSource {
+    /// The file's own correction (DNG opcodes, a camera's correction a raw reader converts).
+    #[default]
+    File,
+    /// A profile from a lensfun-format lens database, matched by the lens named in the file.
+    Database,
+}
+
+impl LensSource {
+    pub fn is_file(&self) -> bool {
+        *self == LensSource::File
+    }
 }
 
 /// Most warp stages an [`EmbeddedLens`] chain keeps.
