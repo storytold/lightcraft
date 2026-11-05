@@ -716,6 +716,10 @@
   "Invert Component": "Inverti componente",
   "Invert Mask": "Inverti maschera",
   "JPEG (Large)": "JPEG (grande)",
+  "Instagram Feed": "Feed Instagram",
+  "Instagram Story / Reel": "Storie / Reel Instagram",
+  "Web / Portfolio": "Web / Portfolio",
+  "Full Resolution Master": "Master a piena risoluzione",
   "JPEG (Small)": "JPEG (piccolo)",
   "Join the ArtCraft Discord": "Unisciti al Discord di ArtCraft",
   "Join the ArtCraft Discord…": "Unisciti al Discord di ArtCraft…",
@@ -2585,5 +2589,6 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Avvia l'app con --control 7980 (o LIGHTCRAFT_CONTROL_PORT), poi lightcraft-cli mcp --connect vi collega un agente.",
   "Welcome": "Benvenuto",
   "Next": "Avanti",
-  "Get Started": "Inizia"
+  "Get Started": "Inizia",
+  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto"
 }
