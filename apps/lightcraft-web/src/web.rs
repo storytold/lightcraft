@@ -93,10 +93,13 @@ impl Options {
             })
             .collect();
         let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        let bench = get("bench").is_some();
         Options {
-            bench: get("bench").is_some(),
-            store: get("store").filter(|s| s == "idb" || s == "memory").unwrap_or_else(|| "opfs".into()),
-            workers: get("workers").and_then(|v| v.parse().ok()),
+            bench,
+            // the benchmark edits the first photo it finds: a link with `?bench` must never reach
+            // the library in browser storage, so it always runs on the demo photos in an unsaved library
+            store: if bench { "memory".into() } else { get("store").filter(|s| s == "idb" || s == "memory").unwrap_or_else(|| "opfs".into()) },
+            workers: get("workers").and_then(|v| v.parse().ok()).map(|n: usize| n.min(crate::workers::MAX_WORKERS)),
             reset: get("reset").is_some(),
             query: q,
         }
@@ -576,6 +579,10 @@ impl WebApp {
                 });
             }
         }
+        // `?bench` never has storage (see `Options::from_url`): it measures the generated demo photos
+        if opts.bench && backend.is_none() && session.catalog.len() == 0 {
+            lightcraft_engine::demo::load(&mut session);
+        }
         if backend.is_some() {
             notice(
                 "LightCraft in the browser is experimental. Your library is kept in this browser's storage: keep your original photos \
@@ -964,7 +971,7 @@ pub fn start(chinese_font: Vec<u8>) {
     // `?host=parent`: a same-origin page framing LightCraft hands photos in, stores what would
     // be downloaded and hears about unsaved changes (see `host`). `data-host="page"` on the
     // canvas opts a page in instead: it runs LightCraft in its own document and talks over DOM
-    // `CustomEvent`s on the canvas; page mode wins when a page asks for both.
+    // `CustomEvent`s on the canvas. `?host=parent` wins when a page asks for both.
     let canvas = window()
         .and_then(|w| w.document())
         .and_then(|d| d.get_element_by_id("lightcraft_canvas"))
@@ -972,7 +979,9 @@ pub fn start(chinese_font: Vec<u8>) {
     let mode = crate::host::transport_for(canvas.as_ref().and_then(|c| c.get_attribute("data-host")).as_deref(), &opts.query);
     let bridge = mode.and_then(|m| crate::host::Bridge::for_mode(m, canvas.as_ref()));
     if mode == Some(crate::host::Mode::Parent) && bridge.is_none() {
-        log::warn!("lightcraft: ?host=parent, but this page is not framed or has an opaque origin; no page to speak to");
+        log::warn!(
+            "lightcraft: ?host=parent, but this page is not framed, has an opaque origin, or its parent is on another origin; exports keep downloading"
+        );
     }
     wasm_bindgen_futures::spawn_local(async move {
         // one tab per library: two would each keep their own copy and overwrite each other's saves

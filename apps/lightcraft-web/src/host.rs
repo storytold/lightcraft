@@ -25,7 +25,8 @@
 //!
 //! Only the parent window on the page's own origin is heard or answered. A page whose origin is
 //! opaque (`"null"`: a sandboxed iframe, a `data:` page) gets no bridge at all, since every other
-//! opaque-origin window would then pass as the parent. There is no `docClosed`: LightCraft has a
+//! opaque-origin window would then pass as the parent. A parent on another origin gets no bridge
+//! either: its `location` cannot be read, and exports keep downloading. There is no `docClosed`: LightCraft has a
 //! library, not documents that close.
 //!
 //! ## `data-host="page"` — the page's own document
@@ -146,6 +147,25 @@ impl DirtyReport {
     pub fn sent(&mut self, dirty: bool) {
         self.reported = Some(dirty);
     }
+
+    /// Record `dirty` before the send. A page host can report another state while the event is
+    /// still dispatching, and that later report wins. Returns the message to send and the state
+    /// to put back if this send fails and nothing else recorded one.
+    pub fn prepare(&mut self, dirty: bool) -> (Option<Outgoing>, Option<bool>) {
+        let previous = self.reported;
+        let message = self.change(dirty);
+        if message.is_some() {
+            self.sent(dirty);
+        }
+        (message, previous)
+    }
+
+    /// Forget a send that failed, unless a nested report already recorded a different state.
+    pub fn restore_if_unchanged(&mut self, dirty: bool, previous: Option<bool>) {
+        if self.reported == Some(dirty) {
+            self.reported = previous;
+        }
+    }
 }
 
 /// Whether a page origin can tell the parent apart from any other window: an opaque origin
@@ -173,17 +193,24 @@ pub enum Mode {
     Page,
 }
 
-/// The mode the page asked for: page mode when the canvas has `data-host="page"` (the exact value
-/// [`PAGE_HOST`]), parent mode when the query asks for `?host=parent`; page mode wins when a page
-/// asks for both; `None` with neither, so that URL stays the normal app with downloads.
+/// The mode the page asked for. `?host=parent` wins when the page asks for both, the same order
+/// as the other apps. Page mode is the exact `data-host="page"` ([`PAGE_HOST`]). `None` with
+/// neither, so that URL stays the normal app with downloads.
 pub fn transport_for(data_host: Option<&str>, query: &str) -> Option<Mode> {
-    if data_host == Some(PAGE_HOST) {
-        Some(Mode::Page)
-    } else if host_parent_requested(query) {
+    if host_parent_requested(query) {
         Some(Mode::Parent)
+    } else if data_host == Some(PAGE_HOST) {
+        Some(Mode::Page)
     } else {
         None
     }
+}
+
+/// The message type. A page-mode `CustomEvent` is named `lightcraft:open` or `lightcraft:cmd`
+/// and its `detail` is only the fields, so the event name is the type. A parent `postMessage`
+/// carries `type` in the object and has no event name.
+pub fn incoming_kind(event_name: Option<&str>, detail_type: Option<String>) -> Option<String> {
+    event_name.map(str::to_string).or(detail_type)
 }
 
 /// Does the query ask for the parent bridge? The same reading of `?host=parent` the URL options
@@ -260,8 +287,8 @@ mod bridge {
     }
 
     impl Bridge {
-        /// The parent bridge for `?host=parent`; `None` when the page isn't framed (there is no
-        /// parent to talk to), so opening that URL directly stays the normal app.
+        /// The parent bridge for `?host=parent`. `None` when the page isn't framed, its origin is
+        /// opaque, or the parent is on another origin (exports then keep downloading).
         pub fn new() -> Option<Self> {
             let window = web_sys::window()?;
             let parent = window.parent().ok().flatten()?;
@@ -272,6 +299,10 @@ mod bridge {
             // its URL but runs with the opaque origin "null"
             let origin = window.origin();
             if !origin_is_usable(&origin) {
+                return None;
+            }
+            // Reading another origin's location throws, so this is `None` for a cross-origin parent.
+            if parent.location().origin().ok().as_deref() != Some(origin.as_str()) {
                 return None;
             }
             Some(Self { transport: Transport::Parent { parent, origin }, incoming: Rc::default(), dirty: Rc::default() })
@@ -299,11 +330,11 @@ mod bridge {
                     let parent = parent.clone();
                     let origin = origin.clone();
                     let incoming = self.incoming.clone();
-                    let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
+                    let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
                         if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                             return;
                         }
-                        deliver(&incoming, &ctx, &event.data());
+                        deliver(&incoming, &ctx, &event.data(), None);
                     });
                     if web_sys::window().is_some_and(|w| w.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok()) {
                         // the listener lives as long as the page
@@ -315,9 +346,12 @@ mod bridge {
                     for kind in ["lightcraft:open", "lightcraft:cmd"] {
                         let incoming = self.incoming.clone();
                         let ctx = ctx.clone();
-                        let on_custom = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+                        let event_type = kind.to_string();
+                        // `Fn`, not `FnMut`: a page event is dispatched synchronously, and a host
+                        // that answers one event with another would re-enter an `FnMut` listener.
+                        let on_custom = Closure::<dyn Fn(web_sys::Event)>::new(move |event: web_sys::Event| {
                             let Some(custom) = event.dyn_ref::<web_sys::CustomEvent>() else { return };
-                            deliver(&incoming, &ctx, &custom.detail());
+                            deliver(&incoming, &ctx, &custom.detail(), Some(event_type.as_str()));
                         });
                         if canvas.add_event_listener_with_callback(kind, on_custom.as_ref().unchecked_ref()).is_ok() {
                             // the listener lives as long as the page
@@ -344,12 +378,15 @@ mod bridge {
         }
 
         /// Tell the parent whether closing now would lose something, when that changed.
+        /// The new state is recorded before the send: page mode dispatches synchronously, and a
+        /// host that reports another state from that event wins. A failed send is forgotten
+        /// only when nothing else recorded one, so the next frame retries it.
         pub fn report_dirty(&self, dirty: bool) {
-            let mut report = self.dirty.borrow_mut();
-            if let Some(m) = report.change(dirty)
-                && self.post(&m)
+            let (message, previous) = self.dirty.borrow_mut().prepare(dirty);
+            if let Some(m) = message
+                && !self.post(&m)
             {
-                report.sent(dirty);
+                self.dirty.borrow_mut().restore_if_unchanged(dirty, previous);
             }
         }
 
@@ -376,15 +413,21 @@ mod bridge {
     /// A message from the host (the `data` of a window message, or the `detail` of a page-mode
     /// `CustomEvent`), read with the same field code both transports share, and pushed for the
     /// next frame.
-    fn deliver(incoming: &Rc<RefCell<Vec<Incoming>>>, ctx: &egui::Context, data: &JsValue) {
+    fn deliver(incoming: &Rc<RefCell<Vec<Incoming>>>, ctx: &egui::Context, data: &JsValue, event_type: Option<&str>) {
         // moved, not cloned: an accepted photo can be hundreds of MB
         let (bytes, oversize) = match bytes(data) {
             Some(Ok(b)) => (Some(b), None),
             Some(Err(len)) => (None, Some(len)),
             None => (None, None),
         };
-        let raw =
-            Raw { kind: string(data, "type"), name: string(data, "name"), bytes, id: string(data, "id"), params: string(data, "params"), oversize };
+        let raw = Raw {
+            kind: super::incoming_kind(event_type, string(data, "type")),
+            name: string(data, "name"),
+            bytes,
+            id: string(data, "id"),
+            params: string(data, "params"),
+            oversize,
+        };
         if let Some(m) = Incoming::parse(raw) {
             incoming.borrow_mut().push(m);
             ctx.request_repaint();
@@ -507,6 +550,33 @@ mod tests {
         assert_eq!(d.change(false), Some(Outgoing::Dirty(false)));
     }
 
+    /// A failed send is retried. A report that lands during the send (page mode dispatches
+    /// synchronously) is the one that stays.
+    #[test]
+    fn a_failed_dirty_send_is_retried_unless_a_later_report_landed() {
+        let mut d = DirtyReport::default();
+        let (message, previous) = d.prepare(true);
+        assert_eq!(message, Some(Outgoing::Dirty(true)));
+        d.restore_if_unchanged(true, previous);
+        assert_eq!(d.change(true), Some(Outgoing::Dirty(true)));
+
+        let (message, previous) = d.prepare(true);
+        assert!(message.is_some());
+        let (later, _) = d.prepare(false);
+        assert_eq!(later, Some(Outgoing::Dirty(false)));
+        d.restore_if_unchanged(true, previous);
+        assert_eq!(d.change(false), None);
+    }
+
+    /// A canvas event is named for its type; the detail does not have to repeat it.
+    #[test]
+    fn a_page_event_is_named_for_its_type() {
+        assert_eq!(incoming_kind(Some("lightcraft:open"), None).as_deref(), Some("lightcraft:open"));
+        assert_eq!(incoming_kind(Some("lightcraft:cmd"), Some("lightcraft:open".into())).as_deref(), Some("lightcraft:cmd"));
+        assert_eq!(incoming_kind(None, Some("lightcraft:open".into())).as_deref(), Some("lightcraft:open"));
+        assert_eq!(incoming_kind(None, None), None);
+    }
+
     /// A sandboxed iframe or a `data:` page has the opaque origin `"null"`, which any other such
     /// window shares: no bridge there, so the origin check keeps meaning something.
     #[test]
@@ -525,12 +595,12 @@ mod tests {
         assert_eq!(save_name("lightcraft-library-backup-2026-10-19.zip"), "lightcraft-library-backup-2026-10-19.zip");
     }
 
-    /// Page mode is opt-in by the exact attribute value, parent mode by the query, and page mode
-    /// wins when a page asks for both.
+    /// Page mode is opt-in by the exact attribute value, parent mode by the query, and parent
+    /// mode wins when a page asks for both.
     #[test]
-    fn page_mode_is_opt_in_and_wins_over_parent_mode() {
+    fn page_mode_is_opt_in_and_parent_mode_wins_when_both_are_set() {
         assert_eq!(transport_for(Some("page"), ""), Some(Mode::Page));
-        assert_eq!(transport_for(Some("page"), "?host=parent"), Some(Mode::Page), "page mode wins");
+        assert_eq!(transport_for(Some("page"), "?host=parent"), Some(Mode::Parent), "parent mode wins");
         // only the exact value opts in; anything else falls back to the query, or to standalone
         for not_page in ["Page", " page", "page ", "parent", "host"] {
             assert_eq!(transport_for(Some(not_page), "?host=parent"), Some(Mode::Parent), "{not_page:?}");

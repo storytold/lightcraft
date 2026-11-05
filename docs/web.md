@@ -175,17 +175,19 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   `{dirty}` says, whenever it changes, whether closing now would lose something (a write to
   browser storage still queued or running, or changes storage refused), so the page can ask
   before closing a window with edits. Only the parent window on the page's own origin is heard or
-  answered; a page with an opaque origin (`"null"`: a sandboxed iframe, a `data:` page) gets no
-  bridge. The library still lives in the iframe's browser storage.
+  answered. A page with an opaque origin (`"null"`: a sandboxed iframe, a `data:` page), or a
+  parent on another origin, gets no bridge, and exports keep downloading. The library still lives
+  in the iframe's browser storage.
 - **Embedding in the page's own document (`data-host="page"`).** A page that loads LightCraft into its own
   document, with no iframe, puts `data-host="page"` on the app's canvas. The same messages then travel as
   non-bubbling `CustomEvent`s on the canvas: LightCraft dispatches `lightcraft:ready`, `lightcraft:failed`,
   `lightcraft:dirty`, `lightcraft:save` and `lightcraft:response` with the message's fields as `detail`, and the page
-  dispatches `lightcraft:open` and `lightcraft:cmd` on the canvas. Add the listeners before the module starts,
-  because `lightcraft:ready` is sent as soon as the app listens. Only the exact value `page` turns it on, and `?host=parent`
-  is checked first and works as before. In this mode the page and LightCraft share one document, so any script on the
-  page can drive the app and receive what it saves: use it only on a page you control. A photo handed in is held to the
-  same size limit as in the iframe mode and refused before its bytes are copied.
+  dispatches `lightcraft:open` and `lightcraft:cmd` on the canvas (`detail` is the fields; the event name is the
+  type). Add the listeners before the module starts, because `lightcraft:ready` is sent as soon as the app listens.
+  Only the exact value `page` turns it on. When the page asks for both, `?host=parent` wins. In this mode the page
+  and LightCraft share one document, so any script on the page can drive the app and receive what it saves: use it
+  only on a page you control. A photo handed in is held to the same size limit as in the iframe mode and refused
+  before its bytes are copied.
 - **The page title names the open photo**: `<file name> — LightCraft`, with ` •` after the name while
   changes are not yet written to browser storage (`LightcraftApp::page_title`). eframe's web runner
   ignores the window title the desktop app sets, and a host that embeds the page reads this title to
@@ -212,7 +214,8 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
 
 ## Measuring
 
-Open `http://127.0.0.1:8080/?bench` to run a scripted measurement:
+Open `http://127.0.0.1:8080/?bench` to run a scripted measurement. It always runs on the generated demo photos in an unsaved library
+(`?bench` implies `?store=memory`), so it never edits the library kept in browser storage:
 
 1. Wait for the grid thumbnails.
 2. Open the first photo in Detail.
