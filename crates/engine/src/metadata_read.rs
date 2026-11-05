@@ -108,23 +108,37 @@ fn read_in_worker(input: WorkerInput, timeout: std::time::Duration) -> ReadResul
     use std::io::{Read as _, Write as _};
     use std::process::{Command, Stdio};
 
-    let exe = std::env::current_exe().map_err(|error| format!("metadata worker executable: {error}"))?;
-    let mut child = Command::new(exe)
-        .arg(WORKER_ARG)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("metadata worker: {error}"))?;
+    // Drop also covers failed pipe setup, writes and polling, which must not orphan a worker.
+    struct Worker(std::process::Child);
+    impl Drop for Worker {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
     let payload = serde_json::to_vec(&input).map_err(|error| format!("metadata worker input: {error}"))?;
+    let exe = std::env::current_exe().map_err(|error| format!("metadata worker executable: {error}"))?;
+    let mut worker = Worker(
+        Command::new(exe)
+            .arg(WORKER_ARG)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("metadata worker: {error}"))?,
+    );
+    let child = &mut worker.0;
     let Some(mut stdin) = child.stdin.take() else { return Err("metadata worker has no input pipe".into()) };
     stdin.write_all(&payload).map_err(|error| format!("metadata worker input: {error}"))?;
     drop(stdin);
     let Some(mut stdout) = child.stdout.take() else { return Err("metadata worker has no output pipe".into()) };
-    let output = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).map(|_| bytes)
-    });
+    let output = std::thread::Builder::new()
+        .name("metadata-worker-output".into())
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).map(|_| bytes)
+        })
+        .map_err(|error| format!("metadata worker output thread: {error}"))?;
     let started = std::time::Instant::now();
     let mut timed_out = false;
     loop {

@@ -8,6 +8,29 @@ use serde_json::{Value, json};
 use super::binary;
 
 #[test]
+fn metadata_worker_reads_sidecars_without_starting_the_cli() {
+    let input = tmp("metadata-worker.png");
+    gradient_png(&input);
+    let sidecar = input.with_extension("xmp");
+    std::fs::write(&sidecar, r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="Worker title"/></rdf:RDF></x:xmpmeta>"#).unwrap();
+    let mut child = Command::new(binary())
+        .arg(lightcraft_engine::metadata_read::WORKER_ARG)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let request = json!({"path": input, "sidecar": {"naming": "stem", "owns_stem": true}});
+    child.stdin.take().unwrap().write_all(request.to_string().as_bytes()).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(result["Ok"][0]["xmp"].as_array().unwrap().iter().any(|tag| tag["value"] == "Worker title"), "{result}");
+    let _ = std::fs::remove_file(input);
+    let _ = std::fs::remove_file(sidecar);
+}
+
+#[test]
 fn contact_sheet_exports_pdf_and_protects_originals() {
     let input = tmp("contact-sheet-input.png");
     gradient_png(&input);
