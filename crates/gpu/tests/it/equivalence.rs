@@ -582,6 +582,7 @@ fn embedded_lens_perspective_edges_match() {
         }),
         vignette: Some(EmbeddedVignette { k: [0.4, -0.1, 0.02, 0.0, 0.0], center: Point::new(0.5, 0.5), radius: 0.6 }),
         stages: Default::default(),
+        source: Default::default(),
     };
     let info = SourceInfo { lens: Some(lens), ..raw };
     let mut s = DevelopSettings::default();
