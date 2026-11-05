@@ -27,7 +27,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lightcraft_catalog::{FsStore, Journal, LibraryLock, LoadReport, Store};
+use lightcraft_catalog::{FsStore, Journal, LibraryLock, LoadReport, OpenedFolder, Store};
 use lightcraft_develop::Preset;
 use serde::{Deserialize, Serialize};
 
@@ -155,6 +155,10 @@ pub struct Library {
     warnings_reported: usize,
     /// Settings files that couldn't be read or set aside: never overwritten this session.
     blocked: Vec<&'static str>,
+    /// The folder the library was opened from (`None`: its stores were given, not opened here). The
+    /// stores hold their own copy; this one is for what is not a store, so far the thumbnail cache
+    /// (issue #3240).
+    folder: Option<OpenedFolder>,
     /// Keeps other processes out of this library while it's open (last: released after the
     /// journal's background snapshot has landed).
     lock: Option<LibraryLock>,
@@ -168,8 +172,17 @@ pub struct LibraryStores {
     pub catalog: Box<dyn Store>,
     /// presets.json, view.json, prefs.json.
     pub files: Box<dyn Store>,
-    /// `dir` is a real directory (enables `Originals/` copies and the `thumbs/` disk cache).
+    /// `dir` is a real directory (enables `Originals/` copies and the `thumbs/` disk cache). The cache
+    /// is bound to the folder `dir` named when the library opened, which only [`Session::open_library`]
+    /// records: the stores of [`Session::open_library_in`] (browser storage, memory) have no folder.
     pub on_disk: bool,
+}
+
+/// What the thumbnail cache asks before it changes its folder: `false` while the library's path leads
+/// to another folder than the one it was opened from (issue #3240). `None`: there is no folder to ask.
+fn disk_gate(folder: Option<&OpenedFolder>) -> Option<lightcraft_preview::WriteGate> {
+    let folder = folder?.clone();
+    Some(std::sync::Arc::new(move || folder.check().is_ok()))
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -359,6 +372,17 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// The lock for the library at `dir`. One taken in another folder than `folder` (the stores' record,
+/// which holds no note yet, so only the numbers are compared) means the path changed since the
+/// stores recorded it, and nothing of this open is consistent: refused.
+pub(crate) fn lock_in(dir: &Path, folder: &OpenedFolder) -> Result<LibraryLock> {
+    let lock = LibraryLock::acquire(dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?;
+    if lock.folder().is_some_and(|f| !folder.same_folder(f)) {
+        return Err(EngineError::Other(format!("{} changed while the library was being opened; open it again", dir.display())));
+    }
+    Ok(lock)
+}
+
 /// This program, for the lock owner note ("LightCraft", "lightcraft-cli").
 fn program_name() -> String {
     let exe = std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
@@ -464,8 +488,14 @@ impl Session {
             return Err(EngineError::Other(format!("{} is not a folder", dir.display())));
         }
         std::fs::read_dir(&dir).map_err(|e| EngineError::Other(format!("can't open library {}: {e}", dir.display())))?;
-        // the library open in this session keeps its lock when reopened; any other must be free
-        let current = self.library.as_ref().is_some_and(|l| l.on_disk && same_dir(&l.dir, &dir));
+        // the library open in this session keeps its lock when reopened, if it was taken in the folder
+        // at the path now (as in `open_library`); any other must be free
+        let here = OpenedFolder::at(&dir).ok();
+        let current = self.library.as_ref().is_some_and(|l| {
+            l.on_disk
+                && same_dir(&l.dir, &dir)
+                && l.lock.as_ref().is_some_and(|k| k.folder().is_none_or(|f| here.as_ref().is_none_or(|h| f.same_folder(h))))
+        });
         if !current && is_library(&dir) {
             drop(LibraryLock::acquire(&dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?);
         }
@@ -489,16 +519,30 @@ impl Session {
             return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
         }
         let dir = resolve_dir(&dir)?;
-        let open = || FsStore::open(&dir).map_err(|e| EngineError::Other(format!("can't open library {}: {e}", dir.display())));
-        let stores = LibraryStores { catalog: Box::new(open()?), files: Box::new(open()?), on_disk: true, dir: dir.clone() };
-        // the library open in this session (same directory): hand its lock over
-        let reused = self.library.as_mut().filter(|l| same_dir(&l.dir, &dir)).and_then(|l| l.lock.take());
+        let catalog = FsStore::open(&dir).map_err(|e| EngineError::Other(format!("can't open library {}: {e}", dir.display())))?;
+        // the folder `dir` names now: both stores write only while it still does (issue #3240)
+        let folder = catalog.folder().clone();
+        let stores =
+            LibraryStores { catalog: Box::new(catalog), files: Box::new(FsStore::in_folder(folder.clone())), on_disk: true, dir: dir.clone() };
+        // the library open in this session (same directory, same folder): hand its lock over. A lock
+        // on another folder than the path leads to now protects nothing here: take this one's own.
+        // (A lock that couldn't look at its folder is handed over as before.)
+        let reused = self
+            .library
+            .as_mut()
+            .filter(|l| same_dir(&l.dir, &dir))
+            .and_then(|l| l.lock.take_if(|k| k.folder().is_none_or(|f| f.same_folder(&folder))));
         let reusing = reused.is_some();
         let mut lock = match reused {
             Some(l) => Some(l),
-            None => Some(LibraryLock::acquire(&dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?),
+            None => Some(lock_in(&dir, &folder)?),
         };
-        if let Err(e) = self.open_stores(stores, seed_demo, &mut lock) {
+        // what tells the folder when its numbers can't (a drive that numbers its folders anew each
+        // time it is mounted): the note this session's lock wrote into it
+        if let Some(note) = lock.as_ref().and_then(LibraryLock::note) {
+            folder.vouch(note);
+        }
+        if let Err(e) = self.open_stores(stores, seed_demo, &mut lock, Some(folder)) {
             if reusing && let Some(lib) = self.library.as_mut() {
                 lib.lock = lock.take();
             }
@@ -511,7 +555,7 @@ impl Session {
     /// this session's catalog. Not locked: the host guards against a second opener (see
     /// [`Session::open_library`] for directories).
     pub fn open_library_in(&mut self, stores: LibraryStores, seed_demo: bool) -> Result<&LoadReport> {
-        self.open_stores(stores, seed_demo, &mut None)?;
+        self.open_stores(stores, seed_demo, &mut None, None)?;
         self.loaded_report()
     }
 
@@ -522,8 +566,9 @@ impl Session {
         }
     }
 
-    /// Open `stores`; the new library takes `lock` once nothing can fail any more.
-    fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
+    /// Open `stores`; the new library takes `lock` once nothing can fail any more. `folder` is the
+    /// folder they write to, when they write to one: the thumbnail cache asks it too.
+    fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>, folder: Option<OpenedFolder>) -> Result<()> {
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
         // the current library may be these same files: let its background snapshot land first, and
         // what its log's thread was handed reach the file before the new journal reads it. When
@@ -663,7 +708,7 @@ impl Session {
         // photo ids are per library: drop decoded sources of the previous one
         self.media.clear_sources();
         if on_disk {
-            self.media.attach_disk_cache(&dir.join("thumbs"), self.cache_bytes());
+            self.media.attach_disk_cache(&dir.join("thumbs"), self.cache_bytes(), disk_gate(folder.as_ref()));
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
@@ -684,6 +729,7 @@ impl Session {
             settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(settings.warnings).collect(),
             warnings_reported: 0,
             blocked: settings.blocked,
+            folder,
             lock: lock.take(),
         });
         // forget untouched Local records of folders not browsed for a while (journaled at once)
@@ -972,8 +1018,8 @@ impl Session {
     pub fn set_cache_mb(&mut self, mb: u32) -> Result<()> {
         self.cache_mb = mb;
         if let Some(lib) = self.library.as_ref().filter(|l| l.on_disk) {
-            let dir = lib.thumbs_dir();
-            self.media.set_disk_cache_bytes(&dir, self.cache_bytes());
+            let (dir, gate) = (lib.thumbs_dir(), disk_gate(lib.folder.as_ref()));
+            self.media.set_disk_cache_bytes(&dir, self.cache_bytes(), gate);
         }
         self.save_prefs()
     }
