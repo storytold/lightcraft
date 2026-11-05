@@ -639,7 +639,8 @@ mod tests {
         sources(&src, &mut files);
         let mut unchecked = Vec::new();
         for file in files {
-            let text = std::fs::read_to_string(&file).unwrap();
+            // (a Windows checkout may have CRLF line ends)
+            let text = std::fs::read_to_string(&file).unwrap().replace("\r\n", "\n");
             let code = text.split("\n#[cfg(test)]\nmod ").next().unwrap_or_default();
             let name = file.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
             let checked = code.contains("file_access::") || name.starts_with("file_access");

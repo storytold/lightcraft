@@ -56,7 +56,8 @@ impl Mcp {
     /// Start the real binary over stdio, with the roots asked for.
     fn start(base: &Path, read: bool, write: bool) -> Self {
         let mut cmd = Command::new(binary());
-        cmd.arg("mcp");
+        // (a path with leading blanks is relative: with no roots a write lands here, not in the repository)
+        cmd.arg("mcp").current_dir(base);
         if read {
             cmd.arg("--automation-read-root").arg(base.join("in"));
         }
