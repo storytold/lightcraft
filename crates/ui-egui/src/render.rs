@@ -1308,6 +1308,60 @@ impl Renderer {
         r.display != before
     }
 
+    /// Show a render that stayed on the GPU (`r.frame`) in `slot`; whether it could be. When it
+    /// can't, views come back as pixels from then on.
+    fn show_frame(&mut self, ctx: &egui::Context, slot: Slot, r: &RenderResult, look: Option<(u64, bool)>, ms: f64) -> bool {
+        let (Some(frame), Ok(rendered)) = (r.frame.as_ref(), r.rendered.as_ref()) else { return false };
+        self.failed.remove(&slot);
+        let shown = self.screen.as_mut().and_then(|s| s.show(frame, self.natives.get(&slot).copied()));
+        let Some(id) = shown else {
+            // can't be shown: from now on views come back as pixels
+            log::warn!("render {slot:?}: a GPU-resident render can't be shown; rendering pixels");
+            self.free_natives();
+            self.screen = None;
+            return false;
+        };
+        self.natives.insert(slot, id);
+        if self.keep_pixels {
+            self.native_frames.insert(slot, frame.clone());
+        }
+        let (size, histogram) = ([frame.width, frame.height], rendered.histogram.clone());
+        match self.textures.get_mut(&slot) {
+            Some(t) => {
+                t.show_native(id);
+                t.look = look;
+                t.key = r.key;
+                t.photo = r.photo;
+                t.size = size;
+                t.histogram = Some(histogram);
+                t.ms = ms;
+                t.quick = None;
+            }
+            None => {
+                // (`tex` is never drawn while `native` is set)
+                let blank = egui::ColorImage::filled([1, 1], egui::Color32::BLACK);
+                let tex = ctx.load_texture(format!("{slot:?}"), blank, egui::TextureOptions::LINEAR);
+                let t = Tex {
+                    look,
+                    key: r.key,
+                    photo: r.photo,
+                    tex,
+                    size,
+                    histogram: Some(histogram),
+                    ms,
+                    quick: None,
+                    pixels: None,
+                    native: Some(id),
+                };
+                self.textures.insert(slot, t);
+            }
+        }
+        if slot == Slot::Main {
+            self.last_main_ms = ms;
+        }
+        true
+    }
+
     /// Turn finished jobs into textures. Returns true if anything changed.
     fn collect(&mut self, ctx: &egui::Context, session: &mut Session, inline_ms: f64) -> bool {
         let finished = self.take_finished(inline_ms);
@@ -1359,55 +1413,8 @@ impl Renderer {
             }
             slot = self.stand_in_slot(slot, &r);
             // a render that stayed on the GPU: drawn from its texture
-            if let (Some(frame), Ok(rendered)) = (r.frame.as_ref(), r.rendered.as_ref()) {
-                self.failed.remove(&slot);
-                let shown = self.screen.as_mut().and_then(|s| s.show(frame, self.natives.get(&slot).copied()));
-                let Some(id) = shown else {
-                    // can't be shown: from now on views come back as pixels
-                    log::warn!("render {slot:?}: a GPU-resident render can't be shown; rendering pixels");
-                    self.free_natives();
-                    self.screen = None;
-                    continue;
-                };
-                self.natives.insert(slot, id);
-                if self.keep_pixels {
-                    self.native_frames.insert(slot, frame.clone());
-                }
-                let (size, histogram) = ([frame.width, frame.height], rendered.histogram.clone());
-                match self.textures.get_mut(&slot) {
-                    Some(t) => {
-                        t.show_native(id);
-                        t.look = look;
-                        t.key = r.key;
-                        t.photo = r.photo;
-                        t.size = size;
-                        t.histogram = Some(histogram);
-                        t.ms = ms;
-                        t.quick = None;
-                    }
-                    None => {
-                        // (`tex` is never drawn while `native` is set)
-                        let blank = egui::ColorImage::filled([1, 1], egui::Color32::BLACK);
-                        let tex = ctx.load_texture(format!("{slot:?}"), blank, egui::TextureOptions::LINEAR);
-                        let t = Tex {
-                            look,
-                            key: r.key,
-                            photo: r.photo,
-                            tex,
-                            size,
-                            histogram: Some(histogram),
-                            ms,
-                            quick: None,
-                            pixels: None,
-                            native: Some(id),
-                        };
-                        self.textures.insert(slot, t);
-                    }
-                }
-                if slot == Slot::Main {
-                    self.last_main_ms = ms;
-                }
-                changed = true;
+            if r.frame.is_some() && r.rendered.is_ok() {
+                changed |= self.show_frame(ctx, slot, &r, look, ms);
                 continue;
             }
             let rendered = match r.rendered {
