@@ -83,6 +83,9 @@ fn same_metadata(a: &Metadata, b: &Metadata) -> bool {
 const MAX_PAGE_ID: u32 = 16_777_216;
 const MAX_COLUMNS: usize = 16_384;
 const MAX_ROWS: usize = 1_000_000;
+/// Values one table read may hold (every record is padded to its schema's width, so compact
+/// records of a wide table would otherwise expand far past the encoded-byte limits).
+const MAX_TABLE_VALUES: usize = 64_000_000;
 const MAX_CELLS: usize = 4_000_000;
 const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 const MAX_TABLE_PAYLOAD: usize = 256 * 1024 * 1024;
@@ -137,6 +140,7 @@ struct WalkState {
     seen: HashSet<u32>,
     out: Vec<Record>,
     payload_total: usize,
+    values_total: usize,
 }
 
 struct WalOverlay {
@@ -251,7 +255,7 @@ impl Database {
             return Err("table has too many columns".into());
         }
         let alias = self.rowid_aliases.get(&rootpage).copied();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
+        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0, values_total: 0 };
         self.visit_table(rootpage, ncols, alias, 0, &mut state)?;
         Ok(state.out)
     }
@@ -311,6 +315,10 @@ impl Database {
                     state.payload_total = state.payload_total.checked_add(payload_len).ok_or("SQLite table payload total overflow")?;
                     if state.payload_total > MAX_TABLE_PAYLOAD {
                         return Err("SQLite table payload exceeds bounded import size".into());
+                    }
+                    state.values_total = state.values_total.saturating_add(ncols);
+                    if state.values_total > MAX_TABLE_VALUES {
+                        return Err("SQLite table exceeds the bounded import size (values)".into());
                     }
                     let payload = self.payload(&page, at, payload_len)?;
                     let mut values = decode_record(&payload, ncols, self.encoding)?;
@@ -427,7 +435,8 @@ impl Database {
     fn parse_schema(&self) -> Result<SchemaInfo, String> {
         let mut tables = Vec::new();
         let mut aliases = HashMap::new();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
+        let mut roots = HashSet::new();
+        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0, values_total: 0 };
         self.visit_table(1, 5, None, 0, &mut state)?;
         for record in state.out {
             if record.values.len() < 5 {
@@ -459,7 +468,7 @@ impl Database {
             if column_names.len() > MAX_COLUMNS {
                 continue;
             }
-            if tables.iter().any(|table: &LiveTable| table.rootpage == rootpage) {
+            if !roots.insert(rootpage) {
                 continue;
             }
             if let Some(index) = alias {
@@ -694,6 +703,7 @@ fn parse_create_table(sql: &str) -> Result<(Vec<String>, Option<usize>), String>
     }
     let body = tokens.get(open + 1..close).ok_or("invalid CREATE TABLE column list")?;
     let mut columns = Vec::new();
+    let mut names = HashSet::new();
     let mut alias = None;
     let mut integer_columns = HashSet::new();
     let mut table_primary = None;
@@ -712,7 +722,11 @@ fn parse_create_table(sql: &str) -> Result<(Vec<String>, Option<usize>), String>
                 }
             } else {
                 let name = part.first().and_then(Token::identifier).ok_or("column name is not an identifier")?;
-                if columns.iter().any(|old| old == name) {
+                if columns.len() >= MAX_COLUMNS {
+                    return Err("CREATE TABLE has too many columns".into());
+                }
+                // SQLite column names are ASCII case-insensitive, so "a" and "A" clash
+                if !names.insert(name.to_ascii_lowercase()) {
                     return Err("duplicate SQLite column name".into());
                 }
                 let index = columns.len();
