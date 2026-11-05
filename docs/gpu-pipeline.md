@@ -8,6 +8,11 @@ CPU fast guided-filter allocation measurements and reproduction commands are doc
 [guided-filter-memory.md](guided-filter-memory.md). That optimization retains the full-size base
 and does not change the GPU's coefficient buffers.
 
+Process V4's camera-look Contrast and Blacks share the CPU's generated lookup tables and
+ProPhoto matrices. `finish.wgsl::light_ops` applies them after V2's Whites tone curve and
+before the colour stage. Full frames and render windows use the same pointwise operators;
+see [calibrated Light operators](light-v3.md) for HDR rules and limits.
+
 Warped geometry uses a CPU-computed coverage bit mask for the source boundary.
 The CPU reference evaluates that boundary in double precision; GPU float
 rounding otherwise can turn a blank edge pixel into a photo pixel. The mask
@@ -59,10 +64,10 @@ Overrides (read once at launch):
   (`gpu: LIGHTCRAFT_GPU_ADAPTER=… names none of the graphics cards (…); using the default choice`) and
   the default high-performance card is used. Each line is logged once, though the render device, AI
   Denoise and the face models each ask. Each of those makes its own wgpu instance and device, so
-  devices on different cards share no buffer, pipeline or queue. The window stays on the card that drives the screen,
-  and rendering runs on a device of its own on the chosen card (the photo is copied to the screen's
-  card); a build that lets rendering share the window's device does so only when the variable names
-  the window's card (`backend::may_adopt_window_device`). The log's `gpu: LIGHTCRAFT_GPU_ADAPTER=…: using …` line names the card
+  devices on different cards share no buffer, pipeline or queue. The window keeps the card wgpu picks for it by power preference, and
+  rendering runs on a device of its own on the chosen card (the photo is copied to the window's card).
+  Rendering shares the window's device when the variable is unset or names the window's card
+  (`backend::may_adopt_window_device`). The log's `gpu: LIGHTCRAFT_GPU_ADAPTER=…: using …` line names the card
   used. Handy to keep test runs or a long export off the card the screens hang on.
 - `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter (llvmpipe / lavapipe, WARP), which is
   otherwise refused because the CPU pipeline is faster. For running the GPU tests on a machine
@@ -423,6 +428,11 @@ view shows a GPU-resident draft reads that texture back for the picture (`Screen
 - The next and previous photos in filmstrip order are prepared in the background once the current
   one is rendered (decoded source kept, view render cached): stepping through photos shows the
   developed image in ~50 ms.
+- Culling (PERF-CULL): the stand-ins of the next five photos in the direction of travel and the one
+  behind are made ahead (`render::Slot::QuickAhead`) and taken over at the step, so a step shows
+  the camera JPEG at once; while an arrow key is held (a photo left within 0.25 s) the raw render
+  of a photo waits until it has stayed 0.12 s, and a render queued for a photo already left is
+  dropped. `ui.inspect` → `perf.loupeSteps` times each step on the frames drawn.
 
 ## Memory (M5.6)
 A view's stages keep an uploaded source only up to 96 MB (a Preview-level source); a bigger one (the original a zoom window is cut from) is kept once, outside the views' stages, for all views of the photo (the Before and After windows and every pan share it; the Before window of a Before/After waits at first open until the After's job has handed the original over, or each would decode and upload its own copy) and given back when the app idles with no zoom window on screen (a zoomed view keeps it for its next pan: a 64 MP original is 800 MB to upload again; issue #323: kept per view it counted against the stage budget on every tick of a drag, and not kept every new window uploaded 288 MB again).

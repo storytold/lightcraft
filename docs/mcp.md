@@ -33,7 +33,9 @@ A malformed, incomplete, oversized or mismatched reply also closes the connectio
 an unknown outcome without resending. An idless `ok: false` with a string `error` is preserved
 as a pre-dispatch refusal (for example, too many control connections); the next call reconnects.
 
-### Automation roots
+Logs go to stderr; stdout carries only protocol messages.
+
+## Automation roots
 
 `lightcraft-cli mcp` can keep an agent's file access to the folders you give it, for a server that hosts agents or any
 other unattended use:
@@ -48,7 +50,7 @@ The rules:
 - **Links are followed before a path is judged.** Both the roots and every path are resolved first, so `..`, a link to a
   file or folder outside, and a link that leads nowhere are refused before anything is opened. A file that doesn't exist
   yet is judged by its nearest existing folder. Comparison is by whole path components (`/work2` isn't inside `/work`)
-  and exact: a folder that exists counts in its real case, so `C:\\WORK` finds `C:\\Work` on an ordinary Windows volume, and a
+  and exact: a folder that exists counts in its real case, so `C:\WORK` finds `C:\Work` on an ordinary Windows volume, and a
   name that doesn't exist yet has to match. Reserved Windows device names (`CON`, `NUL`, `COM1`…) are refused too.
 - **Writing to a link acts on the link.** A write can replace, rename or remove the link itself, so a link's own folder
   has to be inside the write root too, whatever the link points to. A file under a linked folder is judged where it
@@ -90,8 +92,6 @@ Where the file-touching commands are checked, besides the check of their paramet
 | `photo.relink`, `photo.autoTagTracklog`, `keyword.import`, `curve.importPresets`, `preset.import`, `mask.importEffects`, `profile.import`, `print.template.import`, `slideshow.templates.import`, `denoise.models.install`, `faces.models.install` | Read | `file_access/commands.rs`, and the command's own file where it opens one |
 | `library.inspectLightroom`, `library.importLightroom` | Read, the `-wal` file too | `cmd/library/specs.rs`, `lightroom_catalog.rs` |
 | Watermark and identity plate graphics, print and proof profiles | Read | `export/watermark.rs`, `print_color.rs`, `proof.rs`, `display.rs` |
-
-Logs go to stderr; stdout carries only protocol messages.
 
 ## Wiring it into a client
 
