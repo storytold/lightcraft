@@ -322,5 +322,11 @@
   "Creates {stacks} stack{} from {photos} of {scope}": "Skapar staplar: {stacks} · foton: {photos} av {scope}{:.0}",
   "{n} selected photo{} · {pages} page{}": "Markerade foton: {n} · sidor: {pages}{:.0}{:.0}",
   "{n} photo{} in view · {slides} slide{} · {time}": "Foton i vyn: {n} · bilder: {slides} · {time}{:.0}{:.0}",
-  "Can't read this folder: {}": "Det går inte att läsa den här mappen: {}"
+  "Can't read this folder: {}": "Det går inte att läsa den här mappen: {}",
+  "LightCraft can correct distortion and vignetting for many lenses using the open lens database (lensfun, about {size} MB).": "LightCraft kan korrigera distorsion och vinjettering för många objektiv med hjälp av den öppna objektivdatabasen (lensfun, cirka {size} MB).",
+  "No lens profile found for {}.": "Ingen objektivprofil hittades för {}.",
+  "Profile: {} (lens database)": "Profil: {} (objektivdatabas)",
+  "The drive with this library's previews is almost full: {free} free of {total}. The preview cache takes {cache} and grows as the library does. To keep it smaller, set a size limit in Settings → Performance.": "Enheten med det här bibliotekets förhandsgranskningar är nästan full: {free} ledigt av {total}. Cachen för förhandsgranskningar tar {cache} och växer i takt med biblioteket. Om du vill hålla den mindre anger du en storleksgräns under Inställningar → Prestanda.",
+  "The lens database is not installed (about {size} MB).": "Objektivdatabasen är inte installerad (cirka {size} MB).",
+  "{n} photos got their lens profile": "{n} foton fick sin objektivprofil"
 }
