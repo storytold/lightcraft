@@ -306,7 +306,10 @@ impl LightcraftApp {
         if self.shown_library == Some(generation) {
             return;
         }
+        // The first library shown replaces none; later switches invalidate both face review
+        // state and any similar-photo search belonging to the previous library.
         if self.shown_library.is_some() {
+            crate::find_similar::library_changed(self);
             self.ui.ignored_faces = None;
             self.ui.person_selection = Default::default();
             self.ui.unnamed_selected.clear();

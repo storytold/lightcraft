@@ -158,6 +158,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);
     }
+    if id == "library.findSimilar" {
+        // the photos are read in the background (the first search reads the whole library)
+        return Some(crate::find_similar::command(app, p));
+    }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
         // Immediately, not on the next frame: the reply and anything else run this frame
