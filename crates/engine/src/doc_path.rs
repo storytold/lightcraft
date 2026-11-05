@@ -160,7 +160,7 @@ pub(crate) fn is_network_redirect(error: &std::io::Error) -> bool {
 }
 
 #[cfg(windows)]
-mod network;
+pub(crate) mod network;
 
 /// Open a catalog original for reading. UNC paths are opened component by component relative
 /// to directory handles, refusing reparse points; the returned handle is the one to read.

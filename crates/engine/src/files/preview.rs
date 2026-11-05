@@ -120,17 +120,23 @@ pub(super) fn fit_box(max_edge: usize) -> lightcraft_codecs::DecodeOptions {
 /// the whole file, which is what the decode of one can hold.
 pub fn fs_preview_loader() -> PreviewLoader {
     Arc::new(|path: &str, max_edge: usize| {
-        let len = crate::doc_path::original_metadata(std::path::Path::new(path)).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
+        use std::io::{Read, Seek};
+        let mut file = crate::doc_path::open_original(path).ok()?;
+        let total = file.metadata().ok()?.len();
+        let len = usize::try_from(total).unwrap_or(usize::MAX);
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(len.saturating_mul(2)) } else { gate.acquire_urgent(len.saturating_mul(2)) };
-        if let Some(image) = preview_window(path, max_edge)
+        if let Some(image) = preview_window_from(&mut file, path, total, max_edge)
             .ok()
             .flatten()
             .and_then(|(header, window, read)| quick_image_srgb(&header, &window, read.adobe_rgb, max_edge))
         {
             return Some(image);
         }
-        embedded_preview_srgb(&crate::doc_path::read_original(path).ok()?, max_edge)
+        file.rewind().ok()?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).ok()?;
+        embedded_preview_srgb(&bytes, max_edge)
     })
 }
 
@@ -176,11 +182,15 @@ impl PreviewRead {
 /// out of a container that carries no preview colour space of its own (Nikon's maker note) the
 /// whole-file fallback stays in charge.
 pub fn preview_window(path: &str, max_edge: usize) -> Result<Option<(Vec<u8>, Vec<u8>, PreviewRead)>, String> {
-    use std::io::{Read, Seek, SeekFrom};
-
     let mut file = crate::doc_path::open_original(path).map_err(|e| format!("{path}: {e}"))?;
     let total = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
-    let mut prefix = read_prefix(&mut file, path, total)?;
+    preview_window_from(&mut file, path, total, max_edge)
+}
+
+/// Read a bounded preview from the caller's open original, retaining that handle for fallback.
+fn preview_window_from(file: &mut std::fs::File, path: &str, total: u64, max_edge: usize) -> Result<Option<(Vec<u8>, Vec<u8>, PreviewRead)>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut prefix = read_prefix(file, path, total)?;
 
     // What the header itself declares, before the container reader is asked: it clamps a slice to
     // the buffer it was given, so a prefix that stops inside the declared preview yields a
@@ -190,14 +200,14 @@ pub fn preview_window(path: &str, max_edge: usize) -> Result<Option<(Vec<u8>, Ve
     if let Some(extent) = raf_preview_extent(&prefix)
         && extent > prefix.len() as u64
     {
-        prefix = read_prefix_at(&mut file, path, extent.min(total))?;
+        prefix = read_prefix_at(file, path, extent.min(total))?;
     }
     let Some(range) = lightcraft_raw::bounded_preview(&prefix) else {
         // The header carries no pointer this path reads — a Canon CR3's boxes, a TIFF raw whose
         // preview tag sits past the prefix, the containers whose preview only a scan finds: ask the
         // sparse planner which ranges `embedded_preview` reads before handing the caller the
         // whole-file fallback.
-        return planned_preview(&mut file, path, total, max_edge);
+        return planned_preview(file, path, total, max_edge);
     };
     // A preview at the file's end may have been padded past it: clamp rather than fail.
     let end = range.offset.saturating_add(range.window_len).min(total);
