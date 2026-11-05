@@ -215,8 +215,13 @@ impl RenderRequest {
         Self { exact_size: true, ..Self::fit(width, height) }
     }
 
+    /// The output size for `frame`. An exact box stands against a proxy that only rounds the photo's
+    /// shape differently; a source of another shape (a raw's embedded preview) is fitted, not stretched.
     fn size(&self, frame: &geometry::Frame) -> (usize, usize) {
-        if self.exact_size { (self.max_w.max(1), self.max_h.max(1)) } else { frame.fit(self.max_w, self.max_h) }
+        let fitted = frame.fit(self.max_w, self.max_h);
+        let exact = (self.max_w.max(1), self.max_h.max(1));
+        let near = |a: usize, b: usize| a.abs_diff(b) <= b / 64 + 1;
+        if self.exact_size && near(fitted.0, exact.0) && near(fitted.1, exact.1) { exact } else { fitted }
     }
 }
 
@@ -779,6 +784,10 @@ fn plan_preserves_matching_box_size() {
     let req = RenderRequest::exact(240, 160);
     let p = plan(&src, &info, &s, &req);
     assert_eq!((p.w, p.h), (240, 160));
+    // an embedded preview of another shape keeps its shape: an exact box must not stretch it
+    let preview = Rgb32f::from_fn(120, 100, |_, _| [0.5; 3]);
+    let p = plan(&preview, &info, &s, &req);
+    assert_eq!((p.w, p.h), (192, 160));
 }
 
 #[cfg(test)]
