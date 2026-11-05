@@ -67,6 +67,12 @@ pub fn register_all(s: &mut Session, profiles: Option<&Path>) {
     s.media.camera_profiles = loaded.into_iter().collect();
 }
 
+/// The bytes of the profile file `file`; outside the automation roots it counts as missing.
+fn read_allowed(file: &Path) -> std::io::Result<Vec<u8>> {
+    crate::file_access::check_read(file).map_err(std::io::Error::other)?;
+    lightcraft_raw::dcp::read_dcp(file)
+}
+
 /// The copy of saved profile file `file` in the open library's profiles folder `dir`, when it is there under the
 /// same name and `file` is not already it.
 fn library_copy(dir: &Path, file: &str) -> Option<PathBuf> {
@@ -119,9 +125,10 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
         let stem = f.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Camera Profile".into());
         let name = if profile.name.trim().is_empty() { stem.clone() } else { profile.name.trim().to_string() };
         // the same profile imported again: keep the one there is
-        let same = s.dcp_profiles.iter().find(|p| {
-            p.name == name && p.camera_model == profile.camera_model && lightcraft_raw::dcp::read_dcp(Path::new(&p.file)).is_ok_and(|b| b == bytes)
-        });
+        let same = s
+            .dcp_profiles
+            .iter()
+            .find(|p| p.name == name && p.camera_model == profile.camera_model && read_allowed(Path::new(&p.file)).is_ok_and(|b| b == bytes));
         if let Some(p) = same {
             imported.push(json!({"id": p.id, "name": p.name, "cameraModel": p.camera_model, "existing": true}));
             continue;
@@ -137,6 +144,10 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
         let file = match &dir {
             Some(d) => {
                 let to = d.join(format!("{}.dcp", id.trim_start_matches(DCP_PREFIX)));
+                if let Err(e) = crate::file_access::check_write(&to) {
+                    failed.push(json!([shown, format!("{}: {e}", to.display())]));
+                    continue;
+                }
                 // a copy that fails (disk full, no access) fails this file only: the profiles
                 // copied before it stay imported, and nothing half-written is left behind
                 if let Err(e) = std::fs::write(&to, &bytes) {

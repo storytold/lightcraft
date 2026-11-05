@@ -561,3 +561,60 @@ fn an_oversized_camera_profile_is_refused_while_it_is_read() {
     assert_eq!(r["failed"][0][1], json!("the camera profile is larger than 64 MiB"), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A saved or named profile outside the automation roots counts as missing, and the same one loads without roots.
+#[test]
+fn a_profile_outside_the_roots_counts_as_missing() {
+    use crate::cmd::dcp_profiles::{DcpEntry, import_files, register_all};
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("outside-roots");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let file = outside.join("Swap.dcp");
+    std::fs::write(&file, write_dcp(&swapping_profile("Swap")).unwrap()).unwrap();
+    let shown = file.to_string_lossy().to_string();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.dcp_profiles.push(DcpEntry { id: "dcp:swap".into(), name: "Swap".into(), camera_model: "LightCraft Test Camera".into(), file: shown.clone() });
+    confine(Some(&roots), || register_all(&mut s, None));
+    assert!(s.media.camera_profiles.is_empty());
+    register_all(&mut s, None);
+    assert_eq!(s.media.camera_profiles.len(), 1);
+
+    let mut s = Session::new().with_fs();
+    let (imported, failed) = confine(Some(&roots), || import_files(&mut s, std::slice::from_ref(&shown))).unwrap();
+    assert!(imported.is_empty(), "{imported:?}");
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A link standing in the library's `Profiles` folder is not written through to a file outside the roots.
+#[cfg(unix)]
+#[test]
+fn an_import_does_not_write_through_a_link_in_the_profiles_folder() {
+    use crate::cmd::dcp_profiles::import_files;
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("profiles-link");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    let lib = root.join("lib");
+    std::fs::create_dir_all(lib.join("Profiles")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let source = root.join("Swap.dcp");
+    std::fs::write(&source, write_dcp(&swapping_profile("Swap")).unwrap()).unwrap();
+    let secret = outside.join("secret.dcp");
+    std::fs::write(&secret, b"kept").unwrap();
+    let slug = crate::presets::slug("LightCraft Test Camera-Swap");
+    std::os::unix::fs::symlink(&secret, lib.join("Profiles").join(format!("{slug}.dcp"))).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let paths = [source.to_string_lossy().to_string()];
+    let (imported, failed) = confine(Some(&roots), || import_files(&mut s, &paths)).unwrap();
+    assert!(imported.is_empty(), "{imported:?}");
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(std::fs::read(&secret).unwrap(), b"kept");
+    let _ = std::fs::remove_dir_all(&base);
+}
