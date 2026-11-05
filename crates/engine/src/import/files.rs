@@ -684,7 +684,12 @@ mod prepared_tests {
         let mut job = ImportJob::new(&mut s, ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() }).unwrap();
         // as the probe records it: the file's modification time, to the second
         let modified = |p: &str| std::fs::metadata(p).ok().and_then(|m| crate::files::modified_secs(&m)).map(crate::import::civil);
-        let probed = |size: u64, modified: Option<String>| ProbeInfo { format: "JPEG".into(), file_size: size, file_modified: modified, ..ProbeInfo::default() };
+        let probed = |size: u64, modified: Option<String>| ProbeInfo {
+            format: "JPEG".into(),
+            file_size: size,
+            file_modified: modified,
+            ..ProbeInfo::default()
+        };
         job.cache.insert(files[0].clone(), probed(10, modified(&files[0])));
         job.cache.insert(files[1].clone(), probed(5, modified(&files[1])));
         // probed a minute before it was written again at the same size
