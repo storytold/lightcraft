@@ -2,7 +2,8 @@
 
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
-through Metal on macOS, on the CPU elsewhere (for now).
+through Metal on macOS, on the CPU elsewhere (for now). If the Mac's GPU can't run it, it runs on
+the CPU (see the worker below).
 
 **The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
 Object and Describe offer to download it, every other feature (and every existing mask, see
@@ -16,13 +17,26 @@ In the Masking panel (M):
   to leave it out. Clicks show as green (include) and red (leave out) dots.
 - **Describe**: type what to select — `sky`, `trees`, `the red car` — and press Return. Every
   instance the model finds (score above 0.5) joins the mask; if nothing matches, nothing is
-  created and you are told so.
+  created and you are told so. Around what it found, the mask follows the model's semantic mask
+  for the phrase, which is sure inside and runs on where two instances touch (the instances'
+  own masks alone left a sky or a net about 70–90 % selected and a thin line between two people
+  side by side).
 - Several things at once: `car, road` (comma-separated) selects each and merges them.
 - **+ / −** under the selected mask (and the Add / Subtract / Intersect menus) combine
   selections: Describe `car`, click the mask, + ▸ Describe… `road`; − ▸ Describe… `people` takes
   the people out of a sky mask; − ▸ Object then clicks remove one object.
 - **Edge** (per selection, −100…100): below 0 a crisper border, above 0 a feathered one (up to 2 %
   of the long edge, so previews and exports match).
+- **Edges follow the photo** (issue #3272): the model's grid (288² over the whole photo) has
+  ~20 px cells on a 24 MP export, so a plain enlargement put the mask's edge up to a cell off the
+  subject's and a raised Exposure drew a bright outline around it. Where the grid is coarser than
+  the output, the mask's logits are guided-filtered by the photo's log luminance (the fast guided
+  filter, a window of 1.5 grid cells, so a preview and an export put the edge in the same place):
+  near the edge the selection follows the photo's tones, ≈ 0 a pixel or two outside a subject that
+  stands out from its background and ≈ 1 inside. Pixels whose surroundings are all in or all out,
+  and edges the photo has no contrast across, keep the plain enlargement. Refine Edges then works
+  on the combined mask and finds these edges in place. Cost on an M2 Pro, per AI selection: +22 ms
+  and +12 MB at 24 MP, +46 ms and +17 MB at 60 MP, +7.5 ms on a 2.7 MP preview.
 - **Detail:** about a second after the last click (or right after a description), the photo
   around the selection is analyzed again, zoomed in, from a sharper source (~5 s on an M4 Pro,
   in the background); the result is kept as a high-resolution patch (at most 4 per selection),
@@ -111,7 +125,7 @@ The model is fetched from an ordered list of mirrors: base URLs where `<base>/mo
 2. the file `models/sam3-mirrors.txt` in LightCraft's settings folder (one URL per line, `#`
    comments) — `~/Library/Application Support/LightCraft/` (macOS), `%APPDATA%\LightCraft\`
    (Windows), `~/.config/lightcraft/` (Linux);
-3. the built-in list, `DEFAULT_MIRRORS` in `crates/segment/src/fetch/mod.rs`.
+3. the built-in list, `DEFAULT_MIRRORS` in `crates/segment/src/fetch.rs`.
 
 > **Maintainers:** the built-in list is **empty** until LightCraft's own CDN locations exist
 > (see the `TODO(maintainer)` there): add them in order of preference, host the three files
@@ -139,7 +153,9 @@ the Mozilla root certificates; no OpenSSL, `ring` or `aws-lc`, nothing compiled 
 ### By hand
 
 Put `model.safetensors`, `vocab.json` and `merges.txt` from `facebook/sam3` in the model folder:
-`models/sam3/` in the settings folder above, or the folder `LIGHTCRAFT_SAM3_DIR` names. Developers
+`models/sam3/` in the settings folder above, or the folder `LIGHTCRAFT_SAM3_DIR` names. It must be
+the Hugging Face format (3,439,938,512 bytes): `sam3.safetensors` from community mirrors, renamed, is
+Meta's original checkpoint, and LightCraft says so instead of loading it. Developers
 can use the installer scripts, which download from Hugging Face with your token and verify the
 weights:
 
@@ -214,7 +230,7 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   `NOTICE` — the ported files say so and that they were modified): the 32-layer ViT backbone
   with 2-D RoPE and windowed attention, the feature pyramids, the SAM 2-style prompt encoder and
   two-way mask decoder for clicks, and the CLIP text encoder, DETR encoder/decoder (box
-  relative-position bias, presence token) and pixel decoder for text. The CLIP tokenizer is a
+  relative-position bias, presence token), pixel decoder and semantic head for text. The CLIP tokenizer is a
   small BPE in `tokenizer.rs`. The downloader (original code) is the `lightcraft-fetch` crate, shared by any model that is downloaded; `fetch/` here says what SAM 3 needs.
 - candle is pinned at 0.9.2: later releases make `candle-core` depend on `tokenizers` with the
   Oniguruma C library, and the product is pure Rust. Weights are read with positional reads (no
@@ -225,9 +241,16 @@ wait and return the result (when built with the `sam` feature; the default CLI h
   encoded photo; the session sends it jobs and receives results over channels, never holding a
   lock the model holds. Each job runs under `catch_unwind`: a panic inside candle becomes an
   error and the model is reloaded on the next request; busy counters are reset by drop guards.
+- GPU fallback (issue #1974): a job that fails on the GPU (a panic or a candle error, e.g. an
+  AMD GPU in an Intel Mac whose Metal compiler crashes on a matmul kernel) frees the model and runs
+  once more on the CPU. If that works, the model stays on the CPU until LightCraft restarts and
+  the user is told once ("The GPU couldn't run the AI mask model…"); if the CPU fails too, the
+  error is reported and the next job tries the GPU again. Missing or damaged model files and
+  remote-worker errors are not retried. `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` keep
+  the model on the CPU from the start.
 - Hostile documents: a selection keeps at most 4 detail patches (when read and when rendered),
   each at most 1024² logits; more than 64 clicks are never sent to the model.
-- Accuracy: `crates/segment/tests/reference.rs` compares every stage against the Python
+- Accuracy: `crates/segment/tests/it/reference.rs` compares every stage against the Python
   reference (`tools/sam3_reference.py`); on Metal the backbone matches to 7e-5 relative error
   and masks to ~5e-5. f16 was tried and rejected (overflow, ~7 % faster).
 - The engine feature `sam` (on in the desktop app, off for web and CLI) gates the model; without

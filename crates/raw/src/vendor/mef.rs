@@ -87,8 +87,19 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         None => Rect::new(0, 0, w, h),
     };
     // the white balance is measured from the samples, so the header probe reads them too
+    // the strip length is the tag value, so a short file must fail before the sample buffer is sized from it
     let chunks = info.chunks(bytes.len() as u64);
-    let src = chunks.first().and_then(|c| chunk_bytes(bytes, c)).ok_or_else(|| RawError::Corrupt("Mef strip outside file".into()))?;
+    let src = chunks
+        .first()
+        .and_then(|c| chunk_bytes(bytes, c).filter(|s| s.len() as u64 == c.len))
+        .ok_or_else(|| RawError::Corrupt("Mef strip outside file".into()))?;
+    // 12-bit MSB packing takes 3 bytes per 2 samples; a strip that cannot hold the declared
+    // samples is a truncated file, not a picture — unpacking it would run past the real bytes
+    // through every output sample (a short strip asks for the whole allocation and more).
+    let need = n.div_ceil(2).saturating_mul(3);
+    if src.len() < need {
+        return Err(RawError::Corrupt(format!("a Mef strip of {} bytes cannot hold the declared {n} samples", src.len())));
+    }
     let mut d = vec![0u16; n];
     crate::unpack::unpack_msb(src, 12, &mut d);
     let white = super::white_from_data(&d, 12);
@@ -138,6 +149,10 @@ mod tests {
     }
 
     fn sample(w: u32, h: u32, px: &[u16]) -> Vec<u8> {
+        sample_strip(w, h, &pack(px))
+    }
+
+    fn sample_strip(w: u32, h: u32, strip: &[u8]) -> Vec<u8> {
         let mut raw = IfdBuilder::new();
         raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
         raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
@@ -148,12 +163,58 @@ mod tests {
         raw.set(t::ORIENTATION, Value::Short(vec![6]));
         raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
         raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
-        raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![pack(px)] });
+        raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![strip.to_vec()] });
         let mut ifd0 = IfdBuilder::new();
         ifd0.set(t::MAKE, Value::Ascii("Mamiya-OP Co.,Ltd.".into()));
         ifd0.set(t::MODEL, Value::Ascii("MAMIYA ZD".into()));
         ifd0.add_sub_ifd(raw);
         TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()
+    }
+
+    /// A strip that cannot hold the declared samples is a truncated file, refused as corrupt
+    /// instead of unpacked: `unpack_msb` would otherwise run `n` samples through the few real
+    /// bytes, filling the rest from nothing.
+    #[test]
+    fn a_strip_too_short_for_the_declared_samples_is_refused() {
+        let px: Vec<u16> = (0..16 * 6).map(|i| (i * 41 % 4096) as u16).collect();
+        let f = sample(16, 6, &px);
+        assert!(crate::decode(&f).is_ok());
+        // A truncated file shaped like a real one: IFD tables first, strip last — only its first
+        // 20 packed bytes remain, while the IFD still declares the full 1.5 B/sample length. The
+        // probe accepts the file on the declared length; before the byte gate below, `unpack_msb`
+        // ran the dimension-sized allocation through those 20 bytes, filling it from nothing.
+        let u32be = |b: &[u8], a: usize| u32::from_be_bytes([b[a], b[a + 1], b[a + 2], b[a + 3]]);
+        let full = pack(&px);
+        let at = f.windows(full.len()).position(|w| w == full).expect("strip bytes in the file");
+        let after_strip = at + full.len();
+        let moved = after_strip - (at + 20);
+        let mut g = f[..8].to_vec();
+        g.extend(std::iter::repeat_n(0u8, at + 20 - 8));
+        g.extend_from_slice(&f[after_strip..]);
+        // repoint the first-IFD pointer and ifd0's MAKE / MODEL / SubIfds offsets (the tables now
+        // sit `moved` earlier); the raw sub-IFD's strip offset and byte count are patched below
+        let poke = |b: &mut [u8], a: usize| {
+            let v = u32::from_be_bytes([b[a], b[a + 1], b[a + 2], b[a + 3]]);
+            if v as usize >= after_strip {
+                b[a..a + 4].copy_from_slice(&(v - moved as u32).to_be_bytes());
+            }
+        };
+        let ifd0_at = u32be(&g, 4) as usize - moved;
+        g[4..8].copy_from_slice(&(ifd0_at as u32).to_be_bytes());
+        let n = u16::from_be_bytes([g[ifd0_at], g[ifd0_at + 1]]) as usize;
+        for i in 0..n {
+            poke(&mut g, ifd0_at + 2 + i * 12 + 8);
+        }
+        // the raw sub-IFD: entries follow its count; tag 273 (StripOffsets) is the seventh, held
+        // inline — repoint it at the strip's new home, and append the truncated strip for real
+        let sub_at = u32be(&g, ifd0_at + 2 + 2 * 12 + 8) as usize;
+        let e_offsets = sub_at + 2 + 6 * 12 + 8;
+        let strip_at = g.len() as u32;
+        g[e_offsets..e_offsets + 4].copy_from_slice(&strip_at.to_be_bytes());
+        g.extend_from_slice(&full[..20]);
+        assert_eq!(crate::probe(&g), Some(RawFormat::Mef));
+        let r = crate::decode(&g);
+        assert!(matches!(r, Err(RawError::Corrupt(_))), "{r:?}");
     }
 
     #[test]
@@ -183,5 +244,36 @@ mod tests {
                 let _ = crate::probe_info(&g);
             }
         }
+    }
+
+    /// Rewrite the raw IFD's height, rows per strip and strip length in place (the strip data stays as written).
+    fn declare(f: &mut [u8], rows: u32, strip_len: u32) {
+        let tiff = Tiff::parse(f).unwrap();
+        let raw = &tiff.ifds[0].sub_ifds[0];
+        let spots: Vec<_> = [(t::IMAGE_LENGTH, rows), (t::ROWS_PER_STRIP, rows), (t::STRIP_BYTE_COUNTS, strip_len)]
+            .into_iter()
+            .map(|(tag, v)| {
+                let e = raw.entries.iter().find(|e| e.tag == tag).unwrap();
+                (e.offset as usize, matches!(e.value, Value::Short(_)), v)
+            })
+            .collect();
+        for (at, short, v) in spots {
+            if short {
+                f[at..at + 2].copy_from_slice(&u16::try_from(v).unwrap().to_be_bytes());
+            } else {
+                f[at..at + 4].copy_from_slice(&v.to_be_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn a_strip_longer_than_the_file_is_an_error() {
+        // #2119: the declared strip length matched the size, so a few bytes of data were decoded as a full frame
+        let px: Vec<u16> = (0..40).map(|i| (i * 13 % 4096) as u16).collect();
+        let mut f = sample(20, 2, &px);
+        declare(&mut f, 2000, 30 * 2000);
+        assert_eq!(crate::probe(&f), Some(RawFormat::Mef));
+        assert!(matches!(crate::probe_info(&f), Err(RawError::Corrupt(_))));
+        assert!(matches!(crate::decode(&f), Err(RawError::Corrupt(_))));
     }
 }

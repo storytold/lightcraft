@@ -3,6 +3,7 @@
 
 use lightcraft_catalog::{HistoryStep, Op, PhotoId, Stack, StackId};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, has_selection, str_param};
 use crate::{Result, Selection, Session};
@@ -63,18 +64,53 @@ fn copy_number(name: Option<&str>) -> u32 {
     name.and_then(|n| n.strip_prefix("Copy ")).and_then(|n| n.trim().parse().ok()).unwrap_or(0)
 }
 
+/// Resolve every requested name before creating copies, so an exhausted counter cannot leave a
+/// partially completed batch. Explicit names do not depend on the numeric sequence.
+fn virtual_copy_names(s: &Session, targets: &[PhotoId], name: Option<&str>) -> Result<Vec<Option<String>>> {
+    if let Some(name) = name {
+        return Ok(targets.iter().map(|id| s.catalog.photo(*id).map(|_| name.to_string())).collect());
+    }
+
+    let mut last_by_master = HashMap::new();
+    for id in targets {
+        if let Some(photo) = s.catalog.photo(*id) {
+            last_by_master.entry(photo.copy_of.unwrap_or(*id)).or_insert(0_u32);
+        }
+    }
+    for photo in s.catalog.photos() {
+        if let Some(master) = photo.copy_of
+            && let Some(last) = last_by_master.get_mut(&master)
+        {
+            *last = (*last).max(copy_number(photo.copy_name.as_deref()));
+        }
+    }
+
+    targets
+        .iter()
+        .map(|id| {
+            let Some(photo) = s.catalog.photo(*id) else { return Ok(None) };
+            let master = photo.copy_of.unwrap_or(*id);
+            let last = last_by_master.get_mut(&master).ok_or_else(|| bad("photo.virtualCopy", "could not resolve the virtual-copy master"))?;
+            let number = last.checked_add(1).ok_or_else(|| {
+                bad("photo.virtualCopy", format!("default virtual-copy numbering is exhausted for master {}; provide an explicit name", master.0))
+            })?;
+            *last = number;
+            Ok(Some(format!("Copy {number}")))
+        })
+        .collect()
+}
+
 /// Create one virtual copy of `src`: a new photo sharing its file, with the same settings and
 /// metadata, added to the same albums and stacked right after it (the stack is expanded so the
-/// copy is visible). `name` replaces the default "Copy N".
-fn virtual_copy(s: &mut Session, src: PhotoId, name: Option<&str>) -> Result<Option<PhotoId>> {
+/// copy is visible). `name` is resolved by the command before any copies are created.
+fn virtual_copy(s: &mut Session, src: PhotoId, name: &str) -> Result<Option<PhotoId>> {
     let Some(orig) = s.catalog.photo(src).cloned() else { return Ok(None) };
     let master = orig.copy_of.unwrap_or(src);
-    let n = 1 + s.catalog.photos().filter(|p| p.copy_of == Some(master)).map(|p| copy_number(p.copy_name.as_deref())).max().unwrap_or(0);
     let id = s.catalog.alloc_photo_id();
     let mut c = (*orig).clone();
     c.id = id;
     c.copy_of = Some(master);
-    c.copy_name = Some(name.map_or_else(|| format!("Copy {n}"), str::to_string));
+    c.copy_name = Some(name.to_string());
     c.versions.clear();
     c.history = vec![HistoryStep { label: "Virtual Copy".into(), settings: c.develop.clone() }];
     c.deleted = false;
@@ -113,9 +149,12 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let targets = s.targets(p)?;
                 let name = str_param(p, "name").filter(|n| !n.trim().is_empty()).map(str::to_string);
+                let names = virtual_copy_names(s, &targets, name.as_deref())?;
                 let mut made = Vec::new();
-                for t in targets {
-                    if let Some(id) = virtual_copy(s, t, name.as_deref())? {
+                for (t, name) in targets.into_iter().zip(names) {
+                    if let Some(name) = name
+                        && let Some(id) = virtual_copy(s, t, &name)?
+                    {
                         made.push(id);
                     }
                 }
@@ -161,17 +200,17 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"changed": commit_ops(s, "Remove from Stack", ops)?}))
         }),
         cmd!("stack.setTop", "Set as Top of Stack", ["Photo", "Stack"], Some("Shift+S"), "{id?} (default: the active photo)", in_stack, |s, p| {
-            let id = p.get("id").and_then(Value::as_u64).map(PhotoId).or(s.active()).ok_or_else(|| bad("stack.setTop", "no photo"))?;
+            let id = super::photo_id(p, "stack.setTop")?.or(s.active()).ok_or_else(|| bad("stack.setTop", "no photo"))?;
             let op = s.catalog.set_top_ops(id);
             Ok(json!({"changed": commit_ops(s, "Set Top of Stack", op.into_iter().collect())?}))
         }),
         cmd!("stack.moveUp", "Move Up in Stack", ["Photo", "Stack"], None, "{id?} — one place towards the top", in_stack, |s, p| {
-            let id = p.get("id").and_then(Value::as_u64).map(PhotoId).or(s.active()).ok_or_else(|| bad("stack.moveUp", "no photo"))?;
+            let id = super::photo_id(p, "stack.moveUp")?.or(s.active()).ok_or_else(|| bad("stack.moveUp", "no photo"))?;
             let op = s.catalog.move_in_stack_ops(id, -1);
             Ok(json!({"changed": commit_ops(s, "Move in Stack", op.into_iter().collect())?}))
         }),
         cmd!("stack.moveDown", "Move Down in Stack", ["Photo", "Stack"], None, "{id?} — one place away from the top", in_stack, |s, p| {
-            let id = p.get("id").and_then(Value::as_u64).map(PhotoId).or(s.active()).ok_or_else(|| bad("stack.moveDown", "no photo"))?;
+            let id = super::photo_id(p, "stack.moveDown")?.or(s.active()).ok_or_else(|| bad("stack.moveDown", "no photo"))?;
             let op = s.catalog.move_in_stack_ops(id, 1);
             Ok(json!({"changed": commit_ops(s, "Move in Stack", op.into_iter().collect())?}))
         }),
@@ -183,17 +222,32 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id?} — this photo and the ones after it become their own stack",
             in_stack,
             |s, p| {
-                let id = p.get("id").and_then(Value::as_u64).map(PhotoId).or(s.active()).ok_or_else(|| bad("stack.split", "no photo"))?;
+                let id = super::photo_id(p, "stack.split")?.or(s.active()).ok_or_else(|| bad("stack.split", "no photo"))?;
                 let op = s.catalog.split_stack_ops(id).ok_or_else(|| bad("stack.split", "pick a photo below the top of a stack"))?;
                 Ok(json!({"changed": commit_ops(s, "Split Stack", vec![op])?}))
             }
         ),
-        cmd!("stack.toggle", "Expand/Collapse Stack", ["Photo", "Stack"], Some("S"), "{ids?, collapsed?: bool}", in_stack, |s, p| {
-            let stacks = stacks_of(s, &s.targets(p)?);
-            let first = stacks.first().and_then(|id| s.catalog.stack(*id)).map(|st| st.collapsed).unwrap_or(false);
-            let collapsed = bool_or(p, "collapsed", !first);
-            set_collapsed(s, stacks, collapsed, if collapsed { "Collapse Stack" } else { "Expand Stack" })
-        }),
+        // `ids` names the stacks' photos without selecting them (a click on a stack badge)
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "stack.toggle",
+                "Expand/Collapse Stack",
+                ["Photo", "Stack"],
+                Some("S"),
+                "{ids?, collapsed?: bool} — the stacks of the named photos (else of the selection)",
+                in_stack,
+                |s, p| {
+                    let stacks = stacks_of(s, &s.targets(p)?);
+                    if stacks.is_empty() {
+                        return Err(bad("stack.toggle", "none of the photos is in a stack"));
+                    }
+                    let first = stacks.first().and_then(|id| s.catalog.stack(*id)).map(|st| st.collapsed).unwrap_or(false);
+                    let collapsed = bool_or(p, "collapsed", !first);
+                    set_collapsed(s, stacks, collapsed, if collapsed { "Collapse Stack" } else { "Expand Stack" })
+                }
+            )
+        },
         cmd!("stack.expandAll", "Expand All Stacks", ["View", "Stacks"], None, "{}", has_stacks, |s, _| {
             let all: Vec<StackId> = s.catalog.stacks().map(|st| st.id).collect();
             set_collapsed(s, all, false, "Expand All Stacks")
