@@ -4,7 +4,7 @@
 use lightcraft_color::cct::{temp_tint_to_xy, wb_matrix, xy_to_temp_tint};
 use lightcraft_color::{REC2020, luminance_2020};
 use lightcraft_develop::{DevelopSettings, Process};
-use lightcraft_raster::blur::gaussian;
+use lightcraft_raster::blur::{gauss_taps, gaussian, gaussian_taps};
 use std::sync::Arc;
 
 use lightcraft_raster::{Plane, Rgb32f, par_join};
@@ -138,6 +138,39 @@ pub fn legacy_to_kelvin(temp: f64, tint: f64, as_shot: (f64, f64)) -> (f64, f64)
         Some((t, tint)) if t.is_finite() && tint.is_finite() => (t, tint),
         _ => (temp, tint),
     }
+}
+
+/// The relative-scale `(temp, tint)` that [`legacy_to_kelvin`] would read as the Kelvin `(temp, tint)` on a source
+/// whose real as-shot white is `as_shot`: the inverse of [`legacy_white`]'s composition. It runs the Bradford step
+/// backwards — the old target's cone response times the old reference's over the as-shot white's — and reads the
+/// result back through [`xy_to_temp_tint`]. `(6500, 0)` is the relative scale's as-shot reference, so the Kelvin
+/// white of the source itself maps exactly to it. `None` when the arithmetic has nowhere to go (a non-finite input,
+/// a white outside the chromaticity plane, or an as-shot cone response of zero, where the forward step discarded it).
+pub fn kelvin_to_legacy(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<(f64, f64)> {
+    use lightcraft_color::{BRADFORD, Xy};
+    if !(temp.is_finite() && tint.is_finite() && as_shot.0.is_finite() && as_shot.1.is_finite()) {
+        return None;
+    }
+    if (temp - as_shot.0).abs() < 1e-9 && (tint - as_shot.1).abs() < 1e-9 {
+        // the source's own white: the relative scale's as-shot reference, exactly
+        return Some((6500.0, 0.0));
+    }
+    let cones = |t: f64, tint: f64| BRADFORD.apply(temp_tint_to_xy(t, tint).to_xyz());
+    let (target, reference, shot) = (cones(temp, tint), cones(6500.0, 0.0), cones(as_shot.0, as_shot.1));
+    let inverse = BRADFORD.inverse()?;
+    let mut old = [0.0; 3];
+    for i in 0..3 {
+        if shot[i].abs() < 1e-12 {
+            return None;
+        }
+        old[i] = target[i] * reference[i] / shot[i];
+    }
+    let xy = Xy::from_xyz(inverse.apply(old));
+    if !(xy.x.is_finite() && xy.y.is_finite() && xy.y > 0.0) {
+        return None;
+    }
+    let (t, tint) = xy_to_temp_tint(xy);
+    (t.is_finite() && tint.is_finite()).then_some((t, tint))
 }
 
 /// Bring the white balance of `d` onto the scale `info` is edited on, before a new value is written into it: on a
@@ -338,11 +371,11 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 }
 
 /// Median radius (px) of the highlights/shadows base of `s`'s rendering process at `px_per_long`:
-/// 0 (no median) under V1, [`base_detail_radius`] from V2.
+/// 0 (no median) under V1, [`base_detail_radius`] from V2 (later processes keep V2's base).
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 | Process::V4 => base_detail_radius(px_per_long),
     }
 }
 
@@ -488,6 +521,8 @@ pub(crate) struct Planes {
     pub base: Option<(BaseKey, Arc<Plane>)>,
     pub clarity: Option<(u32, Arc<Plane>)>,
     pub texture: Option<(u32, Arc<Plane>)>,
+    /// Sharpening blur (exact Gaussian at the sharpen radius).
+    pub sharpen: Option<(SharpenKey, Arc<Plane>)>,
     /// Dark channel and its airlight.
     pub dark: Option<(u32, Arc<Plane>, f32)>,
     /// Blurred chromaticity (local Moiré / Noise).
@@ -499,7 +534,7 @@ impl Planes {
     /// enough for a draft: the wide blurs (base, clarity, dehaze, chromaticity). Its `key` matches
     /// no image, so only another draft takes them.
     pub fn for_other_nr(self) -> Planes {
-        Planes { key: 0, pre_nr: self.pre_nr, log_l: None, texture: None, ..self }
+        Planes { key: 0, pre_nr: self.pre_nr, log_l: None, texture: None, sharpen: None, ..self }
     }
 }
 
@@ -507,6 +542,16 @@ impl Planes {
 /// rendering process and the median radius ([`tone_base_detail`]). The base differs between
 /// processes, so a photo moved to another one (Update to Current Process, undo) recomputes it.
 pub type BaseKey = (u32, Process, usize);
+
+pub type SharpenKey = (u32, Process);
+
+pub fn sharpen_key(s: &DevelopSettings, sigma: f32) -> SharpenKey {
+    (sigma.to_bits(), s.process.process())
+}
+
+pub fn pixel_sharpen(s: &DevelopSettings) -> bool {
+    s.process.process() >= Process::V3
+}
 
 /// The [`BaseKey`] of a base at `sigma` for `s` (`detail`: [`PlaneSigmas::base_detail`]).
 pub fn base_key(s: &DevelopSettings, sigma: f32, detail: usize) -> BaseKey {
@@ -551,13 +596,58 @@ pub struct PlaneSigmas {
     pub clarity: Option<f32>,
     /// Texture / sharpening band (Gaussian).
     pub texture: Option<f32>,
+    /// Sharpening blur (exact Gaussian, see [`sharpen_sigma`]).
+    pub sharpen: Option<f32>,
     /// Dehaze dark channel (Gaussian).
     pub dark: Option<f32>,
     /// Chromaticity blur for local Moiré / colour noise (Gaussian).
     pub chroma: Option<f32>,
 }
 
-pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
+/// Gaussian sigma (pixels) of the texture / sharpening band at `px_per_long`.
+pub fn texture_sigma(px_per_long: f64) -> f32 {
+    (0.0018 * px_per_long as f32).max(0.6)
+}
+
+/// Sharpening blur radius in output pixels before clamping: Radius (source pixels) times the
+/// output pixels per original pixel (`native_long` = the original photo's long edge), so a preview and
+/// an export show the same detail at the same displayed scale.
+pub fn sharpen_sigma_raw(s: &DevelopSettings, px_per_long: f64, native_long: f64) -> f32 {
+    let r = s.detail.sharpen_radius;
+    let radius = if r.is_finite() { r.clamp(0.1, 10.0) } else { 1.0 };
+    (radius * px_per_long / native_long.max(1.0)) as f32
+}
+
+/// Smallest and largest sigma (px) of the sharpening blur. The largest is the most the Gaussian taps
+/// support (CPU and GPU share them), so an enlarging export keeps every Radius step distinct.
+pub const SHARPEN_SIGMA_MIN: f32 = 0.5;
+pub const SHARPEN_SIGMA_MAX: f32 = lightcraft_raster::blur::GAUSS_SIGMA_MAX;
+
+/// The sharpening blur's sigma for a raw value of [`sharpen_sigma_raw`].
+pub fn sharpen_sigma(raw: f32) -> f32 {
+    raw.clamp(SHARPEN_SIGMA_MIN, SHARPEN_SIGMA_MAX)
+}
+
+/// Match the continuous Gaussian's Nyquist response below half a pixel, using a representable
+/// FIR blur. Blend the correction out between half and one pixel: no jump at the floor, and
+/// full-pixel sharpening (including Radius 1 at native size) is unchanged.
+pub fn sharpen_gain(raw: f32) -> f32 {
+    if !raw.is_finite() || raw <= 0.0 {
+        return 0.0;
+    }
+    if raw >= 1.0 {
+        return 1.0;
+    }
+    let taps = gauss_taps(sharpen_sigma(raw));
+    let radius = taps.len() / 2;
+    let response = taps.iter().enumerate().map(|(i, &t)| if (i + radius).is_multiple_of(2) { t } else { -t }).sum::<f32>();
+    let desired = -(-0.5 * std::f32::consts::PI.powi(2) * raw * raw).exp_m1();
+    let ratio = desired / (1.0 - response).max(1e-6);
+    let blend = ((1.0 - raw) / 0.5).clamp(0.0, 1.0);
+    1.0 + (ratio - 1.0) * blend
+}
+
+pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, native_long: f64, q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
     // A hidden mask, or one with no components, does not change the picture. Its sliders must
     // not pick the tone base Clarity reads (#1214).
@@ -576,16 +666,19 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
     let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
     // local Noise and Defringe read the fine detail band too
     let texture = (s.effects.texture != 0.0
-        || s.detail.sharpen_amount != 0.0
         || local_any(|a| a.texture)
-        || local_any(|a| a.sharpness)
         || local_any(|a| a.noise)
+        || (!pixel_sharpen(s) && (s.detail.sharpen_amount != 0.0 || local_any(|a| a.sharpness)))
         || s.masks.iter().filter(live).any(|m| m.adjust.defringe > 0.0))
-    .then(|| (0.0018 * ppl).max(0.6));
+    .then(|| texture_sigma(px_per_long));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
     let chroma = (local_any(|a| a.moire) || s.masks.iter().filter(live).any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
     let base_detail = if base.is_some() { tone_base_detail(s, px_per_long) } else { 0 };
-    PlaneSigmas { base, base_detail, clarity, texture, dark, chroma }
+    // V1/V2 keep their texture-band sharpening; only V3 requests the pixel-scale plane.
+    let sharpen_raw = sharpen_sigma_raw(s, px_per_long, native_long);
+    let sharpen = (pixel_sharpen(s) && sharpen_gain(sharpen_raw) > 0.0 && (s.detail.sharpen_amount != 0.0 || local_any(|a| a.sharpness)))
+        .then(|| sharpen_sigma(sharpen_raw));
+    PlaneSigmas { base, base_detail, clarity, texture, sharpen, dark, chroma }
 }
 
 /// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
@@ -597,15 +690,23 @@ pub(crate) fn prepare(
     s: &DevelopSettings,
     frame: &Frame,
     px_per_long: f64,
+    native_long: f64,
     q: Quality,
     planes: &mut Planes,
     mattes: Option<&masks::Mattes>,
 ) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
-    let PlaneSigmas { base: base_sigma, base_detail, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
-        plane_sigmas(s, px_per_long, q);
+    let PlaneSigmas {
+        base: base_sigma,
+        base_detail,
+        clarity: clarity_sigma,
+        texture: texture_sigma,
+        sharpen: sharpen_sigma_px,
+        dark: dark_sigma,
+        chroma: chroma_sigma,
+    } = plane_sigmas(s, px_per_long, native_long, q);
 
-    let Planes { base: sb, clarity: sc, texture: st, dark: sd, chroma: sch, .. } = planes;
+    let Planes { base: sb, clarity: sc, texture: st, sharpen: ss, dark: sd, chroma: sch, .. } = planes;
     let chroma_blur = chroma_sigma.map(|sg| match sch {
         Some((k, c)) if *k == sg.to_bits() => c.clone(),
         _ => {
@@ -615,14 +716,22 @@ pub(crate) fn prepare(
         }
     });
     let l = &log_l;
-    let (base, (clarity_blur, (texture_blur, dark))) = par_join(
+    let (base, (clarity_blur, ((texture_blur, sharpen_blur), dark))) = par_join(
         || base_sigma.map(|sg| plane_at(sb, base_key(s, sg, base_detail), || timed("base", || tone_base(l, sg, base_detail)))),
         || {
             par_join(
                 || clarity_sigma.map(|sg| plane_at(sc, sg.to_bits(), || timed("clarity", || guided_fast(l, sg, CLARITY_EPS)))),
                 || {
                     par_join(
-                        || texture_sigma.map(|sg| plane_at(st, sg.to_bits(), || timed("texture", || gaussian(l, sg)))),
+                        || {
+                            par_join(
+                                || texture_sigma.map(|sg| plane_at(st, sg.to_bits(), || timed("texture", || gaussian(l, sg)))),
+                                || {
+                                    sharpen_sigma_px
+                                        .map(|sg| plane_at(ss, sharpen_key(s, sg), || timed("sharpen", || gaussian_taps(l, &gauss_taps(sg)))))
+                                },
+                            )
+                        },
                         || {
                             dark_sigma.map(|sg| match sd {
                                 Some((k, d, air)) if *k == sg.to_bits() => (d.clone(), *air),
@@ -646,7 +755,7 @@ pub(crate) fn prepare(
     };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
-    Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 
 /// The airlight of the whole output frame, estimated on a small render of it (`proxy_w` px wide):
@@ -703,6 +812,7 @@ pub fn airlight_of(mut v: Vec<f32>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightcraft_color::cct::xy_to_uv;
 
     #[test]
     fn guided_preserves_step_edges_and_flattens_texture() {
@@ -775,17 +885,17 @@ mod tests {
             adjust: lightcraft_develop::LocalAdjustments { highlights: 40.0, ..Default::default() },
             ..Default::default()
         });
-        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        assert!(plane_sigmas(&s, 2000.0, 2000.0, Quality::Full).base.is_none());
         s.masks[0].visible = true;
         s.masks[0].components.clear();
-        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        assert!(plane_sigmas(&s, 2000.0, 2000.0, Quality::Full).base.is_none());
         s.masks[0].components.push(MaskComponent {
             name: None,
             op: MaskOp::Add,
             invert: false,
             shape: MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) },
         });
-        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_some());
+        assert!(plane_sigmas(&s, 2000.0, 2000.0, Quality::Full).base.is_some());
     }
 
     #[test]
@@ -795,6 +905,70 @@ mod tests {
         let mut img = Rgb32f::filled(2, 2, [0.1, 0.2, 0.3]);
         scene_linear_pre(&mut img, &SourceInfo::default(), &s);
         assert!((img.get(1, 1)[2] - 0.6).abs() < 1e-5);
+    }
+
+    /// [`kelvin_to_legacy`] inverts [`legacy_to_kelvin`] over the whole relative slider range and back: the
+    /// round trip returns the start, in both directions, to the precision of the Kelvin / tint parametrisation.
+    #[test]
+    fn kelvin_to_legacy_inverts_legacy_to_kelvin() {
+        for as_shot in [(4986.0, -2.0), (6500.0, 0.0), (3200.0, 14.0), (9500.0, -12.0)] {
+            // the relative slider's whole reach: temp 0..100 (2000–13550 K around 6500), tint −150..150
+            for pct in [0.0, 12.5, 25.0, 50.0, 75.0, 100.0] {
+                for tint in [-150.0, -40.0, 0.0, 33.0, 150.0] {
+                    let (lt, ltint) = controls_relative(pct, tint);
+                    let (kt, ktint) = legacy_to_kelvin(lt, ltint, as_shot);
+                    // past the Kelvin parametrisation's own reach (its search runs 1000–50000 K) the forward
+                    // conversion has already clamped, so the pair is not expected to come back
+                    if !(1050.0..=49_000.0).contains(&kt) {
+                        continue;
+                    }
+                    let back = kelvin_to_legacy(kt, ktint, as_shot).unwrap();
+                    let (x1, y1) = xy_to_uv(temp_tint_to_xy(lt, ltint));
+                    let (x2, y2) = xy_to_uv(temp_tint_to_xy(back.0, back.1));
+                    // the pair may differ by more than the slider's own step at the extreme corners (the Kelvin
+                    // parametrisation is read back through a search), but never by much, and the white it renders
+                    // is the same
+                    assert!(
+                        (back.0 - lt).abs() <= lt.abs() * 0.01 && (back.1 - ltint).abs() < 0.5,
+                        "as shot {as_shot:?}: relative ({lt}, {ltint}) -> kelvin ({kt}, {ktint}) -> {back:?}"
+                    );
+                    assert!((x1 - x2).hypot(y1 - y2) < 1e-3, "as shot {as_shot:?}: relative ({lt}, {ltint}) -> kelvin ({kt}, {ktint}) -> {back:?}");
+                }
+            }
+            // the other direction: every white the relative scale can hold maps back to a pair that renders the same
+            for kt in [as_shot.0, 2500.0, 4200.0, 6500.0, 12000.0] {
+                for ktint in [-60.0, 0.0, 45.0] {
+                    let Some((lt, ltint)) = kelvin_to_legacy(kt, ktint, as_shot) else { continue };
+                    // outside the slider's reach the relative scale has no value for this white: the forward
+                    // conversion would clamp, so the round trip is not expected to close there
+                    if !(2000.0..=13550.0).contains(&lt) || ltint.abs() > 150.0 {
+                        continue;
+                    }
+                    let (kt2, ktint2) = legacy_to_kelvin(lt, ltint, as_shot);
+                    let (x1, y1) = xy_to_uv(temp_tint_to_xy(kt, ktint));
+                    let (x2, y2) = xy_to_uv(temp_tint_to_xy(kt2, ktint2));
+                    assert!(
+                        (x1 - x2).hypot(y1 - y2) < 1e-3,
+                        "as shot {as_shot:?}: kelvin ({kt}, {ktint}) -> relative ({lt}, {ltint}) -> ({kt2}, {ktint2})"
+                    );
+                }
+            }
+            // the source's own white is the relative scale's as-shot reference, exactly
+            assert_eq!(kelvin_to_legacy(as_shot.0, as_shot.1, as_shot), Some((6500.0, 0.0)));
+        }
+        // the exact inverse of the special case inside legacy_to_kelvin
+        assert_eq!(kelvin_to_legacy(4986.0, -2.0, (4986.0, -2.0)), Some((6500.0, 0.0)));
+        assert_eq!(legacy_to_kelvin(6500.0, 0.0, (4986.0, -2.0)), (4986.0, -2.0));
+        // hostile numbers answer None, never a panic or a plausible lie
+        assert_eq!(kelvin_to_legacy(f64::NAN, 0.0, (5000.0, 0.0)), None);
+        assert_eq!(kelvin_to_legacy(5000.0, f64::INFINITY, (5000.0, 0.0)), None);
+        assert_eq!(kelvin_to_legacy(5000.0, 0.0, (f64::NAN, 0.0)), None);
+    }
+
+    /// The relative scale's `(temp, tint)` for a slider temperature at `pct` % (2000–7000 K fill the left half) and tint.
+    fn controls_relative(pct: f64, tint: f64) -> (f64, f64) {
+        let t = if pct <= 50.0 { 2000.0 + pct * 100.0 } else { 7000.0 + (pct - 50.0) * 131.0 };
+        (t, tint)
     }
 }
 

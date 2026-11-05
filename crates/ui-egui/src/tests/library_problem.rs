@@ -804,3 +804,78 @@ fn typing_reaches_the_launch_lists_own_new_library_prompt() {
     assert_eq!(command, "app.newLibrary");
     assert_eq!(value, "Fresh", "typing reaches the launch list's own text prompt");
 }
+
+/// Issue #2779: files waiting for a library (the command line, drops on the launch list) that
+/// find another import running when a library opens are kept, with a toast saying why, and
+/// imported once that import ends instead of being dropped.
+#[test]
+fn waiting_files_wait_for_a_running_import_instead_of_being_dropped() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-waiting-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = |v: u8| {
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[v, 3, 9, 255]; 64] };
+        lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap()
+    };
+    // enough photos that the first import is still running two frames later
+    let busy = dir.join("busy");
+    std::fs::create_dir_all(&busy).unwrap();
+    for i in 0..100u8 {
+        std::fs::write(busy.join(format!("{i}.png")), png(i)).unwrap();
+    }
+    let waiting = dir.join("waiting.png");
+    std::fs::write(&waiting, png(200)).unwrap();
+
+    let app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
+    let lib = dir.join("lib");
+    h.app.library_problem = Some(LibraryProblem {
+        pending_import: vec![waiting.to_string_lossy().to_string()],
+        ..LibraryProblem::new(lib.to_string_lossy(), "a test error")
+    });
+    h.step();
+    // a library opens another way (File ▸ Open Library…) while an import is running
+    h.app.session.open_library(&lib, false).unwrap();
+    crate::import::start_paths(&mut h.app, vec![busy.to_string_lossy().to_string()]).unwrap();
+    // the UI pass takes the files; the next background tick tries to import them
+    h.step();
+    h.step();
+    assert!(h.app.library_problem.is_none(), "the problem is over");
+    assert_eq!(h.app.waiting_import.files, vec![waiting.to_string_lossy().to_string()], "the waiting file is kept");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("An import is running") && toast.contains("once it ends"), "{toast}");
+    // the files belong to this library: no switch while they wait, also when what they wait for
+    // is a Synchronize Folder, which doesn't hold switching back by itself (the import set aside)
+    let running = h.app.import.take();
+    let r = h.app.run("app.openLibrary", json!({"path": dir.join("other").to_string_lossy()}));
+    h.app.import = running;
+    assert!(r.as_ref().is_err_and(|e| e.contains("waiting")), "{r:?}");
+    assert_eq!(h.app.session.library.as_ref().map(|l| l.dir.clone()), Some(lib.clone()));
+
+    // quitting while the file waits asks first
+    assert!(!crate::panels::notices::may_close(&mut h.app));
+    h.app.quit_prompt = None;
+
+    // the window is hidden from here on: only the background logic runs. The tick that hands the
+    // file to a new import (once the first one ends) leaves that import unlisted until its own
+    // first tick, and quitting right then still asks
+    let t0 = std::time::Instant::now();
+    while !h.app.waiting_import.files.is_empty() && t0.elapsed() < T {
+        let ctx = h.view.ctx.clone();
+        h.app.logic(&ctx);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(h.app.waiting_import.files.is_empty(), "the file was handed to a new import");
+    assert!(h.app.import.as_ref().is_some_and(|t| !t.listed()), "not listed before its first tick");
+    assert!(!crate::panels::notices::may_close(&mut h.app), "quitting asks about the import just handed over");
+    h.app.quit_prompt = None;
+    while !(h.app.import.is_none() && h.app.session.catalog.len() == 101) && t0.elapsed() < T {
+        let ctx = h.view.ctx.clone();
+        h.app.logic(&ctx);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(h.app.session.catalog.len(), 101, "both imports went in while hidden");
+    assert!(h.app.waiting_import.files.is_empty());
+    let _ = h.app.session.close_library();
+    let _ = std::fs::remove_dir_all(&dir);
+}

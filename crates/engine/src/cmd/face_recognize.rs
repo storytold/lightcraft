@@ -280,6 +280,7 @@ mod imp {
     use lightcraft_faces::runtime::Embedder;
     use lightcraft_geom::Rect;
     use lightcraft_meta::{Region, RegionKind};
+    use rayon::prelude::*;
     use serde_json::{Value, json};
 
     use super::super::bad;
@@ -345,10 +346,12 @@ mod imp {
         current_with(s, cmd, true)
     }
 
-    /// Whether the background scan should look for faces in this photo: it is in the library, has no face regions at all
-    /// (nothing from XMP, nothing drawn or named, no earlier detection) and has not been searched yet.
+    /// Whether the background scan should look for faces in this photo: it is in the library, is not a video (the image
+    /// decoders can't read one, [`Photo::is_video`]), has no face regions at all (nothing from XMP, nothing drawn or
+    /// named, no earlier detection) and has not been searched yet.
     fn needs_search(s: &Session, photo: &Photo) -> bool {
         photo.in_library()
+            && !photo.is_video()
             && !photo.meta.regions.iter().any(|r| r.kind == RegionKind::Face)
             && !s.faces.scanned.contains(photo.id.0)
             && !s.faces.scan_failed.contains(&photo.id.0)
@@ -731,11 +734,13 @@ mod imp {
             return ready;
         }
         let bar = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD) * 0.8;
-        let refs: Vec<(&str, &[f32])> = gallery.iter().map(|e| ("person", &e[..])).collect();
+        let refs: Vec<&[f32]> = gallery.iter().map(|e| &e[..]).collect();
+        // every unnamed face against every face of theirs: some 400 million comparisons for a person with 4 000 faces
+        // in a library of 90 000, so on every core (minutes on one)
         let mut scored: Vec<(f32, u64, usize, Rect)> = candidates
-            .into_iter()
+            .into_par_iter()
             .filter_map(|(photo, index, rect, e)| {
-                let score = matching::rank(&e, &refs).first()?.score;
+                let score = matching::person_score(&e, &refs, matching::TOP_FACES)?;
                 (score >= bar).then_some((score, photo, index, rect))
             })
             .collect();
@@ -968,6 +973,22 @@ mod imp {
             assert!(!s.faces.scanned.contains(a.0), "not remembered as searched: the file may come back");
             assert!(!needs_search(&s, s.catalog.photo(a).unwrap()), "but not retried on every pass");
             assert!(!pending(&s, &[], true).contains(&a));
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        /// A video went to the image decoders to be searched for faces and failed, once each launch: it is skipped, as the
+        /// grid's thumbnails skip it (issue #2682 is about those).
+        #[test]
+        fn a_video_is_not_searched_for_faces() {
+            let (mut s, d) = loaded("video");
+            let (a, _) = two_photos(&s);
+            let id = s.catalog.alloc_photo_id();
+            let path = d.join("clip.mp4").to_string_lossy().into_owned();
+            let clip = Photo::new(id, lightcraft_catalog::Source::File { path }, "clip.mp4", "VIDEO", 1920, 1080, "2026-10-24T00:00:00");
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(clip) }).unwrap();
+            assert!(needs_search(&s, s.catalog.photo(a).unwrap()), "a photo is searched");
+            assert!(!needs_search(&s, s.catalog.photo(id).unwrap()));
+            assert!(!pending(&s, &[], true).contains(&id));
             let _ = std::fs::remove_dir_all(&d);
         }
 

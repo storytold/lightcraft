@@ -2,13 +2,18 @@ use serde_json::{Value, json};
 
 use crate::{Selection, Session, command_specs};
 
+mod album_loops;
+mod album_missing;
 mod album_order;
 mod album_remove;
 mod albums_local;
+mod autosync_wb;
 mod color;
 mod constrain_crop;
 mod crop_angle;
 mod crop_aspect;
+mod dcp;
+mod dcp_corpus;
 mod denoise;
 mod export;
 mod face_models;
@@ -27,23 +32,29 @@ mod ids_params;
 mod import;
 mod import_move;
 mod keyword_list;
+mod lens_refresh;
 mod libops;
 mod library;
 mod lightroom_folder;
 mod mask_effects;
+mod mask_geometry;
 mod merge;
 mod move_to_share;
 mod organize;
 mod persist;
 mod prefs;
 mod presets_scale;
+mod preview_prep;
 mod print;
 mod process;
 mod recheck;
 mod segment;
 mod settings_files;
+mod shelved_folder;
 mod slide;
 mod slideshow_export;
+#[cfg(not(target_arch = "wasm32"))]
+mod slow_drive;
 mod spots;
 mod sync;
 mod view_follow;
@@ -410,6 +421,17 @@ fn connected_brush_strokes_start_where_the_last_one_ended() {
     // all of it is one undo step
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(strokes(&s).len(), 2);
+}
+
+#[test]
+fn a_mask_id_at_the_limit_does_not_overflow_the_next_masks() {
+    let mut s = demo();
+    s.execute("develop.merge", &json!({"settings": {"masks": [{"id": u32::MAX, "name": "Pasted"}]}})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    s.execute("mask.duplicate", &json!({})).unwrap();
+    let ids: Vec<u32> = active_dev(&s).masks.iter().map(|m| m.id).collect();
+    assert_eq!(ids.len(), 3);
+    assert!(ids.iter().enumerate().all(|(i, id)| !ids[..i].contains(id)), "distinct ids: {ids:?}");
 }
 
 #[test]
@@ -1017,6 +1039,48 @@ fn auto_sync_carries_only_the_changed_settings() {
     s.execute("develop.autoSync", &json!({"on": false})).unwrap();
     s.execute("develop.set", &json!({"control": "light.exposure", "value": -1})).unwrap();
     assert_eq!(s.develop_of(PhotoId(ids[1])).unwrap().light.exposure, 0.7);
+}
+
+#[test]
+fn auto_sync_carries_remove_hot_pixels_off() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<PhotoId> = s.catalog.photos().take(2).map(|p| p.id).collect();
+    for id in &ids {
+        let mut d = (*s.develop_of(*id).unwrap()).clone();
+        d.detail.nr_outliers = true;
+        s.set_develop(*id, d, "Setup").unwrap();
+    }
+    s.execute("library.select", &json!({"ids": [ids[0].0, ids[1].0], "active": ids[0].0})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    // off is omitted from the stored JSON: switching it off is still a change Auto Sync carries
+    let mut d = (*s.develop_of(ids[0]).unwrap()).clone();
+    d.detail.nr_outliers = false;
+    s.set_develop(ids[0], d, "Remove Hot Pixels").unwrap();
+    assert!(!s.develop_of(ids[1]).unwrap().detail.nr_outliers);
+}
+
+#[test]
+fn the_hot_pixel_limit_renders_afresh_only_the_photos_that_remove_hot_pixels() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<PhotoId> = s.catalog.photos().take(2).map(|p| p.id).collect();
+    let mut d = (*s.develop_of(ids[0]).unwrap()).clone();
+    d.detail.nr_outliers = true;
+    s.set_develop(ids[0], d, "Setup").unwrap();
+    let keys = |s: &mut crate::Session| ids.iter().map(|id| s.thumb_job(*id, 256).unwrap().cache.unwrap().1).collect::<Vec<_>>();
+    let before = keys(&mut s);
+    assert_eq!(s.execute("app.hotPixelLimit", &json!({})).unwrap()["default"], 0.2);
+    assert!(s.execute("app.hotPixelLimit", &json!({"percent": 0})).is_err());
+    assert!(s.execute("app.hotPixelLimit", &json!({"percent": "1"})).is_err());
+    let r = s.execute("app.hotPixelLimit", &json!({"percent": 1.5}));
+    let after = keys(&mut s);
+    // (process-wide: back to the default before anything can fail)
+    s.execute("app.hotPixelLimit", &json!({"percent": 0.2f32})).unwrap();
+    assert_eq!(r.unwrap()["percent"], 1.5);
+    assert_ne!(after[0], before[0], "a photo that removes hot pixels renders with the new limit");
+    assert_eq!(after[1], before[1], "the other photo's thumbnail stays valid");
+    assert_eq!(keys(&mut s), before, "the default limit keeps the keys it always had");
 }
 
 #[test]
