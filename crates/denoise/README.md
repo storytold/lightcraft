@@ -1,6 +1,6 @@
 # lightcraft-denoise
 
-L1 pure-Rust AI RAW denoise primitives and CPU inference. No weights are bundled.
+L1 pure-Rust AI RAW denoise primitives and CPU inference. No weights are bundled; `lightcraft_denoise_core::builtin` is the model-free denoiser used by default.
 See [user workflow and limitations](../../docs/denoise.md).
 
 `lightcraft-denoise-core` provides metadata, Bayer helpers and cache formats,
