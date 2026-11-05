@@ -972,6 +972,10 @@
   "It tests this album, so testing it back would loop": "Album itu sudah menjadikan album ini sebagai syarat; menjadikannya syarat di sini akan menimbulkan perulangan",
   "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).": "Hasil pengurangan noise foto ini belum dibuat, dan tidak dibuat secara otomatis (Pengaturan, Pengurangan noise AI).",
   "JPEG (Large)": "JPEG (besar)",
+  "Instagram Feed": "Umpan Instagram",
+  "Instagram Story / Reel": "Instagram Story / Reel",
+  "Web / Portfolio": "Web / Portofolio",
+  "Full Resolution Master": "Master Resolusi Penuh",
   "JPEG (Small)": "JPEG (kecil)",
   "Join the ArtCraft Discord": "Gabung ke Discord ArtCraft",
   "Join the ArtCraft Discord…": "Gabung ke Discord ArtCraft…",
@@ -2397,5 +2401,6 @@
   "Build Anyway": "Tetap buat",
   "Smart Preview Format": "Format pratinjau pintar",
   "Checking free space…": "Memeriksa ruang kosong…",
-  "Build": "Buat"
+  "Build": "Buat",
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
 }

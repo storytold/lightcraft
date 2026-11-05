@@ -349,5 +349,7 @@
     "other": "{count} bản xem trước thông minh · {size:.1} MiB"
   },
   "could not check smart preview storage: {e}": "Không thể kiểm tra nơi lưu xem trước thông minh: {e}",
-  "free space is unavailable for {path} on this platform": "Không thể kiểm tra dung lượng trống của {path} trên nền tảng này"
+  "free space is unavailable for {path} on this platform": "Không thể kiểm tra dung lượng trống của {path} trên nền tảng này",
+  "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}"
 }

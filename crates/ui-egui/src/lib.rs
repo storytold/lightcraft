@@ -88,6 +88,7 @@ pub use widgets::rating;
 pub use widgets::text_field;
 
 mod app;
+mod auto_settings;
 mod caches;
 mod clock;
 mod services;

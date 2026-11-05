@@ -352,5 +352,7 @@
     "other": "{count} pratinjau pintar · {size:.1} MiB"
   },
   "could not check smart preview storage: {e}": "Tidak dapat memeriksa penyimpanan pratinjau pintar: {e}",
-  "free space is unavailable for {path} on this platform": "Ruang kosong tidak tersedia untuk {path} pada platform ini"
+  "free space is unavailable for {path} on this platform": "Ruang kosong tidak tersedia untuk {path} pada platform ini",
+  "{n} folder{} could not be read": "Folder yang tidak bisa dibaca: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}"
 }
