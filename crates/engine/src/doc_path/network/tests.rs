@@ -5,11 +5,11 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-struct Fixture(PathBuf);
+pub(crate) struct Fixture(pub(crate) PathBuf);
 
 impl Fixture {
     /// Make disjoint selected and unselected directories containing distinguishable data.
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let root = std::env::temp_dir().join(format!("lc-unc-handles-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir(&root).unwrap();
@@ -32,7 +32,7 @@ impl Fixture {
     }
 
     /// Address this fixture through the machine's optional loopback administrative share.
-    fn unc(&self) -> Option<PathBuf> {
+    pub(crate) fn unc(&self) -> Option<PathBuf> {
         let drive_root = self.0.ancestors().last()?;
         let Some(Component::Prefix(prefix)) = drive_root.components().next() else { return None };
         let std::path::Prefix::Disk(drive) = prefix.kind() else { return None };
@@ -43,9 +43,11 @@ impl Fixture {
 impl Drop for Fixture {
     /// Delete only this fixture; unlink junctions before removing its ordinary directories.
     fn drop(&mut self) {
-        let link = self.0.join("selected/redirect");
-        if junction::exists(&link).unwrap_or(false) {
-            let _ = junction::delete(&link);
+        for name in ["selected/redirect", "selected/safe"] {
+            let link = self.0.join(name);
+            if junction::exists(&link).unwrap_or(false) {
+                let _ = junction::delete(&link);
+            }
         }
         let _ = std::fs::remove_dir_all(&self.0);
     }
@@ -187,4 +189,46 @@ fn unc_import_reads_original_and_sidecar_without_an_unchecked_probe() {
     assert_eq!(session.catalog.photo(lightcraft_catalog::PhotoId(report.imported[0])).unwrap().rating, 4);
     assert!(!called.load(Ordering::Relaxed));
     assert_eq!(std::fs::read(photo).unwrap(), png);
+}
+
+/// A region packet already read from a sidecar cannot authorize a redirected orientation reread.
+#[test]
+fn region_orientation_reread_refuses_replaced_directory() {
+    use crate::sidecar::{SidecarLookup, SidecarNaming};
+    use lightcraft_catalog::MediaKind;
+    use lightcraft_meta::Orientation;
+    let f = Fixture::new();
+    let Some(unc) = f.unc().filter(|p| std::fs::metadata(p).is_ok()) else {
+        lightcraft_testkit::skip!(System, "loopback administrative share unavailable");
+        return;
+    };
+    for (folder, orientation) in [("selected/safe", Orientation::Rotate90), ("unselected", Orientation::Rotate180)] {
+        let image = lightcraft_raster::Rgba8::from_fn(32, 24, |_, _| [20, 40, 80, 255]);
+        let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { orientation: Some(orientation), ..Default::default() });
+        let bytes = lightcraft_codecs::encode_jpeg(
+            &lightcraft_codecs::EncodeImage::rgba8(&image),
+            90,
+            Default::default(),
+            &lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() },
+        )
+        .unwrap();
+        std::fs::write(f.0.join(folder).join("photo.jpg"), bytes).unwrap();
+    }
+    let packet = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+        xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#" xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#">
+        <mwg-rs:Regions rdf:parseType="Resource"><mwg-rs:AppliedToDimensions rdf:parseType="Resource" stDim:w="32" stDim:h="24" stDim:unit="pixel"/>
+        <mwg-rs:RegionList><rdf:Bag><rdf:li rdf:parseType="Resource" mwg-rs:Name="Example" mwg-rs:Type="Face">
+        <mwg-rs:Area rdf:parseType="Resource" stArea:x="0.25" stArea:y="0.4" stArea:w="0.1" stArea:h="0.15" stArea:unit="normalized"/>
+        </rdf:li></rdf:Bag></mwg-rs:RegionList></mwg-rs:Regions></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(f.0.join("selected/safe/photo.xmp"), packet).unwrap();
+    let original = unc.join("selected/safe/photo.jpg").to_string_lossy().into_owned();
+    let lookup = SidecarLookup { naming: SidecarNaming::Stem, owns_stem: true };
+    let (packet, _) = crate::sidecar::read_packet(&original, MediaKind::Image, lookup).unwrap();
+    let sc = crate::sidecar::parse_sidecar(&packet, crate::crs::Target::Rendered).unwrap();
+    assert!(sc.regions_drawn_on.is_some());
+    assert_eq!(sc.clone().with_file_orientation(&original).orientation, Some(Orientation::Rotate90));
+    std::fs::rename(f.0.join("selected/safe"), f.0.join("selected/before")).unwrap();
+    junction::create(f.0.join("unselected"), f.0.join("selected/safe")).unwrap();
+    assert_eq!(sc.with_file_orientation(&original).orientation, None, "must not read the redirected original's orientation");
 }

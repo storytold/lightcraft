@@ -108,4 +108,4 @@ fn invalid_path() -> io::Error {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

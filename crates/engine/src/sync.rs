@@ -604,8 +604,8 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarLookup, listing:
     // (a name the listing holds is read for its date next, and one that can't be read is passed
     // over for the next name, as a name that is no file was)
     let found = naming.candidates(path).find_map(|c| {
-        let there = listing.or_ask(listing.is_file(&c), || c.is_file());
-        let meta = there.then(|| std::fs::metadata(&c).ok()).flatten().filter(std::fs::Metadata::is_file)?;
+        let there = listing.or_ask(listing.is_file(&c), || crate::doc_path::original_metadata(&c).is_ok_and(|m| m.is_file()));
+        let meta = there.then(|| crate::doc_path::original_metadata(&c).ok()).flatten().filter(std::fs::Metadata::is_file)?;
         Some((c, meta))
     });
     let Some((file, meta)) = found else { return false };
@@ -618,7 +618,7 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarLookup, listing:
     if seen.is_some_and(|t| saved <= t) {
         return false;
     }
-    let Ok(text) = std::fs::read_to_string(&file) else { return false };
+    let Ok(text) = crate::doc_path::read_original_text(&file) else { return false };
     let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
     let sc = sc.with_file_orientation(path).resolve_label(labels);
     let mut q = p.clone();
@@ -798,11 +798,16 @@ impl SyncWork {
 /// Read and parse photo file `path`'s XMP sidecar file.
 fn read_sidecar(path: &str, naming: SidecarLookup, target: crate::crs::Target) -> std::result::Result<crate::sidecar::SidecarData, String> {
     let file = naming.find(path).ok_or_else(|| "no XMP sidecar".to_string())?;
-    let len = std::fs::metadata(&file).map_err(|e| format!("{}: {e}", file.display()))?.len();
+    read_sidecar_file(path, &file, target)
+}
+
+/// Revalidate a discovered sidecar at each read; an earlier lookup or folder listing is not authority.
+fn read_sidecar_file(path: &str, file: &Path, target: crate::crs::Target) -> std::result::Result<crate::sidecar::SidecarData, String> {
+    let len = crate::doc_path::original_metadata(file).map_err(|e| format!("{}: {e}", file.display()))?.len();
     if len > MAX_SIDECAR_BYTES {
         return Err(format!("{}: too large for an XMP sidecar", file.display()));
     }
-    let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let text = crate::doc_path::read_original_text(file).map_err(|e| format!("{}: {e}", file.display()))?;
     crate::sidecar::parse_sidecar(&text, target).map(|sc| sc.with_file_orientation(path)).map_err(|e| format!("{}: {e}", file.display()))
 }
 
@@ -895,3 +900,7 @@ impl SyncCommit {
 #[cfg(test)]
 #[path = "sync/tests_listing.rs"]
 mod tests_listing;
+
+#[cfg(all(test, windows))]
+#[path = "sync/tests_network.rs"]
+mod tests_network;

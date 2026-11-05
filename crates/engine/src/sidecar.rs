@@ -397,7 +397,7 @@ impl SidecarData {
 /// ([`late_orientation`]). A WebP's or PNG's chunks are always walked, since the last Exif chunk is the one that counts
 /// ([`webp_orientation`], [`png_orientation`]).
 fn file_orientation(path: &str) -> Option<lightcraft_meta::Orientation> {
-    let mut file = std::fs::File::open(path).ok()?;
+    let mut file = crate::doc_path::open_original(path).ok()?;
     let mut head = Vec::new();
     (&mut file).take(ORIENTATION_SPAN).read_to_end(&mut head).ok()?;
     // Import takes a raw's orientation from the decoder, not from Exif IFD0 / XMP alone. Re-read and sync must do the

@@ -251,6 +251,9 @@ fn preview_loading_reads_only_the_header_and_the_jpeg() {
     assert_eq!((quick.width, quick.height), (whole.width, whole.height), "same preview size");
     assert_eq!(quick.data, whole.data, "byte for byte");
 
+    let loaded = fs_preview_loader()(&path, max_edge).expect("the filesystem hook keeps its opened original");
+    assert_eq!((loaded.width, loaded.height, loaded.data), (whole.width, whole.height, whole.data));
+
     // A file with no locatable preview declines (the caller then reads it whole), a missing file errors.
     let plain = dir.join("plain.jpg");
     std::fs::write(&plain, &jpeg).unwrap();
@@ -418,6 +421,9 @@ fn preview_loading_declines_an_orientation_only_the_whole_file_shows() {
     assert!(lightcraft_meta::extract(&file[..PLAN_PREFIX as usize]).orientation.is_none(), "which the bounded header cannot see");
     assert!(lightcraft_meta::extract(&jpeg).orientation.is_none(), "and the preview JPEG carries none of its own");
     assert!(preview_window(&path, usize::MAX).expect("the file reads").is_none(), "the whole-file path keeps it");
+    let whole = embedded_preview_srgb(&file, usize::MAX).expect("the whole file has its rotated preview");
+    let loaded = fs_preview_loader()(&path, usize::MAX).expect("fallback rewinds the same open file");
+    assert_eq!((loaded.width, loaded.height, loaded.data), (whole.width, whole.height, whole.data));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

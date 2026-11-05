@@ -246,8 +246,11 @@ point; metadata is read from that handle and a reparse point is refused before p
 Ancestors stay open during the walk, and metadata, probing and file bytes use the opened
 object rather than reopening a previously checked path. Native remote-symlink errors are
 refused; there is no fallback that retries the path through Win32 or evaluates a link target.
-Preview and native byte-loading paths use the same entry point after import. Source discovery
-itself still performs no original-file I/O.
+Preview and native byte-loading paths use the same entry point after import. Region-orientation
+rereads and Synchronize Folder sidecar reads also revalidate their opens; a prior lookup or cached
+folder listing does not authorize a later read. Image/preview loaders retain one original handle
+for metadata and bytes, including whole-file preview fallback. Source discovery itself still
+performs no original-file I/O.
 
 The grant is to the **logical SMB share**, not to a physical directory on the server or a fixed
 IP address. The selected server and Windows' SMB transport remain trusted to serve that share:
