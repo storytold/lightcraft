@@ -177,6 +177,105 @@ fn unknown_op_in_the_log_is_refused_untouched() {
     assert_refused_untouched(&m);
 }
 
+/// A failed append's fragment must not hide a CRC-valid unknown retry, even if it is stale or
+/// has no final newline. Refusal must precede tail repair, damage preservation and format upgrade.
+#[test]
+fn fragmented_unknown_op_is_refused_untouched() {
+    let (base, log, _) = legacy_parts();
+    let body = r#"{"op":"fromTheFuture","value":{"seq":{"text":"braces { } and quotes \" \\"}}}"#;
+    let id = base.photos().next().unwrap().id;
+    let after = encode_record(5, &Op::SetRating { id, rating: 1 });
+    for version in [1, VERSION] {
+        let snap = format!("{{\"format\":\"lightcraft-catalog\",\"version\":{version},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot());
+        for seq in [2, 4] {
+            let record = format!("{{\"seq\":{seq},\"crc\":{},\"op\":{body}}}", crc32fast::hash(body.as_bytes()));
+            assert_eq!(crate::journal::decode_record(&record), None, "the public decoder stays unchanged");
+            for fragment in [b"{\"seq\":".as_slice(), b"\xff\"{\\", b"garbage}"] {
+                for ending in [b"\n".as_slice(), b"\r\n", b""] {
+                    let m = MemStore::new();
+                    m.set(SNAPSHOT, snap.clone().into_bytes());
+                    let mut bytes = log.as_bytes().to_vec();
+                    bytes.extend_from_slice(fragment);
+                    bytes.extend_from_slice(record.as_bytes());
+                    bytes.extend_from_slice(ending);
+                    m.set(LOG, bytes.clone());
+                    assert_refused_untouched(&m);
+                    // A following good record would otherwise turn this into preserved damage.
+                    if ending.is_empty() {
+                        bytes.push(b'\n');
+                    }
+                    bytes.extend_from_slice(format!("{after}\n").as_bytes());
+                    m.set(LOG, bytes);
+                    assert_refused_untouched(&m);
+                }
+            }
+        }
+    }
+}
+
+/// A fragment and an unknown retried op on a line after damage is refused too, not truncated
+/// as a torn tail or kept as damage.
+#[test]
+fn fragmented_unknown_op_after_damage_is_refused_untouched() {
+    let (base, log, _) = legacy_parts();
+    let body = r#"{"op":"fromTheFuture"}"#;
+    let record = format!("{{\"seq\":4,\"crc\":{},\"op\":{body}}}", crc32fast::hash(body.as_bytes()));
+    for ending in ["\n", "\r\n", ""] {
+        let m = MemStore::new();
+        m.set(
+            SNAPSHOT,
+            format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes(),
+        );
+        m.set(LOG, format!("{log}<garbage>\nfragment{record}{ending}").into_bytes());
+        assert_refused_untouched(&m);
+    }
+}
+
+/// The new refusal applies only to CRC-valid, stale-or-next suffixes; malformed records, bad
+/// CRCs and a sequence gap retain the normal torn-tail / preserved-damage recovery rules.
+#[test]
+fn fragmented_unknown_op_with_bad_crc_or_sequence_is_still_damage() {
+    let (base, log, full) = legacy_parts();
+    let body = r#"{"op":"fromTheFuture"}"#;
+    let bad_crc = format!("{{\"seq\":4,\"crc\":{},\"op\":{body}}}", crc32fast::hash(body.as_bytes()) ^ 1);
+    let future_seq = format!("{{\"seq\":5,\"crc\":{},\"op\":{body}}}", crc32fast::hash(body.as_bytes()));
+    let id = base.photos().next().unwrap().id;
+    let good = encode_record(4, &Op::SetRating { id, rating: 1 });
+    for suffix in [bad_crc.as_str(), future_seq.as_str(), "{\"seq\":4,\"crc\":"] {
+        for ending in ["\n", "\r\n", ""] {
+            for following_good in [false, true] {
+                let m = MemStore::new();
+                m.set(
+                    SNAPSHOT,
+                    format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot())
+                        .into_bytes(),
+                );
+                let mut bytes = format!("{log}fragment{suffix}{ending}").into_bytes();
+                if following_good {
+                    if ending.is_empty() {
+                        bytes.push(b'\n');
+                    }
+                    bytes.extend_from_slice(format!("{good}\n").as_bytes());
+                }
+                m.set(LOG, bytes.clone());
+                let (j, loaded, report) = Journal::open(Box::new(m.clone())).unwrap();
+                assert_eq!(j.seq(), 3);
+                assert_eq!(loaded.to_snapshot(), full.to_snapshot());
+                assert_eq!((report.replayed, report.torn_fragments), (1, 0));
+                if following_good {
+                    let damaged = report.damaged.expect("a good record after damage preserves the original log");
+                    assert_eq!(m.get(&damaged).unwrap(), bytes);
+                    assert_eq!(report.torn_bytes, 0);
+                } else {
+                    assert!(report.damaged.is_none());
+                    assert_eq!(report.torn_bytes as usize, bytes.len() - log.len());
+                    assert_eq!(m.get(LOG).unwrap(), log.as_bytes());
+                }
+            }
+        }
+    }
+}
+
 /// A CRC mismatch is still damage / a torn tail (not "newer").
 #[test]
 fn bad_crc_is_still_a_torn_tail() {
