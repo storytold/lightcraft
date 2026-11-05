@@ -323,6 +323,7 @@ fn a_rename_or_copy_that_cant_be_saved_is_not_kept() {
     s.execute("export.renamePreset", &json!({"name": "Web", "to": "Web Small"})).unwrap();
     s.execute("export.duplicatePreset", &json!({"name": "Web Small"})).unwrap();
     assert_eq!(names(&s), ["Web Small", "Web Small copy"]);
+}
 
 /// Issue #2571: a subfolder with `..`, a root or a drive wrote outside the chosen folder. It is
 /// cleaned where the folder is used, so a preset or the Export dialog's field (which set it
