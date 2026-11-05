@@ -1,6 +1,6 @@
 # Roadmap: milestones, current focus and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created; milestones moved here from ROADMAP.md, focus re-ranked after the 2026-10-10 re-measure) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** major (gap 9: roadmap item 8 no longer lists Linux, where CI runs the tests since #2667, and lists the GPU tests; created; milestones moved here from ROADMAP.md, focus re-ranked after the 2026-10-10 re-measure) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 Forward-looking plan. The summary with the headline numbers is [ROADMAP.md](../ROADMAP.md); the
 ranked shortfalls are [gaps.md](gaps.md); the numbers come from [target-app-parity.md](target-app-parity.md).
@@ -23,7 +23,7 @@ Toward **beta** (~340–600 Opus 5.5 agent hours; ranked, each a gap in [gaps.md
    mirror. Needs the maintainer's model decision.
 6. **Compressed ORF and HE NEF** (gaps 6–7, 28–55 h).
 7. **Lens profiles of our own** (gap 8, 40–80 h).
-8. **Tests in CI on macOS, Windows and Linux** (gap 9, 6–12 h).
+8. **Tests in CI on macOS and Windows, and the GPU tests in CI** (gap 9, 6–12 h).
 9. **Per-model verification** (gap 10, 20–35 h).
 
 ## Alpha gate
@@ -108,6 +108,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | patch | Item 8 (gap 9): Linux dropped from "Tests in CI" and "the GPU tests in CI" added, because the CI gate has run the tests there since #2667; hours unchanged |
 | 2026-10-10 | minor | Beta hours 340–600; full ready ~59% in the gate note |
 | 2026-10-10 | minor | Added the Alpha gate table (core-workflow gate from the revised standard): passes, stays alpha |
 | 2026-10-10 | major | Created: milestones moved from ROADMAP.md (statuses refreshed: M3 ✅, M11 / M12 / M15 detail), current focus re-ranked toward beta, risks and design notes kept |

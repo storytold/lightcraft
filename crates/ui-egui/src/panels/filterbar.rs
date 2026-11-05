@@ -135,14 +135,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     ui.add_space(14.0);
 
-    // flags (one at a time; click again to clear)
+    // flags: several can be on at once (any of them matches), as in Lightroom Classic
     caption(ui, "Flag");
+    let chosen: Vec<Flag> = f.flags_shown().unwrap_or_default();
     for (id, icon, flag, tip) in [
         ("pick", Icon::FlagPick, Flag::Pick, "Picked"),
         ("reject", Icon::FlagReject, Flag::Reject, "Rejected"),
         ("none", Icon::Circle, Flag::None, "Unflagged"),
     ] {
-        let on = f.flag == Some(flag);
+        let on = chosen.contains(&flag);
         let color = match flag {
             Flag::Pick if on => t.pick,
             Flag::Reject if on => t.reject,
@@ -151,7 +152,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let icon = if on && flag == Flag::Pick { Icon::FlagPickFilled } else { icon };
         let resp = toggle(ui, id, on, tip, |p, r, c| paint(p, r, icon, if color == Color32::TRANSPARENT { c } else { color }));
         if resp.clicked() {
-            filter(app, json!({"flag": if on { Value::Null } else { json!(id) }}));
+            // in the bar's order, so the chip reads the same whichever was clicked first
+            let names: Vec<String> = [Flag::Pick, Flag::Reject, Flag::None]
+                .into_iter()
+                .filter(|x| if *x == flag { !on } else { chosen.contains(x) })
+                .map(|x| format!("{x:?}").to_lowercase())
+                .collect();
+            filter(app, json!({"flag": Value::Null, "flags": names}));
         }
     }
     ui.add_space(14.0);

@@ -138,7 +138,7 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     is saved; the stored library is left as it was.
   - A panic (wasm is built with `panic = "abort"`) replaces the page with a message saying the
     stored library is kept and to reload, instead of a frozen canvas.
-- **Importing photos with no filesystem.** *File ▸ Import Photos…* (<kbd>⌘⇧I</kbd>) opens the
+- **Importing photos with no filesystem.** *File ▸ Import Photos…* (<kbd>⇧⌘I</kbd>) opens the
   browser's file picker. You can also drop files anywhere on the page. The bytes are written to
   storage, then imported and decoded by the same engine code as the desktop app
   (`lightcraft_engine::files::{probe_bytes, load_bytes}`): JPEG/PNG/TIFF/WebP and the supported
@@ -153,7 +153,7 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   threads or `SharedArrayBuffer`. If no worker starts, rendering falls back to the main thread.
 - **Every develop control** (sliders, curves, mixer, grading, masking, crop…) works as it does
   on the desktop, since it's the same crate.
-- **Export downloads the file.** *Export…* (<kbd>⌘⇧E</kbd>) runs the same `app.export` path as
+- **Export downloads the file.** *Export…* (<kbd>⇧⌘E</kbd>) runs the same `app.export` path as
   the desktop app (`lightcraft_engine::export`: JPEG/PNG/TIFF/WebP, sizing, naming). The host's
   `write` service hands each file to the browser as a download instead of writing it to disk.
 - **Automation.** `await lightcraft.command("library.info", "{}")` runs any engine or UI command
@@ -188,7 +188,8 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
 
 ## Measuring
 
-Open `http://127.0.0.1:8080/?bench` to run a scripted measurement:
+Open `http://127.0.0.1:8080/?bench` to run a scripted measurement. It always runs on the generated demo photos in an unsaved library
+(`?bench` implies `?store=memory`), so it never edits the library kept in browser storage:
 
 1. Wait for the grid thumbnails.
 2. Open the first photo in Detail.
