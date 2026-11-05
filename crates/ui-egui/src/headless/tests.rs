@@ -1229,6 +1229,10 @@ fn a_right_click_on_a_face_tile_opens_its_photo() {
     open(&mut h, format!("more-face:{}:0", ids[1].0), "more-face-menu:open");
     assert_eq!((h.app.ui.view, h.app.session.selection.active), (crate::state::ViewMode::Detail, Some(ids[1])));
     assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].name, None, "opened, not confirmed");
+    // and Escape comes back to her page
+    h.request("ui.key", json!({"key": "escape"}), t);
+    h.step();
+    assert_eq!((h.app.ui.view, h.app.ui.person_page.as_deref()), (crate::state::ViewMode::People, Some("Jane Doe")));
 }
 
 /// A person's More grid confirms a score-bounded batch through either ↑ or the focused tile's A key. Both
