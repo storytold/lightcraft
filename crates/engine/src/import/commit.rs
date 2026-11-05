@@ -262,7 +262,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.meta = info.meta;
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
-                p.embedded_lens = info.embedded_lens;
+                p.embedded_lens = info.embedded_lens.map(Box::new);
                 p.set_preview_only(info.preview_only.clone());
                 apply_import_defaults(s, &mut p);
                 if let Some(sc) = &sidecar {

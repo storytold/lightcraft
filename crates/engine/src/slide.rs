@@ -87,7 +87,7 @@ impl crate::Session {
             p.height.max(1) as usize,
             &p.develop,
             true,
-            p.embedded_lens.as_ref(),
+            p.embedded_lens.as_deref(),
         );
         let a = frame.aspect();
         Some(if a.is_finite() && a > 0.0 { a } else { 1.5 })

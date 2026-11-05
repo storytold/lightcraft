@@ -33,7 +33,7 @@ pub struct Missing {
 pub fn missing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[PhotoId]>, again: bool) -> Vec<Missing> {
     // a photo and its virtual copies list the photo once, in library order
     let mut seen = std::collections::HashSet::new();
-    let from_database = |p: &Photo| p.embedded_lens.is_some_and(|l| l.source == LensSource::Database);
+    let from_database = |p: &Photo| p.embedded_lens.as_deref().is_some_and(|l| l.source == LensSource::Database);
     cat.photos()
         .filter(|p| ids.is_none_or(|ids| ids.contains(&p.id) || p.copy_of.is_some_and(|c| ids.contains(&c))))
         .map(|p| p.copy_of.and_then(|c| cat.photo(c)).map_or(&**p, |orig| &**orig))
@@ -82,7 +82,7 @@ pub fn apply(s: &mut Session, results: Vec<(Missing, std::result::Result<ProbeIn
         for id in family {
             let Some(p) = s.catalog.photo(id) else { continue };
             // nothing found for a photo without a database profile: a file's own correction is Reload's business
-            let from_database = p.embedded_lens.is_some_and(|l| l.source == LensSource::Database);
+            let from_database = p.embedded_lens.as_deref().is_some_and(|l| l.source == LensSource::Database);
             if info.embedded_lens.is_some() || from_database {
                 let mine = crate::cmd::convert::lens_ops(id, p, &info);
                 if !mine.is_empty() {

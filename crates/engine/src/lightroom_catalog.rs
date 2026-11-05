@@ -1104,7 +1104,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.duration = duplicate.duration;
             p.as_shot_wb = duplicate.as_shot_wb;
             p.content_hash = duplicate.content_hash.clone();
-            p.embedded_lens = duplicate.embedded_lens;
+            p.embedded_lens = duplicate.embedded_lens.clone();
             p.preview_only = duplicate.preview_only.clone();
             p.preview_checked = duplicate.preview_checked.clone();
             if let Some(file) = file {

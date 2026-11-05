@@ -261,7 +261,7 @@ fn a_content_duplicate_raw_starts_from_its_camera_defaults() {
         p.format = "DNG".into();
         p.kind = lightcraft_catalog::MediaKind::Raw;
         p.as_shot_wb = Some((5200.0, 4.0));
-        p.embedded_lens = Some(lightcraft_develop::EmbeddedLens::default());
+        p.embedded_lens = Some(Box::default());
     });
     let mut data = sample();
     data.photos.retain(|p| number(&p.image, "masterImage") == 0);

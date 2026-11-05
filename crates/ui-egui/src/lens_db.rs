@@ -185,7 +185,7 @@ fn database_name(camera: &str, lens: &str) -> Option<String> {
 /// none.
 pub fn readout(app: &LightcraftApp, p: &lightcraft_catalog::Photo) -> String {
     use lightcraft_develop::LensSource;
-    match p.embedded_lens.map(|l| l.source) {
+    match p.embedded_lens.as_deref().map(|l| l.source) {
         Some(LensSource::File) => crate::i18n::tr("Profile: from the file (the camera's own correction)").to_string(),
         Some(LensSource::Database) => {
             let name = database_name(&p.meta.camera, &p.meta.lens).unwrap_or_else(|| p.meta.lens.trim().to_string());
@@ -219,10 +219,10 @@ mod tests {
         assert_eq!(super::readout(&app, &p), "No lens profile found for EF35mm f/1.4L II USM.");
         p.meta.lens.clear();
         assert_eq!(super::readout(&app, &p), "This file names no lens.");
-        p.embedded_lens = Some(EmbeddedLens::default());
+        p.embedded_lens = Some(Box::default());
         assert_eq!(super::readout(&app, &p), "Profile: from the file (the camera's own correction)");
         p.meta.lens = "EF70-200mm f/2.8L IS II USM".into();
-        p.embedded_lens = Some(EmbeddedLens { source: LensSource::Database, ..Default::default() });
+        p.embedded_lens = Some(Box::new(EmbeddedLens { source: LensSource::Database, ..Default::default() }));
         // the database's name for it, or the file's own without a database (LIGHTCRAFT_LENSFUN_DIR may be set)
         let r = super::readout(&app, &p);
         assert!(r.starts_with("Profile: ") && r.contains("70-200mm f/2.8L IS II USM") && r.ends_with(" (lens database)"), "{r}");
