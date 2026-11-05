@@ -1280,14 +1280,35 @@ fn assert_lowered(fitted: &CameraLook, fixed: &CameraLook, what: &str) {
         }
     }
     assert!(at_most(&fixed.tone, &fitted.tone), "{what}: brighter than the fitted curve somewhere");
-    // the same check spelled out, from deep shadows to far past the last knot (the shoulder), with
-    // the shoulder of V1 to V4 and the one of V5 (issue #1632)
+    // the same check spelled out, from deep shadows to far past the last knot (the shoulder)
     for i in 0..=2400 {
         let x = 0.001 * 1.005f32.powi(i);
         assert!(fixed.tone.apply(x) <= fitted.tone.apply(x) + 1e-5, "{what} at {x}: {} > {}", fixed.tone.apply(x), fitted.tone.apply(x));
-        let (v3, own) = (fixed.tone.apply_rolloff(x), fitted.tone.apply_rolloff(x));
-        assert!(v3 <= own + 1e-5, "{what} at {x}, V5: {v3} > {own}");
     }
+    // V5's shoulder stays below too whenever the lowered last segment's slope over its squared gap to
+    // white is at most the fitted one's (`dro_off` doesn't enforce it, so V1 to V4 keep their curve;
+    // issue #1632)
+    if v5_bounded(&fixed.tone, &fitted.tone) {
+        assert!(v5_below(&fixed.tone, &fitted.tone), "{what}: brighter than the fitted curve under V5");
+    }
+}
+
+/// Whether the last segment of `a`, over its squared gap to white, is at most `b`'s: then `a`'s V5
+/// shoulder ([`CameraTone::apply_rolloff`]) is nowhere above `b`'s (issue #1632).
+fn v5_bounded(a: &CameraTone, b: &CameraTone) -> bool {
+    let rate = |t: &CameraTone| {
+        let k = t.knots();
+        ((k[31][1] - k[30][1]) / (k[31][0] - k[30][0])).max(0.0) / (1.0 - k[31][1]).powi(2)
+    };
+    rate(a) <= rate(b)
+}
+
+/// Whether `a`'s V5 curve is nowhere brighter than `b`'s, from deep shadows to far past the last knot.
+fn v5_below(a: &CameraTone, b: &CameraTone) -> bool {
+    (0..=2400).all(|i| {
+        let x = 0.001 * 1.005f32.powi(i);
+        a.apply_rolloff(x) <= b.apply_rolloff(x) + 1e-5
+    })
 }
 
 /// Issue #244: Sony's Dynamic Range Optimizer lifts the camera JPEG's shadows, not the raw's. A
@@ -1426,14 +1447,8 @@ fn corpus_arw_with_dro_is_lowered_to_the_dro_off_tone() {
         let fitted = fit_look(&sensor, &reference, &clipped, colour).unwrap();
         if dro {
             assert_lowered(&fitted, &look, name);
-            // the V5 bound on the second-last knot (`dro_off`) leaves it where the rate bound puts it on
-            // these photos, so their V1 to V4 renders are what they were before process V5 (issue #1632)
-            let (own, sony) = (fitted.tone.knots(), sony_dro_off_tone().unwrap());
-            let ([a, b], last) = ([own[30], own[31]], look.tone.knots()[31]);
-            let dx = b[0] - a[0];
-            let rate = ((b[1] - a[1]) / dx).clamp(0.1, 16.0) / (1.0 - b[1]).max(0.01);
-            let by_rate = a[1].min(sony.apply(a[0])).max(last[1] - rate * (1.0 - last[1]).max(0.01) * dx).min(last[1]);
-            assert_eq!(look.tone.knots()[30][1], by_rate, "{name}");
+            // the Sony DRO samples' lowered curves stay below their fitted ones under V5 as well
+            assert!(v5_below(&look.tone, &fitted.tone), "{name}: brighter than the fitted curve under V5");
             for x in lowered {
                 assert!(look.tone.apply(x) < 0.95 * fitted.tone.apply(x), "{name} at {x}: {} vs {}", look.tone.apply(x), fitted.tone.apply(x));
             }

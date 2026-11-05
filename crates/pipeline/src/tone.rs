@@ -231,8 +231,9 @@ impl ToneMap {
 
     /// [`ToneMap::hdr`] of process V5 (issue #1632): from [`GENERIC_KNEE_STOPS`] below the white
     /// point the curve rolls off into white in stops, with the same value and slope at the join,
-    /// instead of reaching white about ¼ stop past the sensor's white and clipping there. The
-    /// result stays below 1 (SDR white) and is the same as [`ToneMap::hdr`]'s below the join.
+    /// instead of reaching white about ¼ stop past the sensor's white and clipping there. The SDR
+    /// curve stays below 1 (SDR white) and is the same as [`ToneMap::hdr`]'s below the join; for
+    /// `peak` above 1 the HDR lift then takes highlights up to `peak`, as in [`ToneMap::hdr`].
     pub fn rolloff_hdr(contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
         ToneMap::generic(contrast, whites, blacks, peak, true)
     }
