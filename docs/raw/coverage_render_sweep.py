@@ -13,6 +13,7 @@ stay in gitignored corpus; commit the numerical evidence separately. PreviewTIFF
 rows use encoded-luminance correlation for structure only, with no sRGB transfer
 or colour-error metrics. Older PreviewTIFF baseline scores must be regenerated
 with this tool; valid cached PNGs can be reused.
+Cache filenames include the input SHA-256. Legacy stem-only caches are ignored.
 """
 import argparse, csv, hashlib, io, json, math, os, subprocess, sys
 from pathlib import Path
@@ -134,10 +135,11 @@ def main():
         digest = hashlib.sha256(raw.read_bytes()).hexdigest()
         if digest != row["sha256"]:
             raise ValueError("SHA-256 mismatch " + row["file"])
-        out = a.out / (raw.stem + ".png")
-        ref = (a.compare.parent if a.compare else a.out) / (raw.stem + "-reference.png")
+        cache_stem = raw.stem + "-" + digest
+        out = a.out / (cache_stem + ".png")
+        ref = (a.compare.parent if a.compare else a.out) / (cache_stem + "-reference.png")
         if not readable_png(out):
-            with (a.out / (raw.stem + ".log")).open("w") as log:
+            with (a.out / (cache_stem + ".log")).open("w") as log:
                 subprocess.run(
                     [str(a.cli), "render", str(raw), "-o", str(out), "--size", "1200"],
                     env=env,

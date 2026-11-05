@@ -133,8 +133,9 @@ class Resume(unittest.TestCase):
         raw.write_bytes(b"original synthetic input")
         self.manifest([dict(file=raw.name, sha256=hashlib.sha256(raw.read_bytes()).hexdigest(), reference="embedded JPEG", notes="")])
         self.output.mkdir(parents=True)
-        gradient().save(self.output / "sample-reference.png")
-        return self.output / "sample.png"
+        cache_stem = raw.stem + "-" + hashlib.sha256(raw.read_bytes()).hexdigest()
+        gradient().save(self.output / (cache_stem + "-reference.png"))
+        return self.output / (cache_stem + ".png")
 
     def test_missing_lens_database_parents_are_created_with_an_external_output(self):
         self.manifest([])
@@ -172,6 +173,49 @@ class Resume(unittest.TestCase):
             self.invoke()
         run.assert_called_once()
         self.assertTrue(sweep.readable_png(output))
+
+    def test_changed_input_cannot_reuse_same_stem_pixels_or_references(self):
+        output = self.prepare_sample()
+        gradient().save(output)
+        self.invoke()
+        baseline = self.output / "scores.json"
+        for name in ("sample.nef", "sample.dng"):
+            with self.subTest(name=name):
+                raw = Path("corpus/raw") / name
+                raw.write_bytes(("replacement input " + name).encode())
+                digest = hashlib.sha256(raw.read_bytes()).hexdigest()
+                self.manifest([dict(file=name, sha256=digest, reference="embedded JPEG", notes="")])
+                image = gradient().transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+                buffer = io.BytesIO()
+                image.save(buffer, format="PNG")
+                def render(args, **kwargs):
+                    image.save(args[args.index("-o") + 1])
+                def extract(args, **kwargs):
+                    return buffer.getvalue() if "-JpgFromRaw" in args else b""
+                with mock.patch.object(sweep.subprocess, "run", side_effect=render) as run, mock.patch.object(sweep.subprocess, "check_output", side_effect=extract) as extract_call:
+                    self.invoke()
+                run.assert_called_once()
+                self.assertEqual(extract_call.call_count, 3)
+                self.assertEqual(Path(run.call_args.args[0][run.call_args.args[0].index("-o") + 1]).name, "sample-" + digest + ".png")
+                self.assertTrue((self.output / ("sample-" + digest + ".log")).is_file())
+                reference = self.output / ("sample-" + digest + "-reference.png")
+                with Image.open(reference) as cached:
+                    self.assertEqual(cached.tobytes(), image.tobytes())
+                record = json.loads(baseline.read_text())["records"][name]
+                self.assertEqual(record["file_sha256"], digest)
+                self.assertEqual(record["reference_sha256"], hashlib.sha256(image.tobytes()).hexdigest())
+                with mock.patch.object(sweep.subprocess, "run") as run, mock.patch.object(sweep.subprocess, "check_output") as extract_call:
+                    self.invoke()
+                run.assert_not_called()
+                extract_call.assert_not_called()
+        self.output = Path("candidate")
+        with mock.patch.object(sweep.subprocess, "run", side_effect=render) as run, mock.patch.object(sweep.subprocess, "check_output") as extract_call:
+            self.invoke(["--compare", str(baseline)])
+        run.assert_called_once()
+        extract_call.assert_not_called()
+        record = json.loads((self.output / "scores.json").read_text())["records"][name]
+        self.assertFalse(record["pixels_changed"])
+        self.assertEqual(record["delta_r"], 0)
 
     def test_preview_tiff_run_records_structure_only(self):
         output = self.prepare_sample()
