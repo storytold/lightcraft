@@ -91,7 +91,7 @@ fn count_loads(s: &mut Session) -> Loads {
     let loads = Loads::default();
     let file = s.media.file_loader.clone().unwrap();
     let n = loads.files.clone();
-    s.media.file_loader = Some(Arc::new(move |p: &str, e: usize, dcp: Option<&crate::media::DcpProfile>| {
+    s.media.file_loader = Some(Arc::new(move |p: &str, e: usize, dcp: crate::media::RawDecode<'_>| {
         n.fetch_add(1, Ordering::SeqCst);
         file(p, e, dcp)
     }));
