@@ -499,6 +499,22 @@ fn masks_crop_and_render() {
     s.execute("develop.wbPick", &json!({"x": 0.5, "y": 0.5})).unwrap();
 }
 
+/// Auto applies to every selected photo, not only the highlighted one (#2184).
+#[test]
+fn auto_applies_to_every_selected_photo() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    assert_eq!(ids.len(), 3, "the demo library has enough photos to select");
+    s.execute("library.select", &json!({"ids": ids.clone(), "active": ids[1]})).unwrap();
+    s.execute("develop.auto", &json!({})).unwrap();
+    for id in ids {
+        let d = (*s.develop_of(PhotoId(id)).unwrap()).clone();
+        assert_eq!(d.light.contrast, 68.0, "photo {id} got Auto's contrast");
+        assert_eq!(d.color.vibrance, 30.0, "photo {id} got Auto's vibrance");
+    }
+}
+
 #[test]
 fn versions_history_and_reset() {
     let mut s = demo();
