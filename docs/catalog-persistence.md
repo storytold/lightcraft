@@ -7,9 +7,9 @@ happens to a library's files when a newer version opens it.
 
 ## Going back to an older version
 
-Opening a library with a newer LightCraft rewrites it in that version's format, and older versions then refuse it
-(safely: they say so and change nothing). So that this is not a one-way step, the upgrade first keeps the files the
-library was, byte for byte, beside it:
+Opening a library saved in an older catalog format with a newer LightCraft rewrites it in that version's format, and
+versions that don't know that format then refuse it (safely: they say so and change nothing). So that this is not a
+one-way step, the upgrade first keeps the files the library was, byte for byte, beside it:
 
 - `catalog.snap.v<format>-<seq>` and `catalog.log.v<format>-<seq>`, where `<format>` is the format they are in and
   `<seq>` the number of the last change the library held when it was upgraded (or, where the upgrade was left for a
