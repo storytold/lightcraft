@@ -46,11 +46,15 @@ impl RawImage {
             return none;
         }
         let lo = (black + 0.5 * (white - black)).ceil().max(0.0) as usize;
-        let hi = (white as usize).min(65535);
+        // the search runs past the stated white level: a sensor can saturate above it (Canon
+        // states 14558 where the EOS RP really saturates at 16383), and that pile-up is the
+        // real clip point; cap the search at the histogram length so it can never index past
+        // the allocated bins
+        let mut hist = vec![[0u32; 3]; 65536];
+        let hi = hist.len();
         if lo + NEIGHBOURHOOD >= hi {
             return none;
         }
-        let mut hist = vec![[0u32; 3]; 65536];
         let mut total = [0u64; 3];
         for y in 0..a.height {
             let row = &d[(a.y + y) * self.width + a.x..][..a.width];
@@ -64,12 +68,23 @@ impl RawImage {
         for c in 0..3 {
             // the most populated value of the upper half of the range
             let Some((v, n)) = (lo..hi).map(|v| (v, hist[v][c])).max_by_key(|&(v, n)| (n, v)) else { continue };
-            if (n as f64) < (total[c] as f64 * MIN_SHARE).max(100.0) || v as f32 >= white - NEAR_WHITE * (white - black) {
+            if (n as f64) < (total[c] as f64 * MIN_SHARE).max(100.0) {
+                continue;
+            }
+            // a plateau within 3% below the stated white is the white level itself: no lift needed
+            if v as f32 <= white && v as f32 >= white - NEAR_WHITE * (white - black) {
                 continue;
             }
             let below: u64 = (v.saturating_sub(NEIGHBOURHOOD)..v).map(|u| hist[u][c] as u64).sum();
-            let from = (v + ((ABOVE_MARGIN * (white - black)) as usize).max(1) + 1).min(hist.len());
-            let above: u64 = hist[from..].iter().map(|h| h[c] as u64).sum();
+            // at the top of the histogram nothing can be brighter: a plateau there is a
+            // one-sided cliff, so there is no `above` neighbourhood to check (Canon's stated
+            // white can sit below the sensor's real saturation, e.g. 14558 vs 16383)
+            let above = if v + 1 >= hi {
+                0
+            } else {
+                let from = (v + ((ABOVE_MARGIN * (white - black)) as usize).max(1) + 1).min(hist.len());
+                hist[from..].iter().map(|h| h[c] as u64).sum()
+            };
             if n as f64 >= MIN_SPIKE * (below as f64 / NEIGHBOURHOOD as f64).max(1.0) && above as f64 <= MAX_ABOVE * n as f64 {
                 out[c] = Some(v as u16);
             }
@@ -84,6 +99,17 @@ impl RawImage {
         let points = self.saturation_points();
         if points.iter().all(Option::is_none) {
             return 0;
+        }
+        // a saturation plateau above the stated white means the sensor really saturates higher
+        // than the file states (Canon states 14558, the EOS RP saturates at 16383): extend the
+        // white level to the plateau, so highlight reconstruction does not treat real highlight
+        // data between the two as clipped
+        for (level, point) in self.white.iter_mut().zip(points.iter()) {
+            if let Some(p) = point {
+                if *p as f32 > *level {
+                    *level = *p as f32;
+                }
+            }
         }
         let (a, w, white) = (self.active_area, self.width, self.white_at(0).round() as u16);
         let Some(cfa) = self.cfa.clone() else { return 0 };
@@ -268,5 +294,23 @@ mod tests {
         assert!(r.lift_clipped_samples() > 1000);
         let after = render(&r);
         assert!(tint(after) < 0.01, "{after:?}");
+    }
+
+    /// Canon states a white level below the sensor's real saturation (EOS RP: 14558 stated, 16383
+    /// real). Samples pile up at the real saturation above the stated white; the white level must be
+    /// extended to the saturation point so highlight reconstruction does not treat real highlight data
+    /// between the two as clipped. The plateau above the stated white is currently outside the search
+    /// range (which ends at the white level), so it is never found and the white level is never extended.
+    #[test]
+    fn extend_white_to_saturation_above_stated_white() {
+        let mut r = raw_with(None, 14558.0);
+        if let RawData::U16(d) = &mut r.data {
+            for v in d.iter_mut().take(2048) {
+                *v = 16383;
+            }
+        }
+        assert_eq!(r.saturation_points(), [Some(16383); 3], "{:?}", r.saturation_points());
+        r.lift_clipped_samples();
+        assert_eq!(r.white_at(0), 16383.0);
     }
 }
