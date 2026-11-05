@@ -154,99 +154,56 @@ impl fmt::Display for NetworkRedirect {
 }
 impl std::error::Error for NetworkRedirect {}
 
+/// Recognize a refused redirect so it cannot be retained as an ordinary offline original.
 pub(crate) fn is_network_redirect(error: &std::io::Error) -> bool {
     error.get_ref().is_some_and(|e| e.is::<NetworkRedirect>())
 }
 
-/// Metadata for a catalog original. On Windows, reject reparse points along a UNC path
-/// before asking about a descendant, so an existing directory or file link is never followed.
-/// This is a preflight check, not an atomic filesystem sandbox against concurrent path swaps.
+#[cfg(windows)]
+mod network;
+
+/// Open a catalog original for reading. UNC paths are opened component by component relative
+/// to directory handles, refusing reparse points; the returned handle is the one to read.
+/// Local paths retain their usual filesystem semantics. Share authorization precedes this call.
+pub(crate) fn open_original(path: impl AsRef<Path>) -> std::io::Result<std::fs::File> {
+    let path = path.as_ref();
+    #[cfg(windows)]
+    if network::is_unc(path) {
+        return network::open(path, true);
+    }
+    std::fs::File::open(path)
+}
+
+/// Query an original through the same no-follow UNC handle walk used for reading.
+/// A later read must call `open_original` again, never open the previously checked path unchecked.
 pub(crate) fn original_metadata(path: &Path) -> std::io::Result<std::fs::Metadata> {
     #[cfg(windows)]
-    if path.to_str().is_some_and(|p| craft_docpath::classify(p) == craft_docpath::PathKind::Network) {
-        return metadata_without_reparse(path, |p| std::fs::symlink_metadata(p));
+    if network::is_unc(path) {
+        return network::open(path, false)?.metadata();
     }
     std::fs::metadata(path)
 }
 
-/// Walk from the root to the leaf, checking each entry without following its final component.
-/// Never query a descendant after a reparse point; the callback also lets tests observe this.
-#[cfg(windows)]
-fn metadata_without_reparse(path: &Path, mut stat: impl FnMut(&Path) -> std::io::Result<std::fs::Metadata>) -> std::io::Result<std::fs::Metadata> {
-    use std::os::windows::fs::MetadataExt;
-    let mut ancestors: Vec<_> = path.ancestors().take(257).collect();
-    if ancestors.len() > 256 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "network original path is too deeply nested"));
-    }
-    ancestors.reverse();
-    let mut last = None;
-    for part in ancestors {
-        let meta = stat(part)?;
-        // FILE_ATTRIBUTE_REPARSE_POINT includes junctions and other redirects, not only symlinks.
-        if meta.file_attributes() & 0x400 != 0 {
-            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, NetworkRedirect));
-        }
-        last = Some(meta);
-    }
-    last.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty original path"))
+/// Read an original or sidecar using the validated handle, without reopening its path.
+pub(crate) fn read_original(path: impl AsRef<Path>) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut file = open_original(path)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Read a UTF-8 sidecar through a no-follow handle, preserving the usual UTF-8 error behavior.
+pub(crate) fn read_original_text(path: impl AsRef<Path>) -> std::io::Result<String> {
+    String::from_utf8(read_original(path)?).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A link at either a directory or the leaf is rejected before its target is inspected.
-    #[cfg(windows)]
     #[test]
-    fn network_preflight_stops_at_reparse_points_before_descendants() {
-        let root = std::env::temp_dir().join(format!(
-            "lc-reparse-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        std::fs::create_dir(&root).unwrap();
-        let target = root.join("target");
-        std::fs::create_dir(&target).unwrap();
-        std::fs::write(target.join("photo.jpg"), b"synthetic").unwrap();
-        let link = root.join("redirect");
-        if let Err(e) = std::os::windows::fs::symlink_dir(&target, &link) {
-            std::fs::remove_dir_all(&root).unwrap();
-            lightcraft_testkit::skip!(System, "Windows symlink creation is unavailable: {e}");
-            return;
-        }
-        let mut visited = Vec::new();
-        let error = metadata_without_reparse(&link.join("photo.jpg"), |p| {
-            visited.push(p.to_path_buf());
-            std::fs::symlink_metadata(p)
-        })
-        .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
-        assert_eq!(visited.last(), Some(&link));
-        assert!(!visited.contains(&link.join("photo.jpg")));
-        let leaf = root.join("leaf.jpg");
-        std::os::windows::fs::symlink_file(target.join("photo.jpg"), &leaf).unwrap();
-        assert!(metadata_without_reparse(&leaf, |p| std::fs::symlink_metadata(p)).is_err());
-        assert!(metadata_without_reparse(&target.join("photo.jpg"), |p| std::fs::symlink_metadata(p)).unwrap().is_file());
-        // Exercise the actual UNC entry point too when this machine offers its loopback share.
-        let drive_root = root.ancestors().last().unwrap();
-        if let Some(std::path::Component::Prefix(prefix)) = drive_root.components().next()
-            && let std::path::Prefix::Disk(drive) = prefix.kind()
-        {
-            let unc = PathBuf::from(format!(r"\\localhost\{}$", char::from(drive))).join(root.strip_prefix(drive_root).unwrap());
-            if std::fs::metadata(unc.join("target/photo.jpg")).is_ok() {
-                assert!(original_metadata(&unc.join("target/photo.jpg")).unwrap().is_file());
-                assert!(is_network_redirect(&original_metadata(&unc.join("redirect/photo.jpg")).unwrap_err()));
-                assert!(is_network_redirect(&original_metadata(&unc.join("leaf.jpg")).unwrap_err()));
-                std::os::windows::fs::symlink_dir(r"\\localhost\lightcraft-unselected", root.join("other-share")).unwrap();
-                assert!(is_network_redirect(&original_metadata(&unc.join("other-share/photo.jpg")).unwrap_err()));
-            } else {
-                lightcraft_testkit::skip!(System, "loopback administrative share unavailable; local reparse checks passed");
-            }
-        }
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
+    /// Explicit grants match complete server/share pairs and never authorize devices, URLs or traversal.
     fn selected_network_shares_allow_only_the_chosen_server_and_share() {
         let catalog = std::env::temp_dir().join("local.lrcat");
         let selected = NetworkShares::new(vec![r"\\nas\other\folder".into(), r"\\NAS\Photos\chosen-folder".into()]).unwrap();
@@ -275,6 +232,7 @@ mod tests {
     }
 
     #[test]
+    /// Discovery canonicalizes share names while an empty explicit grant overrides the implicit catalog share.
     fn network_sources_are_canonical_and_an_explicit_empty_selection_denies_the_document_share() {
         for path in [r"\\nas\photos\Trip", "//nas/photos/Trip", r"\\?\UNC\nas\photos\Trip"] {
             assert_eq!(network_share(path).as_deref(), Some(r"\\nas\photos"));
@@ -290,6 +248,7 @@ mod tests {
     }
 
     #[test]
+    /// Reject malformed or excessive grants before any filesystem access.
     fn network_share_options_are_explicit_bounded_and_validated() {
         use serde_json::json;
         assert_eq!(NetworkShares::from_params(&json!({})).unwrap(), NetworkShares::default());

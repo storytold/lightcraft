@@ -342,6 +342,7 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
     Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })
 }
 
+/// Collect unique accessible originals, preserve missing paths and mark refused redirects on every copy.
 fn original_paths(data: &mut CatalogImport, cancel: &AtomicBool) -> crate::Result<(Vec<String>, HashSet<String>)> {
     let mut paths = Vec::new();
     let mut missing = HashSet::new();

@@ -258,6 +258,7 @@ impl Database {
         self.read_table_active(rootpage, ncols, Some(cancel))
     }
 
+    /// Walk a bounded table with the optional caller cancellation flag and its rowid alias.
     fn read_table_active(&self, rootpage: u32, ncols: usize, cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<Vec<Record>, String> {
         if !(1..=MAX_PAGE_ID).contains(&rootpage) || rootpage > self.page_count {
             return Err("table root page is outside database".into());
@@ -287,6 +288,7 @@ impl Database {
         self.main.get(start..end).map(Cow::Borrowed).ok_or_else(|| format!("page {page_id} is truncated"))
     }
 
+    /// Visit one B-tree page, enforcing depth, cycle and payload limits before descending.
     fn visit_table(&self, page_id: u32, ncols: usize, alias: Option<usize>, depth: usize, state: &mut WalkState<'_>) -> Result<(), String> {
         check_cancel(state.cancel)?;
         if depth > MAX_BTREE_DEPTH {
@@ -377,6 +379,7 @@ impl Database {
         }
     }
 
+    /// Assemble a bounded cell payload, checking cancellation and cycles before each overflow page.
     fn payload(&self, page: &[u8], cell_at: usize, payload_len: usize, cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<Vec<u8>, String> {
         let usable = self.page_size.checked_sub(self.reserved).ok_or("invalid usable page size")?;
         if usable < 8 {
@@ -441,6 +444,7 @@ impl Database {
         Ok(out)
     }
 
+    /// Decode sqlite_schema and retain supported table definitions and integer-primary-key aliases.
     fn parse_schema(&self) -> Result<SchemaInfo, String> {
         let mut tables = Vec::new();
         let mut aliases = HashMap::new();

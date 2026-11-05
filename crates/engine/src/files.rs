@@ -23,6 +23,7 @@ mod probe;
 
 pub use colour::bin_factor;
 pub(crate) use colour::clipped_white;
+pub(crate) use fs::probe_path;
 #[cfg(test)]
 use fs::quick_image_srgb;
 pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader};

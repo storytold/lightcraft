@@ -19,6 +19,7 @@ const T: Duration = Duration::from_secs(20);
 /// A synthetic SQLite catalog with only a root-folder table; discovery works and full import
 /// fails cleanly on the absent photo tables. No original is opened, no external SQLite needed.
 pub(super) fn root_catalog(roots: &[&str]) -> Vec<u8> {
+    /// Encode a positive SQLite varint for the synthetic root-folder table.
     fn varint(mut n: usize) -> Vec<u8> {
         let mut v = vec![(n & 127) as u8];
         n >>= 7;
@@ -29,6 +30,7 @@ pub(super) fn root_catalog(roots: &[&str]) -> Vec<u8> {
         v.reverse();
         v
     }
+    /// Encode a SQLite record containing text columns only.
     fn record(cells: &[&str]) -> Vec<u8> {
         let types: Vec<_> = cells.iter().flat_map(|s| varint(13 + 2 * s.len())).collect();
         let mut out = varint(types.len() + 1);
@@ -38,6 +40,7 @@ pub(super) fn root_catalog(roots: &[&str]) -> Vec<u8> {
         }
         out
     }
+    /// Place bounded synthetic records in a SQLite leaf page.
     fn leaf(page: &mut [u8], offset: usize, records: &[Vec<u8>]) {
         page[offset] = 13;
         page[offset + 3..offset + 5].copy_from_slice(&(records.len() as u16).to_be_bytes());
@@ -222,6 +225,7 @@ fn the_window_asks_and_merge_imports_into_the_open_library() {
 }
 
 #[test]
+/// Checkbox consent reaches the import job and is cleared for every subsequent import.
 fn network_sources_are_discovered_selectable_and_not_remembered() {
     let f = Fixture::new("network-shares");
     std::fs::write(&f.lrcat, root_catalog(&[r"\\nas\photos\Trip", "//NAS/PHOTOS/Family", r"\\other\archive\Old", "C:/Photos"])).unwrap();
@@ -259,6 +263,7 @@ fn network_sources_are_discovered_selectable_and_not_remembered() {
 }
 
 #[test]
+/// Cancellation and session changes discard completed source reads before they can affect the UI.
 fn cancelled_or_stale_source_reviews_never_open_a_dialog_or_start_import() {
     for stale in [false, true] {
         let f = Fixture::new(if stale { "source-stale" } else { "source-cancel" });
@@ -279,6 +284,7 @@ fn cancelled_or_stale_source_reviews_never_open_a_dialog_or_start_import() {
 }
 
 #[test]
+/// An invalid catalog fails discovery without changing the current library or creating another.
 fn an_invalid_catalog_fails_source_review_without_creating_a_library() {
     let f = Fixture::new("source-invalid");
     std::fs::write(&f.lrcat, b"not SQLite").unwrap();
@@ -291,6 +297,7 @@ fn an_invalid_catalog_fails_source_review_without_creating_a_library() {
 }
 
 #[test]
+/// Explicit grants survive destination review and invalid grants fail before library creation.
 fn network_share_params_survive_the_dialog_and_are_checked_before_creating_a_library() {
     let f = Fixture::new("network-share-params");
     let mut h = f.app(true);
