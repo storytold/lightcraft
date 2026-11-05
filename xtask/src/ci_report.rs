@@ -554,6 +554,9 @@ pub fn summary_md(report: &Value) -> String {
         let sw = &report["software"];
         let time = sw["seconds"].as_f64().map(seconds).unwrap_or_default();
         let _ = writeln!(s, "| {} | {} | {time} |", cell(&name), sw["status"].as_str().unwrap_or("?"));
+        for skip in sw["unexpected_skips"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            let _ = writeln!(s, "| still skipped: {} | | |", cell(skip));
+        }
     }
     let skips = skips_from(report);
     if skips.is_empty() {
@@ -787,6 +790,7 @@ mod tests {
         assert!(text.contains("  still skipped: memory: no GPU adapter"), "{text}");
         let md = summary_md(&report);
         assert!(md.contains("| GPU tests on the software adapter llvmpipe (vulkan) | fail | 51.0 s |"), "{md}");
+        assert!(md.contains("| still skipped: memory: no GPU adapter | | |"), "{md}");
         report["software"] = Value::Null;
         assert!(!summary_text(&report).contains("software adapter"), "nothing when it did not run");
         assert!(!summary_md(&report).contains("software adapter"));
