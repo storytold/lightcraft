@@ -176,7 +176,11 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
     // what they chose follows them, and stays under the old name too, for an undo. What the new name held counts only
     // when someone bears that name (a merge): then their picture is kept and the faces set aside for both add up;
     // otherwise it is left over from an earlier rename and is replaced (or dropped when there is nothing to carry)
-    let before = crate::PersonChoices { key: to_key.clone(), cover: s.person_covers.get(&to_key).copied() };
+    let before = crate::PersonChoices {
+        key: to_key.clone(),
+        cover: s.person_covers.get(&to_key).copied(),
+        dismissed: s.person_dismissed.get(&to_key).cloned(),
+    };
     let mut changed = false;
     if from_key != to_key {
         let set_aside = s.person_dismissed.get(&from_key).cloned().unwrap_or_default();
@@ -854,7 +858,8 @@ mod imp {
     /// The unnamed faces that look most like the person whose lower-cased name is `key`, best first, at most `limit`: each
     /// is scored like a suggestion (the mean of its two closest faces of theirs) and kept above four fifths of the
     /// model's suggestion bar, since a person looks at these before anything is named. Only faces already embedded can be
-    /// found; `ready` says whether recognition is running at all.
+    /// found; `ready` says whether recognition is running at all. A face more like one set aside for them than like
+    /// them comes after the others (#3249).
     pub fn similar(s: &mut Session, key: &str, limit: usize) -> Similar {
         let none = Similar { items: Vec::new(), ready: false, pending: 0 };
         let Some(dir) = s.face_models_dir.clone() else { return none };
@@ -889,26 +894,44 @@ mod imp {
         }
         let bar = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD) * 0.8;
         let refs: Vec<&[f32]> = gallery.iter().map(|e| &e[..]).collect();
+        // the faces set aside for them are counter-examples too (#3249): a face more like one of them than like this
+        // person goes after every other one, so the faces like a rejected one move down with it (the latest ones)
+        let rejected: Vec<Arc<[f32]>> = s
+            .person_dismissed
+            .get(key)
+            .into_iter()
+            .flat_map(|v| v.iter().rev())
+            .filter_map(|f| s.faces.index.get(f.photo.0, &f.face).cloned())
+            .take(MAX_COUNTER_EXAMPLES)
+            .collect();
         // every unnamed face against every face of theirs: some 400 million comparisons for a person with 4 000 faces
         // in a library of 90 000, so on every core (minutes on one)
-        let mut scored: Vec<(f32, u64, usize, Rect)> = candidates
+        let mut scored: Vec<(bool, f32, u64, usize, Rect)> = candidates
             .into_par_iter()
             .filter_map(|(photo, index, rect, e)| {
                 let score = matching::person_score(&e, &refs, matching::TOP_FACES)?;
-                (score >= bar).then_some((score, photo, index, rect))
+                if score < bar {
+                    return None;
+                }
+                let like_a_rejected = rejected.iter().any(|r| matching::cosine(&e, r).is_some_and(|c| c > score));
+                Some((!like_a_rejected, score, photo, index, rect))
             })
             .collect();
-        scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.total_cmp(&a.1)).then(a.2.cmp(&b.2)).then(a.3.cmp(&b.3)));
         scored.truncate(limit);
         let items = scored
             .into_iter()
-            .map(|(score, photo, index, rect)| {
+            .map(|(_, score, photo, index, rect)| {
                 let view = s.face_view(PhotoId(photo), rect);
                 json!({"photo": photo, "index": index, "rect": super::rect_json(&rect), "view": super::rect_json(&view), "score": score})
             })
             .collect();
         Similar { items, ..ready }
     }
+
+    /// Most faces set aside for a person that move the faces like them down in [`similar`] (each is compared with
+    /// every face offered).
+    const MAX_COUNTER_EXAMPLES: usize = 200;
 
     /// Most faces put in order of likeness (the order is a pass over every pair of them).
     const MAX_ARRANGED: usize = 1500;

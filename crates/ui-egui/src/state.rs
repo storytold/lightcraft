@@ -145,6 +145,7 @@ pub struct UiState {
     pub cull_burst: Option<(f32, f32)>,
     /// "More" faces the user set aside with ×, hidden at once (the engine keeps them for good, `faces.dismiss`):
     /// (the person's lower-cased name, photo, region index). A face set aside for one person may be someone else.
+    /// Only until the person's page is asked for again, which leaves them out itself.
     #[serde(skip)]
     pub dismissed_faces: std::collections::HashSet<(String, u64, usize)>,
     /// The unnamed faces selected in the People view (photo, region), the name being typed for them, the face last
