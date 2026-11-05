@@ -895,7 +895,8 @@ pub(crate) fn read_texture(
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    let wait = std::time::Duration::from_secs(10);
+    // (the render path's wait: queued work ahead of the copy can take that long too)
+    let wait = READBACK_TIMEOUT;
     poll_device(device, wgpu::PollType::Wait { submission_index: None, timeout: Some(wait) })?;
     match rx.recv_timeout(wait) {
         Ok(Ok(())) => {}
