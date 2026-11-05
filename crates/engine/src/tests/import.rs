@@ -2253,6 +2253,64 @@ fn reload_virtual_copy_updates_shared_smart_preview_family() {
 }
 
 #[test]
+fn reload_relinked_virtual_copy_reads_its_own_file() {
+    reload_relinked_virtual_copy(true);
+}
+
+#[test]
+fn reload_original_leaves_relinked_virtual_copy_unchanged() {
+    reload_relinked_virtual_copy(false);
+}
+
+fn reload_relinked_virtual_copy(from_copy: bool) {
+    let dir = temp_dir(&format!("reload-relinked-copy-{from_copy}"));
+    let original_path = dir.join("original.png");
+    let copy_path = dir.join("other.png");
+    write_png(&original_path, 10);
+    write_png(&copy_path, 20);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [original_path.to_string_lossy()]})).unwrap();
+    let original = PhotoId(r["imported"][0].as_u64().unwrap());
+    let mut copies = Vec::new();
+    for _ in 0..2 {
+        let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+        copies.push(PhotoId(r["ids"][0].as_u64().unwrap()));
+    }
+    let (copy, sibling) = (copies[0], copies[1]);
+    s.execute("photo.relink", &json!({"id": copy.0, "path": copy_path.to_string_lossy()})).unwrap();
+    assert_eq!(s.catalog.photo(copy).unwrap().copy_of, Some(original));
+    let before: Vec<_> = [original, sibling, copy].into_iter().map(|id| s.catalog.photo(id).unwrap().clone()).collect();
+    write_png(&original_path, 100);
+    write_png(&copy_path, 200);
+
+    if from_copy {
+        // A relinked copy keeps its own probe; same-file siblings still share one original probe.
+        let items = crate::cmd::reload::plan(&mut s, &json!({"ids": [copy.0, original.0, sibling.0]})).unwrap();
+        assert_eq!(items.iter().map(|item| item.id).collect::<Vec<_>>(), vec![copy, original]);
+        assert_eq!(items[0].path, copy_path.to_string_lossy());
+        assert_eq!(items[1].path, original_path.to_string_lossy());
+    }
+    let target = if from_copy { copy } else { original };
+    let changed = if from_copy { vec![copy] } else { vec![original, sibling] };
+    let r = s.execute("photo.reload", &json!({"ids": [target.0]})).unwrap();
+    assert_eq!(r["reloaded"], json!(changed.iter().map(|id| id.0).collect::<Vec<_>>()));
+    for old in &before {
+        let new = s.catalog.photo(old.id).unwrap();
+        if changed.contains(&old.id) {
+            assert_ne!(new.content_hash, old.content_hash);
+            assert_eq!(new.develop, old.develop);
+        } else {
+            assert_eq!(new, old, "a photo using another file stays unchanged");
+        }
+    }
+    s.execute("edit.undo", &json!({})).unwrap();
+    for old in &before {
+        assert_eq!(s.catalog.photo(old.id).unwrap(), old, "reload remains one undo step");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn reload_unavailable_smart_preview_drive_is_retryable() {
     reload_smart_preview_transition(false, true, false);
 }

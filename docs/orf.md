@@ -1,6 +1,6 @@
 # Olympus and OM System ORF decoding
 
-> **Last updated:** 2026-10-13 · **Change:** minor (shared-copy reload, unavailable proxy storage and rebuild after Undo)
+> **Last updated:** 2026-11-05 · **Change:** patch (same-file virtual-copy reload and unknown-header limits)
 
 LightCraft reads ORF sensor data from older uncompressed cameras and from the lossless compressed
 files written by Olympus PEN, OM-D and Tough cameras and OM System bodies. The original mosaic,
@@ -79,7 +79,8 @@ Reload invalidates its JPEG-derived smart preview even when the original's bytes
 use **Build Smart Previews** before taking the original offline to rebuild it from sensor data.
 Relink, Undo and Redo also discard existing proxies when they change the preview-only state. If
 discarding a proxy fails, the catalog change is refused; fix the storage problem and retry.
-Reloading a virtual copy updates its original and siblings together, once per shared file.
+Reloading a virtual copy updates its original and siblings together only while they share the
+same file path. A copy relinked to another file reloads independently.
 An unavailable custom smart-preview folder also refuses the transition: reconnect the drive and
 retry so its old proxies can be removed. The automatic preview-only recheck uses the same invalidation. Undo restores the catalog's interpretation, not the
 installed decoder; if they disagree, Build Smart Previews reports a failure for that photo and
@@ -93,14 +94,17 @@ Colour uses the existing guarded fit to the file's own camera JPEG when it conta
 monochrome preview contributes tone only, keeping the sensor's colour channels editable. See
 [camera-preview-colour.md](camera-preview-colour.md). This is estimated camera colour, not measured
 chart calibration or Lightroom Camera Matching profiles. Per-model calibration and automatic lens
-corrections remain separate gaps. The decoder accepts the measured stream header; unknown headers
-and damaged files retain the app's existing preview/error fallback. Unchecked camera models are
-listed as unverified in [raw/coverage.tsv](raw/coverage.tsv).
+corrections remain separate gaps. The lossless decoder accepts the measured stream header. An
+unrecognized header falls through to byte-count-based packing detection: a damaged compressed
+strip with at least two bytes per pixel can be read as `Word16` and appear as distorted raw data,
+rather than reaching the preview/error fallback. Unchecked camera models are listed as unverified
+in [raw/coverage.tsv](raw/coverage.tsv).
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | patch | Reload only shares probe data between virtual copies using the same file path; document damaged-header misclassification as Word16 |
 | 2026-10-13 | minor | Reload virtual-copy families together; refuse transitions with unavailable custom proxy storage and rebuilds with mismatched decoder facts |
 | 2026-10-13 | minor | Apply smart-preview invalidation to Relink and Undo/Redo, preserving history when deletion fails |
 | 2026-10-13 | minor | Reload invalidates old JPEG-derived smart previews before switching to sensor decoding; synthetic and E-PL7 regressions |

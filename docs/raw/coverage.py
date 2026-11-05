@@ -78,7 +78,7 @@ def classify(maker, camera, ext_field):
         if e == "PEF":
             return "unverified", "PEF", "PEF decoder (uncompressed, Huffman, packed 12-bit)"
         if e == "ORF":
-            return "unverified", "ORF", "ORF decoder (uncompressed, packed / two-field / 12.8-bpp, lossless compressed); unknown stream headers refused"
+            return "unverified", "ORF", "ORF decoder (uncompressed, packed / two-field / 12.8-bpp, lossless compressed); damaged headers may be misread as Word16 raw data"
         if e == "SRW":
             if SRW_COMPRESSED.search(camera):
                 return "preview", "SRW", "compressed SRW is not decoded"

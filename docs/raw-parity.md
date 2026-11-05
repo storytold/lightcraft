@@ -1,6 +1,6 @@
 # RAW parity: cameras, formats, demosaic, colour and lens profiles
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (lossless compressed ORF integrated with current main; 577 models verified; LR-PROF-IMPORT: the user's own `.dcp` camera profiles import, checked on a real D750 profile; Canon CRW decoder shared via craft-libs `craft-crw`; Canon EOS D60: chart-measured colour matrices, white balance in Kelvin; Canon CRW merged with MRW: 577 verified; CRW variant rows split by verification status; Sony ILCE-6700 in-file distortion; Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices; AHD no longer turns flat noise into a maze pattern) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (ORF damaged-header fallback limits corrected; lossless compressed ORF integrated with current main; 577 models verified; LR-PROF-IMPORT: the user's own `.dcp` camera profiles import, checked on a real D750 profile; Canon CRW decoder shared via craft-libs `craft-crw`; Canon EOS D60: chart-measured colour matrices, white balance in Kelvin; Canon CRW merged with MRW: 577 verified; CRW variant rows split by verification status; Sony ILCE-6700 in-file distortion; Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices; AHD no longer turns flat noise into a maze pattern) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
 
 Raw processing is the deepest single dimension of Lightroom parity: a photographer whose camera
 does not decode, or decodes with the wrong colour, cannot switch. This document measures it model by
@@ -159,7 +159,7 @@ checked (the per-model CC0 sweeps of October 2026); lossless compressed ORF now 
 | RAF | uncompressed, lossless and lossy compressed; Bayer and X-Trans; GFX 14/16-bit | ✅ | 24 files from 13 bodies exact |
 | RAF | pre-X FinePix without a raw IFD | ⬜ | `raf.rs` refuses (26 Adobe models, estimated split) |
 | ORF | uncompressed 16-bit, 12-bit packed, two-field 12-bit, 12.8 bpp | ✅ | E-1, E-400, XZ-2 corpus; #651 |
-| ORF | **lossless compressed** (E-410 onwards, PEN, OM-D, Tough, OM System) | ✅ | 23 new exact full-sensor references including PEN E-PL7; `orfc.rs`, `orf_corpus.rs`, [orf.md](orf.md); unknown stream headers refused |
+| ORF | **lossless compressed** (E-410 onwards, PEN, OM-D, Tough, OM System) | 🟡 | 23 new exact full-sensor references including PEN E-PL7; `orfc.rs`, `orf_corpus.rs`, [orf.md](orf.md); damaged stream headers may be misread as Word16 raw data instead of reaching the preview/error fallback |
 | RW2 / RWL / RAW | formats 2, 4, 5, 6, 7, 8 and 16-bit words | ✅ | 118 bodies (#215) |
 | PEF | uncompressed, Huffman, packed 12-bit | ✅ | K10D, K-3, K-5 IIs; files without area tags lose their masked, empty and saturated border lines (#1271: KP, KF, K-3 Mark III, K-70, K-1, K-1 Mark II, K-S1, K-S2, 645Z) |
 | PEF / DNG | Pentax pixel shift | ⬜ | frames not combined |
@@ -303,6 +303,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | patch | ORF lossless decoding marked partial for damaged-header misclassification as Word16; corrected the fallback claim and generated coverage notes; verified models and coverage counts unchanged |
 | 2026-11-05 | patch | Rebased lossless compressed ORF with current main and CRW support; combined evidence measures 577 verified, 703 unverified, 129 preview-only and 37 unsupported models (97% use-weighted decoding, 88% on verified bodies); readiness estimates retained |
 | 2026-10-26 | patch | Bundled camera profile count 5 → 9 (Nikon Z 6II, Z 8 and D5300, ILCE-7RM5); counts only |
 | 2026-10-23 | minor | Lens profiles: Sony ILCE-6700 (APS-C) in-file distortion through the ILCE-7RM6 conversion, knots spanning its own crop; lens score unchanged (~10%: one more body) |
@@ -323,7 +324,7 @@ Beyond decoding:
 | 2026-10-14 | minor | 21 Sony and Leica models verified (one CC0 raw.pixls.us file each, pinned; `sony_leica_corpus.rs`): 258 verified, 920 unverified; Leica on a verified body 21% → 72%, Sony 91% → 92%, use-weighted 85% and 43% |
 | 2026-10-14 | minor | 17 uncompressed Olympus and Samsung models verified on one CC0 file each (`olympus_samsung_corpus.rs`): 254 verified, 932 unverified, 224 preview; OM / Olympus 3% → 6% (5% on verified bodies); use-weighted 85% and 42% unchanged; duplicated summary rows from a merge removed |
 | 2026-10-14 | minor | Nikon D600 and D610 image area (6016 × 4016 at 8, 6) measured on 4 CC0 NEFs of each, and the D90's area and white level applied to the D5000 (same sensor and filler, 2 CC0 NEFs): the filler and noise columns on the right no longer develop as a band, and for these bodies the white level is measured inside the image area, issue #1627 |
-| 2026-10-12 | minor | Lossless compressed ORF completed, 23 exact full-sensor references: 260 verified, 984 unverified, 166 preview-only; use-weighted coverage 87% (44% verified); decoding 78%, RAW readiness 57%; unknown headers remain refused |
+| 2026-10-12 | minor | Lossless compressed ORF completed, 23 exact full-sensor references: 260 verified, 984 unverified, 166 preview-only; use-weighted coverage 87% (44% verified); decoding 78%, RAW readiness 57%; unknown-header fallback limits corrected on 2026-11-05 |
 | 2026-10-11 | minor | Leica Q3 verified by a recorded check of 38 private DNGs (no decode failure; mean ΔE to the camera JPEG 6.3–13.9): 236 verified, 941 unverified, Leica bucket on a verified body 5% → 21%, weighted shares unchanged |
 | 2026-10-12 | patch | CR2 white level from the active area, not the saturated masked rows above it (#1272: EOS 50D, 60D, 450D (Rebel XSi), 500D (Rebel T1i), 550D (Rebel T2i), 1200D (Rebel T5) and 100D (Rebel SL1)); scores unchanged |
 | 2026-10-12 | minor | Canon PowerShot G9: as-shot white balance from WBInfo (`0x0029`, the row of the preset in ShotInfo), issue #1273; render unchanged (the camera-look fit already absorbed it), As Shot now the camera's; counts unchanged |

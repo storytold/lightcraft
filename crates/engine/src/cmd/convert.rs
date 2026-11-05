@@ -301,8 +301,11 @@ pub(crate) fn reload_ops(
         ops.append(&mut mine);
         changed.push(id);
     }
-    // virtual copies share the file
-    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
+    // A virtual copy may have been relinked to a different file.
+    for c in cat
+        .photos()
+        .filter(|c| c.copy_of == Some(id) && matches!((&c.source, &ph.source), (Source::File { path: a }, Source::File { path: b }) if a == b))
+    {
         let theirs: Vec<Op> =
             content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
         if !theirs.is_empty() {
