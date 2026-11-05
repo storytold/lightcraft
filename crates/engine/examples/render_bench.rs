@@ -158,6 +158,15 @@ fn benchmark_source(args: &[String], n: usize) {
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         println!("  {}×{} cpp {} cfa {:?}", raw.width, raw.height, raw.cpp, raw.cfa.as_ref().map(|c| c.name()));
         println!("  {:<36} {}", "raw decode:", best(n, || drop(lightcraft_raw::decode(&bytes).expect("decode"))));
+        // what the lateral CA map costs (ILCE-7RM6): the same steps without it
+        let ca = raw.opcodes.lateral_ca.take();
+        if ca.is_some() {
+            println!("  {:<36} {}", "normalize, no lateral CA map:", best(n, || drop(raw.normalized().expect("norm"))));
+            if let Some(k) = lightcraft_engine::files::bin_factor(&raw, 2560) {
+                println!("  {:<36} {}", format!("binned ×{k}, no lateral CA map:"), best(n, || drop(raw.develop_binned(k, 0.99))));
+            }
+        }
+        raw.opcodes.lateral_ca = ca;
         println!("  {:<36} {}", "normalize:", best(n, || drop(raw.normalized().expect("norm"))));
         let norm = raw.normalized().expect("norm");
         println!("  {:<36} {}", "demosaic AHD:", best(n, || drop(lightcraft_raw::demosaic(&norm, lightcraft_raw::Method::Ahd))));

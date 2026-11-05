@@ -859,3 +859,25 @@ fn denoise_row_while_queue_is_busy() {
     assert!(rows(&x.s).is_empty(), "the row goes once the photo is made");
     let _ = std::fs::remove_dir_all(&x.dir);
 }
+
+/// ARW photos develop from a CA-corrected mosaic (the ILCE-7RM6's map), whatever the photo record holds: their
+/// products get a key of their own, once; other formats keep theirs. A Sony raw migrated from a Lightroom catalog
+/// (format `RAW`) is known by its extension.
+#[test]
+fn arw_products_are_keyed_apart() {
+    use lightcraft_catalog::{Photo, PhotoId, Source};
+    // (the content key is the source path's: only the format, the name and the lens data differ)
+    let key = |format: &str, name: &str, lens: bool| {
+        let mut p = Photo::new(PhotoId(1), Source::File { path: "/x".into() }, name, format, 64, 48, "");
+        p.embedded_lens = lens.then(|| lightcraft_develop::EmbeddedLens { warp: Some(Default::default()), ..Default::default() });
+        crate::denoise::product_key("fp", &p)
+    };
+    let arw = key("ARW", "x.arw", false);
+    let plain = key("RW2", "x.rw2", false);
+    assert_ne!(arw, plain, "ARW salted");
+    assert_eq!(key("ARW", "x.arw", true), arw, "with or without embedded lens data (no second re-key)");
+    assert_eq!(key("RAW", "DSC00001.ARW", false), arw, "a Lightroom-migrated Sony raw, by its extension");
+    assert_eq!(key("RW2", "x.rw2", true), plain);
+    assert_eq!(key("DNG", "x.dng", false), plain, "other formats unsalted");
+    assert_eq!(key("RAW", "x.nef", false), plain, "a Lightroom-migrated Nikon raw");
+}

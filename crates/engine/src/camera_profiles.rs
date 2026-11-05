@@ -203,9 +203,10 @@ impl Pool {
     pub fn add(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
         let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
         // colour only: geometric lens corrections would stop the sensor proxy from binning (the pairs still follow
-        // the warp the camera applied to its JPEG)
+        // the warp the camera applied to its JPEG), and the mosaic's lateral CA map would change the proxy the
+        // pooled pairs were tuned on
         let lens = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
-        raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+        colour_only(&mut raw);
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
         let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref()) else { return Ok(None) };
         let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
@@ -244,6 +245,21 @@ impl Pool {
         v.sort();
         v
     }
+}
+
+/// A raw file made colour only, for profile pairs: no geometric lens corrections (they would stop the sensor proxy
+/// from binning) and no lateral CA map on the mosaic (it would change the proxy the pooled pairs were tuned on).
+pub(crate) fn colour_only(raw: &mut lightcraft_raw::RawImage) {
+    raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+    raw.opcodes.lateral_ca = None;
+}
+
+/// A raw file decoded for profile pairs: colour only ([`colour_only`]).
+#[cfg(test)]
+pub(crate) fn decode_colour_only(bytes: &[u8]) -> Result<lightcraft_raw::RawImage, String> {
+    let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
+    colour_only(&mut raw);
+    Ok(raw)
 }
 
 #[cfg(test)]

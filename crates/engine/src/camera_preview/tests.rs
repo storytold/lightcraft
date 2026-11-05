@@ -2606,3 +2606,40 @@ fn a_narrow_black_and_white_curve_that_darkens_the_bright_areas_is_refused() {
         assert!(sky > 0.8, "an accepted curve must not darken what the camera renders at 0.93: {sky}");
     }
 }
+
+/// The camera-look fits (the colour JPEG's, the black-and-white JPEG's and the near-black tone fallback) see the mosaic
+/// without the lateral CA map (the fits and LOOK_VERSION are unchanged); the map is back afterwards for the development.
+#[test]
+fn the_camera_look_fit_sees_the_mosaic_without_lateral_ca() {
+    let mut raw = raw_of(RawFormat::Arw, "SONY", "ILCE-7RM6", Default::default());
+    let ca = lightcraft_raw::LateralCa::new([0.5, 0.5], 400.0, vec![1e-4, 2e-4], vec![-1e-4, -2e-4]).unwrap();
+    raw.opcodes.lateral_ca = Some(ca.clone());
+    let (mut seen, mut seen_monochrome, mut seen_dark) = (None, None, None);
+    let _ = starting_colour_with(
+        &mut raw,
+        |r, _| {
+            seen = Some(r.opcodes.lateral_ca.clone());
+            (None, true)
+        },
+        |r, _| {
+            seen_monochrome = Some(r.opcodes.lateral_ca.clone());
+            None
+        },
+        |r, _| {
+            seen_dark = Some(r.opcodes.lateral_ca.clone());
+            None
+        },
+    );
+    assert_eq!((seen, seen_monochrome, seen_dark), (Some(None), Some(None), Some(None)), "all fits ran, without the map");
+    assert_eq!(raw.opcodes.lateral_ca, Some(ca.clone()), "restored");
+    // an accepted fit returns early: the map is back too
+    let fitted = dro_test_look(&std::array::from_fn(|i| 0.006 * 1.13f32.powi(i as i32)), &|x| x.sqrt());
+    let (_, _, look) = starting_colour_with(
+        &mut raw,
+        |r, _| (r.opcodes.lateral_ca.is_none().then_some(fitted), false),
+        |_, _| panic!("no black-and-white JPEG fit after an accepted fit"),
+        |_, _| panic!("no near-black fallback after an accepted fit"),
+    );
+    assert!(look.is_some(), "the fit ran without the map");
+    assert_eq!(raw.opcodes.lateral_ca, Some(ca), "restored after an accepted fit");
+}

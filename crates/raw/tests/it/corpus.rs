@@ -636,14 +636,16 @@ fn corpus_sony_16x9_crops() {
 }
 
 /// Sony ILCE-7RM6: the distortion table in the raw IFD (`0x7037`) becomes a one-plane `WarpRectilinear` in
-/// `OpcodeList3` (`vendor::arw_lens_rm6`; the lateral CA table is read but its planes are off by default, and their
-/// numbers for these files are checked in `arw_lens_rm6`'s unit tests). Expected: the conversion recipe measured on 54
-/// ILCE-7RM6 photos, evaluated in f64 for each file's tables, decoded active area (the padded lossless tiles) and
-/// default crop. All four files carry distortion correction off in camera; the table is applied anyway.
+/// `OpcodeList3`, and the lateral CA table (`0x7035`) the pre-demosaic `LateralCa` map (`vendor::arw_lens_rm6`; the
+/// probe check below covers the map too). Expected: the conversion recipe measured on 54 ILCE-7RM6 photos, evaluated
+/// in f64 for each file's tables, decoded active area (the padded lossless tiles) and default crop; the map's first
+/// knots are each file's CA table values (read with ExifTool) / 3.36·10⁶. All four files carry distortion correction
+/// off in camera; the table is applied anyway.
 #[test]
 fn corpus_sony_lens_tables_become_opcodes() {
     let dir = corpus_root().join("raw");
-    // (file, active area, default crop x, y, width, height, opcode centre, G-plane k0..k3)
+    // (file, active area, default crop x, y, width, height, opcode centre, G-plane k0..k3,
+    //  lateral CA map: centre px, knots per colour, red[0], blue[0])
     let cases = [
         // not pinned in `cargo xtask corpus` (at most two pins per PR; the ARW 6.0 decoder pins the two Compressed files
         // below): checked only where the file is present (RawDB `ILCE-7RM6_FF_land_RAW.ARW`, CC0)
@@ -653,6 +655,7 @@ fn corpus_sony_lens_tables_become_opcodes() {
             (12, 8, 9984, 6656),
             [0.488670768629749, 0.4653969582810102],
             [0.9717033132764651, 0.023249297636569695, 0.008638979168841135, 0.003091041831374855],
+            ([5003.5, 3335.5], 16, 242.0 / 3.36e6, -276.0 / 3.36e6),
         ),
         // pinned in `cargo xtask corpus` (RawDB `ILCE-7RM6_APSC_land_RAW.ARW`, CC0)
         (
@@ -661,6 +664,7 @@ fn corpus_sony_lens_tables_become_opcodes() {
             (16, 10, 6528, 4352),
             [0.49278737791134486, 0.4743868026915563],
             [1.016366854640611, -0.0688824189782517, 0.03615745253291194, -0.009438825010476538],
+            ([3279.5, 2185.5], 11, 792.0 / 3.36e6, -436.0 / 3.36e6),
         ),
         // pinned by the ARW 6.0 decoder (RawDB `ILCE-7RM6_FF_land_RAW-C.ARW`, CC0): the same scene as the full-frame
         // lossless file, its table one step off at knot 12 (268, not 267), on the decoder's unpadded geometry
@@ -670,6 +674,7 @@ fn corpus_sony_lens_tables_become_opcodes() {
             (12, 8, 9984, 6656),
             [0.49960059910134796, 0.5],
             [0.9714600903266707, 0.02234210164294959, 0.001142578769532717, 0.005292120046651031],
+            ([5003.5, 3335.5], 16, 240.0 / 3.36e6, -270.0 / 3.36e6),
         ),
         // pinned by the ARW 6.0 decoder (RawDB `ILCE-7RM6_APSC_land_RAW-C-HD.ARW`, CC0)
         (
@@ -678,10 +683,11 @@ fn corpus_sony_lens_tables_become_opcodes() {
             (16, 10, 6528, 4352),
             [0.4975724472765893, 0.5],
             [1.01627551, -0.0618606692, 0.02768349621, -0.005595798468],
+            ([3279.5, 2185.5], 11, 790.0 / 3.36e6, -432.0 / 3.36e6),
         ),
     ];
     let mut seen = 0;
-    for (name, (aw, ah), crop, center, k) in cases {
+    for (name, (aw, ah), crop, center, k, (ca_center, n_knots, red0, blue0)) in cases {
         let bytes = match std::fs::read(dir.join(name)) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -706,11 +712,16 @@ fn corpus_sony_lens_tables_become_opcodes() {
             })
             .collect();
         let [(planes, got)] = warps.as_slice() else { panic!("{name}: {:?}", img.opcodes.list3) };
-        assert_eq!(planes.len(), 1, "{name}: one plane (G; lateral CA off by default)");
+        assert_eq!(planes.len(), 1, "{name}: one plane (G; lateral CA is the pre-demosaic map)");
         assert!((got[0] - center[0]).abs() < 1e-6 && (got[1] - center[1]).abs() < 1e-6, "{name}: centre {got:?}, want {center:?}");
         for (i, want) in k.iter().enumerate() {
             assert!((planes[0][i] - want).abs() < 1e-6, "{name}: k{i} {}, want {want}", planes[0][i]);
         }
+        let ca = img.opcodes.lateral_ca.as_ref().unwrap_or_else(|| panic!("{name}: no lateral CA map"));
+        assert!((ca.center[0] - ca_center[0]).abs() < 1e-9 && (ca.center[1] - ca_center[1]).abs() < 1e-9, "{name}: {:?}", ca.center);
+        assert!((ca.spacing - 399.9758214914719).abs() < 1e-9, "{name}: spacing {}", ca.spacing);
+        assert_eq!((ca.red.len(), ca.blue.len()), (n_knots, n_knots), "{name}");
+        assert!((ca.red[0] - red0).abs() < 1e-15 && (ca.blue[0] - blue0).abs() < 1e-15, "{name}: {} {}", ca.red[0], ca.blue[0]);
         seen += 1;
     }
     eprintln!("Sony lens tables checked on {seen} files");

@@ -15,6 +15,9 @@
 //! partly clipped without the block's green jumping to the clip level, which would read as a green
 //! speckle once reconstructed. [`RawImage::develop_binned`] instead gives such a channel the block's
 //! maximum sample of the colour, so that plain value thresholds see it as clipped.
+//!
+//! A lateral CA map ([`crate::LateralCa`], Bayer only) is applied to the binned image's red and blue, not to the
+//! mosaic, with the clip mask keeping clipped pixels as they are.
 
 use crate::{Normalized, RawData, RawImage, Result, Rgb32f};
 use rayon::prelude::*;
@@ -62,7 +65,8 @@ impl RawImage {
             return Ok(None);
         }
         // Opcode lists 1/2 need the normalised copy; plain files are normalised row by row.
-        let norm: Option<Normalized> = if self.opcodes.list1.is_empty() && self.opcodes.list2.is_empty() { None } else { Some(self.normalized()?) };
+        let norm: Option<Normalized> =
+            if self.opcodes.list1.is_empty() && self.opcodes.list2.is_empty() { None } else { Some(self.normalize(false)?) };
         let cfa = cfa.shifted(a.x, a.y);
         let range = self.white_at(0) - self.black.mean();
         let scale = if range > 0.0 { 1.0 / range } else { 1.0 };
@@ -122,6 +126,12 @@ impl RawImage {
                 }
             }
         });
+        // the lateral CA map, once: `norm` above was normalised without it (Bayer only, as on the full mosaic)
+        if let Some(ca) = &self.opcodes.lateral_ca
+            && cfa.is_bayer()
+        {
+            ca.correct_binned(&mut out, &mask, k, c);
+        }
         Ok(Some((out, mask)))
     }
 }
@@ -141,11 +151,11 @@ fn block_layout(cfa: &crate::Cfa, i: usize, j: usize, k: usize) -> (Vec<u8>, [u3
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::demosaic::mosaic_from_rgb;
     use crate::*;
 
-    fn raw_from(n: &Normalized, black: f32, white: f32) -> RawImage {
+    pub(crate) fn raw_from(n: &Normalized, black: f32, white: f32) -> RawImage {
         let data = n.data.iter().map(|&v| (v * (white - black) + black).round() as u16).collect();
         RawImage {
             format: RawFormat::Dng,

@@ -398,8 +398,12 @@ fn decode_ifd(bytes: &[u8], tiff: &Tiff, pixels: &Ifd, main: &Ifd, mode: Mode, f
     };
 
     let opcode_list = |tag| raw.bytes(tag).map(opcodes::parse_list).unwrap_or_default();
-    let opcodes =
-        crate::OpcodeLists { list1: opcode_list(t::OPCODE_LIST_1), list2: opcode_list(t::OPCODE_LIST_2), list3: opcode_list(t::OPCODE_LIST_3) };
+    let opcodes = crate::OpcodeLists {
+        list1: opcode_list(t::OPCODE_LIST_1),
+        list2: opcode_list(t::OPCODE_LIST_2),
+        list3: opcode_list(t::OPCODE_LIST_3),
+        lateral_ca: None,
+    };
 
     let mut metadata = lightcraft_meta::from_tiff(tiff);
     metadata.width = Some(developed.0 as u32);

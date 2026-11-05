@@ -1331,13 +1331,19 @@
 - Sony A7R VI (ILCE-7RM6) raws are corrected for lens distortion from the table the camera records in each file,
   under Optics ▸ Enable Lens Corrections, on by default for newly imported photos. On 33 photos shot with the camera's
   correction on (24–70 mm, 100 mm macro, 200–600 mm) the render lines up with the camera's JPEG within 0.68 px at
-  1440 px at the corners, where it was up to 17 px off before. The camera's lateral chromatic aberration table is read
-  too, but not applied by default: our demosaic already hides most of that colour fringing, and the table on top made
-  it slightly worse. The vignetting table is read but not applied: the camera's own JPEGs don't apply it either. This
-  covers lossless, Compressed and Compressed HQ (ARW 6.0) ARWs alike. The A7R IVA (ILCE-7RM4A) has its own distortion
-  correction, checked against Sony's exports; other Sony bodies record the same tables, but they stay uncorrected until
-  they are checked the same way. Photos imported earlier get the correction with Photo ▸ Reload from Disk (when still
-  at their import settings). See `docs/sony-ilce7rm6-lens-corrections.md`.
+  1440 px at the corners, where it was up to 17 px off before. The camera's lateral chromatic aberration table is
+  applied too (next item). The vignetting table is read but not applied: the camera's own JPEGs don't apply it
+  either. This covers lossless, Compressed and Compressed HQ (ARW 6.0) ARWs alike. The A7R IVA (ILCE-7RM4A) has its
+  own distortion correction, checked against Sony's exports; other Sony bodies record the same tables, but they stay
+  uncorrected until they are checked the same way. Photos imported earlier get the correction with Photo ▸ Reload
+  from Disk (when still at their import settings). See `docs/sony-ilce7rm6-lens-corrections.md`.
+- A7R VI colour fringing (lateral chromatic aberration) is now corrected from the camera's own table, on the raw data
+  before demosaicing, so previews, full-size exports and AI Denoise all get the same correction: over 43 photos the
+  corner fringing at 1440 px falls from 0.032 to 0.026 px rms (better on three lenses, worse on the 200–600 mm,
+  2 photos), and a preview, which showed about twice an export's fringing, now gets the same correction. Existing
+  renders of A7R VI photos change slightly at the corners (the render cache refreshes by itself). The correction
+  doesn't follow Enable Lens Corrections, which governs distortion only, and DNG export keeps the distortion
+  correction only. AI Denoise results of Sony raws are made again once.
 
 ### The thumbnail cache is no longer taken for your photos
 - LightCraft's cached thumbnails no longer show up in Windows Photos / Gallery or other photo apps as pictures of

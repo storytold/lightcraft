@@ -24,6 +24,10 @@
 use lightcraft_raster::Rgb32f;
 use rayon::prelude::*;
 
+/// Sensor clip level (normalised, white = 1.0) at which a sample counts as clipped (highlight reconstruction, the
+/// lateral CA map).
+pub const CLIP: f32 = 0.99;
+
 /// Clip every channel of `wb ⊙ img` at `min_c(wb_c) · clip` — i.e. at the lowest channel's clip level after WB —
 /// then divide the multipliers back out. `clip` is the sensor clip in normalised units (≈ 1.0).
 pub fn clip_neutral(img: &mut Rgb32f, wb: [f32; 3], clip: f32) {

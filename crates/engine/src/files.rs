@@ -34,8 +34,8 @@ pub use probe::{embedded_lens, probe_bytes};
 #[cfg(test)]
 use probe::{meta_of, preview_reason};
 
-/// Sensor clip level (normalised) for highlight reconstruction.
-const HIGHLIGHT_CLIP: f32 = 0.99;
+// Sensor clip level (normalised) for highlight reconstruction.
+use lightcraft_raw::highlight::CLIP as HIGHLIGHT_CLIP;
 
 /// How a raw's camera RGB becomes the linear Rec.2020 the pipeline takes.
 pub(crate) struct CameraColourModel<'a> {

@@ -1737,8 +1737,9 @@ fn a_quick_thumbnail_without_an_embedded_preview_renders_the_raw() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A Sony ARW of `model`: a 64 × 48 uncompressed 14-bit CFA strip in a SubIFD (as `crates/raw/tests/it/vendor_robust.rs`
-/// lays it out) whose IFD carries the full-frame 16–35 mm distortion table (tag 0x7037).
+/// A Sony ARW of `model`: a 72 × 48 uncompressed 14-bit CFA strip in a SubIFD (as `crates/raw/tests/it/vendor_robust.rs`
+/// lays it out) whose IFD carries the full-frame 16–35 mm distortion table (tag 0x7037) and its lateral CA table
+/// (tag 0x7035, the `FF_CA` of `arw_lens_rm6`'s tests).
 fn sony_arw(model: &str) -> Vec<u8> {
     use lightcraft_tiff::tags::{self as t, photometric};
     use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
@@ -1754,12 +1755,62 @@ fn sony_arw(model: &str) -> Vec<u8> {
     raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
     raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
     raw.set(0x7037, Value::SShort(vec![16, 0, 2, 7, 16, 28, 43, 61, 83, 109, 139, 175, 217, 267, 325, 395, 479]));
+    raw.set(
+        0x7035,
+        Value::SShort(vec![
+            32, 242, 234, 224, 212, 196, 176, 154, 132, 108, 86, 66, 46, 30, 16, 8, 4, -276, -258, -238, -212, -184, -148, -114, -74, -40, -6, 20,
+            42, 56, 60, 54, 32,
+        ]),
+    );
     raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![2000u16.to_le_bytes().repeat((w * h) as usize)] });
     let mut ifd0 = IfdBuilder::new();
     ifd0.set(t::MAKE, Value::Ascii("SONY".into()));
     ifd0.set(t::MODEL, Value::Ascii(model.into()));
+    // a lens the ILCE-7RM6's lateral CA map is applied for (`arw_lens_rm6::CA_IMPROVES`)
+    ifd0.set_child(t::EXIF_IFD, IfdBuilder::new().with(t::LENS_MODEL, Value::Ascii("FE 24-70mm F2.8 GM II".into())));
     ifd0.add_sub_ifd(raw);
     TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+}
+
+/// Spec E1: a DNG exported from an ILCE-7RM6 ARW carries the distortion warp (one plane) and no lateral CA map:
+/// no DNG opcode resamples the CFA before demosaic, so Convert to DNG loses the CA correction (documented limit).
+#[test]
+fn dng_export_of_an_arw_keeps_distortion_and_drops_lateral_ca() {
+    let dir = std::env::temp_dir().join(format!("lc-arw-dng-ca-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("rm6.arw");
+    let arw = sony_arw("ILCE-7RM6");
+    assert!(lightcraft_raw::decode(&arw).unwrap().opcodes.lateral_ca.is_some(), "the source carries a map");
+    std::fs::write(&path, &arw).unwrap();
+    let mut s = crate::Session::new().with_fs();
+    let r = s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+    let o = crate::export::ExportOptions::from_json(&serde_json::json!({"format": "dng", "dngCompression": "uncompressed"}));
+    let mut out = Vec::new();
+    let mut write = |_: &str, b: &[u8]| {
+        out = b.to_vec();
+        Ok(())
+    };
+    crate::export::export_batch(&mut s, &[id], &o, &crate::export::Destination { dir: "x".into(), exact: None }, &mut write, &|_| false).unwrap();
+    let dng = lightcraft_raw::decode(&out).unwrap();
+    assert!(dng.opcodes.lateral_ca.is_none());
+    assert!(
+        matches!(dng.opcodes.list3.as_slice(), [lightcraft_raw::Opcode::WarpRectilinear { planes, .. }] if planes.len() == 1),
+        "{:?}",
+        dng.opcodes.list3
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The camera-profile pool ([`crate::camera_profiles::Pool::add`]) reads an ILCE-7RM6 ARW without its lens
+/// corrections: no distortion warp and no lateral CA map (the profiles were tuned on such sensor proxies).
+#[test]
+fn profile_pool_decodes_arws_without_lens_corrections() {
+    let arw = sony_arw("ILCE-7RM6");
+    let opcodes = lightcraft_raw::decode(&arw).unwrap().opcodes;
+    assert!(opcodes.lateral_ca.is_some() && !opcodes.list3.is_empty(), "the file carries both");
+    assert_eq!(crate::camera_profiles::decode_colour_only(&arw).unwrap().opcodes, lightcraft_raw::OpcodeLists::default());
 }
 
 /// Sony's embedded distortion correction is on by default: an ARW of a verified body imports with "Enable Lens

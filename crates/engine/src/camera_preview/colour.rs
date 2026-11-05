@@ -106,23 +106,29 @@ pub(super) fn starting_colour_with(
     if !t.matrix_is_fallback {
         return (xy, t, None);
     }
-    let (look, black_and_white) = fit(raw, &t);
-    if let Some(look) = look {
-        return (xy, t, Some(look));
-    }
-    let (xy, t) = match raw.metadata.model.as_deref().and_then(|model| lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), model)) {
-        Some(camera) => {
-            camera.fill(&mut raw.color);
-            if lightcraft_pipeline::profiling() {
-                eprintln!("[profile] {:?} camera colour from spectral sensitivities: {} {}", raw.format, camera.make, camera.model);
-            }
-            start(raw)
+    // The camera-look fits pair the mosaic without the lateral CA map with the camera JPEG, as they were tuned
+    // (LOOK_VERSION unchanged); the map goes back for the development, on the one way out below.
+    let ca = raw.opcodes.lateral_ca.take();
+    let out = match fit(raw, &t) {
+        (Some(look), _) => (xy, t, Some(look)),
+        (None, black_and_white) => {
+            let (xy, t) = match raw.metadata.model.as_deref().and_then(|model| lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), model)) {
+                Some(camera) => {
+                    camera.fill(&mut raw.color);
+                    if lightcraft_pipeline::profiling() {
+                        eprintln!("[profile] {:?} camera colour from spectral sensitivities: {} {}", raw.format, camera.make, camera.model);
+                    }
+                    start(raw)
+                }
+                None => (xy, t),
+            };
+            // A black-and-white JPEG first tries its existing tone fit on the chosen colour.
+            let look = if black_and_white { monochrome(raw, &t) } else { None };
+            (xy, t, look.or_else(|| dark(raw, &t)))
         }
-        None => (xy, t),
     };
-    // A black-and-white JPEG first tries its existing tone fit on the chosen colour.
-    let look = if black_and_white { monochrome(raw, &t) } else { None };
-    (xy, t, look.or_else(|| dark(raw, &t)))
+    raw.opcodes.lateral_ca = ca;
+    out
 }
 
 /// The colour a raw starts from ([`starting_colour`]) as DNG colour tags, for a DNG of the raw's camera RGB (Photo

@@ -12,7 +12,7 @@
 //! Value convention: list 1 runs on raw sample values (16-bit scale), lists 2 and 3 on values normalised to
 //! [0, 1]; table/polynomial/delta opcodes are defined on the normalised range and are rescaled accordingly.
 
-use crate::{Cfa, Rgb32f};
+use crate::{Cfa, LateralCa, Rgb32f};
 use serde::{Deserialize, Serialize};
 
 /// Rectangular area + plane selection + pitch shared by the "area" opcodes.
@@ -230,6 +230,10 @@ pub struct OpcodeLists {
     pub list1: Vec<Opcode>,
     pub list2: Vec<Opcode>,
     pub list3: Vec<Opcode>,
+    /// Lateral chromatic aberration corrected on the mosaic before demosaic (after list 2). Not a DNG list: never
+    /// written to a DNG.
+    #[serde(default)]
+    pub lateral_ca: Option<LateralCa>,
 }
 
 struct Rd<'a> {

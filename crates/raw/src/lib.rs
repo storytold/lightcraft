@@ -5,9 +5,11 @@
 //!   opcode lists, [`Metadata`]); [`embedded_preview`] returns the largest embedded JPEG (or DNG 1.7 JPEG XL) preview;
 //!   [`semantic_masks`] reads a DNG's semantic masks (segmentation mattes, e.g. iPhone ProRAW's sky matte).
 //! - [`RawImage::normalized`] subtracts black, scales white to 1.0 and crops to the active area (applying DNG
-//!   `OpcodeList1`/`OpcodeList2`); [`demosaic`] turns CFA data into camera-RGB [`Rgb32f`];
-//!   [`RawImage::develop`] does all of it plus `OpcodeList3` and the default crop; [`RawImage::develop_binned`]
-//!   produces the same at 1/k of the size straight from the mosaic (previews, thumbnails;
+//!   `OpcodeList1`/`OpcodeList2`, then the lateral CA map [`OpcodeLists::lateral_ca`], which resamples a Bayer
+//!   mosaic's red and blue sites before demosaic; the ARW decoder fills it from the ILCE-7RM6's CA table);
+//!   [`demosaic`] turns CFA data into camera-RGB [`Rgb32f`]; [`RawImage::develop`] does all of it plus `OpcodeList3`
+//!   and the default crop; [`RawImage::develop_binned`] produces the same at 1/k of the size straight from the mosaic,
+//!   the lateral CA map applied to the binned red and blue (previews, thumbnails;
 //!   [`RawImage::develop_binned_masked`] with the mask of blocks holding clipped samples, for [`highlight`]).
 //! - [`color`] implements the DNG colour model (dual-illuminant interpolation, forward matrices, white balance)
 //!   and produces camera → linear Rec.2020 D65 matrices; [`profile`] reads and applies a DNG's own profile
@@ -37,6 +39,7 @@ pub mod highlight;
 mod jxl;
 pub mod kelvin_builtin;
 pub mod kelvin_presets;
+mod lateral_ca;
 pub mod lens_metadata;
 pub mod ljpeg;
 pub(crate) mod llvc;
@@ -54,6 +57,7 @@ mod wb_estimate;
 
 pub use demosaic::{Method, demosaic};
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};
+pub use lateral_ca::LateralCa;
 pub use lens_metadata::LensMetadata;
 pub use lightcraft_color::Mat3;
 pub use lightcraft_geom::Orientation;
@@ -821,8 +825,14 @@ impl RawImage {
     }
 
     /// Black-subtract, white-scale and crop to the active area, applying `OpcodeList1` (on raw values) first and
-    /// `OpcodeList2` (on normalised values) after. 1.0 = white level.
+    /// `OpcodeList2` (on normalised values) after, then the lateral CA map ([`OpcodeLists::lateral_ca`]).
+    /// 1.0 = white level.
     pub fn normalized(&self) -> Result<Normalized> {
+        self.normalize(true)
+    }
+
+    /// [`Self::normalized`], with or without the lateral CA map (binning corrects its own, smaller image).
+    fn normalize(&self, lateral_ca: bool) -> Result<Normalized> {
         self.validate()?;
         let (w, cpp) = (self.width, self.cpp);
         let a = self.active_area;
@@ -860,9 +870,15 @@ impl RawImage {
                 }
             }
         });
+        // the full-size list-1 copy is done with: free it before list 2 and the lateral CA map
+        drop(stage1);
         let cfa = self.cfa.as_ref().map(|c| c.shifted(a.x, a.y));
         opcodes::apply_list(&self.opcodes.list2, &mut out, a.width, a.height, cpp, cfa.as_ref(), 1.0);
-        Ok(Normalized { width: a.width, height: a.height, cpp, data: out, cfa })
+        let mut n = Normalized { width: a.width, height: a.height, cpp, data: out, cfa };
+        if lateral_ca && let Some(ca) = &self.opcodes.lateral_ca {
+            ca.correct_mosaic(&mut n);
+        }
+        Ok(n)
     }
 
     /// Full "raw → camera RGB" path: normalise, demosaic with `method`, apply `OpcodeList3`, then the default crop.

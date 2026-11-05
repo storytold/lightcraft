@@ -29,6 +29,13 @@ pub(crate) fn eligible(p: &Photo) -> bool {
 pub(crate) fn product_key(fingerprint: &str, p: &Photo) -> String {
     let mut h = Hasher128::new();
     h.str("lcdn").u64(u64::from(product::ALGORITHM)).str(fingerprint).str(&crate::media::content_key(p));
+    // An ILCE-7RM6 ARW develops its plain picture from a mosaic corrected for lateral CA (`lightcraft_raw::LateralCa`)
+    // since that correction moved before demosaic, whatever the photo record holds: every ARW's products (format
+    // `ARW`, or `RAW` with an .arw name as migrated from a Lightroom catalog) are re-made once rather than blended
+    // with the corrected picture (double red and blue edges at the corners).
+    if p.format.eq_ignore_ascii_case("ARW") || p.extension().eq_ignore_ascii_case("arw") {
+        h.str("lateral-ca-before-demosaic");
+    }
     h.finish().to_string()
 }
 
