@@ -355,16 +355,17 @@ fn luminance(c: [f64; 3]) -> f64 {
 /// changed then.
 pub fn mixer_neutral(m: &ChannelMixer, c: [f64; 3], calib: Option<[[f64; 3]; 3]>, mixer_rendered: bool) -> Result<(ChannelMixer, f64), &'static str> {
     let rows = m.rows().map(|r| r.map(|v| v.clamp(-200.0, 200.0) / 100.0));
-    if c.iter().any(|v| !(v.is_finite() && *v > 1e-6)) {
-        return Err(MIXER_NEUTRAL_ERROR);
-    }
     let mat = Mat3(rows);
     let u = mat.inverse().ok_or(MIXER_IMPOSSIBLE_ERROR)?.apply([1.0, 1.0, 1.0]);
     // the gains are g ∝ (M⁻¹ · 1) / c with c > 0: a non-positive (or not finite) component there
     // refuses every spot, whatever and wherever it is — a mixer-level refusal, before the spot is
-    // even looked at
+    // even looked at (so a dark spot under such a mixer is told to fix the mixer, not to pick again)
     if u.iter().any(|v| !(v.is_finite() && *v > 0.0)) {
         return Err(MIXER_IMPOSSIBLE_ERROR);
+    }
+    // the spot, before anything divides by it
+    if c.iter().any(|v| !(v.is_finite() && *v > 1e-6)) {
+        return Err(MIXER_NEUTRAL_ERROR);
     }
     // what the spot rendered as before the pick: the calibration over the mixer — or over the
     // mixer's input, when the mixer's own section was off and the render skipped it
@@ -600,6 +601,29 @@ mod tests {
             blue: MixRow { blue: 100.0, ..MixRow::default() },
         };
         assert!(mixer_neutral(&flip, red_cast, None, true).is_err(), "a negative gain is refused");
+    }
+
+    /// Issue #2158 review: a mixer no spot can fix says so even when the spot is also too dark — the
+    /// mixer-level refusal comes first, so the pick doesn't send someone off to pick a brighter area
+    /// that can't help; a usable mixer still refuses the dark spot itself.
+    #[test]
+    fn mixer_neutral_refuses_the_mixer_before_the_spot() {
+        use lightcraft_develop::{ChannelMixer, MixRow};
+        let same = MixRow { red: 100.0, green: 0.0, blue: 0.0 };
+        let singular = ChannelMixer { red: same, green: same, blue: same };
+        // no inverse, and an inverse with a negative gain: both mixer-level, whatever the spot
+        // M⁻¹ · 1 = (1, 1, −1)
+        let negative = ChannelMixer {
+            red: MixRow { red: 100.0, green: 0.0, blue: 0.0 },
+            green: MixRow { red: 0.0, green: 100.0, blue: 0.0 },
+            blue: MixRow { red: 100.0, green: 100.0, blue: 100.0 },
+        };
+        for (name, m) in [("singular", singular), ("negative gain", negative)] {
+            for spot in [[0.0, 0.0, 0.0], [1e-9, 0.2, 0.2], [f64::NAN, 0.2, 0.2], [0.3, 0.3, 0.3]] {
+                assert_eq!(mixer_neutral(&m, spot, None, true), Err(MIXER_IMPOSSIBLE_ERROR), "{name} at {spot:?}");
+            }
+        }
+        assert_eq!(mixer_neutral(&ChannelMixer::default(), [0.0, 0.0, 0.0], None, true), Err(MIXER_NEUTRAL_ERROR), "a black spot");
     }
 
     /// Issue #2158 review: the render clamps each mixer output channel at zero before the tone map
