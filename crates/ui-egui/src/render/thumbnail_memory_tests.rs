@@ -213,9 +213,9 @@ fn a_print_cell_keeps_its_thumbnail_through_the_grids_trims() {
 }
 
 // Given a Print cell whose thumbnail is still queued, and the grid trimming before it every frame
-// with its own window elsewhere, the cell's job stays where it is queued: dropped each frame, the
-// cell would ask again and wait at the back of the queue each time, and never get its turn behind
-// busy workers. Two frames after the last ask it goes like the rest.
+// with its own window elsewhere, the cell's job stays queued, the same one each frame: dropped by
+// each trim, the cell would build and ask for a new job every frame (a new request each time).
+// Two frames after the last ask it goes like the rest.
 #[test]
 fn the_trim_keeps_the_queued_thumbnail_of_a_photo_a_view_asked_for() {
     let (mut app, _ctx) = unreadable_library(3);
@@ -274,7 +274,7 @@ fn the_second_window_notes_the_photo_whose_thumbnail_it_falls_back_on() {
 }
 
 // Given thumbnails over their share of the budget, or more remembered failures than are kept, the
-// loupe trims them while stepping through photos, as the grid does while scrolling.
+// loupe trims them, as the grid does while scrolling.
 #[test]
 fn thumbnails_are_over_their_limit_by_bytes_or_by_remembered_failures() {
     let ctx = egui::Context::default();

@@ -1754,7 +1754,7 @@ impl Renderer {
     /// for again when it comes back on screen. None of it takes a photo something asked a
     /// thumbnail of in this frame or the last ([`Self::thumb_asked`]), its queued job included:
     /// the Print dialog's cells draw after the grid, which trims, and a cell whose job went would
-    /// ask again every frame, and wait at the back of the queue each time.
+    /// build and ask for a new one every frame.
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>) {
         self.evict_thumbs_within(keep, self.thumb_budget());
     }
