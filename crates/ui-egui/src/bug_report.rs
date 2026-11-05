@@ -134,7 +134,9 @@ fn hide_photo_names(text: &str) -> String {
         // `O'Brien.CR2`) until a name has been hidden there; after that it ends a word again
         let in_basename = after_path.is_some_and(|p| hidden_end <= p);
         // an apostrophe between letters is part of a word anywhere (`O'Brien.CR2`)
-        let in_word = c == '\'' && i > 0 && chars.get(i - 1).is_some_and(|(_, l)| l.is_alphanumeric())
+        let in_word = c == '\''
+            && i > 0
+            && chars.get(i - 1).is_some_and(|(_, l)| l.is_alphanumeric())
             && chars.get(i + 1).is_some_and(|(_, r)| r.is_alphanumeric());
         if c == '/' || c == '\\' {
             after_path = Some(next);
@@ -148,7 +150,10 @@ fn hide_photo_names(text: &str) -> String {
             let ext_len = chars.get(i + 1..).unwrap_or(&[]).iter().take_while(|(_, e)| e.is_ascii_alphanumeric()).count();
             let end = chars.get(i + 1 + ext_len).map_or(text.len(), |(b, _)| *b);
             let ext = text.get(next..end).unwrap_or("");
-            let start = after_path.unwrap_or(after_space).max(hidden_end).max(copied);
+            // a path's last name runs back to its separator; once a name there was hidden, a later
+            // name starts after the last space like any word
+            let base = after_path.filter(|p| hidden_end <= *p).unwrap_or(after_space);
+            let start = base.max(hidden_end).max(copied);
             let name = text.get(start..at).unwrap_or("");
             if !ext.is_empty() && is_photo_extension(ext) && !name.trim().is_empty() {
                 out.push_str(text.get(copied..start).unwrap_or(""));
@@ -422,10 +427,7 @@ mod tests {
         // never cuts inside a character
         assert_eq!(redact("写真/桜.jpg ✓", None), "写真/<photo>.jpg ✓");
         // punctuation inside a photo's name is part of it (#1128 review): the whole name is hidden
-        assert_eq!(
-            redact("import /Users/ann/Pictures/Private Client (1).CR2: no preview", home),
-            "import ~/Pictures/<photo>.CR2: no preview"
-        );
+        assert_eq!(redact("import /Users/ann/Pictures/Private Client (1).CR2: no preview", home), "import ~/Pictures/<photo>.CR2: no preview");
         assert_eq!(redact("/Users/ann/Wedding/[final].jpg", home), "~/Wedding/<photo>.jpg");
         assert_eq!(redact("/Users/ann/O'Brien.CR2 and O'Brien.CR2", home), "~/<photo>.CR2 and <photo>.CR2");
         assert_eq!(redact(r"C:\Users\ann\Smith, J. {2}.NEF", Some(r"C:\Users\ann")), r"~\<photo>.NEF");
