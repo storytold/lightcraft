@@ -322,6 +322,35 @@ pub fn check_gaps(md: &str) -> Vec<String> {
     problems
 }
 
+/// A doc whose header (the lines before its first `## ` heading) carries a `Last updated` date or a
+/// `Change` note: every PR that touches the doc would edit that one line and conflict with every
+/// other open PR. Changes go in the doc's `## Revision history` table instead.
+pub fn check_header(path: &str, md: &str) -> Option<String> {
+    let (i, _) = md
+        .lines()
+        .enumerate()
+        .take_while(|(_, l)| !l.starts_with("## "))
+        .find(|(_, l)| l.contains("**Last updated:**") || l.contains("**Change:**"))?;
+    Some(format!("{path}:{}: the header has a `Last updated` or `Change` field: add a row to the doc's revision history instead", i + 1))
+}
+
+fn check_headers(root: &Path) -> Result<Vec<String>, String> {
+    let mut files: Vec<String> = std::fs::read_dir(root.join("docs"))
+        .map_err(|e| format!("docs: {e}"))?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|n| n.ends_with(".md"))
+        .map(|n| format!("docs/{n}"))
+        .collect();
+    files.sort();
+    files.push("ROADMAP.md".into());
+    let mut problems = Vec::new();
+    for f in files {
+        let md = std::fs::read_to_string(root.join(&f)).map_err(|e| format!("{f}: {e}"))?;
+        problems.extend(check_header(&f, &md));
+    }
+    Ok(problems)
+}
+
 fn registry(what: &str) -> Result<BTreeSet<String>, String> {
     let out = crate::cargo()
         .args(["run", "-q", "-p", "lightcraft-cli", "--", what, "--json"])
@@ -348,6 +377,7 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
     });
     let gaps = std::fs::read_to_string(root.join(GAPS)).map_err(|e| format!("{GAPS}: {e}"))?;
     problems.extend(check_gaps(&gaps));
+    problems.extend(check_headers(root)?);
 
     let table = summary_table(&doc);
     println!("Lightroom parity ({DOC}): {} rows, {} references\n", doc.rows.len(), doc.refs.len());
@@ -470,6 +500,16 @@ old
         assert!(p[0].contains(":9: gap 2 is listed again (first at line 8)"), "{p:?}");
         assert!(p[1].contains(":11: gap 10 is listed again (first at line 10)"), "{p:?}");
         assert!(check_gaps("## Ranked\n\n| 1 | a |\n| 2 B | b |\n").is_empty());
+    }
+
+    #[test]
+    fn header_without_dates_or_change_notes() {
+        let ok = "# Doc\n\n> **Last reviewed:** 2026-10-10 · **Changes:** [revision history](#revision-history)\n\n## A\n\n**Change:** in the body is fine\n";
+        assert_eq!(check_header("docs/a.md", ok), None);
+        let dated = "# Doc\n\n> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05\n\n## A\n";
+        assert!(check_header("docs/a.md", dated).is_some_and(|p| p.starts_with("docs/a.md:3: ")));
+        let noted = "# Doc\n> **Change:** minor (x)\n";
+        assert!(check_header("docs/b.md", noted).is_some_and(|p| p.starts_with("docs/b.md:2: ")));
     }
 
     #[test]
