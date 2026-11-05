@@ -214,6 +214,9 @@ pub struct Renderer {
     offload_looks: HashMap<u64, (u64, bool)>,
     #[cfg(test)]
     failure_messages: Vec<String>,
+    /// The render decisions [`Self::decided`] logged.
+    #[cfg(test)]
+    decisions: Vec<String>,
     /// Request id of the pixels each interactive view (loupe, before, hover) shows: a draft that
     /// finishes after a newer request was made still replaces older pixels, so a long slider drag
     /// keeps updating the loupe instead of waiting for the drag to pause.
@@ -329,6 +332,8 @@ impl Renderer {
             offload_looks: HashMap::new(),
             #[cfg(test)]
             failure_messages: Vec::new(),
+            #[cfg(test)]
+            decisions: Vec::new(),
             shown_ids: HashMap::new(),
             epoch: 0,
             preview_generation: None,
@@ -597,6 +602,7 @@ impl Renderer {
         if !self.request_needed(slot, job.key, priority) {
             return;
         }
+        self.note_request(slot, job.key, priority, "requested", || render_subject(slot, job.photo, Some(&job.origin)));
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
         self.requests.insert(
@@ -664,18 +670,24 @@ impl Renderer {
                 });
                 if queued && let Some(p) = self.pending.get_mut(&slot) {
                     p.1 = priority;
+                    if logs_decisions() {
+                        let source = self.requests.get(&slot).and_then(|r| r.source.as_ref());
+                        let line = format!("{}: still waiting, moved to priority {priority}", render_subject(slot, job.photo, source));
+                        self.decided(|| line);
+                    }
                 }
             }
             return;
         }
         self.quick_tried.insert(slot, job.key);
-        self.pending.insert(slot, (job.key, priority));
-        job.request_id = lightcraft_preview::next_tick();
         let source = job
             .small
             .as_ref()
             .map(|job| job.origin.clone())
             .or_else(|| job.embedded.as_ref().map(|(path, _, _)| lightcraft_catalog::Source::File { path: path.clone() }));
+        self.note_request(slot, job.key, priority, "stand-in requested", || render_subject(slot, job.photo, source.as_ref()));
+        self.pending.insert(slot, (job.key, priority));
+        job.request_id = lightcraft_preview::next_tick();
         self.requests.insert(
             slot,
             Requested { look: job.small.as_ref().map(|j| (geometry_look(&j.settings), j.request.apply_crop)), id: job.request_id, source },
@@ -696,6 +708,7 @@ impl Renderer {
         if !self.request_needed(slot, key, priority) {
             return;
         }
+        self.note_request(slot, key, priority, "title screen requested", || format!("render {slot:?}"));
         self.pending.insert(slot, (key, priority));
         let request_id = lightcraft_preview::next_tick();
         self.requests.insert(slot, Requested { look: None, id: request_id, source: None });
@@ -710,6 +723,7 @@ impl Renderer {
             return;
         }
         self.prefetched.insert(slot, job.key);
+        self.note_request(slot, job.key, priority, "prefetch requested", || render_subject(slot, job.photo, Some(&job.origin)));
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
         self.requests.insert(
@@ -732,6 +746,7 @@ impl Renderer {
             return;
         }
         let gone = |s: &Slot| matches!(s, Slot::Slide(id) if !keep.contains(id));
+        self.abandon_pending(gone, "no longer near the slide shown");
         self.textures.retain(|s, _| !gone(s));
         let _ = self.pool.reprioritize(|s, p| if gone(s) { None } else { Some(p) });
         self.queue.retain(|q| !gone(&q.slot));
@@ -745,6 +760,7 @@ impl Renderer {
     /// Is a request for `slot` queued or running?
     /// Drop every texture and cached stage (another library was opened: photo ids changed meaning).
     pub fn forget_all(&mut self) {
+        self.abandon_pending(|_| true, "the renderer started over (another library, or the previews were cleared)");
         self.requests.clear();
         self.offload_looks.clear();
         self.shown_ids.clear();
@@ -1026,6 +1042,10 @@ impl Renderer {
             self.completed += 1;
             // made for another display profile than the one in use: obsolete
             if r.display.is_some_and(|id| Some(id) != self.display_id()) {
+                self.decided(|| {
+                    let source = session.catalog.photo(r.photo).map(|p| &p.source);
+                    format!("{}: abandoned, made for another display profile", render_subject(slot, r.photo, source))
+                });
                 continue;
             }
             // Ignore obsolete pixels, failures and decoded sources, even for the same render key;
@@ -1040,6 +1060,12 @@ impl Renderer {
                     && r.rendered.is_ok();
                 if !newer_draft {
                     self.discarded += 1;
+                    let replaced = self.requests.contains_key(&slot);
+                    self.decided(|| {
+                        let why = if replaced { "a newer request replaced it" } else { "no longer wanted when it finished" };
+                        let source = session.catalog.photo(r.photo).map(|p| &p.source);
+                        format!("{}: abandoned, {why}", render_subject(slot, r.photo, source))
+                    });
                     continue;
                 }
                 session.accept(&r);
@@ -1068,6 +1094,17 @@ impl Renderer {
             let rendered = match r.rendered {
                 Ok(x) => {
                     self.failed.remove(&slot);
+                    // (a stand-in that comes back after the thumbnail itself is thrown away below)
+                    let unused = matches!(slot, Slot::ThumbQuick(id) if self.textures.contains_key(&Slot::Thumb(id)));
+                    self.decided(|| {
+                        let source = source.as_ref().or_else(|| session.catalog.photo(r.photo).map(|p| &p.source));
+                        let subject = render_subject(slot, r.photo, source);
+                        if unused {
+                            format!("{subject}: abandoned, the thumbnail itself came first")
+                        } else {
+                            format!("{subject}: produced in {ms:.0} ms")
+                        }
+                    });
                     x
                 }
                 Err(e) => {
@@ -1077,6 +1114,9 @@ impl Renderer {
                         self.failure_messages.push(message.clone());
                         log::warn!("{message}");
                         self.failed.insert(slot, (r.key, e, self.catalog_rev, r.photo));
+                    } else {
+                        // (a prefetch only prepares: its failure is no warning, but the trace says how it ended)
+                        self.decided(|| format!("{}: prefetch failed: {e}", render_subject(slot, r.photo, source.as_ref())));
                     }
                     continue;
                 }
@@ -1235,19 +1275,24 @@ impl Renderer {
         });
         for s in dropped {
             self.pending.remove(&s);
-            self.requests.remove(&s);
+            let request = self.requests.remove(&s);
             self.quick_tried.remove(&s);
+            self.decided(|| abandoned_line(s, request.as_ref(), "scrolled out of view before it started"));
         }
+        let mut gone = Vec::new();
         let requests = &mut self.requests;
         let pending = &mut self.pending;
         self.queue.retain(|q| match q.slot {
             Slot::Thumb(id) if !keep.contains(&id) && q.priority <= 10 => {
                 pending.remove(&q.slot);
-                requests.remove(&q.slot);
+                gone.push((q.slot, requests.remove(&q.slot)));
                 false
             }
             _ => true,
         });
+        for (s, request) in gone {
+            self.decided(|| abandoned_line(s, request.as_ref(), "scrolled out of view before it started"));
+        }
         let thumbs = self.thumb_textures();
         if thumbs <= max {
             return;
@@ -1255,15 +1300,91 @@ impl Renderer {
         self.textures.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id)));
         self.quick_tried.retain(|s, _| !matches!(s, Slot::ThumbQuick(id) if !keep.contains(id)));
     }
+
+    /// Log a render decision at debug level: each request, and how it ended when it ended without
+    /// a picture or a failure (failures stay warnings). One "requested" line per request tells a
+    /// file asked for 37 times from one asked once and failing inside (issue #2682). `line` is only
+    /// built when the log takes debug lines (`LIGHTCRAFT_LOG=debug`, or
+    /// `RUST_LOG=lightcraft_ui_egui::render=debug`), so the grid's requests cost nothing more otherwise.
+    fn decided(&mut self, line: impl FnOnce() -> String) {
+        if !logs_decisions() {
+            return;
+        }
+        let line = line();
+        log::debug!("{line}");
+        #[cfg(test)]
+        self.decisions.push(line);
+    }
+
+    /// Log a new request for `slot`, and first what becomes of the one it replaces while that one
+    /// still waits: a queue holds one job per slot, so a newer render drops it, and the same render
+    /// is only moved to the new priority. One already running says so when its result comes back.
+    fn note_request(&mut self, slot: Slot, key: u64, priority: u32, what: &str, subject: impl FnOnce() -> String) {
+        if !logs_decisions() {
+            return;
+        }
+        let waiting = self.pending.get(&slot).map(|p| p.0).filter(|_| self.is_queued(slot));
+        if waiting == Some(key) {
+            let line = format!("{}: still waiting, moved to priority {priority}", subject());
+            self.decided(|| line);
+            return;
+        }
+        if waiting.is_some() {
+            let line = abandoned_line(slot, self.requests.get(&slot), "a newer request replaced it before it started");
+            self.decided(|| line);
+        }
+        let again = if self.failed.get(&slot).is_some_and(|f| f.0 == key) { " again after a failure" } else { "" };
+        let line = format!("{}: {what}{again}", subject());
+        self.decided(|| line);
+    }
+
+    /// Log each request in `which` that still waits in a queue as abandoned (`why`), before they are
+    /// dropped. One already running says so once, when its result comes back unclaimed.
+    fn abandon_pending(&mut self, which: impl Fn(&Slot) -> bool, why: &str) {
+        if !logs_decisions() {
+            return;
+        }
+        let mut slots: Vec<Slot> = self.pending.keys().copied().filter(|s| which(s) && self.is_queued(*s)).collect();
+        slots.sort_by_key(|s| format!("{s:?}"));
+        for s in slots {
+            let line = abandoned_line(s, self.requests.get(&s), why);
+            self.decided(|| line);
+        }
+    }
 }
 
-/// Include the source identity in diagnostics for every catalog-backed render slot (#1890).
-/// Debug-format paths so whitespace/control characters cannot forge another log entry.
-fn render_failure_message(slot: Slot, photo: PhotoId, source: Option<&lightcraft_catalog::Source>, error: &str) -> String {
+/// Whether render decisions are logged ([`Renderer::decided`]): the log takes debug lines from this
+/// module, or a test is looking.
+fn logs_decisions() -> bool {
+    cfg!(test) || log::log_enabled!(log::Level::Debug)
+}
+
+/// How the log names a render: its slot, its photo and that photo's source, for every
+/// catalog-backed render slot (#1890). Debug-format paths so whitespace/control characters cannot
+/// forge another log entry.
+fn render_subject(slot: Slot, photo: PhotoId, source: Option<&lightcraft_catalog::Source>) -> String {
     match source {
-        Some(lightcraft_catalog::Source::File { path }) => format!("render {slot:?}, {photo:?}, file {path:?}: {error}"),
-        Some(lightcraft_catalog::Source::Demo { scene }) => format!("render {slot:?}, {photo:?}, demo scene {scene}: {error}"),
-        None => format!("render {slot:?}, {photo:?}, source unavailable: {error}"),
+        Some(lightcraft_catalog::Source::File { path }) => format!("render {slot:?}, {photo:?}, file {path:?}"),
+        Some(lightcraft_catalog::Source::Demo { scene }) => format!("render {slot:?}, {photo:?}, demo scene {scene}"),
+        None => format!("render {slot:?}, {photo:?}, source unavailable"),
+    }
+}
+
+/// Include the source identity in diagnostics ([`render_subject`]).
+fn render_failure_message(slot: Slot, photo: PhotoId, source: Option<&lightcraft_catalog::Source>, error: &str) -> String {
+    format!("{}: {error}", render_subject(slot, photo, source))
+}
+
+/// The log line for a request dropped before its result came back, named by the source it was
+/// requested from. A grid slot names its photo; a view or slide slot shows whichever photo is open,
+/// so its file names it.
+fn abandoned_line(slot: Slot, request: Option<&Requested>, why: &str) -> String {
+    let source = request.and_then(|r| r.source.as_ref());
+    match (slot, source) {
+        (Slot::Thumb(id) | Slot::ThumbQuick(id), _) => format!("{}: abandoned, {why}", render_subject(slot, id, source)),
+        (_, Some(lightcraft_catalog::Source::File { path })) => format!("render {slot:?}, file {path:?}: abandoned, {why}"),
+        (_, Some(lightcraft_catalog::Source::Demo { scene })) => format!("render {slot:?}, demo scene {scene}: abandoned, {why}"),
+        (_, None) => format!("render {slot:?}: abandoned, {why}"),
     }
 }
 
