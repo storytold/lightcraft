@@ -46,21 +46,26 @@ pub use crate::dialogs::settings::slide_templates;
 pub use crate::dialogs::settings::slide_titles;
 use crate::theme::Tokens;
 
+/// A side panel the user resizes: which side, how it is drawn and how wide it may be.
+pub struct SidePanel<'a> {
+    /// the left side (else the right)
+    pub left: bool,
+    pub id: &'a str,
+    pub frame: egui::Frame,
+    /// the width the user chose
+    pub width: f32,
+    pub limits: crate::state::PanelWidth,
+    /// room to leave for what is beside the photo
+    pub reserve: f32,
+}
+
 /// Show a side panel the user resizes by dragging its inner edge. `width` (in [`crate::UiState`],
 /// so it survives navigation and restarts) is the source of truth: egui's own remembered size is
 /// dropped every frame, and a drag of the edge returns the new width to store. The panel never
 /// takes more than `available − reserve − MIN_PHOTO_WIDTH` (its minimum permitting), so the photo
 /// stays usable; a narrower window shrinks it without forgetting the chosen width.
-pub fn resizable_side(
-    ui: &mut egui::Ui,
-    left: bool,
-    id: &str,
-    frame: egui::Frame,
-    width: f32,
-    limits: crate::state::PanelWidth,
-    reserve: f32,
-    add: impl FnOnce(&mut egui::Ui),
-) -> Option<f32> {
+pub fn resizable_side(ui: &mut egui::Ui, side: SidePanel, add: impl FnOnce(&mut egui::Ui)) -> Option<f32> {
+    let SidePanel { left, id, frame, width, limits, reserve } = side;
     // `Panel::new` stores `IdSalt::new(id)`; the panel's persisted key is
     // `parent_ui.scope_id().with_salt(that_salt)`, which is exactly `scope_id().with(id)`.
     // (Passing an already-built `Id` through `Panel::left` would salt it a second time.)

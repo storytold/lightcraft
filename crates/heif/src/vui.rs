@@ -201,6 +201,11 @@ fn st_ref_pic_set(r: &mut Bits, idx: usize, num_delta_pocs: &[u32]) -> Option<u3
 fn parse_sps(rbsp: &[u8]) -> Option<Signal> {
     let r = &mut Bits { data: rbsp, pos: 0 };
     let (_, _, max_sub_layers_minus1) = sps_size(r)?;
+    parse_sps_parameters(r, max_sub_layers_minus1)?;
+    parse_vui(r)
+}
+
+fn parse_sps_parameters(r: &mut Bits<'_>, max_sub_layers_minus1: u32) -> Option<()> {
     if r.flag()? {
         for _ in 0..4 {
             r.ue()?; // conf_win_*_offset
@@ -253,6 +258,10 @@ fn parse_sps(rbsp: &[u8]) -> Option<Signal> {
         }
     }
     r.skip(2)?; // sps_temporal_mvp_enabled_flag, strong_intra_smoothing_enabled_flag
+    Some(())
+}
+
+fn parse_vui(r: &mut Bits<'_>) -> Option<Signal> {
     let mut signal = Signal::default();
     if !r.flag()? {
         return Some(signal); // no VUI

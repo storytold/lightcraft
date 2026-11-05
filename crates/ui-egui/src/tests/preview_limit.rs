@@ -588,7 +588,7 @@ mod in_the_loupe {
     // Given soft proofing against an output-device profile (rendered on the CPU even with a GPU), a
     // drag drafts small (#330); proofs into an output space run on the GPU like any render
     #[test]
-    fn a_soft_proofed_drag_drafts_small() {
+    fn a_drag_soft_proofed_to_a_device_profile_drafts_small() {
         // the GPU device up front (the loupe never waits for it): with one, this is the case where
         // the GPU is there and the render still goes to the CPU
         let _ = lightcraft_engine::gpu::available();
@@ -599,6 +599,24 @@ mod in_the_loupe {
         h.settle(SETTLE);
         let (main, small) = drag_exposure(&mut h);
         assert!(main <= small, "the draft is {main} px, a small one at most {small}");
+    }
+
+    // Given soft proofing into a colour space (the GPU renders it), a drag drafts as it does
+    // without the proof: at full size where the GPU draws the view (review of PR #1065: it
+    // drafted small, as if the proof went to the CPU)
+    #[test]
+    fn a_drag_soft_proofed_into_a_colour_space_drafts_full_size_on_the_gpu() {
+        let gpu = lightcraft_engine::gpu::available();
+        let (_fx, mut h, _) = detail();
+        assert_eq!(h.app.ui.proof.profile, 0, "a colour space, no device profile");
+        h.app.ui.soft_proof = true;
+        h.settle(SETTLE);
+        let (main, small) = drag_exposure(&mut h);
+        if !gpu {
+            lightcraft_testkit::skip!(Gpu, "no GPU: every drag drafts small");
+            return;
+        }
+        assert!(main > small, "the draft is {main} px, a small one would be at most {small}");
     }
 
     fn tile(h: &Headless, slot: Slot) -> Option<(usize, usize)> {
@@ -704,6 +722,217 @@ mod in_the_loupe {
         h.settle(SETTLE);
         let region = h.app.region_view.expect("the window arrives when the pinch is over");
         assert_eq!(region.full.0.max(region.full.1), native);
+    }
+
+    #[derive(Default)]
+    struct PinchWork {
+        jobs: Vec<(Slot, lightcraft_engine::media::RenderJob)>,
+        finished: Vec<(Slot, lightcraft_engine::media::RenderResult, f64)>,
+    }
+
+    struct PinchOffload(std::rc::Rc<std::cell::RefCell<PinchWork>>);
+
+    impl crate::render::RenderOffload for PinchOffload {
+        fn try_start(&mut self, slot: Slot, job: lightcraft_engine::media::RenderJob) -> Option<lightcraft_engine::media::RenderJob> {
+            self.0.borrow_mut().jobs.push((slot, job));
+            None
+        }
+
+        fn finished(&mut self) -> Vec<(Slot, lightcraft_engine::media::RenderResult, f64)> {
+            std::mem::take(&mut self.0.borrow_mut().finished)
+        }
+    }
+
+    // Complete the first pinch-step render only after later steps have superseded it. Running
+    // real jobs through the offload makes the worker order explicit without timing sleeps.
+    #[test]
+    fn pinch_display_fit_keeps_the_request_key_until_the_hold_expires() {
+        let (mut h, native) = demo_detail_in([1400.0, 900.0]);
+        assert!(h.settle(SETTLE), "the starting render must be complete");
+        let main = h.app.renderer.textures.get(&Slot::Main).unwrap();
+        let (original_key, original_size) = (main.key, main.size);
+        let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
+        h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
+        let at = h.app.canvas_rect.unwrap().center();
+        assert_eq!(h.request("ui.move", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+        let mut keys = std::collections::HashSet::new();
+        for _ in 0..40 {
+            assert_eq!(h.request("ui.zoom", json!({"factor": 1.08}), T)["ok"], true);
+            keys.insert(h.app.renderer.wanted(Slot::Main));
+            assert!(h.app.region_view.is_none());
+        }
+        let first = work.borrow().jobs.iter().position(|(slot, _)| *slot == Slot::Main);
+        if let Some(i) = first {
+            let (slot, job) = work.borrow_mut().jobs.remove(i);
+            let result = job.run();
+            assert!(result.rendered.is_ok());
+            work.borrow_mut().finished.push((slot, result, 0.0));
+            h.app.renderer.poll(&h.view.ctx, &mut h.app.session);
+        }
+        h.step();
+        let main = h.app.renderer.textures.get(&Slot::Main).unwrap();
+        assert_eq!(main.size, original_size, "the whole-frame render keeps its size even when workers finish during the pinch");
+        assert_eq!(keys, std::collections::HashSet::from([Some(original_key)]), "a held gesture must not schedule new fits");
+        for _ in 0..60 {
+            h.step();
+        }
+        // Finish the final requests at the chosen frame, without advancing time while they run.
+        let jobs = std::mem::take(&mut work.borrow_mut().jobs);
+        for (slot, job) in jobs {
+            let result = job.run();
+            assert!(result.rendered.is_ok());
+            work.borrow_mut().finished.push((slot, result, 0.0));
+        }
+        h.step();
+        let region = h.app.region_view.expect("the final window arrives after the hold expires");
+        assert_eq!(region.full.0.max(region.full.1), native);
+        assert_eq!(h.app.renderer.textures.get(&Slot::Region).unwrap().key, region.key);
+        assert!(!h.app.renderer.is_pending(Slot::Main) && !h.app.renderer.is_pending(Slot::Region));
+        assert_ne!(h.app.renderer.wanted(Slot::Main), Some(original_key));
+    }
+
+    fn complete_pinch_jobs(h: &mut Headless, work: &std::rc::Rc<std::cell::RefCell<PinchWork>>) {
+        let jobs = std::mem::take(&mut work.borrow_mut().jobs);
+        for (slot, job) in jobs {
+            let result = job.run();
+            assert!(result.rendered.is_ok());
+            work.borrow_mut().finished.push((slot, result, 0.0));
+        }
+        h.step();
+    }
+
+    fn drawn_fit(h: &Headless) -> (usize, usize) {
+        let rect = h.app.image_rect.unwrap();
+        let ppp = h.view.ctx.pixels_per_point();
+        ((rect.width() * ppp).round() as usize, (rect.height() * ppp).round() as usize)
+    }
+
+    #[test]
+    fn pinch_display_fit_refreshes_main_and_before_after_a_short_pinch() {
+        let (mut h, _) = demo_detail_in([1400.0, 900.0]);
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+        assert!(h.settle(SETTLE));
+        let slots = [Slot::Main, Slot::Before];
+        let keys = slots.map(|slot| h.app.renderer.wanted(slot).unwrap());
+        let initial_fit = drawn_fit(&h);
+        let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
+        h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
+        let at = h.app.image_rect.unwrap().center();
+        assert_eq!(h.request("ui.move", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+        for _ in 0..2 {
+            assert_eq!(h.request("ui.zoom", json!({"factor": 1.08}), T)["ok"], true);
+            assert_eq!(slots.map(|slot| h.app.renderer.wanted(slot).unwrap()), keys);
+        }
+        let final_fit = drawn_fit(&h);
+        assert!(final_fit.0 > initial_fit.0 && final_fit.1 > initial_fit.1, "the image still follows the gesture");
+        assert!(h.app.size_hold.holding(h.view.ctx.input(|i| i.time)));
+        assert!(work.borrow().jobs.iter().all(|(slot, _)| !slots.contains(slot)), "no new Main or Before job during the hold");
+        for _ in 0..20 {
+            h.step();
+        }
+        for slot in slots {
+            let work = work.borrow();
+            let jobs: Vec<_> = work.jobs.iter().filter(|(s, _)| *s == slot).collect();
+            assert_eq!(jobs.len(), 1, "one final render for {slot:?}");
+            assert_eq!(jobs[0].1.display_fit, Some(final_fit));
+        }
+        complete_pinch_jobs(&mut h, &work);
+        for slot in slots {
+            let tex = h.app.renderer.textures.get(&slot).unwrap();
+            assert!(tex.size[0].abs_diff(final_fit.0) <= 1 && tex.size[1].abs_diff(final_fit.1) <= 1, "{slot:?}: {:?} vs {final_fit:?}", tex.size);
+            assert!(!h.app.renderer.is_pending(slot));
+        }
+        assert!(h.app.region_view.is_none(), "a short pinch still fits in the whole-frame render");
+    }
+
+    #[test]
+    fn pinch_display_fit_does_not_follow_the_old_photo() {
+        let (mut h, _) = demo_detail_in([1400.0, 900.0]);
+        assert!(h.settle(SETTLE));
+        let old = h.app.session.active().unwrap();
+        let next = h.app.session.visible_cloned().into_iter().find(|id| *id != old).unwrap();
+        let initial_fit = drawn_fit(&h);
+        let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
+        h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
+        let at = h.app.image_rect.unwrap().center();
+        assert_eq!(h.request("ui.move", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+        assert_eq!(h.request("ui.zoom", json!({"factor": 1.08}), T)["ok"], true);
+        assert!(h.app.size_hold.holding(h.view.ctx.input(|i| i.time)));
+        assert_eq!(h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [next.0]}}), T)["ok"], true);
+        assert_eq!(h.app.session.active(), Some(next));
+        assert!(!h.app.size_hold.holding(h.view.ctx.input(|i| i.time)), "the new photo resets the hold");
+        let fit = drawn_fit(&h);
+        assert_ne!(fit, initial_fit, "the fixture must distinguish the two fits");
+        let job = work.borrow().jobs.iter().rev().find(|(slot, _)| *slot == Slot::Main).unwrap().1.clone();
+        assert_eq!(job.photo, next);
+        assert_eq!(job.display_fit, Some(fit));
+        complete_pinch_jobs(&mut h, &work);
+        assert_eq!(h.app.renderer.textures.get(&Slot::Main).unwrap().photo, next);
+    }
+
+    #[test]
+    fn pinch_display_fit_is_shared_with_a_hover_during_the_hold() {
+        let (mut h, _) = demo_detail_in([1400.0, 900.0]);
+        assert_eq!(h.request("engine.execute", json!({"command": "panel.profiles"}), T)["ok"], true);
+        assert!(h.settle(SETTLE));
+        let initial_fit = drawn_fit(&h);
+        let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
+        h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
+        let at = h.app.image_rect.unwrap().center();
+        assert_eq!(h.request("ui.move", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+        assert_eq!(h.request("ui.zoom", json!({"factor": 1.08}), T)["ok"], true);
+        assert_eq!(h.request("ui.hoverWidget", json!({"id": "profileCell:lc.vivid"}), T)["ok"], true);
+        assert!(h.app.size_hold.holding(h.view.ctx.input(|i| i.time)));
+        let job = work.borrow().jobs.iter().find(|(slot, _)| *slot == Slot::Hover).unwrap().1.clone();
+        assert_eq!(job.display_fit, Some(initial_fit), "hover uses the held Main fit");
+        complete_pinch_jobs(&mut h, &work);
+        let held_key = h.app.renderer.wanted(Slot::Hover).unwrap();
+        assert_eq!(h.app.loupe_shown.map(|shown| shown.1), Some("hover"));
+        for _ in 0..20 {
+            h.step();
+        }
+        let job = work.borrow().jobs.iter().rev().find(|(slot, _)| *slot == Slot::Hover).unwrap().1.clone();
+        assert_eq!(job.display_fit, Some(drawn_fit(&h)));
+        assert_ne!(job.key, held_key);
+        complete_pinch_jobs(&mut h, &work);
+        assert!(!h.app.renderer.is_pending(Slot::Hover));
+    }
+
+    #[test]
+    fn pinch_display_fit_keeps_edits_live_and_refits_changed_crop_geometry() {
+        let (mut h, _) = demo_detail_in([1400.0, 900.0]);
+        assert!(h.settle(SETTLE));
+        let initial_fit = drawn_fit(&h);
+        let initial_key = h.app.renderer.wanted(Slot::Main).unwrap();
+        let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
+        h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
+        let at = h.app.image_rect.unwrap().center();
+        assert_eq!(h.request("ui.move", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+        assert_eq!(h.request("ui.zoom", json!({"factor": 1.08}), T)["ok"], true);
+        for (control, value) in [("light.exposure", 0.75), ("crop.angle", -30.0)] {
+            assert_eq!(h.request("engine.execute", json!({"command": "develop.set", "params": {"control": control, "value": value}}), T)["ok"], true);
+        }
+        assert!(h.app.size_hold.holding(h.view.ctx.input(|i| i.time)));
+        let job = work.borrow().jobs.iter().rev().find(|(slot, _)| *slot == Slot::Main).unwrap().1.clone();
+        assert_eq!(job.settings.light.exposure, 0.75);
+        assert_eq!(job.settings.crop.geometry.angle, -30.0);
+        assert!(job.request.apply_crop);
+        assert_ne!(job.key, initial_key, "holding sizes does not suppress edits");
+        assert_eq!(job.display_fit, Some(initial_fit));
+        complete_pinch_jobs(&mut h, &work);
+        let final_fit = drawn_fit(&h);
+        assert_ne!(final_fit, initial_fit);
+        for _ in 0..20 {
+            h.step();
+        }
+        let job = work.borrow().jobs.iter().rev().find(|(slot, _)| *slot == Slot::Main).unwrap().1.clone();
+        assert_eq!(job.display_fit, Some(final_fit));
+        assert_eq!(job.settings.light.exposure, 0.75);
+        assert_eq!(job.settings.crop.geometry.angle, -30.0);
+        let key = job.key;
+        complete_pinch_jobs(&mut h, &work);
+        assert_eq!(h.app.renderer.textures.get(&Slot::Main).unwrap().key, key);
+        assert!(!h.app.renderer.is_pending(Slot::Main));
     }
 
     // Given a picture on screen that is not the frame (an unsupported raw's embedded JPEG cropped
@@ -840,6 +1069,72 @@ mod in_the_loupe {
         }
     }
 
+    fn drag_first_window(h: &mut Headless, work: &Rc<RefCell<OffloadWork>>, id: lightcraft_catalog::PhotoId) -> RenderJob {
+        let first = next_region_job(h, work);
+        let view = h.app.region_view.expect("Detail asked for a window");
+        assert_eq!(view.photo, id);
+        assert_eq!(view.full, (WIDTH as usize, HEIGHT as usize), "at 400 % the window's frame is the photo's own pixels");
+        assert!(view.window.w >= 1300 && view.window.h >= 700, "the window covers the canvas: {:?}", view.window);
+        assert!(view.window.x + view.window.w <= view.full.0 && view.window.y + view.window.h <= view.full.1, "inside the frame: {:?}", view.window);
+        assert_eq!(first.request.window, Some(view.window), "the job is the window on screen");
+        assert_eq!((first.request.max_w, first.request.max_h), view.full, "the job renders the frame the view uses");
+        assert_eq!(first.request.quality, lightcraft_pipeline::Quality::Draft, "a drag drafts the window");
+        assert_eq!(first.level, SourceLevel::Full);
+        assert!(matches!(&first.source, SourceRef::File { .. }), "the first window decodes the real file");
+        assert_ne!(first.request_id, 0, "the renderer gave the request its own identity");
+        first
+    }
+
+    /// An edit during the first decode waits; the first result is accepted with its original.
+    fn drag_accepts_first_original(
+        h: &mut Headless,
+        work: &Rc<RefCell<OffloadWork>>,
+        id: lightcraft_catalog::PhotoId,
+        first: RenderJob,
+    ) -> (u64, u64) {
+        // An edit changes the desired window key while the first original is still held.
+        // Detail must defer a second decode until this first result has populated the cache.
+        let (first_key, first_request) = (first.key, first.request_id);
+        let reply = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
+        assert_eq!(reply["ok"], true);
+        h.step();
+        assert!(work.borrow().jobs.is_empty(), "a changed window waits for the first original");
+        assert_eq!(h.app.renderer.wanted(Slot::Region), Some(first_key));
+        assert_eq!(h.app.session.memory_report().full_source.bytes, 0);
+
+        deliver(work, Slot::Region, first.run());
+        h.step();
+        assert!(h.app.region_view.is_some());
+        assert_eq!(h.app.renderer.textures.get(&Slot::Region).map(|t| t.key), Some(first_key), "the first window arrived");
+        assert!(h.app.session.memory_report().full_source.bytes >= WIDTH as usize * HEIGHT as usize * 3 * 4);
+        assert!(h.app.session.media.has_source(id, SourceLevel::Full), "the original was accepted before any supersession");
+        (first_key, first_request)
+    }
+
+    fn drag_later_windows_reuse_original(h: &mut Headless, work: &Rc<RefCell<OffloadWork>>, first: (u64, u64), discarded: u64) {
+        let (first_key, first_request) = first;
+        let second = next_region_job(h, work);
+        let (second_key, second_request) = (second.key, second.request_id);
+        assert_ne!(second_key, first_key);
+        assert_ne!(second_request, first_request);
+        assert_eq!(h.app.renderer.wanted(Slot::Region), Some(second_key), "the newer window is pending");
+        assert!(matches!(&second.source, SourceRef::Loaded(_)), "the newer window reuses the accepted original");
+
+        let reply = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 1.0}}), T);
+        assert_eq!(reply["ok"], true);
+        let third = next_region_job(h, work);
+        assert_ne!(third.key, second_key);
+        assert_eq!(h.app.renderer.wanted(Slot::Region), Some(third.key));
+
+        deliver(work, Slot::Region, second.run());
+        h.step();
+        assert_eq!(h.app.renderer.textures.get(&Slot::Region).map(|t| t.key), Some(second_key), "the superseded draft still reached the screen");
+        assert_eq!(h.app.renderer.wanted(Slot::Region), Some(third.key), "the newest request is still pending");
+        assert_eq!(h.app.renderer.discarded, discarded, "the superseded draft was accepted, not discarded");
+        assert!(h.app.session.memory_report().full_source.bytes >= WIDTH as usize * HEIGHT as usize * 3 * 4);
+        assert!(matches!(&third.source, SourceRef::Loaded(_)), "the pending window still reuses the original");
+    }
+
     // Given a 400 % view of a real 24 MP photo, when the first window is decoded and accepted and
     // later drag ticks supersede each other, then the original stays in the cache and every later
     // window is cut from it. The first accepted result is the actual Detail wiring's job: the
@@ -856,57 +1151,9 @@ mod in_the_loupe {
         let discarded = h.app.renderer.discarded;
         h.app.ui.zoom = crate::state::Zoom::Percent(400.0);
         h.app.session.begin_interaction("Exposure").expect("a drag");
-
-        let first = next_region_job(&mut h, &work);
-        let (first_key, first_request) = (first.key, first.request_id);
-        let view = h.app.region_view.expect("Detail asked for a window");
-        assert_eq!(view.photo, id);
-        assert_eq!(view.full, (WIDTH as usize, HEIGHT as usize), "at 400 % the window's frame is the photo's own pixels");
-        assert!(view.window.w >= 1300 && view.window.h >= 700, "the window covers the canvas: {:?}", view.window);
-        assert!(view.window.x + view.window.w <= view.full.0 && view.window.y + view.window.h <= view.full.1, "inside the frame: {:?}", view.window);
-        assert_eq!(first.request.window, Some(view.window), "the job is the window on screen");
-        assert_eq!((first.request.max_w, first.request.max_h), view.full, "the job renders the frame the view uses");
-        assert_eq!(first.request.quality, lightcraft_pipeline::Quality::Draft, "a drag drafts the window");
-        assert_eq!(first.level, SourceLevel::Full);
-        assert!(matches!(&first.source, SourceRef::File { .. }), "the first window decodes the real file");
-        assert_ne!(first_request, 0, "the renderer gave the request its own identity");
-
-        // An edit changes the desired window key while the first original is still held.
-        // Detail must defer a second decode until this first result has populated the cache.
-        let reply = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), T);
-        assert_eq!(reply["ok"], true);
-        h.step();
-        assert!(work.borrow().jobs.is_empty(), "a changed window waits for the first original");
-        assert_eq!(h.app.renderer.wanted(Slot::Region), Some(first_key));
-        assert_eq!(h.app.session.memory_report().full_source.bytes, 0);
-
-        deliver(&work, Slot::Region, first.run());
-        h.step();
-        assert!(h.app.region_view.is_some());
-        assert_eq!(h.app.renderer.textures.get(&Slot::Region).map(|t| t.key), Some(first_key), "the first window arrived");
-        assert!(h.app.session.memory_report().full_source.bytes >= WIDTH as usize * HEIGHT as usize * 3 * 4);
-        assert!(h.app.session.media.has_source(id, SourceLevel::Full), "the original was accepted before any supersession");
-
-        let second = next_region_job(&mut h, &work);
-        let (second_key, second_request) = (second.key, second.request_id);
-        assert_ne!(second_key, first_key);
-        assert_ne!(second_request, first_request);
-        assert_eq!(h.app.renderer.wanted(Slot::Region), Some(second_key), "the newer window is pending");
-        assert!(matches!(&second.source, SourceRef::Loaded(_)), "the newer window reuses the accepted original");
-
-        let reply = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 1.0}}), T);
-        assert_eq!(reply["ok"], true);
-        let third = next_region_job(&mut h, &work);
-        assert_ne!(third.key, second_key);
-        assert_eq!(h.app.renderer.wanted(Slot::Region), Some(third.key));
-
-        deliver(&work, Slot::Region, second.run());
-        h.step();
-        assert_eq!(h.app.renderer.textures.get(&Slot::Region).map(|t| t.key), Some(second_key), "the superseded draft still reached the screen");
-        assert_eq!(h.app.renderer.wanted(Slot::Region), Some(third.key), "the newest request is still pending");
-        assert_eq!(h.app.renderer.discarded, discarded, "the superseded draft was accepted, not discarded");
-        assert!(h.app.session.memory_report().full_source.bytes >= WIDTH as usize * HEIGHT as usize * 3 * 4);
-        assert!(matches!(&third.source, SourceRef::Loaded(_)), "the pending window still reuses the original");
+        let first = drag_first_window(&mut h, &work, id);
+        let keys = drag_accepts_first_original(&mut h, &work, id, first);
+        drag_later_windows_reuse_original(&mut h, &work, keys, discarded);
     }
 
     // The collector's accept branch on its own: a superseded window result still carries the
@@ -982,7 +1229,7 @@ mod in_the_loupe {
             .iter()
             .enumerate()
             .filter_map(|(i, c)| match &c.shape {
-                egui::epaint::Shape::Mesh(m) if m.texture_id == tex.tex.id() => Some((i, c.clip_rect, m.calc_bounds())),
+                egui::epaint::Shape::Mesh(m) if m.texture_id == tex.id() => Some((i, c.clip_rect, m.calc_bounds())),
                 _ => None,
             })
             .collect()
@@ -1043,6 +1290,38 @@ mod in_the_loupe {
         assert!(window[0].1.right() >= canvas.right() - 0.5, "the Before window stops at the wipe line: {:?}", window[0].1);
     }
 
+    // Given Before and After side by side at 1:1 with `\` held, the After pane is still the view
+    // shown: a Before window drawn while the After pane shows a stand-in does not make the loupe
+    // say the render is on screen
+    #[test]
+    fn holding_backslash_side_by_side_the_before_window_is_not_the_shown_render() {
+        let (_fx, mut h, _) = detail_in([1800.0, 900.0]);
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        h.events.push(egui::Event::Key {
+            key: egui::Key::Backslash,
+            physical_key: Some(egui::Key::Backslash),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.settle(SETTLE);
+        // (the key's own shortcut switches to the Before view; side by side is chosen again with the key down)
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+        h.settle(SETTLE);
+        assert!(h.app.renderer.textures.contains_key(&Slot::RegionBefore), "the Before window is rendered");
+        // the After pane back to a stand-in: no whole-frame render and no window of its own
+        h.app.renderer.textures.remove(&Slot::Main);
+        h.app.renderer.textures.remove(&Slot::Region);
+        h.step();
+        assert!(!drawn(&h, Slot::RegionBefore).is_empty(), "the Before window is painted");
+        // (the step must not bring the After pane's render back, or the check below proves nothing)
+        assert!(!h.app.renderer.textures.contains_key(&Slot::Main), "the whole-frame render came back during the step");
+        assert!(!h.app.renderer.textures.contains_key(&Slot::Region), "the After window came back during the step");
+        assert_ne!(h.app.loupe_shown.map(|l| l.1), Some("render"), "the After pane shows a stand-in, not the render");
+    }
+
     // Given Before and After side by side at 1:1, each window is painted inside its own pane: its
     // margin (a window is wider than what its pane shows) does not spill into the neighbour
     #[test]
@@ -1050,6 +1329,33 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail_in([1800.0, 900.0]);
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        h.step();
+        let canvas = h.app.canvas_rect.unwrap();
+        let (before, after) = (drawn(&h, Slot::RegionBefore), drawn(&h, Slot::Region));
+        assert!(!before.is_empty() && !after.is_empty());
+        assert!(before.iter().all(|(_, clip, _)| clip.right() <= canvas.center().x), "the Before window spills into the After pane: {before:?}");
+        assert!(after.iter().all(|(_, clip, _)| clip.left() >= canvas.center().x), "the After window spills into the Before pane: {after:?}");
+    }
+
+    // Given Before and After side by side at 1:1 with `\` held, both panes stay, so each window
+    // stays clipped to its own pane: the Before window's margin does not cover the After pane
+    #[test]
+    fn holding_backslash_side_by_side_keeps_each_window_in_its_pane() {
+        let (_fx, mut h, _) = detail_in([1800.0, 900.0]);
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+        h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+        h.settle(SETTLE);
+        h.events.push(egui::Event::Key {
+            key: egui::Key::Backslash,
+            physical_key: Some(egui::Key::Backslash),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.settle(SETTLE);
+        // (the key's own shortcut switches to the Before view; side by side is chosen again with the key down)
+        h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.settle(SETTLE);
         h.step();
         let canvas = h.app.canvas_rect.unwrap();
@@ -1335,4 +1641,17 @@ mod in_the_loupe {
         let after = h.app.compare_windows[1].expect("a window for the new look");
         assert_ne!(after.settings, before.settings);
     }
+}
+
+// Build Standard-Sized Previews on Automatic: the loupe's size once one was drawn (the engine's standard), the
+// standard 2560 px in a fresh session, not the engine's 2048 px minimum a fit view would render again over
+// (CodeRabbit on #3077); a chosen limit as is
+#[test]
+fn standard_build_keeps_the_standard_size_before_a_loupe_was_drawn() {
+    use crate::menubar::standard_build_params;
+    use serde_json::json;
+    assert_eq!(standard_build_params(&with_limit(0), 0), json!({"size": "standard", "edge": STANDARD_PREVIEW_EDGE}));
+    assert_eq!(standard_build_params(&with_limit(0), 2400), json!({"size": "standard"}));
+    assert_eq!(standard_build_params(&with_limit(3840), 0), json!({"size": "standard", "edge": 3840}));
+    assert_eq!(standard_build_params(&with_limit(3840), 2400), json!({"size": "standard", "edge": 3840}));
 }

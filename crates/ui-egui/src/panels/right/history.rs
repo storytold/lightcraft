@@ -1,4 +1,4 @@
-use super::*;
+use super::{Align2, Icon, LightcraftApp, PhotoId, Rect, Sense, Tokens, header, json, padded, paint, pos2, register, text_button, vec2};
 
 pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
@@ -42,7 +42,7 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
             if let Some(job) = app.session.variant_job(id, &v.settings, 160)
                 && let Some(tex) = app.renderer.variant(job)
             {
-                ui.painter().image(tex.tex.id(), tr, crate::panels::presets::cover_uv(tr, tex.size), egui::Color32::WHITE);
+                ui.painter().image(tex.id(), tr, crate::panels::presets::cover_uv(tr, tex.size), egui::Color32::WHITE);
             }
             let x = tr.right() + 10.0;
             ui.painter().with_clip_rect(r.with_max_x(r.right() - 24.0)).text(

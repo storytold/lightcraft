@@ -1,5 +1,5 @@
 use super::prefs::config_dir;
-use super::*;
+use super::window_gpu;
 
 /// The window's renderer (egui-wgpu): eframe's defaults, with LightCraft's backend choice — DX12
 /// alone on Windows unless `LIGHTCRAFT_GPU_BACKEND` / `WGPU_BACKEND` say otherwise (issue #136:

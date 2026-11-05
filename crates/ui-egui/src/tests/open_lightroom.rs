@@ -22,8 +22,16 @@ fn names(dir: &std::path::Path) -> Vec<std::ffi::OsString> {
     v
 }
 
-#[test]
-fn open_library_on_a_lightroom_catalog_offers_its_import() {
+struct Fx {
+    dir: std::path::PathBuf,
+    lib: std::path::PathBuf,
+    lr: std::path::PathBuf,
+    lrcat: std::path::PathBuf,
+    before: Vec<std::ffi::OsString>,
+    photos: usize,
+}
+
+fn setup() -> (Headless, Fx) {
     let dir = std::env::temp_dir().join(format!("lc-ui-openlrcat-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let lib = dir.join("LightCraft Library");
@@ -52,7 +60,12 @@ fn open_library_on_a_lightroom_catalog_offers_its_import() {
     };
     let mut h = Headless::new(LightcraftApp::new(session, services), [1200.0, 800.0], 1.0);
     h.step();
+    (h, Fx { dir, lib, lr, lrcat, before, photos })
+}
 
+fn offer_and_cancel(h: &mut Headless, fx: &Fx) {
+    let Fx { lib, lr, lrcat, before, photos, .. } = fx;
+    let (photos, lib, lr, lrcat, before) = (*photos, lib.clone(), lr.clone(), lrcat.clone(), before.clone());
     // File ▸ Open Library…, the Lightroom folder chosen in the folder dialog
     let r = h.app.run("app.openLibrary", json!({})).unwrap();
     assert_eq!(r["opened"], false, "{r}");
@@ -64,7 +77,7 @@ fn open_library_on_a_lightroom_catalog_offers_its_import() {
         "{:?}",
         h.app.ui.dialog
     );
-    assert!(has(&h, "button:dialogOk") && has(&h, "button:dialogCancel"));
+    assert!(has(h, "button:dialogOk") && has(h, "button:dialogCancel"));
     // the library open before is still open, and nothing was made in Lightroom's folder
     assert_eq!(h.app.session.library.as_ref().map(|l| l.dir.clone()), Some(lib.clone()));
     assert_eq!(h.app.session.catalog.len(), photos);
@@ -79,7 +92,10 @@ fn open_library_on_a_lightroom_catalog_offers_its_import() {
     h.step();
     assert!(h.app.ui.dialog.is_none());
     assert!(h.app.lightroom.is_none() && h.app.lightroom_last.is_none());
+}
 
+fn reoffer_import_and_merge(h: &mut Headless, fx: &Fx) {
+    let (lib, lr, lrcat, before) = (fx.lib.clone(), fx.lr.clone(), fx.lrcat.clone(), fx.before.clone());
     // a previews folder given by path (control channel, agents): the same offer
     let r = h.app.run("app.openLibrary", json!({"path": lr.join("Lightroom Catalog Previews.lrdata").to_string_lossy()})).unwrap();
     assert_eq!(r["lightroomCatalog"], json!(lrcat.to_string_lossy()), "{r}");
@@ -108,6 +124,13 @@ fn open_library_on_a_lightroom_catalog_offers_its_import() {
     assert_eq!(last["path"], json!(lrcat), "{last}");
     assert_eq!(h.app.session.library.as_ref().map(|l| l.dir.clone()), Some(lib.clone()));
     assert_eq!(names(&lr), before, "the catalog is only read");
+}
+
+#[test]
+fn open_library_on_a_lightroom_catalog_offers_its_import() {
+    let (mut h, fx) = setup();
+    offer_and_cancel(&mut h, &fx);
+    reoffer_import_and_merge(&mut h, &fx);
     drop(h);
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&fx.dir);
 }
