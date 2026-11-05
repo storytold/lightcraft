@@ -108,7 +108,7 @@ fn luma(img: &Rgba8, i: usize) -> f64 {
     (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0
 }
 
-/// Match the CPU geometry test's exclusion of differences at the 8-bit dither floor.
+/// A difference between two renders, without the one level of 8-bit dither any pixel can differ by.
 fn above_dither(d: f64) -> f64 {
     (d - 1.5).max(0.0)
 }
