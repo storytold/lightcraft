@@ -166,11 +166,15 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
     })
 }
 
-/// Bytes held by the engine's caches and the renderer's (`ui.inspect` → `memory`).
+/// Bytes held by the engine's caches and the renderer's (`ui.inspect` → `memory`), and what the
+/// grid's thumbnails hold against the share of the budget they are limited to.
 pub fn memory(app: &LightcraftApp) -> Value {
     let mut v = serde_json::to_value(app.session.memory_report()).unwrap_or_default();
     if let (Some(o), Value::Object(r)) = (v.as_object_mut(), app.renderer.memory()) {
         o.extend(r);
+    }
+    if let Some(o) = v.as_object_mut() {
+        o.insert("thumbnails".into(), app.renderer.thumbnail_memory());
     }
     v
 }

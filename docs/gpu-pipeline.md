@@ -450,8 +450,11 @@ view shows a GPU-resident draft reads that texture back for the picture (`Screen
 A view's stages keep an uploaded source only up to 96 MB (a Preview-level source); a bigger one (the original a zoom window is cut from) is kept once, outside the views' stages, for all views of the photo (the Before and After windows and every pan share it; the Before window of a Before/After waits at first open until the After's job has handed the original over, or each would decode and upload its own copy) and given back when the app idles with no zoom window on screen (a zoomed view keeps it for its next pan: a 64 MP original is 800 MB to upload again; issue #323: kept per view it counted against the stage budget on every tick of a drag, and not kept every new window uploaded 288 MB again).
 - `library.memory` reports what the engine's caches hold (decoded thumbnail / preview / full-size
   sources, rendered previews) and the GPU renderer's device buffers (allocated, of which pooled
-  and retired); `ui.inspect` → `memory` adds the loupe's stage caches (CPU images, GPU buffers)
-  and the textures.
+  and retired), and beside them the `catalog`: how many photos it holds and the least their
+  records take, which no share of the budget limits. `ui.inspect` → `memory` adds the loupe's
+  stage caches (CPU images, GPU buffers), the textures, and the grid's `thumbnails`: how many
+  pictures, their bytes, the limit they are held to (a quarter of the memory budget) and the
+  failures remembered (past 1,024 those of photos off screen are dropped).
 - Heap profile: build `lightcraft-cli` with `--features dhat-heap`; `library.memory` then also
   reports live/peak heap bytes and the run writes `dhat-heap.json` (`LIGHTCRAFT_DHAT_FILE`), whose
   allocation sites at the peak (`t-gmax`) show who holds the memory.

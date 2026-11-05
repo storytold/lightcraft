@@ -457,7 +457,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     });
     app.caches.grid_stats.cells_visited += visited;
-    app.renderer.evict_thumbs(&visible_ids, 600);
+    app.renderer.evict_thumbs(&visible_ids);
     let _ = (Color32::BLACK, StrokeKind::Inside, Stroke::NONE);
 }
 
