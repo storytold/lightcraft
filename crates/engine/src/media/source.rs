@@ -398,15 +398,17 @@ pub struct ProbeInfo {
     pub preview_only: Option<String>,
     /// How the stored image is turned into the oriented one `width × height` describes (the
     /// file's EXIF orientation, as the decoder applies it); `None` when not known. Lightroom's
-    /// saved Upright matrices are in the stored frame ([`crate::crs::SavedUpright`]).
-    pub orientation: Option<lightcraft_geom::Orientation>,
+    /// saved Upright matrices are in the stored frame ([`crate::crs::SavedUpright`]). Unlike
+    /// [`Self::orientation`] (what the file states, for face regions), it is known for every
+    /// file the decoder reads.
+    pub frame_orientation: Option<lightcraft_geom::Orientation>,
 }
 
 impl ProbeInfo {
     /// The stored image's frame: its orientation and its size before that orientation, when both
     /// are known (see [`crate::sidecar::SidecarData::set_frame`]).
     pub fn stored_frame(&self) -> Option<crate::sidecar::StoredFrame> {
-        crate::sidecar::StoredFrame::of_shown(self.orientation?, f64::from(self.width), f64::from(self.height))
+        crate::sidecar::StoredFrame::of_shown(self.frame_orientation?, f64::from(self.width), f64::from(self.height))
     }
 }
 

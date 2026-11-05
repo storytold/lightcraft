@@ -76,7 +76,7 @@ fn frame_bytes(bytes: &[u8]) -> Result<ProbeInfo, String> {
             }
             Err(Ok(_)) => {
                 let (width, height, orientation) = super::preview::embedded_preview_frame(bytes).ok_or("raw without a usable preview")?;
-                return Ok(ProbeInfo { width, height, orientation: Some(orientation), ..Default::default() });
+                return Ok(ProbeInfo { width, height, frame_orientation: Some(orientation), ..Default::default() });
             }
             Err(Err(e)) => return Err(e),
         }
@@ -87,7 +87,7 @@ fn frame_bytes(bytes: &[u8]) -> Result<ProbeInfo, String> {
     if orientation.swaps_axes() {
         std::mem::swap(&mut width, &mut height);
     }
-    Ok(ProbeInfo { width, height, orientation: Some(orientation), ..Default::default() })
+    Ok(ProbeInfo { width, height, frame_orientation: Some(orientation), ..Default::default() })
 }
 
 #[cfg(test)]

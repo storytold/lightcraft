@@ -114,7 +114,7 @@ impl FrameProbes {
                 let mut frames = cache.frames.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Keep geometry only, even when a custom host supplied its full import probe.
                 // Entries belong to catalogued sources and are dropped on a library switch.
-                let geometry = ProbeInfo { width: info.width, height: info.height, orientation: info.orientation, ..Default::default() };
+                let geometry = ProbeInfo { width: info.width, height: info.height, frame_orientation: info.frame_orientation, ..Default::default() };
                 frames.insert(path.to_string(), (stamp, geometry));
             }
             Ok(info)

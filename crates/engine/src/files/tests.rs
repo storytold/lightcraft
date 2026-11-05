@@ -1880,7 +1880,7 @@ fn review_rotated_preview_orientation_wins_over_the_raw() {
     assert_eq!(lightcraft_meta::extract(&bytes).orientation, Some(Orientation::Rotate90));
     let probe = probe_bytes("rotated.cr3", &bytes).unwrap();
     assert!(probe.preview_only.is_some());
-    assert_eq!(probe.orientation, Some(Orientation::Rotate270));
+    assert_eq!(probe.frame_orientation, Some(Orientation::Rotate270));
     assert_eq!((probe.width, probe.height), (32, 48));
     let (image, _) = load_bytes(&bytes, usize::MAX).unwrap();
     assert_eq!((image.width, image.height), (32, 48));
