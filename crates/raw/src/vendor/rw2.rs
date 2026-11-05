@@ -122,6 +122,12 @@ const LINEARITY_LIMIT: [u16; 3] = [0x000e, 0x000f, 0x0010];
 const ISO: u16 = 0x0017;
 const BLACK_RGB: [u16; 3] = [0x001c, 0x001d, 0x001e];
 const WB_RGB: [u16; 3] = [0x0024, 0x0025, 0x0026];
+/// `ColorTempKelvin`: the shot's absolute colour temperature, in kelvin.
+const COLOR_TEMP_KELVIN: u16 = 0x0027;
+/// `WBType1`..`WBType7`: the names of the seven in-camera white-balance presets.
+const WB_TYPE: [u16; 7] = [0x0028, 0x0029, 0x002a, 0x002b, 0x002c, 0x0033, 0x0034];
+/// `WB_RGBLevels1`..`WB_RGBLevels7`: each preset's R/G/B levels, as three `u16`.
+const WB_LEVELS: [u16; 7] = [0x0035, 0x0036, 0x0038, 0x0042, 0x0049, 0x004a, 0x004b];
 const RAW_FORMAT: u16 = 0x002d;
 /// The in-camera aspect-ratio crop: top, left, bottom, right in sensor coordinates.
 const CROP: [u16; 4] = [0x002f, 0x0030, 0x0031, 0x0032];
@@ -543,6 +549,40 @@ fn cfa(code: u16) -> Cfa {
     })
 }
 
+/// The colour temperature a white-balance preset name denotes (kelvin). Panasonic writes the
+/// preset name (`WBType1`..`WBType7`) but not its temperature: the camera maps each name to a
+/// fixed colour temperature, so the seven presets become points on a Kelvin curve.
+fn wb_type_kelvin(name: &str) -> Option<f32> {
+    Some(match name {
+        n if n.eq_ignore_ascii_case("Tungsten") => 2850.0,
+        n if n.eq_ignore_ascii_case("Warm White") => 3200.0,
+        n if n.eq_ignore_ascii_case("White Fluorescent") => 4000.0,
+        n if n.eq_ignore_ascii_case("Daylight") => 5000.0,
+        n if n.eq_ignore_ascii_case("Sunlight") => 5600.0,
+        n if n.eq_ignore_ascii_case("Cloudy") => 6500.0,
+        n if n.eq_ignore_ascii_case("Shade") => 7500.0,
+        _ => return None,
+    })
+}
+
+/// The seven in-camera white-balance presets as points on a Kelvin curve: each preset's name
+/// maps to its temperature ([`wb_type_kelvin`]) and its `WB_RGBLevels` tag holds its R/G/B
+/// levels. Presets without a recognised name or usable levels are skipped; the rest are sorted
+/// by temperature ([`crate::kelvin_presets::KelvinPresets::from_unordered`]), so the tag order
+/// does not matter.
+fn wb_kelvin_presets(ifd: &Ifd) -> Option<crate::kelvin_presets::KelvinPresets> {
+    let mut points = Vec::with_capacity(7);
+    for (&name_tag, &level_tag) in WB_TYPE.iter().zip(WB_LEVELS.iter()) {
+        let Some(name) = ifd.string(name_tag) else { continue };
+        let Some(kelvin) = wb_type_kelvin(&name) else { continue };
+        let Some(Value::Short(levels)) = ifd.value(level_tag) else { continue };
+        if levels.len() == 3 {
+            points.push((kelvin, [levels[0] as f32, levels[1] as f32, levels[2] as f32]));
+        }
+    }
+    crate::kelvin_presets::KelvinPresets::from_unordered(points)
+}
+
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = tiff.ifds.first().ok_or_else(|| RawError::Corrupt("RW2 without IFD0".into()))?;
@@ -631,6 +671,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         [Some(r), Some(g), Some(b)] if r > 0.0 && g > 0.0 && b > 0.0 => Some([(r / g) as f32, 1.0, (b / g) as f32]),
         _ => None,
     };
+    // `ColorTempKelvin`, the shot's absolute colour temperature, is read for the record; the
+    // Kelvin scale the WB panel edits comes from the seven presets below.
+    let _shot_kelvin = ifd0.u16(COLOR_TEMP_KELVIN).map(|k| k as f32);
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
@@ -650,7 +693,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area: active,
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets: wb_kelvin_presets(ifd0), ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
         pixel_aspect: 1.0,
@@ -1306,5 +1349,58 @@ mod tests {
             assert!(matches!(crate::decode(&bytes), Err(RawError::Corrupt(_))), "{format}");
             assert!(matches!(crate::probe_info(&bytes), Err(RawError::Corrupt(_))), "{format}");
         }
+    }
+
+    /// Panasonic RW2 white-balance preset tags, as named in ExifTool's PanasonicRaw tables:
+    /// `ColorTempKelvin` is the absolute colour temperature of the shot; `WBType1`..`WBType7`
+    /// name the seven in-camera white-balance presets and `WB_RGBLevels1`..`WB_RGBLevels7`
+    /// give each preset's R/G/B levels. An RW2 carries no colour matrices, so these presets
+    /// are the file's only Kelvin scale ([`crate::kelvin_presets::KelvinPresets`]). The
+    /// decoder reads none of it: `wb_multipliers` comes from tags `0x0024`–`0x0026` only and
+    /// `color.kelvin_presets` stays `None`.
+    #[test]
+    fn rw2_reads_absolute_colour_temperature_and_wb_presets() {
+        const COLOR_TEMP_KELVIN: u16 = 0x0027;
+        const WB_TYPE: [u16; 7] = [0x0028, 0x0029, 0x002a, 0x002b, 0x002c, 0x0033, 0x0034];
+        const WB_LEVELS: [u16; 7] = [0x0035, 0x0036, 0x0038, 0x0042, 0x0049, 0x004a, 0x004b];
+
+        // Presets in kelvin order: red rising and blue falling, as `KelvinPresets::new`
+        // requires. The shot sits on the daylight preset (index 4): its levels are the
+        // as-shot `WB_RGB` tags and `5600` K is the recorded `ColorTempKelvin`.
+        const KELVIN: [u16; 7] = [2850, 3200, 4000, 5000, 5600, 6500, 7500];
+        const LEVELS: [[u16; 3]; 7] = [
+            [1200, 1024, 2600],
+            [1400, 1024, 2200],
+            [1700, 1024, 1800],
+            [2000, 1024, 1500],
+            [2300, 1024, 1300],
+            [2600, 1024, 1100],
+            [2900, 1024, 950],
+        ];
+        const SHOT: usize = 4;
+
+        let (w, h) = (90usize, 60usize);
+        let px: Vec<u16> = (0..w * h).map(|i| (i % 4000) as u16 + 1).collect();
+        let mut tags = vec![short(CFA_PATTERN, 1), short(BITS, 12), short(RAW_FORMAT, 5)];
+        tags.extend(BLACK_RGB.iter().enumerate().map(|(i, &tag)| short(tag, 128 + i as u16)));
+        tags.extend(WB_RGB.iter().zip(LEVELS[SHOT]).map(|(&tag, v)| short(tag, v)));
+        tags.push((COLOR_TEMP_KELVIN, Value::Short(vec![KELVIN[SHOT]])));
+        for (&tag, name) in WB_TYPE.iter().zip(["Tungsten", "Warm White", "White Fluorescent", "Daylight", "Sunlight", "Cloudy", "Shade"]) {
+            tags.push((tag, Value::Ascii(name.into())));
+        }
+        for (&tag, &levels) in WB_LEVELS.iter().zip(&LEVELS) {
+            tags.push((tag, Value::Short(levels.to_vec())));
+        }
+        let bytes = file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
+        let r = crate::decode(&bytes).unwrap();
+        assert_eq!(r.wb_multipliers, Some([2300.0 / 1024.0, 1.0, 1300.0 / 1024.0]));
+
+        // The kelvin scale from the seven presets is never built, and no kelvin value is
+        // stored anywhere the WB panel or settings could read.
+        let presets = r.color.kelvin_presets.as_ref();
+        assert!(presets.is_some(), "kelvin_presets is None: RW2 decode reads WB_RGB but never ColorTempKelvin or WBType1-7 / WB_RGBLevels1-7");
+        let (t, tint) = presets.unwrap().temp_tint(r.wb_multipliers.unwrap()).unwrap();
+        assert!((t - 5600.0).abs() < 1.0, "as-shot white reads {t} K, want 5600 K");
+        assert!(tint.abs() < 1.0, "tint {tint}");
     }
 }
