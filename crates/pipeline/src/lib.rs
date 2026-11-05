@@ -34,6 +34,7 @@ pub mod geometry;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
+pub mod mask_space;
 pub mod masks;
 pub mod optics;
 pub mod output;
@@ -252,6 +253,10 @@ pub fn frame_for(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, apply_cro
     let mut frame = geometry::Frame::with_lens(src.width, src.height, s, apply_crop, info.lens.as_ref());
     if s.optics.remove_ca && s.section_enabled("optics") {
         frame.add_lateral_ca(optics::estimate_lateral_ca(src));
+        if apply_crop {
+            // The estimated CA moves the colour planes too: keep the crop inside every one of them.
+            frame.constrain_to_image(s.geometry.constrain_crop);
+        }
     }
     frame
 }
@@ -753,6 +758,8 @@ mod tests_geometry;
 mod tests_hdr;
 #[cfg(test)]
 mod tests_local;
+#[cfg(test)]
+mod tests_mask_geometry;
 #[cfg(test)]
 mod tests_nr_scale;
 #[cfg(test)]
