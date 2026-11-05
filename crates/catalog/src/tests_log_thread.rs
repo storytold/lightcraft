@@ -106,8 +106,8 @@ fn a_failed_write_is_held_reported_and_retried() {
     let fail = Arc::new(AtomicBool::new(true));
     let f = fail.clone();
     fault::install(&dir, Arc::new(move |_| if f.load(Ordering::SeqCst) { Err(std::io::Error::other("disk full (test)")) } else { Ok(()) }));
-    store.append(LOG, b"1\n").unwrap();
-    store.append(LOG, b"2\n").unwrap();
+    // (one append: the log thread can fail the first before a second arrives, and then refuses it)
+    store.append(LOG, b"1\n2\n").unwrap();
     wait_until("the failure is published", || store.unwritten().is_some());
     let (held, why) = store.unwritten().unwrap();
     assert!(why.contains("disk full"), "{why}");
