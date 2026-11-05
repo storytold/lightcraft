@@ -88,6 +88,9 @@ fn partial_append_then_retry_loads_cleanly() {
         assert!(j.append(&batch).is_err(), "tear at {tear}");
         // cut back to the last whole record
         assert_eq!(t.files.get(LOG).unwrap().len(), good_len, "tear at {tear}");
+        // and a snapshot is due (records handed over before may be missing from a log written
+        // by a thread of its own: note 2 of 2026-10-25)
+        assert!(j.wants_snapshot(), "tear at {tear}");
         j.append(&batch).unwrap();
         let more = apply(&mut c, vec![Op::SetLabel { id, label: Some(ColorLabel::ALL[0]) }]);
         j.append(&more).unwrap();
