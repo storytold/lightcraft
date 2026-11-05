@@ -1949,10 +1949,9 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             }
         }
         Dialog::CreatePreset { name, group, groups } => {
-            crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Preset name")).desired_width(f32::INFINITY)),
-                crate::i18n::tr("Preset name"),
-            );
+            if dialog_field(ui, "field:presetName", name, "Preset name") {
+                *confirm = true;
+            }
             crate::widgets::named(
                 ui.add(egui::TextEdit::singleline(group).hint_text(crate::i18n::tr("Group")).desired_width(f32::INFINITY)),
                 crate::i18n::tr("Group"),
