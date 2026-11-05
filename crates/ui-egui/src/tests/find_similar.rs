@@ -179,6 +179,8 @@ fn stopping_leaves_the_view_alone_and_the_next_search_reads_only_the_rest() {
     once.dedup();
     assert_eq!(once.len(), read.len(), "a file was read twice: {read:?}");
     assert_eq!(read.iter().filter(|p| p.ends_with("IMG_0000.arw")).count(), 1, "the searched photo was read again: {read:?}");
+    // and every photo was measured, from a read or from memory, not only the ones alike
+    assert_eq!(h.app.session.signatures.len(), PHOTOS as usize, "a photo was not measured");
     assert_eq!(h.app.session.filter.only.len(), PHOTOS as usize / 2);
 }
 
