@@ -168,3 +168,15 @@ fn edit_list_reorders_deletes_and_hides_without_closing_the_menu() {
     assert!(!shown.iter().any(|w| w == "cropAspectPreset:4x5"), "{shown:?}");
     assert_eq!(widgets(&mut h, "cropAspectSaved:").len(), 2);
 }
+
+/// CodeRabbit on #3762: the button names the saved ratio whose rounded value is the lock, not
+/// the first one within the label's tolerance.
+#[test]
+fn the_aspect_button_names_the_exact_saved_ratio_first() {
+    let custom = [
+        lightcraft_engine::cmd::crop_aspects::CustomAspect { name: "Close".into(), aspect: [3.01, 2.0] },
+        lightcraft_engine::cmd::crop_aspects::CustomAspect { name: "Exact".into(), aspect: [1.5, 1.0] },
+    ];
+    assert_eq!(crate::panels::right::aspect_label(Some((150, 100)), None, &custom), "Exact");
+    assert_eq!(crate::panels::right::aspect_label(Some((100, 150)), None, &custom), "Exact", "either orientation");
+}

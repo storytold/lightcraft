@@ -37,8 +37,24 @@ pub struct CustomAspect {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CropAspects {
+    #[serde(deserialize_with = "each_that_reads")]
     pub custom: Vec<CustomAspect>,
+    #[serde(deserialize_with = "each_that_reads")]
     pub hidden: Vec<String>,
+}
+
+/// A list read entry by entry: one that doesn't read (a hand-edited prefs.json, a ratio that isn't two numbers) is
+/// left out instead of failing the whole file, which holds the other presets too. Not a list at all reads as empty.
+fn each_that_reads<'de, D, T>(d: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let v = <Value as serde::Deserialize>::deserialize(d)?;
+    Ok(match v {
+        Value::Array(items) => items.into_iter().filter_map(|i| serde_json::from_value(i).ok()).collect(),
+        _ => Vec::new(),
+    })
 }
 
 impl CropAspects {
@@ -191,7 +207,11 @@ fn hide(s: &mut Session, p: &Value) -> Result<Value> {
     if !hideable(key) {
         return Err(bad(C, format!("`{key}` is not a built-in ratio that can be hidden (Free and Original always show)")));
     }
-    let hidden = p.get("hidden").and_then(Value::as_bool).unwrap_or(true);
+    let hidden = match p.get("hidden") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(other) => return Err(bad(C, format!("`hidden` must be true or false, not {other}"))),
+    };
     s.crop_aspects.hidden.retain(|k| k != key);
     if hidden {
         s.crop_aspects.hidden.push(key.to_string());

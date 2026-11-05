@@ -16,7 +16,14 @@ pub(crate) fn aspect_label(aspect: Option<(u32, u32)>, original: Option<f64>, cu
     if original.is_some_and(is) {
         return "Original".into();
     }
-    if let Some(a) = custom.iter().find(|a| is(a.aspect[0] / a.aspect[1])) {
+    // the lock is the rounded pair (`crop.aspect` stores hundredths): a saved ratio that rounds to it, in either
+    // orientation, before one that is only close
+    let hundredths = |v: f64| (v * 100.0).round();
+    let exact = custom.iter().find(|a| {
+        let (x, y) = (hundredths(a.aspect[0]), hundredths(a.aspect[1]));
+        (x, y) == (f64::from(w), f64::from(h)) || (x, y) == (f64::from(h), f64::from(w))
+    });
+    if let Some(a) = exact.or_else(|| custom.iter().find(|a| is(a.aspect[0] / a.aspect[1]))) {
         return a.name.clone();
     }
     for (label, key) in BUILTIN_ASPECTS {
@@ -96,69 +103,73 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // room for a name beside its ↑ ↓ Delete buttons
         ui.set_min_width(260.0);
     }
-    for (label, key) in BUILTIN_ASPECTS {
-        let hidden = app.session.crop_aspects.is_hidden(key);
-        if editing {
-            if matches!(key, "free" | "original") {
-                // always in the menu: shown ticked, and not to be unticked
-                ui.add_enabled(false, egui::Checkbox::new(&mut true, crate::i18n::tr(label)));
-                continue;
-            }
-            let mut shown = !hidden;
-            let r = ui.checkbox(&mut shown, crate::i18n::tr(label));
-            register(ui, format!("check:cropAspectShow:{key}"), r.rect);
-            if r.changed()
-                && let Err(e) = app.run("crop.hideAspect", json!({"aspect": key, "hidden": !shown}))
-            {
-                app.toast_error(ui.ctx(), e);
-            }
-        } else if !hidden {
-            let r = ui.button(crate::i18n::tr(label));
-            register(ui, format!("cropAspectPreset:{key}"), r.rect);
-            if r.clicked() {
-                let _ = app.run("crop.aspect", json!({"aspect": key}));
-                ui.close();
+    // many saved ratios scroll rather than run off the window; Custom and Edit List stay below them
+    let max = (ui.ctx().content_rect().bottom() - ui.max_rect().top() - 160.0).max(120.0);
+    egui::ScrollArea::vertical().max_height(max).auto_shrink([true, true]).show(ui, |ui| {
+        for (label, key) in BUILTIN_ASPECTS {
+            let hidden = app.session.crop_aspects.is_hidden(key);
+            if editing {
+                if matches!(key, "free" | "original") {
+                    // always in the menu: shown ticked, and not to be unticked
+                    ui.add_enabled(false, egui::Checkbox::new(&mut true, crate::i18n::tr(label)));
+                    continue;
+                }
+                let mut shown = !hidden;
+                let r = ui.checkbox(&mut shown, crate::i18n::tr(label));
+                register(ui, format!("check:cropAspectShow:{key}"), r.rect);
+                if r.changed()
+                    && let Err(e) = app.run("crop.hideAspect", json!({"aspect": key, "hidden": !shown}))
+                {
+                    app.toast_error(ui.ctx(), e);
+                }
+            } else if !hidden {
+                let r = ui.button(crate::i18n::tr(label));
+                register(ui, format!("cropAspectPreset:{key}"), r.rect);
+                if r.clicked() {
+                    let _ = app.run("crop.aspect", json!({"aspect": key}));
+                    ui.close();
+                }
             }
         }
-    }
-    let custom = app.session.crop_aspects.custom.clone();
-    if !custom.is_empty() {
-        ui.separator();
-    }
-    let last = custom.len().saturating_sub(1);
-    for (i, a) in custom.iter().enumerate() {
-        if editing {
-            ui.horizontal(|ui| {
-                ui.label(&a.name);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if text_button(ui, &format!("cropAspectDelete-{i}"), "Delete", false).clicked()
-                        && let Err(e) = app.run("crop.deleteAspect", json!({"name": a.name}))
-                    {
-                        app.toast_error(ui.ctx(), e);
-                    }
-                    if i < last
-                        && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked()
-                        && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1}))
-                    {
-                        app.toast_error(ui.ctx(), e);
-                    }
-                    if i > 0
-                        && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked()
-                        && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1}))
-                    {
-                        app.toast_error(ui.ctx(), e);
-                    }
+        let custom = app.session.crop_aspects.custom.clone();
+        if !custom.is_empty() {
+            ui.separator();
+        }
+        let last = custom.len().saturating_sub(1);
+        for (i, a) in custom.iter().enumerate() {
+            if editing {
+                ui.horizontal(|ui| {
+                    ui.label(&a.name);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if text_button(ui, &format!("cropAspectDelete-{i}"), "Delete", false).clicked()
+                            && let Err(e) = app.run("crop.deleteAspect", json!({"name": a.name}))
+                        {
+                            app.toast_error(ui.ctx(), e);
+                        }
+                        if i < last
+                            && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked()
+                            && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1}))
+                        {
+                            app.toast_error(ui.ctx(), e);
+                        }
+                        if i > 0
+                            && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked()
+                            && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1}))
+                        {
+                            app.toast_error(ui.ctx(), e);
+                        }
+                    });
                 });
-            });
-        } else {
-            let r = ui.button(&a.name);
-            register(ui, format!("cropAspectSaved:{i}"), r.rect);
-            if r.clicked() {
-                let _ = app.run("crop.aspect", json!({"aspect": a.aspect}));
-                ui.close();
+            } else {
+                let r = ui.button(&a.name);
+                register(ui, format!("cropAspectSaved:{i}"), r.rect);
+                if r.clicked() {
+                    let _ = app.run("crop.aspect", json!({"aspect": a.aspect}));
+                    ui.close();
+                }
             }
         }
-    }
+    });
     ui.separator();
     if !editing {
         custom_aspect(app, ui);
