@@ -67,6 +67,10 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// Import files whose content the library already has as new photos (Lightroom's "Don't
+    /// Import Suspected Duplicates" unchecked). A file at a path the library already lists, or one
+    /// in Recently Deleted, is still handled as a duplicate.
+    pub import_duplicates: bool,
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the

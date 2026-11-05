@@ -204,6 +204,13 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             }
         }
     }
+    // "Don't Import Suspected Duplicates" off: contents already in the library (or earlier in this
+    // import), so a copy gets its own `<hash>:dup<id>` key, as Photo > Duplicate does
+    let mut live_hash: std::collections::HashSet<String> = if opts.import_duplicates {
+        s.catalog.photos().filter(|p| !p.deleted).filter_map(|p| p.content_hash.clone()).collect()
+    } else {
+        Default::default()
+    };
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
     for it in prepared.items {
@@ -262,6 +269,12 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.meta = info.meta;
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
+                if opts.import_duplicates
+                    && let Some(h) = p.content_hash.clone()
+                    && !live_hash.insert(h.clone())
+                {
+                    p.content_hash = Some(format!("{h}:dup{}", id.0));
+                }
                 p.embedded_lens = info.embedded_lens;
                 p.set_preview_only(info.preview_only.clone());
                 apply_import_defaults(s, &mut p);
