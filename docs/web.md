@@ -162,6 +162,32 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   (no params: a command that takes photo ids then acts on the selection). Any other text that
   isn't an object rejects the promise and runs nothing, as the control channel and MCP do, so a
   typo can't run a command on the selection. This is how the headless-Chrome checks drive the page.
+- **Embedding (`?host=parent`).** A same-origin page framing LightCraft in an `<iframe>` speaks
+  to it over `postMessage`, the protocol PdfCraft, GridCraft and DeckCraft share
+  (`apps/lightcraft-web/src/host.rs`, issue #2270). LightCraft posts `lightcraft:ready`
+  `{version}` once it listens (`lightcraft:failed` `{error}` if it couldn't start); the page sends
+  `lightcraft:open` `{name, bytes}` to add a photo (as one dropped on the window; `name` gives the
+  format) and `lightcraft:cmd` `{id, params}` to run a command, answered by `lightcraft:response`
+  `{ok, value}` (no request id, as in the sibling bridges: responses come back in the order the
+  commands were sent, one per `cmd` that had an id). Everything that would be downloaded (exports and the library backup; the
+  preset, keyword and curve file dialogs have no web implementation yet) reaches the page as
+  `lightcraft:save` `{name, bytes}` (a transferred `ArrayBuffer`) instead, and `lightcraft:dirty`
+  `{dirty}` says, whenever it changes, whether closing now would lose something (a write to
+  browser storage still queued or running, or changes storage refused), so the page can ask
+  before closing a window with edits. Only the parent window on the page's own origin is heard or
+  answered. A page with an opaque origin (`"null"`: a sandboxed iframe, a `data:` page), or a
+  parent on another origin, gets no bridge, and exports keep downloading. The library still lives
+  in the iframe's browser storage.
+- **Embedding in the page's own document (`data-host="page"`).** A page that loads LightCraft into its own
+  document, with no iframe, puts `data-host="page"` on the app's canvas. The same messages then travel as
+  non-bubbling `CustomEvent`s on the canvas: LightCraft dispatches `lightcraft:ready`, `lightcraft:failed`,
+  `lightcraft:dirty`, `lightcraft:save` and `lightcraft:response` with the message's fields as `detail`, and the page
+  dispatches `lightcraft:open` and `lightcraft:cmd` on the canvas (`detail` is the fields; the event name is the
+  type). Add the listeners before the module starts, because `lightcraft:ready` is sent as soon as the app listens.
+  Only the exact value `page` turns it on. When the page asks for both, `?host=parent` wins. In this mode the page
+  and LightCraft share one document, so any script on the page can drive the app and receive what it saves: use it
+  only on a page you control. A photo handed in is held to the same size limit as in the iframe mode and refused
+  before its bytes are copied.
 - **The page title names the open photo**: `<file name> — LightCraft`, with ` •` after the name while
   changes are not yet written to browser storage (`LightcraftApp::page_title`). eframe's web runner
   ignores the window title the desktop app sets, and a host that embeds the page reads this title to
