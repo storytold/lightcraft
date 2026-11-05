@@ -99,6 +99,25 @@ fn album_operations_are_live_and_plain_source_clears_them() {
     assert!(app.session.filter.labels.is_empty());
     assert!(app.session.filter.only.is_empty());
     assert!(!app.session.filter.only_none);
+    app.session.filter.text = "narrow".into();
+    app.session.filter.flags = vec![lightcraft_catalog::Flag::Pick];
+    app.session.filter.labels = vec![lightcraft_catalog::ColorLabel::Blue];
+    app.session.filter.only = vec![ids[1]];
+    app.session.filter.only_none = true;
+    app.ui.search = "narrow".into();
+    app.run("view.combineAlbums", json!({"ids": [a, b], "operation": "intersection"})).unwrap();
+    assert_eq!(app.session.filter.text, "narrow");
+    assert_eq!(app.session.filter.flags, [lightcraft_catalog::Flag::Pick]);
+    assert_eq!(app.session.filter.labels, [lightcraft_catalog::ColorLabel::Blue]);
+    assert_eq!(app.session.filter.only, [ids[1]]);
+    assert!(app.session.filter.only_none);
+    assert_eq!(app.ui.search, "narrow");
+    app.session.filter.text.clear();
+    app.session.filter.flags.clear();
+    app.session.filter.labels.clear();
+    app.session.filter.only.clear();
+    app.session.filter.only_none = false;
+    app.ui.search.clear();
     for (operation, expected) in
         [("union", vec![ids[0], ids[1], ids[2]]), ("intersection", vec![ids[1]]), ("difference", vec![ids[0]]), ("exclusive", vec![ids[0], ids[2]])]
     {

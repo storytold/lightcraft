@@ -79,20 +79,29 @@ pub fn command(app: &mut LightcraftApp, params: &Value) -> Result<Value, String>
     if !problems.is_empty() {
         return Err(problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "));
     }
-    // A source choice starts a fresh view; ordinary filters can be applied to the result next.
-    let filter = lightcraft_catalog::Filter { rule_set: Some(set), ..Default::default() };
-    let mut filter = serde_json::to_value(filter).map_err(|e| e.to_string())?;
-    let fields = filter.as_object_mut().ok_or("view.combineAlbums: couldn't serialize the filter")?;
-    // These defaults are normally omitted by Filter's serializer. library.filter merges a
-    // partial payload, so spell them out to keep a previous Find Similar or multi-select filter
-    // from narrowing the new source view.
-    fields.insert("flags".into(), json!([]));
-    fields.insert("labels".into(), json!([]));
-    fields.insert("only".into(), json!([]));
-    fields.insert("onlyNone".into(), json!(false));
+    let preserve_filters = active(app) && app.ui.album_combination.as_ref().is_some_and(|(current, _)| current == &ids);
+    let filter = if preserve_filters {
+        // Changing only the operation keeps filters applied after the combination was opened.
+        json!({"ruleSet": set})
+    } else {
+        // A source choice starts a fresh view; ordinary filters can be applied to the result next.
+        let filter = lightcraft_catalog::Filter { rule_set: Some(set), ..Default::default() };
+        let mut filter = serde_json::to_value(filter).map_err(|e| e.to_string())?;
+        let fields = filter.as_object_mut().ok_or("view.combineAlbums: couldn't serialize the filter")?;
+        // These defaults are normally omitted by Filter's serializer. library.filter merges a
+        // partial payload, so spell them out to keep a previous Find Similar or multi-select
+        // filter from narrowing the new source view.
+        fields.insert("flags".into(), json!([]));
+        fields.insert("labels".into(), json!([]));
+        fields.insert("only".into(), json!([]));
+        fields.insert("onlyNone".into(), json!(false));
+        filter
+    };
     app.session.source = LibrarySource::All;
     app.session.execute("library.filter", &filter).map_err(|e| e.to_string())?;
-    app.ui.search.clear();
+    if !preserve_filters {
+        app.ui.search.clear();
+    }
     app.ui.album_combination = Some((ids, operation.into()));
     app.session.keep_active_in_view();
     Ok(json!({"count": app.session.visible().len(), "operation": operation}))
