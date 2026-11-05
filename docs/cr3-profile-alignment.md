@@ -24,8 +24,8 @@ CR3 framing path. All subsequent colour,
 tone, hue/saturation, clipping, and held-out acceptance gates stay unchanged.
 
 The proposal reaches file-local colour and tone, pooled camera-profile pairs, and colour tags
-for merge/DNG conversion. Cache versions advance from upstream look 13/render 74 to look 14/render 75.
-Render 75 also separates the combined result from the earlier CR3-only render 74 cache.
+for merge/DNG conversion. Cache versions advance from upstream look 13/render 75 to look 14/render 76.
+Render 76 also separates the combined result from the earlier CR3-only render 74 cache.
 The upstream source-position vignetting correction remains before geometry, including CR3. No camera allowlist,
 new profile matching rules, or weaker acceptance gate is introduced. Other RAW formats
 retain their existing correspondence behaviour. The non-CR3 and fixed-mount changes
