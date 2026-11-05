@@ -93,6 +93,44 @@ pub struct Tex {
     pub quick: Option<QuickSource>,
     /// CPU copy of the pixels (only with [`Renderer::keep_pixels`]; for headless screenshots).
     pub pixels: Option<std::sync::Arc<egui::ColorImage>>,
+    /// Showing a render that stayed on the GPU ([`ScreenTextures`]): drawn by this id instead of `tex`.
+    pub native: Option<egui::TextureId>,
+}
+
+impl Tex {
+    /// Draw this slot from the GPU-resident texture `id` from now on. On the switch from pixels, the egui texture
+    /// (never drawn while `native` is set) drops its full-size image for a 1 × 1 placeholder, so a view slot on the
+    /// GPU path doesn't keep a second copy of the picture until it is released (review of PR #1065).
+    fn show_native(&mut self, id: egui::TextureId) {
+        if self.native.is_none() {
+            self.tex.set(egui::ColorImage::filled([1, 1], egui::Color32::BLACK), egui::TextureOptions::LINEAR);
+        }
+        self.native = Some(id);
+        self.pixels = None;
+    }
+
+    /// The texture to draw.
+    pub fn id(&self) -> egui::TextureId {
+        self.native.unwrap_or_else(|| egui::TextureHandle::id(&self.tex))
+    }
+}
+
+/// Draws renders that stayed on the GPU ([`lightcraft_engine::media::ScreenFrame`]): the window's
+/// renderer registers their textures. Installed by a host whose GPU renderer runs on the window's
+/// device (the desktop app); without one, every render comes back as pixels.
+pub trait ScreenTextures {
+    /// Show `frame` under `id` (one this returned before, updated in place) or a new id; `None`
+    /// when it can't be shown.
+    fn show(&mut self, frame: &lightcraft_engine::media::ScreenFrame, id: Option<egui::TextureId>) -> Option<egui::TextureId>;
+    /// Release `id` (and the texture it shows).
+    fn free(&mut self, id: egui::TextureId);
+    /// The pixels `frame` holds, read back from the GPU: only for a headless screenshot of a view
+    /// that shows it ([`Renderer::cpu_textures`]). `None` when they can't be read (the view is
+    /// then left out of the picture).
+    fn read(&self, frame: &lightcraft_engine::media::ScreenFrame) -> Option<egui::ColorImage> {
+        let _ = frame;
+        None
+    }
 }
 
 /// Runs render jobs outside this thread's job pool (the browser build: Web Workers, each with its
@@ -214,6 +252,9 @@ pub struct Renderer {
     offload_looks: HashMap<u64, (u64, bool)>,
     #[cfg(test)]
     failure_messages: Vec<String>,
+    /// The render decisions [`Self::decided`] logged.
+    #[cfg(test)]
+    decisions: Vec<String>,
     /// Request id of the pixels each interactive view (loupe, before, hover) shows: a draft that
     /// finishes after a newer request was made still replaces older pixels, so a long slider drag
     /// keeps updating the loupe instead of waiting for the drag to pause.
@@ -276,6 +317,14 @@ pub struct Renderer {
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
+    /// Draws GPU-resident renders; with it, interactive drafts of views stay on the GPU.
+    screen: Option<Box<dyn ScreenTextures>>,
+    /// The texture id each view slot shows GPU-resident renders under (one per slot, reused).
+    natives: HashMap<Slot, egui::TextureId>,
+    /// The GPU-resident render each of those shows, kept with [`Self::keep_pixels`]: a headless
+    /// screenshot reads it back ([`Self::cpu_textures`]) instead of finding no pixels (a white
+    /// photo, review of PR #1065).
+    native_frames: HashMap<Slot, lightcraft_engine::media::ScreenFrame>,
 }
 
 /// After this long without renders the GPU renderer's pool of recycled buffers is freed.
@@ -329,6 +378,8 @@ impl Renderer {
             offload_looks: HashMap::new(),
             #[cfg(test)]
             failure_messages: Vec::new(),
+            #[cfg(test)]
+            decisions: Vec::new(),
             shown_ids: HashMap::new(),
             epoch: 0,
             preview_generation: None,
@@ -360,6 +411,9 @@ impl Renderer {
             display: None,
             #[cfg(not(target_arch = "wasm32"))]
             idle: None,
+            screen: None,
+            natives: HashMap::new(),
+            native_frames: HashMap::new(),
         }
     }
 }
@@ -521,7 +575,23 @@ impl Renderer {
     /// `job` as [`Self::request`] would run it for `slot` (its key included): views render for
     /// the display profile in use.
     pub fn job_for(&self, slot: Slot, job: RenderJob) -> RenderJob {
-        if Self::renders_for_display(slot) { job.with_display(self.display.clone()) } else { job }
+        if !Self::renders_for_display(slot) {
+            return job;
+        }
+        let job = job.with_display(self.display.clone());
+        // a drag's drafts are only drawn: they may stay on the GPU when the window can show them
+        if self.screen.is_some() && job.request.quality == lightcraft_pipeline::Quality::Draft { job.on_screen() } else { job }
+    }
+
+    /// Show GPU-resident renders through `screen` from now on (the desktop app, once its GPU
+    /// renderer runs on the window's device).
+    pub fn set_screen_textures(&mut self, screen: Box<dyn ScreenTextures>) {
+        self.screen = Some(screen);
+    }
+
+    /// Whether GPU-resident renders can be shown.
+    pub fn has_screen_textures(&self) -> bool {
+        self.screen.is_some()
     }
 
     /// The display profile in use (id).
@@ -567,6 +637,19 @@ impl Renderer {
     pub fn release(&mut self, slot: Slot) {
         self.textures.remove(&slot);
         self.stages.remove(&slot);
+        // and its GPU-resident texture, which can be window-sized (review of PR #1065)
+        self.free_native(slot);
+    }
+
+    /// Let go of `slot`'s GPU-resident texture: its registration with the window, and the frame
+    /// kept for headless screenshots.
+    fn free_native(&mut self, slot: Slot) {
+        self.native_frames.remove(&slot);
+        if let Some(id) = self.natives.remove(&slot)
+            && let Some(screen) = self.screen.as_mut()
+        {
+            screen.free(id);
+        }
     }
 
     /// Run jobs through `offload` from now on (instead of the job pool / inline).
@@ -597,6 +680,7 @@ impl Renderer {
         if !self.request_needed(slot, job.key, priority) {
             return;
         }
+        self.note_request(slot, job.key, priority, "requested", || render_subject(slot, job.photo, Some(&job.origin)));
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
         self.requests.insert(
@@ -664,18 +748,24 @@ impl Renderer {
                 });
                 if queued && let Some(p) = self.pending.get_mut(&slot) {
                     p.1 = priority;
+                    if logs_decisions() {
+                        let source = self.requests.get(&slot).and_then(|r| r.source.as_ref());
+                        let line = format!("{}: still waiting, moved to priority {priority}", render_subject(slot, job.photo, source));
+                        self.decided(|| line);
+                    }
                 }
             }
             return;
         }
         self.quick_tried.insert(slot, job.key);
-        self.pending.insert(slot, (job.key, priority));
-        job.request_id = lightcraft_preview::next_tick();
         let source = job
             .small
             .as_ref()
             .map(|job| job.origin.clone())
             .or_else(|| job.embedded.as_ref().map(|(path, _, _)| lightcraft_catalog::Source::File { path: path.clone() }));
+        self.note_request(slot, job.key, priority, "stand-in requested", || render_subject(slot, job.photo, source.as_ref()));
+        self.pending.insert(slot, (job.key, priority));
+        job.request_id = lightcraft_preview::next_tick();
         self.requests.insert(
             slot,
             Requested { look: job.small.as_ref().map(|j| (geometry_look(&j.settings), j.request.apply_crop)), id: job.request_id, source },
@@ -696,6 +786,7 @@ impl Renderer {
         if !self.request_needed(slot, key, priority) {
             return;
         }
+        self.note_request(slot, key, priority, "title screen requested", || format!("render {slot:?}"));
         self.pending.insert(slot, (key, priority));
         let request_id = lightcraft_preview::next_tick();
         self.requests.insert(slot, Requested { look: None, id: request_id, source: None });
@@ -710,6 +801,7 @@ impl Renderer {
             return;
         }
         self.prefetched.insert(slot, job.key);
+        self.note_request(slot, job.key, priority, "prefetch requested", || render_subject(slot, job.photo, Some(&job.origin)));
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
         self.requests.insert(
@@ -732,6 +824,7 @@ impl Renderer {
             return;
         }
         let gone = |s: &Slot| matches!(s, Slot::Slide(id) if !keep.contains(id));
+        self.abandon_pending(gone, "no longer near the slide shown");
         self.textures.retain(|s, _| !gone(s));
         let _ = self.pool.reprioritize(|s, p| if gone(s) { None } else { Some(p) });
         self.queue.retain(|q| !gone(&q.slot));
@@ -745,6 +838,7 @@ impl Renderer {
     /// Is a request for `slot` queued or running?
     /// Drop every texture and cached stage (another library was opened: photo ids changed meaning).
     pub fn forget_all(&mut self) {
+        self.abandon_pending(|_| true, "the renderer started over (another library, or the previews were cleared)");
         self.requests.clear();
         self.offload_looks.clear();
         self.shown_ids.clear();
@@ -759,6 +853,20 @@ impl Renderer {
         self.prefetched.clear();
         self.pending.clear();
         self.queue.clear();
+        self.free_natives();
+    }
+
+    /// Release every GPU-resident texture shown.
+    fn free_natives(&mut self) {
+        if let Some(screen) = self.screen.as_mut() {
+            for (_, id) in self.natives.drain() {
+                screen.free(id);
+            }
+        }
+        self.natives.clear();
+        self.native_frames.clear();
+        // a view drawn from a freed texture would show nothing: it is rendered again, as pixels
+        self.textures.retain(|_, t| t.native.is_none());
     }
 
     pub fn is_pending(&self, slot: Slot) -> bool {
@@ -1008,8 +1116,9 @@ impl Renderer {
         }
     }
 
-    /// Turn finished jobs into textures. Returns true if anything changed.
-    fn collect(&mut self, ctx: &egui::Context, session: &mut Session, inline_ms: f64) -> bool {
+    /// The jobs the pool and the offload finished: (slot, result, texture pixels, look, ms).
+    #[allow(clippy::type_complexity)]
+    fn take_finished(&mut self, inline_ms: f64) -> Vec<(Slot, RenderResult, Option<Arc<egui::ColorImage>>, Option<(u64, bool)>, f64)> {
         let mut finished = Vec::new();
         while let Some(done) = self.pool.try_recv() {
             finished.push((done.slot, done.result.result, done.result.color, done.result.look, if done.ms > 0.0 { done.ms } else { inline_ms }));
@@ -1020,12 +1129,22 @@ impl Renderer {
                 (slot, r, None, look, ms)
             }));
         }
+        finished
+    }
+
+    /// Turn finished jobs into textures. Returns true if anything changed.
+    fn collect(&mut self, ctx: &egui::Context, session: &mut Session, inline_ms: f64) -> bool {
+        let finished = self.take_finished(inline_ms);
         self.dispatch();
         let mut changed = false;
         for (mut slot, mut r, mut color, completed_look, ms) in finished {
             self.completed += 1;
             // made for another display profile than the one in use: obsolete
             if r.display.is_some_and(|id| Some(id) != self.display_id()) {
+                self.decided(|| {
+                    let source = session.catalog.photo(r.photo).map(|p| &p.source);
+                    format!("{}: abandoned, made for another display profile", render_subject(slot, r.photo, source))
+                });
                 continue;
             }
             // Ignore obsolete pixels, failures and decoded sources, even for the same render key;
@@ -1040,6 +1159,12 @@ impl Renderer {
                     && r.rendered.is_ok();
                 if !newer_draft {
                     self.discarded += 1;
+                    let replaced = self.requests.contains_key(&slot);
+                    self.decided(|| {
+                        let why = if replaced { "a newer request replaced it" } else { "no longer wanted when it finished" };
+                        let source = session.catalog.photo(r.photo).map(|p| &p.source);
+                        format!("{}: abandoned, {why}", render_subject(slot, r.photo, source))
+                    });
                     continue;
                 }
                 session.accept(&r);
@@ -1065,9 +1190,72 @@ impl Renderer {
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
             }
+            // a render that stayed on the GPU: drawn from its texture
+            if let (Some(frame), Ok(rendered)) = (r.frame.as_ref(), r.rendered.as_ref()) {
+                self.failed.remove(&slot);
+                let shown = self.screen.as_mut().and_then(|s| s.show(frame, self.natives.get(&slot).copied()));
+                let Some(id) = shown else {
+                    // can't be shown: from now on views come back as pixels
+                    log::warn!("render {slot:?}: a GPU-resident render can't be shown; rendering pixels");
+                    self.free_natives();
+                    self.screen = None;
+                    continue;
+                };
+                self.natives.insert(slot, id);
+                if self.keep_pixels {
+                    self.native_frames.insert(slot, frame.clone());
+                }
+                let (size, histogram) = ([frame.width, frame.height], rendered.histogram.clone());
+                match self.textures.get_mut(&slot) {
+                    Some(t) => {
+                        t.show_native(id);
+                        t.look = look;
+                        t.key = r.key;
+                        t.photo = r.photo;
+                        t.size = size;
+                        t.histogram = Some(histogram);
+                        t.ms = ms;
+                        t.quick = None;
+                    }
+                    None => {
+                        // (`tex` is never drawn while `native` is set)
+                        let blank = egui::ColorImage::filled([1, 1], egui::Color32::BLACK);
+                        let tex = ctx.load_texture(format!("{slot:?}"), blank, egui::TextureOptions::LINEAR);
+                        let t = Tex {
+                            look,
+                            key: r.key,
+                            photo: r.photo,
+                            tex,
+                            size,
+                            histogram: Some(histogram),
+                            ms,
+                            quick: None,
+                            pixels: None,
+                            native: Some(id),
+                        };
+                        self.textures.insert(slot, t);
+                    }
+                }
+                if slot == Slot::Main {
+                    self.last_main_ms = ms;
+                }
+                changed = true;
+                continue;
+            }
             let rendered = match r.rendered {
                 Ok(x) => {
                     self.failed.remove(&slot);
+                    // (a stand-in that comes back after the thumbnail itself is thrown away below)
+                    let unused = matches!(slot, Slot::ThumbQuick(id) if self.textures.contains_key(&Slot::Thumb(id)));
+                    self.decided(|| {
+                        let source = source.as_ref().or_else(|| session.catalog.photo(r.photo).map(|p| &p.source));
+                        let subject = render_subject(slot, r.photo, source);
+                        if unused {
+                            format!("{subject}: abandoned, the thumbnail itself came first")
+                        } else {
+                            format!("{subject}: produced in {ms:.0} ms")
+                        }
+                    });
                     x
                 }
                 Err(e) => {
@@ -1077,6 +1265,9 @@ impl Renderer {
                         self.failure_messages.push(message.clone());
                         log::warn!("{message}");
                         self.failed.insert(slot, (r.key, e, self.catalog_rev, r.photo));
+                    } else {
+                        // (a prefetch only prepares: its failure is no warning, but the trace says how it ended)
+                        self.decided(|| format!("{}: prefetch failed: {e}", render_subject(slot, r.photo, source.as_ref())));
                     }
                     continue;
                 }
@@ -1107,9 +1298,12 @@ impl Renderer {
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             let pixels = self.keep_pixels.then(|| color.clone());
             let name = format!("{slot:?}");
+            // pixels again: the slot's GPU-resident texture is let go
+            self.free_native(slot);
             match self.textures.get_mut(&slot) {
                 Some(t) => {
                     t.tex.set(color, egui::TextureOptions::LINEAR);
+                    t.native = None;
                     t.pixels = pixels;
                     t.look = look;
                     t.key = r.key;
@@ -1133,6 +1327,7 @@ impl Renderer {
                             ms,
                             quick: r.quick,
                             pixels,
+                            native: None,
                         },
                     );
                 }
@@ -1202,9 +1397,20 @@ impl Renderer {
         })
     }
 
-    /// CPU copies of the current textures by id (see [`Self::keep_pixels`]).
+    /// CPU copies of the current textures by id (see [`Self::keep_pixels`]); a view drawn straight
+    /// from the GPU is read back from it (only here: drawing it never does).
     pub fn cpu_textures(&self) -> HashMap<egui::TextureId, crate::softpaint::CpuTexture> {
-        self.textures.values().filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?)))).collect()
+        self.textures
+            .iter()
+            .filter_map(|(slot, t)| {
+                let pixels = match (&t.pixels, t.native, self.native_frames.get(slot), self.screen.as_ref()) {
+                    (Some(p), ..) => p.clone(),
+                    (None, Some(_), Some(frame), Some(screen)) => Arc::new(screen.read(frame)?),
+                    _ => return None,
+                };
+                Some((t.id(), crate::softpaint::CpuTexture::linear(pixels)))
+            })
+            .collect()
     }
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).
@@ -1235,19 +1441,24 @@ impl Renderer {
         });
         for s in dropped {
             self.pending.remove(&s);
-            self.requests.remove(&s);
+            let request = self.requests.remove(&s);
             self.quick_tried.remove(&s);
+            self.decided(|| abandoned_line(s, request.as_ref(), "scrolled out of view before it started"));
         }
+        let mut gone = Vec::new();
         let requests = &mut self.requests;
         let pending = &mut self.pending;
         self.queue.retain(|q| match q.slot {
             Slot::Thumb(id) if !keep.contains(&id) && q.priority <= 10 => {
                 pending.remove(&q.slot);
-                requests.remove(&q.slot);
+                gone.push((q.slot, requests.remove(&q.slot)));
                 false
             }
             _ => true,
         });
+        for (s, request) in gone {
+            self.decided(|| abandoned_line(s, request.as_ref(), "scrolled out of view before it started"));
+        }
         let thumbs = self.thumb_textures();
         if thumbs <= max {
             return;
@@ -1255,15 +1466,91 @@ impl Renderer {
         self.textures.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id)));
         self.quick_tried.retain(|s, _| !matches!(s, Slot::ThumbQuick(id) if !keep.contains(id)));
     }
+
+    /// Log a render decision at debug level: each request, and how it ended when it ended without
+    /// a picture or a failure (failures stay warnings). One "requested" line per request tells a
+    /// file asked for 37 times from one asked once and failing inside (issue #2682). `line` is only
+    /// built when the log takes debug lines (`LIGHTCRAFT_LOG=debug`, or
+    /// `RUST_LOG=lightcraft_ui_egui::render=debug`), so the grid's requests cost nothing more otherwise.
+    fn decided(&mut self, line: impl FnOnce() -> String) {
+        if !logs_decisions() {
+            return;
+        }
+        let line = line();
+        log::debug!("{line}");
+        #[cfg(test)]
+        self.decisions.push(line);
+    }
+
+    /// Log a new request for `slot`, and first what becomes of the one it replaces while that one
+    /// still waits: a queue holds one job per slot, so a newer render drops it, and the same render
+    /// is only moved to the new priority. One already running says so when its result comes back.
+    fn note_request(&mut self, slot: Slot, key: u64, priority: u32, what: &str, subject: impl FnOnce() -> String) {
+        if !logs_decisions() {
+            return;
+        }
+        let waiting = self.pending.get(&slot).map(|p| p.0).filter(|_| self.is_queued(slot));
+        if waiting == Some(key) {
+            let line = format!("{}: still waiting, moved to priority {priority}", subject());
+            self.decided(|| line);
+            return;
+        }
+        if waiting.is_some() {
+            let line = abandoned_line(slot, self.requests.get(&slot), "a newer request replaced it before it started");
+            self.decided(|| line);
+        }
+        let again = if self.failed.get(&slot).is_some_and(|f| f.0 == key) { " again after a failure" } else { "" };
+        let line = format!("{}: {what}{again}", subject());
+        self.decided(|| line);
+    }
+
+    /// Log each request in `which` that still waits in a queue as abandoned (`why`), before they are
+    /// dropped. One already running says so once, when its result comes back unclaimed.
+    fn abandon_pending(&mut self, which: impl Fn(&Slot) -> bool, why: &str) {
+        if !logs_decisions() {
+            return;
+        }
+        let mut slots: Vec<Slot> = self.pending.keys().copied().filter(|s| which(s) && self.is_queued(*s)).collect();
+        slots.sort_by_key(|s| format!("{s:?}"));
+        for s in slots {
+            let line = abandoned_line(s, self.requests.get(&s), why);
+            self.decided(|| line);
+        }
+    }
 }
 
-/// Include the source identity in diagnostics for every catalog-backed render slot (#1890).
-/// Debug-format paths so whitespace/control characters cannot forge another log entry.
-fn render_failure_message(slot: Slot, photo: PhotoId, source: Option<&lightcraft_catalog::Source>, error: &str) -> String {
+/// Whether render decisions are logged ([`Renderer::decided`]): the log takes debug lines from this
+/// module, or a test is looking.
+fn logs_decisions() -> bool {
+    cfg!(test) || log::log_enabled!(log::Level::Debug)
+}
+
+/// How the log names a render: its slot, its photo and that photo's source, for every
+/// catalog-backed render slot (#1890). Debug-format paths so whitespace/control characters cannot
+/// forge another log entry.
+fn render_subject(slot: Slot, photo: PhotoId, source: Option<&lightcraft_catalog::Source>) -> String {
     match source {
-        Some(lightcraft_catalog::Source::File { path }) => format!("render {slot:?}, {photo:?}, file {path:?}: {error}"),
-        Some(lightcraft_catalog::Source::Demo { scene }) => format!("render {slot:?}, {photo:?}, demo scene {scene}: {error}"),
-        None => format!("render {slot:?}, {photo:?}, source unavailable: {error}"),
+        Some(lightcraft_catalog::Source::File { path }) => format!("render {slot:?}, {photo:?}, file {path:?}"),
+        Some(lightcraft_catalog::Source::Demo { scene }) => format!("render {slot:?}, {photo:?}, demo scene {scene}"),
+        None => format!("render {slot:?}, {photo:?}, source unavailable"),
+    }
+}
+
+/// Include the source identity in diagnostics ([`render_subject`]).
+fn render_failure_message(slot: Slot, photo: PhotoId, source: Option<&lightcraft_catalog::Source>, error: &str) -> String {
+    format!("{}: {error}", render_subject(slot, photo, source))
+}
+
+/// The log line for a request dropped before its result came back, named by the source it was
+/// requested from. A grid slot names its photo; a view or slide slot shows whichever photo is open,
+/// so its file names it.
+fn abandoned_line(slot: Slot, request: Option<&Requested>, why: &str) -> String {
+    let source = request.and_then(|r| r.source.as_ref());
+    match (slot, source) {
+        (Slot::Thumb(id) | Slot::ThumbQuick(id), _) => format!("{}: abandoned, {why}", render_subject(slot, id, source)),
+        (_, Some(lightcraft_catalog::Source::File { path })) => format!("render {slot:?}, file {path:?}: abandoned, {why}"),
+        (_, Some(lightcraft_catalog::Source::Demo { scene })) => format!("render {slot:?}, demo scene {scene}: abandoned, {why}"),
+        (_, None) => format!("render {slot:?}: abandoned, {why}"),
     }
 }
 
@@ -1286,7 +1573,7 @@ mod stage_budget_tests {
         let tex = ctx.load_texture("window", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
         r.textures.insert(
             Slot::Region,
-            Tex { look: None, key: 1, photo: PhotoId(1), tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+            Tex { look: None, key: 1, photo: PhotoId(1), tex, native: None, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
         );
         let long_ago = std::time::Instant::now().checked_sub(IDLE_TRIM * 2).unwrap();
         r.idle = Some((long_ago, false));
@@ -1296,6 +1583,59 @@ mod stage_budget_tests {
         r.idle = Some((long_ago, false));
         r.trim_when_idle(&ctx);
         assert_eq!(r.idle, Some((long_ago, true)), "trimmed once the window is gone");
+    }
+
+    // Given views drawn from GPU-resident frames, freeing those frames (the screen can't show one any more) drops
+    // the views that point at them, so they are rendered again as pixels; a view held as pixels stays
+    #[test]
+    fn freeing_gpu_frames_drops_the_views_drawn_from_them() {
+        let ctx = egui::Context::default();
+        let mut r = Renderer::default();
+        let tex = |name: &str| ctx.load_texture(name, egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
+        let view = |tex, native| Tex {
+            look: None,
+            key: 1,
+            photo: PhotoId(1),
+            tex,
+            native,
+            size: [64, 48],
+            histogram: None,
+            ms: 0.0,
+            quick: None,
+            pixels: None,
+        };
+        r.textures.insert(Slot::Before, view(tex("before"), Some(egui::TextureId::User(7))));
+        r.textures.insert(Slot::Compare(0), view(tex("compare"), Some(egui::TextureId::User(8))));
+        r.textures.insert(Slot::Main, view(tex("main"), None));
+        r.free_natives();
+        assert!(!r.textures.contains_key(&Slot::Before), "its frame is gone");
+        assert!(!r.textures.contains_key(&Slot::Compare(0)), "its frame is gone");
+        assert!(r.textures.contains_key(&Slot::Main), "pixels stay");
+    }
+
+    /// A view slot switching from pixels to a GPU-resident texture lets go of its pixel image (it is never drawn
+    /// while the native texture is set): before, the full-size image stayed in egui's texture manager.
+    #[test]
+    fn a_view_switching_to_a_gpu_texture_drops_its_pixel_image() {
+        let ctx = egui::Context::default();
+        let image = egui::ColorImage::new([64, 48], vec![egui::Color32::GRAY; 64 * 48]);
+        let mut t = Tex {
+            look: None,
+            key: 1,
+            photo: PhotoId(1),
+            tex: ctx.load_texture("main", image, Default::default()),
+            native: None,
+            size: [64, 48],
+            histogram: None,
+            ms: 0.0,
+            quick: None,
+            pixels: Some(std::sync::Arc::new(egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]))),
+        };
+        t.show_native(egui::TextureId::User(7));
+        assert_eq!(t.tex.size(), [1, 1], "the pixel image is released");
+        assert_eq!((t.native, t.pixels.is_none()), (Some(egui::TextureId::User(7)), true));
+        t.show_native(egui::TextureId::User(8));
+        assert_eq!((t.native, t.tex.size()), (Some(egui::TextureId::User(8)), [1, 1]));
     }
 
     // Given stage caches within the budget, nothing is cleared
@@ -1418,6 +1758,7 @@ mod color_image_tests {
             loaded: None,
             quick: None,
             display: None,
+            frame: None,
         };
         let histogram = Histogram::of_srgb8(&image);
         let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })), &None);

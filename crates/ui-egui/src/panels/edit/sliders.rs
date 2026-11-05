@@ -116,17 +116,21 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
             crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
         }
     }
-    // imported LUT profile groups
-    let mut lut_groups: Vec<String> = app.session.lut_profiles.iter().map(|p| p.group.clone()).collect();
-    lut_groups.sort_unstable();
-    lut_groups.dedup();
+    // imported profile groups: LUT folders, then camera profiles
+    let imported = app.session.imported_profiles();
+    let mut lut_groups: Vec<String> = Vec::new();
+    for (_, _, g) in &imported {
+        if !lut_groups.contains(g) {
+            lut_groups.push(g.clone());
+        }
+    }
     for g in &lut_groups {
         // a folder's name as it is, and its own widget id even when it matches a built-in group
         let r = crate::widgets::menu_button(ui, g.as_str(), |ui| {
             crate::menu_level::level(ui, 2, Some(below), |ui| {
                 ui.set_min_width(170.0);
-                for p in app.session.lut_profiles.iter().filter(|p| &p.group == g) {
-                    item(ui, "group", &p.id, &p.name, &mut pick);
+                for (id, name, _) in imported.iter().filter(|p| &p.2 == g) {
+                    item(ui, "group", id, name, &mut pick);
                 }
             });
         });
@@ -214,13 +218,14 @@ pub(super) fn section(
 
 // ------------------------------------------------------------------------------ HDR
 
-/// The Light panel's HDR row: the HDR switch and Visualize HDR, then (HDR on) the headroom limit.
 /// The Light panel's HDR settings while HDR editing is on (the switch itself is the HDR button
-/// next to B&W): Visualize HDR range and the headroom limit.
-pub(super) fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
-    if !d.hdr.enabled {
-        return;
-    }
+/// next to B&W): Visualize HDR range and the headroom limit. They slide open and shut with the
+/// histogram's change of layout; another photo shows its own at once.
+pub(super) fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId) {
+    super::hdr_flow::drawer(ui, egui::Id::unique(("hdrSettings", id)), d.hdr.enabled, |ui| hdr_settings(app, ui, d));
+}
+
+fn hdr_settings(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
         let mut v = app.ui.hdr_visualize;
         let r = ui.checkbox(&mut v, "Visualize HDR");
