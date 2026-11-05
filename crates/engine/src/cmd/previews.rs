@@ -384,11 +384,12 @@ fn smart_run(
     dir: &std::path::Path,
     custom: bool,
     action: SmartAction,
+    rendered: &lightcraft_preview::PreviewCache,
     jobs: Vec<SmartJob>,
     state: Option<(&PreviewBuild, &TaskGuard)>,
 ) -> std::result::Result<SmartCounts, String> {
     let mut n = SmartCounts::default();
-    if action != SmartAction::Discard {
+    if action == SmartAction::Build {
         // a chosen folder on another drive must be there: never recreate it on this one
         if custom {
             crate::smart::check_writable(dir)?;
@@ -409,7 +410,17 @@ fn smart_run(
             }
         } else {
             let existing = crate::smart::existing_file_path(dir, path.clone());
-            let was_stale = crate::smart::is_stale_for(&existing, look);
+            let was_stale = if action == SmartAction::Refresh {
+                match crate::smart::checked_file_path(dir, path.clone()).and_then(|path| crate::smart::stale_status(&path, look)) {
+                    Ok(stale) => stale,
+                    Err(e) => {
+                        n.failed.push(json!([id.0, e.to_string()]));
+                        continue;
+                    }
+                }
+            } else {
+                crate::smart::is_stale_for(&existing, look)
+            };
             let encoded = if action == SmartAction::Refresh && !was_stale {
                 None
             } else if !was_stale && crate::smart::is_valid(&existing) {
@@ -430,12 +441,30 @@ fn smart_run(
                     break;
                 }
                 // Build or Discard could have changed the destination while we read the original.
-                let path = crate::smart::existing_file_path(dir, path);
+                let path = if action == SmartAction::Refresh {
+                    match crate::smart::checked_file_path(dir, path) {
+                        Ok(path) => path,
+                        Err(e) => {
+                            n.failed.push(json!([id.0, e.to_string()]));
+                            continue;
+                        }
+                    }
+                } else {
+                    crate::smart::existing_file_path(dir, path)
+                };
                 let damaged = path.exists();
-                let stale = damaged && crate::smart::is_stale_for(&path, look);
-                if action == SmartAction::Refresh && !stale {
-                    continue;
-                }
+                let stale = if action == SmartAction::Refresh {
+                    match crate::smart::stale_status(&path, look) {
+                        Ok(true) => true,
+                        Ok(false) => continue,
+                        Err(e) => {
+                            n.failed.push(json!([id.0, e.to_string()]));
+                            continue;
+                        }
+                    }
+                } else {
+                    damaged && crate::smart::is_stale_for(&path, look)
+                };
                 let r = if !stale && crate::smart::is_valid(&path) {
                     Ok(false)
                 } else if stale && !was_stale {
@@ -484,6 +513,10 @@ fn smart_run(
             task.progress(done as u64, st.total as u64);
         }
     }
+    if n.refreshed != 0 {
+        // Reject writes from render jobs that captured the cache generation before refresh.
+        rendered.clear();
+    }
     Ok(n)
 }
 
@@ -512,6 +545,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let custom = s.smart_previews_dir.is_some();
     let action = if discard { SmartAction::Discard } else { SmartAction::Build };
+    let rendered = s.media.rendered.clone();
     if background {
         let what = if discard { "discarding smart previews" } else { "smart previews" };
         let state = Arc::new(PreviewBuild { total: jobs.len(), what, ..Default::default() });
@@ -521,7 +555,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         std::thread::Builder::new()
             .name("lc-smart-previews".into())
             .spawn(move || {
-                if let Err(e) = smart_run(&dir, custom, action, jobs, Some((&st, &task))) {
+                if let Err(e) = smart_run(&dir, custom, action, &rendered, jobs, Some((&st, &task))) {
                     log::warn!("{C}: {e}");
                     *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
                 }
@@ -530,7 +564,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             .map_err(|e| bad(C, format!("could not start: {e}")))?;
         return Ok(state.json());
     }
-    let r = smart_run(&dir, custom, action, jobs, None).map_err(|e| bad(C, e))?;
+    let r = smart_run(&dir, custom, action, &rendered, jobs, None).map_err(|e| bad(C, e))?;
     Ok(
         json!({"built": r.built, "repaired": r.repaired, "refreshed": r.refreshed, "staleKept": r.stale_kept, "removed": r.removed, "failed": r.failed}),
     )
@@ -556,35 +590,27 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
         .iter()
         .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
         .collect();
+    let rendered = s.media.rendered.clone();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
-        .spawn(move || refresh_stale(&dir, jobs))
+        .spawn(move || refresh_stale(&dir, jobs, &rendered))
         .map_err(|e| log::warn!("smart previews: could not start the look refresh: {e}"))
         .ok()
 }
 
 /// The body of [`refresh_stale_smart_previews`]: rebuild the stale proxies among `jobs`.
 #[cfg(not(target_arch = "wasm32"))]
-fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
-    let stale: Vec<SmartJob> = jobs
-        .into_iter()
-        .filter(|(_, path, _, look)| crate::smart::is_stale_for(&crate::smart::existing_file_path(dir, path.clone()), *look))
-        .collect();
-    if !stale.is_empty() {
-        // `custom`: the folder is there already, and must not be recreated if it went away since
-        match smart_run(dir, true, SmartAction::Refresh, stale, None) {
-            Ok(n) => {
-                log::info!("smart previews: {} refreshed to the current camera look, {} kept (original offline)", n.refreshed, n.stale_kept);
-                // Keep the refresh pending until every stale proxy can be rebuilt.
-                if n.stale_kept != 0 || !n.failed.is_empty() {
-                    return;
-                }
-            }
-            Err(e) => {
-                // not marked: the next opening tries again
-                log::warn!("smart previews: look refresh: {e}");
+fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>, rendered: &lightcraft_preview::PreviewCache) {
+    match smart_run(dir, true, SmartAction::Refresh, rendered, jobs, None) {
+        Ok(n) => {
+            log::info!("smart previews: {} refreshed to the current camera look, {} kept (original offline)", n.refreshed, n.stale_kept);
+            if n.stale_kept != 0 || !n.failed.is_empty() {
                 return;
             }
+        }
+        Err(e) => {
+            log::warn!("smart previews: look refresh: {e}");
+            return;
         }
     }
     if let Err(e) = crate::smart::mark_look_checked(dir) {

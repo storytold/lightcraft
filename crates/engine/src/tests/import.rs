@@ -2160,6 +2160,24 @@ fn smart_preview_discard_can_finish_during_an_opening_refresh_load() {
     let _ = std::fs::remove_dir_all(&case.lib);
 }
 
+#[test]
+fn smart_preview_refresh_retries_when_a_proxy_cannot_be_read() {
+    let mut case = SmartLookCase::new("ARW", "unreadable");
+    case.session.execute("library.smartPreviews", &json!({})).unwrap();
+    edit_smart_header(&case.file, |h| h["look_version"] = json!(0));
+    let backup = case.file.with_extension("backup");
+    std::fs::rename(&case.file, &backup).unwrap();
+    // A directory at the proxy path fails to open or read as a file on all platforms.
+    std::fs::create_dir(&case.file).unwrap();
+    crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
+    assert!(!crate::smart::look_checked(&case.dir));
+    std::fs::remove_dir(&case.file).unwrap();
+    std::fs::rename(backup, &case.file).unwrap();
+    crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
+    assert!(!crate::smart::is_stale(&case.file));
+    assert!(crate::smart::look_checked(&case.dir));
+}
+
 fn smart_look_refresh_for(format: &str) {
     let mut case = SmartLookCase::new(format, format);
     assert_current_smart_look_is_not_rebuilt(&mut case);
@@ -2260,7 +2278,15 @@ fn refresh_online_previews(case: &mut SmartLookCase, old_bytes: &[u8], png_bytes
     // The original comes back: a later library opening retries the pending refresh.
     std::fs::rename(case.src.with_extension("offline"), &case.src).unwrap();
     case.calls.store(0, std::sync::atomic::Ordering::SeqCst);
+    let job = case.session.thumb_job(case.id, 256).unwrap();
+    let (cache, key) = job.cache.unwrap();
+    let old_render = std::sync::Arc::new(lightcraft_raster::Rgba8::new(8, 8));
+    cache.put_at(job.cache_generation, key, old_render.clone());
+    assert!(cache.get(key).is_some());
     crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
+    assert!(cache.get(key).is_none(), "refresh invalidates the cached thumbnail");
+    cache.put_at(job.cache_generation, key, old_render);
+    assert!(cache.get(key).is_none(), "an older render cannot refill the cache");
     assert_ne!(std::fs::read(&case.file).unwrap(), old_bytes, "the opening refresh rebuilt the stale proxy");
     assert!(crate::smart::look_checked(&case.dir), "the successful retry finishes the refresh");
     let r = case.session.execute("library.smartPreviews", &json!({})).unwrap();
