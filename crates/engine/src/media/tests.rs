@@ -83,13 +83,14 @@ fn decoder_info_survives_render_jobs_cache_and_eviction() {
     job.source = SourceRef::File {
         path: "synthetic.arw".into(),
         max_edge: 64,
-        loader: Some(Arc::new(move |_, _| {
+        loader: Some(Arc::new(move |_, _, _| {
             let mut image = Rgb32f::new(64, 64);
             image.data.fill([0.1; 3]);
             Ok((image, loaded_info.clone()))
         })),
         fallback: None,
         denoise: None,
+        camera_profile: None,
         reduced: None,
     };
     job.info = SourceInfo::default(); // Header facts cannot override decoder facts.
@@ -143,9 +144,10 @@ fn old_relative_white_balance_on_a_kelvin_camera_keeps_its_look_and_learns_the_a
     job.source = SourceRef::File {
         path: "/photos/DSC00001.ARW".into(),
         max_edge: 64,
-        loader: Some(Arc::new(move |_, _| Ok((loaded_pixels.clone(), loaded_info.clone())))),
+        loader: Some(Arc::new(move |_, _, _| Ok((loaded_pixels.clone(), loaded_info.clone())))),
         fallback: None,
         denoise: None,
+        camera_profile: None,
         reduced: None,
     };
     let undo_before = s.undo.len();
