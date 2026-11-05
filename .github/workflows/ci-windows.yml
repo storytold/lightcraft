@@ -35,9 +35,13 @@ jobs:
       paths: |
         .github/workflows/ci-windows.yml
         apps/lightcraft/*
+        apps/lightcraft-cli/src/bench_cull.rs
+        apps/lightcraft-cli/tests/it/cli.rs
+        apps/lightcraft-cli/Cargo.toml
         crates/wincolor/*
         crates/ui-egui/src/theme.rs
         crates/ui-egui/src/panels/left/local.rs
+        crates/ui-egui/src/menus/files.rs
         crates/ui-egui/src/dialogs/settings/performance.rs
         crates/catalog/src/safe_file.rs
         crates/catalog/Cargo.toml
@@ -69,6 +73,6 @@ jobs:
       tools: ""
       timeout-minutes: 90
       windows-command: |
-        pkgs=(-p lightcraft-wincolor -p lightcraft-catalog -p lightcraft-engine -p lightcraft-ui-egui -p lightcraft)
+        pkgs=(-p lightcraft-wincolor -p lightcraft-catalog -p lightcraft-engine -p lightcraft-ui-egui -p lightcraft -p lightcraft-cli)
         cargo clippy "${pkgs[@]}" --all-targets --keep-going -- -D warnings
         cargo test "${pkgs[@]}" --lib --bins --tests --no-fail-fast
