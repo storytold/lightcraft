@@ -114,7 +114,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 ## Progress log
 
-- 2026-11-04: Olympus / OM System compressed ORF decodes from sensor data: pure-Rust bitstream decoder (`crates/raw/src/vendor/orf.rs`) implementing edge-directed prediction and entropy coding (note: derived from LibRaw/dcraw implementation; pending clean-room reimplementation from patent specifications US7333035B2/US7715639B2 and CC0 samples per repository clean-room rules) and verified on OM-D E-M1 (r=0.995) and E-M10 Mark III (r=0.929) CC0 samples; 58 bodies newly unlocked (78 total across Olympus and OM; OM/Olympus 6% → 81% fully working, overall weighted camera coverage 94% → 97%).
+- 2026-11-04: Olympus / OM System compressed ORF decodes from sensor data: clean-room pure-Rust bitstream decoder (`crates/raw/src/vendor/orfc.rs`) derived strictly from Olympus patents US7333035B2/US7715639B2, maker notes and CC0 samples without third-party decoder code (see `docs/orf-compression.md`), verified on OM-D E-M1 (r=0.995) and E-M10 Mark III (r=0.929) CC0 samples; 58 bodies newly unlocked (78 total across Olympus and OM; OM/Olympus 6% → 81% fully working, overall weighted camera coverage 94% → 97%).
 - 2026-10-22: Print page setup and PDF output gain the Japanese photo and postcard papers — L判
   (89 × 127 mm), 2L判 (127 × 178), KG判 (102 × 152), はがき (100 × 148), 往復はがき (148 × 200),
   六切 (203 × 254), 四切 (254 × 305) and 名刺 (55 × 91) — at their exact metric sizes. The Print dialog

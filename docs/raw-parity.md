@@ -5,7 +5,7 @@
 Raw processing is the deepest single dimension of Lightroom parity: a photographer whose camera
 does not decode, or decodes with the wrong colour, cannot switch. This document measures it model by
 model. The numbers feed [target-app-parity.md](target-app-parity.md); individual shortfalls are
-ranked in [gaps.md](gaps.md). Details per format: [cr3.md](cr3.md),
+ranked in [gaps.md](gaps.md). Details per format: [cr3.md](cr3.md), [orf-compression.md](orf-compression.md),
 [raf-compression.md](raf-compression.md), [sony-lens-corrections.md](sony-lens-corrections.md),
 [sony-ilce7rm6-lens-corrections.md](sony-ilce7rm6-lens-corrections.md), [nikon-lens-corrections.md](nikon-lens-corrections.md),
 [camera-preview-colour.md](camera-preview-colour.md), [denoise.md](denoise.md).
@@ -189,8 +189,8 @@ files and prose rather than from dcraw-family code.
 - [US7715639B2](https://patents.google.com/patent/US7715639B2/en): a sibling with predictor variants, `k` derived from
   neighbouring positions, raw low-order bits and a correction filter.
 
-They give the algorithm's shape; constants, the bit layout and the stream header still have to be established from CC0
-sample files. A pointer for contributors, not legal advice.
+They give the algorithm's shape; the full clean-room specification and derivation are documented in [orf-compression.md](orf-compression.md) and implemented in pure Rust in `crates/raw/src/vendor/orfc.rs`.
+
 
 ## Demosaic, levels, crops and lens metadata
 
@@ -298,7 +298,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-04 | minor | Compressed ORF decoded (pure-Rust entropy bitstream decoder, `crates/raw/src/vendor/orf.rs`): OM-D E-M1 (r=0.995) and E-M10 Mark III (r=0.929) verified; 559 verified, 721 unverified, 129 preview; OM / Olympus fully working 6% → 81%, weighted coverage 94% → 97% |
+| 2026-11-04 | minor | Compressed ORF decoded (clean-room pure-Rust bitstream decoder, `crates/raw/src/vendor/orfc.rs`, `docs/orf-compression.md`): OM-D E-M1 (r=0.995) and E-M10 Mark III (r=0.929) verified; 559 verified, 721 unverified, 129 preview; OM / Olympus fully working 6% → 81%, weighted coverage 94% → 97% |
 | 2026-10-26 | patch | Bundled camera profile count 5 → 9 (Nikon Z 6II, Z 8 and D5300, ILCE-7RM5); counts only |
 | 2026-10-23 | minor | Lens profiles: Sony ILCE-6700 (APS-C) in-file distortion through the ILCE-7RM6 conversion, knots spanning its own crop; lens score unchanged (~10%: one more body) |
 | 2026-10-25 | patch | CRW variant rows split by verification status (EOS and G1/G6 verified; G2/G3/G4/Pro1/S-series unverified; G5 preview); the CIFF heap walk is bounded by a per-file record budget, so a block of sub-heap records pointing back at their parent no longer hangs decode |
