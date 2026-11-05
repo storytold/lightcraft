@@ -1868,7 +1868,7 @@ fn remove_folder_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 /// The body of the About dialog.
 fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::About = dlg else { return };
-    ui.set_min_width(680.0);
+    ui.set_min_width(820.0);
     let tab_id = egui::Id::unique("about_tab");
     let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
     ui.horizontal(|ui| {
