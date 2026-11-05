@@ -2126,8 +2126,42 @@ fn smart_previews_from_an_older_look_fit_are_refreshed() {
     }
 }
 
+#[test]
+fn smart_preview_discard_can_finish_during_an_opening_refresh_load() {
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::{Duration, Instant};
+
+    let mut case = SmartLookCase::new("ARW", "discard");
+    case.session.execute("library.smartPreviews", &json!({})).unwrap();
+    edit_smart_header(&case.file, |h| h["look_version"] = json!(0));
+    let (loading, started) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    let resume = Mutex::new(resume);
+    let plain = case.plain_loader.clone();
+    case.session.media.file_loader = Some(Arc::new(move |path, edge| {
+        loading.send(()).unwrap();
+        resume.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
+        plain(path, edge)
+    }));
+    let refresh = crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap();
+    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    case.session.execute("library.smartPreviews", &json!({"ids": [case.id.0], "discard": true, "background": true})).unwrap();
+    let discard = case.session.preview_build.as_ref().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !discard.finished.load(std::sync::atomic::Ordering::Relaxed) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let discarded_during_load = !case.file.exists();
+    release.send(()).unwrap();
+    refresh.join().unwrap();
+    assert!(discarded_during_load, "discard must not wait for the original to load");
+    assert!(!case.file.exists(), "refresh must not restore a discarded proxy");
+    let _ = std::fs::remove_dir_all(&case.src);
+    let _ = std::fs::remove_dir_all(&case.lib);
+}
+
 fn smart_look_refresh_for(format: &str) {
-    let mut case = SmartLookCase::new(format);
+    let mut case = SmartLookCase::new(format, format);
     assert_current_smart_look_is_not_rebuilt(&mut case);
     let (old_bytes, png_bytes) = keep_offline_previews(&mut case);
     refresh_online_previews(&mut case, &old_bytes, &png_bytes);
@@ -2150,9 +2184,9 @@ struct SmartLookCase {
 }
 
 impl SmartLookCase {
-    fn new(format: &str) -> Self {
-        let src = temp_dir(&format!("smartlook-src-{format}"));
-        let lib = temp_dir(&format!("smartlook-lib-{format}"));
+    fn new(format: &str, name: &str) -> Self {
+        let src = temp_dir(&format!("smartlook-src-{name}"));
+        let lib = temp_dir(&format!("smartlook-lib-{name}"));
         write_png(&src.join("a.png"), 3);
         write_png(&src.join("b.png"), 9);
         let mut session = Session::new().with_fs();

@@ -368,6 +368,14 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SmartAction {
+    Build,
+    Discard,
+    Refresh,
+}
+
 /// The file-system half of Build / Discard Smart Previews (runs on a worker thread in the app).
 /// `custom`: the folder was chosen (on another drive, perhaps): it must be there, it is never
 /// recreated. With `state`, progress and cancel.
@@ -375,12 +383,12 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
 fn smart_run(
     dir: &std::path::Path,
     custom: bool,
-    discard: bool,
+    action: SmartAction,
     jobs: Vec<SmartJob>,
     state: Option<(&PreviewBuild, &TaskGuard)>,
 ) -> std::result::Result<SmartCounts, String> {
     let mut n = SmartCounts::default();
-    if !discard {
+    if action != SmartAction::Discard {
         // a chosen folder on another drive must be there: never recreate it on this one
         if custom {
             crate::smart::check_writable(dir)?;
@@ -392,47 +400,60 @@ fn smart_run(
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
-        let _one = SMART_WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Read either the new shard or a pre-upgrade flat file, without making new work
-        // depend on having the original online.
-        let path = crate::smart::existing_file_path(dir, path);
-        if discard {
+        // Read either the new shard or a pre-upgrade flat file.
+        if action == SmartAction::Discard {
+            let _one = SMART_WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let path = crate::smart::existing_file_path(dir, path);
             if std::fs::remove_file(&path).is_ok() {
                 n.removed += 1;
             }
         } else {
-            // a complete, current proxy is kept; a missing or damaged one (cut short by a crash or a
-            // full drive) is (re)built, and so is one written by an older encoding or camera-look
-            // fit (see `smart::ENCODE_VERSION` and `camera_preview::LOOK_VERSION`) when its
-            // original can be read
-            let damaged = path.exists();
-            let stale = damaged && crate::smart::is_stale_for(&path, look);
-            if damaged && !stale && crate::smart::is_valid(&path) {
+            let existing = crate::smart::existing_file_path(dir, path.clone());
+            let was_stale = crate::smart::is_stale_for(&existing, look);
+            let encoded = if action == SmartAction::Refresh && !was_stale {
+                None
+            } else if !was_stale && crate::smart::is_valid(&existing) {
                 n.built += 1;
+                None
             } else {
-                // a stale proxy is rebuilt from the original only: never from itself (the file
-                // fallback or a source decoded from a proxy would stamp the old look as current)
-                let source = if stale { source.and_then(original_only) } else { source };
-                // atomic: a failed write leaves no partial proxy that would pass for a built one;
-                // and synced (issue #134): built so the photo can be edited while its original
-                // is offline, when it is the only copy — the sync is small next to the decode
-                let r = source
-                    .ok_or_else(|| "nothing to build from".to_string())
-                    .and_then(|s| s.load_source())
-                    .and_then(|src| {
-                        let info = src.info_or(Default::default());
-                        crate::smart::encode(&src.image, Some(&info))
-                    })
-                    .and_then(|b| {
+                // A stale proxy must be rebuilt from the original, never from its own fallback.
+                let source = if was_stale { source.and_then(original_only) } else { source };
+                Some(source.ok_or_else(|| "nothing to build from".to_string()).and_then(|s| s.load_source()).and_then(|src| {
+                    let info = src.info_or(Default::default());
+                    crate::smart::encode(&src.image, Some(&info))
+                }))
+            };
+
+            if let Some(encoded) = encoded {
+                let _one = SMART_WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
+                    break;
+                }
+                // Build or Discard could have changed the destination while we read the original.
+                let path = crate::smart::existing_file_path(dir, path);
+                let damaged = path.exists();
+                let stale = damaged && crate::smart::is_stale_for(&path, look);
+                if action == SmartAction::Refresh && !stale {
+                    continue;
+                }
+                let r = if !stale && crate::smart::is_valid(&path) {
+                    Ok(false)
+                } else if stale && !was_stale {
+                    Err("preview became stale while loading its source".into())
+                } else {
+                    encoded.and_then(|b| {
                         let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
                         // Only create the leaf shard: do not recreate a missing external drive.
                         if !parent.is_dir() {
                             std::fs::create_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
                         }
-                        lightcraft_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display()))
-                    });
+                        // Keep offline previews durable and leave the existing file intact on failure.
+                        lightcraft_catalog::safe_file::write_atomic(&path, &b).map(|()| true).map_err(|e| format!("{}: {e}", path.display()))
+                    })
+                };
                 match r {
-                    Ok(()) => {
+                    Ok(false) => n.built += 1,
+                    Ok(true) => {
                         n.built += 1;
                         if stale {
                             n.refreshed += 1;
@@ -490,6 +511,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         jobs.push((id, path, source, preview_fitted_look(&ph)));
     }
     let custom = s.smart_previews_dir.is_some();
+    let action = if discard { SmartAction::Discard } else { SmartAction::Build };
     if background {
         let what = if discard { "discarding smart previews" } else { "smart previews" };
         let state = Arc::new(PreviewBuild { total: jobs.len(), what, ..Default::default() });
@@ -499,7 +521,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         std::thread::Builder::new()
             .name("lc-smart-previews".into())
             .spawn(move || {
-                if let Err(e) = smart_run(&dir, custom, discard, jobs, Some((&st, &task))) {
+                if let Err(e) = smart_run(&dir, custom, action, jobs, Some((&st, &task))) {
                     log::warn!("{C}: {e}");
                     *st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e);
                 }
@@ -508,7 +530,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             .map_err(|e| bad(C, format!("could not start: {e}")))?;
         return Ok(state.json());
     }
-    let r = smart_run(&dir, custom, discard, jobs, None).map_err(|e| bad(C, e))?;
+    let r = smart_run(&dir, custom, action, jobs, None).map_err(|e| bad(C, e))?;
     Ok(
         json!({"built": r.built, "repaired": r.repaired, "refreshed": r.refreshed, "staleKept": r.stale_kept, "removed": r.removed, "failed": r.failed}),
     )
@@ -546,12 +568,11 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
 fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     let stale: Vec<SmartJob> = jobs
         .into_iter()
-        .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
-        .filter(|(_, path, _, look)| crate::smart::is_stale_for(path, *look))
+        .filter(|(_, path, _, look)| crate::smart::is_stale_for(&crate::smart::existing_file_path(dir, path.clone()), *look))
         .collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
-        match smart_run(dir, true, false, stale, None) {
+        match smart_run(dir, true, SmartAction::Refresh, stale, None) {
             Ok(n) => {
                 log::info!("smart previews: {} refreshed to the current camera look, {} kept (original offline)", n.refreshed, n.stale_kept);
                 // Keep the refresh pending until every stale proxy can be rebuilt.
