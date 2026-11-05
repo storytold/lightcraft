@@ -240,12 +240,27 @@ checked between WAL chunks, root-table B-tree/overflow pages and rows; an OS rea
 flight must return before cancellation can be observed. If another dialog was opened during
 discovery, its unconfirmed input is preserved and the import asks the user to retry.
 
-On Windows, catalog imports check UNC path components without following the final component
-and refuse existing reparse points (including directory junctions and symbolic links) before
-probing originals or sidecars. Source discovery itself still performs no original-file I/O.
-These checks are not an atomic filesystem sandbox: a concurrently replaced component or
-server-side redirection is outside the lexical share policy's guarantee. Only authorize shares
-whose contents and server you trust.
+On Windows, UNC originals and sidecars are opened relative to directory handles, one
+validated component at a time. Every component is opened without following its final reparse
+point; metadata is read from that handle and a reparse point is refused before proceeding.
+Ancestors stay open during the walk, and metadata, probing and file bytes use the opened
+object rather than reopening a previously checked path. Native remote-symlink errors are
+refused; there is no fallback that retries the path through Win32 or evaluates a link target.
+Preview and native byte-loading paths use the same entry point after import. Source discovery
+itself still performs no original-file I/O.
+
+The grant is to the **logical SMB share**, not to a physical directory on the server or a fixed
+IP address. The selected server and Windows' SMB transport remain trusted to serve that share:
+server-side mounts, storage layout and transport/DFS referrals are not controlled by the
+catalog importer. The importer does not evaluate catalog-driven links to another share.
+A server that itself serves different data under an authorized name is outside this boundary,
+just as it is for an ordinary file read. This distinction also applies to metadata-only checks.
+
+The Windows implementation uses the safe, handle-relative API of `cap-primitives` (pinned to
+4.0.3), with `FILE_FLAG_OPEN_REPARSE_POINT` and no delete sharing during traversal. No unsafe
+code or operating-system policy changes are added to LightCraft. Tests use synthetic local and
+loopback-SMB fixtures; junction tests need no elevation, while symbolic-link tests explicitly
+report a skip if Windows denies link creation.
 
 The import-start response includes `networkShares`, the policy received by the import job
 (`null` for the default document-share policy, an array for an explicit selection).

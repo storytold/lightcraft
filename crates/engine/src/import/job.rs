@@ -46,7 +46,7 @@ pub struct ImportJob {
     /// Probes from a preceding scan (not read again).
     pub(super) cache: HashMap<String, ProbeInfo>,
     naming: crate::sidecar::SidecarNaming,
-    /// Catalog-driven imports preflight network originals and sidecars before probing them.
+    /// Catalog-driven imports use handle-based network reads, including sidecars and custom probes.
     check_network_links: bool,
     now: String,
     /// Next rename number; `None` once the final representable value has been reserved.
@@ -209,13 +209,14 @@ impl ImportJob {
         })
     }
 
-    /// Catalog paths are untrusted: recheck existing UNC redirects immediately before probing.
+    /// Route catalog-driven UNC probes through the handle-based filesystem reader.
+    /// A path-based custom hook must not reopen an original after a separate authorization check.
     pub(crate) fn check_network_links(&mut self) {
         self.check_network_links = true;
         if let Some(probe) = self.probe.take() {
             self.probe = Some(std::sync::Arc::new(move |path| {
                 if craft_docpath::classify(path) == craft_docpath::PathKind::Network {
-                    crate::doc_path::original_metadata(Path::new(path)).map_err(|e| e.to_string())?;
+                    return crate::files::probe_path(path);
                 }
                 probe(path)
             }));
@@ -378,18 +379,16 @@ impl ImportJob {
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none (a duplicate needs only that time)
             let raw = info.kind == MediaKind::Raw;
-            let packet = if duplicate_of.is_some() && info.captured.is_some() {
-                None
-            } else {
-                found_sidecar
-                    .and_then(|f| {
-                        if self.check_network_links {
-                            crate::doc_path::original_metadata(&f).ok()?;
-                        }
-                        std::fs::read_to_string(f).ok()
-                    })
-                    .or_else(|| info.xmp.clone().filter(|_| raw))
-            };
+            let packet =
+                if duplicate_of.is_some() && info.captured.is_some() {
+                    None
+                } else {
+                    found_sidecar
+                        .and_then(|f| {
+                            if self.check_network_links { crate::doc_path::read_original_text(f).ok() } else { std::fs::read_to_string(f).ok() }
+                        })
+                        .or_else(|| info.xmp.clone().filter(|_| raw))
+                };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
                 Ok(sc) => Some(sc),

@@ -69,3 +69,10 @@ jxl-oxide = { workspace = true }
 craft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 craft-tiff = { workspace = true }
+
+# Handle-relative opens keep UNC originals and sidecars inside their granted share.
+[target.'cfg(windows)'.dependencies]
+cap-primitives = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+junction = { workspace = true }

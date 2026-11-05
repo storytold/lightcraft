@@ -73,7 +73,7 @@ pub fn sidecar_path(original: &str, naming: SidecarNaming) -> PathBuf {
 /// accepting `.XMP` and `.Xmp`, and a full name whose photo extension differs in case, such as
 /// `IMG_1.cr3.xmp` beside `IMG_1.CR3`, which a case-sensitive file system would otherwise miss).
 pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
-    sidecar_candidates(original, naming).find(|p| p.is_file())
+    sidecar_candidates(original, naming).find(|p| crate::doc_path::original_metadata(p).is_ok_and(|m| m.is_file()))
 }
 
 /// Where to look for a catalogued photo's sidecar: how the library names it, and whether the photo
@@ -97,7 +97,7 @@ impl SidecarLookup {
 
     /// [`find_sidecar`], except that a photo that does not own its stem sidecar never reads it.
     pub fn find(self, original: &str) -> Option<PathBuf> {
-        self.candidates(original).find(|p| p.is_file())
+        self.candidates(original).find(|p| crate::doc_path::original_metadata(p).is_ok_and(|m| m.is_file()))
     }
 }
 
@@ -851,15 +851,16 @@ fn file_path(p: &Photo) -> Option<&str> {
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
     if let Some(sc) = lookup.find(original) {
         // A discovered sidecar keeps precedence even when reading it fails.
-        return crate::read_file::read_regular(&sc, SIDECAR_READ_MAX).ok().and_then(|b| String::from_utf8(b).ok()).map(|s| (s, sc));
+        let file = crate::doc_path::open_original(&sc).ok()?;
+        return crate::read_file::read_open(file, SIDECAR_READ_MAX).ok().and_then(|b| String::from_utf8(b).ok()).map(|s| (s, sc));
     }
     if kind == MediaKind::Raw {
-        let bytes = crate::read_file::read_regular(original, crate::read_file::MAX_MEDIA_BYTES).ok()?;
+        let bytes = crate::doc_path::read_original(original).ok()?;
         let x = lightcraft_meta::embedded(&bytes).xmp?;
         return Some((x, PathBuf::from(original)));
     }
     if kind == MediaKind::Image {
-        let mut file = std::fs::File::open(original).ok()?;
+        let mut file = crate::doc_path::open_original(original).ok()?;
         let x = read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)?;
         return Some((x, PathBuf::from(original)));
     }
