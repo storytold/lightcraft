@@ -546,7 +546,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             #[cfg(not(target_arch = "wasm32"))]
             let work = {
                 let shown = req.overlay.mask(s).map(|m| m.id);
-                let margin = window::margin(s, (&frame, full_w, full_h), (detail_scale, native_long as f64), req.quality, info.mattes.as_deref(), shown);
+                let margin =
+                    window::margin(s, (&frame, full_w, full_h), (detail_scale, native_long as f64), req.quality, info.mattes.as_deref(), shown);
                 let work = window::expand(win, full_w, full_h, margin);
                 // Spots upstream of the filters must supply the expanded context too.
                 let work = spots::window_for_reads_checked(s, &frame, full_w, full_h, px_per_long, work).unwrap_or(PixelWindow {
