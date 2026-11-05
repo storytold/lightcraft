@@ -138,6 +138,12 @@ of it.
   with `/usr/bin/time`. Record numbers in `plan/STATUS.md` → Metrics. Budgets: slider update ≤ 16 ms (draft) / loupe
   ≤ 60 ms on ~2.5 MP; export ≤ 1 s per 24 MP JPEG.
 - Never commit media: test images are procedural (`lightcraft-scenes`) or CC0 downloads in the gitignored `corpus/`.
+- **Flaky tests:** a test that fails, then passes on a rerun of the same commit, is flaky. Don't rerun until it
+  passes and move on: open an issue with the failing log, and if it failed on two unrelated PRs, quarantine it with
+  `#[ignore = "flaky: #<issue>"]` (a doctest: an `ignore` code fence and a comment naming the issue) in a PR of its
+  own until the issue is fixed. Never quarantine a test that fails every time; fix the code or the test. A test that
+  hangs is a failure too: under `cargo test`, libtest's "has been running for over 60 seconds" line names it; under
+  nextest (`LIGHTCRAFT_NEXTEST=1`), its `SLOW` lines do.
 - A test that can't run here (no GPU, corpus file, craft-fonts face, model) calls `lightcraft_testkit::skip!(Gpu, "why")`
   before it returns, not a bare `eprintln!`. `cargo xtask ci` then lists the skips and the machine's GPU adapters and
   data, and writes `target/ci/report.json` and `target/ci/summary.md` (Markdown for a PR).
