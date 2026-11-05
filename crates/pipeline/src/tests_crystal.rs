@@ -199,7 +199,7 @@ fn seed_picks_the_pattern() {
 /// waits always gets the exact tile, as does a draft for a seed with no tile yet.
 #[test]
 fn a_drag_takes_the_last_tile_while_the_next_is_drawn() {
-    // a cache of its own: other tests' tiles (through any V3 render) would evict from the shared one
+    // a cache of its own: other tests' tiles (through any V4 render) would evict from the shared one
     static OWN: Cache = Mutex::new(Vec::new());
     let tile = |look, seed, wait| tile_in(&OWN, look, seed, wait);
     let (seed, fresh) = (0x0d4a_0001, 0x0d4a_0002);

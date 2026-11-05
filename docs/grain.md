@@ -5,8 +5,8 @@ The Effects panel's Grain (`ctl:grain.amount`, `ctl:grain.size`, `ctl:grain.roug
 crystal layers: `crates/pipeline/src/crystal.rs` on the CPU, the same tables read by the GPU
 kernel (`crates/gpu/src/wgsl/finish.wgsl`).
 
-This is the grain of **process V3** and later ([process-versions.md](process-versions.md)). Photos on
-V1 or V2 keep the two-octave value noise they were edited with (`finish::ValueGrain`), so opening an
+This is the grain of **process V4** and later ([process-versions.md](process-versions.md)). Photos on
+V1 to V3 keep the two-octave value noise they were edited with (`finish::ValueGrain`), so opening an
 older catalog never changes a photo's grain; Update to Current Process moves a photo to the crystal
 grain. The sliders, their ranges and their XMP names are unchanged.
 

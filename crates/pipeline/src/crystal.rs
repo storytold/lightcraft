@@ -1,4 +1,4 @@
-//! Crystal-layer film grain, the grain of process V3 and later ([`crate::finish::GrainModel`]).
+//! Crystal-layer film grain, the grain of process V4 and later ([`crate::finish::GrainModel`]).
 //!
 //! After the model of Aurélien Pierre, *Stochastic photographic grain synthesis from
 //! crystallographic structure simulation* (2023), implemented from the article's description of
