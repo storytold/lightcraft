@@ -79,8 +79,9 @@ fn typical() -> DevelopSettings {
 }
 
 /// [`typical`] plus three masks: a radial gradient, a brush (three strokes) and either a linear
-/// gradient with Refine Edges (`refine`; such edits render on the CPU) or a Subject mask (the
-/// heuristic, which the GPU renderer evaluates on the CPU).
+/// gradient with Refine Edges (`refine`; the GPU renderer refines it on the device, so both columns
+/// time their own backend) or a Subject mask (the heuristic, which the GPU renderer evaluates on
+/// the CPU).
 fn with_masks(refine: bool) -> DevelopSettings {
     use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
     use lightcraft_geom::Point;
