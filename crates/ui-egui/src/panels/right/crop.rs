@@ -107,10 +107,10 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let mut shown = !hidden;
             let r = ui.checkbox(&mut shown, crate::i18n::tr(label));
             register(ui, format!("check:cropAspectShow:{key}"), r.rect);
-            if r.changed() {
-                if let Err(e) = app.run("crop.hideAspect", json!({"aspect": key, "hidden": !shown})) {
-                    app.toast_error(ui.ctx(), e);
-                }
+            if r.changed()
+                && let Err(e) = app.run("crop.hideAspect", json!({"aspect": key, "hidden": !shown}))
+            {
+                app.toast_error(ui.ctx(), e);
             }
         } else if !hidden {
             let r = ui.button(crate::i18n::tr(label));
@@ -131,20 +131,20 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.label(&a.name);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if text_button(ui, &format!("cropAspectDelete-{i}"), "Delete", false).clicked() {
-                        if let Err(e) = app.run("crop.deleteAspect", json!({"name": a.name})) {
-                            app.toast_error(ui.ctx(), e);
-                        }
+                    if text_button(ui, &format!("cropAspectDelete-{i}"), "Delete", false).clicked()
+                        && let Err(e) = app.run("crop.deleteAspect", json!({"name": a.name}))
+                    {
+                        app.toast_error(ui.ctx(), e);
                     }
-                    if i < last && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked() {
-                        if let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1})) {
-                            app.toast_error(ui.ctx(), e);
-                        }
+                    if i < last && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked()
+                        && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1}))
+                    {
+                        app.toast_error(ui.ctx(), e);
                     }
-                    if i > 0 && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked() {
-                        if let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1})) {
-                            app.toast_error(ui.ctx(), e);
-                        }
+                    if i > 0 && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked()
+                        && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1}))
+                    {
+                        app.toast_error(ui.ctx(), e);
                     }
                 });
             });
