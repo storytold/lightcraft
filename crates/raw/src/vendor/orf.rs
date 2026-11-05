@@ -213,11 +213,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let mut two_field = false;
     let mn = maker_note(bytes, &tiff);
     let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
-    let (mut data, bits) = if info.compression != 1 {
+    let (mut data, bits, from_word16) = if info.compression != 1 {
         return Err(RawError::Unsupported(format!("ORF compression {}", info.compression)));
     } else if total >= (n as u64) * 2 {
         let d = read_image(bytes, &info, tiff.order, Packing::Word16)?;
-        (d, 16)
+        (d, 16, true)
     } else if is_block16(w, n, total, chunks.len()) {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
         let stride = w / 10 * 16;
@@ -231,7 +231,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         } else {
             Vec::new()
         };
-        (RawData::U16(d), 12)
+        (RawData::U16(d), 12, false)
     } else if let Some((params, stream)) = (|| {
         let params = super::orfc::CompressionParameters::from_ifd(ip.as_ref()?, mn.as_ref())?;
         let chunk = chunks.first()?;
@@ -243,7 +243,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         Some((params, stream))
     })() {
         let d = if mode == Mode::Full || stated.is_none() { super::orfc::decompress_stream(stream, w, h, &params)? } else { Vec::new() };
-        (RawData::U16(d), params.valid_bits)
+        (RawData::U16(d), params.valid_bits, false)
     } else if total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
         // the strip as it is in the file (clipped at its end), not as its tag states it: one too short
@@ -261,7 +261,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         } else {
             Vec::new()
         };
-        (RawData::U16(d), 12)
+        (RawData::U16(d), 12, false)
     } else if let Some(rows) = (info.bits() == 12 && info.samples_per_pixel == 1 && info.planar != 2 && info.offsets.len() == info.byte_counts.len())
         .then(|| field_rows(&info.offsets.iter().copied().zip(info.byte_counts.iter().copied()).collect::<Vec<_>>(), w, h, bytes.len()))
         .flatten()
@@ -281,16 +281,16 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         } else {
             Vec::new()
         };
-        (RawData::U16(d), 12)
+        (RawData::U16(d), 12, false)
     } else {
         return Err(RawError::Unsupported("Olympus compressed ORF".into()));
     };
     let RawData::U16(ref mut samples) = data else { return Err(RawError::Unsupported("float ORF".into())) };
-    let bits = if bits == 16 && samples.iter().step_by(7).filter(|v| *v & 15 != 0).count() * 700 <= n {
+    let bits = if from_word16 && bits == 16 && samples.iter().step_by(7).filter(|v| *v & 15 != 0).count() * 700 <= n {
         // 12-bit values stored in the top bits
         samples.par_iter_mut().for_each(|v| *v >>= 4);
         12
-    } else if bits == 16 {
+    } else if from_word16 && bits == 16 {
         let mx = samples.iter().step_by(31).max().copied().unwrap_or(0);
         if mx < 4096 {
             12

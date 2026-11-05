@@ -46,7 +46,7 @@ phase #85, duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 
 | Dimension | Breadth | Ready for real work | Remaining | Doc |
 |---|---:|---:|---:|---|
-| Features (weighted areas below) | ~77% (checklist 81.1%, measured) | ~61% | 600–1,100 h | [Features](#features) |
+| Features (weighted areas below) | ~77% (checklist 81.6%, measured) | ~62% | 600–1,100 h | [Features](#features) |
 | ↳ RAW cameras, colour and lens profiles (part of features) | 85% of Adobe's 1,446 models decode (39% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
 | UI/UX fidelity | ~85% | ~70% | 32–54 h | [ui-parity.md](ui-parity.md) |
 | File formats (non-raw: images, sidecars, presets, catalogs) | ~85% | ~70% | 30–55 h | [file-format-parity.md](file-format-parity.md) |
@@ -67,7 +67,7 @@ from the checklist sections and the deep-dive documents.
 | Area | Weight | Breadth | Ready | Remaining | Notes |
 |---|---:|---:|---:|---:|---|
 | Import and library (import, folders, albums, smart albums, keywords, metadata, search, faces) | 15% | 90% | 80% | 25–45 h | checklist A–E 83–92%; robust journal; 85k-photo libraries |
-| RAW decoding and camera coverage | 15% | 85% | 80% | 110–205 h | [raw-parity.md](raw-parity.md), measured model by model: 97% of photographers' cameras decode (use-weighted); CR3 variants, HE NEF |
+| RAW decoding and camera coverage | 15% | 85% | 87% | 110–205 h | [raw-parity.md](raw-parity.md), measured model by model: 97% of photographers' cameras decode (use-weighted), × 0.9 for per-body bugs; CR3 variants, HE NEF |
 | Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 10 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; no fidelity suite ([raw-parity.md](raw-parity.md#colour)) |
 | Global develop adjustments (light, colour, curves, grading, effects, detail) | 15% | 93% | 70% | 30–60 h | checklist F 91.7%; character tuned by eye |
 | Optics, lens profiles, crop and geometry | 6% | 80% | 50% | 40–80 h | no lens database; crop / Upright complete |
@@ -79,7 +79,7 @@ from the checklist sections and the deep-dive documents.
 | Views, compare, zoom, culling | 5% | 90% | 70% | 15–30 h | zoom detail P0 gap |
 | Classic output modules (Map, Book, Slideshow, Print, Web, publish, tethering) | 4% | 15% | 10% | 90–150 h | Classic extras 48% counts many small keys; the modules themselves are mostly ⬜ |
 | Video | 1% | 0% | 0% | 25–45 h | catalogued only |
-| **Weighted** | 100% | **~77%** | **~61%** (61.5%) | **600–1,100 h** | |
+| **Weighted** | 100% | **~77%** | **~62%** (62.2%) | **600–1,100 h** | |
 
 ## AI
 
@@ -230,7 +230,7 @@ evidence. The stage stays **alpha**.
 
 **Alpha.** Core workflows exist end to end (import, cull, develop, mask, export, catalog migration),
 but ready-for-real-work is ~62%, below the ~75% beta bar, and the main file formats have blocking
-gaps: Canon CR3 decodes from sensor data on 26 verified bodies, compressed ORF decodes across 78 bodies, and HE NEF opens as preview, while colour on every non-DNG raw is estimated rather than measured.
+gaps: Canon CR3 decodes from sensor data on 26 verified bodies, compressed ORF decodes on 58 more bodies (2 verified), and HE NEF opens as preview, while colour on every non-DNG raw is estimated rather than measured.
 
 **Alpha gate:** all six core workflows (import, cull, develop, save and reopen, batch looks, export)
 work end to end on macOS; see the table in [roadmap.md](roadmap.md#alpha-gate). The partial rows (CR3

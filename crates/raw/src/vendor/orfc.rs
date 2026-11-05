@@ -269,6 +269,11 @@ pub(crate) fn decompress_stream(stream: &[u8], width: usize, height: usize, para
     if total_pixels > 0 && stream.is_empty() {
         return Err(RawError::Corrupt("ORF compressed stream is empty".into()));
     }
+    // Reject streams too short to encode even 1 bit per pixel (prevents large allocation
+    // from a truncated file before we start decoding).
+    if total_pixels > 0 && (stream.len() as u64).saturating_mul(8) < total_pixels as u64 {
+        return Err(RawError::Corrupt("ORF compressed stream too short for frame".into()));
+    }
     let mut pixels = vec![0u16; total_pixels];
     let mut reader = BitStream::new(stream);
 
@@ -338,7 +343,7 @@ pub(crate) fn decompress_stream(stream: &[u8], width: usize, height: usize, para
             };
 
             pred1 = context[0];
-            context[0] = if params.feedback_shift_644 == 15 { 0 } else { feedback_bits >> params.feedback_shift_644.min(30) };
+            context[0] = feedback_bits >> params.feedback_shift_644.min(30);
 
             let west = if col < 2 { params.boundary_predictor_642 } else { context[1] };
             let mut north = if row < 2 {
