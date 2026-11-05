@@ -398,6 +398,59 @@ fn a_content_duplicate_keeps_what_its_sidecar_says() {
     assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "the file's own capture time: {r}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+/// A content duplicate's sidecar regions drawn on its photo as stored (its stored size as
+/// `AppliedToDimensions`, no `mwg-rs:Rotation`) land on the upright photo, turned by its file's own
+/// orientation as a file import of it turns them (#2674): the record's size is its file's upright one,
+/// and the catalog's orientation is a develop rotation on top of it (#2589).
+#[test]
+fn a_content_duplicates_sidecar_regions_are_turned_by_its_files_orientation() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-regions-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("Photos/test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+  xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#" xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#">
+<mwg-rs:Regions rdf:parseType="Resource">
+<mwg-rs:AppliedToDimensions rdf:parseType="Resource" stDim:w="32" stDim:h="24" stDim:unit="pixel"/>
+<mwg-rs:RegionList><rdf:Bag><rdf:li rdf:parseType="Resource" mwg-rs:Name="Hannah" mwg-rs:Type="Face">
+<mwg-rs:Area rdf:parseType="Resource" stArea:x="0.25" stArea:y="0.4" stArea:w="0.1" stArea:h="0.15" stArea:unit="normalized"/>
+</rdf:li></rdf:Bag></mwg-rs:RegionList>
+</mwg-rs:Regions>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    // stored 32 × 24, a quarter turn clockwise upright: 24 × 32 (the size the new record takes)
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| (p.width, p.height) = (24, 32));
+    s.media.file_probe = Some(Arc::new(|_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 24,
+            height: 32,
+            content_hash: Some("same-bytes".into()),
+            captured: Some("2024-05-06T07:08:09".into()),
+            orientation: Some(lightcraft_geom::Orientation::Rotate90),
+            ..Default::default()
+        })
+    }));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!(new.meta.regions.len(), 1, "{r}");
+    let b = new.meta.regions[0].rect;
+    let got = [b.x0, b.y0, b.x1, b.y1];
+    assert!(
+        got.iter().zip([0.525, 0.2, 0.675, 0.3]).all(|(g, w)| (g - w).abs() < 1e-9),
+        "the box is where the photo as stored had the face: {got:?}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
 /// Only the Lightroom import reads a content duplicate's XMP sidecar: any other import skips the
 /// duplicate without looking its sidecar up (#2954), so the same file beside the same sidecar
 /// reaches the report with no sidecar unless the import makes a record of it (#2589).
