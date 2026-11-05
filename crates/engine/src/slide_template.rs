@@ -628,5 +628,4 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "tests_slide_template.rs"]
 mod tests;

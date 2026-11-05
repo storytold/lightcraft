@@ -46,6 +46,7 @@ pub mod guard;
 pub mod import;
 mod import_move;
 pub mod lens_profiles;
+pub mod lensfun_download;
 pub mod library;
 mod lightroom_archive;
 pub mod lightroom_catalog;
@@ -195,6 +196,31 @@ pub struct Interaction {
 /// The most photos an edit may touch for the view to follow it photo by photo; a larger edit is worked out whole.
 const MAX_FOLLOWED: usize = 256;
 
+/// The established clock precision for relative-date views and sidebar counts.
+fn clock_minute(now: &str) -> &str {
+    now.get(..16).unwrap_or(now)
+}
+
+/// Whether a query can change membership without a catalog edit, including the smart albums it tests.
+fn filter_depends_on_clock(filter: &Filter, catalog: &Catalog) -> bool {
+    if filter.depends_on_now() {
+        return true;
+    }
+    let mut pending = filter.albums_tested();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(smart) = catalog.album(id).and_then(|album| album.smart.as_deref()) else { continue };
+        if smart.depends_on_now() {
+            return true;
+        }
+        pending.extend(smart.albums_tested());
+    }
+    false
+}
+
 /// Source of [`Session::visible_shared`] generations (process-wide, so two sessions never share one).
 static VISIBLE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 static LIBRARY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -207,12 +233,16 @@ pub struct Session {
     pub catalog: Catalog,
     pub source: LibrarySource,
     pub filter: Filter,
+    /// The filter `library.toggleFilters` put aside (Library > Enable Filters off); not persisted.
+    pub(crate) shelved_filter: Option<Filter>,
     pub sort: Sort,
     pub selection: Selection,
     /// The grid order for the current source/filter/sort (cached by catalog revision).
     /// Shared, so frontends can hold it across frames without copying ([`Session::visible_shared`]).
     visible: Arc<[PhotoId]>,
     visible_key: Option<(u64, String)>,
+    /// The minute used for a cached view whose rules depend on the session clock.
+    visible_clock_minute: Option<String>,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`): an edit that makes a photo stop
     /// matching a smart album's rules, Picks or the filter bar leaves it where it is. Off: the photo goes at once.
     pub hold_view: bool,
@@ -232,7 +262,7 @@ pub struct Session {
     /// is recomputed, so frontends can key their per-view caches on it instead of hashing the ids.
     visible_gen: u64,
     /// Photos in the current source with no filter on (cached like `visible`).
-    total: Option<((u64, String), usize)>,
+    total: Option<((u64, String), usize, Option<String>)>,
     pub undo: Vec<UndoEntry>,
     /// Undo steps committed in this session, ever (the history drops its oldest past 1000, so
     /// its length can't tell how many steps a command just made; see [`Session::commits`]).
@@ -255,6 +285,11 @@ pub struct Session {
     pub face_models_dir: Option<std::path::PathBuf>,
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
     pub face_downloads: face_download::Downloads,
+    /// The lens database download ([`lensfun_download`]).
+    pub lensfun: lensfun_download::Download,
+    /// The host may offer the lens database at its start, and fetch it after the user's yes
+    /// ([`Session::with_lens_auto_download`]; when: [`lensfun_download::fetch_on_start`]).
+    pub lens_auto_download: bool,
     /// Reverse geocoding: the parsed place names and their download (`metadata.*PlaceNames`).
     pub place_names: cmd::geocode::PlaceNames,
     /// The user's own list of models to download (`catalog.json` in the models folder), as last read.
@@ -422,10 +457,12 @@ impl Session {
             catalog: Catalog::new(),
             source: LibrarySource::All,
             filter: Filter::default(),
+            shelved_filter: None,
             sort: Sort::default(),
             selection: Selection::default(),
             visible: Vec::new().into(),
             visible_key: None,
+            visible_clock_minute: None,
             hold_view: false,
             base: None,
             view_followed: 0,
@@ -445,6 +482,8 @@ impl Session {
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
+            lensfun: Default::default(),
+            lens_auto_download: false,
             place_names: Default::default(),
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -597,10 +636,12 @@ impl Session {
 
     // ---------------------------------------------------------------- ops, undo
 
-    /// Apply an op as one undoable step.
+    /// Apply an op as one undoable step. A new edit: one that would make a smart album include
+    /// itself is refused here, whichever command, task or caller asked ([`Catalog::apply_new`]);
+    /// undo, redo and opening a library bring back what was and are not held to that.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
         let fwd = op.clone();
-        let inv = self.apply_catalog(op)?;
+        let inv = self.apply_through(op, Catalog::apply_new)?;
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -614,7 +655,14 @@ impl Session {
         Ok(())
     }
 
+    /// [`Catalog::apply`] for what brings back what was (an undo or a redo).
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
+        self.apply_through(op, Catalog::apply)
+    }
+
+    /// Apply `op` with `apply` (the catalog's way in for a new edit or for bringing back what
+    /// was), then forget what the session cached of the photos it replaced.
+    fn apply_through(&mut self, op: Op, apply: fn(&mut Catalog, Op) -> std::result::Result<Op, lightcraft_catalog::CatalogError>) -> Result<Op> {
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
@@ -633,7 +681,7 @@ impl Session {
                 _ => {}
             }
         }
-        let inv = self.catalog.apply(op)?;
+        let inv = apply(&mut self.catalog, op)?;
         for id in invalidated {
             self.media.forget(id);
         }
@@ -983,6 +1031,30 @@ impl Session {
     /// The op that sets a photo's develop settings and appends a History entry (for batches).
     pub fn develop_op(&self, id: PhotoId, settings: DevelopSettings, label: &str) -> Option<Op> {
         self.catalog.photo(id)?;
+        let mut settings = settings;
+        // old masks (on the corrected frame) go onto the photo, from the frame they were drawn on:
+        // masks this edit kept, under the photo's settings before it (a geometry edit then moves
+        // the photo, not them); masks it brought in (paste, sync, a preset, a history step, a
+        // sidecar), under the settings they came with, where they render now. Kept masks also
+        // turn with an orientation change the edit makes (a sync or paste of the Crop group).
+        let before = match &self.interaction {
+            Some(i) if i.photo == id => Some(i.original.clone()),
+            _ => self.develop_of(id),
+        };
+        let turn = before.as_ref().and_then(|b| orientation_change(b.orientation, settings.orientation));
+        if settings.masks.iter().any(|m| !m.on_photo) || turn.is_some() {
+            let kept_frame = before.as_ref().and_then(|b| self.mask_frame(id, b));
+            let new_frame = self.mask_frame(id, &settings);
+            for m in &mut settings.masks {
+                let kept = before.as_ref().is_some_and(|b| b.masks.contains(m));
+                if let Some(f) = if kept { kept_frame.as_ref() } else { new_frame.as_ref() } {
+                    lightcraft_pipeline::mask_space::attach(m, f);
+                }
+                if let (true, Some(t)) = (kept, turn) {
+                    lightcraft_pipeline::mask_space::turn(m, t);
+                }
+            }
+        }
         let settings = Arc::new(settings);
         let step = lightcraft_catalog::HistoryStep { label: label.into(), settings: settings.clone() };
         Some(Op::Batch {
@@ -990,11 +1062,45 @@ impl Session {
         })
     }
 
+    /// Put the old masks of `d` (on the corrected frame, `Mask::on_photo` false) on photo `id`
+    /// before the warp, from the frame of `drawn` (the settings they were drawn under): they
+    /// render where they did and from then on stay on their content when lens corrections,
+    /// Upright or Transform change.
+    pub fn attach_masks(&self, id: PhotoId, drawn: &DevelopSettings, d: &mut DevelopSettings) {
+        if d.masks.iter().all(|m| m.on_photo) {
+            return;
+        }
+        let Some(frame) = self.mask_frame(id, drawn) else { return };
+        for m in &mut d.masks {
+            lightcraft_pipeline::mask_space::attach(m, &frame);
+        }
+    }
+
+    /// The uncropped frame of photo `id` under settings `d`, with its lens: where mask
+    /// coordinates go through its warp ([`lightcraft_pipeline::geometry::Frame::for_mask`]).
+    pub(crate) fn mask_frame(&self, id: PhotoId, d: &DevelopSettings) -> Option<lightcraft_pipeline::geometry::Frame> {
+        let p = self.catalog.photo(id)?;
+        Some(lightcraft_pipeline::geometry::Frame::with_lens(
+            p.width.max(1) as usize,
+            p.height.max(1) as usize,
+            &d.effective(),
+            false,
+            p.embedded_lens.as_ref(),
+        ))
+    }
+
     pub fn begin_interaction(&mut self, label: &str) -> Result<()> {
         if self.interaction.is_some() {
             self.end_interaction()?;
         }
         let id = self.active().ok_or_else(|| EngineError::Other("no active photo".into()))?;
+        // old masks go onto the photo before a drag moves the frame under them (they then stay on
+        // their content while it does, not only once it ends)
+        if let Some(d) = self.develop_of(id).filter(|d| d.masks.iter().any(|m| !m.on_photo)) {
+            let mut on = (*d).clone();
+            self.attach_masks(id, &d, &mut on);
+            self.apply_silent(Op::SetDevelop { id, settings: Arc::new(on), label: label.into(), edited: None })?;
+        }
         let original = self.develop_of(id).unwrap_or_default();
         self.interaction = Some(Interaction { label: label.into(), photo: id, original, crop_edited: false });
         Ok(())
@@ -1027,6 +1133,11 @@ impl Session {
 
     // ---------------------------------------------------------------- library view
 
+    /// Library > Enable Filters is off: a filter is put aside (`library.toggleFilters`).
+    pub fn filters_off(&self) -> bool {
+        self.shelved_filter.is_some()
+    }
+
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
         let mut key =
@@ -1042,12 +1153,20 @@ impl Session {
         };
         let view = format!("{}|{rules}", key.1);
         if self.source == LibrarySource::Missing && self.media.availability.is_background() {
-            // the view fills in as the background checks find files gone
-            key.1.push_str(&format!("|{}", self.media.availability.generation()));
+            // the view fills in as the background checks find files gone (a file found there at
+            // its first check changes nothing it shows)
+            key.1.push_str(&format!("|{}", self.media.availability.gone_generation()));
         }
-        if self.visible_key.as_ref() != Some(&key) {
-            // "in the last N days" rules count back from the session's clock
-            lightcraft_catalog::rules::set_now(Some((self.clock)()));
+        let key_changed = self.visible_key.as_ref() != Some(&key);
+        // A time-dependent cache needs one clock read to test its minute stamp. A new view also
+        // needs one value for the query, even when its previous cached view did not use the clock.
+        let current_now = (key_changed || self.visible_clock_minute.is_some()).then(|| (self.clock)());
+        let current_minute = current_now.as_deref().map(clock_minute);
+        let clock_changed = self.visible_clock_minute.as_deref().is_some_and(|cached| current_minute != Some(cached));
+        if key_changed || clock_changed {
+            // Use this same value to evaluate relative rules and stamp the result.
+            let now = current_now.unwrap_or_else(|| (self.clock)());
+            lightcraft_catalog::rules::set_now(Some(now.clone()));
             let f = self.view_filter(self.source, &self.filter);
             // A held view keeps the photos it shows that stopped matching what is asked of them (a smart album's
             // rules, a flag, the filter bar), as long as they are still where the view looks: in the library for
@@ -1074,8 +1193,7 @@ impl Session {
             let whole = own_order || matches!(self.source, LibrarySource::RecentlyAdded | LibrarySource::Missing);
             // A view that asks about "the last N days" (itself, or through a smart album it looks into) changes
             // with the clock as well as with edits: a photo nobody touched can stop matching. It is asked whole.
-            let clocked = f.depends_on_now()
-                || (!f.albums_tested().is_empty() && self.catalog.albums().any(|al| al.smart.as_deref().is_some_and(Filter::depends_on_now)));
+            let clocked = filter_depends_on_clock(&f, &self.catalog);
             let base = self.base.take().filter(|(of, _, _)| *of == view);
             // A small edit to the same view: the photos it touched are taken out, asked about again, and put back
             // at their place in the order. The others neither stopped matching nor moved.
@@ -1149,6 +1267,7 @@ impl Session {
             self.visible = visible.into();
             self.visible_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.visible_key = Some(key);
+            self.visible_clock_minute = clocked.then(|| clock_minute(&now).to_owned());
         }
         &self.visible
     }
@@ -1181,12 +1300,20 @@ impl Session {
     /// view, so a list followed many times over is compared, not only one followed once.
     #[cfg(test)]
     pub(crate) fn visible_in_full(&mut self) -> Vec<PhotoId> {
-        let kept = (self.base.clone(), self.visible_key.clone(), self.visible.clone(), self.visible_gen, self.view_followed, self.view_worked_out);
+        let kept = (
+            self.base.clone(),
+            self.visible_key.clone(),
+            self.visible_clock_minute.clone(),
+            self.visible.clone(),
+            self.visible_gen,
+            self.view_followed,
+            self.view_worked_out,
+        );
         self.never_follow = true;
         self.visible_key = None;
         let whole = self.visible().to_vec();
         self.never_follow = false;
-        (self.base, self.visible_key, self.visible, self.visible_gen, self.view_followed, self.view_worked_out) = kept;
+        (self.base, self.visible_key, self.visible_clock_minute, self.visible, self.visible_gen, self.view_followed, self.view_worked_out) = kept;
         whole
     }
 
@@ -1214,7 +1341,15 @@ impl Session {
             }
         }
         let key = (self.catalog.revision, format!("{:?}|{:?}|{:?}", self.source, self.browse, self.library_folder));
-        if self.total.as_ref().map(|t| &t.0) != Some(&key) {
+        let key_changed = self.total.as_ref().map(|total| &total.0) != Some(&key);
+        let cached_minute = self.total.as_ref().and_then(|total| total.2.as_deref());
+        let current_now = cached_minute.map(|_| (self.clock)());
+        let current_minute = current_now.as_deref().map(clock_minute);
+        let clock_changed = cached_minute.is_some_and(|cached| current_minute != Some(cached));
+        if key_changed || clock_changed {
+            // The source count can be requested before `visible`; bind it to the session's clock itself.
+            let now = current_now.unwrap_or_else(|| (self.clock)());
+            lightcraft_catalog::rules::set_now(Some(now.clone()));
             let mut f = self.source.to_filter(&Filter::default(), &self.catalog);
             if self.source == LibrarySource::Folder {
                 let b = self.browse.clone().unwrap_or_default();
@@ -1226,7 +1361,8 @@ impl Session {
             }
             // (how many, not which: nothing to put in order)
             let n = self.catalog.count(&f);
-            self.total = Some((key, n));
+            let clocked = filter_depends_on_clock(&f, &self.catalog);
+            self.total = Some((key, n, clocked.then(|| clock_minute(&now).to_owned())));
         }
         self.total.as_ref().map(|t| t.1)
     }
@@ -1299,90 +1435,26 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod tests_album_order;
-#[cfg(test)]
-mod tests_album_remove;
-#[cfg(test)]
-mod tests_albums_local;
-#[cfg(test)]
-mod tests_color;
-#[cfg(test)]
-mod tests_constrain_crop;
-#[cfg(test)]
-mod tests_crop_angle;
-#[cfg(test)]
-mod tests_crop_aspect;
-#[cfg(test)]
-mod tests_denoise;
-#[cfg(test)]
-mod tests_export;
-#[cfg(test)]
-mod tests_face_models;
-#[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
-mod tests_face_recognize;
+use tests::face_recognize as tests_face_recognize;
 #[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
-mod tests_face_tiles;
-#[cfg(test)]
-mod tests_filesystem_history;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod tests_focus_scan;
-#[cfg(test)]
-mod tests_folders;
-#[cfg(test)]
-mod tests_forget_local;
-#[cfg(test)]
-mod tests_history_cursor;
-#[cfg(test)]
-mod tests_hold_view;
-#[cfg(test)]
-mod tests_ids_params;
-#[cfg(test)]
-mod tests_import;
-#[cfg(test)]
-mod tests_import_move;
-#[cfg(test)]
-mod tests_keyword_list;
-#[cfg(test)]
-mod tests_libops;
-#[cfg(test)]
-mod tests_library;
-#[cfg(test)]
-mod tests_lightroom_folder;
-#[cfg(test)]
-mod tests_mask_effects;
-#[cfg(test)]
-mod tests_merge;
-#[cfg(test)]
-mod tests_move_to_share;
-#[cfg(test)]
-mod tests_organize;
-#[cfg(test)]
-mod tests_persist;
-#[cfg(test)]
-mod tests_prefs;
-#[cfg(test)]
-mod tests_presets_scale;
-#[cfg(test)]
-mod tests_print;
-#[cfg(test)]
-mod tests_process;
-#[cfg(test)]
-mod tests_recheck;
-#[cfg(test)]
-mod tests_segment;
-#[cfg(test)]
-mod tests_settings_files;
-#[cfg(test)]
-mod tests_slide;
-#[cfg(test)]
-mod tests_slideshow_export;
-#[cfg(test)]
-mod tests_spots;
-#[cfg(test)]
-mod tests_sync;
-#[cfg(test)]
-mod tests_view_follow;
-#[cfg(test)]
-mod tests_xmp;
+use tests::xmp as tests_xmp;
+
+/// The turn or flip that takes orientation `from` to `to` (`None` when they are the same): what the
+/// masks, on the oriented photo, must follow ([`lightcraft_pipeline::mask_space::turn`]).
+pub(crate) fn orientation_change(from: lightcraft_geom::Orientation, to: lightcraft_geom::Orientation) -> Option<lightcraft_geom::Orientation> {
+    use lightcraft_geom::Orientation;
+    if from == to {
+        return None;
+    }
+    let inv = from.inverse();
+    let probes = [(0.2, 0.3), (0.7, 0.1), (0.4, 0.9)];
+    let close = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9;
+    (0..8u8).map(|k| Orientation::from_parts(k >= 4, k % 4)).find(|t| {
+        probes.iter().all(|&(x, y)| {
+            let (rx, ry) = inv.map(x, y, 1.0, 1.0);
+            let (tx, ty) = from.map(rx, ry, 1.0, 1.0);
+            close(t.map(tx, ty, 1.0, 1.0), to.map(rx, ry, 1.0, 1.0))
+        })
+    })
+}

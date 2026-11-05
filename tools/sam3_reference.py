@@ -1,4 +1,4 @@
-"""Reference tensors for the Rust SAM 3 port (crates/segment/tests/reference.rs).
+"""Reference tensors for the Rust SAM 3 port (crates/segment/tests/it/reference.rs).
 
 Runs the Hugging Face transformers implementation (fp32, CPU) on one photo and writes the
 shared pixel input plus intermediate and final outputs of the click (tracker) and text
