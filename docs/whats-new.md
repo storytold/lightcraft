@@ -12,6 +12,13 @@
   hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
   loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
 
+## 2026-11-02
+
+### The Windows title bar is readable from the moment the window opens
+- When LightCraft's appearance differs from the one set in Windows (the dark default on a light Windows, for one), the
+  title bar kept the system's colour with the title in LightCraft's, so the title looked blank until focus moved to
+  another window. It now takes LightCraft's colours as soon as the window has focus.
+
 ## 2026-11-01
 
 ### Moving photos to a network share is about nine times faster
@@ -781,6 +788,16 @@
   Photos and export file names take them too.
 
 ## 2026-10-20
+
+### Windows: photos follow the monitor's colour profile
+- On Windows, photos are now shown through the colour profile Windows assigns to the monitor the window is on
+  (Settings ▸ System ▸ Display ▸ Color profile, Color Management, or a calibrator's profile), while no monitor profile
+  is chosen in Settings ▸ Display. Before, they were shown as sRGB, so a wide-gamut monitor showed them oversaturated
+  and a calibration was ignored unless you picked the profile by hand. Moving the window to another monitor, or
+  changing the profile in Windows, is followed within about a second.
+- While Windows manages colour itself (HDR on, or Auto Color Management on Windows 11), photos stay sRGB: Windows
+  converts them for the monitor then. Settings ▸ Display ▸ **Use Screen Profile** goes back to this after choosing a
+  profile by hand. See [display profiles](display-profiles.md).
 
 ### Smart albums check File Path rules faster
 - A smart album rule on File Path (contains, doesn't contain, is, isn't, starts with, ends with, is empty, isn't
