@@ -90,7 +90,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | patch | LR-META-EXIF-FULL: EXIF GPS subdivisions are validated before projection and rounded with carry on write; Original export checks every EXIF APP1 block, PNG/WebP EXIF chunk, GPS IFD pointer, destination coordinate and unreadable embedded EXIF; counts unchanged |
+| 2026-11-05 | patch | LR-META-EXIF-FULL: EXIF GPS subdivisions are validated before projection and rounded with carry on write; Original export checks every EXIF APP1 block, PNG/WebP EXIF chunk, CR3 CMT4 GPS data, GPS IFD pointer, destination coordinate and unreadable embedded EXIF; counts unchanged |
 | 2026-10-27 | minor | Gap 26: the loupe shows built previews (they were rendered again), photos ahead and the whole view are prepared in the background with settings per mode; gap not closed |
 | 2026-10-27 | minor | Gap 26: culling speed measured and improved (progressive Local browse, camera previews made ahead, a CR3's smallest covering JPEG, camera JPEG first at 100 %); what is left listed; gap not closed |
 | 2026-11-02 | minor | PERF-STEP-STALL: the catalog log is written and synced off the UI thread, so stepping and flagging never wait for the drive (a 300 ms sync: slowest flag 0.2 ms, was 305 ms); a failed write is held and retried, counted as unsaved, never dropped; gap 26 not closed |

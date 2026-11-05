@@ -581,6 +581,31 @@ mod tests {
         assert_eq!(m.iso, Some(400));
     }
 
+    /// The Original-copy guard checks raw CMT4 even when merging or parsing it as EXIF fails.
+    #[test]
+    fn source_gps_guard_checks_raw_cmt4() {
+        use lightcraft_tiff::{Value, tags as t};
+
+        let cr3_with = |cmt1: &[u8], cmt4: &[u8]| {
+            let canon = uuid(&CANON_UUID, &[bx(b"CMT1", cmt1), bx(b"CMT4", cmt4)].concat());
+            [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat()
+        };
+        let valid_cmt1 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
+
+        let malformed_cmt4 = cr3_with(&valid_cmt1, b"not a TIFF");
+        let parsed = parse_cr3(&malformed_cmt4).unwrap();
+        let merged = merged_exif(&parsed).unwrap();
+        assert_eq!(crate::exif::exif_gps_tag_presence(&merged), Some(false));
+        assert!(crate::source_embeds_exif_gps_location(&malformed_cmt4));
+
+        let gps_cmt4 = tiff_with(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let invalid_cmt1 = cr3_with(b"not a TIFF", &gps_cmt4);
+        let parsed = parse_cr3(&invalid_cmt1).unwrap();
+        assert!(merged_exif(&parsed).is_none());
+        assert_eq!(crate::exif::exif_gps_tag_presence(&gps_cmt4), Some(false), "CMT4 stores the GPS IFD as its root IFD");
+        assert!(crate::source_embeds_exif_gps_location(&invalid_cmt1));
+    }
+
     fn compression_payload(levels: u8) -> Vec<u8> {
         let mut b = vec![0u8; 52];
         b[0..2].copy_from_slice(&0xff00u16.to_be_bytes());
