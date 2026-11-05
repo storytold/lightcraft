@@ -324,8 +324,12 @@ pub(crate) fn reload_ops(
     }
     // virtual copies that share the file (a copy linked to a file of its own is not this file's)
     for c in cat.photos().filter(|c| c.copy_of == Some(id) && c.source == ph.source) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        let theirs: Vec<Op> = content_op(c.id, c, info.clone())
+            .into_iter()
+            .chain(fill_missing_meta(c.id, c, info))
+            .chain(lens_ops(c.id, c, info))
+            .chain(as_shot_wb_op(c.id, c, info))
+            .collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
@@ -449,6 +453,31 @@ mod tests {
         ph.meta = (**meta).clone();
         ph.captured = Some("2026-10-04T08:16:11".into());
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
+    }
+
+    /// Reloading a photo fills the camera fields its virtual copies lack too (each keeps its own
+    /// metadata), and leaves alone a copy linked to a file of its own.
+    #[test]
+    fn reload_fills_missing_camera_fields_on_copies_of_the_file() {
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let photo = |id: u64, path: &str, copy_of: Option<u64>| {
+            let mut ph = Photo::new(PhotoId(id), Source::File { path: path.into() }, "x.cr3", "CR3", 1620, 1080, "2026-10-06T00:00:00");
+            ph.copy_of = copy_of.map(PhotoId);
+            ph
+        };
+        for ph in [photo(1, "/x.cr3", None), photo(2, "/x.cr3", Some(1)), photo(3, "/y.cr3", Some(1))] {
+            cat.apply(Op::AddPhoto { photo: Box::new(ph) }).unwrap();
+        }
+        let mut info = crate::media::ProbeInfo { width: 1620, height: 1080, ..Default::default() };
+        info.meta.camera = "Canon EOS R6 Mark III".into();
+        let (mut ops, mut changed) = (Vec::new(), Vec::new());
+        reload_ops(&cat, PhotoId(1), &info, &mut ops, &mut changed);
+        let filled: Vec<u64> = ops
+            .iter()
+            .filter_map(|op| if let Op::SetMeta { id, meta } = op { (meta.camera == "Canon EOS R6 Mark III").then_some(id.0) } else { None })
+            .collect();
+        assert_eq!(filled, vec![1, 2], "{ops:?}");
+        assert_eq!(changed, vec![PhotoId(1), PhotoId(2)]);
     }
 
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
