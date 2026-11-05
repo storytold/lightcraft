@@ -33,7 +33,7 @@
 //!   (inventor Takashi Ishikawa). Bitstream uses a 7-byte header (`00 00 00 00 01 00 00`), continuous big-endian
 //!   MSB-first bit order, adaptive Golomb-Rice entropy coding with flatness run tracking and dynamic range pre-range,
 //!   spatial prediction (horizontal Formula 2 within CFA color channels; vertical Formula 3 for line heads), and ZigZag
-//!   difference mapping. See `cleanroom-inputs/DERIVATION.md` for complete mathematical and empirical provenance.
+//!   difference mapping. See `docs/olympus-lossless-derivation.md` for complete mathematical and empirical provenance.
 //! - The colour-filter layout is the file's Exif `CFAPattern`: GRBG on the E-1 and E-400, RGGB on the XZ-2, where
 //!   the colours of the decoded mosaic follow the embedded JPEG best with exactly that layout
 //!   (`corpus_orf_cfa_patterns`). The samples' active areas start at even offsets, so they can't tell whether the
@@ -265,7 +265,7 @@ fn bit_length(v: u32) -> u32 {
 /// Implemented strictly from the technical specifications in Olympus patents
 /// US 7,333,035 B2 and US 7,715,639 B2 (inventor Takashi Ishikawa).
 ///
-/// See `cleanroom-inputs/DERIVATION.md` for full derivation and empirical verification.
+/// See `docs/olympus-lossless-derivation.md` for full derivation and empirical verification.
 fn decode_compressed_strip(src: &[u8], w: usize, h: usize) -> Result<Vec<u16>> {
     if src.len() < 7 || src.get(..7) != Some(&[0, 0, 0, 0, 1, 0, 0]) {
         return Err(RawError::Corrupt("invalid ORF compressed strip header".into()));

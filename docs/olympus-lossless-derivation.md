@@ -145,7 +145,7 @@ Esta formulación garantiza que en zonas uniformes (ruido de sensor, fondo liso)
 
 Se ejecutó la decodificación completa sobre la totalidad del conjunto de prueba utilizando el motor central `lightcraft_raw::decode()`:
 - **Corpus CC0:** `orf-olympus-em1.orf`, `orf-olympus-em10iii.orf`.
-- **Fotos de usuario:** 8 imágenes tomadas con Olympus E-M5 Mark III y E-M1 Mark III en `C:\Users\Diego\Pictures\fotos oly para\`.
+- **Fotos de usuario:** 8 imágenes reales tomadas con cámaras de producción Olympus OM-D E-M5 Mark III y E-M1 Mark III (`P9120028`, `P9120029`, `P9120035`, `P9120036`, `_OM10008`–`_OM10011`).
 
 ### 6.1 Tabla de Resultados de Validación
 | Archivo | Cámara | Dimensiones | Tamaño Strip | Nivel Mínimo | Nivel Máximo | Media Sensor | Correlación $r$ con Preview JPEG | Hash FNV-1a Pinned |
