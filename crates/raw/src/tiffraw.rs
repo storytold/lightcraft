@@ -63,8 +63,20 @@ pub fn check_image(data: &[u8], info: &ImageInfo) -> Result<usize> {
         return Err(RawError::Limit("image data chunks far larger than the image"));
     }
     // Plausibility bound before allocating: no supported coding stores more than ~2000 samples per byte
-    // (Deflate of constant data is the extreme), so tiny files cannot trigger huge allocations.
-    let available: u64 = chunks.iter().map(|c| chunk_bytes(data, c).map_or(0, |s| s.len() as u64)).sum();
+    // (Deflate of constant data is the extreme), so tiny files cannot trigger huge allocations. The
+    // bytes are counted once however many chunks point at them: a grid of tiles sharing one small
+    // payload holds that payload's samples, not the grid's.
+    let mut spans: Vec<(u64, u64)> =
+        chunks.iter().filter_map(|c| Some((c.offset, c.offset.checked_add(chunk_bytes(data, c)?.len() as u64)?))).collect();
+    spans.sort_unstable();
+    let (mut available, mut end) = (0u64, 0u64);
+    for (a, b) in spans {
+        let a = a.max(end);
+        if b > a {
+            available = available.saturating_add(b - a);
+            end = b;
+        }
+    }
     if available.saturating_mul(2048) < total as u64 {
         return Err(RawError::Corrupt(format!("{available} bytes of image data cannot hold {total} samples")));
     }
@@ -428,6 +440,30 @@ fn unpack_chunk(
 mod lossy_tests {
     use super::*;
     use lightcraft_tiff::image::Layout;
+
+    /// 65 536 tiles all pointing at the same 256 bytes: the image's samples can't come from them,
+    /// and nothing of its size is allocated to find that out.
+    #[test]
+    fn tiles_sharing_one_payload_count_its_bytes_once() {
+        let file = vec![0u8; 8 + 256];
+        let info = ImageInfo {
+            width: 4096,
+            height: 4096,
+            bits_per_sample: vec![8],
+            samples_per_pixel: 1,
+            compression: comp::NONE,
+            photometric: 34892,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Tiles { tile_width: 16, tile_height: 16 },
+            offsets: vec![8; 65_536],
+            byte_counts: vec![256; 65_536],
+        };
+        let err = check_image(&file, &info).unwrap_err().to_string();
+        assert!(err.contains("cannot hold"), "{err}");
+    }
 
     /// A lossy-DNG-style image: two 16×8 tiles, each a baseline JPEG, the right one cut short
     /// by the image edge.
