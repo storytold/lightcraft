@@ -2133,6 +2133,33 @@ fn render_to_dng_keeps_the_window_drawing() {
     let _ = std::fs::remove_dir_all(&out);
 }
 
+/// Opening another library while Render to DNG runs: its originals' ids mean other photos there, so the
+/// finished DNGs are neither added to nor stacked in the library that is open by then.
+#[test]
+fn render_to_dng_finishing_in_another_library_adds_nothing_to_it() {
+    let mut h = demo([1000.0, 700.0]);
+    let t = Duration::from_secs(30);
+    let out = std::env::temp_dir().join(format!("lc-render-dng-switch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    h.app.services.write_shared = Some(Arc::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    let r = h.request("engine.execute", json!({"command": "photo.renderToDng", "params": {"ids": ids, "dir": out.to_string_lossy()}}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.render_dng.is_some(), "the renders run on a worker");
+    // another library is open before the worker finishes (its photos reuse the same numeric ids)
+    h.app.session = lightcraft_engine::Session::with_demo();
+    let (photos, stacks) = (h.app.session.catalog.len(), h.app.session.catalog.stacks().count());
+    let started = Instant::now();
+    while h.app.render_dng.is_some() && started.elapsed() < Duration::from_secs(120) {
+        h.step();
+    }
+    assert!(h.app.render_dng.is_none(), "the batch finished");
+    assert!(h.app.last_render_dng.is_none(), "nothing was reported as added");
+    assert_eq!((h.app.session.catalog.len(), h.app.session.catalog.stacks().count()), (photos, stacks), "the open library is untouched");
+    let _ = std::fs::remove_dir_all(&out);
+}
+
 /// Issue #236 review: control requests run on the UI thread, which must not wait minutes for
 /// Photos. `export.addToPhotos` and `app.export {addToPhotos}` without `background` answer at
 /// once with the running job; the app announces the outcome when Photos is done.
