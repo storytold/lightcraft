@@ -330,6 +330,8 @@ impl RenderJob {
                             photo: self.photo,
                             level: self.level,
                             key: self.key,
+                            cache_generation: self.cache_generation,
+                            cache_owner: self.cache_owner.clone(),
                             rendered: Ok(Rendered {
                                 image: lightcraft_raster::Rgba8 { width: 0, height: 0, data: Vec::new() },
                                 histogram,

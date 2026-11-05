@@ -262,7 +262,7 @@ fn source_clear_during_job_preparation_retries_without_losing_the_photo() {
         let id = PhotoId(1);
         let old = Arc::new(Rgb32f::new(8, 8));
         s.media.insert(id, SourceLevel::Thumb, old.clone());
-        s.media.file_loader = Some(Arc::new(|_, _| {
+        s.media.file_loader = Some(Arc::new(|_, _, _| {
             let mut image = Rgb32f::new(8, 8);
             image.data.fill([0.25; 3]);
             Ok((image, SourceInfo::default()))

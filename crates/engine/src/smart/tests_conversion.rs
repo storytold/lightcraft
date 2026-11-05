@@ -140,14 +140,14 @@ fn interrupted_conversion_child() {
     crate::cmd::previews::wait_for_smart_refresh(&s);
     let loader = s.media.file_loader.clone().unwrap();
     let first_read = AtomicBool::new(false);
-    s.media.file_loader = Some(Arc::new(move |path, edge| {
+    s.media.file_loader = Some(Arc::new(move |path, edge, profile| {
         if path.ends_with("second.tif") {
             // The first photo's Lossless proxy is durable; the build's final clear has not run.
             assert!(first_read.load(Ordering::SeqCst), "the first photo converts first");
             std::process::exit(EXIT_CODE);
         }
         first_read.store(true, Ordering::SeqCst);
-        loader(path, edge)
+        loader(path, edge, profile)
     }));
     let ids = ids(&s);
     s.execute("library.smartPreviews", &json!({"format": "lossless", "ids": ids})).unwrap();
@@ -225,12 +225,12 @@ fn reopening_during_a_running_build_keeps_its_marker() {
     let (release, blocked) = mpsc::channel::<()>();
     let blocked = Mutex::new(blocked);
     let loader = s.media.file_loader.clone().unwrap();
-    s.media.file_loader = Some(Arc::new(move |path, edge| {
+    s.media.file_loader = Some(Arc::new(move |path, edge, profile| {
         if path.ends_with("second.tif") {
             entered.send(()).unwrap();
             blocked.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
         }
-        loader(path, edge)
+        loader(path, edge, profile)
     }));
     let ids = ids(&s);
     s.execute("library.smartPreviews", &json!({"format": "lossless", "ids": ids, "background": true})).unwrap();
@@ -265,12 +265,12 @@ fn block_second(s: &mut Session) -> (std::sync::mpsc::Receiver<()>, std::sync::m
     let (release, blocked) = mpsc::channel::<()>();
     let blocked = Mutex::new(blocked);
     let loader = s.media.file_loader.clone().unwrap();
-    s.media.file_loader = Some(Arc::new(move |path, edge| {
+    s.media.file_loader = Some(Arc::new(move |path, edge, profile| {
         if path.ends_with("second.tif") {
             entered.send(()).unwrap();
             blocked.lock().unwrap().recv_timeout(std::time::Duration::from_secs(10)).unwrap();
         }
-        loader(path, edge)
+        loader(path, edge, profile)
     }));
     (waiting, release)
 }
@@ -371,11 +371,11 @@ fn failed_preferences_child() {
     set_online(&root, true);
     // A conversion replaces the first proxy, then the process ends while reading the second original.
     let loader = s.media.file_loader.clone().unwrap();
-    s.media.file_loader = Some(Arc::new(move |path, edge| {
+    s.media.file_loader = Some(Arc::new(move |path, edge, profile| {
         if path.ends_with("second.tif") {
             std::process::exit(EXIT_CODE);
         }
-        loader(path, edge)
+        loader(path, edge, profile)
     }));
     let ids = ids(&s);
     s.execute("library.smartPreviews", &json!({"format": "lossless", "ids": ids})).unwrap();
@@ -651,11 +651,11 @@ fn interrupted_discard_then_build_child() {
     if std::env::var("LC_SMART_CHAIN_MODE").unwrap() == "build" {
         // A first build writes the first proxy, then the process ends while reading the second original.
         let loader = s.media.file_loader.clone().unwrap();
-        s.media.file_loader = Some(Arc::new(move |path, edge| {
+        s.media.file_loader = Some(Arc::new(move |path, edge, profile| {
             if path.ends_with("second.tif") {
                 std::process::exit(EXIT_CODE);
             }
-            loader(path, edge)
+            loader(path, edge, profile)
         }));
         s.execute("library.smartPreviews", &json!({"format": "lossless", "ids": ids})).unwrap();
         panic!("the build finished without reading the second original");
@@ -735,7 +735,7 @@ fn full_drive_fallback_child() {
     let (release, blocked) = mpsc::channel::<()>();
     let blocked = Mutex::new(blocked);
     let loader = s.media.file_loader.clone().unwrap();
-    s.media.file_loader = Some(Arc::new(move |path, edge| {
+    s.media.file_loader = Some(Arc::new(move |path, edge, profile| {
         if path.ends_with("third.tif") {
             std::process::exit(EXIT_CODE);
         }
@@ -743,7 +743,7 @@ fn full_drive_fallback_child() {
             entered.send(()).unwrap();
             blocked.lock().unwrap().recv_timeout(std::time::Duration::from_secs(10)).unwrap();
         }
-        loader(path, edge)
+        loader(path, edge, profile)
     }));
     let ids = [photo_id(&s, "first.tif").0, photo_id(&s, "second.tif").0, photo_id(&s, "third.tif").0];
     s.execute("library.smartPreviews", &json!({"format": "lossless", "ids": ids, "background": true})).unwrap();
