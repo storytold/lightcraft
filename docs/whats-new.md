@@ -342,7 +342,8 @@
 - On a person's page, × on one of the faces offered in More used to hide it until LightCraft was quit: next time it was
   offered again. It is now kept: that face is no longer offered in that person's More (it can still be offered for
   someone else, and name suggestions elsewhere are unchanged); the faces more like it than like them move down in More,
-  after the others. Bring Back Set-Aside Faces, at the top of their page, gives them all back. Kept in the library's
+  after the others, the next time the page is worked out (not at once, as working More out again takes long in a large
+  library). Bring Back Set-Aside Faces, at the top of their page, gives them all back. Kept in the library's
   `people.json` beside the chosen picture, so the catalog format does not change; it follows Rename Person, and undoing
   a merge gives the other person back what they had set aside. Agents:
   `faces.dismiss {name, photo, index}`, `{name, restore: true}`; `faces.person` counts them (`dismissed`). (#3249)
