@@ -239,7 +239,13 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         let candidates =
             queue.iter().cloned().map(|path| lightcraft_engine::import::ImportCandidate { path, ..Default::default() }).chain(known).collect();
         // the probes of earlier scans go back to the session with the result, for the import that follows
-        let _ = tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput { candidates, probes: input.take_probes(), truncated: false, unreadable: 0, unsupported: 0 }));
+        let _ = tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput {
+            candidates,
+            probes: input.take_probes(),
+            truncated: false,
+            unreadable: 0,
+            unsupported: 0,
+        }));
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(job);
