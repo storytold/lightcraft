@@ -291,7 +291,6 @@ pub fn rows_between(rows: &[GridRow], top: f32, bottom: f32) -> &[GridRow] {
 }
 
 fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
     let (generation, ids) = app.session.visible_shared();
     // header: source title + count
     let sel_n = app.session.selection.ids.len();
@@ -305,21 +304,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             folder_header(app, ui, &b, &ids, local, &cnt);
         }
         None => {
-            let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
-            ui.painter().rect_filled(hr, 0.0, t.canvas);
-            let full = crate::i18n::source_title(&app.session);
-            let count_w = ui.painter().layout_no_wrap(cnt.clone(), t.font(12.5), t.text_dim).size().x;
-            // the title gives way to the count: a long album or folder name is trimmed, in full on hover
-            let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
-            let font = t.semibold(17.0);
-            let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
-            let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
-            let count_rect = ui.painter().text(pos2(hr.right() - 20.0, hr.center().y), Align2::RIGHT_CENTER, cnt, t.font(12.5), t.text_dim);
-            crate::widgets::register(ui, "grid:title", title_rect);
-            crate::widgets::register(ui, "grid:count", count_rect);
-            if title != full {
-                ui.interact(title_rect, ui.scope_id().with("grid-title"), Sense::hover()).on_hover_text(full);
-            }
+            library_header(app, ui, &cnt);
         }
     }
     super::chips::show(app, ui, &chips);
@@ -1014,6 +999,35 @@ struct BadgeFlags {
     square: bool,
     selected: bool,
     hovered: bool,
+}
+
+/// The header of a library view (All Photos, an album, a library folder…): the source's title and
+/// the photo count.
+fn library_header(app: &LightcraftApp, ui: &mut egui::Ui, cnt: &str) -> Rect {
+    let t = Tokens::get(ui.ctx());
+    let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
+    ui.painter().rect_filled(hr, 0.0, t.canvas);
+    let full = crate::i18n::source_title(&app.session);
+    // the title gives way to the count: a long album or folder name is trimmed, in full on hover;
+    // a count wider than all but the title's ellipsis (a narrow centre pane) is cut, as a Local
+    // folder's is, and reads in full on hover
+    let count_w = ui.painter().layout_no_wrap(cnt.to_owned(), t.font(12.5), t.text_dim).size().x.ceil().min((hr.width() - 96.0).max(0.0).floor());
+    let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
+    let font = t.semibold(17.0);
+    let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
+    let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
+    let count_box = Rect::from_min_max(pos2(hr.right() - 20.0 - count_w, hr.top()), pos2(hr.right() - 20.0, hr.bottom()));
+    let label = egui::Label::new(egui::RichText::new(cnt).font(t.font(12.5)).color(t.text_dim)).truncate().show_tooltip_when_elided(false);
+    let count = ui
+        .scope_builder(egui::UiBuilder::new().max_rect(count_box).layout(egui::Layout::right_to_left(egui::Align::Center)), |ui| ui.add(label))
+        .inner;
+    crate::widgets::register(ui, "grid:title", title_rect);
+    crate::widgets::register(ui, "grid:count", count.rect);
+    count.on_hover_text(cnt);
+    if title != full {
+        ui.interact(title_rect, ui.scope_id().with("grid-title"), Sense::hover()).on_hover_text(full);
+    }
+    hr
 }
 
 /// The header of a Local folder view: the path as a breadcrumb (each part opens that folder),
