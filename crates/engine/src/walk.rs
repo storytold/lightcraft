@@ -46,13 +46,21 @@ pub struct Walked {
 
 /// Whether a listed entry is hidden: a dot-prefixed name, or the Windows or macOS hidden
 /// attribute. Windows' comes with the listing; macOS' takes an lstat, so it is read for folders
-/// only (a hidden folder like `~/Library` hides a whole tree; a file hidden other than by a dot
-/// name is a rare system file).
+/// and links only (a hidden folder like `~/Library`, or a hidden link to a folder, hides a whole
+/// tree; a file hidden other than by a dot name is a rare system file).
 pub fn is_hidden_entry(entry: &std::fs::DirEntry) -> bool {
-    hidden_entry(entry, entry.file_type().is_ok_and(|t| t.is_dir()))
+    hidden_entry(entry, entry.file_type().is_ok_and(|t| may_hold_a_tree(&t)))
 }
 
-/// [`is_hidden_entry`] for an entry the caller already knows to be a folder or not.
+/// Whether a listed entry can lead to a tree of files: a folder, or a link (whose own type says
+/// nothing about its target, and which a walk follows into a folder). Its hidden attribute is
+/// read even where that takes an lstat; a link's own attribute, not its target's.
+fn may_hold_a_tree(t: &std::fs::FileType) -> bool {
+    t.is_dir() || t.is_symlink()
+}
+
+/// [`is_hidden_entry`] for an entry the caller already knows to be a folder (or a link, see
+/// [`may_hold_a_tree`]) or not.
 fn hidden_entry(entry: &std::fs::DirEntry, is_folder: bool) -> bool {
     dot_name(Some(&entry.file_name())) || HIDDEN.is_some_and(|a| a.read_for(is_folder) && entry.metadata().is_ok_and(|m| a.hides(attribute_word(&m))))
 }
@@ -219,7 +227,7 @@ fn walk(
             out.entries = out.entries.saturating_add(1);
             let p = e.path();
             let ft = e.file_type();
-            let is_hidden = hidden_entry(&e, ft.as_ref().is_ok_and(|t| t.is_dir()));
+            let is_hidden = hidden_entry(&e, ft.as_ref().is_ok_and(may_hold_a_tree));
             if is_hidden && listed.is_none() {
                 continue;
             }
@@ -316,6 +324,27 @@ mod tests {
         expected.sort();
         assert_eq!(found, expected);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A link's own hidden flag is read like a folder's, so a hidden link to a folder isn't
+    /// followed into it (macOS: `chflags -h hidden`; elsewhere a link has no such flag).
+    #[cfg(unix)]
+    #[test]
+    fn a_hidden_link_to_a_folder_is_not_followed() {
+        let root = tmp("hidden-link");
+        let target = tmp("hidden-link-target");
+        std::fs::write(target.join("inside.jpg"), b"x").unwrap();
+        std::os::unix::fs::symlink(&target, root.join("Linked")).unwrap();
+        #[cfg(target_os = "macos")]
+        assert!(std::process::Command::new("chflags").args(["-h", "hidden"]).arg(root.join("Linked")).status().unwrap().success());
+        let entry = std::fs::read_dir(&root).unwrap().next().unwrap().unwrap();
+        assert!(may_hold_a_tree(&entry.file_type().unwrap()));
+        assert_eq!(is_hidden_entry(&entry), cfg!(target_os = "macos"));
+        let found = files_in(&root, None, Limits::default(), |_| true).files;
+        let expected = if cfg!(target_os = "macos") { vec![] } else { vec![root.join("Linked/inside.jpg")] };
+        assert_eq!(found, expected);
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(target).unwrap();
     }
 
     /// The hidden attributes' bits and when a listed entry's is read, checked on every platform
