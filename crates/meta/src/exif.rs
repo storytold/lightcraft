@@ -594,7 +594,7 @@ pub(crate) mod tests {
         assert!(read("N", valid.clone()).is_some());
         assert_eq!(read("N", vec![(0, 0), (0, 0), (0, 0)]), None, "0/0 rationals");
         assert_eq!(read("N", vec![(33, 1), (0, 0), (0, 0)]), None, "0/0 minutes");
-        assert_eq!(read(" ", valid.clone()), None, "NUL ref");
+        assert_eq!(read("\0", valid.clone()), None, "NUL ref");
         assert_eq!(read("", valid.clone()), None, "empty ref");
         assert_eq!(read("X", valid), None, "invalid ref");
     }
