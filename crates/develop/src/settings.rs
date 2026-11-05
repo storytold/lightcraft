@@ -90,12 +90,15 @@ pub enum Process {
     /// camera curve keeps V2 Whites and fitted pointwise operators follow it
     /// (`lightcraft_pipeline::light_v3`, `docs/light-v3.md`).
     V4,
+    /// V4, with a raw's tone curve rolling off into white in stops past its last fitted knot, so
+    /// highlights the sensor recorded keep their detail when Exposure lifts them (issue #1632).
+    V5,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 4] = [Process::V1, Process::V2, Process::V3, Process::V4];
-    pub const LATEST: Process = Process::V4;
+    pub const ALL: [Process; 5] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5];
+    pub const LATEST: Process = Process::V5;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -103,6 +106,7 @@ impl Process {
             Process::V2 => ProcessVersion(2),
             Process::V3 => ProcessVersion(3),
             Process::V4 => ProcessVersion(4),
+            Process::V5 => ProcessVersion(5),
         }
     }
 }
@@ -1136,6 +1140,88 @@ impl Default for Mask {
             refine: 0.0,
             on_photo: true,
         }
+    }
+}
+
+impl DevelopSettings {
+    /// Calls `f` for every segmentation grid stored in these settings (the `seg` and `detail`
+    /// of Object, Prompt and People mask shapes).
+    pub fn visit_seg_masks(&self, f: &mut impl FnMut(&crate::SegMask)) {
+        for mask in &self.masks {
+            for component in &mask.components {
+                visit_shape(&component.shape, f);
+            }
+        }
+    }
+
+    /// [`DevelopSettings::visit_seg_masks`] with mutable access (resolving references into a
+    /// snapshot's grid table).
+    pub fn visit_seg_masks_mut(&mut self, f: &mut impl FnMut(&mut crate::SegMask)) {
+        for mask in &mut self.masks {
+            for component in &mut mask.components {
+                visit_shape_mut(&mut component.shape, f);
+            }
+        }
+    }
+}
+
+fn visit_shape(shape: &MaskShape, f: &mut impl FnMut(&crate::SegMask)) {
+    match shape {
+        MaskShape::Object { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        MaskShape::Prompt { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        MaskShape::People { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn visit_shape_mut(shape: &mut MaskShape, f: &mut impl FnMut(&mut crate::SegMask)) {
+    match shape {
+        MaskShape::Object { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        MaskShape::Prompt { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        MaskShape::People { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        _ => {}
     }
 }
 

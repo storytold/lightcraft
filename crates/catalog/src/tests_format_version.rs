@@ -28,10 +28,10 @@ fn snapshot_version(m: &MemStore) -> u64 {
     v["version"].as_u64().unwrap()
 }
 
-/// v12 added a People mask's SAM 3 selection (`face`, `seg`, `detail`, `edge`). A v11 library with
-/// a People mask (person and parts only) opens as it was and is rewritten as v12; a v12 library
+/// v13 added a People mask's SAM 3 selection (`face`, `seg`, `detail`, `edge`). A v12 library with
+/// a People mask (person and parts only) opens as it was and is rewritten as v13; a v13 library
 /// keeps the selection across an unrelated op and the next snapshot. (Builds that don't know the
-/// fields refuse a v12 library: `newer_snapshot_is_refused_untouched`.)
+/// fields refuse a v13 library: `newer_snapshot_is_refused_untouched`.)
 #[test]
 fn people_selections_survive_open_op_and_snapshot() {
     use lightcraft_develop::{DevelopSettings, Mask, MaskComponent, MaskOp, MaskShape, SegMask};
@@ -47,11 +47,11 @@ fn people_selections_survive_open_op_and_snapshot() {
     c.apply(op).unwrap();
     let id = c.photos().next().unwrap().id;
     c.apply(Op::SetDevelop { id, settings: people(None), label: "People".into(), edited: None }).unwrap();
-    // v11: a People mask without a selection is upgraded to the current format
+    // v12: a People mask without a selection is upgraded to the current format
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":11,\"seq\":2,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":12,\"seq\":2,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
     let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(r.upgraded_from, Some(11));
+    assert_eq!(r.upgraded_from, Some(12));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
     assert_eq!(loaded.to_snapshot(), c.to_snapshot());
     // the current format: the selection is kept across an unrelated op and a snapshot
@@ -281,8 +281,10 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v12: `MaskShape::People.face` / `seg` / `detail` / `edge` (a People mask's SAM 3 selection; v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 12;
+    /// v13: `MaskShape::People.face` / `seg` / `detail` / `edge` (a People mask's SAM 3 selection; v12: `Catalog.grids` and
+    /// `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
+    /// `Photo.preview_checked` and `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 13;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
