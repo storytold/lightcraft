@@ -149,6 +149,13 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             }
             Err(Err(e)) => return Err(e),
         };
+        // what the Exif reader can't see, the decoder may have read from the raw's own records (a CRW keeps make,
+        // model and capture time in CIFF records, no Exif): it fills the gaps, so the catalog knows the camera
+        let (meta, captured) = {
+            let mut m = m.clone();
+            m.fill_missing(&raw.metadata);
+            meta_of(&m)
+        };
         let (w, h) = raw.developed_size();
         let (mut w, mut h) = (w.max(1) as u32, h.max(1) as u32);
         if raw.orientation.swaps_axes() {
