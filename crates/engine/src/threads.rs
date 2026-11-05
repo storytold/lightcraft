@@ -7,17 +7,43 @@ pub fn rayon_thread_name(i: usize) -> String {
     format!("lc-rayon-{i}")
 }
 
+/// How [`name_global_pool`] left rayon's global pool when it could use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobalPool {
+    /// Built here, its threads named [`rayon_thread_name`].
+    Named,
+    /// It already existed (something used rayon first): it keeps its threads and their names.
+    AlreadyBuilt,
+}
+
+/// Rayon's global pool could not start its threads. rayon-core (1.13) marks the global pool as
+/// set up even then, with no pool, so every later use of rayon's global pool panics ("The global
+/// thread pool has not been initialized"): the app has to stop before it runs any rayon work.
+#[derive(Debug, thiserror::Error)]
+#[error("its worker threads could not start: {0}")]
+pub struct PoolStartFailed(#[source] rayon::ThreadPoolBuildError);
+
 /// Build rayon's global pool with its threads named [`rayon_thread_name`], at rayon's default
-/// size. The app binaries call this once at start-up, before anything uses rayon; test binaries
-/// keep rayon's lazy, unnamed pool. Returns whether the pool was built here: when it already
-/// exists, or its threads can't start, it is left as it is (logged at debug level), never a
-/// panic.
-pub fn name_global_pool() -> bool {
-    match rayon::ThreadPoolBuilder::new().thread_name(rayon_thread_name).build_global() {
-        Ok(()) => true,
+/// size. The app binaries call this once at start-up, before anything uses rayon, and stop on an
+/// error (see [`PoolStartFailed`]); test binaries keep rayon's lazy, unnamed pool. A pool that
+/// already exists is left as it is ([`GlobalPool::AlreadyBuilt`], logged at debug level).
+pub fn name_global_pool() -> Result<GlobalPool, PoolStartFailed> {
+    pool_outcome(rayon::ThreadPoolBuilder::new().thread_name(rayon_thread_name).build_global())
+}
+
+/// What a `build_global` result means. rayon's error kinds are private: a failed thread start is
+/// the one that carries its I/O error as the `source`; the others (the global pool already
+/// exists, or the current thread is in a pool, which only `use_current_thread` builds check)
+/// carry none. A call after a failed build also reads as "already built", which is why the apps
+/// stop on the first error.
+fn pool_outcome(built: Result<(), rayon::ThreadPoolBuildError>) -> Result<GlobalPool, PoolStartFailed> {
+    use std::error::Error as _;
+    match built {
+        Ok(()) => Ok(GlobalPool::Named),
+        Err(e) if e.source().is_some() => Err(PoolStartFailed(e)),
         Err(e) => {
             log::debug!("rayon's global pool keeps its thread names: {e}");
-            false
+            Ok(GlobalPool::AlreadyBuilt)
         }
     }
 }
@@ -30,6 +56,15 @@ mod tests {
     fn names_fit_linux_thread_names() {
         assert_eq!(rayon_thread_name(0), "lc-rayon-0");
         assert!(rayon_thread_name(99_999).len() <= 15, "Linux would cut the index off");
+    }
+
+    /// A pool whose threads can't start is an error (the apps stop on it), not "already built".
+    #[test]
+    fn a_pool_whose_threads_cannot_start_is_an_error() {
+        let built = rayon::ThreadPoolBuilder::new().num_threads(1).spawn_handler(|_| Err(std::io::Error::other("no threads here"))).build().map(drop);
+        let e = pool_outcome(built).unwrap_err();
+        assert_eq!(e.to_string(), "its worker threads could not start: no threads here");
+        assert_eq!(pool_outcome(Ok(())).unwrap(), GlobalPool::Named);
     }
 
     /// `name_global_pool` in a process of its own (the global pool is built once per process):
@@ -78,12 +113,12 @@ mod tests {
         if std::env::var_os("LC_NAME_GLOBAL_POOL").is_none() {
             return;
         }
-        assert!(name_global_pool(), "the first call builds the pool");
+        assert_eq!(name_global_pool().unwrap(), GlobalPool::Named, "the first call builds the pool");
         let names: Vec<Option<String>> = rayon::broadcast(|_| std::thread::current().name().map(String::from));
         assert_eq!(names.len(), rayon::current_num_threads());
         for (i, name) in names.iter().enumerate() {
             assert_eq!(name.as_deref(), Some(rayon_thread_name(i).as_str()));
         }
-        assert!(!name_global_pool(), "a second call leaves the pool as it is");
+        assert_eq!(name_global_pool().unwrap(), GlobalPool::AlreadyBuilt, "a second call leaves the pool as it is");
     }
 }
