@@ -853,7 +853,7 @@ fn import_rename_sequence_keeps_flushed_copy_and_move_results() {
                 assert!(paths[3].is_file(), "the failed source remains in place");
                 assert_eq!(r["moved"].as_array().map(Vec::len), Some(3), "{r}");
             }
-            _ => unreachable!(),
+            other => panic!("no such mode: {other}"),
         }
         let _ = std::fs::remove_dir_all(base);
     }
