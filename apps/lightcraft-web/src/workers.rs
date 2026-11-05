@@ -207,6 +207,15 @@ impl Inner {
     }
 }
 
+/// The most workers started, whatever `?workers=` asks: more than this brings nothing to a
+/// render queue and a link can't make the page spawn workers (and their copies of the module)
+/// without end.
+pub const MAX_WORKERS: usize = 16;
+
+/// Worker constructions failing in a row after which the rest are not tried: a browser that
+/// refused this many refuses the next ones too.
+const MAX_FAILED_STARTS: usize = 3;
+
 /// The main thread's handle on the render workers.
 #[derive(Clone)]
 pub struct Workers(Rc<RefCell<Inner>>);
@@ -244,7 +253,12 @@ impl Workers {
             return w;
         }
         let mut slots = WorkerSlots::default();
-        for attempt in 0..n {
+        let mut failed = 0;
+        for attempt in 0..n.min(MAX_WORKERS) {
+            if failed >= MAX_FAILED_STARTS {
+                log::warn!("render workers: {failed} failed to start in a row; not trying the rest");
+                break;
+            }
             // The callbacks name their worker by its place in `workers`; a failed attempt takes none.
             let i = slots.peek();
             let opts = web_sys::WorkerOptions::new();
@@ -254,6 +268,7 @@ impl Workers {
                 Ok(x) => x,
                 Err(e) => {
                     log::warn!("render worker {attempt}: {e:?}");
+                    failed += 1;
                     continue;
                 }
             };
@@ -274,10 +289,12 @@ impl Workers {
                 worker.set_onmessage(None);
                 worker.set_onerror(None);
                 worker.terminate();
+                failed += 1;
                 continue;
             }
             w.0.borrow_mut().workers.push(W { worker, ready: false, dead: false, busy: None });
             slots.commit();
+            failed = 0;
         }
         w
     }
@@ -301,6 +318,7 @@ impl Workers {
                     loaded: None,
                     quick: None,
                     display: None,
+                    frame: None,
                 };
                 g.done.push((b.slot, r, 0.0));
             }
@@ -392,6 +410,7 @@ impl Workers {
                 loaded: None,
                 quick: None,
                 display: None,
+                frame: None,
             },
             ms,
         ));
@@ -446,6 +465,7 @@ impl RenderOffload for Workers {
                 loaded: None,
                 quick: None,
                 display: None,
+                frame: None,
             };
             g.done.push((slot, r, 0.0));
             return None;
