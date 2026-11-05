@@ -1,7 +1,7 @@
-//! Issue #2882 / TEST-TIFF-ZIP: a ZIP (Deflate) TIFF is never larger than the same image uncompressed, with the
-//! Deflate backend the app ships. `flate2` picks its backend by Cargo feature, and the desktop app's dependencies
-//! (`craft-update` → `zip`) switch it to `zlib-rs`; this crate's dev-dependencies do the same, so these tests see
-//! what an exported file gets, whichever crate is tested alone.
+//! Issue #2882 / TEST-TIFF-ZIP: noisy 8/16-bit ZIP TIFFs stay within their uncompressed size.
+//! Use the backend selected by the application dependency graph, without forcing a test-only backend:
+//! #3800 removed craft-update's zlib-rs feature so Windows uses miniz_oxide like the other platforms.
+//! Running these tests across the workspace also catches a dependency switching the backend again.
 
 use lightcraft_codecs::*;
 
