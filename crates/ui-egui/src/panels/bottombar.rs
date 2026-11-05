@@ -199,6 +199,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         size_slider(
             &mut child,
             "slider:surveyFilmstripSize",
+            "Filmstrip size",
             &mut app.ui.survey_filmstrip_size,
             crate::state::SURVEY_FILMSTRIP_SIZE_MIN,
             crate::state::SURVEY_FILMSTRIP_SIZE_MAX,
@@ -255,6 +256,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         size_slider(
             &mut child,
             "slider:thumbSize",
+            "Thumbnail size",
             &mut app.ui.thumb_size,
             crate::state::THUMB_SIZE_MIN,
             crate::state::THUMB_SIZE_MAX,
@@ -265,10 +267,10 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
 }
 
 /// The bottom-bar size slider shared by the independent Grid and Survey preferences.
-fn size_slider(ui: &mut egui::Ui, id: &str, value: &mut f32, min: f32, max: f32, step: f32) {
+fn size_slider(ui: &mut egui::Ui, id: &str, label: &str, value: &mut f32, min: f32, max: f32, step: f32) {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(110.0, 20.0), Sense::click_and_drag());
-    resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(*value), crate::i18n::tr("Thumbnail size")));
+    resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(*value), crate::i18n::tr(label)));
     ui.ctx().accesskit_node_builder(resp.id, |node| {
         node.set_min_numeric_value(f64::from(min));
         node.set_max_numeric_value(f64::from(max));
