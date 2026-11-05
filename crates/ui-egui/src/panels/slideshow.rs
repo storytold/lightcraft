@@ -328,7 +328,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let draw = |id: Item, alpha: f32| -> Option<Rect> {
         let t = texture(app, id)?;
         let r = rect_of(t);
-        p.image(t.tex.id(), r, full_uv(), Color32::WHITE.gamma_multiply(alpha.clamp(0.0, 1.0)));
+        p.image(t.id(), r, full_uv(), Color32::WHITE.gamma_multiply(alpha.clamp(0.0, 1.0)));
         Some(r)
     };
     let k = frame.progress.clamp(0.0, 1.0);
@@ -352,13 +352,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let r = rect_of(t);
                 match new_rect {
                     Some(n) => {
-                        p.with_clip_rect(n.intersect(canvas)).image(t.tex.id(), r, full_uv(), Color32::WHITE);
+                        p.with_clip_rect(n.intersect(canvas)).image(t.id(), r, full_uv(), Color32::WHITE);
                         for band in outside(r, n) {
-                            p.with_clip_rect(band).image(t.tex.id(), r, full_uv(), Color32::WHITE.gamma_multiply(1.0 - k));
+                            p.with_clip_rect(band).image(t.id(), r, full_uv(), Color32::WHITE.gamma_multiply(1.0 - k));
                         }
                     }
                     None => {
-                        p.image(t.tex.id(), r, full_uv(), Color32::WHITE.gamma_multiply(1.0 - k));
+                        p.image(t.id(), r, full_uv(), Color32::WHITE.gamma_multiply(1.0 - k));
                     }
                 }
             }
