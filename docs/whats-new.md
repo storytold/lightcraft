@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-05
+
+### EXIF GPS coordinates are checked before use
+- EXIF GPS minutes and seconds at or above 60 are no longer folded into a plausible location. Original export with Remove Location Info also refuses to copy a file whose parsed EXIF still contains GPS coordinate or altitude tags, even when invalid coordinates are not projected into typed metadata.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III

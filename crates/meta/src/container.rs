@@ -347,6 +347,49 @@ mod tests {
     }
 
     #[test]
+    fn jpeg_gps_falls_back_from_invalid_exif_and_keeps_valid_exif() {
+        use crate::Gps;
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let exif_with_latitude = |latitude: Vec<(u32, u32)>| {
+            let mut gps = IfdBuilder::new();
+            gps.set(t::GPS_LATITUDE_REF, Value::Ascii("N".into()));
+            gps.set(t::GPS_LATITUDE, Value::Rational(latitude));
+            gps.set(t::GPS_LONGITUDE_REF, Value::Ascii("E".into()));
+            gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(10, 1), (30, 1), (0, 1)]));
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set_child(t::GPS_IFD, gps);
+            TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+        };
+        let jpeg = |exif: &[u8], xmp: Option<&str>| {
+            let mut jpeg = vec![0xff, 0xd8];
+            let mut payload = b"Exif\0\0".to_vec();
+            payload.extend_from_slice(exif);
+            jpeg.extend(seg(0xe1, &payload));
+            if let Some(xmp) = xmp {
+                let mut payload = XMP_SIG.to_vec();
+                payload.extend_from_slice(xmp.as_bytes());
+                jpeg.extend(seg(0xe1, &payload));
+            }
+            jpeg.extend_from_slice(&[0xff, 0xd9]);
+            jpeg
+        };
+
+        let fallback = Gps { latitude: 51.5, longitude: -0.125, altitude: Some(12.0) };
+        let xmp = crate::write_xmp(&crate::Metadata { gps: Some(fallback), ..Default::default() }, None);
+        let invalid_exif = exif_with_latitude(vec![(45, 1), (60, 1), (0, 1)]);
+        assert!(crate::exif_embeds_gps_location(&invalid_exif), "location-bearing EXIF tags are retained even when their values are invalid");
+        let bytes = jpeg(&invalid_exif, Some(&xmp));
+        assert_eq!(crate::try_extract(&bytes).unwrap().gps, Some(fallback), "invalid EXIF coordinates leave XMP fallback available");
+        assert_eq!(embedded(&bytes).exif.as_deref(), Some(invalid_exif.as_slice()), "the source EXIF bytes remain available");
+
+        let valid_exif = exif_with_latitude(vec![(45, 1), (30, 1), (0, 1)]);
+        assert!(crate::exif_embeds_gps_location(&valid_exif));
+        let bytes = jpeg(&valid_exif, None);
+        assert_eq!(crate::try_extract(&bytes).unwrap().gps, Some(Gps { latitude: 45.5, longitude: 10.5, altitude: None }));
+    }
+
+    #[test]
     fn jpeg_extended_xmp() {
         let mut j = vec![0xff, 0xd8];
         for (off, part) in [(5u32, &b"world"[..]), (0, b"hello")] {
