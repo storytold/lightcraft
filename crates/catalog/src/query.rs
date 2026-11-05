@@ -514,9 +514,36 @@ impl Filter {
     }
 }
 
-/// Case-insensitive file name order without allocating (compares per-character lowercase via `char::to_lowercase`).
+#[cfg(test)]
+thread_local! {
+    /// Tests: how many name comparisons were handed to the Unicode lower-casing (`cmp_name` on this thread).
+    pub(crate) static CASE_FOLDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Case-insensitive file name order without allocating: the names' characters compared in lower case (`char::to_lowercase`).
+///
+/// A sort by file name compares nothing else, and a sort by a date comes to the names of the photos that tie on it (a
+/// burst, one import batch), so walking two `to_lowercase` iterators was most of what sorting a big library by name
+/// cost. An ASCII letter lower-cases to
+/// the one ASCII letter that `eq_ignore_ascii_case` says it is, so the names are compared byte by byte up to the first
+/// byte that is not ASCII in either one (the bytes before it are whole characters); only what follows goes through the
+/// Unicode tables. The order is the same as comparing the whole names that way.
 pub fn cmp_name(a: &str, b: &str) -> std::cmp::Ordering {
-    a.chars().flat_map(char::to_lowercase).cmp(b.chars().flat_map(char::to_lowercase))
+    use std::cmp::Ordering::{Greater, Less};
+    let same = a.bytes().zip(b.bytes()).take_while(|(x, y)| x.is_ascii() && x.eq_ignore_ascii_case(y)).count();
+    match (a.as_bytes().get(same), b.as_bytes().get(same)) {
+        (None, None) => Equal,
+        // (the shorter name is the start of the longer one, which has at least one character more)
+        (None, Some(_)) => Less,
+        (Some(_), None) => Greater,
+        (Some(x), Some(y)) if x.is_ascii() && y.is_ascii() => x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase()),
+        _ => {
+            #[cfg(test)]
+            CASE_FOLDED.with(|n| n.set(n.get() + 1));
+            let (rest_a, rest_b) = (a.get(same..).unwrap_or_default(), b.get(same..).unwrap_or_default());
+            rest_a.chars().flat_map(char::to_lowercase).cmp(rest_b.chars().flat_map(char::to_lowercase))
+        }
+    }
 }
 
 impl Catalog {
