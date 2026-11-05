@@ -59,6 +59,7 @@ fn assert_identical(frames: Vec<Frame>, opts: HdrOptions) {
     assert_eq!(new.reference, old.reference);
     assert_eq!(new.ev.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), old.ev.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
     assert_eq!(new.ev_exif, old.ev_exif);
+    assert_eq!(new.alignments.len(), old.alignments.len(), "alignment count {opts:?}");
     for (a, b) in new.alignments.iter().zip(&old.alignments) {
         assert_eq!(a.h, b.h);
         assert_eq!((a.model, a.inliers, a.rms.to_bits()), (b.model, b.inliers, b.rms.to_bits()));

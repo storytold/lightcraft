@@ -1,6 +1,6 @@
 # Photo Merge (HDR, Panorama, HDR Panorama)
 
-> **Last updated:** 2026-11-05. LR-MERGE-HDR: exact reductions in merge memory; half-float frame storage remains deferred.
+> **Changes:** [revision history](#revision-history)
 
 `crates/merge` (layer L3, no UI dependencies) implements the algorithms; `crates/engine/src/merge.rs`
 plans, runs and finishes merges in the library; the desktop UI shows a dialog with a live preview.

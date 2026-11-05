@@ -1,6 +1,6 @@
 # HDR merge memory measurement
 
-Task: `LR-MERGE-HDR`. Last updated: 2026-11-05. Stage 1 reduces allocations without changing pixel precision. Half-float frame storage is deferred.
+Task: `LR-MERGE-HDR`. Stage 1 reduces allocations without changing pixel precision. Half-float frame storage is deferred.
 
 ## Reproduce the original and exact paths
 
