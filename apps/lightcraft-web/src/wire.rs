@@ -205,7 +205,7 @@ impl WorkerCore {
             }
         };
         let src = match job.fit_edge {
-            Some(max_edge) => SourceRef::Fit { from: Arc::new(src), max_edge }.load_source()?,
+            Some(max_edge) => SourceRef::Fit { from: Box::new(src), max_edge }.load_source()?,
             None => src,
         };
         let info = src.info_or(job.info());
@@ -484,6 +484,7 @@ mod tests {
             level: SourceLevel::Thumb,
             origin,
             max_edge: 512,
+            fit_edge: None,
             raw: false,
             relative_wb: false,
             legacy_relative_wb: false,
