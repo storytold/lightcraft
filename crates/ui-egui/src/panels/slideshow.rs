@@ -298,17 +298,17 @@ pub(crate) fn moving_part(app: &LightcraftApp, item: Item, t: &crate::render::Te
 /// coordinates) shows that view's window of itself in the same place; the rest is drawn as is.
 fn paint(p: &egui::Painter, t: &crate::render::Tex, r: Rect, part: Rect, view: Option<View>, tint: Color32) {
     let Some(v) = view else {
-        p.image(t.tex.id(), r, full_uv(), tint);
+        p.image(t.id(), r, full_uv(), tint);
         return;
     };
     let at = |u: Pos2| pos2(r.min.x + u.x * r.width(), r.min.y + u.y * r.height());
     let place = Rect::from_min_max(at(part.min), at(part.max));
     for band in outside(r, place) {
-        p.with_clip_rect(band).image(t.tex.id(), r, full_uv(), tint);
+        p.with_clip_rect(band).image(t.id(), r, full_uv(), tint);
     }
     let (x0, y0, x1, y1) = v.window();
     let sub = |x: f64, y: f64| pos2(part.min.x + x as f32 * part.width(), part.min.y + y as f32 * part.height());
-    p.image(t.tex.id(), place, Rect::from_min_max(sub(x0, y0), sub(x1, y1)), tint);
+    p.image(t.id(), place, Rect::from_min_max(sub(x0, y0), sub(x1, y1)), tint);
 }
 
 fn full_uv() -> Rect {

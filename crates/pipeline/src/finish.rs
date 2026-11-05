@@ -29,6 +29,31 @@ pub fn sharpen_mask_weight(masking: f32, det: f32) -> f32 {
     if masking > 0.0 { smooth(masking * 0.25, masking * 0.25 + 0.15, det.abs()) } else { 1.0 }
 }
 
+/// Masking weight for the V3 pixel-scale sharpening band, also used by its Alt-drag preview.
+#[inline]
+pub fn pixel_sharpen_mask_weight(masking: f32, det: f32) -> f32 {
+    if masking > 0.0 { smooth(masking * 0.1, masking * 0.1 + 0.06, det.abs()) } else { 1.0 }
+}
+
+/// Gain of the sharpening detail term (per unit of `Amount / 150`), in stops of luminance per stop of detail.
+pub const SHARPEN_GAIN: f32 = 7.0;
+
+/// Soft-clip limit (stops) of the sharpening detail term for Detail `0..=100`: 0.03 stops (large
+/// edge detail is flattened so halos stay small) up to 1.5 stops (practically linear).
+pub fn sharpen_limit(detail: f64) -> f32 {
+    let d = (detail / 100.0).clamp(0.0, 1.0) as f32;
+    0.03 * 50f32.powf(d)
+}
+
+/// The sharpening boost (stops) for pixel-scale detail `det` (log luminance minus its blur at the
+/// sharpen radius): linear for small detail, soft-clipped at `limit`, and gated by the Masking edge
+/// mask (`mask` = Masking / 100) so flat areas and noise can be left alone.
+#[inline]
+pub fn sharpen_term(det: f32, limit: f32, mask: f32) -> f32 {
+    let m = pixel_sharpen_mask_weight(mask, det);
+    SHARPEN_GAIN * m * det / (1.0 + det.abs() / limit)
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -155,6 +180,9 @@ pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
+    /// Process V4's calibrated Contrast and Blacks on the camera-look path, applied after
+    /// the tone map (`None`: another process or path, or both at 0; see [`crate::light_v3`]).
+    pub light: Option<crate::light_v3::LightOps>,
     pub ops: ColorOps,
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
@@ -169,7 +197,7 @@ pub struct FinishParams {
     pub to_out: [[f32; 3]; 3],
     pub out_luma: [f32; 3],
     pub out_trc: OutputTrc,
-    /// Soft proofing (CPU only; the GPU path declines proof renders).
+    /// Soft proofing (the GPU kernel reads the same parameters).
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
     pub sh: f32,
@@ -178,6 +206,12 @@ pub struct FinishParams {
     pub dehaze: f32,
     pub sharpen: f32,
     pub sharpen_mask: f32,
+    /// V1/V2 retain their texture-band sharpening; V3 uses the pixel-scale plane.
+    pub pixel_sharpen: bool,
+    /// Soft-clip limit (stops) of the sharpening detail term: small damps halos (Detail 0), large keeps all (100).
+    pub sharpen_limit: f32,
+    /// Response compensation for a sharpening radius below one output pixel.
+    pub sharpen_gain: f32,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -240,6 +274,7 @@ impl FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
+            light: crate::light_v3::LightOps::new(s, info),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
@@ -256,6 +291,13 @@ impl FinishParams {
             dehaze,
             sharpen: (s.detail.sharpen_amount / 150.0) as f32,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            pixel_sharpen: crate::local::pixel_sharpen(s),
+            sharpen_limit: sharpen_limit(s.detail.sharpen_detail),
+            sharpen_gain: crate::local::sharpen_gain(crate::local::sharpen_sigma_raw(
+                s,
+                px_per_long,
+                info.native_long.unwrap_or(0).max(frame.ow.max(frame.oh) as usize).max(1) as f64,
+            )),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -285,6 +327,8 @@ impl FinishParams {
 /// rendering process. This is where a new tone model branches: a retuned default tone curve (issue
 /// #146) is a new [`Process`] with its own arm here, and V1's arm stays as it is, so photos edited
 /// under V1 keep their look (`docs/process-versions.md`). CPU and GPU both take it from here.
+/// From V4 the camera curve keeps V2 Whites; its Contrast and Blacks are the
+/// calibrated operators that follow the tone map ([`crate::light_v3`], [`FinishParams::light`]).
 /// `peak` is the HDR render's peak relative to SDR white ([`lightcraft_develop::Hdr::peak`]); at 1.0 (SDR)
 /// every arm is the SDR tone map. An HDR render keeps the camera's look through the midtones and
 /// lifts its highlights past white ([`ToneMap::camera_hdr`]), so it matches the SDR render below them.
@@ -292,14 +336,21 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
+            None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
+            None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
+        },
+        // Keep V2 Whites in the camera curve; calibrated Contrast and Blacks follow it.
+        Process::V4 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+            Some(curve) => ToneMap::camera_hdr(curve, 0.0, l.whites, 0.0, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
         },
     }
 }
 
+/// Finish the prepared pipeline stages into an 8-bit RGBA image in `space` (or `display`).
 pub(crate) fn finish(
     p: &Prepared,
     s: &DevelopSettings,
@@ -317,11 +368,14 @@ pub(crate) fn finish(
         fp.for_display(d, proof);
     }
     let trc = fp.out_trc;
-    let data = finish_with(p, &fp, false, |e| match trc {
-        OutputTrc::Srgb => [enc(e[0]), enc(e[1]), enc(e[2]), 255],
-        t => {
-            let x = e.map(|v| enc(t.encode(lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0)))));
-            [x[0], x[1], x[2], 255]
+    let data = finish_with(p, &fp, false, |x, y, e| {
+        let d = bayer_dither_offset(x, y);
+        match trc {
+            OutputTrc::Srgb => [enc(e[0], d), enc(e[1], d), enc(e[2], d), 255],
+            t => {
+                let c = e.map(|v| enc(t.encode(lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0))), d));
+                [c[0], c[1], c[2], 255]
+            }
         }
     });
     Rgba8 { width: w, height: h, data }
@@ -345,18 +399,18 @@ pub(crate) fn finish_deep(
     let trc = fp.out_trc;
     let samples = match depth {
         OutputDepth::F32Linear => {
-            let v = finish_with(p, &fp, true, |e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
+            let v = finish_with(p, &fp, true, |_x, _y, e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
             DeepSamples::F32(v.into_flattened())
         }
         OutputDepth::F32Hdr => {
             // the sRGB curve extended past 1 (it is unbounded), so values up to `peak` survive
             let peak = fp.peak;
-            let v = finish_with(p, &fp, true, |e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
+            let v = finish_with(p, &fp, true, |_x, _y, e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
             DeepSamples::F32(v.into_flattened())
         }
         _ => {
             let q = |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
-            let v = finish_with(p, &fp, true, |e| match trc {
+            let v = finish_with(p, &fp, true, |_x, _y, e| match trc {
                 OutputTrc::Srgb => e.map(q),
                 t => e.map(|v| q(t.encode(srgb_to_linear(v.clamp(0.0, 1.0))))),
             });
@@ -373,19 +427,21 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     p: &Prepared,
     fp: &FinishParams,
     exact: bool,
-    store: impl Fn([f32; 3]) -> T + Sync + Send,
+    store: impl Fn(usize, usize, [f32; 3]) -> T + Sync + Send,
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
-    let FinishParams { curves, vig, to_out, out_luma, grain, .. } = fp;
+    let FinishParams { light, curves, vig, to_out, out_luma, grain, .. } = fp;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
     let [vx, vy, vw, vh] = fp.view;
+    let (vx_u, vy_u) = (vx.round() as usize, vy.round() as usize);
     // the vignette belongs to the whole output frame, not to the window being drawn
     let aspect = vw / vh;
 
     let srgb = srgb_lut();
+    let preview_light = if exact { None } else { light.as_ref().and_then(|lo| crate::light_v3::PreviewOps::new(lo, &|v| encode_srgb(srgb, v))) };
     let peak = fp.peak;
     let hdr = peak > 1.0;
     let mut out = vec![T::default(); w * h];
@@ -427,6 +483,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
                 d = d.map(|v| v + (o - v) * t);
             }
+
+            // --- process V4: calibrated Contrast, Blacks (ProPhoto with the sRGB transfer)
+            d = apply_light(d, light.as_ref(), preview_light.as_ref(), exact, srgb);
 
             // --- colour
             d = fp.ops.apply(d, l_sat, l_hue);
@@ -549,10 +608,27 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
                 None => e,
             };
-            *px = store(warn.unwrap_or(e));
+            *px = store(vx_u + x, vy_u + y, warn.unwrap_or(e));
         }
     });
     out
+}
+
+#[inline]
+fn apply_light(
+    color: [f32; 3],
+    light: Option<&crate::light_v3::LightOps>,
+    preview: Option<&crate::light_v3::PreviewOps>,
+    exact: bool,
+    srgb: &[f32; SRGB_LUT_N + 1],
+) -> [f32; 3] {
+    if let Some(lo) = preview {
+        lo.apply(color)
+    } else if let Some(lo) = light {
+        if exact { lo.apply(color, &linear_to_srgb) } else { lo.apply(color, &|v| encode_srgb(srgb, v)) }
+    } else {
+        color
+    }
 }
 
 struct PixelLocalTerms {
@@ -662,17 +738,26 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         delta += clarity * 0.85 * detail * (0.35 + 0.65 * midtone);
     }
     let texture = fp.tex + l_tex;
-    let sharpen = l_sharp * 0.6 + fp.sharpen;
-    if (texture != 0.0 || sharpen != 0.0)
+    if texture != 0.0
         && let Some(blur) = &p.texture_blur
     {
         let detail = p.log_l.data[index] - blur.data[index];
         let tame = 1.0 - 0.6 * smooth(0.4, 1.6, detail.abs());
         delta += texture * 1.1 * detail.clamp(-1.0, 1.0) * tame;
-        if sharpen != 0.0 {
-            let mask = sharpen_mask_weight(fp.sharpen_mask, detail);
-            delta += sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask;
+    }
+    let sharpen = l_sharp * 0.6 + fp.sharpen;
+    if fp.pixel_sharpen {
+        if sharpen != 0.0
+            && let Some(blur) = &p.sharpen_blur
+        {
+            delta += sharpen * fp.sharpen_gain * sharpen_term(p.log_l.data[index] - blur.data[index], fp.sharpen_limit, fp.sharpen_mask);
         }
+    } else if sharpen != 0.0
+        && let Some(blur) = &p.texture_blur
+    {
+        let detail = p.log_l.data[index] - blur.data[index];
+        let mask = sharpen_mask_weight(fp.sharpen_mask, detail);
+        delta += sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask;
     }
     if l_noise != 0.0
         && let Some(blur) = &p.texture_blur
@@ -685,7 +770,7 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
 
 /// A colour needing more desaturation than this (scale < `GAMUT_WARN`) to fit is out of gamut for
 /// the gamut warnings (tolerates rounding at the gamut boundary).
-const GAMUT_WARN: f32 = 0.995;
+pub const GAMUT_WARN: f32 = 0.995;
 
 /// For the gamut warnings: `r` needed desaturating by `t` to fit, and isn't simply a neutral
 /// beyond white or below black (that's clipping, which the clipping warnings show).
@@ -770,17 +855,42 @@ pub fn srgb_lut() -> &'static [f32; SRGB_LUT_N + 1] {
 /// Linear → sRGB-encoded (clamped to 0..1) by an interpolated table: within 2e-5 of the exact
 /// curve (≪ one 8-bit or 10-bit step), several times faster than `powf`.
 #[inline]
-fn encode_srgb(lut: &[f32; SRGB_LUT_N + 1], v: f32) -> f32 {
+pub(crate) fn encode_srgb(lut: &[f32; SRGB_LUT_N + 1], v: f32) -> f32 {
     let f = v.clamp(0.0, 1.0) * SRGB_LUT_N as f32;
     let i = (f as usize).min(SRGB_LUT_N - 1);
     let t = f - i as f32;
     lut[i] + (lut[i + 1] - lut[i]) * t
 }
 
+#[rustfmt::skip]
+const BAYER_8X8: [u8; 64] = [
+     0, 32,  8, 40,  2, 34, 10, 42,
+    48, 16, 56, 24, 50, 18, 58, 26,
+    12, 44,  4, 36, 14, 46,  6, 38,
+    60, 28, 52, 20, 62, 30, 54, 22,
+     3, 35, 11, 43,  1, 33,  9, 41,
+    51, 19, 59, 27, 49, 17, 57, 25,
+    15, 47,  7, 39, 13, 45,  5, 37,
+    63, 31, 55, 23, 61, 29, 53, 21,
+];
+
+/// Returns the ordered Bayer 8×8 dither threshold offset in `0..1` for pixel `(x, y)`.
 #[inline]
-fn enc(v: f32) -> u8 {
-    // `v` is already sRGB-encoded; round to 8 bits.
-    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+fn bayer_dither_offset(x: usize, y: usize) -> f32 {
+    let idx = (y & 7) * 8 + (x & 7);
+    (BAYER_8X8[idx] as f32 + 0.5) / 64.0
+}
+
+/// Quantizes display-curve-encoded value `v` (0..1) to 8-bit integer with 8×8 ordered Bayer dithering.
+#[inline]
+fn enc(v: f32, dither: f32) -> u8 {
+    let y = v.clamp(0.0, 1.0) * 255.0;
+    // Guard against floating point rounding error (e.g. sRGB <-> Rec.2020 matrix conversion)
+    // where numerical white (1.0) evaluates to ~254.95.
+    if y >= 254.9 {
+        return 255;
+    }
+    (y + dither).clamp(0.0, 255.0) as u8
 }
 
 #[cfg(test)]
@@ -821,5 +931,63 @@ mod tests {
         assert!(worst < 2e-5, "{worst}");
         assert_eq!(encode_srgb(lut, -1.0), 0.0);
         assert!((encode_srgb(lut, 2.0) - 1.0).abs() < 1e-6);
+    }
+
+    /// Verifies 8x8 Bayer dithering preserves endpoints, exact 8-bit quantization steps, and fractional levels.
+    #[test]
+    fn bayer_dithering_preserves_extremes_and_dithers_smoothly() {
+        for y in 0..8 {
+            for x in 0..8 {
+                let d = bayer_dither_offset(x, y);
+                // Zero is strictly 0 across all dither offsets
+                assert_eq!(enc(0.0, d), 0);
+                // One is strictly 255 across all dither offsets
+                assert_eq!(enc(1.0, d), 255);
+                // Exact 8-bit quantization steps have zero spatial noise
+                for k in 0..=255 {
+                    assert_eq!(enc(k as f32 / 255.0, d), k);
+                }
+            }
+        }
+
+        // Fractional level: 128.5 / 255.0 should dither equally between 128 and 129
+        let v = 128.5 / 255.0;
+        let mut sum = 0u32;
+        let mut count_128 = 0;
+        let mut count_129 = 0;
+        for y in 0..8 {
+            for x in 0..8 {
+                let val = enc(v, bayer_dither_offset(x, y));
+                sum += val as u32;
+                if val == 128 {
+                    count_128 += 1;
+                } else if val == 129 {
+                    count_129 += 1;
+                }
+            }
+        }
+        assert_eq!(count_128, 32);
+        assert_eq!(count_129, 32);
+        assert_eq!(sum, 32 * 128 + 32 * 129);
+
+        // Fractional highlight level: 254.5 / 255.0 should dither equally between 254 and 255
+        let v = 254.5 / 255.0;
+        let mut sum_hl = 0u32;
+        let mut count_254 = 0;
+        let mut count_255 = 0;
+        for y in 0..8 {
+            for x in 0..8 {
+                let val = enc(v, bayer_dither_offset(x, y));
+                sum_hl += val as u32;
+                if val == 254 {
+                    count_254 += 1;
+                } else if val == 255 {
+                    count_255 += 1;
+                }
+            }
+        }
+        assert_eq!(count_254, 32);
+        assert_eq!(count_255, 32);
+        assert_eq!(sum_hl, 32 * 254 + 32 * 255);
     }
 }
