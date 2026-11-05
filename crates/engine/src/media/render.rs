@@ -293,6 +293,8 @@ impl RenderJob {
                 photo: self.photo,
                 level: self.level,
                 key: self.key,
+                cache_generation: self.cache_generation,
+                cache_owner: self.cache_owner.clone(),
                 rendered: Ok(Rendered { image, histogram, deep: None }),
                 gpu_fallback: None,
                 loaded: None,
