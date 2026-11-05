@@ -355,9 +355,11 @@ mod memory_budget_tests {
             return;
         }
         let mut s = Session::new();
-        // a budget other than the one the process has, in whole MB (and a fractional one)
+        // a budget other than the one the process has, in whole MB (and a fractional one), and both
+        // ends of the range, which are accepted: setting a budget only moves limits (nothing is
+        // allocated, even for 1 TiB), and this process runs nothing else
         let mb = if crate::memory::budget() == 512 << 20 { 768.0 } else { 512.0 };
-        for mb in [mb, mb + 0.5] {
+        for mb in [mb, mb + 0.5, 64.0, 1_048_576.0] {
             let r = s.execute("app.memoryBudget", &json!({ "mb": mb })).unwrap();
             let bytes = (mb * 1_048_576.0) as u64;
             assert_eq!(r["budget"].as_u64(), Some(bytes), "{r}");
