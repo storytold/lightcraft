@@ -14,7 +14,7 @@ LightCraft is a clean-room, open-source, pure-Rust photo library + non-destructi
 4. **Pick work** from [`docs/gaps.md`](docs/gaps.md) (ranked by user impact; `B` marks beta blockers). The row-by-row
    tracker is [`docs/parity-checklist.md`](docs/parity-checklist.md) (one row per feature, menu item and shortcut).
    When you land a feature, update its row(s) and the gap entry in the same commit, and the numbers in `ROADMAP.md` /
-   `docs/target-app-parity.md` when a listed gap closes (bump each doc's *Last updated* line and revision history); `cargo xtask parity` (part of `ci`) checks that every `cmd:`/`ctl:` id and
+   `docs/target-app-parity.md` when a listed gap closes (add a row to each doc's revision history; the header line keeps only `Last reviewed`, `Target` and the `Changes` link, never a `Last updated` date or a change note, which every PR would edit and conflict on); `cargo xtask parity` (part of `ci`) checks that every `cmd:`/`ctl:` id and
    path the tracker cites still exists, and `cargo xtask parity --write` refreshes its summary.
 5. Follow the autonomous operation protocol (`plan/execution-plan.md` §7). Don't stop to ask unless §7 lists the decision as the user's.
 
