@@ -11,12 +11,8 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 |---|---|
 | **V1** | LightCraft's rendering from before process versions existed. Frozen. |
 | **V2** | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
-| **V3** (the latest) | V2 plus calibrated global Contrast (per channel) and Blacks (per-channel/luminance mix) on raws with a camera tone curve. Whites behaves exactly as V2, both signs; its calibration is a planned follow-up. Other sources and local adjustments retain V2 operators. See [calibrated Light operators](light-v3.md). |
-
-The number for this calibration is provisional. Open PR #944 also proposes V3 and V4,
-#1283 proposes V3 for Dehaze, and #1286 follows #1283. Maintainers should assign final
-numbers and inheritance in merge order. The `Process::V3` arm in `Process::version()` is
-the single serialized-number definition; code and tests refer to the enum.
+| **V3** | Pixel-scale sharpening (issue #757): Radius uses the original photo’s pixels, Detail controls halo damping, and downsized sources retain a response-matched sharpening band. V1 and V2 keep texture-band sharpening exactly. The sharpen plane is keyed by radius and process and invalidated after noise-reduction changes. The Highlights/Shadows base and tone map are unchanged from V2. |
+| **V4** (the latest) | V3 plus calibrated global Contrast (per channel) and Blacks (per-channel/luminance mix) on raws with a camera tone curve. Whites behaves exactly as V2, both signs; its calibration is a planned follow-up. Other sources and local adjustments retain V2 operators. See [calibrated Light operators](light-v3.md). |
 
 ## The rule
 
@@ -34,6 +30,13 @@ the single serialized-number definition; code and tests refer to the enum.
 Blacks at 0) is the identity up to white: the SDR shoulder no longer pulls 1.0 down to 0.9875 (8-bit
 255 to 254, issue #1945). It landed in place as a bug fix, since the tone map promised identity at
 neutral settings; edited curves keep the shoulder and their V1 look.
+
+**AI mask edges** (Object and Describe selections stored as a model's grid) follow the photo's edges
+when they are enlarged to the output (issue #3272): the plain enlargement spilled 1–2 px onto the
+background, which a raised Exposure turned into a bright outline around the subject in previews and
+exports. Existing AI masks become 1–2 px tighter at a subject's edges, on every process; their
+inside, their outside and edges without contrast in the photo are unchanged. It landed in place as
+a bug fix: the outline is output that isn't in the photo nor in the edit, not a look anyone chose.
 
 ## Adding a process
 

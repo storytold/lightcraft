@@ -8,8 +8,18 @@ use super::{CACHE_SIZES, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Token
 pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     use lightcraft_engine::gpu;
     heading(ui, t, crate::i18n::tr("Rendering"));
+    #[cfg(target_os = "windows")]
+    check(ui, "settings.composeWindow", &mut app.ui.settings.compose_window, "Prevent G-SYNC/FreeSync flicker (applies at next launch)");
     check(ui, "settings.gpu", &mut app.ui.settings.gpu, "Use the GPU for rendering");
-    let status = if !gpu::available() {
+    // `available` would wait for a device still being created (issue #136)
+    let status = if gpu::enabled() && !gpu::ready() {
+        // the device is created on another thread, which doesn't wake the UI when it's done;
+        // make sure that thread runs (cheap and idempotent: a start lost to an off/on switch
+        // can't leave "starting" for good)
+        gpu::warm_up();
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        "GPU: starting…".to_string()
+    } else if !gpu::available() {
         match gpu::unavailable_reason() {
             Some(why) => crate::i18n::tr_format!("Rendering on the CPU: {why}", why = why),
             None => "No usable GPU found: rendering on the CPU".to_string(),

@@ -1,5 +1,5 @@
-//! Process V3's calibrated Contrast and Blacks (`light_v3`): V1 and V2 render as they
-//! always did, and the V3 operators behave.
+//! Process V4's calibrated Contrast and Blacks (`light_v3`): V1 and V2 render as they
+//! always did, and the V4 operators behave.
 
 use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
 use lightcraft_develop::{DevelopSettings, Process, ProcessVersion, controls};
@@ -17,7 +17,7 @@ fn camera_curve() -> crate::tone::CameraTone {
     crate::tone::CameraTone::new(knots).unwrap().with_chroma([1.3, 1.2, 1.1, 1.0, 0.9, 0.7, 0.5, 0.4]).unwrap()
 }
 
-/// A raw with a camera look: the path V3 changes.
+/// A raw with a camera look: the path V4 changes.
 fn camera_look() -> SourceInfo {
     SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 4.0, camera_tone: Some(camera_curve()), ..Default::default() }
 }
@@ -34,7 +34,7 @@ fn check_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     .unwrap();
     let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
     let src = Rgb32f::filled(64, 64, pixel);
-    let mut s = DevelopSettings { process: Process::V3.version(), ..Default::default() };
+    let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
     s.light.contrast = 100.0;
     s.light.blacks = 80.0;
     let image = render(&src, &info, &s, &RenderRequest::fit(64, 64)).image;
@@ -288,14 +288,14 @@ fn a_folding_fit_is_flattened_and_others_are_untouched() {
     }
 }
 
-/// A grey ramp through the camera look: each V3 slider moves the tones its way, keeps their order
+/// A grey ramp through the camera look: each V4 slider moves the tones its way, keeps their order
 /// and keeps the ramp neutral.
 #[test]
 fn v3_sliders_move_a_grey_ramp_their_way() {
     let ramp = Rgb32f::from_fn(256, 8, |x, _| [0.0005 * 1.035f32.powi(x as i32); 3]);
     let shot = |id: &str, v: f64| {
         let mut s = DevelopSettings::default();
-        assert_eq!(s.process.process(), Process::V3);
+        assert_eq!(s.process.process(), Process::V4);
         controls::set(&mut s, id, v);
         let r = render(&ramp, &camera_look(), &s, &RenderRequest::fit(256, 8)).image;
         (0..256).map(|x| r.get(x, 4)).collect::<Vec<[u8; 4]>>()
@@ -326,8 +326,8 @@ fn v3_sliders_move_a_grey_ramp_their_way() {
     }
 }
 
-/// V3 with Contrast, Whites and Blacks at 0 is the Neutral camera look exactly (V2's at 0),
-/// whatever the other sliders; other sources render under V3 as under V2.
+/// V4 with Contrast, Whites and Blacks at 0 is the Neutral camera look exactly (V2's at 0),
+/// whatever the other sliders; other sources render under V4 as under V2.
 #[test]
 fn v3_at_zero_is_the_neutral_camera_look_and_other_paths_are_v2() {
     let reqs = [RenderRequest::fit(480, 480), RenderRequest { depth: OutputDepth::U16, ..RenderRequest::fit(320, 320) }];
@@ -342,14 +342,14 @@ fn v3_at_zero_is_the_neutral_camera_look_and_other_paths_are_v2() {
         for s in [DevelopSettings::for_raw(5200.0, 4.0), typical.clone()] {
             for req in &reqs {
                 assert_eq!(
-                    render_hash(&src, &camera_look(), &on(Process::V3, &s), req),
-                    render_hash(&src, &camera_look(), &on(Process::V2, &s), req)
+                    render_hash(&src, &camera_look(), &on(Process::V4, &s), req),
+                    render_hash(&src, &camera_look(), &on(Process::V3, &s), req)
                 );
             }
         }
         assert_eq!(
-            render_hash(&src, &camera_look(), &on(Process::V3, &hdr), &hdr_req),
-            render_hash(&src, &camera_look(), &on(Process::V2, &hdr), &hdr_req)
+            render_hash(&src, &camera_look(), &on(Process::V4, &hdr), &hdr_req),
+            render_hash(&src, &camera_look(), &on(Process::V3, &hdr), &hdr_req)
         );
         let mut edited = typical.clone();
         for (id, v) in [("light.contrast", 30.0), ("light.whites", 25.0), ("light.blacks", -20.0)] {
@@ -357,20 +357,20 @@ fn v3_at_zero_is_the_neutral_camera_look_and_other_paths_are_v2() {
         }
         for info in [SourceInfo::default(), SourceInfo { raw: true, ..Default::default() }] {
             for req in &reqs {
-                assert_eq!(render_hash(&src, &info, &on(Process::V3, &edited), req), render_hash(&src, &info, &on(Process::V2, &edited), req));
+                assert_eq!(render_hash(&src, &info, &on(Process::V4, &edited), req), render_hash(&src, &info, &on(Process::V3, &edited), req));
             }
         }
         // and on the camera look the sliders do something
         assert_ne!(
-            render_hash(&src, &camera_look(), &on(Process::V3, &edited), &reqs[0]),
-            render_hash(&src, &camera_look(), &on(Process::V3, &typical), &reqs[0])
+            render_hash(&src, &camera_look(), &on(Process::V4, &edited), &reqs[0]),
+            render_hash(&src, &camera_look(), &on(Process::V4, &typical), &reqs[0])
         );
     }
     let info = camera_look();
-    assert!(LightOps::new(&on(Process::V3, &typical), &info).is_none(), "nothing to apply at 0");
+    assert!(LightOps::new(&on(Process::V4, &typical), &info).is_none(), "nothing to apply at 0");
     assert!(
         LightOps::new(
-            &on(Process::V2, &DevelopSettings { light: lightcraft_develop::Light { contrast: 50.0, ..Default::default() }, ..typical.clone() }),
+            &on(Process::V3, &DevelopSettings { light: lightcraft_develop::Light { contrast: 50.0, ..Default::default() }, ..typical.clone() }),
             &info
         )
         .is_none()
@@ -467,8 +467,8 @@ fn whites_is_byte_identical_to_v2() {
             s.hdr.max_ev = 2.0;
             for req in &reqs {
                 assert_eq!(
+                    render_hash(&src, &info, &on(Process::V4, &s), req),
                     render_hash(&src, &info, &on(Process::V3, &s), req),
-                    render_hash(&src, &info, &on(Process::V2, &s), req),
                     "Whites {amount}, HDR {hdr}, {req:?}"
                 );
             }
@@ -497,7 +497,7 @@ fn section_bypass_and_local_adjustments_keep_v2_behavior() {
     s.light.contrast = 70.0;
     s.light.blacks = -50.0;
     s.disabled_sections.push("light".into());
-    assert_eq!(render_hash(&src, &info, &on(Process::V3, &s), &req), render_hash(&src, &info, &on(Process::V2, &s), &req));
+    assert_eq!(render_hash(&src, &info, &on(Process::V4, &s), &req), render_hash(&src, &info, &on(Process::V3, &s), &req));
     s.light = Default::default();
     s.disabled_sections.clear();
     s.masks = vec![lightcraft_develop::Mask {
@@ -510,5 +510,5 @@ fn section_bypass_and_local_adjustments_keep_v2_behavior() {
         adjust: lightcraft_develop::LocalAdjustments { contrast: 40.0, whites: 60.0, blacks: -30.0, ..Default::default() },
         ..Default::default()
     }];
-    assert_eq!(render_hash(&src, &info, &on(Process::V3, &s), &req), render_hash(&src, &info, &on(Process::V2, &s), &req));
+    assert_eq!(render_hash(&src, &info, &on(Process::V4, &s), &req), render_hash(&src, &info, &on(Process::V3, &s), &req));
 }

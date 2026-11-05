@@ -23,6 +23,129 @@ fn render_failure_paths_are_escaped_and_missing_sources_still_identified() {
     assert!(render_failure_message(Slot::Main, PhotoId(42), Some(&demo), "decode failed").contains("demo scene 7"));
 }
 
+/// Issue #2682: the log could not tell a file asked for 37 times from one asked once and failing
+/// inside. At debug level every request is a line naming its file, and so is how it ended when it
+/// drew nothing (a failure stays the warning it was).
+#[test]
+fn each_render_request_and_how_it_ended_is_a_debug_line_with_its_file() {
+    let ends =
+        |lines: &[String]| -> Vec<String> { lines.iter().map(|l| l.rsplit_once(": ").map_or(l.clone(), |(_, end)| end.to_string())).collect() };
+    let (mut app, work, ctx) = fixture();
+    let slot = Slot::Thumb(PhotoId(1));
+    let job = |app: &mut crate::LightcraftApp, edge| app.session.render_job(PhotoId(1), edge, edge, false, true).unwrap();
+    // asked once, drawn
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, j.run());
+    // asked twice: the first answer comes after the second request and is dropped
+    let (a, b) = (job(&mut app, 128), job(&mut app, 160));
+    app.renderer.request(slot, a, 10);
+    app.renderer.request(slot, b, 10);
+    let (_, b) = take_job(&work);
+    let (_, a) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, a.run());
+    finish(&mut app, &work, &ctx, slot, b.run());
+    // a stand-in that comes back after the thumbnail itself is not used
+    let quick = Slot::ThumbQuick(PhotoId(1));
+    let mut j = job(&mut app, 64);
+    j.request_id = lightcraft_preview::next_tick();
+    app.renderer.requests.insert(quick, Requested { look: None, id: j.request_id, source: Some(j.origin.clone()) });
+    finish(&mut app, &work, &ctx, quick, j.run());
+    // a render still running when everything is forgotten says so once, when it comes back
+    let j = job(&mut app, 200);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    app.renderer.forget_all();
+    finish(&mut app, &work, &ctx, slot, j.run());
+    assert_eq!(
+        ends(&app.renderer.decisions),
+        [
+            "requested",
+            "produced in 0 ms",
+            "requested",
+            "requested",
+            "abandoned, a newer request replaced it",
+            "produced in 0 ms",
+            "abandoned, the thumbnail itself came first",
+            "requested",
+            "abandoned, no longer wanted when it finished"
+        ]
+    );
+    let named = |app: &crate::LightcraftApp| {
+        assert!(
+            app.renderer.decisions.iter().all(|l| l.starts_with("render Thumb") && l.contains(", PhotoId(1), file \"audit.jpg\": ")),
+            "{:?}",
+            app.renderer.decisions
+        );
+    };
+    named(&app);
+
+    // a file that fails asks nothing while its failure stands, and says so when it is asked again
+    let (mut app, work, ctx) = fixture();
+    app.session.media.file_loader = Some(Arc::new(|_, _| Err("simulated decode failure".into())));
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, j.run());
+    assert_eq!(app.renderer.failure_messages.len(), 1, "the failure is the warning it was");
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    app.session.catalog.apply(Op::SetRating { id: PhotoId(1), rating: 3 }).unwrap();
+    app.renderer.poll(&ctx, &mut app.session);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    assert_eq!(ends(&app.renderer.decisions), ["requested", "requested again after a failure"]);
+    named(&app);
+
+    // requests that end before they run: the same render moved to another priority, a newer render
+    // in its place, scrolled out of view, everything forgotten
+    let (mut app, _, _) = fixture();
+    app.renderer.set_offload(Box::new(Blocked));
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 5);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let j = job(&mut app, 128);
+    app.renderer.request(slot, j, 10);
+    app.renderer.evict_thumbs(&Default::default(), 0);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 5);
+    app.renderer.forget_all();
+    assert_eq!(
+        ends(&app.renderer.decisions),
+        [
+            "requested",
+            "still waiting, moved to priority 10",
+            "abandoned, a newer request replaced it before it started",
+            "requested",
+            "abandoned, scrolled out of view before it started",
+            "requested",
+            "abandoned, the renderer started over (another library, or the previews were cleared)"
+        ]
+    );
+    named(&app);
+
+    // a stand-in still waiting that the grid moves up while it scrolls says so
+    let mut s = Session::new();
+    s.media.preview_loader = Some(Arc::new(|_, _| Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })));
+    let mut raw = (*photo()).clone();
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    raw.develop = Arc::new(raw.camera_defaults());
+    let (mut app, _, _) = fixture_with(s, raw);
+    app.renderer.pool = JobPool::new(0); // nothing starts until run_inline
+    crate::panels::grid::request_thumb(&mut app, PhotoId(1), 384, 5);
+    crate::panels::grid::request_thumb(&mut app, PhotoId(1), 384, 10);
+    assert_eq!(ends(&app.renderer.decisions), ["stand-in requested", "still waiting, moved to priority 11"]);
+    named(&app);
+    // a view shows whichever photo is open: its file names it
+    let main = Requested { look: None, id: 1, source: Some(Source::File { path: "trip/IMG_1.nef".into() }) };
+    assert_eq!(
+        abandoned_line(Slot::Main, Some(&main), "a newer request replaced it"),
+        "render Main, file \"trip/IMG_1.nef\": abandoned, a newer request replaced it"
+    );
+}
+
 struct Blocked;
 impl RenderOffload for Blocked {
     fn try_start(&mut self, _: Slot, job: RenderJob) -> Option<RenderJob> {
@@ -206,6 +329,7 @@ fn larger_texture_for_another_key_does_not_count_as_current() {
         ms: 0.0,
         quick: None,
         pixels: None,
+        native: None,
     };
     let mut r = Renderer::default();
     // A completed larger bucket: the remembered request is bucket 512, key 77.
@@ -216,6 +340,55 @@ fn larger_texture_for_another_key_does_not_count_as_current() {
     assert!(!r.thumb_current(&p, 256, 10), "a mismatched texture key must not serve a smaller bucket");
     r.textures.insert(slot, tex(77));
     assert!(r.thumb_current(&p, 256, 10), "the recorded key's larger texture serves the smaller bucket");
+}
+
+/// Issue #2682: writes to other photos in the background (faces found, metadata read) moved
+/// the catalog revision on and sent every undecodable file back to the decoder, 37 times each
+/// in 154 s of idle. A failure is tried again only when its own photo changes, when the
+/// catalog can't say which photos did, or, at any change, when its file is known to be missing.
+#[test]
+fn a_failed_thumbnail_is_retried_only_when_its_photo_changes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut catalog = Catalog::default();
+    let p = photo();
+    let other = PhotoId(2);
+    catalog.apply(Op::AddPhoto { photo: Box::new((*p).clone()) }).unwrap();
+    let other_photo = Photo::new(other, Source::File { path: "other.jpg".into() }, "other.jpg", "JPEG", 60, 40, "2026-01-01");
+    catalog.apply(Op::AddPhoto { photo: Box::new(other_photo) }).unwrap();
+    // the files are there (an undecodable file is still a file)
+    let here = Arc::new(AtomicBool::new(true));
+    let mut files = lightcraft_engine::availability::Availability::default();
+    let h = here.clone();
+    files.set_probe(Arc::new(move |_| h.load(Ordering::SeqCst)));
+    let slot = Slot::Thumb(p.id);
+    let mut r = Renderer::default();
+    r.follow_catalog(&catalog, &files);
+    r.failed.insert(slot, (77, "unrecognised image format".into(), r.catalog_rev, p.id));
+    assert!(!r.request_needed(slot, 77, 10), "a failure stands");
+    // the other photo changes, op after op, as background work does
+    for rating in 1..=5 {
+        catalog.apply(Op::SetRating { id: other, rating }).unwrap();
+        r.follow_catalog(&catalog, &files);
+        assert!(!r.request_needed(slot, 77, 10), "another photo's change (rating {rating}) retries nothing");
+    }
+    // a change to the photo itself is a reason to try again
+    catalog.apply(Op::SetRating { id: p.id, rating: 2 }).unwrap();
+    r.follow_catalog(&catalog, &files);
+    assert!(r.request_needed(slot, 77, 10), "its own photo changed");
+    // so is a change the catalog can't attribute to photos
+    r.failed.insert(slot, (77, "unrecognised image format".into(), r.catalog_rev, p.id));
+    assert!(!r.request_needed(slot, 77, 10));
+    let album = catalog.alloc_album_id();
+    catalog.apply(Op::AddAlbum { album: lightcraft_catalog::Album::new(album, "Trip") }).unwrap();
+    r.follow_catalog(&catalog, &files);
+    assert!(r.request_needed(slot, 77, 10), "which photos changed is unknown");
+    // a file known to be missing (its drive unplugged) is tried at every change, as before, so
+    // the photo comes back with its drive
+    r.failed.insert(slot, (77, "file not found".into(), r.catalog_rev, p.id));
+    here.store(false, Ordering::SeqCst);
+    catalog.apply(Op::SetRating { id: other, rating: 1 }).unwrap();
+    r.follow_catalog(&catalog, &files);
+    assert!(r.request_needed(slot, 77, 10), "a missing file is tried again");
 }
 
 #[test]
@@ -293,6 +466,117 @@ fn finish(app: &mut crate::LightcraftApp, work: &std::rc::Rc<std::cell::RefCell<
 }
 fn request(app: &mut crate::LightcraftApp) {
     crate::panels::grid::request_thumb(app, PhotoId(1), 256, 10);
+}
+
+/// Draws GPU-resident renders under one fixed id, and reads them back from the test's device.
+#[cfg(not(target_arch = "wasm32"))]
+struct TestScreen(lightcraft_engine::gpu::wgpu::Device, lightcraft_engine::gpu::wgpu::Queue, std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>);
+#[cfg(not(target_arch = "wasm32"))]
+impl ScreenTextures for TestScreen {
+    fn show(&mut self, _: &lightcraft_engine::media::ScreenFrame, _: Option<egui::TextureId>) -> Option<egui::TextureId> {
+        Some(egui::TextureId::User(7))
+    }
+    fn free(&mut self, id: egui::TextureId) {
+        self.2.lock().unwrap().push(id);
+    }
+    fn read(&self, frame: &lightcraft_engine::media::ScreenFrame) -> Option<egui::ColorImage> {
+        let img = lightcraft_engine::gpu::read_texture(&self.0, &self.1, &frame.texture, frame.width, frame.height).ok()?;
+        Some(color_image(&img))
+    }
+}
+
+/// A headless screenshot (driven by the control channel: `keep_pixels`) of a view drawn straight
+/// from the GPU has its pixels. Before, a mid-drag `ui.screenshot {"headless": true}` showed the
+/// photo as a white rectangle: the GPU-resident draft left no CPU copy (review of PR #1065).
+/// The test fixture with a small GPU texture (5 × 3 known texels) and a [`TestScreen`] that
+/// records the ids it frees; `None` without a GPU adapter.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::type_complexity)]
+fn gpu_drawn_fixture(
+    freed: std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>,
+) -> Option<(crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context, lightcraft_engine::media::ScreenFrame)> {
+    use lightcraft_engine::gpu::wgpu;
+    let device = (|| {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = lightcraft_engine::gpu::backend::window_backends();
+        desc.backend_options = lightcraft_engine::gpu::backend::backend_options();
+        let instance = wgpu::Instance::new(desc);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { label: Some("test window"), ..Default::default() })).ok()
+    })();
+    let (device, queue) = device?;
+    let (w, h) = (5usize, 3usize);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let texels: Vec<u8> = (0..w * h).flat_map(|i| [i as u8 * 10, 100, 200, 255]).collect();
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        &texels,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 4), rows_per_image: Some(h as u32) },
+        wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+    );
+    let (mut app, work, ctx) = fixture();
+    app.renderer.set_screen_textures(Box::new(TestScreen(device, queue, freed)));
+    Some((app, work, ctx, lightcraft_engine::media::ScreenFrame { texture, width: w, height: h }))
+}
+
+/// A headless screenshot (driven by the control channel: `keep_pixels`) of a view drawn straight
+/// from the GPU has its pixels. Before, a mid-drag `ui.screenshot {"headless": true}` showed the
+/// photo as a white rectangle: the GPU-resident draft left no CPU copy (review of PR #1065).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_headless_screenshot_reads_back_a_view_drawn_from_the_gpu() {
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default()) else {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    };
+    let (w, h) = (frame.width, frame.height);
+    assert!(app.renderer.keep_pixels);
+    let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap().draft();
+    app.renderer.request(Slot::Main, job, 100);
+    let (slot, job) = take_job(&work);
+    let mut result = job.run();
+    result.frame = Some(frame);
+    finish(&mut app, &work, &ctx, slot, result);
+    let t = app.renderer.textures.get(&Slot::Main).unwrap();
+    assert_eq!(t.id(), egui::TextureId::User(7), "the draft is drawn from the GPU");
+    assert!(t.pixels.is_none());
+    let cpu = app.renderer.cpu_textures();
+    let shot = cpu.get(&egui::TextureId::User(7)).expect("the headless screenshot has the view's pixels");
+    assert_eq!(shot.image.size, [w, h]);
+    assert_eq!(shot.image.pixels[4], egui::Color32::from_rgb(40, 100, 200));
+}
+
+/// Releasing a slot (a zoomed loupe leaving its window, a Compare region) lets go of its
+/// GPU-resident texture too, which can be window-sized (review of PR #1065: it was kept until
+/// the slot was drawn from the GPU again).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn releasing_a_slot_frees_its_gpu_texture() {
+    let freed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(freed.clone()) else {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    };
+    let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap().draft();
+    app.renderer.request(Slot::Main, job, 100);
+    let (slot, job) = take_job(&work);
+    let mut result = job.run();
+    result.frame = Some(frame);
+    finish(&mut app, &work, &ctx, slot, result);
+    assert_eq!(app.renderer.textures.get(&Slot::Main).map(|t| t.id()), Some(egui::TextureId::User(7)));
+    assert!(freed.lock().unwrap().is_empty());
+    app.renderer.release(Slot::Main);
+    assert_eq!(*freed.lock().unwrap(), vec![egui::TextureId::User(7)], "the window's texture is freed");
+    assert!(app.renderer.natives.is_empty() && app.renderer.native_frames.is_empty());
 }
 
 fn relink_destination() -> std::path::PathBuf {
@@ -446,6 +730,39 @@ fn unchanged_queued_frames_build_no_jobs() {
     assert_eq!(app.renderer.queue.len(), 1);
 }
 
+/// Issue #2682: the grid sent each video to the image decoder for a thumbnail, which failed with
+/// "unrecognised image format", and asked again on every pass. A video is known by its kind, by
+/// the format a Lightroom catalog gives it, or by its extension; none asks for a render, so none
+/// fails and its cell keeps the plain placeholder.
+#[test]
+fn a_video_asks_the_decoders_for_no_thumbnail() {
+    use lightcraft_catalog::MediaKind;
+    let clip = |name: &str, format: &str, kind: MediaKind| {
+        let mut p = Photo::new(PhotoId(1), Source::File { path: name.into() }, name, format, 1920, 1080, "2022-11-25");
+        p.kind = kind;
+        p
+    };
+    for video in [
+        clip("VID_20221125_083409_527.mp4", "MP4", MediaKind::Video),
+        clip("clip.MOV", "VIDEO", MediaKind::Image),
+        clip("20221223_100006.mp4", "", MediaKind::Image),
+    ] {
+        let name = video.file_name.clone();
+        let (mut app, work, ctx) = fixture_with(Session::new(), video);
+        for _ in 0..30 {
+            request(&mut app);
+            app.renderer.poll(&ctx, &mut app.session);
+        }
+        assert_eq!(app.renderer.thumb_jobs_built, 0, "{name}");
+        assert!(work.borrow().jobs.is_empty() && app.renderer.queue.is_empty(), "{name}: nothing is decoded");
+        assert_eq!(app.renderer.failure(Slot::Thumb(PhotoId(1))), None, "{name}: nothing failed, so the cell has no \"!\"");
+    }
+    // a photo is still asked for
+    let (mut app, _, _) = fixture();
+    request(&mut app);
+    assert_eq!(app.renderer.thumb_jobs_built, 1);
+}
+
 #[test]
 fn resizing_the_disk_cache_keeps_textures_and_skips_rebuilds() {
     let lib = std::env::temp_dir().join(format!("lc-ui-thumb-resize-{}", std::process::id()));
@@ -507,6 +824,25 @@ fn a_panicking_render_is_a_failure_not_a_dead_worker() {
     }
     assert!(!app.renderer.is_pending(slot) && app.renderer.completed == done, "no retry loop");
     assert_eq!(app.renderer.live_workers(), workers);
+}
+
+/// An app built by this crate's tests renders on two workers, not the machine's six: several
+/// tests run at once, and each of them used to start six (issue #3067).
+#[test]
+fn a_test_app_renders_on_two_workers() {
+    let (mut app, _, ctx) = fixture_with(Session::new(), (*photo()).clone());
+    app.renderer.offload = None; // the real job pool
+    let slot = Slot::Thumb(PhotoId(1));
+    let job = app.session.thumb_job(PhotoId(1), 256).unwrap();
+    app.renderer.request(slot, job, 30);
+    assert_eq!(app.renderer.live_workers(), TEST_WORKERS, "the pool starts all its workers with its first job");
+    let t0 = std::time::Instant::now();
+    while app.renderer.is_pending(slot) {
+        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the render never answered");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        app.renderer.poll(&ctx, &mut app.session);
+    }
+    assert!(app.renderer.textures.contains_key(&slot), "{:?}", app.renderer.failure(slot));
 }
 
 #[test]

@@ -64,6 +64,8 @@ impl LightcraftApp {
             ui_passes: 0,
             #[cfg(test)]
             library_passes: vec![],
+            #[cfg(test)]
+            missing_count_test_delay: None,
             shadow: None,
             synthetic: vec![],
             pointer_cleanup: false,
@@ -71,6 +73,7 @@ impl LightcraftApp {
             drop_pending: vec![],
             copied: None,
             pending_picks: vec![],
+            missing: Default::default(),
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
             host_mods: egui::Modifiers::NONE,
@@ -88,6 +91,7 @@ impl LightcraftApp {
             next_widgets: vec![],
             next_widget_hits: vec![],
             gesture: None,
+            space_hand: None,
             brush_live: None,
             loupe_shown: None,
             region_view: None,
@@ -102,6 +106,7 @@ impl LightcraftApp {
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
+            waiting_import: Default::default(),
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
@@ -227,6 +232,10 @@ impl LightcraftApp {
             // menu), it must not keep a search that no longer applies (issue #1648)
             self.ui.search.clear();
         }
+        if r.is_ok() && id == "mask.addComponent" && params.get("kind").and_then(Value::as_str) != Some("colorRange") && self.ui.tool == "colorRange"
+        {
+            self.ui.tool.clear();
+        }
         if r.is_ok() && id == "mask.adjust" {
             // Judge local adjustments on the photo, without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
@@ -251,8 +260,9 @@ impl LightcraftApp {
                 self.ui.toast = Some((message, now + TOAST_SECONDS, None));
             }
         }
-        if r.is_ok() && id == "photo.label" {
-            let label = params.get("label").and_then(Value::as_str).and_then(lightcraft_catalog::ColorLabel::parse);
+        if r.is_ok() && matches!(id, "photo.label" | "photo.clearLabel") {
+            // Clear Color Label takes no colour: whatever `label` it is given, the photo's label is cleared
+            let label = params.get("label").and_then(Value::as_str).and_then(lightcraft_catalog::ColorLabel::parse).filter(|_| id == "photo.label");
             let text = match label {
                 Some(label) => {
                     let name =
@@ -310,6 +320,33 @@ impl LightcraftApp {
                 Some((number(0)?, number(1)?))
             }
             _ => None,
+        }
+    }
+
+    /// The box the crop tool shows on an untouched photo with a remembered ratio (issue #3029): fitted
+    /// as `begin_crop` (and Return) will apply it, so the box matches the dropdown before any edit.
+    pub(crate) fn crop_tool_preview(&self) -> Option<lightcraft_geom::CropGeometry> {
+        let photo = self.session.active()?;
+        let d = self.session.develop_of(photo)?;
+        if d.crop != lightcraft_develop::Crop::default() || !matches!(self.ui.crop_default_aspect, Some(Value::Array(_))) {
+            return None;
+        }
+        let (aw, ah) = self.crop_tool_aspect()?;
+        let p = self.session.catalog.photo(photo)?;
+        let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
+        let (w, h) = if d.orientation.swaps_axes() { (h, w) } else { (w, h) };
+        // turned like the photo's full-frame crop, as `crop.aspect` with `orientation: "crop"` does
+        let (aw, ah) = if (aw >= ah) != (w >= h) { (ah, aw) } else { (aw, ah) };
+        Some(lightcraft_geom::crop_fit_angle(w, h, d.crop.geometry.angle, Some(f64::from(aw) / f64::from(ah.max(1)))))
+    }
+
+    /// Return on an untouched photo crops it to the remembered ratio's box the tool showed.
+    pub(crate) fn apply_crop_preview(&mut self) {
+        if self.crop_tool_preview().is_some()
+            && let Some(aspect) = self.ui.crop_default_aspect.clone()
+            && let Err(e) = self.session.execute("crop.aspect", &serde_json::json!({"aspect": aspect, "orientation": "crop"}))
+        {
+            self.ui.status = e.to_string();
         }
     }
 

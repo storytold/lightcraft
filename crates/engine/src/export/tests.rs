@@ -916,6 +916,51 @@ fn distinct_levels(bytes: &[u8]) -> (usize, lightcraft_codecs::Decoded) {
     (v.len(), d)
 }
 
+/// A 16-bit render of a photo-like scene: smooth colour gradients plus sensor-like noise of
+/// `noise` (linear, about 0.002 to 0.03 for clean to high-ISO raws), the case where the low
+/// byte of every 16-bit sample is mostly noise.
+fn noisy_render(noise: f32) -> lightcraft_pipeline::Rendered {
+    let (w, h) = (512, 384);
+    // a hash of the position and channel: the same noise every run
+    let hash = |x: usize, y: usize, c: usize| {
+        let mut z = (x as u64) << 32 ^ (y as u64) << 2 ^ c as u64 ^ 0x2882;
+        z = (z ^ (z >> 33)).wrapping_mul(0xff51_afd7_ed55_8ccd);
+        z = (z ^ (z >> 33)).wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        (z ^ (z >> 33)) as f32 / u64::MAX as f32 - 0.5
+    };
+    let src = lightcraft_raster::Rgb32f::from_fn(w, h, |x, y| {
+        let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+        let base = [0.05 + 0.4 * u, 0.1 + 0.3 * v, 0.2 + 0.2 * (u * v)];
+        [0, 1, 2].map(|c| (base[c] + noise * hash(x, y, c)).max(0.0))
+    });
+    let req = lightcraft_pipeline::RenderRequest { depth: OutputDepth::U16, ..lightcraft_pipeline::RenderRequest::fit(w, h) };
+    lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req)
+}
+
+/// Issue #2882: a 16-bit TIFF with ZIP (the default) is never larger than the same render
+/// uncompressed, from smooth to noisy. (LZW can be: it is printed, not checked, and the export
+/// dialog says so when it is picked.)
+#[test]
+fn sixteen_bit_zip_tiff_is_never_larger_than_uncompressed() {
+    assert_eq!(ExportOptions::default().tiff_compression, TiffCompression::Deflate, "ZIP is the default");
+    for noise in [0.0, 0.002, 0.01, 0.03, 0.1] {
+        let r = noisy_render(noise);
+        assert!(matches!(r.deep.as_ref().unwrap().samples, DeepSamples::U16(_)));
+        let size = |tiff_compression| {
+            let o = ExportOptions { format: ExportFormat::Tiff, bit_depth: Some(16), tiff_compression, ..Default::default() };
+            assert_eq!(o.effective_depth(), OutputDepth::U16);
+            encode_rendered(&r, &o, None).unwrap().len()
+        };
+        let (none, zip, lzw) = (size(TiffCompression::None), size(TiffCompression::Deflate), size(TiffCompression::Lzw));
+        eprintln!(
+            "noise {noise}: none {none} B, ZIP {zip} B ({:+.1} %), LZW {lzw} B ({:+.1} %)",
+            100.0 * (zip as f64 / none as f64 - 1.0),
+            100.0 * (lzw as f64 / none as f64 - 1.0)
+        );
+        assert!(zip <= none, "noise {noise}: 16-bit ZIP {zip} B is larger than uncompressed {none} B");
+    }
+}
+
 #[test]
 fn sixteen_bit_tiff_and_png_have_no_banding() {
     let tiff = |bit_depth| ExportOptions { format: ExportFormat::Tiff, bit_depth, ..Default::default() };

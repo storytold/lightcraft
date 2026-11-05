@@ -1,4 +1,4 @@
-//! Process V3's Contrast and Blacks on the camera-look path (a raw with its camera's tone
+//! Process V4's Contrast and Blacks on the camera-look path (a raw with its camera's tone
 //! curve): pointwise operators fitted to how Lightroom's sliders move a photo's tones, applied
 //! after the camera curve with V2 Whites. Method, operator family and the fitted constants' provenance:
 //! `docs/light-v3.md`; the constants are in [`crate::light_v3_params`] (generated).
@@ -278,13 +278,13 @@ pub struct LightOps {
 /// The fits of Contrast and Blacks, in the order they apply.
 pub const FITS: [&Fit; 2] = [&fitted::CONTRAST, &fitted::BLACKS];
 
-/// Whether `s` renders `info` with the V3 operators: process V3 and a raw with its camera's tone
+/// Whether `s` renders `info` with the V4 operators: process V4 and a raw with its camera's tone
 /// curve (other sources keep the tone map's own Contrast and Blacks).
 pub fn applies(s: &DevelopSettings, info: &SourceInfo) -> bool {
     let camera_look = info.raw && info.camera_tone.is_some();
     match s.process.process() {
-        Process::V1 | Process::V2 => false,
-        Process::V3 => camera_look,
+        Process::V1 | Process::V2 | Process::V3 => false,
+        Process::V4 => camera_look,
     }
 }
 
