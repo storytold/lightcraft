@@ -62,14 +62,24 @@ pub fn register_all(s: &mut Session, profiles: Option<&Path>) {
     let loaded: Vec<(String, LoadedCameraProfile)> = s
         .dcp_profiles
         .iter()
-        .filter_map(|p| read_allowed(Path::new(&p.file)).ok().and_then(|b| LoadedCameraProfile::parse(&b).ok()).map(|d| (p.id.clone(), d)))
+        .filter_map(|p| read_allowed(profiles, Path::new(&p.file)).ok().and_then(|b| LoadedCameraProfile::parse(&b).ok()).map(|d| (p.id.clone(), d)))
         .collect();
     s.media.camera_profiles = loaded.into_iter().collect();
 }
 
-/// The bytes of the profile file `file`; outside the automation roots it counts as missing.
-fn read_allowed(file: &Path) -> std::io::Result<Vec<u8>> {
-    crate::file_access::check_read(file).map_err(std::io::Error::other)?;
+/// Whether `file` is the library's own copy: directly in its profiles folder `dir`, neither of them a link. The operator
+/// chose the library, so it isn't confined, wherever the automation roots are; a link there is judged like any other path.
+fn library_owned(dir: Option<&Path>, file: &Path) -> bool {
+    let is_link = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+    dir.is_some_and(|d| file.parent() == Some(d) && !is_link(d) && !is_link(file))
+}
+
+/// The bytes of the profile file `file`, with `dir` the library's profiles folder; outside the automation roots a file
+/// that isn't the library's own counts as missing.
+fn read_allowed(dir: Option<&Path>, file: &Path) -> std::io::Result<Vec<u8>> {
+    if !library_owned(dir, file) {
+        crate::file_access::check_read(file).map_err(std::io::Error::other)?;
+    }
     lightcraft_raw::dcp::read_dcp(file)
 }
 
@@ -107,7 +117,7 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
     let (mut imported, mut failed) = (Vec::new(), Vec::new());
     for f in dcp_files(paths) {
         let shown = f.display().to_string();
-        let bytes = match read_allowed(&f) {
+        let bytes = match read_allowed(dir.as_deref(), &f) {
             Ok(b) => b,
             Err(e) => {
                 failed.push(json!([shown, e.to_string()]));
@@ -125,10 +135,9 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
         let stem = f.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Camera Profile".into());
         let name = if profile.name.trim().is_empty() { stem.clone() } else { profile.name.trim().to_string() };
         // the same profile imported again: keep the one there is
-        let same = s
-            .dcp_profiles
-            .iter()
-            .find(|p| p.name == name && p.camera_model == profile.camera_model && read_allowed(Path::new(&p.file)).is_ok_and(|b| b == bytes));
+        let same = s.dcp_profiles.iter().find(|p| {
+            p.name == name && p.camera_model == profile.camera_model && read_allowed(dir.as_deref(), Path::new(&p.file)).is_ok_and(|b| b == bytes)
+        });
         if let Some(p) = same {
             imported.push(json!({"id": p.id, "name": p.name, "cameraModel": p.camera_model, "existing": true}));
             continue;
@@ -144,7 +153,8 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
         let file = match &dir {
             Some(d) => {
                 let to = d.join(format!("{}.dcp", id.trim_start_matches(DCP_PREFIX)));
-                if let Err(e) = crate::file_access::check_write(&to) {
+                let allowed = if library_owned(Some(d), &to) { Ok(()) } else { crate::file_access::check_write(&to) };
+                if let Err(e) = allowed {
                     failed.push(json!([shown, format!("{}: {e}", to.display())]));
                     continue;
                 }

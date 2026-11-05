@@ -618,3 +618,42 @@ fn an_import_does_not_write_through_a_link_in_the_profiles_folder() {
     assert_eq!(std::fs::read(&secret).unwrap(), b"kept");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// The library is the operator's choice: outside the automation roots its own profile copies still work, but a link
+/// standing in its `Profiles` folder is judged like any other path.
+#[cfg(unix)]
+#[test]
+fn a_library_outside_the_roots_keeps_its_own_profiles() {
+    use crate::cmd::dcp_profiles::{DcpEntry, import_files, register_all};
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("library-outside");
+    let (root, lib, outside) = (base.join("root"), base.join("lib"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let source = root.join("Swap.dcp");
+    let bytes = write_dcp(&swapping_profile("Swap")).unwrap();
+    std::fs::write(&source, &bytes).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let paths = [source.to_string_lossy().to_string()];
+    let (imported, failed) = confine(Some(&roots), || import_files(&mut s, &paths)).unwrap();
+    assert_eq!(imported.len(), 1, "{failed:?}");
+    let profiles = lib.join("Profiles");
+    let copy = std::path::Path::new(&s.dcp_profiles[0].file).to_path_buf();
+    assert_eq!(copy.parent(), Some(profiles.as_path()));
+    s.media.camera_profiles.clear();
+    confine(Some(&roots), || register_all(&mut s, Some(&profiles)));
+    assert_eq!(s.media.camera_profiles.len(), 1);
+
+    let secret = outside.join("secret.dcp");
+    std::fs::write(&secret, &bytes).unwrap();
+    let link = profiles.join("link.dcp");
+    std::os::unix::fs::symlink(&secret, &link).unwrap();
+    s.dcp_profiles =
+        vec![DcpEntry { id: "dcp:link".into(), name: "Link".into(), camera_model: String::new(), file: link.to_string_lossy().to_string() }];
+    confine(Some(&roots), || register_all(&mut s, Some(&profiles)));
+    assert!(s.media.camera_profiles.is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}
