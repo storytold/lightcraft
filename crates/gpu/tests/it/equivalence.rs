@@ -714,8 +714,7 @@ fn light_v3_operators_match() {
     let req = RenderRequest::fit(720, 720);
     for id in ["light.contrast", "light.whites", "light.blacks"] {
         for v in [-100.0, -50.0, 50.0, 100.0] {
-            let mut s = DevelopSettings::default();
-            assert_eq!(s.process.process(), Process::V4);
+            let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
             lightcraft_develop::controls::set(&mut s, id, v);
             check(&format!("V4 {id} {v}"), &src, &info, &s, &req);
             if id == "light.whites" {
@@ -728,7 +727,7 @@ fn light_v3_operators_match() {
             }
         }
     }
-    let mut s = DevelopSettings::default();
+    let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
     typical(&mut s);
     s.light.contrast = 35.0;
     s.light.whites = 40.0;

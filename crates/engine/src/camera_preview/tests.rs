@@ -1426,6 +1426,14 @@ fn corpus_arw_with_dro_is_lowered_to_the_dro_off_tone() {
         let fitted = fit_look(&sensor, &reference, &clipped, colour).unwrap();
         if dro {
             assert_lowered(&fitted, &look, name);
+            // the V5 bound on the second-last knot (`dro_off`) leaves it where the rate bound puts it on
+            // these photos, so their V1 to V4 renders are what they were before process V5 (issue #1632)
+            let (own, sony) = (fitted.tone.knots(), sony_dro_off_tone().unwrap());
+            let ([a, b], last) = ([own[30], own[31]], look.tone.knots()[31]);
+            let dx = b[0] - a[0];
+            let rate = ((b[1] - a[1]) / dx).clamp(0.1, 16.0) / (1.0 - b[1]).max(0.01);
+            let by_rate = a[1].min(sony.apply(a[0])).max(last[1] - rate * (1.0 - last[1]).max(0.01) * dx).min(last[1]);
+            assert_eq!(look.tone.knots()[30][1], by_rate, "{name}");
             for x in lowered {
                 assert!(look.tone.apply(x) < 0.95 * fitted.tone.apply(x), "{name} at {x}: {} vs {}", look.tone.apply(x), fitted.tone.apply(x));
             }
