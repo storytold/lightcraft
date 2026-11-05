@@ -38,6 +38,7 @@ use crate::{Selection, Session};
 
 #[cfg(feature = "denoise")]
 mod ane;
+mod builtin;
 mod gpu;
 mod model;
 mod products;
