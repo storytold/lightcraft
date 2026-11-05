@@ -15,7 +15,9 @@
 //! the library in browser storage); `?store=idb` forces the IndexedDB backend, `?store=memory` disables
 //! persistence and `?workers=0` renders on the main thread.
 //! `?host=parent` speaks to a same-origin page framing LightCraft (see [`host`]): it hands
-//! photos in, receives what would be downloaded and hears about unsaved changes.
+//! photos in, receives what would be downloaded and hears about unsaved changes. A page can also
+//! host LightCraft in its own document, no iframe: `data-host="page"` on the canvas opts in, and
+//! the same messages travel as DOM `CustomEvent`s on the canvas.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
