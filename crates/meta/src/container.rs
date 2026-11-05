@@ -80,6 +80,67 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     }
 }
 
+/// Check every PNG/WebP EXIF chunk for location tags. Malformed recognized containers or EXIF blocks
+/// fail closed because an Original copy cannot establish that location data is absent.
+pub(crate) fn png_webp_embeds_exif_gps_location(bytes: &[u8]) -> Option<bool> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        let mut i = 8usize;
+        while i < bytes.len() {
+            let length_start = i;
+            let Some(type_start) = length_start.checked_add(4) else { return Some(true) };
+            let Some(data_start) = type_start.checked_add(4) else { return Some(true) };
+            let Some(length_end) = bytes.get(length_start..type_start) else { return Some(true) };
+            let Ok(length_bytes) = <[u8; 4]>::try_from(length_end) else { return Some(true) };
+            let Ok(length) = usize::try_from(u32::from_be_bytes(length_bytes)) else { return Some(true) };
+            let Some(data_end) = data_start.checked_add(length) else { return Some(true) };
+            let Some(chunk_end) = data_end.checked_add(4) else { return Some(true) };
+            let (Some(kind), Some(data)) = (bytes.get(type_start..data_start), bytes.get(data_start..data_end)) else { return Some(true) };
+            if chunk_end > bytes.len() {
+                return Some(true);
+            }
+            if kind == b"eXIf" && crate::exif::exif_gps_tag_presence(data) != Some(false) {
+                return Some(true);
+            }
+            if kind == b"IEND" {
+                return Some(length != 0 || chunk_end != bytes.len());
+            }
+            i = chunk_end;
+        }
+        return Some(true);
+    }
+
+    if bytes.len() >= 12 && bytes.get(..4) == Some(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        let Some(riff_size_bytes) = bytes.get(4..8) else { return Some(true) };
+        let Ok(riff_size_bytes) = <[u8; 4]>::try_from(riff_size_bytes) else { return Some(true) };
+        let Ok(riff_size) = usize::try_from(u32::from_le_bytes(riff_size_bytes)) else { return Some(true) };
+        let Some(riff_end) = 8usize.checked_add(riff_size) else { return Some(true) };
+        if riff_size < 4 || riff_end != bytes.len() {
+            return Some(true);
+        }
+        let mut i = 12usize;
+        while i < bytes.len() {
+            let Some(length_start) = i.checked_add(4) else { return Some(true) };
+            let Some(data_start) = i.checked_add(8) else { return Some(true) };
+            let Some(length_end) = bytes.get(length_start..data_start) else { return Some(true) };
+            let Ok(length_bytes) = <[u8; 4]>::try_from(length_end) else { return Some(true) };
+            let Ok(length) = usize::try_from(u32::from_le_bytes(length_bytes)) else { return Some(true) };
+            let Some(data_end) = data_start.checked_add(length) else { return Some(true) };
+            let Some(padded_end) = data_end.checked_add(length & 1) else { return Some(true) };
+            let (Some(kind), Some(data)) = (bytes.get(i..length_start), bytes.get(data_start..data_end)) else { return Some(true) };
+            if padded_end > bytes.len() {
+                return Some(true);
+            }
+            if kind == b"EXIF" && crate::exif::exif_gps_tag_presence(data) != Some(false) {
+                return Some(true);
+            }
+            i = padded_end;
+        }
+        return Some(false);
+    }
+
+    None
+}
+
 /// Locate metadata blocks while preserving PSD/PSB resource-structure errors for callers that
 /// must establish whether embedded GPS is absent. Other containers keep their best-effort walk.
 pub(crate) fn try_embedded(bytes: &[u8]) -> Result<Embedded, crate::ExtractError> {
@@ -444,6 +505,62 @@ mod tests {
         let embedded = jpeg_segments(&jpeg);
         assert!(embedded.icc.is_none());
         assert!(embedded.xmp.as_deref().is_some_and(|x| x.contains("kept")));
+    }
+
+    /// The Original-copy guard checks every PNG/WebP EXIF chunk, not only the last one.
+    #[test]
+    fn png_and_webp_gps_guard_checks_each_exif_chunk() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let exif = |with_gps: bool| {
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set(t::MAKE, Value::Ascii("Procedural camera".into()));
+            if with_gps {
+                let mut gps = IfdBuilder::new();
+                gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+                ifd0.set_child(t::GPS_IFD, gps);
+            }
+            TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+        };
+        let chunks = [exif(true), exif(false)];
+
+        let png = |blocks: &[Vec<u8>]| {
+            let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+            for data in blocks {
+                bytes.extend_from_slice(&(data.len() as u32).to_be_bytes());
+                bytes.extend_from_slice(b"eXIf");
+                bytes.extend_from_slice(data);
+                bytes.extend_from_slice(&[0; 4]);
+            }
+            bytes.extend_from_slice(&0u32.to_be_bytes());
+            bytes.extend_from_slice(b"IEND");
+            bytes.extend_from_slice(&[0; 4]);
+            bytes
+        };
+        let webp = |blocks: &[Vec<u8>]| {
+            let mut bytes = b"RIFF\0\0\0\0WEBP".to_vec();
+            for data in blocks {
+                bytes.extend_from_slice(b"EXIF");
+                bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+                bytes.extend_from_slice(data);
+                if data.len() % 2 == 1 {
+                    bytes.push(0);
+                }
+            }
+            let riff_size = u32::try_from(bytes.len().saturating_sub(8)).unwrap_or(u32::MAX);
+            bytes[4..8].copy_from_slice(&riff_size.to_le_bytes());
+            bytes
+        };
+
+        assert_eq!(crate::exif::exif_gps_tag_presence(&chunks[0]), Some(true));
+        assert_eq!(crate::exif::exif_gps_tag_presence(&chunks[1]), Some(false));
+        assert_eq!(embedded(&png(&chunks)).exif.as_deref(), Some(chunks[1].as_slice()));
+        let png_has_gps = crate::source_embeds_exif_gps_location(&png(&chunks));
+        let webp_has_gps = crate::source_embeds_exif_gps_location(&webp(&chunks));
+        assert!(png_has_gps && webp_has_gps, "earlier EXIF chunks contain GPS: PNG={png_has_gps}, WebP={webp_has_gps}");
+        let no_gps = [exif(false), exif(false)];
+        assert!(!crate::source_embeds_exif_gps_location(&png(&no_gps)));
+        assert!(!crate::source_embeds_exif_gps_location(&webp(&no_gps)));
     }
 
     #[test]

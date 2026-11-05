@@ -39,8 +39,34 @@ pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata,
 /// Whether a parsed EXIF block contains GPS location-bearing tags, even if their values cannot
 /// be projected into a valid [`Gps`] position. Used by Original export's location-removal guard.
 pub fn exif_embeds_gps_location(bytes: &[u8]) -> bool {
-    let Ok(tiff) = Tiff::parse(strip_exif_header(bytes)) else { return false };
-    tiff.gps().is_some_and(|gps| [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE].into_iter().any(|tag| gps.contains(tag)))
+    exif_gps_tag_presence(bytes).unwrap_or(false)
+}
+
+/// Whether a source file contains location-bearing EXIF tags or an embedded EXIF block that cannot
+/// be parsed. JPEG APP1 packets and all PNG/WebP EXIF chunks are inspected; when a container has no
+/// separate EXIF block, the whole source is checked as a possible TIFF-structured EXIF stream.
+pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
+    if let Some(has_location) = crate::container::png_webp_embeds_exif_gps_location(bytes) {
+        return has_location;
+    }
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        return crate::container::jpeg_embeds_exif_gps_location(bytes);
+    }
+    match crate::container::embedded(bytes).exif.as_deref() {
+        Some(exif) => exif_gps_tag_presence(exif).unwrap_or(true),
+        None => exif_embeds_gps_location(bytes),
+    }
+}
+
+/// Return tag presence separately from parse failure so Original-copy privacy checks can fail closed.
+pub(crate) fn exif_gps_tag_presence(bytes: &[u8]) -> Option<bool> {
+    let tiff = Tiff::parse(strip_exif_header(bytes)).ok()?;
+    if tiff.all_ifds().into_iter().any(|ifd| ifd.contains(t::GPS_IFD)) {
+        return Some(true);
+    }
+    Some(tiff.gps().is_some_and(|gps| {
+        [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE].into_iter().any(|tag| gps.contains(tag))
+    }))
 }
 
 fn text(ifd: Option<&Ifd>, tag: u16) -> Option<String> {

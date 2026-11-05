@@ -26,9 +26,12 @@ fallback to supply the capture time. The original tag remains available in All M
 malformed or truncated ICC sequences leave unrelated readable metadata available and produce no profile.
 
 EXIF GPS degrees, minutes and seconds are validated before decimal conversion: each component must be finite and
-nonnegative, and minutes / seconds must be below 60. Malformed subdivisions do not create a typed location, while
-the source tags remain available in All Metadata. Original export with Remove Location Info still refuses a source
-whose parsed EXIF GPS IFD contains location-bearing tags, even when those coordinates are invalid.
+nonnegative, and minutes / seconds must be below 60. The writer rounds total coordinates to thousandths of a second
+before splitting DMS, carrying rounding across minute and degree boundaries. Malformed subdivisions do not create a
+typed location, while the source tags remain available in All Metadata. Original export with Remove Location Info
+refuses files with location-bearing EXIF tags, a GPS IFD pointer whose child could not be read, or an embedded EXIF
+block that could not be parsed. PNG `eXIf` and WebP `EXIF` chunks are all checked, not just the one exposed by
+`embedded()`. Containers without a separate EXIF block retain the whole-file TIFF fallback.
 
 ## XMP namespaces
 

@@ -1038,6 +1038,70 @@ fn remove_location_refuses_a_psd_that_embeds_gps() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An unparseable embedded EXIF block cannot authorize a privacy-sensitive Original copy.
+#[test]
+fn remove_location_refuses_original_with_unparseable_embedded_exif() {
+    let dir = temp_dir("export-noloc-unparseable-exif");
+    let path = dir.join("UnreadableExif.png");
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let encoded = lightcraft_codecs::EncodeMeta { exif: Some(b"not a TIFF stream"), ..Default::default() };
+    let original = lightcraft_codecs::encode_png(&image, &encoded).unwrap();
+    assert!(lightcraft_meta::embedded(&original).exif.is_some());
+    assert!(lightcraft_meta::source_embeds_exif_gps_location(&original));
+    std::fs::write(&path, &original).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't remove the location"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), original, "the source is left byte-for-byte unchanged");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A later GPS-free PNG EXIF chunk cannot hide GPS in an earlier chunk from Original export.
+#[test]
+fn remove_location_refuses_original_with_gps_in_an_earlier_png_exif_chunk() {
+    let dir = temp_dir("export-noloc-duplicate-png-exif");
+    let path = dir.join("DuplicateExif.png");
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let gps_meta =
+        lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.5, longitude: 10.5, altitude: None }), ..Default::default() };
+    let gps_exif = lightcraft_meta::write_exif(&gps_meta);
+    let no_gps_meta = lightcraft_meta::Metadata { make: Some("Procedural camera".into()), ..Default::default() };
+    let no_gps_exif = lightcraft_meta::write_exif(&no_gps_meta);
+    let gps_png = lightcraft_codecs::encode_png(&image, &lightcraft_codecs::EncodeMeta { exif: Some(&gps_exif), ..Default::default() }).unwrap();
+    let no_gps_png =
+        lightcraft_codecs::encode_png(&image, &lightcraft_codecs::EncodeMeta { exif: Some(&no_gps_exif), ..Default::default() }).unwrap();
+    let exif_chunk = |png: &[u8]| {
+        let type_at = png.windows(4).position(|window| window == b"eXIf").unwrap();
+        let start = type_at.checked_sub(4).unwrap();
+        let length_bytes: [u8; 4] = png.get(start..type_at).unwrap().try_into().unwrap();
+        let length = usize::try_from(u32::from_be_bytes(length_bytes)).unwrap();
+        let end = type_at.checked_add(4).and_then(|at| at.checked_add(length)).and_then(|at| at.checked_add(4)).unwrap();
+        (start, png.get(start..end).unwrap().to_vec())
+    };
+    let (_, gps_chunk) = exif_chunk(&gps_png);
+    let (no_gps_chunk_at, _) = exif_chunk(&no_gps_png);
+    let mut original = no_gps_png;
+    original.splice(no_gps_chunk_at..no_gps_chunk_at, gps_chunk);
+
+    assert_eq!(lightcraft_meta::embedded(&original).exif.as_deref(), Some(no_gps_exif.as_slice()));
+    assert!(!lightcraft_meta::exif_embeds_gps_location(&no_gps_exif));
+    assert!(lightcraft_meta::source_embeds_exif_gps_location(&original));
+    std::fs::write(&path, &original).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't remove the location"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), original, "the source is left byte-for-byte unchanged");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn remove_location_refuses_a_psd_with_unreadable_xmp() {
     let dir = temp_dir("export-noloc-psd-xmp");
