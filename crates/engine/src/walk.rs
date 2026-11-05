@@ -43,8 +43,37 @@ pub struct Walked {
     pub entries: usize,
 }
 
-fn hidden(p: &Path) -> bool {
-    p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
+/// Whether the entry has a dot-prefixed name or a Windows or macOS hidden attribute.
+pub fn is_hidden_entry(entry: &std::fs::DirEntry) -> bool {
+    hidden_with_metadata(&entry.path(), || entry.metadata())
+}
+
+/// Whether the path has a dot-prefixed name or a Windows or macOS hidden attribute.
+pub fn is_hidden_path(path: &Path) -> bool {
+    hidden_with_metadata(path, || std::fs::symlink_metadata(path))
+}
+
+fn hidden_with_metadata(path: &Path, metadata: impl FnOnce() -> std::io::Result<std::fs::Metadata>) -> bool {
+    if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+        metadata().is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::darwin::fs::MetadataExt;
+        const UF_HIDDEN: u32 = 0x0000_8000;
+        metadata().is_ok_and(|m| m.st_flags() & UF_HIDDEN != 0)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 /// What a folder's listing says an entry is.
@@ -58,24 +87,45 @@ pub enum EntryKind {
 
 /// What [`files_in_noting`] hands over for each folder it lists: the folder, the name and kind
 /// of every entry in it (hidden ones too), and whether that is all of them (not when the walk
-/// stopped inside the folder, or an entry could not be read).
-pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, EntryKind)>, bool);
+/// stopped inside the folder, or an entry could not be read). It answers whether to go on: `false`
+/// ends the walk there (a scan cancelled; [`Walked::truncated`] is left alone: who stopped it knows).
+pub type NoteFolder<'a> = &'a mut dyn FnMut(&Path, Vec<(std::ffi::OsString, EntryKind)>, bool) -> bool;
 
 /// The files below folder `root` that `keep` accepts. Hidden entries (names starting with `.`)
 /// are left out, the folder `skip` (e.g. the library's own) is never entered, and the walk stops
 /// at `limits` (see [`Walked::truncated`]). Unreadable folders are skipped.
 pub fn files_in(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool) -> Walked {
-    walk(root, skip, limits, keep, None)
+    walk(root, skip, limits, keep, |_| true, None)
+}
+
+/// [`files_in`], entering a folder below `root` only when `enter` accepts it: a folder it turns
+/// down is neither listed nor counted against `limits` (e.g. a NAS's `@eaDir` thumbnail folders,
+/// which can hold more entries than the photos beside them).
+pub fn files_in_entering(
+    root: &Path,
+    skip: Option<&Path>,
+    limits: Limits,
+    keep: impl FnMut(&Path) -> bool,
+    enter: impl FnMut(&Path) -> bool,
+) -> Walked {
+    walk(root, skip, limits, keep, enter, None)
 }
 
 /// [`files_in`], handing the listing of every folder it reads to `note`: who walks a folder to
 /// find its files has, with that, the answer to "is this name there" for everything in it, and
 /// need not ask the disk again (a round trip for each name on a network share).
 pub fn files_in_noting(root: &Path, skip: Option<&Path>, limits: Limits, keep: impl FnMut(&Path) -> bool, note: NoteFolder) -> Walked {
-    walk(root, skip, limits, keep, Some(note))
+    walk(root, skip, limits, keep, |_| true, Some(note))
 }
 
-fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&Path) -> bool, mut note: Option<NoteFolder>) -> Walked {
+fn walk(
+    root: &Path,
+    skip: Option<&Path>,
+    limits: Limits,
+    mut keep: impl FnMut(&Path) -> bool,
+    mut enter: impl FnMut(&Path) -> bool,
+    mut note: Option<NoteFolder>,
+) -> Walked {
     let mut out = Walked::default();
     // canonical folders reached through a link, so a link loop is walked at most once
     let mut linked: HashSet<PathBuf> = HashSet::new();
@@ -119,7 +169,7 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
             let p = e.path();
             // (a hidden entry's kind is only asked for when the listing is wanted; every other
             // entry's is asked once)
-            let is_hidden = hidden(&p);
+            let is_hidden = is_hidden_entry(&e);
             if is_hidden && listed.is_none() {
                 continue;
             }
@@ -141,6 +191,11 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
                 // a link (or a Windows junction): a folder is entered once, a file is a file
                 match std::fs::metadata(&p) {
                     Ok(m) if m.is_dir() => {
+                        // (asked before the folder is marked as entered, so a folder turned down
+                        // here can still be entered through another link to it)
+                        if !enter(&p) {
+                            continue;
+                        }
                         let Ok(c) = std::fs::canonicalize(&p) else { continue };
                         if !linked.insert(c) {
                             continue;
@@ -149,13 +204,20 @@ fn walk(root: &Path, skip: Option<&Path>, limits: Limits, mut keep: impl FnMut(&
                     }
                     _ => false,
                 }
+            } else if ft.is_dir() {
+                if !enter(&p) {
+                    continue;
+                }
+                true
             } else {
-                ft.is_dir()
+                false
             };
             children.push((p, dir));
         }
-        if let (Some(note), Some(listed)) = (note.as_mut(), listed) {
-            note(&path, listed, complete);
+        if let (Some(note), Some(listed)) = (note.as_mut(), listed)
+            && !note(&path, listed, complete)
+        {
+            break;
         }
         children.sort();
         let below = depth.saturating_add(1);
@@ -173,6 +235,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn hidden_names_and_platform_attributes_are_excluded_from_walks() {
+        let root = tmp("hidden-attributes");
+        for folder in [".dot", "Hidden"] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            std::fs::write(root.join(folder).join("inside.jpg"), b"x").unwrap();
+        }
+        for file in ["Shown.jpg", ".dot.jpg", "hidden.jpg"] {
+            std::fs::write(root.join(file), b"x").unwrap();
+        }
+        for name in ["Hidden", "hidden.jpg"] {
+            #[cfg(windows)]
+            assert!(std::process::Command::new("attrib").arg("+h").arg(root.join(name)).status().unwrap().success());
+            #[cfg(target_os = "macos")]
+            assert!(std::process::Command::new("chflags").arg("hidden").arg(root.join(name)).status().unwrap().success());
+            assert_eq!(is_hidden_path(&root.join(name)), cfg!(any(windows, target_os = "macos")));
+        }
+        let mut found = files_in(&root, None, Limits::default(), |_| true).files;
+        found.sort();
+        let mut expected = vec![root.join("Shown.jpg")];
+        if !cfg!(any(windows, target_os = "macos")) {
+            expected.extend([root.join("Hidden/inside.jpg"), root.join("hidden.jpg")]);
+        }
+        expected.sort();
+        assert_eq!(found, expected);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Given a folder with files, a folder inside it, a hidden file and a link, when it is walked
@@ -193,6 +283,7 @@ mod tests {
             let mut entries: Vec<(String, EntryKind)> = entries.into_iter().map(|(n, k)| (n.to_string_lossy().to_string(), k)).collect();
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             noted.push((dir.to_path_buf(), entries, complete));
+            true
         });
         assert_eq!(walked, files_in(&root, None, Limits::default(), |_| true), "the same walk, noted or not");
         let named = |n: &str, k: EntryKind| (n.to_string(), k);
@@ -205,7 +296,8 @@ mod tests {
         // stopped inside the first folder: its listing is not all of it
         let mut cut = Vec::new();
         let walked = files_in_noting(&root, None, Limits { max_depth: 8, max_entries: 2 }, |_| true, &mut |dir, entries, complete| {
-            cut.push((dir.to_path_buf(), entries.len(), complete))
+            cut.push((dir.to_path_buf(), entries.len(), complete));
+            true
         });
         assert!(walked.truncated);
         assert_eq!(cut.first().map(|(dir, n, complete)| (dir.clone(), *n, *complete)), Some((root.clone(), 2, false)));
@@ -278,6 +370,41 @@ mod tests {
         // Scanning a subfolder already inside the excluded library is also forbidden.
         let inside = files_in(&library.join("Originals"), Some(&library), Limits::default(), |_| true);
         assert!(inside.files.is_empty(), "{inside:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A folder `enter` turns down is not listed: its entries neither come back nor use up the
+    /// entry budget, so a sibling folder after it is still walked.
+    #[test]
+    fn folders_turned_down_are_not_listed_or_counted() {
+        let d = tmp("enter");
+        std::fs::create_dir_all(d.join("@eaDir")).unwrap();
+        std::fs::create_dir_all(d.join("z")).unwrap();
+        for i in 0..20 {
+            std::fs::write(d.join("@eaDir").join(format!("{i:02}.jpg")), b"x").unwrap();
+        }
+        std::fs::write(d.join("z/keep.jpg"), b"x").unwrap();
+        let not_at = |p: &Path| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('@'));
+        let w = files_in_entering(&d, None, Limits { max_depth: 8, max_entries: 5 }, |_| true, not_at);
+        assert_eq!((w.files, w.entries, w.truncated), (vec![d.join("z/keep.jpg")], 3, false));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A link `enter` turns down does not use up its folder's one visit through a link: another
+    /// link to the same folder is still entered.
+    #[cfg(unix)]
+    #[test]
+    fn folder_turned_down_through_one_link_is_entered_through_another() {
+        let d = tmp("enter-link");
+        std::fs::create_dir_all(d.join("real")).unwrap();
+        std::fs::write(d.join("real/p.jpg"), b"x").unwrap();
+        let root = d.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink(d.join("real"), root.join("@meta")).unwrap();
+        std::os::unix::fs::symlink(d.join("real"), root.join("photos")).unwrap();
+        let not_at = |p: &Path| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('@'));
+        let w = files_in_entering(&root, None, Limits::default(), |_| true, not_at);
+        assert_eq!(w.files, vec![root.join("photos/p.jpg")]);
         let _ = std::fs::remove_dir_all(&d);
     }
 

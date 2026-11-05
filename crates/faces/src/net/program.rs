@@ -9,7 +9,7 @@
 
 use std::borrow::Cow;
 
-use super::*;
+use super::{ConvJob, Data, HashMap, Net, NetError, Result, kernels, pads, pair, shape, shape_err, unsupported};
 
 /// Value 0 is the network's input.
 pub const INPUT: usize = 0;
