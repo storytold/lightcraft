@@ -78,6 +78,24 @@ pub(super) fn dup_counts(d: &ImportDialog) -> (usize, usize, usize) {
     (dups, in_source, trashed)
 }
 
+/// The one line that says what the scan left out, for the review's header: a folder walk that
+/// stopped at its limit, folders it couldn't read, files that are not a supported photo type.
+/// `None` when it left nothing out (the review then shows no line at all).
+pub(crate) fn scan_note(d: &ImportDialog) -> Option<String> {
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let mut parts: Vec<String> = Vec::new();
+    if d.scan_limited {
+        parts.push(crate::i18n::tr("Stopped at the scan limit: there may be more photos").to_string());
+    }
+    if d.unreadable > 0 {
+        parts.push(crate::i18n::tr_format!("{n} folder{} could not be read", plural(d.unreadable), n = d.unreadable));
+    }
+    if d.unsupported > 0 {
+        parts.push(crate::i18n::tr_format!("{n} file{} skipped (not a supported photo type)", plural(d.unsupported), n = d.unsupported));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
 /// The dialog body: options, then the candidate grid.
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     let t = Tokens::get(ui.ctx());
@@ -107,6 +125,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             }
         });
     });
+    // what the scan left out, when it left something out
+    if let Some(note) = scan_note(d) {
+        let r = ui.label(egui::RichText::new(note).color(t.caution).small());
+        register(ui, "label:importScanNote", r.rect);
+    }
     // with more than one file type: a toggle per type checks or unchecks all of its files
     let types = d.file_types();
     if types.len() > 1 {
