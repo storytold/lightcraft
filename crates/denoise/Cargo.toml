@@ -30,3 +30,8 @@ web-time = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+lightcraft-testkit = { workspace = true }
+
+# the end-to-end test of the Core ML model runs it
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+lightcraft-coreml = { workspace = true }
