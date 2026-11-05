@@ -129,11 +129,13 @@ fn golden(process: ProcessVersion) -> u64 {
     h
 }
 
-/// V1 and V2 render byte for byte as they do on main before adding process V3. The hashes were captured
-/// on main at e2d18b5fb (before `light_v3`) on macOS aarch64, where they are checked: the renders
+/// V1 and V2 render byte for byte as they do on main after #3509's intentional 8-bit dithering.
+/// The hashes were captured on unchanged main at a220d3eb on macOS aarch64, where they are checked: the renders
 /// call the platform's `powf` / `exp2` / `log2`, whose last bit can differ on other platforms, so
 /// elsewhere the test only prints them. Before updating them during a rebase, run this exact fixture
-/// on main and confirm that both hashes match. This PR must not change V1 or V2 rendering.
+/// on main and confirm that both hashes match. Restoring only the pre-#3509 quantizer on that
+/// baseline reproduces the original e2d18b5fb goldens (0x5bf0a7c8579f3f34, 0x87a3598c15979e4d)
+/// exactly: only the intended final quantization change requires this baseline update.
 #[test]
 fn v1_and_v2_render_as_before_v3() {
     let got = [golden(ProcessVersion(1)), golden(ProcessVersion(2))];
@@ -143,7 +145,7 @@ fn v1_and_v2_render_as_before_v3() {
     }
 }
 
-const GOLDEN: [u64; 2] = [0x5bf0_a7c8_579f_3f34, 0x87a3_598c_1597_9e4d];
+const GOLDEN: [u64; 2] = [0x4830_59a3_ad92_326c, 0x9653_aed0_ea32_aff3];
 
 fn on(process: Process, s: &DevelopSettings) -> DevelopSettings {
     DevelopSettings { process: process.version(), ..s.clone() }
