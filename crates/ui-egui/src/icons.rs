@@ -54,6 +54,9 @@ icons! {
     StarFilled,
     Circle,
     FlagPick,
+    /// The Pick flag a photo carries: pennant filled, so a pick reads at a glance (#1013). The
+    /// outlined [`Icon::FlagPick`] stays for buttons and filters.
+    FlagPickFilled,
     FlagReject,
     Gear,
     Filmstrip,
@@ -501,6 +504,14 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
         FlagPick => {
             // Lucide `flag`
             lucide!(pen, ["M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z", "M4 22v-7"]);
+        }
+        FlagPickFilled => {
+            pen.line(&[(5.0, 17.0), (5.0, 3.5)]);
+            // the notched pennant is concave: two convex halves meet at the notch, overlapping
+            // along the pole side so their anti-aliased edges leave no seam
+            pen.fill(&[(5.0, 3.5), (15.0, 3.5), (12.5, 7.0), (5.0, 7.5)]);
+            pen.fill(&[(5.0, 6.5), (12.5, 7.0), (15.0, 10.5), (5.0, 10.5)]);
+            pen.closed(&[(5.0, 3.5), (15.0, 3.5), (12.5, 7.0), (15.0, 10.5), (5.0, 10.5)]);
         }
         FlagReject => {
             // the flag struck through (Lucide `flag-off`)

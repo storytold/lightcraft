@@ -45,12 +45,22 @@ pub fn paths(kind: CropOverlay, orient: u8, w: f32, h: f32) -> Vec<Vec<(f32, f32
     }
 }
 
-/// The golden spiral: squares carved off a `w × h` rectangle (left, top, right, bottom, …), a
+/// The golden spiral: squares carved off a golden-ratio rectangle (left, top, right, bottom, …), a
 /// quarter circle in each, joined into one curve; plus the square boundaries.
+///
+/// The squares come off a `PHI × 1` rectangle whatever the crop's shape is, and the normalisation
+/// at the end stretches the result to fit. Carving them off the crop itself made the guide depend
+/// on the crop: a square crop lost everything after the first arc, because the first subtraction
+/// left no rectangle to carve, and other ratios gave different numbers of arcs (#2393). Only a
+/// golden-ratio rectangle subdivides into squares forever, so it is the one shape that gives a
+/// complete spiral; stretching it distorts the curve on a crop of another ratio, which is the
+/// price of the guide staying complete and is what the report asks for.
 fn spiral(w: f32, h: f32) -> Vec<Vec<(f32, f32)>> {
+    // A `PHI × 1` rectangle less a `1 × 1` square is `1 × 1/PHI`, the same shape again.
+    const PHI: f32 = std::f32::consts::GOLDEN_RATIO;
     // work landscape; transpose back for portrait crops
     let portrait = h > w;
-    let (rw, rh) = if portrait { (h, w) } else { (w, h) };
+    let (rw, rh) = (PHI, 1.0);
     let (mut x, mut y, mut cw, mut ch) = (0.0f32, 0.0f32, rw, rh);
     let mut curve = Vec::new();
     let mut squares = Vec::new();
@@ -126,6 +136,27 @@ mod tests {
         }
         // orientation mirrors the triangle
         assert_eq!(paths(CropOverlay::Triangle, 1, w, h)[0], vec![(1.0, 0.0), (0.0, 1.0)]);
+    }
+
+    /// The spiral is the same complete guide at every crop shape. Carving the squares off the
+    /// crop itself made it depend on the crop: a square kept one arc of ten, 3:2 kept three and
+    /// 16:9 four, so changing the crop truncated the guide (#2393).
+    #[test]
+    fn the_spiral_is_complete_at_every_aspect_ratio() {
+        let shapes = [(1.0f32, 1.0f32), (1.618, 1.0), (1.0, 1.618), (3.0, 2.0), (2.0, 3.0), (16.0, 9.0), (9.0, 16.0), (4.0, 5.0)];
+        let (squares, points) = {
+            let p = paths(CropOverlay::Spiral, 0, 1.618, 1.0);
+            (p.len() - 1, p.last().unwrap().len())
+        };
+        assert!(squares >= 8, "the golden rectangle itself gives a long spiral: {squares}");
+        for (w, h) in shapes {
+            for o in 0..4 {
+                let p = paths(CropOverlay::Spiral, o, w, h);
+                assert_eq!(p.len() - 1, squares, "{w}x{h} orient {o}: {} squares, not {squares}", p.len() - 1);
+                assert_eq!(p.last().unwrap().len(), points, "{w}x{h} orient {o}: a shorter curve");
+                assert!(in_unit(&p), "{w}x{h} orient {o}");
+            }
+        }
     }
 
     #[test]
