@@ -144,15 +144,15 @@ use the largest JPEG, so their geometry and colour do not depend on the size lev
   sRGB stays on the fast path. A synthetic DNG with a full-size and a half-size JPEG gets, on the plan
   path, the half-size one for a box it covers and the full-size one otherwise, with the same pixels as
   the whole-file path (`preview_loading_plans_the_smallest_covering_jpeg`).
-- `crates/raw/tests/sparse_corpus.rs`: `preview_plan` is asked for **every** corpus file, not only
+- `crates/raw/tests/it/sparse_corpus.rs`: `preview_plan` is asked for **every** corpus file, not only
   the ones whose header plan is `Ready`, and the preview it yields must equal the whole file's with
   the skipped bytes `0` and `0xFF`. The test prints what each format reads.
-- `crates/engine/tests/preview_read.rs` (opt-in, `#[ignore]`): the same measurement on a **real**
+- `crates/engine/tests/it/preview_read.rs` (opt-in, `#[ignore]`): the same measurement on a **real**
   file, typically on a share:
 
   ```sh
   LC_PREVIEW_RAW="/mnt/nas/…/DSCF0001.RAF" \
-    cargo test --release -p lightcraft-engine --test preview_read -- --ignored --nocapture
+    cargo test --release -p lightcraft-engine --test it preview_read:: -- --ignored --nocapture
   ```
 
   No raw fixture is committed (media never is, see `AGENTS.md`).

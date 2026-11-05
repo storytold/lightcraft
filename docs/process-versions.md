@@ -9,7 +9,7 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 |---|---|
 | **V1** | LightCraft's rendering from before process versions existed. Frozen. |
 | **V2** | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
-| **V3** (the latest) | Dehaze (issue #1237): the haze plane is the Gaussian of a patch minimum (`local::min_hv`, radius 0.5 % of the long edge, at most 64 px, `local::dehaze_patch_radius`) of each pixel's darkest channel instead of the Gaussian of that channel itself, so textured, haze-free regions are no longer read as haze; positive amounts ease in (`k·(0.4 + 0.6·k)`), the transmission floor is 0.3, and the veil removed never exceeds 90 % of the pixel's darkest channel (`finish::dehaze_v3_pixel`), so shadows next to bright sky no longer clip to black. Negative dehaze is V1's. The dark plane's cache key carries the patch radius (`local::dark_key`). Renders without Dehaze are the same as V2's. |
+| **V3** (the latest) | Dehaze (issue #1237): the haze plane is the Gaussian of a patch minimum (`local::min_hv`, radius 0.5 % of the long edge, at most 64 px, `local::dehaze_patch_radius`) of each pixel's darkest channel instead of the Gaussian of that channel itself, so textured, haze-free regions are no longer read as haze; positive amounts ease in (`k·(0.4 + 0.6·k)`), the transmission floor is 0.3, and the veil removed never exceeds 90 % of the pixel's darkest channel (`finish::dehaze_v3_pixel`), so shadows next to bright sky no longer clip to black. Negative dehaze is V1's, including its dark plane and airlight (the patch radius is 0 unless a positive Dehaze, global or in a mask, can reach a pixel). The dark plane's cache key carries the patch radius (`local::dark_key`). Renders without Dehaze are the same as V2's. |
 
 ## The rule
 
@@ -22,6 +22,18 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
   error, CPU and GPU disagreeing) are not looks and can land in place, as before.
 - Changes to how a file is decoded or which camera colour it gets change the source, not how settings
   are interpreted; the process doesn't reach that stage today.
+
+**Neutral display tone map** (JPEG, PNG and other display-referred sources with Contrast, Whites and
+Blacks at 0) is the identity up to white: the SDR shoulder no longer pulls 1.0 down to 0.9875 (8-bit
+255 to 254, issue #1945). It landed in place as a bug fix, since the tone map promised identity at
+neutral settings; edited curves keep the shoulder and their V1 look.
+
+**AI mask edges** (Object and Describe selections stored as a model's grid) follow the photo's edges
+when they are enlarged to the output (issue #3272): the plain enlargement spilled 1–2 px onto the
+background, which a raised Exposure turned into a bright outline around the subject in previews and
+exports. Existing AI masks become 1–2 px tighter at a subject's edges, on every process; their
+inside, their outside and edges without contrast in the photo are unchanged. It landed in place as
+a bug fix: the outline is output that isn't in the photo nor in the edit, not a look anyone chose.
 
 ## Adding a process
 

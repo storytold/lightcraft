@@ -51,20 +51,22 @@ fn ground(img: &Rgba8, x0: usize, x1: usize) -> (f32, f32) {
 #[test]
 fn v3_leaves_haze_free_texture_and_shadows_by_the_sky_alone() {
     let ev = |a: f32, b: f32| (b / a).log2();
+    let mut darkening = Vec::new();
     for p in [Process::V1, Process::V3] {
         let (m0, _) = ground(&shot(p, 0.0), W / 2 + 20, W);
         let (m50, _) = ground(&shot(p, 50.0), W / 2 + 20, W);
         let (_, black10) = ground(&shot(p, 10.0), W / 2, W / 2 + 12);
         let (_, black50) = ground(&shot(p, 50.0), W / 2, W / 2 + 12);
         eprintln!("{p:?}: ground {m0:.1} -> {m50:.1} at +50 ({:.2} EV); black by the sky {black10:.2} (+10) {black50:.2} (+50)", ev(m0, m50));
+        darkening.push(ev(m0, m50));
         if p == Process::V3 {
             assert!(ev(m0, m50) > -0.25, "V3 darkens a haze-free ground by {:.2} EV at +50", ev(m0, m50));
             assert!(black10 < 0.01 && black50 < 0.01, "V3 clips shadows by the sky: {black10} {black50}");
-        } else {
-            // V1 is frozen with the faults the issue measured
-            assert!(ev(m0, m50) < -0.4, "V1 changed: {:.2} EV", ev(m0, m50));
         }
     }
+    // (V1 keeps its response; main's veil limit since then already tames its worst case, so V3 is
+    // compared with it rather than with the figure the issue measured)
+    assert!(darkening[1] >= darkening[0] - 0.01, "V3 darkens the ground more than V1: {darkening:?}");
 }
 
 #[test]
@@ -99,11 +101,19 @@ fn v3_pixel_never_goes_black_and_eases_in() {
 
 #[test]
 fn patch_radius_only_from_v3_and_min_filter_erodes() {
-    let s = |p: Process| DevelopSettings { process: p.version(), ..DevelopSettings::default() };
+    let s = |p: Process| {
+        let mut s = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
+        s.effects.dehaze = 0.5;
+        s
+    };
     assert_eq!(local::dehaze_patch_radius(&s(Process::V1), 3000.0), 0);
     assert_eq!(local::dehaze_patch_radius(&s(Process::V2), 3000.0), 0);
     assert_eq!(local::dehaze_patch_radius(&s(Process::V3), 3000.0), 15);
     assert_eq!(local::dehaze_patch_radius(&s(Process::V3), 1e9), local::DEHAZE_PATCH_MAX);
+    // negative Dehaze is V1's: it keeps V1's dark plane (and so airlight) under V3
+    let mut negative = s(Process::V3);
+    negative.effects.dehaze = -0.5;
+    assert_eq!(local::dehaze_patch_radius(&negative, 3000.0), 0);
     let p = lightcraft_raster::Plane::from_fn(9, 5, |x, y| if (x, y) == (4, 2) { 0.0 } else { 1.0 });
     let m = local::min_hv(&p, 1);
     assert_eq!(m.get(3, 1), 0.0);

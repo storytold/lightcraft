@@ -89,8 +89,9 @@ fn unescape(t: &str) -> String {
             _ => ent
                 .strip_prefix("#x")
                 .or_else(|| ent.strip_prefix("#X"))
+                .filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
                 .and_then(|h| u32::from_str_radix(h, 16).ok())
-                .or_else(|| ent.strip_prefix('#').and_then(|d| d.parse().ok()))
+                .or_else(|| ent.strip_prefix('#').filter(|d| d.bytes().all(|b| b.is_ascii_digit())).and_then(|d| d.parse().ok()))
                 .and_then(char::from_u32),
         };
         match c {
@@ -484,6 +485,12 @@ mod tests {
     use super::*;
     use crate::preset_import::read_presets;
     use serde_json::json;
+
+    #[test]
+    fn unescape_rejects_signed_numeric_references() {
+        assert_eq!(unescape("&#+65;&#x+41;"), "&#+65;&#x+41;");
+        assert_eq!(unescape("&#65;&#x41;"), "AA");
+    }
 
     /// One effect's parameter as Luminar writes it.
     fn param(name: &str, v: f64) -> String {
