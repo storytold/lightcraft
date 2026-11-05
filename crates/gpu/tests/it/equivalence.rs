@@ -53,7 +53,8 @@ fn check_v3_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     let cpu = render(&src, &info, &s, &req).image;
     let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
     for image in [&cpu, &gpu] {
-        assert!(image.data.iter().all(|p| *p == image.data[0]));
+        // (8-bit output is dithered: a flat source varies by a level)
+        assert!(image.data.iter().all(|p| p.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1)));
         for (actual, expected) in image.data[0].into_iter().zip(expected) {
             assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {:?}, expected {expected}", image.data[0]);
         }
