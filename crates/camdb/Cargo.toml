@@ -1,0 +1,15 @@
+[package]
+name = "lightcraft-camdb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Per-model camera data with provenance: dual-illuminant colour matrices, white-balance presets, level overrides (L1)"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-color = { workspace = true }
+lightcraft-raw = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }

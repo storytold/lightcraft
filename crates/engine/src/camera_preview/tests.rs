@@ -852,6 +852,66 @@ fn a_black_and_white_jpeg_adds_its_tone_on_top_of_the_colour_it_gets_otherwise()
     assert_eq!(raw.color, lightcraft_raw::ColorData::default());
 }
 
+/// A measured camera database entry (here: as if from a camera-native DNG) comes before the JPEG fit, its level
+/// overrides apply, and the input transform interpolates its two matrices by the as-shot white's temperature.
+#[test]
+fn a_measured_database_entry_comes_before_the_jpeg_fit() {
+    let mut entry = lightcraft_camdb::find(Some("Canon"), "Canon EOS 600D").unwrap();
+    entry.provenance.source = lightcraft_camdb::Source::NativeDng;
+    entry.black = Some(2048.0);
+    let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 600D", Default::default());
+    let (xy, t, look) = starting_colour_from(
+        &mut raw,
+        Some(entry.clone()),
+        |_, _| panic!("no JPEG fit for measured colour"),
+        |_, _| panic!("no black-and-white step for measured colour"),
+        |_, _| panic!("no dark-tone step for measured colour"),
+    );
+    assert!(look.is_none() && !t.matrix_is_fallback);
+    assert_eq!(raw.color.color_matrix, entry.color_matrix);
+    assert!(raw.black.values.iter().all(|&b| b == 2048.0));
+    assert_eq!(t.matrix, lightcraft_raw::color::camera_transform_of(&entry.color_data(), xy).matrix);
+
+    // a spectral entry's levels apply at once, its matrices only after a failed fit
+    let mut spectral = entry.clone();
+    spectral.provenance.source = lightcraft_camdb::Source::SpectralSensitivities;
+    let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 600D", Default::default());
+    let (_, t, _) = starting_colour_from(
+        &mut raw,
+        Some(spectral),
+        |raw, _| {
+            assert!(!lightcraft_raw::color::has_matrix(&raw.color));
+            assert!(raw.black.values.iter().all(|&b| b == 2048.0));
+            (None, false)
+        },
+        |_, _| panic!("a colour JPEG never takes the black-and-white step"),
+        |_, _| None,
+    );
+    assert!(!t.matrix_is_fallback);
+
+    // a spectral entry and a black-and-white JPEG: the database matrices with the JPEG's tone look on top
+    let toned = CameraLook {
+        matrix: Mat3::IDENTITY,
+        tone: dro_test_look(&std::array::from_fn(|i| 0.006 * 1.13f32.powi(i as i32)), &|x| x.sqrt()).tone,
+        hue_sat: None,
+    };
+    let mut spectral = entry.clone();
+    spectral.provenance.source = lightcraft_camdb::Source::SpectralSensitivities;
+    let mut raw = raw_of(RawFormat::Cr2, "Canon", "Canon EOS 600D", Default::default());
+    let (_, t, look) = starting_colour_from(
+        &mut raw,
+        Some(spectral),
+        |_, _| (None, true),
+        |raw, t| {
+            assert!(!t.matrix_is_fallback && raw.color.color_matrix == entry.color_matrix, "the database matrices are in");
+            Some(toned.clone())
+        },
+        |_, _| panic!("the black-and-white tone is taken first"),
+    );
+    assert!(!t.matrix_is_fallback);
+    assert!(look.is_some_and(|l| l.matrix == Mat3::IDENTITY && l.hue_sat.is_none()), "the tone curve on top");
+}
+
 /// Step 5: a camera outside the table whose fit fails keeps the neutral fallback.
 #[test]
 fn a_camera_outside_the_table_keeps_the_fallback() {

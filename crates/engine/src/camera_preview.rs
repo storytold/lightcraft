@@ -27,7 +27,7 @@ mod tone;
 #[cfg(test)]
 pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 #[cfg(test)]
-use colour::{PROXY, starting_colour_with};
+use colour::{PROXY, starting_colour_from, starting_colour_with};
 pub(crate) use colour::{file_local_look, starting_colour, starting_colour_tags, with_starting_colour};
 pub(crate) use hue_sat::HueSat;
 #[cfg(test)]

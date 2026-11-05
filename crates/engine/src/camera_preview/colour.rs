@@ -33,14 +33,17 @@ pub(crate) fn file_local_look(format: RawFormat) -> bool {
     )
 }
 
-/// The colour a raw starts from, first available first: the file's own colour matrices (DNG); a look fitted to the
-/// file's JPEG ([`fit_preview`]: with the camera profile for its model when there is one, else with colour fitted to
-/// this photo alone); the model's colour matrices from measured spectral sensitivities (`lightcraft_raw::spectral`);
-/// the neutral fallback. The spectral matrices only stand in for the neutral fallback, so a photo whose JPEG fit is
-/// accepted renders as without them; when used they are written into `raw.color`. A photo whose JPEG is black and
-/// white (a monochrome picture style) has no colour to fit, but still gives its tone curve: with the camera profile's
-/// colour in [`fit_preview`], else on top of the spectral matrices or the fallback ([`monochrome_look`]). Returns the
-/// as-shot white, the camera transform at it and the fitted look.
+/// The colour a raw starts from, first available first: the file's own colour matrices (DNG); the model's measured
+/// matrices from the camera database (`lightcraft_camdb`: camera-native DNG, chart or manufacturer data); a look fitted to
+/// the file's JPEG ([`fit_preview`]: with the camera profile for its model when there is one, else with colour fitted
+/// to this photo alone); the model's other database matrices (from measured spectral sensitivities,
+/// `lightcraft_raw::spectral`); the neutral fallback. The spectral matrices only stand in for the neutral fallback, so a
+/// photo whose JPEG fit is accepted renders as without them. Database matrices, when used, are written into
+/// `raw.color`, where the DNG colour model interpolates them by the white's temperature; the database's black and
+/// white level overrides are applied first. A photo whose JPEG is black and white (a monochrome picture style) has no
+/// colour to fit, but still gives its tone curve: with the camera profile's colour in [`fit_preview`], else on top of
+/// the database matrices or the fallback ([`monochrome_look`]). Returns the as-shot white, the camera transform at it
+/// and the fitted look.
 /// `lens` is the file's own lens-correction warp ([`lens_geometry`], read before the caller removes it from
 /// `OpcodeList3`): the camera applied it to its JPEG, so the sensor proxy is warped the same way before pairing.
 /// `embedded` is the file's embedded lens correction: its vignetting is applied to the sensor proxy of every fit, as
@@ -98,10 +101,30 @@ pub(super) fn starting_colour_with(
     monochrome: impl FnOnce(&RawImage, &CameraTransform) -> Option<CameraLook>,
     dark: impl FnOnce(&RawImage, &CameraTransform) -> Option<CameraLook>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
+    let entry = raw.metadata.model.as_deref().and_then(|model| lightcraft_camdb::find(raw.metadata.make.as_deref(), model));
+    starting_colour_from(raw, entry, fit, monochrome, dark)
+}
+
+/// [`starting_colour_with`] with the camera database entry passed in.
+pub(super) fn starting_colour_from(
+    raw: &mut RawImage,
+    entry: Option<lightcraft_camdb::Entry>,
+    fit: impl FnOnce(&RawImage, &CameraTransform) -> (Option<CameraLook>, bool),
+    monochrome: impl FnOnce(&RawImage, &CameraTransform) -> Option<CameraLook>,
+    dark: impl FnOnce(&RawImage, &CameraTransform) -> Option<CameraLook>,
+) -> (Xy, CameraTransform, Option<CameraLook>) {
     let start = |raw: &RawImage| {
         let xy = lightcraft_raw::color::as_shot_white_xy(raw);
         (xy, lightcraft_raw::color::camera_transform(raw, xy))
     };
+    let measured = entry.as_ref().is_some_and(|e| e.provenance.source.is_measured());
+    if let Some(e) = &entry {
+        // levels always; matrices now only when measured (the JPEG fit outranks spectral and estimated colour)
+        let applied = if measured { e.apply(raw) } else { lightcraft_camdb::Entry { color_matrix: [None, None], ..e.clone() }.apply(raw) };
+        if lightcraft_pipeline::profiling() && (applied.matrix || applied.levels) {
+            eprintln!("[profile] {:?} camera database {} {} ({:?}): {applied:?}", raw.format, e.make, e.model, e.provenance.source);
+        }
+    }
     let (xy, t) = start(raw);
     if !t.matrix_is_fallback {
         return (xy, t, None);
@@ -110,15 +133,14 @@ pub(super) fn starting_colour_with(
     if let Some(look) = look {
         return (xy, t, Some(look));
     }
-    let (xy, t) = match raw.metadata.model.as_deref().and_then(|model| lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), model)) {
-        Some(camera) => {
-            camera.fill(&mut raw.color);
+    let (xy, t) = match entry.filter(|_| !measured) {
+        Some(e) if e.apply(raw).matrix => {
             if lightcraft_pipeline::profiling() {
-                eprintln!("[profile] {:?} camera colour from spectral sensitivities: {} {}", raw.format, camera.make, camera.model);
+                eprintln!("[profile] {:?} camera colour from the camera database: {} {} ({:?})", raw.format, e.make, e.model, e.provenance.source);
             }
             start(raw)
         }
-        None => (xy, t),
+        _ => (xy, t),
     };
     // A black-and-white JPEG first tries its existing tone fit on the chosen colour.
     let look = if black_and_white { monochrome(raw, &t) } else { None };

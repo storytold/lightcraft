@@ -3570,6 +3570,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-camdb"
+version = "0.18.0"
+dependencies = [
+ "lightcraft-color",
+ "lightcraft-raw",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "lightcraft-catalog"
 version = "0.18.0"
 dependencies = [
@@ -3595,6 +3605,7 @@ name = "lightcraft-cli"
 version = "0.18.0"
 dependencies = [
  "dhat",
+ "lightcraft-camdb",
  "lightcraft-codecs",
  "lightcraft-denoise",
  "lightcraft-engine",
@@ -3702,6 +3713,7 @@ dependencies = [
  "harfrust 0.13.3",
  "jxl-oxide",
  "libc",
+ "lightcraft-camdb",
  "lightcraft-catalog",
  "lightcraft-codecs",
  "lightcraft-color",
