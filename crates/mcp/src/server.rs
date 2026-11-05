@@ -4,7 +4,6 @@ use std::io::{BufRead, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[path = "progress.rs"]
 mod progress;
 
 use serde_json::{Value, json};

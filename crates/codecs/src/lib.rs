@@ -211,6 +211,7 @@ pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
         Format::Heif => heif::header(bytes)?,
         #[cfg(not(target_arch = "wasm32"))]
         Format::Avif => avif::header(bytes)?,
+        Format::Gif | Format::Bmp => other::header(bytes, format)?,
         // rare here (or, for JPEG XL, without a header reader yet): a small decode, as before
         _ => {
             let d = decode_unguarded(bytes, format, &DecodeOptions::fit(64, 64))?;
