@@ -320,6 +320,7 @@ impl Workers {
                     loaded: None,
                     quick: None,
                     display: None,
+                    frame: None,
                 };
                 g.done.push((b.slot, r, 0.0));
             }
@@ -413,6 +414,7 @@ impl Workers {
                 loaded: None,
                 quick: None,
                 display: None,
+                frame: None,
             },
             ms,
         ));
@@ -469,6 +471,7 @@ impl RenderOffload for Workers {
                 loaded: None,
                 quick: None,
                 display: None,
+                frame: None,
             };
             g.done.push((slot, r, 0.0));
             return None;
