@@ -31,7 +31,7 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 44 | 2 | 3 | 1 | 28/28 (100%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 41 | 5 | 3 | 1 | 25/28 (89%) | 13/14 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 25 | 21 | 8 | — | 24/26 (92%) |
-| **Total** | 421 | 65 | 57 | 35 | 196/203 (97%) | 146/161 (91%) |
+| **Total** | 418 | 68 | 57 | 35 | 193/203 (95%) | 146/161 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.5%** of 543 in-scope rows — P0 98.3% of 203 · P1 94.4% of 161 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 543 in-scope rows — P0 97.5% of 203 · P1 94.4% of 161 · P2 56.7% of 178.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
