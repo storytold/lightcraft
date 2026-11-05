@@ -104,7 +104,10 @@ fn hostile_dimensions_are_rejected_quickly() {
     let bytes = TiffWriter::default().write(&[ifd]).unwrap();
     let t0 = std::time::Instant::now();
     assert!(lightcraft_raw::decode(&bytes).is_err());
-    assert!(t0.elapsed().as_secs_f64() < 2.0);
+    // a regression guard, not a speed measurement: rejecting it takes milliseconds, reading the 7 GB
+    // frame it claims would take far longer (stretched by LIGHTCRAFT_TIME_SCALE for a loaded machine)
+    let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(5)).max(std::time::Duration::from_secs(5));
+    assert!(t0.elapsed() < limit, "took {:?} (limit {limit:?})", t0.elapsed());
 }
 
 /// A Bayer DNG whose `BlackLevel` is a FLOAT holding NaN (or infinity), and a float CFA DNG with

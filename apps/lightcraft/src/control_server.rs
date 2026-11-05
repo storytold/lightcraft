@@ -401,10 +401,17 @@ mod tests {
     #[test]
     fn a_request_to_an_app_drawing_no_frames_is_given_up_with_a_reason() {
         let (req, rrx) = ControlRequest::new("ui.inspect", json!({}));
+        // The overall timeout and the bound on giving up both stretch with LIGHTCRAFT_TIME_SCALE,
+        // so the bound stays half the timeout on a loaded machine. Neither shrinks below its
+        // unscaled value: at LIGHTCRAFT_TIME_SCALE=0.1 the bound would be 0.5 s, which a loaded
+        // machine can miss even when the 50 ms frame window works.
+        let timeout = lightcraft_testkit::scaled(Duration::from_secs(10)).max(Duration::from_secs(10));
         let t0 = std::time::Instant::now();
-        let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(50), Duration::from_secs(10));
-        // the frame window (50 ms), not the 10 s timeout; the margin is for a slow machine
-        assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+        let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(50), timeout);
+        // Given up by the frame window (50 ms), not the timeout, which answers "timeout". The
+        // reason alone can't tell: a wait that slept out the whole timeout before checking the
+        // frame window would still answer "not visible", so the return is bounded too.
+        assert!(t0.elapsed() < timeout / 2, "given up after {:?} (timeout {timeout:?})", t0.elapsed());
         assert_eq!(r["ok"], false);
         assert!(r["error"].as_str().unwrap().contains("not visible"), "{r}");
         assert!(!req.take(), "the app does not run it once it shows up");

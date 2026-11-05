@@ -19,5 +19,7 @@ default = ["parallel"]
 parallel = ["dep:rayon"]
 
 [dev-dependencies]
+# time guards stretched by LIGHTCRAFT_TIME_SCALE
+lightcraft-testkit = { workspace = true }
 proptest = { workspace = true }
 libc = { workspace = true }
