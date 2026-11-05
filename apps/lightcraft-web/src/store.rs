@@ -292,8 +292,8 @@ mod tests {
         let store = Originals::default();
         store.insert("h1", Arc::from(dng));
         let (loader, _) = store.hooks();
-        let with = loader("web/h1/a.dng", 64, Some(&profile)).unwrap();
-        let without = loader("web/h1/a.dng", 64, None).unwrap();
+        let with = loader("web/h1/a.dng", 64, lightcraft_engine::media::RawDecode { dcp: Some(&profile), outliers: false }).unwrap();
+        let without = loader("web/h1/a.dng", 64, Default::default()).unwrap();
         assert_eq!(with.0.data, without.0.data, "the web loader leaves it out");
     }
 
