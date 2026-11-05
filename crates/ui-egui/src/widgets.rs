@@ -990,6 +990,47 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
     clicked
 }
 
+/// [`segmented`] with icons: one row of equal icon segments, each with its label as hover text and
+/// accessible name, addressable as `button:{id}-{key}`. Returns the clicked index.
+pub fn icon_segmented(ui: &mut Ui, id: &str, items: &[(Icon, &str, &str)], active: Option<usize>) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let gap = 4.0;
+    let n = items.len().max(1) as f32;
+    let seg_w = ((ui.available_width() - gap * (n - 1.0)) / n).clamp(24.0, 40.0);
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        for (i, (icon, label, key)) in items.iter().enumerate() {
+            let label = crate::i18n::tr(label);
+            let on = active == Some(i);
+            let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
+            register(ui, format!("button:{id}-{key}"), r);
+            let fill = if on {
+                t.pressed
+            } else if resp.hovered() {
+                t.hover
+            } else {
+                t.button
+            };
+            let p = ui.painter();
+            p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+            let c = if on {
+                t.pick
+            } else if resp.hovered() {
+                t.text
+            } else {
+                t.icon
+            };
+            paint(p, Rect::from_center_size(r.center(), vec2(18.0, 18.0)), *icon, c);
+            if resp.on_hover_text(label).clicked() {
+                clicked = Some(i);
+            }
+        }
+    });
+    clicked
+}
+
 /// Splits a tooltip that ends in its key hint ("Edit (E)", "Import Photos… (⌘⇧I)") into the label
 /// and the hint: `("Edit", Some("E"))`. A tooltip without one is all label. The Japanese and
 /// Traditional Chinese catalogs write the hint in full-width brackets without a space ("編集（E）").
@@ -1017,9 +1058,27 @@ pub(crate) fn accessible_label<'a>(resp: &egui::Response, tip: &'a str) -> &'a s
 /// An icon-only button. `active` draws the selected background (tool strip).
 pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, tooltip: &str) -> Response {
     let tooltip = crate::i18n::tr(tooltip);
+    icon_button_named(ui, id, icon, size, active, enabled, tooltip, tooltip)
+}
+
+/// The tooltip a panel's icon button shows: its (translated) label, then the shortcut of
+/// `command` as menus write it (`Rotate Left (⌘[)`), when it has one.
+pub fn command_tooltip(ui: &Ui, label: &str, shortcut: Option<&str>) -> String {
+    let label = crate::i18n::tr(label);
+    match shortcut {
+        Some(sc) => format!("{label} ({})", crate::menubar::shortcut_text(sc, ui.ctx().os() == egui::os::OperatingSystem::Mac)),
+        None => label.to_string(),
+    }
+}
+
+/// [`icon_button`] with its accessible `name` (already translated) apart from its hover text
+/// (`tooltip`, e.g. the name plus a shortcut).
+#[allow(clippy::too_many_arguments)]
+pub fn icon_button_named(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, name: &str, tooltip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
-    let name = accessible_label(&resp, tooltip);
+    let label = accessible_label(&resp, tooltip);
+    let name = if name == tooltip { label } else { name };
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, name));
     register(ui, format!("icon:{id}"), r);
     let p = ui.painter();
@@ -1219,6 +1278,8 @@ mod access_tests {
                 let _ = slider(ui, spec, 0.5, true, None);
                 let _ = text_button(ui, "auto", "Auto", false);
                 let _ = icon_button(ui, "trash", Icon::Trash, vec2(24.0, 24.0), false, true, "Delete mask");
+                let _ = icon_button_named(ui, "rotl", Icon::RotateLeft, vec2(28.0, 24.0), false, true, "Rotate Left", "Rotate Left (Ctrl+[)");
+                let _ = icon_segmented(ui, "ov", &[(Icon::OverlayThirds, "Thirds", "thirds"), (Icon::OverlayNone, "None", "none")], Some(0));
             });
             let mut out = out;
             out.textures_delta.clear();
@@ -1242,6 +1303,8 @@ mod access_tests {
         assert!(ranges.contains(&(Some(spec.min), Some(spec.max))), "the slider's range: {ranges:?}");
         assert!(has("Button", "Auto"), "{found:?}");
         assert!(has("Button", "Delete mask"), "{found:?}");
+        assert!(has("Button", "Rotate Left"), "an icon button is named by its label, not its hover text: {found:?}");
+        assert!(has("Button", "Thirds") && has("Button", "None"), "icon segments are named: {found:?}");
     }
 }
 

@@ -2563,5 +2563,7 @@
   "Unit": "Unità",
   "Top bar": "Barra superiore",
   "Tool strip": "Barra degli strumenti",
-  "Bottom bar": "Barra inferiore"
+  "Bottom bar": "Barra inferiore",
+  "Lock Aspect": "Blocca proporzioni",
+  "Aspect Locked": "Proporzioni bloccate"
 }
