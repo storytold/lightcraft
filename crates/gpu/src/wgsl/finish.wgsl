@@ -371,7 +371,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let air = pf(F_AIR);
         let cmin = min(c.x, min(c.y, c.z));
         let d = clamp(min(select(0.0, dark[i] / pf(F_AIR_PRE), pf(F_AIR_PRE) > 0.0), select(0.0, cmin / air, air > 0.0)), 0.0, 1.0);
-        if (dz > 0.0) {
+        if (dz > 0.0 && pu(F_DEHAZE_V3) != 0u) {
+            // process V3 (`finish::dehaze_v3_pixel`): the dark channel is a patch minimum
+            let d3 = clamp(select(0.0, dark[i] / pf(F_AIR_PRE), pf(F_AIR_PRE) > 0.0), 0.0, 1.0);
+            let k0 = clamp(dz, 0.0, 1.0);
+            let k = k0 * (0.4 + 0.6 * k0);
+            let t = max(1.0 - 0.95 * k * d3, 0.3);
+            let veil = min(air * (1.0 - t), 0.9 * max(cmin, 0.0));
+            c = max((c - veil) / t, vec3<f32>(0.0));
+        } else if (dz > 0.0) {
             let t = max(1.0 - 0.95 * min(dz, 1.0) * d, 0.12);
             c = max((c - air * (1.0 - t)) / t, vec3<f32>(0.0));
         } else {
