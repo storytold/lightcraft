@@ -40,9 +40,9 @@ fn nothing_renders_on_the_gpu_once_the_process_is_ending() {
         })
     };
     if has_gpu {
-        while rendered.load(Ordering::SeqCst) == 0 && !refused.load(Ordering::SeqCst) {
-            std::thread::yield_now();
-        }
+        lightcraft_testkit::wait_until(Duration::from_secs(120), "the worker's first GPU render (or the GPU refusing it)", || {
+            rendered.load(Ordering::SeqCst) > 0 || refused.load(Ordering::SeqCst)
+        });
         assert!(rendered.load(Ordering::SeqCst) > 0, "the GPU renders before the shutdown ({:?})", lightcraft_gpu::last_fallback());
     }
 
