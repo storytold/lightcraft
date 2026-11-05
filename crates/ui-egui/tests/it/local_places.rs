@@ -33,8 +33,9 @@ impl Drop for Scratch {
 /// The app with Local listing `places` (what the host passes in place of the machine's home) and
 /// `kept` folders kept with Browse Folder….
 fn harness(places: Vec<(String, String)>, kept: Vec<String>) -> Harness<'static, LightcraftApp> {
-    let services = Services { headless: true, local_places: Some(places), pick_folder: Some(Box::new(|| None)), ..Default::default() };
+    let services = Services { local_places: Some(places), pick_folder: Some(Box::new(|| None)), ..Default::default() };
     let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), services);
+    app.headless_host = true;
     app.ui.left_panel = true;
     app.ui.local_roots = kept;
     let mut h = Harness::builder().with_size(vec2(1000.0, 800.0)).build_ui_state(
