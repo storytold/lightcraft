@@ -386,6 +386,10 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.
 pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
     let (w, h) = (img.width, img.height);
+    // Every spot reads source and target from the image as it was before any spot
+    // was applied, so a spot never copies pixels another spot already wrote and the
+    // result does not depend on spot order. Writes still accumulate in `img`.
+    let original = img.clone();
     for spot in spots {
         let Some(SpotLayout { r, pts, offset, bx: bx0, by: by0, bw, bh, inner, opacity, heal, fill }) = layout(spot, frame, w, h, ppl) else {
             continue;
@@ -401,8 +405,8 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
                 let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
                 let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
                 alpha[y * bw + x] = (1.0 - smooth(inner, r, d)) * opacity;
-                src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
-                tgt[y * bw + x] = img.get(bx0 + x, by0 + y);
+                src[y * bw + x] = original.sample_bilinear(px + offset.0, py + offset.1);
+                tgt[y * bw + x] = original.get(bx0 + x, by0 + y);
             }
         }
         if fill {
@@ -609,6 +613,43 @@ mod tests {
         apply(&mut img, &[spot], &frame, frame.px_per_long(100));
         assert!(img.get(25, 50)[0] > 0.8);
         assert!(img.get(5, 50)[0] < 0.2);
+    }
+
+    #[test]
+    fn spots_do_not_read_each_others_output() {
+        // spot 1 copies bright columns onto the left side; spot 2's source patch
+        // overlaps the pixels spot 1 wrote. Each spot must read from the original
+        // image, so the result must not depend on spot order.
+        let mut base = Rgb32f::from_fn(100, 100, |_, _| [0.1; 3]);
+        for x in 68..72 {
+            for y in 0..100 {
+                base.set(x, y, [0.9; 3]);
+            }
+        }
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(100);
+        let spot1 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.30, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(0.40, 0.0)),
+        };
+        let spot2 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.60, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(-0.30, 0.0)),
+        };
+        let mut first = base.clone();
+        apply(&mut first, &[spot1.clone(), spot2.clone()], &frame, ppl);
+        let mut second = base.clone();
+        apply(&mut second, &[spot2.clone(), spot1.clone()], &frame, ppl);
+        assert!(first.get(30, 50)[0] > 0.5, "spot 1 copied the bright columns");
+        assert_eq!(first.data, second.data, "spot 2 read spot 1's output when spot 1 ran first");
     }
 
     fn with_spots(spots: Vec<Spot>) -> DevelopSettings {
