@@ -1,7 +1,7 @@
 #[cfg(feature = "denoise")]
 use super::model::{GpuSide, STACK};
 #[cfg(feature = "denoise")]
-use super::*;
+use super::{Arc, Duration, Mutex, Path, PathBuf, PoisonError, SystemTime, TileRunner};
 
 /// Tiles run at once on a graphics card: enough to keep it fed while others are packed and blended.
 #[cfg(feature = "denoise")]

@@ -1,7 +1,7 @@
 use super::view::LoupeInfo;
 #[cfg(test)]
 use super::view::{InfoOverlay, LoupeInfoField};
-use super::*;
+use super::{Deserialize, Serialize};
 
 /// Which view the app opens in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +136,8 @@ pub struct AppSettings {
     pub import_dropped_directly: bool,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
+    /// Use Windows DirectComposition to prevent VRR flicker; applies at next launch.
+    pub compose_window: bool,
     /// Largest long edge (pixels) the user lets the loupe render at; 0 = Automatic (the size it is
     /// drawn at, up to the photo's own pixels and [`LOUPE_EDGE_CEILING`]). Not the old
     /// `previewEdge` key: its 2560 px default was the soft-image bug (issue #323).
@@ -193,6 +195,10 @@ pub struct AppSettings {
     /// gets a new one, or always merge (issue #2672; the window's "Don't ask again" picks that).
     #[serde(deserialize_with = "lenient")]
     pub lightroom_import: LightroomImport,
+    /// The answer to the first-launch offer of the lens database (Download / Not Now; Settings ▸ General ▸ Lens
+    /// profiles changes it). A value this version doesn't read asks again.
+    #[serde(deserialize_with = "lenient")]
+    pub lens_database: lightcraft_engine::lensfun_download::Offer,
 }
 
 /// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
@@ -220,6 +226,7 @@ impl Default for AppSettings {
             close_dialogs_outside: false,
             import_dropped_directly: false,
             gpu: true,
+            compose_window: false,
             preview_limit: 0,
             external_editor: String::new(),
             external_file: EditFile::default(),
@@ -242,6 +249,7 @@ impl Default for AppSettings {
             zoom_to_focus: true,
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
+            lens_database: Default::default(),
         }
     }
 }

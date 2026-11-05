@@ -482,6 +482,28 @@ fn a_pinch_holds_the_display_fit_size() {
     assert_eq!(hold.display_fit(1.6, true, [640, 480]), [640, 480]);
 }
 
+// The plan and display fit become fresh on the exact quiet deadline, in the same frame.
+#[test]
+fn the_display_fit_and_plan_release_at_the_exact_deadline() {
+    use lightcraft_catalog::PhotoId;
+    let mut hold = SizeHold::default();
+    let photo = PhotoId(1);
+    let fit = LoupePlan { main_edge: 800, window_edge: None };
+    let zoomed = LoupePlan { main_edge: 1600, window_edge: Some(6000) };
+    assert_eq!(hold.apply(photo, 0.0, false, fit), fit);
+    assert_eq!(hold.display_fit(0.0, false, [508, 762]), [508, 762]);
+    assert_eq!(hold.apply(photo, 1.0, true, zoomed), fit);
+    assert_eq!(hold.display_fit(1.0, true, [549, 823]), [508, 762]);
+    let before_deadline = 1.0 + HOLD_SECS / 2.0;
+    assert_eq!(hold.apply(photo, before_deadline, false, zoomed), fit);
+    assert_eq!(hold.display_fit(before_deadline, false, [549, 823]), [508, 762]);
+    assert!(hold.holding(before_deadline));
+    let deadline = 1.0 + HOLD_SECS;
+    assert_eq!(hold.apply(photo, deadline, false, zoomed), zoomed);
+    assert_eq!(hold.display_fit(deadline, false, [549, 823]), [549, 823]);
+    assert!(!hold.holding(deadline));
+}
+
 // Given another photo, the held sizes are forgotten
 #[test]
 fn another_photo_is_planned_afresh() {

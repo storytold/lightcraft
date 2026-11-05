@@ -632,20 +632,23 @@ fn lossless_file((width, height): (usize, usize), values: &[i32]) -> Fixture {
 
 /// Constant-coefficient planes for one tile: LL3 flat at `ll3`, band `mid_band.0` flat at `mid_band.1`,
 /// everything else zero. Encoded at the given level count with the given quant/gain/base parameters.
-fn constant_band_planes(
-    plane_w: usize,
-    plane_h: usize,
+struct ConstantBandPlaneConfig<'a> {
+    plane_size: (usize, usize),
     levels: u8,
     ll3: i32,
     mid_band: Option<(usize, i32)>,
     quant: u8,
     gains: [u32; 10],
     bases: [u32; 10],
-    qp: Option<&[i32]>,
+    qp: Option<&'a [i32]>,
     qp_padding: usize,
-    before: bool,
-    after: bool,
-) -> (usize, Vec<u8>) {
+    boundary_bands: (bool, bool),
+}
+
+fn constant_band_planes(config: ConstantBandPlaneConfig<'_>) -> (usize, Vec<u8>) {
+    let ConstantBandPlaneConfig { plane_size: (plane_w, plane_h), levels, ll3, mid_band, quant, gains, bases, qp, qp_padding, boundary_bands } =
+        config;
+    let (before, after) = boundary_bands;
     let planes: [Vec<Vec<u8>>; 4] = if levels == 0 {
         let mut encoded: [Vec<Vec<u8>>; 4] = Default::default();
         for bands in encoded.iter_mut() {
@@ -681,7 +684,18 @@ fn constant_band_planes(
 
 /// A 16×16 three-level C-RAW file built from constant bands at the given uniform quant value.
 fn constant_bands_file(ll3: i32, mid_band: Option<(usize, i32)>, quant: u8) -> Fixture {
-    let (header_size, sample) = constant_band_planes(8, 8, 3, ll3, mid_band, quant, [0; 10], [0; 10], None, 0, false, false);
+    let (header_size, sample) = constant_band_planes(ConstantBandPlaneConfig {
+        plane_size: (8, 8),
+        levels: 3,
+        ll3,
+        mid_band,
+        quant,
+        gains: [0; 10],
+        bases: [0; 10],
+        qp: None,
+        qp_padding: 0,
+        boundary_bands: (false, false),
+    });
     let coding = cmp1(0x100, 16, 16, 16, 16, 3, header_size as u32);
     Fixture { file: wrap(&coding, 16, 16, &sample, None), expected: Vec::new() }
 }
@@ -697,7 +711,18 @@ fn v200_mapped_file(
     bases: [u32; 10],
 ) -> Fixture {
     assert_eq!(map.len(), (width / 16) * (height / 4));
-    let (header_size, sample) = constant_band_planes(width / 2, height / 2, 3, ll3, mid_band, 4, gains, bases, Some(map), 3, false, false);
+    let (header_size, sample) = constant_band_planes(ConstantBandPlaneConfig {
+        plane_size: (width / 2, height / 2),
+        levels: 3,
+        ll3,
+        mid_band,
+        quant: 4,
+        gains,
+        bases,
+        qp: Some(map),
+        qp_padding: 3,
+        boundary_bands: (false, false),
+    });
     let coding = cmp1(0x200, width as u32, height as u32, width as u32, height as u32, 3, header_size as u32);
     Fixture { file: wrap(&coding, width as u32, height as u32, &sample, None), expected: Vec::new() }
 }
@@ -811,20 +836,18 @@ proptest! {
             }
             *b = if i < 4 { base + 1 } else { base };
         }
-        let (header_size, sample) = constant_band_planes(
-            width / 2,
-            height / 2,
-            3,
+        let (header_size, sample) = constant_band_planes(ConstantBandPlaneConfig {
+            plane_size: (width / 2, height / 2),
+            levels: 3,
             ll3,
-            Some((4, mid)),
-            4,
+            mid_band: Some((4, mid)),
+            quant: 4,
             gains,
             bases,
-            Some(&qp_values[..map_w * map_h]),
-            3,
-            false,
-            false,
-        );
+            qp: Some(&qp_values[..map_w * map_h]),
+            qp_padding: 3,
+            boundary_bands: (false, false),
+        });
         let coding = cmp1(0x200, width as u32, height as u32, width as u32, height as u32, 3, header_size as u32);
         let file = wrap(&coding, width as u32, height as u32, &sample, None);
         let image = decode(&file).unwrap();
@@ -879,7 +902,18 @@ fn lossless_sample(value: i32) -> Vec<u8> {
 
 /// Raw sample bytes of a constant-band 16×16 C-RAW fixture.
 fn constant_bands_sample(ll3: i32, mid_band: Option<(usize, i32)>, quant: u8) -> Vec<u8> {
-    let (_, sample) = constant_band_planes(8, 8, 3, ll3, mid_band, quant, [0; 10], [0; 10], None, 0, false, false);
+    let (_, sample) = constant_band_planes(ConstantBandPlaneConfig {
+        plane_size: (8, 8),
+        levels: 3,
+        ll3,
+        mid_band,
+        quant,
+        gains: [0; 10],
+        bases: [0; 10],
+        qp: None,
+        qp_padding: 0,
+        boundary_bands: (false, false),
+    });
     sample
 }
 

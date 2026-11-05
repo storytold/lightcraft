@@ -89,6 +89,115 @@ fn the_edge_setting_hardens_or_feathers_the_transition() {
     assert!(hard < plain && plain < soft, "transition widths {hard} < {plain} < {soft}");
 }
 
+/// A dark disc (radius 0.3 of the frame) on a light background, `n × n`: the photo and its log
+/// luminance, and a model's view of it on a `side²` grid (each cell's logit from how much of the
+/// cell the disc covers, as a low-resolution segmenter sees it).
+fn disc_scene(n: usize, side: usize) -> (Rgb32f, Plane, SegMask) {
+    const R: f64 = 0.3;
+    let dark = |x: f64, y: f64| (x - 0.5).hypot(y - 0.5) < R;
+    let lum = |x: usize, y: usize| if dark((x as f64 + 0.5) / n as f64, (y as f64 + 0.5) / n as f64) { 0.05f32 } else { 0.6 };
+    let img = Rgb32f::from_fn(n, n, |x, y| [lum(x, y); 3]);
+    let log_l = img.map(crate::local::log_lum);
+    let logits: Vec<f32> = (0..side * side)
+        .map(|i| {
+            let (cx, cy) = (i % side, i / side);
+            let sub = 8;
+            let cover = (0..sub * sub)
+                .filter(|k| {
+                    dark((cx as f64 + (k % sub) as f64 / sub as f64) / side as f64, (cy as f64 + (k / sub) as f64 / sub as f64) / side as f64)
+                })
+                .count() as f32
+                / (sub * sub) as f32;
+            12.0 * (2.0 * cover - 1.0)
+        })
+        .collect();
+    (img, log_l, SegMask::from_logits(side, &logits))
+}
+
+/// Alpha along the disc's horizontal radius, `d` px outside (> 0) or inside (< 0) its edge.
+fn across_disc_edge(a: &Plane, d: i32) -> f32 {
+    let n = a.width;
+    let edge = (0.8 * n as f64).round() as i32; // first background pixel on the right
+    let x = if d > 0 { edge + d - 1 } else { edge + d };
+    a.get(x as usize, n / 2)
+}
+
+/// Issue #3272: a mask from a low-resolution model grid spilled 1–2 px onto the background (a bright
+/// outline once its Exposure was raised). Enlarged along the photo's edges, it is ≈ 0 one and two
+/// pixels outside the subject, ≈ 1 inside, and exactly what it was away from the edge.
+#[test]
+fn ai_masks_follow_the_photos_edge_when_enlarged() {
+    let (n, side) = (512, 32); // 16 px cells, as a 288² grid on a ~4600 px export
+    let (img, log_l, seg) = disc_scene(n, side);
+    let shape = MaskShape::Prompt { text: "disc".into(), seg: Some(seg), detail: vec![], edge: 0.0 };
+    let f = frame(n, n);
+    let a = shape_alpha(&shape, &f, n, n, &img, &log_l, 0.0, None);
+    for d in [1, 2] {
+        assert!(across_disc_edge(&a, d) < 0.05, "{d} px outside: {}", across_disc_edge(&a, d));
+        assert!(across_disc_edge(&a, -d) > 0.95, "{d} px inside: {}", across_disc_edge(&a, -d));
+    }
+    // all around the disc, not only along one row
+    let r_px = 0.3 * n as f64;
+    for k in 0..64 {
+        let t = k as f64 / 64.0 * std::f64::consts::TAU;
+        let at = |r: f64| a.get((256.0 + r * t.cos()) as usize, (256.0 + r * t.sin()) as usize);
+        assert!(at(r_px + 2.5) < 0.05 && at(r_px - 2.5) > 0.95, "at {t:.2} rad: {} / {}", at(r_px + 2.5), at(r_px - 2.5));
+    }
+    // away from the edge the selection is the plain sample of the grid, to the bit
+    let flat = Plane::new(n, n);
+    let plain = shape_alpha(&shape, &f, n, n, &img, &flat, 0.0, None);
+    for (x, y) in [(256, 256), (200, 300), (10, 10), (500, 256), (256, 505)] {
+        assert_eq!(a.get(x, y), plain.get(x, y), "({x}, {y})");
+    }
+}
+
+/// Refine Edges on top of an enlarged AI mask: the second filter finds the edge already in place, so
+/// there is no second halo and the edge doesn't move inwards.
+#[test]
+fn refine_edges_on_an_enlarged_ai_mask_neither_halos_nor_tightens() {
+    let (n, side) = (512, 32);
+    let (img, log_l, seg) = disc_scene(n, side);
+    let f = frame(n, n);
+    let mask = |refine: f64| Mask {
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Prompt { text: "disc".into(), seg: Some(seg.clone()), detail: vec![], edge: 0.0 },
+        }],
+        refine,
+        ..Default::default()
+    };
+    let crossing = |a: &Plane| (0..n).rev().find(|x| a.get(*x, n / 2) > 0.5).unwrap_or(0);
+    let plain = evaluate_one(&mask(0.0), &f, n, n, &img, &log_l, 0.0, None);
+    for refine in [50.0, 100.0] {
+        let a = evaluate_one(&mask(refine), &f, n, n, &img, &log_l, 0.0, None);
+        for d in [1, 2] {
+            assert!(across_disc_edge(&a, d) < 0.05, "refine {refine}, {d} px outside: {}", across_disc_edge(&a, d));
+            assert!(across_disc_edge(&a, -d) > 0.95, "refine {refine}, {d} px inside: {}", across_disc_edge(&a, -d));
+        }
+        assert!(crossing(&a).abs_diff(crossing(&plain)) <= 1, "refine {refine}: edge at {} vs {}", crossing(&a), crossing(&plain));
+    }
+}
+
+/// The window follows the grid, not the output: a preview and an export put the edge in the same
+/// place of the photo (and on its edge).
+#[test]
+fn enlarged_ai_masks_put_the_edge_in_the_same_place_at_any_size() {
+    let side = 32;
+    let mut edges = Vec::new();
+    for n in [256, 512, 1024] {
+        let (img, log_l, seg) = disc_scene(n, side);
+        let shape = MaskShape::Prompt { text: "disc".into(), seg: Some(seg), detail: vec![], edge: 0.0 };
+        let a = shape_alpha(&shape, &frame(n, n), n, n, &img, &log_l, 0.0, None);
+        // the edge's sub-pixel position along the row: the integral of alpha past the centre
+        let covered: f32 = (n / 2..n).map(|x| a.get(x, n / 2)).sum();
+        edges.push((n / 2) as f64 + covered as f64);
+        let x = edges.last().copied().unwrap_or(0.0) / n as f64;
+        assert!((x - 0.8).abs() < 1.0 / n as f64, "{n} px: edge at {x:.4} of the width, the disc's at 0.8");
+    }
+}
+
 #[test]
 fn ai_shapes_without_a_segmentation_select_nothing() {
     let f = frame(30, 30);
@@ -113,6 +222,52 @@ fn radial_inside_and_invert() {
     let m = Mask { components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: true, shape }], ..Default::default() };
     let e = evaluate(&[m], &f, 100, 100, &img, &l, 0.0, None);
     assert!(e[0].alpha.get(50, 50) < 0.01);
+}
+
+/// #1520: a caller that will not look past its own threshold builds to that threshold, not to
+/// the stroke budget. Each segment here is admissible on its own and together they want far
+/// more than any threshold the callers apply, which is the aggregate the issue describes
+/// rather than one hostile segment.
+#[test]
+fn a_stroke_is_built_only_as_far_as_the_caller_will_look() {
+    let f = frame(4000, 4000);
+    // Twenty long sweeps across the output: tens of thousands of dabs between them.
+    let points: Vec<Point> =
+        (0..20).map(|i| if i % 2 == 0 { Point::new(0.02, 0.02 + i as f64 * 0.04) } else { Point::new(0.98, 0.02 + i as f64 * 0.04) }).collect();
+    let s = BrushStroke { points, size: 0.002, feather: 50.0, flow: 100.0, density: 100.0, ..Default::default() };
+
+    let whole = brush_dabs(&s, &f, 4000, 4000);
+    assert!(whole.dabs.len() > 20_000, "the stroke really is large: {}", whole.dabs.len());
+    assert!(whole.dabs.len() <= MAX_STROKE_DABS);
+
+    // Each caller gets what it asked for and no more, however large the stroke is. 4097 and
+    // 200_001 are what the GPU path and the Auto Mask spot window now ask for.
+    for max in [1usize, 2, 4097, 200_001] {
+        let got = brush_dabs_within(&s, &f, 4000, 4000, max);
+        assert!(got.dabs.len() <= max, "asked for at most {max}, built {}", got.dabs.len());
+        assert_eq!(got.r, whole.r, "the brush itself is unchanged");
+    }
+
+    // A budget the stroke never reaches changes nothing: it only ever truncates.
+    let generous = brush_dabs_within(&s, &f, 4000, 4000, whole.dabs.len() + 1000);
+    assert_eq!(generous.dabs, whole.dabs, "an unreached budget leaves the stroke alone");
+
+    // The guarantee the callers rely on: a result short of the budget was never truncated,
+    // so it is the stroke itself. Both callers ask for one more than they will accept, so
+    // anything they keep is identical to what they drew before this change, and anything
+    // truncated is something they were going to reject anyway.
+    //
+    // A truncated one is not a prefix: running out of room makes a segment lay its remaining
+    // dabs further apart rather than stop mid-segment, which is how `push_dabs_counted`
+    // already behaved at MAX_STROKE_DABS. That only ever reaches a caller that rejects it.
+    let cut = brush_dabs_within(&s, &f, 4000, 4000, 500);
+    assert_eq!(cut.dabs.len(), 500, "a stroke past the budget fills it exactly");
+    for max in [700usize, 5_000, whole.dabs.len()] {
+        let got = brush_dabs_within(&s, &f, 4000, 4000, max);
+        if got.dabs.len() < max {
+            assert_eq!(got.dabs, whole.dabs, "a result short of its budget is the whole stroke");
+        }
+    }
 }
 
 /// Issue #517: dabs along a long segment (a fast stroke: two pointer samples far apart) are at
@@ -148,7 +303,8 @@ fn a_long_segment_gets_dabs_at_most_the_spacing_apart() {
     }
     assert_eq!(committed.dabs, again);
     assert!(committed.dabs.windows(2).all(|w| w[0].dist(w[1]) <= dab_spacing(committed.r) + 1e-9));
-    // many huge segments stop at the stroke budget instead of adding up without bound
+    // a huge segment lays only its end point, so many of them add one dab each instead of
+    // filling the stroke budget with intermediate dabs
     let mut big = Vec::new();
     let mut at = Point::new(0.0, 0.0);
     for i in 0..5 {
@@ -157,14 +313,32 @@ fn a_long_segment_gets_dabs_at_most_the_spacing_apart() {
             at = q;
         }
     }
-    assert!(big.len() <= MAX_STROKE_DABS, "{} dabs", big.len());
-    assert!(!push_dabs(&mut big, Some(at), Point::new(5.0, 5.0), 1.0), "a full stroke takes no more");
+    assert_eq!(big.len(), 5, "an extreme segment lays no intermediate dabs");
+    let mut spent = MAX_STROKE_DABS;
+    assert!(!push_dabs_counted(&mut big, &mut spent, Some(at), Point::new(5.0, 5.0), 1.0), "a full stroke takes no more");
     // a hostile segment places no in-between dabs
     let mut v = Vec::new();
     assert!(!push_dabs(&mut v, Some(Point::new(f64::NAN, 0.0)), Point::new(1.0, 1.0), r));
     assert!(!push_dabs(&mut v, None, Point::new(f64::INFINITY, 1.0), r));
     push_dabs(&mut v, Some(Point::new(0.0, 0.0)), Point::new(1e300, 1.0), 0.0);
     assert!(v.len() <= 1_000_002, "{}", v.len());
+}
+
+#[test]
+fn oversized_brush_segments_skip_intermediate_dabs() {
+    let mut dabs = vec![Point::new(10.0, 10.0)];
+    let far = Point::new(10_000_000.0, 10.0);
+    assert!(push_dabs(&mut dabs, Some(Point::new(10.0, 10.0)), far, 2.0));
+    assert_eq!(dabs.len(), 2, "an extreme segment must not allocate a million intermediate dabs");
+    assert_eq!(dabs.last(), Some(&far));
+
+    // Ordinary feathered-brush paths still get overlapping dabs and their endpoint.
+    let mut regular = vec![Point::new(10.0, 10.0)];
+    let end = Point::new(30.0, 10.0);
+    assert!(push_dabs(&mut regular, Some(Point::new(10.0, 10.0)), end, 4.0));
+    assert_eq!(regular.len(), 21);
+    assert_eq!(regular.last(), Some(&end));
+    assert!(regular.windows(2).all(|pair| pair[0].dist(pair[1]) <= dab_spacing(4.0)));
 }
 
 /// A temporary output buffer must spend the same stroke budget as a retained one.

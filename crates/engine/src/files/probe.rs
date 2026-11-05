@@ -1,6 +1,6 @@
 use super::load::WbScaleOf;
 use super::preview::embedded_preview_size;
-use super::*;
+use super::{MediaKind, Meta, Orientation, ProbeInfo};
 
 pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
     let shutter = m.exposure_time.map(|t| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) }).unwrap_or_default();
@@ -148,6 +148,13 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                 });
             }
             Err(Err(e)) => return Err(e),
+        };
+        // what the Exif reader can't see, the decoder may have read from the raw's own records (a CRW keeps make,
+        // model and capture time in CIFF records, no Exif): it fills the gaps, so the catalog knows the camera
+        let (meta, captured) = {
+            let mut m = m.clone();
+            m.fill_missing(&raw.metadata);
+            meta_of(&m)
         };
         let (w, h) = raw.developed_size();
         let (mut w, mut h) = (w.max(1) as u32, h.max(1) as u32);

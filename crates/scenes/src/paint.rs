@@ -179,7 +179,14 @@ fn pine(p: &P, x: f32, v: f32, ground: f32, height: f32, density: f32) -> Option
     best
 }
 
-fn water(p: &P, x: f32, v: f32, wl: f32, calm: f32, above: &dyn Fn(f32, f32) -> C, tint: C, sun: (f32, f32), sun_col: C) -> C {
+struct WaterLight {
+    tint: C,
+    sun: (f32, f32),
+    sun_col: C,
+}
+
+fn water(p: &P, x: f32, v: f32, wl: f32, calm: f32, above: &dyn Fn(f32, f32) -> C, light: WaterLight) -> C {
+    let WaterLight { tint, sun, sun_col } = light;
     let d = v - wl;
     let rip = fbm(x * 9.0, d * 60.0 / (d + 0.05), p.seed ^ 0xaa, 4) * (1.0 - calm);
     let rv = (wl - d * 1.0 + rip * (0.01 + 0.06 * (1.0 - calm)) * (d * 10.0 + 0.2)).max(0.0);
@@ -340,7 +347,7 @@ fn alpine(p: &P, x: f32, v: f32, blue: bool) -> C {
     };
     if v > wl {
         let tint = if blue { hex(0x1a2440) } else { hex(0x20303a) };
-        return water(p, x, v, wl, 0.75, &above, tint, sun, sun_col);
+        return water(p, x, v, wl, 0.75, &above, WaterLight { tint, sun, sun_col });
     }
     above(x, v)
 }
@@ -419,7 +426,7 @@ fn ocean(p: &P, x: f32, v: f32) -> C {
         if v < hz + head * 0.3 {
             return hex(0x120c14);
         }
-        return water(p, x, v, hz, 0.35, &above, hex(0x1a2040), sun, sun_col);
+        return water(p, x, v, hz, 0.35, &above, WaterLight { tint: hex(0x1a2040), sun, sun_col });
     }
     let _ = head;
     above(x, v)
@@ -465,7 +472,7 @@ fn aurora(p: &P, x: f32, v: f32) -> C {
         add(sky(p, &sk, x, v), aur(x, v))
     };
     if v > wl {
-        return water(p, x, v, wl, 0.9, &above, hex(0x020408), (-5.0, 5.0), [0.0; 3]);
+        return water(p, x, v, wl, 0.9, &above, WaterLight { tint: hex(0x020408), sun: (-5.0, 5.0), sun_col: [0.0; 3] });
     }
     above(x, v)
 }

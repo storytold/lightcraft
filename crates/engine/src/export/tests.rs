@@ -209,6 +209,42 @@ fn sharpen_increases_edge_contrast() {
     assert!(img.data[3][0] < 80 && img.data[4][0] > 170);
 }
 
+/// Output sharpening's pixels for every target and amount, pinned (its box blurs run row-parallel, which must not
+/// change a bit), on 8- and 16-bit images; with no target the image is left as it is.
+#[test]
+fn sharpened_pixels_are_pinned() {
+    let fnv = |b: &[u8]| b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &x| (h ^ u64::from(x)).wrapping_mul(0x100_0000_01b3));
+    let mut got = Vec::new();
+    for target in [SharpenFor::Screen, SharpenFor::Matte, SharpenFor::Glossy] {
+        for amount in [SharpenAmount::Low, SharpenAmount::High] {
+            let mut img = test_image();
+            output_sharpen(&mut img, target, amount);
+            got.push(fnv(img.data.as_flattened()));
+        }
+        let src = test_image();
+        let samples = src.data.iter().flat_map(|p| [p[0], p[1], p[2]].map(|v| u16::from(v) * 257)).collect();
+        let mut deep = DeepImage { width: src.width, height: src.height, samples: DeepSamples::U16(samples), space: OutputSpace::Srgb };
+        output_sharpen_deep(&mut deep, target, SharpenAmount::Standard);
+        let DeepSamples::U16(v) = &deep.samples else { unreachable!() };
+        got.push(fnv(&v.iter().flat_map(|s| s.to_le_bytes()).collect::<Vec<u8>>()));
+    }
+    assert_eq!(got, SHARPENED, "{got:#x?}");
+    let mut img = test_image();
+    output_sharpen(&mut img, SharpenFor::None, SharpenAmount::High);
+    assert_eq!(img, test_image());
+}
+const SHARPENED: [u64; 9] = [
+    0x1494_273e_0bdc_a61c,
+    0x3fbb_40c4_74f4_b0c3,
+    0xa27f_8ff5_82a0_99f9,
+    0x6550_6571_a38d_4d9f,
+    0x5e28_f4f3_fc8a_9685,
+    0xdc2b_6f65_9138_3b1d,
+    0x8ce6_f0b8_d8ed_8026,
+    0x92d8_12e7_4b2e_81fe,
+    0x139f_6d78_b1f2_a910,
+];
+
 /// Exported files carry keywords as Lightroom Classic writes them: names flat in `dc:subject`
 /// (with the keywords containing them), full paths in `lr:hierarchicalSubject`, and nothing of
 /// a keyword left out of export. They used to carry the `a|b` paths in `dc:subject`.
@@ -880,6 +916,51 @@ fn distinct_levels(bytes: &[u8]) -> (usize, lightcraft_codecs::Decoded) {
     (v.len(), d)
 }
 
+/// A 16-bit render of a photo-like scene: smooth colour gradients plus sensor-like noise of
+/// `noise` (linear, about 0.002 to 0.03 for clean to high-ISO raws), the case where the low
+/// byte of every 16-bit sample is mostly noise.
+fn noisy_render(noise: f32) -> lightcraft_pipeline::Rendered {
+    let (w, h) = (512, 384);
+    // a hash of the position and channel: the same noise every run
+    let hash = |x: usize, y: usize, c: usize| {
+        let mut z = (x as u64) << 32 ^ (y as u64) << 2 ^ c as u64 ^ 0x2882;
+        z = (z ^ (z >> 33)).wrapping_mul(0xff51_afd7_ed55_8ccd);
+        z = (z ^ (z >> 33)).wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        (z ^ (z >> 33)) as f32 / u64::MAX as f32 - 0.5
+    };
+    let src = lightcraft_raster::Rgb32f::from_fn(w, h, |x, y| {
+        let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+        let base = [0.05 + 0.4 * u, 0.1 + 0.3 * v, 0.2 + 0.2 * (u * v)];
+        [0, 1, 2].map(|c| (base[c] + noise * hash(x, y, c)).max(0.0))
+    });
+    let req = lightcraft_pipeline::RenderRequest { depth: OutputDepth::U16, ..lightcraft_pipeline::RenderRequest::fit(w, h) };
+    lightcraft_pipeline::render(&src, &Default::default(), &Default::default(), &req)
+}
+
+/// Issue #2882: a 16-bit TIFF with ZIP (the default) is never larger than the same render
+/// uncompressed, from smooth to noisy. (LZW can be: it is printed, not checked, and the export
+/// dialog says so when it is picked.)
+#[test]
+fn sixteen_bit_zip_tiff_is_never_larger_than_uncompressed() {
+    assert_eq!(ExportOptions::default().tiff_compression, TiffCompression::Deflate, "ZIP is the default");
+    for noise in [0.0, 0.002, 0.01, 0.03, 0.1] {
+        let r = noisy_render(noise);
+        assert!(matches!(r.deep.as_ref().unwrap().samples, DeepSamples::U16(_)));
+        let size = |tiff_compression| {
+            let o = ExportOptions { format: ExportFormat::Tiff, bit_depth: Some(16), tiff_compression, ..Default::default() };
+            assert_eq!(o.effective_depth(), OutputDepth::U16);
+            encode_rendered(&r, &o, None).unwrap().len()
+        };
+        let (none, zip, lzw) = (size(TiffCompression::None), size(TiffCompression::Deflate), size(TiffCompression::Lzw));
+        eprintln!(
+            "noise {noise}: none {none} B, ZIP {zip} B ({:+.1} %), LZW {lzw} B ({:+.1} %)",
+            100.0 * (zip as f64 / none as f64 - 1.0),
+            100.0 * (lzw as f64 / none as f64 - 1.0)
+        );
+        assert!(zip <= none, "noise {noise}: 16-bit ZIP {zip} B is larger than uncompressed {none} B");
+    }
+}
+
 #[test]
 fn sixteen_bit_tiff_and_png_have_no_banding() {
     let tiff = |bit_depth| ExportOptions { format: ExportFormat::Tiff, bit_depth, ..Default::default() };
@@ -1031,6 +1112,11 @@ fn avif_ten_bit() {
 /// unknown keys (naming the nearest known one) and values of the wrong kind or range.
 #[test]
 fn export_params_are_validated() {
+    assert_invalid_export_params();
+    assert_export_options_round_trip();
+}
+
+fn assert_invalid_export_params() {
     use serde_json::json;
     let err = |p: serde_json::Value| ExportOptions::from_params(&p).err().map(|e| e.to_string()).unwrap_or_default();
     let e = err(json!({"longEdgee": 400}));
@@ -1056,6 +1142,11 @@ fn export_params_are_validated() {
             .to_string()
             .starts_with("invalid parameters for `export.savePreset`")
     );
+}
+
+fn assert_export_options_round_trip() {
+    use serde_json::json;
+    let err = |p: serde_json::Value| ExportOptions::from_params(&p).err().map(|e| e.to_string()).unwrap_or_default();
     // everything the presets, the dialog, Export with Previous and `render --opt` send passes
     for p in builtin_presets() {
         ExportOptions::from_params(&p.params).unwrap_or_else(|e| panic!("{}: {e}", p.name));

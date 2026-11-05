@@ -154,7 +154,7 @@ pub fn move_node(rs: &mut RuleSet, from: &[usize], dest: &[usize]) -> Option<Vec
     }
     let mut chain = from.get(..from.len().checked_sub(1)?)?.to_vec();
     // (a group the row is going into stays, however empty it is for now)
-    while !chain.is_empty() && !(dest.len() > chain.len() && dest.starts_with(&chain)) && list_at(&next, &chain).is_some_and(|l| l.rules.is_empty()) {
+    while !(chain.is_empty() || dest.len() > chain.len() && dest.starts_with(&chain)) && list_at(&next, &chain).is_some_and(|l| l.rules.is_empty()) {
         remove_at(&mut next, &chain)?;
         if !shift_after_removal(&mut dest, &chain) {
             return None;
