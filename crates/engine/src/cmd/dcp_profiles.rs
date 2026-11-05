@@ -62,9 +62,7 @@ pub fn register_all(s: &mut Session, profiles: Option<&Path>) {
     let loaded: Vec<(String, LoadedCameraProfile)> = s
         .dcp_profiles
         .iter()
-        .filter_map(|p| {
-            lightcraft_raw::dcp::read_dcp(Path::new(&p.file)).ok().and_then(|b| LoadedCameraProfile::parse(&b).ok()).map(|d| (p.id.clone(), d))
-        })
+        .filter_map(|p| read_allowed(Path::new(&p.file)).ok().and_then(|b| LoadedCameraProfile::parse(&b).ok()).map(|d| (p.id.clone(), d)))
         .collect();
     s.media.camera_profiles = loaded.into_iter().collect();
 }
@@ -103,7 +101,7 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
     let (mut imported, mut failed) = (Vec::new(), Vec::new());
     for f in dcp_files(paths) {
         let shown = f.display().to_string();
-        let bytes = match lightcraft_raw::dcp::read_dcp(&f) {
+        let bytes = match read_allowed(&f) {
             Ok(b) => b,
             Err(e) => {
                 failed.push(json!([shown, e.to_string()]));
