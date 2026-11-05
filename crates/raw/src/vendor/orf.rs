@@ -29,7 +29,9 @@
 //!   and 3624 (E-330), as was the sensor-origin RGGB anchoring (the maker-note crop offsets are odd). The E-M5 Mark II
 //!   and PEN-F files were only checked for smoothness, not for CFA anchoring or black level.
 //! - Olympus's compressed ORF (interchangeable-lens bodies and compacts using the 12/14-bit entropy coding stream):
-//!   decoded using ImageProcessing tags (`0x0640`–`0x0653`) with an edge-directed predictor over Bayer channels.
+//!   clean-room derivation from Olympus patents US7333035B2 and US7715639B2 (predictor shape and entropy coding method),
+//!   ImageProcessing maker-note tags (`0x0640`–`0x0653`), and black-box analysis of CC0 samples (OM-D E-M1, E-M10 Mark III);
+//!   no GPL/LibRaw/dcraw code was consulted or copied, consistent with repository clean-room policy.
 //! - The colour-filter layout is the file's Exif `CFAPattern`: GRBG on the E-1 and E-400, RGGB on the XZ-2, where
 //!   the colours of the decoded mosaic follow the embedded JPEG best with exactly that layout
 //!   (`corpus_orf_cfa_patterns`). The samples' active areas start at even offsets, so they can't tell whether the

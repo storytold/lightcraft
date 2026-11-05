@@ -799,7 +799,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-04 | minor | LR-IMP-FORMATS / LR-IMP-CAMERA-COVERAGE: Olympus compressed ORF bitstream decoder implemented (`crates/raw/src/vendor/orf.rs`); OM-D E-M1 and E-M10 Mark III verified on CC0 files; 78 bodies unlocked |
+| 2026-11-04 | minor | LR-IMP-FORMATS / LR-IMP-CAMERA-COVERAGE: Olympus compressed ORF bitstream decoder implemented (`crates/raw/src/vendor/orf.rs`); OM-D E-M1 and E-M10 Mark III verified on CC0 files; 58 bodies newly unlocked (78 total across Olympus and OM) |
 | 2026-10-28 | minor | LR-EDIT-OPTICS-PROFILE: lensfun's database offered once on the first launch and downloaded on request (Download / Not Now, Settings) (pinned, CC BY-SA, never bundled), the library looked up when it arrives or Enable Lens Corrections is ticked, the Optics panel names the profile or the lens without one; status unchanged (🟡) |
 | 2026-10-30 | patch | LR-BEHAV-ACCESS: the Flatpak manifests grant `--talk-name=org.a11y.Bus`, so AccessKit can find out whether a screen reader is running and publish the window inside the sandbox; packaging lint requires it in both manifests; status unchanged (🟡), not tried with Orca |
 | 2026-10-27 | patch | LR-LIB-LABEL, MENU-PHOTO-LABEL, KEY-LABELS: Clear Color Label (`photo.clearLabel`) is a command of its own, so Help → Keyboard Shortcuts can give it a key (#2980); the Photo ▸ Set Color Label ▸ None row runs it; status unchanged |
