@@ -1092,7 +1092,9 @@ fn import_reads_a_catalog_end_to_end() {
     let again = import(&mut s, &catalog, false).unwrap();
     assert_eq!(again["mapping"], report["mapping"]);
     assert_eq!(s.catalog.len(), 1);
-    std::fs::remove_dir_all(dir).unwrap();
+    // (the library's journal writes its snapshot on a thread of its own: dropping the session waits for it)
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The import as a host runs it: the catalog read, every batch added, then the collections.

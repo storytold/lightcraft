@@ -815,7 +815,9 @@ mod tests {
         completion.finalization.finish().unwrap();
         let index = lightroom_catalog::load_index(Some(&index_path)).unwrap();
         assert_eq!(index.photos.get("fixture-1"), Some(&1));
-        std::fs::remove_dir_all(dir).unwrap();
+        // (the library's journal writes its snapshot on a thread of its own: dropping the session waits for it)
+        drop(session);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Importing again after a crash finds a master by its path, but a virtual copy only through
@@ -850,7 +852,9 @@ mod tests {
         let completion = import.finish(&mut session, true).unwrap();
         assert_eq!(session.catalog.len(), 2, "the saved copy is matched, not added again: {}", completion.report);
         assert_eq!(completion.report["imported"], 0);
-        std::fs::remove_dir_all(dir).unwrap();
+        // (the library's journal writes its snapshot on a thread of its own: dropping the session waits for it)
+        drop(session);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
