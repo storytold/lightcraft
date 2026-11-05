@@ -38,19 +38,19 @@ exports. Existing AI masks become 1–2 px tighter at a subject's edges, on ever
 inside, their outside and edges without contrast in the photo are unchanged. It landed in place as
 a bug fix: the outline is output that isn't in the photo nor in the edit, not a look anyone chose.
 
-**Lettering under Highlights and Shadows** (V2) no longer grows blocks of the wrong tone. V2's base
-was first the edge-aware filter of a separable median alone. Dark lettering on a bright panel (a bus
+**Lettering under Highlights and Shadows** (V3) no longer grows blocks of the wrong tone. V2's base
+is the edge-aware filter of a separable median alone. Dark lettering on a bright panel (a bus
 number, a sign) has strokes and gaps about as wide as the median's radius, so each row and column
 window was close to half letter and half panel, and the median picked one tone or the other in
 rectangles: it filled the gaps between the letters and their counters with the letters' tone.
-Shadows then lifted those patches of panel by over 1 EV, into bright blocks beside the letters. Each
-value now moves toward that median only as far as the median of a 3× wider neighbourhood agrees
+Shadows then lifted those patches of panel by over 1 EV, into bright blocks beside the letters. From V3 each
+value moves toward that median only as far as the median of a 3× wider neighbourhood agrees
 (`local::detail_free`). A twig against a wall has both medians on the wall's side and takes its tone,
 as before (#632); the gap between two strokes sits in a wider neighbourhood that is mostly panel, the
 two medians disagree, and the gap keeps its own tone. The letters themselves count as fine dark detail
-on the panel and keep their contrast, as twigs do. V2 renders with Highlights or Shadows change only
-in detail about as fine as the radius, mostly where it is packed closely (lettering, grilles). It
-landed in place as a bug fix: the blocks are output that is neither in the photo nor in the edit.
+on the panel and keep their contrast, as twigs do. V3 differs from V2 under Highlights or Shadows only in detail
+about as fine as the radius, mostly where it is packed closely (lettering, grilles). V2 is frozen
+and keeps the blocks (`tests_legacy`); Update to Current Process moves a photo past them.
 
 ## Adding a process
 
