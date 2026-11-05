@@ -465,8 +465,16 @@ pub fn specs() -> Vec<CommandSpec> {
             let ids = s.targets(p)?;
             let mut first: Option<Value> = None;
             let mut ops: Vec<Op> = Vec::new();
+            let mut failed = None;
             for id in ids {
-                let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(C, e))?;
+                // a photo that can't be read (offline, no decoder) is left out, not the whole selection
+                let src = match s.source_now(id, SourceLevel::Thumb) {
+                    Ok(src) => src,
+                    Err(e) => {
+                        failed.get_or_insert(e);
+                        continue;
+                    }
+                };
                 let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
                 let a = lightcraft_pipeline::auto::auto_tone(&src, &info, &d);
@@ -485,6 +493,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(op) = s.develop_op(id, nd, "Auto") {
                     ops.push(op);
                 }
+            }
+            if let (None, Some(e)) = (&first, failed) {
+                return Err(bad(C, e));
             }
             if !ops.is_empty() {
                 s.commit("Auto", Op::Batch { ops })?;

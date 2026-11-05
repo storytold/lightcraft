@@ -515,6 +515,22 @@ fn auto_applies_to_every_selected_photo() {
     }
 }
 
+/// A photo that can't be read is left out: the rest of the selection still gets Auto.
+#[test]
+fn auto_skips_a_selected_photo_it_cannot_read() {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    let mut s = demo();
+    let good = s.catalog.photos().next().unwrap().id;
+    let missing = s.catalog.alloc_photo_id();
+    let photo = Photo::new(missing, Source::File { path: "/lightcraft-test/missing.jpg".into() }, "missing.jpg", "JPEG", 100, 100, "");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    s.execute("library.select", &json!({"ids": [missing.0, good.0], "active": good.0})).unwrap();
+    s.execute("develop.auto", &json!({})).unwrap();
+    assert_eq!(s.develop_of(PhotoId(good.0)).unwrap().color.vibrance, 30.0, "the readable photo got Auto");
+    s.execute("library.select", &json!({"ids": [missing.0], "active": missing.0})).unwrap();
+    assert!(s.execute("develop.auto", &json!({})).is_err(), "with nothing readable the error is reported");
+}
+
 #[test]
 fn versions_history_and_reset() {
     let mut s = demo();

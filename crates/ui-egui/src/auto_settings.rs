@@ -22,7 +22,10 @@ struct Prepared {
 struct Completed {
     library: u64,
     commits: u64,
-    settings: Vec<(PhotoId, DevelopSettings)>,
+    /// Each photo's settings as they were read, and with Auto.
+    settings: Vec<(PhotoId, Arc<DevelopSettings>, DevelopSettings)>,
+    /// Photos left out because they could not be read.
+    skipped: usize,
 }
 
 fn prepare(app: &mut LightcraftApp, params: &Value) -> Result<Prepared, String> {
@@ -41,11 +44,21 @@ impl Prepared {
     fn run(self, progress: Option<&lightcraft_engine::activity::TaskHandle>) -> Result<Completed, String> {
         let total = self.inputs.len() as u64;
         let mut settings = Vec::with_capacity(self.inputs.len());
+        let mut failed: Option<String> = None;
+        let mut skipped = 0;
         for (i, input) in self.inputs.into_iter().enumerate() {
             if progress.is_some_and(|p| p.is_cancelled()) {
                 return Err("Auto Settings cancelled".into());
             }
-            let source = input.source.load_source()?;
+            // a photo that can't be read (offline, no decoder) is left out, not the whole selection
+            let source = match input.source.load_source() {
+                Ok(source) => source,
+                Err(error) => {
+                    failed.get_or_insert(error);
+                    skipped += 1;
+                    continue;
+                }
+            };
             let info = source.info_or(input.info);
             let auto = lightcraft_pipeline::auto::auto_tone(&source.image, &info, &input.settings);
             let mut develop = (*input.settings).clone();
@@ -57,7 +70,7 @@ impl Prepared {
             develop.light.blacks = auto.blacks;
             develop.color.vibrance = auto.vibrance;
             develop.color.saturation = auto.saturation;
-            settings.push((input.id, develop));
+            settings.push((input.id, input.settings, develop));
             if let Some(p) = progress {
                 p.progress(i as u64 + 1, total);
             }
@@ -65,18 +78,29 @@ impl Prepared {
         if progress.is_some_and(|p| p.is_cancelled()) {
             return Err("Auto Settings cancelled".into());
         }
-        Ok(Completed { library: self.library, commits: self.commits, settings })
+        if let (true, Some(error)) = (settings.is_empty(), failed) {
+            return Err(error);
+        }
+        Ok(Completed { library: self.library, commits: self.commits, settings, skipped })
     }
 }
-fn apply(app: &mut LightcraftApp, completed: Completed) -> Result<(), String> {
-    if app.session.library_generation() != completed.library || app.session.commits() != completed.commits {
+fn apply(app: &mut LightcraftApp, completed: Completed) -> Result<usize, String> {
+    // An undo or a live edit changes a photo's settings without a commit: compare the settings too.
+    let moved = completed.settings.iter().any(|(id, before, _)| app.session.develop_of(*id).is_none_or(|now| now != *before));
+    if app.session.library_generation() != completed.library || app.session.commits() != completed.commits || moved {
         return Err("Auto Settings was not applied because the library changed; try again".into());
     }
-    let ops: Vec<Op> = completed.settings.into_iter().filter_map(|(id, d)| app.session.develop_op(id, d, "Auto")).collect();
+    let ops: Vec<Op> = completed.settings.into_iter().filter_map(|(id, _, d)| app.session.develop_op(id, d, "Auto")).collect();
     if !ops.is_empty() {
-        app.session.commit("Auto", Op::Batch { ops }).map_err(|e| e.to_string())?;
+        // through the command wrapper, so sidecars and the durable save follow as for any edit
+        app.session
+            .execute_fn("develop.auto", |s| {
+                s.commit("Auto", Op::Batch { ops })?;
+                Ok(Value::Null)
+            })
+            .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(completed.skipped)
 }
 pub(crate) fn command(app: &mut LightcraftApp, params: &Value) -> Result<Value, String> {
     if app.tasks.is_running(LABEL) {
@@ -92,7 +116,8 @@ pub(crate) fn command(app: &mut LightcraftApp, params: &Value) -> Result<Value, 
         cancel,
         move |progress| prepared.run(Some(&progress)),
         |app, ctx, result| match result.and_then(|done| apply(app, done)) {
-            Ok(()) => app.toast(ctx, crate::i18n::tr("Auto Settings").to_owned()),
+            Ok(0) => app.toast(ctx, crate::i18n::tr("Auto Settings").to_owned()),
+            Ok(skipped) => app.toast(ctx, format!("{}: {skipped} photo(s) could not be read", crate::i18n::tr("Auto Settings"))),
             Err(error) => app.toast(ctx, error),
         },
     )?;
