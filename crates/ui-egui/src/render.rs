@@ -1291,6 +1291,23 @@ impl Renderer {
         Slot::Preview
     }
 
+    /// A superseded result an interactive view still takes: a draft newer than what it shows.
+    fn is_newer_draft(&self, slot: Slot, r: &RenderResult) -> bool {
+        slot.is_view()
+            && self.requests.contains_key(&slot)
+            && r.request_id >= self.epoch
+            && self.shown_ids.get(&slot).is_none_or(|shown| r.request_id > *shown)
+            && r.rendered.is_ok()
+    }
+
+    /// Convert `r` to the display profile in use; whether that changed it.
+    fn convert_for_display(&self, r: &mut RenderResult) -> bool {
+        let Some(d) = &self.display else { return false };
+        let before = r.display;
+        lightcraft_engine::display::present(r, d);
+        r.display != before
+    }
+
     /// Turn finished jobs into textures. Returns true if anything changed.
     fn collect(&mut self, ctx: &egui::Context, session: &mut Session, inline_ms: f64) -> bool {
         let finished = self.take_finished(inline_ms);
@@ -1311,12 +1328,7 @@ impl Renderer {
             // shows, and the source it decoded: a drag supersedes every request before it
             // finishes, and a source thrown away with them is decoded again for every tick.
             let (source, look) = if self.requests.get(&slot).map(|request| request.id) != Some(r.request_id) {
-                let newer_draft = slot.is_view()
-                    && self.requests.contains_key(&slot)
-                    && r.request_id >= self.epoch
-                    && self.shown_ids.get(&slot).is_none_or(|shown| r.request_id > *shown)
-                    && r.rendered.is_ok();
-                if !newer_draft {
+                if !self.is_newer_draft(slot, &r) {
                     self.discarded += 1;
                     let replaced = self.requests.contains_key(&slot);
                     self.decided(|| {
@@ -1339,12 +1351,8 @@ impl Renderer {
                 self.shown_ids.insert(slot, r.request_id);
             }
             // (results from an offload, which doesn't know the display profile: converted here)
-            if let Some(d) = &self.display {
-                let before = r.display;
-                lightcraft_engine::display::present(&mut r, d);
-                if r.display != before {
-                    color = None; // converted after the worker made its texture pixels
-                }
+            if self.convert_for_display(&mut r) {
+                color = None; // converted after the worker made its texture pixels
             }
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
