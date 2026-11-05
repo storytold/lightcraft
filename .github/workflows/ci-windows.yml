@@ -49,6 +49,8 @@ jobs:
         crates/engine/src/import/scan.rs
         crates/engine/src/walk.rs
         crates/engine/src/doc_path.rs
+        crates/engine/src/doc_path/*
+        crates/engine/src/sync/tests_network.rs
         crates/engine/src/rename/*
         crates/engine/src/cmd/geocode.rs
         crates/engine/src/tests/sync.rs
