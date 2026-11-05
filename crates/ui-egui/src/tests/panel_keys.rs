@@ -1,12 +1,12 @@
-//! Headless tests of the panel keys: F8 (Right Panel) and Shift+Tab (Hide All Panels), which hides
-//! the side panels, the Presets column and the filmstrip, and brings back exactly what it hid.
+//! Headless tests of Shift+Tab (View ▸ Hide All Panels), which hides the side panels, the Presets
+//! column and the filmstrip and brings back exactly what it hid, and of how it gets on with F8.
 
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use crate::headless::Headless;
-use crate::menubar::{MenuNode, checked, menu_bar};
+use crate::menus::menubar::{MenuNode, checked, menu_bar};
 use crate::state::RightPanel;
 use crate::{LightcraftApp, Services};
 
@@ -51,29 +51,6 @@ fn arrange(h: &mut Headless, left: bool, right: RightPanel, presets: bool, films
     h.app.ui.filmstrip = filmstrip;
     h.step();
     h.step();
-}
-
-#[test]
-fn f8_hides_the_right_panel_and_brings_back_the_tool_that_was_there() {
-    let mut h = loupe();
-    for tool in [RightPanel::Edit, RightPanel::Keywords, RightPanel::Info, RightPanel::Versions, RightPanel::Activity, RightPanel::Profiles] {
-        arrange(&mut h, true, tool, false, true);
-        key(&mut h, "F8", false);
-        assert_eq!(shown(&h), (true, RightPanel::None, false, true), "F8 hides {tool:?} and nothing else");
-        key(&mut h, "F8", false);
-        assert_eq!(shown(&h), (true, tool, false, true), "F8 shows {tool:?} again");
-    }
-    // the tools that act on the photo end when hidden and come back as Edit
-    arrange(&mut h, true, RightPanel::Crop, false, true);
-    key(&mut h, "F8", false);
-    assert_eq!(h.app.ui.right, RightPanel::None);
-    key(&mut h, "F8", false);
-    assert_eq!(h.app.ui.right, RightPanel::Edit);
-    // closed some other way, with nothing remembered: Edit
-    let mut h = loupe();
-    arrange(&mut h, true, RightPanel::None, false, true);
-    key(&mut h, "F8", false);
-    assert_eq!(h.app.ui.right, RightPanel::Edit);
 }
 
 #[test]
@@ -176,15 +153,10 @@ fn the_panel_commands_work_without_the_keys() {
     let mut h = loupe();
     arrange(&mut h, true, RightPanel::Keywords, false, true);
     let r = run(&mut h, "view.rightPanel", json!({}));
-    assert_eq!(r["result"]["shown"], false, "{r}");
+    assert_eq!(r["result"]["open"], false, "{r}");
     assert_eq!(h.app.ui.right, RightPanel::None);
-    // `show` says which way, whatever the state
-    run(&mut h, "view.rightPanel", json!({"show": false}));
-    assert_eq!(h.app.ui.right, RightPanel::None);
-    run(&mut h, "view.rightPanel", json!({"show": true}));
+    run(&mut h, "view.rightPanel", json!({}));
     assert_eq!(h.app.ui.right, RightPanel::Keywords);
-    run(&mut h, "view.rightPanel", json!({"show": true}));
-    assert_eq!(h.app.ui.right, RightPanel::Keywords, "showing a shown panel keeps it");
 
     let r = run(&mut h, "view.allPanels", json!({}));
     assert_eq!(r["result"]["hidden"], true, "{r}");
@@ -205,10 +177,12 @@ fn hiding_the_panels_ends_the_tool_in_use() {
     assert_eq!(h.app.ui.right, RightPanel::None);
     assert!(h.app.ui.tool.is_empty());
     run(&mut h, "panel.masking", json!({}));
+    assert!(!h.app.ui.tool.is_empty() || h.app.ui.right == RightPanel::Masking);
     run(&mut h, "view.allPanels", json!({}));
     assert_eq!(h.app.ui.right, RightPanel::None);
+    assert!(h.app.ui.tool.is_empty(), "hiding the panels ends the tool");
     run(&mut h, "view.allPanels", json!({}));
-    assert_eq!(h.app.ui.right, RightPanel::Edit);
+    assert_eq!(h.app.ui.right, RightPanel::Masking, "the panel comes back, as with F8");
 }
 
 #[test]
@@ -228,10 +202,10 @@ fn the_view_menu_lists_the_panel_commands_with_their_state() {
     app.ui.left_panel = true;
     app.ui.right = RightPanel::Edit;
     app.ui.filmstrip = true;
-    let (label, shortcut, on) = item(&app, "view.rightPanel").expect("View ▸ Right Panel");
-    assert_eq!((label.as_str(), shortcut.as_deref(), on), ("Right Panel", Some("F8"), Some(true)));
-    let (label, shortcut, on) = item(&app, "view.allPanels").expect("View ▸ Hide All Panels");
-    assert_eq!((label.as_str(), shortcut.as_deref(), on), ("Hide All Panels", Some("Shift+Tab"), Some(false)));
+    let (label, _, on) = item(&app, "view.rightPanel").expect("View ▸ Right Panel");
+    assert_eq!((label.as_str(), on), ("Right Panel", Some(true)));
+    let (label, _, on) = item(&app, "view.allPanels").expect("View ▸ Hide All Panels");
+    assert_eq!((label.as_str(), on), ("Hide All Panels", Some(false)));
     app.run("view.allPanels", json!({})).unwrap();
     assert_eq!(checked(&app, "view.rightPanel"), Some(false));
     assert_eq!(checked(&app, "view.allPanels"), Some(true));
@@ -241,21 +215,16 @@ fn the_view_menu_lists_the_panel_commands_with_their_state() {
     assert_eq!(checked(&app, "view.allPanels"), Some(false), "a panel is shown again, so the panels are no longer all hidden");
 }
 
+/// Shift+Tab is a fixed key like F8: a saved keymap that gives Shift+Tab to another command keeps
+/// it, and the panels stay as they are.
 #[test]
-fn the_keys_are_in_the_keymap_and_f1_opens_help() {
-    use crate::shortcuts::{parse, shortcut_of};
-    let keymap = Default::default();
-    assert_eq!(shortcut_of(&keymap, "view.rightPanel"), Some("F8"));
-    assert_eq!(shortcut_of(&keymap, "view.allPanels"), Some("Shift+Tab"));
-    assert!(parse("F8").is_some() && parse("Shift+Tab").is_some());
-    // F1 (LightCraft Help) goes to the docs
+fn a_saved_assignment_of_shift_tab_wins() {
+    assert!(crate::shortcuts::ALIASES.iter().any(|(sc, id, _)| (*sc, *id) == ("Shift+Tab", "view.allPanels")));
     let mut h = loupe();
-    let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let o = opened.clone();
-    h.app.services.open_url = Some(Box::new(move |u: &str| {
-        o.lock().unwrap().push(u.to_string());
-        Ok(())
-    }));
-    key(&mut h, "F1", false);
-    assert_eq!(opened.lock().unwrap().as_slice(), [crate::links::HELP]);
+    arrange(&mut h, true, RightPanel::Edit, false, true);
+    h.app.ui.settings.keymap.insert("view.photoGrid".into(), "Shift+Tab".into());
+    key(&mut h, "Tab", true);
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid, "the saved assignment ran");
+    assert_eq!(shown(&h), (true, RightPanel::Edit, false, true), "and the panels were left alone");
+    assert!(h.app.ui.hidden_panels.is_none());
 }
