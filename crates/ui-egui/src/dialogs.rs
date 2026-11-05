@@ -1357,7 +1357,10 @@ fn export_preset_combo(app: &LightcraftApp, ui: &mut egui::Ui, preset: &ExportDi
         None => crate::i18n::tr("Choose…").to_string(),
     };
     let mut chosen = None;
-    let c = crate::widgets::combo_box("exportPreset").width(220.0).selected_text(shown).show_ui(ui, |ui| {
+    // eight built-ins and the user's presets: the list grows to most of the window before it
+    // scrolls, so the user's presets under the built-ins are seen without scrolling
+    let tall = ui.ctx().content_rect().height() * 0.8;
+    let c = crate::widgets::combo_box("exportPreset").width(220.0).height(tall).selected_text(shown).show_ui(ui, |ui| {
         let mut builtin = true;
         for (p, b) in app.session.all_export_presets() {
             if builtin && !b {
@@ -2124,10 +2127,9 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             }
         }
         Dialog::CreatePreset { name, group, groups } => {
-            crate::widgets::named(
-                ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Preset name")).desired_width(f32::INFINITY)),
-                crate::i18n::tr("Preset name"),
-            );
+            if dialog_field(ui, "field:presetName", name, "Preset name") {
+                *confirm = true;
+            }
             crate::widgets::named(
                 ui.add(egui::TextEdit::singleline(group).hint_text(crate::i18n::tr("Group")).desired_width(f32::INFINITY)),
                 crate::i18n::tr("Group"),

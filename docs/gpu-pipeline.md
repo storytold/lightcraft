@@ -91,6 +91,14 @@ leaves them apart. The transposed convolution's merged store ran right on that c
 `nn::tests::a_layer_stores_every_pixels_channels_where_the_next_reads_them` catches the fault on such a card;
 `a_transposed_convolution_stores_every_pixels_channels_where_the_next_reads_them` checks the other store exactly.
 
+FXC also cannot address two things the WGSL looks harmless with, and answers with `X3550 … forcing loop to unroll`
+and then `X3511 unable to unroll loop` (the shader module fails, so the pipeline is never made): an array handed to a
+function through a pointer (`ptr<function, array<…>>`) that the function then indexes with a loop variable, and a vector
+indexed with a loop variable on the left of an assignment (`acc[ch] = …` with `acc: vec4<f32>`). The block-matching
+kernels (`wgsl/bm3d_*.wgsl`) keep their working arrays at module scope (`var<private>`, one copy of the transforms
+generated per array, `bm3d_transform.wgsl`) and accumulate in `array<f32, 4>` instead. A GPU test that only records a
+skip when the device cannot build the kernels hides this, so read the skip note (`cargo test … -- --nocapture`).
+
 **Off the startup path.** The compute device is created on a background thread once the window is
 up (`gpu::warm_up` from the first frame's settings), and never while GPU rendering is off: with
 Settings ▸ Performance ▸ *Use the GPU for rendering* unchecked (applied before the window opens),
@@ -428,6 +436,11 @@ view shows a GPU-resident draft reads that texture back for the picture (`Screen
 - The next and previous photos in filmstrip order are prepared in the background once the current
   one is rendered (decoded source kept, view render cached): stepping through photos shows the
   developed image in ~50 ms.
+- Culling (PERF-CULL): the stand-ins of the next five photos in the direction of travel and the one
+  behind are made ahead (`render::Slot::QuickAhead`) and taken over at the step, so a step shows
+  the camera JPEG at once; while an arrow key is held (a photo left within 0.25 s) the raw render
+  of a photo waits until it has stayed 0.12 s, and a render queued for a photo already left is
+  dropped. `ui.inspect` → `perf.loupeSteps` times each step on the frames drawn.
 
 ## Memory (M5.6)
 A view's stages keep an uploaded source only up to 96 MB (a Preview-level source); a bigger one (the original a zoom window is cut from) is kept once, outside the views' stages, for all views of the photo (the Before and After windows and every pan share it; the Before window of a Before/After waits at first open until the After's job has handed the original over, or each would decode and upload its own copy) and given back when the app idles with no zoom window on screen (a zoomed view keeps it for its next pan: a 64 MP original is 800 MB to upload again; issue #323: kept per view it counted against the stage budget on every tick of a drag, and not kept every new window uploaded 288 MB again).
