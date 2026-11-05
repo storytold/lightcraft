@@ -116,9 +116,9 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join(file_name(&profile.model));
     let json = serde_json::to_vec_pretty(profile).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // a fresh temp file renamed over the profile: never a fixed `.tmp` name, which a planted link
+    // would have written through
+    lightcraft_catalog::safe_file::write_atomic(&path, &json).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path)
 }
 
