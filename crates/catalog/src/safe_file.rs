@@ -157,6 +157,21 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     write_atomic_with(path, &mut |w| w.write_all(data)).map(|_| ())
 }
 
+/// Write and sync a temporary file, replacing `path` only if `commit` permits publication.
+pub fn write_atomic_if(path: &Path, data: &[u8], commit: impl FnOnce() -> bool) -> io::Result<bool> {
+    let (tmp, _) = write_temp(path, true, &mut |w| w.write_all(data))?;
+    if !commit() {
+        let _ = fs::remove_file(&tmp);
+        return Ok(false);
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    sync_dir(parent_of(path));
+    Ok(true)
+}
+
 /// [`write_atomic`] with streamed content: `fill` writes it (an error aborts and leaves the old
 /// file). Returns the length written.
 pub fn write_atomic_with(path: &Path, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<u64> {
@@ -378,6 +393,19 @@ mod tests {
         write_atomic(&p, b"two two").unwrap();
         assert_eq!(fs::read(&p).unwrap(), b"two two");
         assert_eq!(names(&d), vec!["out.jpg"]);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cancelled_atomic_write_preserves_old_file() {
+        let d = temp("cancelled");
+        let p = d.join("groups.json");
+        fs::write(&p, b"old").unwrap();
+        assert!(!write_atomic_if(&p, b"new", || false).unwrap());
+        assert_eq!(fs::read(&p).unwrap(), b"old");
+        assert_eq!(names(&d), vec!["groups.json"]);
+        assert!(write_atomic_if(&p, b"new", || true).unwrap());
+        assert_eq!(fs::read(&p).unwrap(), b"new");
         let _ = fs::remove_dir_all(&d);
     }
 

@@ -309,6 +309,8 @@ impl LightcraftApp {
         // (the first library shown takes the place of none: nothing was searching another one)
         if self.shown_library.is_some() {
             crate::find_similar::library_changed(self);
+            self.ui.unnamed_groups = None;
+            self.ui.person_selection = Default::default();
         }
         self.shown_library = Some(generation);
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
