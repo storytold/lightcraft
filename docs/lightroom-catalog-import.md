@@ -32,13 +32,15 @@ says where to turn the question back on. The choice is an app setting (`ui.json`
 `"ask"` or `"alwaysMerge"`); a settings file without it asks.
 
 A session with no library on disk (in memory, e.g. after Continue Without Saving) has nothing to put a new library
-next to: the catalog merges into it without asking, as before.
+next to: the catalog merges into it without asking when it has no network sources. Network sources
+always get a checkbox review before import, including with Always merge.
 
-**Scripts and agents.** The app command `file.importLightroom {path?, into?, name?, location?}` (control channel,
+**Scripts and agents.** The app command `file.importLightroom {path?, into?, name?, location?, networkShares?}` (control channel,
 `lightcraft-cli mcp --connect`) chooses without the window: `into: "open"` merges, `into: "new"` creates the library
 `name` (default: the catalog's name) in the folder `location` (default: the open library's parent folder; a full
-path), opens it and imports. Without `into` it shows the window (and returns `{asking: true, path, into}`, `into`
-being the choice the window opens with) or merges when the setting says so. A catalog path that doesn't exist is
+path), opens it and imports. Without `into` it first returns `{running: true, kind: "sources", path}` while discovering sources.
+Poll `library.importLightroom {status: true}` (or `{wait: true}`) for `{asking: true, path, into}` when
+the window opens, or for the automatic merge result when no network sources require review. A catalog path that doesn't exist is
 refused before a new library is made. The engine command `library.importLightroom` always imports into the library
 open now.
 
@@ -156,14 +158,76 @@ a project folder with its catalog inside it therefore keeps its originals linked
 originals stay missing; use LightCraft's missing-photo relinking tools to update their paths.
 
 Original and root folder paths are resolved with the catalog as the document and are looked at
-only when they are on this computer or on the network share the catalog itself is on
+by default only when they are on this computer or on the network share the catalog itself is on
 (`crates/engine/src/doc_path.rs`). An original on another computer (`\\server\share\…`,
 `//server/…`, `file://server/…`), a device path, or one whose folder or file name in the catalog is
 an absolute path is not looked at: the import lists it as missing with a warning and leaves the
 photo and its virtual copies out of the library. To import originals on a share, open the catalog
-from that share. A path that is not a path on this computer (a Windows drive path read on macOS or
+from that share, or explicitly select the share as described below. A path that is not a path on this computer (a Windows drive path read on macOS or
 Linux) is not looked at either and stays catalogued as missing.
+
+**Local catalog, NAS originals.** After choosing the `.lrcat`, LightCraft reads its recorded root
+folders in the background and lists **Network sources in this catalog** in the import window.
+Each distinct UNC server/share (for example `\\nas\photos` or `\\archive\old-photos`) gets a checkbox;
+folders and case/separator variants on the same share are grouped. No folder picker is needed.
+Select the sources to import, then confirm the import. All discovered sources start unchecked;
+unchecked network sources are not imported, including the catalog's own share. The catalog,
+LightCraft library and original photos stay at their existing locations.
+
+Example views using synthetic catalogs: [local sources only](images/lightcraft-import-local-sources.png)
+and [two network sources with one selected](images/lightcraft-import-network-sources.png).
+
+Discovery reads only the catalog and its committed WAL, without probing any originals or contacting
+their servers. The network review also appears with **Always merge** or an in-memory library;
+that preference still skips the destination question for catalogs without network sources. Cancel
+grants nothing. Selections apply only to this import and are not remembered on the next one.
+
+The same explicit option is available to `file.importLightroom`, `library.importLightroom` and
+`library.inspectLightroom`: `networkShares: ["\\\\nas\\photos"]` in JSON. At most 32 UNC folder paths
+are accepted, validated before catalog reads or library creation. The resolver checks the full server
+and share names, not a path prefix: selecting `\\nas\photos` does not permit `\\nas\photos-private` or
+another server. Device paths, non-file URLs, invalid paths and remote `file://host/…` URLs remain refused.
+UNC originals work on Windows; on other platforms, use the NAS's locally mounted paths. An allowed but
+offline original stays catalogued as missing for relinking. An explicit empty array allows no UNC shares,
+including the catalog's own share. Without the option, the original restriction remains: a catalog must not make the app contact a server the user has not chosen.
 
 ## Historical local validation
 
 Validated in a local Linux environment after upstream reconciliation: 47 catalog-focused tests, nine pipeline spot tests, the exact sparse-catalog regression, and all eight `cargo xtask ci` stages passed. The full gate recorded 3,166 passing test executions, zero failures, and 28 ignored tests. An original synthetic sparse catalog with a required image-table page beyond 1 GiB also passed headless application import and selection; its expected missing-original placeholder retained its five-star rating. This snapshot check does not establish native-window coverage or dense-catalog performance.
+
+### Source-review limits and filesystem redirects
+
+Source discovery lists all distinct recorded shares within the SQLite reader's table limits;
+the limit of 32 selected shares applies to the import options, not discovery. A catalog with
+more shares can still import local sources alone or a selected subset. Cancelling discovery is
+checked between WAL chunks, root-table B-tree/overflow pages and rows; an OS read already in
+flight must return before cancellation can be observed. If another dialog was opened during
+discovery, its unconfirmed input is preserved and the import asks the user to retry.
+
+On Windows, UNC originals and sidecars are opened relative to directory handles, one
+validated component at a time. Every component is opened without following its final reparse
+point; metadata is read from that handle and a reparse point is refused before proceeding.
+Ancestors stay open during the walk, and metadata, probing and file bytes use the opened
+object rather than reopening a previously checked path. Native remote-symlink errors are
+refused; there is no fallback that retries the path through Win32 or evaluates a link target.
+Preview and native byte-loading paths use the same entry point after import. Region-orientation
+rereads and Synchronize Folder sidecar reads also revalidate their opens; a prior lookup or cached
+folder listing does not authorize a later read. Image/preview loaders retain one original handle
+for metadata and bytes, including whole-file preview fallback. Source discovery itself still
+performs no original-file I/O.
+
+The grant is to the **logical SMB share**, not to a physical directory on the server or a fixed
+IP address. The selected server and Windows' SMB transport remain trusted to serve that share:
+server-side mounts, storage layout and transport/DFS referrals are not controlled by the
+catalog importer. The importer does not evaluate catalog-driven links to another share.
+A server that itself serves different data under an authorized name is outside this boundary,
+just as it is for an ordinary file read. This distinction also applies to metadata-only checks.
+
+The Windows implementation uses the safe, handle-relative API of `cap-primitives` (pinned to
+4.0.3), with `FILE_FLAG_OPEN_REPARSE_POINT` and no delete sharing during traversal. No unsafe
+code or operating-system policy changes are added to LightCraft. Tests use synthetic local and
+loopback-SMB fixtures; junction tests need no elevation, while symbolic-link tests explicitly
+report a skip if Windows denies link creation.
+
+The import-start response includes `networkShares`, the policy received by the import job
+(`null` for the default document-share policy, an array for an explicit selection).
