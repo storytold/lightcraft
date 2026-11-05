@@ -47,11 +47,12 @@ impl crate::Session {
         // share a result (a view slot showing photo A would otherwise look current for photo B)
         // …and so is the file's content: a file changed on disk (Reload) renders afresh
         let content_key = content_key(&p);
-        let source_key = Hasher128::new().str(&content_key).finish();
-        let content = source_key.0 as u64;
+        let content = Hasher128::new().str(&content_key).finish().0 as u64;
+        let source_key = super::quick::source_identity(&p);
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
+        let lens = super::quick::lens_key(&p);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -59,13 +60,18 @@ impl crate::Session {
             ^ (level as u64) << 60
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15)
             ^ content.rotate_left(17)
-            ^ salt;
+            ^ salt
+            ^ lens.rotate_left(29);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
+            }
+            // (likewise a database lens profile: thumbnails of every other photo keep their keys)
+            if lens != 0 {
+                k.u64(lens);
             }
             (self.media.rendered.clone(), k.finish())
         });
@@ -96,20 +102,31 @@ impl crate::Session {
     pub fn preview_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool, settings: &DevelopSettings) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         job.settings = Arc::new(settings.clone());
-        job.key = settings.hash64() ^ ((max_w as u64) << 40) ^ ((max_h as u64) << 20) ^ (apply_crop as u64) ^ (job.level as u64) << 60;
+        // (the photo's database lens profile stays part of it: a profile looked up again renders afresh)
+        let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
+        job.key = settings.hash64()
+            ^ ((max_w as u64) << 40)
+            ^ ((max_h as u64) << 20)
+            ^ (apply_crop as u64)
+            ^ (job.level as u64) << 60
+            ^ lens.rotate_left(29);
         Some(job)
     }
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+        let mut k = Hasher128::new();
+        k.str(&content_key(p))
             .str("variant")
             .u64(settings.hash64())
             .u64(edge as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        let lens = super::quick::lens_key(p);
+        if lens != 0 {
+            k.u64(lens);
+        }
+        k.finish()
     }
 
     /// A thumbnail of `id` rendered with `settings` instead of its own (profile and preset
@@ -126,7 +143,7 @@ impl crate::Session {
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
-            source_key: Some(Hasher128::new().str(&content_key(&p)).finish()),
+            source_key: Some(super::quick::source_identity(&p)),
             photo: id,
             level,
             source,
@@ -181,7 +198,7 @@ impl crate::Session {
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
-            source_key: Some(Hasher128::new().str(&content_key(&p)).finish()),
+            source_key: Some(super::quick::source_identity(&p)),
             photo: id,
             level,
             source,
@@ -217,8 +234,9 @@ impl crate::Session {
     }
 
     /// Size-independent cache key of a photo's view render (loupe) for its current settings. The
-    /// denoised picture and camera profile in use are part of it (as of the render's own key): a
-    /// view rendered before the photo's AI Denoise result was there is not shown as the denoised one.
+    /// denoised picture, camera profile and lens profile in use are part of it (as of the render's own
+    /// key, [`Self::variant_key`]): a view rendered before the photo's AI Denoise result was there is
+    /// not shown as the denoised one.
     pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
         let salt = self.media.denoise_salt(p.id, &p.develop);
         let mut k = Hasher128::new();
@@ -230,6 +248,10 @@ impl crate::Session {
             .u64(crate::camera_profiles::cache_key());
         if salt != 0 {
             k.u64(salt);
+        }
+        let lens = super::quick::lens_key(p);
+        if lens != 0 {
+            k.u64(lens);
         }
         k.finish()
     }
@@ -421,7 +443,7 @@ impl crate::Session {
     /// has wrong is corrected too ([`Self::learn_as_shot_wb`]).
     pub fn accept(&mut self, r: &RenderResult) {
         if let Some(src) = &r.loaded
-            && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| Hasher128::new().str(&content_key(p)).finish() == key))
+            && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| super::quick::source_identity(p) == key))
         {
             if let Some(info) = &src.info {
                 self.learn_as_shot_wb(r.photo, info);

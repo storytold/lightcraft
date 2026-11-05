@@ -11,7 +11,8 @@
 //! - export downloads the file through the browser.
 //!
 //! `?bench` in the URL runs a scripted first-paint / slider-latency measurement and logs it to the
-//! console (see [`bench`]); `?store=idb` forces the IndexedDB backend, `?store=memory` disables
+//! console (see [`bench`]) on the generated demo photos in an unsaved library (it implies `?store=memory`, so it never edits
+//! the library in browser storage); `?store=idb` forces the IndexedDB backend, `?store=memory` disables
 //! persistence and `?workers=0` renders on the main thread.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
