@@ -83,7 +83,7 @@ fn each_render_request_and_how_it_ended_is_a_debug_line_with_its_file() {
 
     // a file that fails asks nothing while its failure stands, and says so when it is asked again
     let (mut app, work, ctx) = fixture();
-    app.session.media.file_loader = Some(Arc::new(|_, _| Err("simulated decode failure".into())));
+    app.session.media.file_loader = Some(Arc::new(|_, _, _| Err("simulated decode failure".into())));
     let j = job(&mut app, 64);
     app.renderer.request(slot, j, 10);
     let (_, j) = take_job(&work);
