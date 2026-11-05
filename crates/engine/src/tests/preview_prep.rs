@@ -414,6 +414,8 @@ fn a_library_can_keep_its_own_background_settings() {
     s.open_library(root.join("lib"), false).unwrap();
     assert_eq!(s.prep_settings().culling.ahead, 0, "kept with the library");
     assert_eq!(s.prep_settings().ahead(crate::prep::Mode::Culling), 0);
+    assert!(s.execute("prefs.setBackgroundPrep", &json!({"reset": true, "settings": 3})).is_err());
+    assert_eq!(s.prep_settings().culling.ahead, 0, "invalid reset keeps the library setting");
     s.execute("prefs.setBackgroundPrep", &json!({"reset": true})).unwrap();
     assert_eq!(s.prep_settings().culling.ahead, 5, "back to the app-wide settings");
     assert!(s.execute("prefs.setBackgroundPrep", &json!({"settings": 3})).is_err());
