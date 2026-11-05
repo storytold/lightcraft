@@ -287,6 +287,7 @@
   "Delete “{name}”?": "「{name}」を削除しますか？",
   "Updated {name}": "{name} を更新しました",
   "Exported to {path}": "{path} に書き出しました",
+  "Exposure raised by {ev:+.1} to keep brightness": "明るさを保つため露出を {ev:+.1} 上げました",
   "Saved template {name}": "テンプレート {name} を保存しました",
   "Imported {name}": "{name} を読み込みました",
   "Skipped {problem}": "スキップ: {problem}",

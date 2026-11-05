@@ -87,6 +87,7 @@
   "Exported {} point curve preset{}": "Đã xuất {} thiết lập sẵn đường cong điểm{:.0}",
   "Exported {} preset{}": "Đã xuất {} thiết lập sẵn{:.0}",
   "Exporting {} of {total}": "Đang xuất {} / {total}",
+  "Exposure raised by {ev:+.1} to keep brightness": "Đã tăng Phơi sáng {ev:+.1} để giữ độ sáng",
   "Filter bar — {active} active filter{}": "Thanh lọc — {active} bộ lọc đang bật{:.0}",
   "Filtered: {label}": "Đã lọc: {label}",
   "Focus {:.0}": "Tiêu điểm {:.0}",

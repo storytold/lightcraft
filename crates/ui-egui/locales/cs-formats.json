@@ -281,6 +281,7 @@
   "Delete “{name}”?": "Odstranit „{name}“?",
   "Updated {name}": "Aktualizováno: {name}",
   "Exported to {path}": "Exportováno do {path}",
+  "Exposure raised by {ev:+.1} to keep brightness": "Expozice zvýšena o {ev:+.1}, aby se zachovala světlost",
   "Saved template {name}": "Uložena šablona {name}",
   "Imported {name}": "Importováno: {name}",
   "Skipped {problem}": "Přeskočeno: {problem}",

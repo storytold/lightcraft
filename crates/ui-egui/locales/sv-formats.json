@@ -85,6 +85,7 @@
   "Exported {} point curve preset{}": "Exporterade {} punktkurvförinställning{}",
   "Exported {} preset{}": "Exporterade {} förinställning{}",
   "Exporting {} of {total}": "Exporterar {} av {total}",
+  "Exposure raised by {ev:+.1} to keep brightness": "Exponeringen höjd med {ev:+.1} för att behålla ljusheten",
   "Filter bar — {active} active filter{}": "Filterfält — {active} aktiva filter{}",
   "Filtered: {label}": "Filtrerat: {label}",
   "Focus {:.0}": "Fokus {:.0}",

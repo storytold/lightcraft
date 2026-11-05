@@ -87,6 +87,7 @@
   "Exported {} point curve preset{}": "Viety pistekäyrän esiasetuksia: {}{:.0}",
   "Exported {} preset{}": "Viety esiasetuksia: {}{:.0}",
   "Exporting {} of {total}": "Viedään {} / {total}",
+  "Exposure raised by {ev:+.1} to keep brightness": "Valotusta nostettu {ev:+.1}, jotta kirkkaus säilyy",
   "Filter bar — {active} active filter{}": "Suodatinpalkki — aktiivisia suodattimia: {active}{:.0}",
   "Filtered: {label}": "Suodatettu: {label}",
   "Focus {:.0}": "Tarkennus {:.0}",

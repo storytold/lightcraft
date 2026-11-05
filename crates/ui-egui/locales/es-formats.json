@@ -283,6 +283,7 @@
   "Delete “{name}”?": "¿Eliminar «{name}»?",
   "Updated {name}": "Se actualizó {name}",
   "Exported to {path}": "Exportado a {path}",
+  "Exposure raised by {ev:+.1} to keep brightness": "Exposición subida {ev:+.1} para mantener el brillo",
   "Saved template {name}": "Plantilla {name} guardada",
   "Imported {name}": "Se importó {name}",
   "Skipped {problem}": "Omitido: {problem}",

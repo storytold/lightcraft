@@ -275,6 +275,7 @@
   "Delete “{name}”?": "Usunąć „{name}”?",
   "Updated {name}": "Zaktualizowano {name}",
   "Exported to {path}": "Wyeksportowano do {path}",
+  "Exposure raised by {ev:+.1} to keep brightness": "Ekspozycja podniesiona o {ev:+.1}, aby zachować jasność",
   "Saved template {name}": "Zapisano szablon {name}",
   "Imported {name}": "Zaimportowano {name}",
   "Skipped {problem}": "Pominięto: {problem}",

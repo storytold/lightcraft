@@ -51,6 +51,23 @@ fn refit_crop_angle(touched: bool, before: CropGeometry, d: &mut DevelopSettings
 
 const CROP_ANGLE: &str = "crop.angle";
 
+/// The mean colour of the 5×5 neighbourhood at normalized `(x, y)` of the oriented source: how the
+/// pickers (white balance, Channel Mixer Neutral) sample a point.
+fn sample_point(src: &lightcraft_raster::Rgb32f, d: &DevelopSettings, x: f64, y: f64) -> [f32; 3] {
+    let o = src.oriented(d.orientation);
+    let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);
+    let mut acc = [0.0f32; 3];
+    for dy in -2..=2 {
+        for dx in -2..=2 {
+            let c = o.get_clamped(cx + dx, cy + dy);
+            for i in 0..3 {
+                acc[i] += c[i] / 25.0;
+            }
+        }
+    }
+    acc
+}
+
 /// Whether a white balance mode renders its own white instead of the numbers stored on the photo: `As Shot`
 /// renders the source's as-shot white, and on a raw edited in Kelvin a named preset renders its own Kelvin / tint
 /// ([`WbMode::preset`]). Either way a number written into `temp` / `tint` is stored but read by nothing, so the
@@ -525,19 +542,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.wbPick", e))?;
             let info = s.source_info(id);
             let d = s.develop_of(id).unwrap_or_default();
-            // Sample a small neighbourhood in the oriented source.
-            let o = src.oriented(d.orientation);
-            let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);
-            let mut acc = [0.0f32; 3];
-            for dy in -2..=2 {
-                for dx in -2..=2 {
-                    let c = o.get_clamped(cx + dx, cy + dy);
-                    for i in 0..3 {
-                        acc[i] += c[i] / 25.0;
-                    }
-                }
-            }
-            let patch = lightcraft_raster::Rgb32f::filled(4, 4, acc);
+            let patch = lightcraft_raster::Rgb32f::filled(4, 4, sample_point(&src, &d, x, y));
             let (t, tint) = lightcraft_pipeline::auto::auto_wb(&patch, &info);
             edit(s, "develop.wbPick", "White Balance", |d| {
                 lightcraft_pipeline::local::normalize_wb(d, &info);
@@ -548,6 +553,112 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"temp": t, "tint": tint}))
         }),
+        cmd!(
+            "develop.mixerNeutralPick",
+            "Channel Mixer Neutral",
+            [],
+            None,
+            "{x, y} normalized image coords of a neutral point — a mixer scaled down to fit the ±200 % sliders raises Exposure by log2(1/scaled) in the same undo step, to keep the brightness; a pick with the section's eye off switches the section on in that same step; with the Light section off Exposure stays unchanged (lightOff in the result: the raise would not render); the white balance is read as the render does (Color's eye off means its defaults; a mask's local temperature/tint is not modelled: the mixer is global); the brightness kept is what the spot rendered before the pick (without the mixer when its eye was off), before the calibration's shadow tint",
+            has_active,
+            |s, p| {
+                let (x, y) = (f64_req(p, "x", "develop.mixerNeutralPick")?, f64_req(p, "y", "develop.mixerNeutralPick")?);
+                let id = active(s, "develop.mixerNeutralPick")?;
+                // a source that cannot be loaded is an operational failure, not a bad parameter: the
+                // picker's UI shows this message itself and saves its "can't be made neutral" advice
+                // for the maths' refusal (a BadParams answer)
+                let src = s.source_now(id, SourceLevel::Thumb).map_err(crate::EngineError::Other)?;
+                let info = s.source_info(id);
+                let d = s.develop_of(id).unwrap_or_default();
+                // The colour at the mixer's input: the sample with the white balance the photo
+                // actually renders applied — read through `effective()`, because with the Color
+                // section's eye off the render resets the stored white balance to the defaults, and
+                // a pick computed on the stored one would neutralize for a look the photo doesn't
+                // have. The mixer is global, so a mask's local temperature/tint is deliberately not
+                // modelled here: the pick neutralizes for the photo as a whole, not per masked
+                // region. The channel mixer itself keeps its own eye (below): `effective()` never
+                // resets it.
+                let sample = sample_point(&src, &d, x, y);
+                let c = lightcraft_pipeline::local::wb_matrix_for(&info, &d.effective()).map_or(sample, |m| {
+                    [
+                        m[0][0] * sample[0] + m[0][1] * sample[1] + m[0][2] * sample[2],
+                        m[1][0] * sample[0] + m[1][1] * sample[1] + m[1][2] * sample[2],
+                        m[2][0] * sample[0] + m[2][1] * sample[1] + m[2][2] * sample[2],
+                    ]
+                });
+                // The pick means the mixer, even with its section's eye off: instead of computing from
+                // the identity (nine values the render would never show), the same undo step switches
+                // the section on and the pick computes from the stored mixer — the one that will
+                // render once the section is on.
+                let section_off = !d.section_enabled("channelMixer");
+                let current = d.channel_mixer;
+                // the calibration the render will apply after the mixer (the pick keeps the mixer
+                // neutral through it: it is white-preserving), gated by its own section's eye; the
+                // brightness kept is what the spot rendered BEFORE the pick, so with the mixer's own
+                // eye off (the render skipped it) the target is the calibration over the mixer's
+                // input, not over the stored mixer. The calibration's shadow tint comes after the
+                // colour matrix and touches only dark tones; it is not modelled, so a dark spot with
+                // a shadow tint set may keep a little of it.
+                let calib = if d.section_enabled("calibration") {
+                    lightcraft_pipeline::colorops::calibration_matrix(&d.calibration).map(|m| m.map(|r| r.map(f64::from)))
+                } else {
+                    None
+                };
+                let (mixer, scaled) = lightcraft_pipeline::colorops::mixer_neutral(&current, c.map(f64::from), calib, !section_off)
+                    .map_err(|e| bad("develop.mixerNeutralPick", e))?;
+                // A mixer scaled down to fit the ±200 % sliders is a gain lost. Exposure is a linear
+                // gain the render applies before the mixer, so raising it by log2(1/scaled) in the
+                // same undo step keeps the photo's brightness exactly; at Exposure's maximum what's
+                // left of the darkening stays (exposureClamped). With the Light section's eye off
+                // the render ignores Exposure (`effective` resets it), so a raise would be stored
+                // but never show: Exposure stays unchanged (exposureAdded 0, lightOff true — the
+                // photo keeps the darkening) rather than switching Light on for it.
+                let light_off = !d.section_enabled("light");
+                let want = -scaled.log2();
+                let (lo, hi) = controls::find("light.exposure").map_or((-5.0, 5.0), |spec| (spec.min, spec.max));
+                let now = d.light.exposure;
+                let raised = if scaled < 1.0 && !light_off { (now + want).clamp(lo, hi) } else { now };
+                let exposure_added = raised - now;
+                let clamped = want > 0.0 && !light_off && raised < now + want - 1e-9;
+                edit(s, "develop.mixerNeutralPick", "Channel Mixer Neutral", |d| {
+                    if section_off {
+                        d.set_section_enabled("channelMixer", true);
+                    }
+                    d.channel_mixer = mixer;
+                    if scaled < 1.0 && !light_off {
+                        d.light.exposure = raised;
+                    }
+                    Ok(())
+                })?;
+                Ok(json!({
+                    "scaled": scaled,
+                    "exposureAdded": exposure_added,
+                    "exposureClamped": clamped,
+                    "lightOff": light_off && scaled < 1.0,
+                    "mixer": mixer,
+                }))
+            }
+        ),
+        cmd!(
+            "develop.mixerSwapRB",
+            "Swap Red and Blue",
+            [],
+            None,
+            "{} — swaps the mixer's red and blue output rows (the infrared swap; twice is the identity); with the section's eye off it switches the section on in the same step",
+            has_active,
+            |s, _| {
+                edit(s, "develop.mixerSwapRB", "Swap Red and Blue", |d| {
+                    // like the pick: a swap the render ignores (the section's eye off) would look
+                    // like a dead button, so the same undo step switches the section on
+                    if !d.section_enabled("channelMixer") {
+                        d.set_section_enabled("channelMixer", true);
+                    }
+                    std::mem::swap(&mut d.channel_mixer.red, &mut d.channel_mixer.blue);
+                    Ok(())
+                })?;
+                let d = s.develop_of(active(s, "develop.mixerSwapRB")?).unwrap_or_default();
+                Ok(json!({"mixer": d.channel_mixer}))
+            }
+        ),
         cmd!("develop.treatment", "Black & White", ["Photo"], Some("V"), "{bw?: bool} (toggles when omitted)", has_active, |s, p| {
             edit(s, "develop.treatment", "Treatment", |d| {
                 let bw = p.get("bw").and_then(Value::as_bool).unwrap_or(d.treatment != Treatment::Bw);
@@ -1158,7 +1269,9 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "preset.update";
                 let id = active(s, c)?;
-                let current = s.develop_of(id).unwrap_or_default().to_json();
+                // the mixer materialized even as the identity: a preset whose keys name it then keeps
+                // the key, and updating from an untouched photo resets a mixed target as it should
+                let current = s.develop_of(id).unwrap_or_default().to_json_with_mixer();
                 let groups = groups_param(p, c)?;
                 let pr = user_preset(s, p, c)?;
                 pr.settings = match groups {

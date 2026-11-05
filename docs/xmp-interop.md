@@ -197,7 +197,8 @@ References are resolved again whenever profiles are imported or deleted, so a pa
 either order. The look's embedded `Parameters` are not read.
 
 **Not mapped:** camera profiles (`CameraProfile`; we have our own profile set), red eye, lens blur,
-process-version 2010 field names, and AI features. Local adjustments and spot removal are read as described below.
+process-version 2010 field names, AI features, and the RGB channel mixer (Lightroom has none; it is kept in LightCraft's
+own settings). Local adjustments and spot removal are read as described below.
 
 ## Spot removal
 

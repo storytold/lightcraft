@@ -283,6 +283,7 @@
   "Delete “{name}”?": "Удалить «{name}»?",
   "Updated {name}": "Обновлено: {name}",
   "Exported to {path}": "Экспортировано в {path}",
+  "Exposure raised by {ev:+.1} to keep brightness": "Экспозиция поднята на {ev:+.1}, чтобы сохранить яркость",
   "Saved template {name}": "Шаблон {name} сохранён",
   "Imported {name}": "Импортировано: {name}",
   "Skipped {problem}": "Пропущено: {problem}",

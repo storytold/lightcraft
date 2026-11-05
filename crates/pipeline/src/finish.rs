@@ -237,7 +237,8 @@ impl FinishParams {
         let peak = s.hdr.peak();
         FinishParams {
             peak,
-            calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
+            // the channel mixer and the calibration primaries, composed (each only when its section is on)
+            calib: crate::colorops::scene_colour_matrix(s),
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),

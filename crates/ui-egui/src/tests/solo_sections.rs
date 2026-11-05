@@ -83,6 +83,9 @@ fn option_click_opens_just_that_section() {
     // agents do the same with the section's command (Calibration has one, though not in the menu)
     exec(&mut h, "section.calibration", json!({"solo": true}));
     assert_eq!(h.app.ui.open_sections, ["calibration"]);
+    // the Channel Mixer section (above Calibration in the panel) has one too
+    exec(&mut h, "section.channelMixer", json!({"solo": true}));
+    assert_eq!(h.app.ui.open_sections, ["channelMixer"]);
 }
 
 #[test]
