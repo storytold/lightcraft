@@ -471,7 +471,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let d = s.develop_of(id).unwrap_or_default();
                 let a = lightcraft_pipeline::auto::auto_tone(&src, &info, &d);
                 if first.is_none() {
-                    first = Some(serde_json::to_value(&a).unwrap_or_default());
+                    first = Some(serde_json::to_value(a).unwrap_or_default());
                 }
                 let mut nd = (*d).clone();
                 nd.light.exposure = a.exposure;
