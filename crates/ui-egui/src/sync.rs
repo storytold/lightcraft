@@ -315,6 +315,28 @@ impl Drop for SyncRun {
     }
 }
 
+/// Tests: a synchronize that stays running while the returned sender lives, so a drop that is
+/// released when another barrier goes meets a running Synchronize Folder deterministically
+/// (without waiting for a real folder's walk). The caller clears `sync_run` when done.
+#[cfg(test)]
+pub(crate) fn stall_run(app: &mut LightcraftApp, name: &str) -> Box<dyn std::any::Any> {
+    let progress = Arc::new(SyncProgress::default());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let guard = app.session.activity.start("sync", "Synchronizing folder", Cancel::Flag(progress.files.cancel.clone()));
+    guard.detail(name);
+    app.sync_run = Some(SyncRun {
+        name: name.to_string(),
+        progress,
+        crashed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        rx,
+        commit: None,
+        stopping: false,
+        not_saved: Vec::new(),
+        guard,
+    });
+    Box::new(tx)
+}
+
 /// Commit what the worker readied (called every frame); when it is done, one undo step and a
 /// word on what happened.
 pub fn poll_run(app: &mut LightcraftApp, ctx: &egui::Context) {
