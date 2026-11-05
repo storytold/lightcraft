@@ -588,7 +588,7 @@ mod in_the_loupe {
     // Given soft proofing against an output-device profile (rendered on the CPU even with a GPU), a
     // drag drafts small (#330); proofs into an output space run on the GPU like any render
     #[test]
-    fn a_soft_proofed_drag_drafts_small() {
+    fn a_drag_soft_proofed_to_a_device_profile_drafts_small() {
         // the GPU device up front (the loupe never waits for it): with one, this is the case where
         // the GPU is there and the render still goes to the CPU
         let _ = lightcraft_engine::gpu::available();
@@ -599,6 +599,24 @@ mod in_the_loupe {
         h.settle(SETTLE);
         let (main, small) = drag_exposure(&mut h);
         assert!(main <= small, "the draft is {main} px, a small one at most {small}");
+    }
+
+    // Given soft proofing into a colour space (the GPU renders it), a drag drafts as it does
+    // without the proof: at full size where the GPU draws the view (review of PR #1065: it
+    // drafted small, as if the proof went to the CPU)
+    #[test]
+    fn a_drag_soft_proofed_into_a_colour_space_drafts_full_size_on_the_gpu() {
+        let gpu = lightcraft_engine::gpu::available();
+        let (_fx, mut h, _) = detail();
+        assert_eq!(h.app.ui.proof.profile, 0, "a colour space, no device profile");
+        h.app.ui.soft_proof = true;
+        h.settle(SETTLE);
+        let (main, small) = drag_exposure(&mut h);
+        if !gpu {
+            lightcraft_testkit::skip!(Gpu, "no GPU: every drag drafts small");
+            return;
+        }
+        assert!(main > small, "the draft is {main} px, a small one would be at most {small}");
     }
 
     fn tile(h: &Headless, slot: Slot) -> Option<(usize, usize)> {
@@ -1211,7 +1229,7 @@ mod in_the_loupe {
             .iter()
             .enumerate()
             .filter_map(|(i, c)| match &c.shape {
-                egui::epaint::Shape::Mesh(m) if m.texture_id == tex.tex.id() => Some((i, c.clip_rect, m.calc_bounds())),
+                egui::epaint::Shape::Mesh(m) if m.texture_id == tex.id() => Some((i, c.clip_rect, m.calc_bounds())),
                 _ => None,
             })
             .collect()
