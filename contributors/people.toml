@@ -68,6 +68,10 @@ sync_github_name = true
 [people.ronibalthazar]
 sync_github_name = true
 
+[people.esli1283]
+real_name = "Aaron Lopez"
+sync_github_name = false
+
 [people.dotCooCoo]
 real_name = "Robert Lee"
 sync_github_name = true
