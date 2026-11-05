@@ -1064,6 +1064,10 @@
   "Join the ArtCraft Discord": "Gå med i ArtCraft på Discord",
   "Join the ArtCraft Discord…": "Gå med i ArtCraft på Discord…",
   "JPEG (Large)": "JPEG (stor)",
+  "Instagram Feed": "Instagram-flöde",
+  "Instagram Story / Reel": "Instagram-story / Reel",
+  "Web / Portfolio": "Webb / Portfölj",
+  "Full Resolution Master": "Master i full upplösning",
   "JPEG (Small)": "JPEG (liten)",
   "JPEG with the same name (`IMG_0001.CR3` + `IMG_0001.JPG`) no longer share one sidecar: the raw keeps `IMG_0001.xmp`,": "JPEG med samma namn (`IMG_0001.CR3` + `IMG_0001.JPG`) delar inte längre en sidofil: raw-filen behåller `IMG_0001.xmp`,",
   "Keep in Local": "Behåll i Lokalt",
@@ -2459,5 +2463,6 @@
   "The Tags button lists placeholders for the template, such as {date} or {seq}. Each file is renamed on disk along with its XMP sidecar; a name that is taken gets -1, -2…": "Knappen Taggar visar platshållare för mallen, till exempel {date} eller {seq}. Varje fil byter namn på disken tillsammans med sin XMP-sidofil; ett namn som redan finns får -1, -2…",
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
-  "Bottom bar": "Nedre fältet"
+  "Bottom bar": "Nedre fältet",
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
 }
