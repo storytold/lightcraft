@@ -627,6 +627,49 @@ fn regions_drawn_on_the_photo_as_stored_land_on_the_upright_photo() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Review of #2857: a photo whose Exif states no orientation, but whose XMP says `tiff:Orientation=6`, is shown as
+/// stored (LightCraft turns by the Exif alone), so boxes drawn on its stored frame are right as written: at import
+/// and when the file's metadata is read again, which must agree.
+#[test]
+fn an_orientation_only_the_xmp_states_leaves_stored_frame_regions_as_written() {
+    let src = temp_dir("regions-xmp-orientation");
+    let file = src.join("p.jpg");
+    let packet = STORED_FRAME_REGIONS.replace(r#"rdf:about="""#, r#"rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6""#);
+    let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
+    // an Exif that states the size as stored (32 × 24, as cameras do) and no orientation
+    let exif = {
+        use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+        let mut sub = IfdBuilder::new();
+        sub.set(t::PIXEL_X_DIMENSION, Value::Long(vec![32]));
+        sub.set(t::PIXEL_Y_DIMENSION, Value::Long(vec![24]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::EXIF_IFD, sub);
+        [b"Exif\0\0".as_slice(), &TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()].concat()
+    };
+    let meta = lightcraft_codecs::EncodeMeta { exif: Some(&exif), xmp: Some(&packet), ..Default::default() };
+    std::fs::write(&file, lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap())
+        .unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let boxes = |s: &Session, when: &str| {
+        let p = s.catalog.photo(id).unwrap();
+        assert_eq!((p.width, p.height), (32, 24), "{when}: shown as stored");
+        assert_eq!(p.meta.regions.len(), 1, "{when}");
+        let r = p.meta.regions[0].rect;
+        [r.x0, r.y0, r.x1, r.y1]
+    };
+    let want = [0.2, 0.325, 0.3, 0.475];
+    let close = |got: [f64; 4]| got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-9);
+    let imported = boxes(&s, "imported");
+    assert!(close(imported), "imported: the box was turned by an orientation the Exif doesn't state: {imported:?}");
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["failed"], json!([]), "{read}");
+    let again = boxes(&s, "read again");
+    assert!(close(again), "read again: {again:?}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// A raw LightCraft can't decode: a TIFF whose first IFD holds Exif orientation 6, a 40 × 30 JPEG and `packet`.
 fn turned_preview_only_raw(packet: &str) -> Vec<u8> {
     let img = lightcraft_raster::Rgba8::from_fn(40, 30, |x, y| [(x * 6) as u8, (y * 8) as u8, 90, 255]);

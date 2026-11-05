@@ -321,6 +321,9 @@ pub fn try_extract(bytes: &[u8]) -> Result<Metadata, ExtractError> {
 fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<XmpData>) -> Metadata {
     // the size the Exif states: a size only the XMP states may be the upright one, so it can't tell how the photo is stored
     let stored = m.width.zip(m.height);
+    // and the orientation the Exif states: the photo is displayed by that alone, so an orientation only the XMP
+    // states ([`Metadata::fill_missing`] reports it below) can't tell how the photo is stored either
+    let exif_orientation = e.exif.as_deref().and_then(exif::ifd0_orientation);
     if let Some(i) = e.iptc.as_deref() {
         m.fill_missing(&parse_iptc(i));
     }
@@ -328,7 +331,7 @@ fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<XmpData>) -> Metad
         m.overlay_user_fields(&xmp.metadata);
         m.fill_missing(&xmp.metadata);
         // boxes another app drew on the photo as stored go where the upright photo has them (#2674)
-        if let (Some(drawn_on), Some(orientation), Some(stored)) = (xmp.regions_drawn_on(), m.orientation, stored) {
+        if let (Some(drawn_on), Some(orientation), Some(stored)) = (xmp.regions_drawn_on(), exif_orientation, stored) {
             upright_regions(&mut m.regions, drawn_on, orientation, stored);
         }
     }
@@ -601,6 +604,47 @@ mod tests {
         ifd0.set(lightcraft_tiff::tags::XMP, lightcraft_tiff::Value::Byte(packet.into_bytes()));
         let m = extract(&lightcraft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
         assert_eq!((m.orientation, m.width, m.height), (Some(Orientation::Rotate90), Some(4000), Some(6000)));
+        assert!(near(m.regions[0].rect, DRAWN), "TIFF: {:?}", m.regions[0].rect);
+    }
+
+    /// A photo whose Exif has a size but no orientation, and whose XMP says `tiff:Orientation=6`: LightCraft
+    /// displays it by the Exif alone, so it stays as stored, and boxes drawn on that stored frame are right as
+    /// written. Turning them by an orientation only the XMP states put them where the photo isn't (review of #2857).
+    #[test]
+    fn an_orientation_only_the_xmp_states_turns_no_regions() {
+        // 6000 × 4000 in the Exif, and no orientation
+        let size_ifd = || {
+            let mut sub = lightcraft_tiff::IfdBuilder::new();
+            sub.set(lightcraft_tiff::tags::PIXEL_X_DIMENSION, lightcraft_tiff::Value::Long(vec![6000]));
+            sub.set(lightcraft_tiff::tags::PIXEL_Y_DIMENSION, lightcraft_tiff::Value::Long(vec![4000]));
+            sub
+        };
+        let mut exif_ifd0 = lightcraft_tiff::IfdBuilder::new();
+        exif_ifd0.set_child(lightcraft_tiff::tags::EXIF_IFD, size_ifd());
+        let exif = lightcraft_tiff::TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[exif_ifd0]).unwrap();
+        let packet = regions_packet(6000, 4000, "")
+            .replace(r#"rdf:about="""#, r#"rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6""#);
+        let mut j = vec![0xff, 0xd8];
+        let mut seg = |payload: Vec<u8>| {
+            j.extend([0xff, 0xe1]);
+            j.extend(u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+            j.extend(payload);
+        };
+        seg([b"Exif\0\0".as_slice(), &exif].concat());
+        seg([b"http://ns.adobe.com/xap/1.0/\0".as_slice(), packet.as_bytes()].concat());
+        j.extend([0xff, 0xd9]);
+        let m = extract(&j);
+        assert_eq!((m.width, m.height), (Some(6000), Some(4000)));
+        assert_eq!(m.orientation, Some(Orientation::Rotate90), "the XMP's orientation is still reported");
+        assert_eq!(m.regions.len(), 1);
+        assert!(near(m.regions[0].rect, DRAWN), "turned by an orientation the Exif doesn't state: {:?}", m.regions[0].rect);
+        assert_eq!(try_extract(&j).unwrap().regions, m.regions);
+        // a TIFF-based file: the first IFD has no orientation, its XMP (tag 700) has
+        let mut ifd0 = lightcraft_tiff::IfdBuilder::new();
+        ifd0.set(lightcraft_tiff::tags::XMP, lightcraft_tiff::Value::Byte(packet.into_bytes()));
+        ifd0.set_child(lightcraft_tiff::tags::EXIF_IFD, size_ifd());
+        let m = extract(&lightcraft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
+        assert_eq!(m.orientation, Some(Orientation::Rotate90));
         assert!(near(m.regions[0].rect, DRAWN), "TIFF: {:?}", m.regions[0].rect);
     }
 }
