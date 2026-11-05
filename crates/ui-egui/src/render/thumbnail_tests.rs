@@ -1624,7 +1624,7 @@ fn curve_input_native_worker_keeps_request_identity_through_failure_and_recovery
     let (entered, started) = mpsc::channel();
     let (release, held) = mpsc::channel();
     let held = Mutex::new(held);
-    app.session.media.file_loader = Some(Arc::new(move |path, _| {
+    app.session.media.file_loader = Some(Arc::new(move |path, _, _| {
         entered.send(path.to_string()).unwrap();
         held.lock().unwrap().recv_timeout(timeout).unwrap();
         Err("controlled curve input failure".into())
@@ -1659,7 +1659,7 @@ fn curve_input_native_worker_keeps_request_identity_through_failure_and_recovery
     assert!(!app.renderer.requests.contains_key(&slot));
     assert!(!app.renderer.is_pending(slot));
     app.session.media.file_loader =
-        Some(Arc::new(|_, _| Ok((lightcraft_raster::Rgb32f::from_fn(32, 16, |x, _| [0.02 + x as f32 / 100.0; 3]), Default::default()))));
+        Some(Arc::new(|_, _, _| Ok((lightcraft_raster::Rgb32f::from_fn(32, 16, |x, _| [0.02 + x as f32 / 100.0; 3]), Default::default()))));
     let key = ask(&mut app);
     assert!(app.renderer.pool.wait(timeout));
     app.renderer.poll(&ctx, &mut app.session);
@@ -1696,9 +1696,9 @@ fn curve_input_relink_retries_current_file_with_retained_content_hash() {
     // loader across relinking so recovery depends on the new job's source.
     let (loaded, paths) = std::sync::mpsc::channel();
     let loader = session.media.file_loader.clone().unwrap();
-    session.media.file_loader = Some(Arc::new(move |path, edge| {
+    session.media.file_loader = Some(Arc::new(move |path, edge, profile| {
         loaded.send(path.to_owned()).unwrap();
-        loader(path, edge)
+        loader(path, edge, profile)
     }));
     session.media.reduced_loader = None;
     let mut app = crate::LightcraftApp::new(session, crate::Services::default());

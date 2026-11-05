@@ -1160,6 +1160,21 @@ impl Renderer {
         finished
     }
 
+    /// Keep the result of a histogram-only slot ([`Slot::CurveHistogram`], [`Slot::HdrHistogram`]);
+    /// whether it changed anything.
+    fn keep_histogram(&mut self, slot: Slot, photo: PhotoId, key: u64, histogram: Histogram) -> bool {
+        if slot == Slot::CurveHistogram {
+            self.curve_histogram = Some((photo, key, histogram));
+            return true;
+        }
+        // (an HDR histogram slot whose render has no HDR histogram changes nothing)
+        let hdr = histogram.hdr.is_some();
+        if hdr {
+            self.live_hdr_histogram = Some((photo, key, histogram));
+        }
+        hdr
+    }
+
     /// Turn finished jobs into textures. Returns true if anything changed.
     fn collect(&mut self, ctx: &egui::Context, session: &mut Session, inline_ms: f64) -> bool {
         let finished = self.take_finished(inline_ms);
@@ -1303,16 +1318,8 @@ impl Renderer {
             if matches!(slot, Slot::Prefetch(_)) {
                 continue;
             }
-            if slot == Slot::CurveHistogram {
-                self.curve_histogram = Some((r.photo, r.key, rendered.histogram));
-                changed = true;
-                continue;
-            }
-            if slot == Slot::HdrHistogram {
-                if rendered.histogram.hdr.is_some() {
-                    self.live_hdr_histogram = Some((r.photo, r.key, rendered.histogram));
-                    changed = true;
-                }
+            if matches!(slot, Slot::CurveHistogram | Slot::HdrHistogram) {
+                changed |= self.keep_histogram(slot, r.photo, r.key, rendered.histogram);
                 continue;
             }
             if let Slot::ThumbQuick(id) = slot {

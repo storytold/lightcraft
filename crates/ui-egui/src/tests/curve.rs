@@ -610,7 +610,7 @@ fn curve_input_open() -> Headless {
         let photo = Photo::new(PhotoId(id), Source::File { path: path.clone() }, &path, "PNG", 64, 48, "2026-10-22");
         session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
     }
-    session.media.file_loader = Some(Arc::new(move |path, edge| {
+    session.media.file_loader = Some(Arc::new(move |path, edge, _| {
         let bytes = files.get(path).ok_or_else(|| format!("unknown curve fixture: {path}"))?;
         lightcraft_engine::files::load_bytes(bytes, edge)
     }));
