@@ -278,13 +278,13 @@ pub struct LightOps {
 /// The fits of Contrast and Blacks, in the order they apply.
 pub const FITS: [&Fit; 2] = [&fitted::CONTRAST, &fitted::BLACKS];
 
-/// Whether `s` renders `info` with the V4 operators: process V4 and a raw with its camera's tone
+/// Whether `s` renders `info` with the V4 operators: process V4 or later and a raw with its camera's tone
 /// curve (other sources keep the tone map's own Contrast and Blacks).
 pub fn applies(s: &DevelopSettings, info: &SourceInfo) -> bool {
     let camera_look = info.raw && info.camera_tone.is_some();
     match s.process.process() {
         Process::V1 | Process::V2 | Process::V3 => false,
-        Process::V4 => camera_look,
+        Process::V4 | Process::V5 => camera_look,
     }
 }
 
