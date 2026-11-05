@@ -537,6 +537,14 @@ impl Session {
     /// Open `stores`; the new library takes `lock` once nothing can fail any more.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
+        // a people.json write still failing (during a rename, say) is tried once more: the next library's file would
+        // replace what it holds, so the current library stays open, as when it is closed; one that can never be
+        // written this session (unreadable at opening) does not hold the library hostage
+        if self.library.as_ref().is_some_and(|l| l.people_error.is_some() && !l.blocked.contains(&"people.json"))
+            && let Err(e) = self.save_people()
+        {
+            return Err(EngineError::NotSaved(format!("the open library's people choices aren't on disk yet, so it stays open: {e}")));
+        }
         // the current library may be these same files: let its background snapshot land first, and
         // what its log's thread was handed reach the file before the new journal reads it. When
         // that can't be written, the open fails and the current library stays open with what its
