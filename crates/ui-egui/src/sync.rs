@@ -51,10 +51,16 @@ pub fn open(app: &mut LightcraftApp, path: &str, name: &str, disk: bool) -> Resu
     let progress = Arc::new(SyncProgress::default());
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
-    let job = move || {
+    let job = move |input| {
         let _ = tx.send(scan_with(input, &p));
     };
-    crate::tasks::worker("lc-sync-scan", job)?;
+    if let Err((e, input)) = crate::tasks::worker_with("lc-sync-scan", input, job) {
+        // the probes of earlier scans the scan took go back to the session
+        if let Some(mut input) = input {
+            app.session.import_probes.extend(input.take_probes());
+        }
+        return Err(e);
+    }
     let guard = app.session.activity.start("sync", "Looking for changes", Cancel::Flag(progress.files.cancel.clone()));
     guard.detail(name);
     app.sync = Some(SyncTask { path: path.to_string(), name: name.to_string(), progress, rx, guard });

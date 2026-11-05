@@ -300,6 +300,22 @@ fn a_synchronize_whose_worker_cannot_start_scans_again_keeping_the_choices() {
     assert_eq!(in_library(&h), vec!["a.png", "c.png"], "c came in, the missing b went");
 }
 
+/// The scan's thread can't start: Synchronize Folder is an error that opens no dialog and keeps the
+/// import probe cache the scan took, so the next scan doesn't probe unchanged files again (#3071).
+#[test]
+fn a_synchronize_scan_whose_worker_cannot_start_keeps_the_probe_cache() {
+    let dir = Scratch::new("scan-refused");
+    let mut h = changed_folder(&dir);
+    let kept = dir.path("trip/a.png");
+    h.app.session.import_probes.insert(kept.clone(), lightcraft_engine::media::ProbeInfo::default());
+    crate::tasks::refused::next(1);
+    let r = crate::sync::open(&mut h.app, &dir.path("trip"), "trip", false);
+    assert!(r.as_ref().is_err_and(|e| e.contains("could not start")), "{r:?}");
+    assert!(h.app.sync.is_none());
+    assert!(h.app.ui.dialog.is_none(), "{:?}", h.app.ui.dialog);
+    assert!(h.app.session.import_probes.contains_key(&kept), "the cache went back to the session");
+}
+
 #[test]
 fn a_stopped_synchronize_says_it_was_stopped_and_stays_at_most_one_step() {
     let dir = Scratch::new("stop");

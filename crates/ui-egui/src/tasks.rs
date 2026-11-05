@@ -117,6 +117,24 @@ pub(crate) fn worker(name: &str, job: impl FnOnce() + Send + 'static) -> Result<
     }
 }
 
+/// [`worker`] for a job that works on `input`, which it gets once its thread runs. When the thread
+/// can't start, `input` comes back with the error (`None` only if the job somehow ran), so what it
+/// took from the session (a scan's probe cache) can go back.
+#[allow(clippy::type_complexity)]
+pub(crate) fn worker_with<T: Send + 'static>(name: &str, input: T, job: impl FnOnce(T) + Send + 'static) -> Result<(), (String, Option<T>)> {
+    use std::sync::{Arc, Mutex, PoisonError};
+    let slot = Arc::new(Mutex::new(Some(input)));
+    let theirs = Arc::clone(&slot);
+    let started = worker(name, move || {
+        let input = theirs.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(input) = input {
+            job(input);
+        }
+    });
+    // (a job that didn't start was dropped unrun: `input` is still in the slot)
+    started.map_err(|e| (e, slot.lock().unwrap_or_else(PoisonError::into_inner).take()))
+}
+
 /// Apply finished tasks (called every frame).
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.tasks.repaint = Some(ctx.clone());
