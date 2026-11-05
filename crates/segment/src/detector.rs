@@ -41,6 +41,9 @@ pub struct Output {
     pub boxes: Vec<[f32; 4]>,
     /// The text features `[1, 32, 256]` (tests).
     pub text: Tensor,
+    /// Semantic logits `[288, 288]` flattened: everything the prompt names, one mask without
+    /// boundaries between instances.
+    pub semantic: Vec<f32>,
 }
 
 struct EncoderLayer {
@@ -91,6 +94,7 @@ pub struct Detector {
     pixel_convs: Vec<Conv2d>,
     pixel_norms: Vec<GroupNorm>,
     instance_proj: Conv2d,
+    semantic_proj: Conv2d,
     mask_embedder: Vec<Linear>,
 }
 
@@ -155,6 +159,7 @@ impl Detector {
             pixel_convs: (0..3).map(|i| Ok(candle_nn::conv2d(HIDDEN, HIDDEN, 3, conv3, p.pp(format!("conv_layers.{i}")))?)).collect::<Result<_>>()?,
             pixel_norms: (0..3).map(|i| Ok(candle_nn::group_norm(8, HIDDEN, 1e-5, p.pp(format!("norms.{i}")))?)).collect::<Result<_>>()?,
             instance_proj: candle_nn::conv2d(HIDDEN, HIDDEN, 1, Conv2dConfig::default(), m.pp("instance_projection"))?,
+            semantic_proj: candle_nn::conv2d(HIDDEN, 1, 1, Conv2dConfig::default(), m.pp("semantic_projection"))?,
             mask_embedder: (0..3).map(|i| linear(HIDDEN, HIDDEN, m.pp(format!("mask_embedder.layers.{i}")))).collect::<Result<_>>()?,
         })
     }
@@ -268,6 +273,7 @@ impl Detector {
             prev = norm.forward(&conv.forward(&prev)?)?.relu()?;
         }
         let inst = self.instance_proj.forward(&prev)?; // [1, 256, 288, 288]
+        let semantic = to_vec(&self.semantic_proj.forward(&prev)?)?;
         let (_, c, mh, mw) = inst.dims4()?;
         let mut e = queries.clone();
         for (i, l) in self.mask_embedder.iter().enumerate() {
@@ -285,24 +291,98 @@ impl Detector {
             presence: to_vec(&presence)?.first().copied().unwrap_or(-10.0),
             boxes: bv.as_chunks::<4>().0.to_vec(),
             text,
+            semantic,
         })
     }
 }
 
+/// How far below 0 the strongest instance may be where it still takes its share of the semantic mask.
+const NEAR: f32 = 4.0;
+
+/// Gives each of `instances` its share of `semantic` (everything the prompt names, one mask): where an
+/// instance is the strongest and near (above −[`NEAR`]), the semantic logits replace its own (it keeps
+/// its own where it is surer of itself). An instance's own logits stay close to 0 even well inside it
+/// (a person comes out about 90 % selected) and both fade where two instances touch, which leaves a gap
+/// between them; the semantic mask is surer inside and runs on across that boundary. Cells far from
+/// every instance keep their logits, so things no instance found don't join one.
+pub fn share(instances: &mut [Vec<f32>], semantic: &[f32]) {
+    let n = semantic.len();
+    if instances.is_empty() || instances.iter().any(|l| l.len() != n) {
+        return;
+    }
+    for (i, s) in semantic.iter().enumerate() {
+        let Some((k, best)) = instances.iter().enumerate().map(|(k, l)| (k, l[i])).max_by(|a, b| a.1.total_cmp(&b.1)) else { return };
+        if best > -NEAR {
+            let l = &mut instances[k][i];
+            *l = if *l > 0.0 { l.max(*s) } else { *s };
+        }
+    }
+}
+
 /// The instances of `out` scoring above `threshold` (sigmoid(logit) × sigmoid(presence)),
-/// merged into one mask (the per-pixel maximum of their probabilities, as logits).
+/// merged into one mask: each its share of the semantic mask ([`share`]), then the per-pixel
+/// maximum of their probabilities, as logits.
 pub fn merge(out: &Output, threshold: f32) -> Option<Prediction> {
     let s = |x: f32| 1.0 / (1.0 + (-x).exp());
     let presence = s(out.presence);
     let keep: Vec<(usize, f32)> = out.logits.iter().enumerate().map(|(i, l)| (i, s(*l) * presence)).filter(|(_, p)| *p > threshold).collect();
     let best = keep.iter().map(|k| k.1).fold(0f32, f32::max);
-    let mut merged: Option<Vec<f32>> = None;
-    for (i, _) in &keep {
-        let m = out.masks.i(*i).ok().and_then(|t| to_vec(&t).ok())?;
-        merged = Some(match merged {
-            None => m,
-            Some(acc) => acc.iter().zip(&m).map(|(a, b)| a.max(*b)).collect(),
-        });
-    }
+    let mut masks: Vec<Vec<f32>> = keep.iter().map(|(i, _)| out.masks.i(*i).ok().and_then(|t| to_vec(&t).ok())).collect::<Option<_>>()?;
+    share(&mut masks, &out.semantic);
+    let merged = masks.into_iter().reduce(|acc, m| acc.iter().zip(&m).map(|(a, b)| a.max(*b)).collect());
     merged.map(|logits| Prediction { logits, score: best })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two people side by side on a row of cells, each only weakly sure of themself and both fading where
+    /// they touch; the semantic mask is sure of both and runs across. Each takes the semantic logits where
+    /// it is the strongest instance, a third region nobody is near keeps its own.
+    #[test]
+    fn instances_share_the_semantic_mask() {
+        // cells: a (0..3), the seam (3), b (4..7), floor beside b (7), someone neither found (8), background
+        let a = vec![2.0, 2.5, 1.0, -0.5, -3.0, -5.0, -6.0, -3.5, -9.0, -9.0];
+        let b = vec![-6.0, -5.0, -3.0, -1.0, 1.0, 2.5, 2.0, -3.0, -9.0, -9.0];
+        let mut inst = vec![a, b];
+        let semantic = [5.0, 6.0, 5.0, 4.0, 5.0, 6.0, 5.0, -7.0, 5.0, -8.0];
+        share(&mut inst, &semantic);
+        assert_eq!(inst[0][..4], [5.0, 6.0, 5.0, 4.0], "a's share, the seam included (a is the stronger there)");
+        assert_eq!(inst[1][4..7], [5.0, 6.0, 5.0], "b's share");
+        assert_eq!(inst[0][4..7], [-3.0, -5.0, -6.0], "a stays out of b");
+        assert_eq!(inst[1][7], -7.0, "the floor near b is surely background");
+        assert_eq!([inst[0][8], inst[1][8]], [-9.0, -9.0], "someone neither instance is near joins neither");
+        // an instance surer than the semantic mask keeps its own logits
+        let mut sure = vec![vec![9.0, 1.0]];
+        share(&mut sure, &[5.0, 5.0]);
+        assert_eq!(sure[0], [9.0, 5.0]);
+        // mismatched sizes (no semantic mask) leave the instances alone
+        let mut none = vec![vec![1.0, 2.0]];
+        share(&mut none, &[]);
+        assert_eq!(none[0], [1.0, 2.0]);
+    }
+
+    /// Describe: the instances above the threshold, each with its share of the semantic mask, merged;
+    /// a query below the threshold adds nothing, and nothing found is `None`.
+    #[test]
+    fn describe_merges_the_shares_of_what_it_found() {
+        // two instances, weak inside and both fading where they touch (cell 2); a third query scores low
+        let masks = [[2.0f32, 1.0, -0.5, -3.0, -6.0], [-6.0, -3.0, -1.0, 1.0, 2.0], [-9.0, -9.0, -9.0, -9.0, 3.0]];
+        let output = |logits: [f32; 3], semantic: &[f32]| Output {
+            masks: Tensor::from_vec(masks.concat(), (3, 1, 5), &Device::Cpu).unwrap(),
+            logits: logits.to_vec(),
+            presence: 8.0,
+            boxes: vec![[0.0; 4]; 3],
+            text: Tensor::zeros(1, candle_core::DType::F32, &Device::Cpu).unwrap(),
+            semantic: semantic.to_vec(),
+        };
+        let semantic = [5.0, 6.0, 4.0, 6.0, 5.0];
+        let merged = merge(&output([4.0, 4.0, -6.0], &semantic), 0.5).unwrap();
+        assert_eq!(merged.logits, semantic, "sure inside both and across where they touch");
+        // without a semantic mask: the per-pixel maximum of the instances, as before
+        let plain = merge(&output([4.0, 4.0, -6.0], &[]), 0.5).unwrap();
+        assert_eq!(plain.logits, [2.0, 1.0, -0.5, 1.0, 2.0]);
+        assert!(merge(&output([-6.0; 3], &semantic), 0.5).is_none(), "nothing found");
+    }
 }

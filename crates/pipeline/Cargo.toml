@@ -19,6 +19,7 @@ rayon = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
+dhat = { workspace = true }
 lightcraft-scenes = { workspace = true }
 proptest = { workspace = true }
 image = { workspace = true }
