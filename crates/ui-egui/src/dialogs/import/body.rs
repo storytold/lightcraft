@@ -78,6 +78,24 @@ pub(super) fn dup_counts(d: &ImportDialog) -> (usize, usize, usize) {
     (dups, in_source, trashed)
 }
 
+/// The one line that says what the scan left out, for the review's header: a folder walk that
+/// stopped at its limit, folders it couldn't read, files that are not a supported photo type.
+/// `None` when it left nothing out (the review then shows no line at all).
+pub(crate) fn scan_note(d: &ImportDialog) -> Option<String> {
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let mut parts: Vec<String> = Vec::new();
+    if d.scan_limited {
+        parts.push(crate::i18n::tr("Stopped at the scan limit: there may be more photos").to_string());
+    }
+    if d.unreadable > 0 {
+        parts.push(crate::i18n::tr_format!("{n} folder{} could not be read", plural(d.unreadable), n = d.unreadable));
+    }
+    if d.unsupported > 0 {
+        parts.push(crate::i18n::tr_format!("{n} file{} skipped (not a supported photo type)", plural(d.unsupported), n = d.unsupported));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
 /// The dialog body: options, then the candidate grid.
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     let t = Tokens::get(ui.ctx());
@@ -107,6 +125,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             }
         });
     });
+    // what the scan left out, when it left something out
+    if let Some(note) = scan_note(d) {
+        let r = ui.label(egui::RichText::new(note).color(t.caution).small());
+        register(ui, "label:importScanNote", r.rect);
+    }
     // with more than one file type: a toggle per type checks or unchecks all of its files
     let types = d.file_types();
     if types.len() > 1 {
@@ -450,7 +473,7 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         let s = ((img.width() - 8.0) / tw as f32).min((img.height() - 8.0) / th as f32);
         let fit = Rect::from_center_size(img.center(), vec2(tw as f32 * s, th as f32 * s));
         let tint = if ok { Color32::WHITE } else { Color32::from_gray(110) };
-        p.image(tex.tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+        p.image(tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
     }
     let on = d.checked.get(i).copied().unwrap_or(false) && ok;
     if on {
