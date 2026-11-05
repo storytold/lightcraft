@@ -118,7 +118,9 @@ impl ToneMap {
         // only mildly compress it — at contrast = -100 the render stays too contrasty. Scale
         // scene EV about grey *before* the curve instead: negative contrast compresses the
         // input EV range and flattens the curve itself, positive contrast is unchanged.
-        let ev_scale = if c < 0.0 { 1.0 + c } else { 1.0 };
+        // Keep a quarter of the scene EV range at minimum contrast: a strong flattening
+        // that still separates shadows, grey and highlights rather than making a solid image.
+        let ev_scale = if c < 0.0 { 1.0 + 0.75 * c } else { 1.0 };
         let adjustment = Self::display(contrast, whites, blacks);
         let neutral = contrast == 0.0 && whites == 0.0 && blacks == 0.0;
         let top = (2.9 - 1.6 * (whites as f32 / 100.0) + peak.log2() + 1.0).max(HDR_FROM_EV + 0.5);
@@ -411,6 +413,8 @@ mod tests {
         let highlight = 2.0;
         let camera_gap = curve.apply(highlight) - curve.apply(shadow);
         let flat_gap = flat.apply(highlight) - flat.apply(shadow);
+        assert!(flat.apply(shadow) + 0.01 < flat.apply(0.18));
+        assert!(flat.apply(0.18) + 0.01 < flat.apply(highlight));
         assert!(flat_gap < camera_gap * 0.5, "min contrast leaves {flat_gap} of the camera curve's {camera_gap} contrast");
     }
 
