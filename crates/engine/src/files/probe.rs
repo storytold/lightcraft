@@ -4,9 +4,11 @@ use super::{MediaKind, Meta, Orientation, ProbeInfo};
 
 pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
     let shutter = m.exposure_time.map(|t| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) }).unwrap_or_default();
-    let camera = [m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" ").trim().to_string();
+    let camera_identity = lightcraft_catalog::CameraIdentity { make: m.make.clone(), model: m.model.clone() };
+    let camera = camera_identity.label();
     let meta = Meta {
         camera,
+        camera_identity: Some(camera_identity),
         // (a camera that writes no lens name, like Nikon's DSLRs, still says what range the lens covers)
         lens: m.lens_model.clone().or_else(|| m.lens_spec.and_then(lightcraft_meta::lens_spec_name)).unwrap_or_default(),
         focal_mm: m.focal_length.map(|f| f as f32),

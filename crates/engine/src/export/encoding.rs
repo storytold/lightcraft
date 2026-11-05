@@ -109,7 +109,14 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
     let profile = icc::write_named(named_space(space));
     let exif = meta.map(lightcraft_meta::write_exif);
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
-    let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+    let meta = EncodeMeta {
+        icc: Some(&profile),
+        exif: exif.as_deref(),
+        xmp: xmp.as_deref(),
+        ppi: Some(o.ppi),
+        make: meta.and_then(|m| m.make.as_deref()),
+        model: meta.and_then(|m| m.model.as_deref()),
+    };
     // Opaque photo exports need no alpha channel (#1670). Keep real transparency for
     // callers of this encoder, and leave unrelated formats on their existing path.
     let rgb: Option<Vec<u8>> = (matches!(o.format, ExportFormat::Png | ExportFormat::Tiff | ExportFormat::Webp)
@@ -210,7 +217,14 @@ pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, met
     let profile = icc::write_named(named_space(space));
     let exif = meta.map(lightcraft_meta::write_exif);
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
-    let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+    let em = EncodeMeta {
+        icc: Some(&profile),
+        exif: exif.as_deref(),
+        xmp: xmp.as_deref(),
+        ppi: Some(o.ppi),
+        make: meta.and_then(|m| m.make.as_deref()),
+        model: meta.and_then(|m| m.model.as_deref()),
+    };
     let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
     encode_jpeg_with_limit(o, |q| gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, q, sub, &em))
 }
@@ -259,7 +273,14 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
     };
     let exif = meta.map(lightcraft_meta::write_exif);
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
-    let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+    let meta = EncodeMeta {
+        icc: Some(&profile),
+        exif: exif.as_deref(),
+        xmp: xmp.as_deref(),
+        ppi: Some(o.ppi),
+        make: meta.and_then(|m| m.make.as_deref()),
+        model: meta.and_then(|m| m.model.as_deref()),
+    };
     let (w, h) = (img.width as u32, img.height as u32);
     let e = match &img.samples {
         DeepSamples::U16(v) => EncodeImage::new(w, h, 3, Samples::U16(v)),
@@ -334,7 +355,10 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_c
         out.gps = m.gps.map(|(latitude, longitude)| Gps { latitude, longitude, altitude: None });
     }
     if o.metadata == MetadataPolicy::All {
-        out.model = text(&m.camera);
+        if let Some(identity) = &m.camera_identity {
+            out.make = identity.make.clone();
+            out.model = identity.model.clone();
+        }
         out.lens_model = text(&m.lens);
         out.focal_length = m.focal_mm.map(f64::from);
         out.f_number = m.aperture.map(f64::from);
