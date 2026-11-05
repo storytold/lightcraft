@@ -146,6 +146,9 @@ fn a_second_search_waits_for_the_first() {
 fn stopping_leaves_the_view_alone_and_the_next_search_reads_only_the_rest() {
     let (mut h, drive) = app_on_a_slow_drive(GUARD);
     h.app.ui.view = ViewMode::Detail;
+    // Count search reads, not races with filmstrip prefetch warming the same source cache.
+    // This test has no active photo: hide the filmstrip so only the real search reads files.
+    h.app.ui.filmstrip = false;
     h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
     // stopped while the searched photo is being read: that one read is all it does
     assert!(h.step_until(T, |_| drive.reads.load(Ordering::SeqCst) == 1), "the first read never started");

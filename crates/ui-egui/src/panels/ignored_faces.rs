@@ -171,7 +171,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             )
                             && let Some(texture) = app.renderer.variant(job)
                         {
-                            ui.painter().image(texture.tex.id(), image, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                            ui.painter().image(texture.id(), image, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                         }
                         shown += 1;
                         if response.clicked() {

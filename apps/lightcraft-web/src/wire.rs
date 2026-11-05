@@ -451,7 +451,12 @@ mod tests {
         let mut core = WorkerCore::default();
         assert_eq!(core.needs_original(&wire), None, "demo scenes are generated");
         let a = core.render(&wire, None).unwrap();
-        let b = job.run().rendered.unwrap();
+        // A web worker renders on the CPU. Compare its serialized job bit-for-bit with the
+        // engine's CPU pipeline, not job.run(), which may now render thumbnails on the GPU
+        // after another test initializes it (CPU/GPU rounding can differ by an LSB).
+        // The window round-trip test above separately checks the native GPU-capable job.
+        let source = job.source.load_source().unwrap();
+        let b = lightcraft_engine::pipeline::render(&source.image, &source.info_or(job.info), &job.settings, &job.request);
         assert_eq!((a.image.width, a.image.height), (b.image.width, b.image.height));
         assert_eq!(a.image.data, b.image.data);
         assert_eq!(a.histogram, b.histogram);
