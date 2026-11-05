@@ -360,8 +360,9 @@ struct SmartCounts {
 fn original_only(source: crate::media::SourceRef) -> Option<crate::media::SourceRef> {
     use crate::media::SourceRef;
     match source {
+        // (a smart preview keeps the file's own colour: an imported camera profile is applied when the original is read)
         SourceRef::File { path, max_edge, loader, denoise, .. } => {
-            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, reduced: None })
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, reduced: None })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
         source @ SourceRef::Demo { .. } => Some(source),
@@ -496,8 +497,9 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
-        // A cached source can predate a runtime lens database replacement. Read the original
-        // afresh so smart_run's captured provenance describes the pixels being encoded.
+        // Read the original afresh: cached pixels can predate a lens database replacement
+        // or carry an imported camera profile. Smart previews keep the file's own colour
+        // and smart_run's captured lens provenance must describe the encoded pixels.
         let source = (!discard).then(|| s.media.origin_ref(&ph.source, crate::media::SourceLevel::Preview.max_edge()));
         jobs.push((id, path, source, preview_fitted_look(&ph)));
     }
@@ -737,8 +739,15 @@ mod tests {
         let mut jobs = jobs_for(&mut s, id, Some(512));
         assert_eq!(jobs.len(), 2, "view and thumbnail");
         assert!(jobs[0].view_cache.is_some(), "the view renders first");
-        jobs[1].source =
-            SourceRef::File { path: "/nonexistent/photo.arw".into(), max_edge: 512, loader: None, fallback: None, denoise: None, reduced: None };
+        jobs[1].source = SourceRef::File {
+            path: "/nonexistent/photo.arw".into(),
+            max_edge: 512,
+            loader: None,
+            fallback: None,
+            denoise: None,
+            camera_profile: None,
+            reduced: None,
+        };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
     }
 
@@ -802,7 +811,7 @@ mod smart_provenance_tests {
 
         let mut session = crate::Session::new();
         session.media.smart_dir = Some(dir.clone());
-        session.media.file_loader = Some(Arc::new(|_, _| Err("original is offline".into())));
+        session.media.file_loader = Some(Arc::new(|_, _, _| Err("original is offline".into())));
         // Reproduce the UI cache selecting legacy while the worker sees the damaged shard.
         let cached_missing = shard.to_string_lossy().into_owned();
         session.media.availability.set_probe(Arc::new(move |path| path != cached_missing));
@@ -815,7 +824,7 @@ mod smart_provenance_tests {
         assert_eq!(std::fs::read(&legacy).unwrap(), old);
         assert!(crate::smart::load(&legacy).unwrap().from_proxy);
 
-        session.media.file_loader = Some(Arc::new(move |_, _| Ok((image.clone(), Default::default()))));
+        session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((image.clone(), Default::default()))));
         let source = session.media.source_ref(&photo, SourceLevel::Preview);
         let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), true)], None).unwrap();
         assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.failed.len()), (1, 1, 0, 0));
@@ -874,7 +883,7 @@ mod smart_provenance_tests {
         session.media.insert(PhotoId(1), SourceLevel::Preview, Arc::new(lightcraft_raster::Rgb32f::new(32, 24)));
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = calls.clone();
-        session.media.file_loader = Some(Arc::new(move |_, _| {
+        session.media.file_loader = Some(Arc::new(move |_, _, _| {
             counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut pixels = lightcraft_raster::Rgb32f::new(32, 24);
             pixels.data.fill([0.4; 3]);
@@ -930,7 +939,7 @@ mod smart_provenance_tests {
                 let db_path = database.clone();
                 let pixels = image.clone();
                 let mut session = crate::Session::new();
-                session.media.file_loader = Some(Arc::new(move |_, _| {
+                session.media.file_loader = Some(Arc::new(move |_, _, _| {
                     std::fs::write(&db_path, DB.replace("-0.03", "-0.05")).map_err(|e| e.to_string())?;
                     if replace {
                         crate::lens_profiles::replaced();
@@ -966,7 +975,7 @@ mod smart_provenance_tests {
 
                 // A subsequent stable decode writes B's identity and can complete the scan.
                 let pixels = image.clone();
-                session.media.file_loader = Some(Arc::new(move |_, _| Ok((pixels.clone(), Default::default()))));
+                session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((pixels.clone(), Default::default()))));
                 let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
                 super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), true)]);
                 assert!(!crate::smart::is_stale_for(&target, true));
