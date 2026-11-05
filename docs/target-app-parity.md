@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** minor (Olympus compressed ORF decoded, 2 sample bodies verified (OM-D E-M1, E-M10 Mark III), 58 bodies newly unlocked (78 total across Olympus and OM); RAW use-weighted coverage updated to 97%; readiness figures recomputed) · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop)
+> **Last reviewed:** 2026-10-10 · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop) · **Changes:** [revision history](#revision-history)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -96,7 +96,7 @@ search embeddings; generative remove runs in Adobe's cloud.
 | People (faces, body, hair, skin…) and Landscape masks | — | ⬜ |
 | Object / Describe masks | SAM 3 in pure Rust (Metal / CPU); opt-in 3.4 GB download, no mirror configured | 🟡 |
 | Depth range mask, Lens Blur | — | ⬜ |
-| AI Denoise | Bayer only, pure-Rust CPU / GPU, user-installed weights | 🟡 |
+| AI Denoise | Bayer only, built-in classical denoiser out of the box, optional user-installed weights, pure-Rust CPU / GPU | 🟡 |
 | Raw Details, Super Resolution | — | ⬜ |
 | Generative remove, distractions, reflections | — (generative is out of scope: cloud) | ⬜ |
 | Dust detection | ✅ | ✅ |
@@ -301,6 +301,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 |---|---|---|
 | 2026-11-04 | minor | Compressed ORF decoded (`crates/raw/src/vendor/orfc.rs`): OM-D E-M1 and E-M10 Mark III verified; 58 bodies newly unlocked (78 total across Olympus and OM); RAW coverage 77% → 80%, weighted camera coverage 94% → 97% |
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |
+| 2026-10-23 | minor | AI Denoise runs without a model (built-in denoiser); percentages unchanged, since it is a classical filter and Bayer-only |
 | 2026-10-13 | minor | Canon CRW decoded (clean-room, craft-libs `crates/crw/clean-room/`): 551 models verified with the coverage sweep (557 with MRW after merging main), Canon preview rows 21 → 6; RAW decoding unchanged |
 | 2026-10-19 | patch | Stability note: tests run in CI on Linux x64 (every PR) as well as FreeBSD; macOS and Windows remain (gap 9) |
 | 2026-10-19 | minor | Localization ~55% → ~64% (mean of the 12 key languages): Indonesian (`id`) catalog, every message but What's New; full target 61.2% → 61.5% (still ~61%) |

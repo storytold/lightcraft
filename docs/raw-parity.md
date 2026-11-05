@@ -1,6 +1,6 @@
 # RAW parity: cameras, formats, demosaic, colour and lens profiles
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** minor (Olympus compressed ORF decoded, 2 sample bodies verified (OM-D E-M1, E-M10 Mark III), 58 bodies newly unlocked (19 Olympus verified total, 78 total across Olympus and OM); 559 verified, 721 unverified, 129 preview; OM / Olympus fully working 6% → 81%, weighted coverage 94% → 97%) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
+> **Last reviewed:** 2026-10-10 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7) · **Changes:** [revision history](#revision-history)
 
 Raw processing is the deepest single dimension of Lightroom parity: a photographer whose camera
 does not decode, or decodes with the wrong colour, cannot switch. This document measures it model by

@@ -1,6 +1,6 @@
 # Roadmap: milestones, current focus and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** major (LR-PROF-IMPORT: the user's own `.dcp` camera profiles import; gap 9: roadmap item 8 no longer lists Linux, where CI runs the tests since #2667, and lists the GPU tests; created; milestones moved here from ROADMAP.md, focus re-ranked after the 2026-10-10 re-measure) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 · **Changes:** [revision history](#revision-history)
 
 Forward-looking plan. The summary with the headline numbers is [ROADMAP.md](../ROADMAP.md); the
 ranked shortfalls are [gaps.md](gaps.md); the numbers come from [target-app-parity.md](target-app-parity.md).

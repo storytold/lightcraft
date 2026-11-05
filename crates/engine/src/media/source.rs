@@ -87,15 +87,22 @@ pub(super) fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_cr
     if needed.is_finite() { needed.min(usize::MAX as f64 / 2.0) as usize } else { out_long }
 }
 
-/// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app).
-/// The third argument is the photo's imported camera profile ([`crate::cmd::dcp_profiles`]): a raw file is developed
-/// with its colour model.
-pub type FileLoader = Arc<dyn Fn(&str, usize, Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+/// How a raw file is decoded for a photo.
+#[derive(Clone, Copy, Default)]
+pub struct RawDecode<'a> {
+    /// The photo's imported camera profile ([`crate::cmd::dcp_profiles`]): a raw file is developed with its colour model.
+    pub dcp: Option<&'a DcpProfile>,
+    /// Replace a raw's single outlier photosites first ([`DevelopSettings`] `detail.nr_outliers`).
+    pub outliers: bool,
+}
+
+/// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app), as the third argument says.
+pub type FileLoader = Arc<dyn Fn(&str, usize, RawDecode<'_>) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
 
 /// [`FileLoader`] for a thumbnail: a raw file that keeps smaller copies of its raw image (Lightroom's merged DNGs)
 /// develops the smallest that covers `max_edge` (set by the app); the flag says it did. Never used for an export,
 /// which must render the full image.
-pub type ReducedLoader = Arc<dyn Fn(&str, usize, Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
+pub type ReducedLoader = Arc<dyn Fn(&str, usize, RawDecode<'_>) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
 
 /// A raw file's embedded (camera-rendered) preview as display sRGB, oriented, no larger than
 /// `max_edge` (set by the app). `None`: no usable preview.
@@ -118,8 +125,7 @@ pub struct DenoiseSpec {
 
 /// Decodes a raw file once and develops it twice: as usual, and from the denoised picture in `spec` when that can be
 /// read (`None` when it cannot). Both are at most `max_edge` long and the same size.
-pub type PairLoader =
-    Arc<dyn Fn(&str, usize, &DenoiseSpec, Option<&DcpProfile>) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
+pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec, RawDecode<'_>) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
 
 /// A photo's denoised picture next to its plain one, and the last mix of the two that was asked for.
 pub struct Twin {
@@ -152,6 +158,8 @@ pub struct DecodedSource {
     /// The imported camera profile (`dcp:…` id) the raw file was developed with, if any: a cached source made with
     /// another one (or none) doesn't stand in for it.
     pub camera_profile: Option<String>,
+    /// Decoded with a raw's single outlier photosites replaced (`detail.nr_outliers`).
+    pub outliers: bool,
     /// These pixels came from the photo's smart preview (an offline original), not from its file.
     /// A refresh must never rebuild a proxy from itself: that would stamp its older look as current.
     pub from_proxy: bool,
@@ -162,7 +170,14 @@ pub struct DecodedSource {
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None, camera_profile: None, from_proxy: false, reduced: false }
+        DecodedSource { image, info, camera_tone: None, denoised: None, camera_profile: None, outliers: false, from_proxy: false, reduced: false }
+    }
+
+    /// Whether this source can stand for one decoded with `outliers`: a raw decode must match it; anything without a
+    /// mosaic (a rendered file, a smart preview, a demo scene) has nothing the flag would change. A smart preview's
+    /// facts say `raw` for a raw photo, so it is told apart by `from_proxy`.
+    pub fn fits_outliers(&self, outliers: bool) -> bool {
+        self.outliers == outliers || self.from_proxy || !self.info.as_ref().is_some_and(|i| i.raw)
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -256,6 +271,8 @@ pub enum SourceRef {
         denoise: Option<(DenoiseSpec, PairLoader)>,
         /// The photo's imported camera profile (id and profile): its raw file is developed with it.
         camera_profile: Option<(String, Arc<DcpProfile>)>,
+        /// Replace a raw's single outlier photosites before developing it (`detail.nr_outliers`).
+        outliers: bool,
         /// A thumbnail's loader, used instead of `loader` (see [`ReducedLoader`]); `None` for every other job.
         reduced: Option<ReducedLoader>,
     },
@@ -283,17 +300,21 @@ impl SourceRef {
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
-            SourceRef::File { path, max_edge, loader, fallback, denoise, camera_profile, reduced } => {
-                let dcp = camera_profile.as_ref().map(|(_, p)| p.as_ref());
+            SourceRef::File { path, max_edge, loader, fallback, denoise, camera_profile, outliers, reduced } => {
+                let with = RawDecode { dcp: camera_profile.as_ref().map(|(_, p)| p.as_ref()), outliers: *outliers };
                 let made_with = camera_profile.as_ref().map(|(id, _)| id.clone());
                 let plain = || match (reduced, loader) {
-                    (Some(l), _) => l(path, *max_edge, dcp).map(|(image, info, reduced)| DecodedSource {
+                    (Some(l), _) => l(path, *max_edge, with).map(|(image, info, reduced)| DecodedSource {
                         reduced,
                         camera_profile: made_with.clone(),
+                        outliers: *outliers,
                         ..DecodedSource::new(Arc::new(image), Some(info))
                     }),
-                    (None, Some(l)) => l(path, *max_edge, dcp)
-                        .map(|(image, info)| DecodedSource { camera_profile: made_with.clone(), ..DecodedSource::new(Arc::new(image), Some(info)) }),
+                    (None, Some(l)) => l(path, *max_edge, with).map(|(image, info)| DecodedSource {
+                        camera_profile: made_with.clone(),
+                        outliers: *outliers,
+                        ..DecodedSource::new(Arc::new(image), Some(info))
+                    }),
                     (None, None) => Err(format!("no decoder available for {path}")),
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
@@ -307,7 +328,7 @@ impl SourceRef {
                             None => true,
                         };
                         if made {
-                            pair(path, *max_edge, spec, dcp).and_then(|(image, twin, info)| {
+                            pair(path, *max_edge, spec, with).and_then(|(image, twin, info)| {
                                 if spec.make.is_some() && twin.is_none() {
                                     return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
                                 }
@@ -317,6 +338,7 @@ impl SourceRef {
                                     camera_tone: None,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
                                     camera_profile: made_with.clone(),
+                                    outliers: *outliers,
                                     from_proxy: false,
                                     reduced: false,
                                 })
@@ -368,6 +390,9 @@ pub struct ProbeInfo {
     pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
     /// The file's embedded XMP packet (raw/DNG files), for develop settings stored inside the file.
     pub xmp: Option<String>,
+    /// The file's Exif orientation, when it states one: how its stored pixels turn upright (`width` and `height` are
+    /// the upright size).
+    pub orientation: Option<lightcraft_geom::Orientation>,
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
