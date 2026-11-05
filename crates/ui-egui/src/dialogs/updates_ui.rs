@@ -5,6 +5,8 @@ use serde_json::Value;
 use crate::LightcraftApp;
 
 #[cfg(not(target_arch = "wasm32"))]
+use craft_update::dialog::{CheckResultDialog, CheckResultResponse};
+#[cfg(not(target_arch = "wasm32"))]
 use craft_update::updater::{Action, Status, Updater};
 
 pub(crate) struct Runtime {
@@ -18,7 +20,9 @@ pub(crate) struct Runtime {
     /// The context of the last frame, to wake the UI when a check is queued from a menu callback.
     #[cfg(not(target_arch = "wasm32"))]
     repaint: Option<egui::Context>,
+    /// A requested check's result dialog is showing.
     pub(crate) manual_window_open: bool,
+    #[cfg(target_arch = "wasm32")]
     pub(crate) status_message: Option<String>,
 }
 
@@ -26,7 +30,7 @@ impl Default for Runtime {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            updater: Updater::new(&craft_update::suite::LIGHTCRAFT, env!("CARGO_PKG_VERSION")),
+            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -34,6 +38,7 @@ impl Default for Runtime {
             #[cfg(not(target_arch = "wasm32"))]
             repaint: None,
             manual_window_open: false,
+            #[cfg(target_arch = "wasm32")]
             status_message: None,
         }
     }
@@ -84,6 +89,7 @@ pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         rt.repaint = Some(ctx.clone());
         if std::mem::take(&mut rt.check_requested) {
             rt.updater.check_now(ctx);
+            rt.manual_window_open = true;
         } else if rt.startup_check {
             rt.updater.check_at_start(ctx);
         }
@@ -103,25 +109,29 @@ pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Action::None => {}
         }
-        // The window answers Help ▸ Check for Updates, so it follows the updater's status.
+        // A found update opens the startup prompt and leaves the status idle, which ends the result dialog.
         let rt = &mut app.updates_rt;
-        (rt.manual_window_open, rt.status_message) = match rt.updater.status() {
-            Status::Idle => (false, None),
-            Status::Checking => (true, Some(crate::i18n::tr("Checking for updates…").to_string())),
-            Status::UpToDate => (
-                true,
-                Some(
-                    crate::i18n::tr("LightCraft {version} is currently the newest version available.")
-                        .replace("{version}", env!("CARGO_PKG_VERSION")),
-                ),
-            ),
-            Status::Failed(e) => (true, Some(crate::i18n::tr("Could not check for updates:\n{error}").replace("{error}", e))),
-        };
+        if rt.manual_window_open {
+            let dialog = CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION"));
+            match dialog.show(ctx, rt.updater.status()) {
+                CheckResultResponse::None => {}
+                CheckResultResponse::Close => rt.manual_window_open = false,
+                CheckResultResponse::CheckAgain => rt.check_requested = true,
+            }
+            if matches!(rt.updater.status(), Status::Idle) {
+                rt.manual_window_open = false;
+            }
+        }
+        // Closing the dialog dismisses the outcome it showed.
+        if !rt.manual_window_open {
+            rt.updater.dismiss_status();
+        }
     }
 
+    #[cfg(target_arch = "wasm32")]
     if app.updates_rt.manual_window_open {
         let mut open = true;
-        egui::Window::new(crate::i18n::tr("LightCraft Updates"))
+        let shown = egui::Window::new(crate::i18n::tr("LightCraft Updates"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -136,15 +146,12 @@ pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     app.updates_rt.manual_window_open = false;
                 }
             });
+        if let Some(w) = &shown {
+            crate::widgets::announce_dialog(ctx, &w.response, crate::widgets::Modal::Window);
+        }
         if !open {
             app.updates_rt.manual_window_open = false;
         }
-    }
-
-    // Closing the window dismisses the outcome it showed.
-    #[cfg(not(target_arch = "wasm32"))]
-    if !app.updates_rt.manual_window_open {
-        app.updates_rt.updater.dismiss_status();
     }
 }
 

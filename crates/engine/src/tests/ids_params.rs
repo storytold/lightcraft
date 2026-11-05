@@ -66,6 +66,20 @@ fn library_select_refuses_ids_that_are_not_photo_ids() {
     assert_eq!(s.selection.ids, vec![vis[2]]);
 }
 
+/// Replacing the selection with a repeated id holds each photo once, in the order first given.
+#[test]
+fn library_select_replace_drops_repeated_ids() {
+    let (mut s, vis, _) = session();
+    let (a, b) = (vis[0], vis[1]);
+    s.execute("library.select", &json!({"ids": [a.0, b.0, a.0]})).unwrap();
+    assert_eq!(s.selection.ids, vec![a, b]);
+    assert_eq!(s.selection.active, Some(a));
+    let r = s.execute("library.select", &json!({"ids": [b.0, a.0, b.0, b.0], "active": a.0})).unwrap();
+    assert_eq!(s.selection.ids, vec![b, a]);
+    assert_eq!(s.selection.active, Some(a));
+    assert_eq!(r["selected"], 2);
+}
+
 /// The same for a single `id`: a value that isn't a photo id used to mean the active photo
 /// (`photo.relink` then relinked the active photo to the file, `photo.removeRegion` removed its face
 /// box), or, for `denoise.cancel`, every photo. (The stack commands share the helper; `in_stack`
