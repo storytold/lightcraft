@@ -46,7 +46,6 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
     let stopped = cancel.clone();
     let work = move |task: lightcraft_engine::activity::TaskHandle| {
         let total = items.len() as u64;
-        task.progress(0, total);
         let results = reload::probe(probe.as_ref(), &items, &flag, &|done| task.progress(done as u64, total));
         (items, results)
     };
@@ -73,7 +72,7 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
         };
         app.toast(ctx, message);
     };
-    if let Err(e) = crate::tasks::spawn_tracked(app, LABEL, "reload", cancel, work, done) {
+    if let Err(e) = crate::tasks::spawn_tracked(app, LABEL, "reload", cancel, count as u64, work, done) {
         return Some(Err(e));
     }
     Some(Ok(json!({"background": true, "count": count})))
