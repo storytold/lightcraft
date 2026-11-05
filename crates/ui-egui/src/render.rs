@@ -1269,6 +1269,28 @@ impl Renderer {
         finished
     }
 
+    /// The slot a finished job goes to. Made ahead for the photo the loupe is now waiting for, it is
+    /// the loupe's stand-in (the loupe's own request for it, if one was started, is dropped when it
+    /// arrives); also when the loupe's own request failed and it still wants that photo: the
+    /// stand-in made ahead still shows, but never over another photo's request.
+    fn stand_in_slot(&mut self, slot: Slot, r: &RenderResult) -> Slot {
+        let waiting = self.pending.get(&Slot::Preview).is_some_and(|p| p.0 == r.key);
+        let failed = !self.pending.contains_key(&Slot::Preview)
+            && self.quick_tried.get(&Slot::Preview) == Some(&r.key)
+            && self.failed.get(&Slot::Preview).is_some_and(|f| f.0 == r.key && f.3 == r.photo);
+        if !matches!(slot, Slot::QuickAhead(_))
+            || r.rendered.is_err()
+            || !(waiting || failed)
+            || !self.ahead_covers(slot, self.quick_edge.get(&Slot::Preview).copied().unwrap_or(0))
+        {
+            return slot;
+        }
+        self.pending.remove(&Slot::Preview);
+        self.requests.remove(&Slot::Preview);
+        self.quick_tried.remove(&slot);
+        Slot::Preview
+    }
+
     /// Turn finished jobs into textures. Returns true if anything changed.
     fn collect(&mut self, ctx: &egui::Context, session: &mut Session, inline_ms: f64) -> bool {
         let finished = self.take_finished(inline_ms);
@@ -1327,23 +1349,7 @@ impl Renderer {
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
             }
-            // made ahead for the photo the loupe is now waiting for: it is the loupe's stand-in
-            // (the loupe's own request for it, if one was started, is dropped when it arrives)
-            // (also when the loupe's own request failed and it still wants that photo: the stand-in
-            // made ahead still shows, but never over another photo's request)
-            if matches!(slot, Slot::QuickAhead(_))
-                && r.rendered.is_ok()
-                && (self.pending.get(&Slot::Preview).is_some_and(|p| p.0 == r.key)
-                    || (!self.pending.contains_key(&Slot::Preview)
-                        && self.quick_tried.get(&Slot::Preview) == Some(&r.key)
-                        && self.failed.get(&Slot::Preview).is_some_and(|f| f.0 == r.key && f.3 == r.photo)))
-                && self.ahead_covers(slot, self.quick_edge.get(&Slot::Preview).copied().unwrap_or(0))
-            {
-                self.pending.remove(&Slot::Preview);
-                self.requests.remove(&Slot::Preview);
-                self.quick_tried.remove(&slot);
-                slot = Slot::Preview;
-            }
+            slot = self.stand_in_slot(slot, &r);
             // a render that stayed on the GPU: drawn from its texture
             if let (Some(frame), Ok(rendered)) = (r.frame.as_ref(), r.rendered.as_ref()) {
                 self.failed.remove(&slot);
