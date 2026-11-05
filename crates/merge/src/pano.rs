@@ -250,7 +250,32 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
     }
     // output scale: native resolution, limited to max_megapixels and the longest edge
     let max_px = if opts.max_megapixels.is_nan() { MAX_MEGAPIXELS } else { opts.max_megapixels.clamp(0.1, MAX_MEGAPIXELS) } * 1e6;
-    let s = (max_px / ((bx1 - bx0) * (by1 - by0))).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0)).min(1.0);
+    let surface = (bx1 - bx0) * (by1 - by0);
+    let mut s = (max_px / surface).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0)).min(1.0);
+    if projection != Projection::Perspective {
+        // The sensors are rectilinear: a frame holds more pixels per degree than a
+        // spherical or cylindrical surface at the same focal length. Raise the
+        // output scale until the canvas matches the frames' own pixel density, so
+        // the photos keep their resolution in the panorama - but never beyond the
+        // size limits above.
+        let mut need = 1.0f64;
+        for &i in &used {
+            if i >= cams.len() || i >= frames.len() {
+                continue;
+            }
+            let Some(c) = cams[i] else { continue };
+            if c.f <= 0.0 || fmed <= 0.0 {
+                continue;
+            }
+            let fr = &frames[i];
+            let (w, h) = (fr.width() as f64, fr.height() as f64);
+            let sx = 2.0 * (0.5 * w / c.f).atan();
+            let sy = 2.0 * (0.5 * h / c.f).atan();
+            need = need.max((w / sx).max(h / sy) / fmed);
+        }
+        let fit = (max_px / surface).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0));
+        s = s.max(need.min(fit));
+    }
     let f_out = fmed * s;
     let (ox, oy) = (bx0 * s, by0 * s);
     let (cw, ch) = (((bx1 - bx0) * s).ceil() as usize + 1, ((by1 - by0) * s).ceil() as usize + 1);
