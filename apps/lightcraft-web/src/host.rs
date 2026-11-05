@@ -25,7 +25,8 @@
 //!
 //! Only the parent window on the page's own origin is heard or answered. A page whose origin is
 //! opaque (`"null"`: a sandboxed iframe, a `data:` page) gets no bridge at all, since every other
-//! opaque-origin window would then pass as the parent. There is no `docClosed`: LightCraft has a
+//! opaque-origin window would then pass as the parent. A parent on another origin gets no bridge
+//! either: its `location` cannot be read, and exports keep downloading. There is no `docClosed`: LightCraft has a
 //! library, not documents that close.
 //!
 //! The message layer (what a message means, what is sent back) is plain Rust, tested natively;
@@ -177,7 +178,8 @@ mod bridge {
     }
 
     impl Bridge {
-        /// `None` when the page isn't framed (there is no parent to talk to).
+        /// `None` when the page isn't framed, its origin is opaque, or the parent is on another
+        /// origin (exports then keep downloading).
         pub fn new() -> Option<Self> {
             let window = web_sys::window()?;
             let parent = window.parent().ok().flatten()?;
@@ -188,6 +190,10 @@ mod bridge {
             // its URL but runs with the opaque origin "null"
             let origin = window.origin();
             if !origin_is_usable(&origin) {
+                return None;
+            }
+            // Reading another origin's location throws, so this is `None` for a cross-origin parent.
+            if parent.location().origin().ok().as_deref() != Some(origin.as_str()) {
                 return None;
             }
             Some(Self { window, parent, origin, incoming: Rc::default(), dirty: Rc::default() })
