@@ -103,7 +103,7 @@ pub(crate) fn finish(
     }
     fp.curves = crate::finish::curve_luts(&input.predecessors(&settings.curve));
     fp.refine_sat = 1.0;
-    let samples = crate::finish::finish_with(p, &fp, false, true, |e| e);
+    let samples = crate::finish::finish_with(p, &fp, false, true, |_x, _y, e| e);
     let histogram = of_encoded(&samples, fp.out_luma);
     let encode = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     let image = Rgba8 { width: w, height: h, data: samples.iter().map(|c| [encode(c[0]), encode(c[1]), encode(c[2]), 255]).collect() };
