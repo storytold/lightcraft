@@ -300,12 +300,19 @@ mod tests {
         let mut a = Availability::default();
         let caller = std::thread::current().id();
         let on_caller = Arc::new(AtomicUsize::new(0));
-        let c = on_caller.clone();
+        // a sleeping NAS: every check waits until the test opens the gate (or gives up, so a
+        // broken build fails instead of hanging)
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let finished = Arc::new(AtomicUsize::new(0));
+        let (c, g, f) = (on_caller.clone(), gate.clone(), finished.clone());
         a.set_probe(Arc::new(move |p| {
             if std::thread::current().id() == caller {
                 c.fetch_add(1, Ordering::SeqCst);
             }
-            std::thread::sleep(Duration::from_millis(200)); // a sleeping NAS
+            let (open, cv) = &*g;
+            let limit = lightcraft_testkit::scaled(Duration::from_secs(5)).max(Duration::from_secs(5));
+            drop(cv.wait_timeout_while(held(open), limit, |open| !*open).unwrap_or_else(PoisonError::into_inner));
+            f.fetch_add(1, Ordering::SeqCst);
             p == "here"
         }));
         let woke = Arc::new(AtomicUsize::new(0));
@@ -313,14 +320,13 @@ mod tests {
         a.run_in_background(Arc::new(move || {
             w.fetch_add(1, Ordering::SeqCst);
         }));
-        let t0 = std::time::Instant::now();
         assert_eq!(a.exists("here"), None, "unknown at first");
         assert_eq!(a.exists("gone"), None);
-        assert!(t0.elapsed() < Duration::from_millis(150), "the caller never waits for the probe");
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        while (a.exists("here").is_none() || a.exists("gone").is_none()) && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        // the gate is still shut, so a caller that waited for a check could not have got here yet
+        assert_eq!(finished.load(Ordering::SeqCst), 0, "the caller never waits for the probe");
+        *held(&gate.0) = true;
+        gate.1.notify_all();
+        wait_until("both answers", || a.exists("here").is_some() && a.exists("gone").is_some());
         assert_eq!(a.exists("here"), Some(true));
         assert_eq!(a.exists("gone"), Some(false));
         assert!(a.is_offline("gone") && !a.is_offline("here") && !a.is_offline("unknown"));
@@ -329,12 +335,10 @@ mod tests {
         assert!(a.gone_generation() >= 2);
     }
 
+    /// Wait for `done` (at most 20 s, stretched by `LIGHTCRAFT_TIME_SCALE`).
+    #[track_caller]
     fn wait_until(what: &str, done: impl Fn() -> bool) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        while !done() {
-            assert!(std::time::Instant::now() < deadline, "timed out waiting: {what}");
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        lightcraft_testkit::wait_until(Duration::from_secs(20), what, done);
     }
 
     fn held<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -483,12 +487,18 @@ mod tests {
         let mut a = Availability::default();
         let log = Arc::new(Mutex::new(Vec::<String>::new()));
         let l = log.clone();
-        // the worker is held inside the fourth check until the sweep is told to give way
+        // the worker is held inside the fourth check (and says it got there) until the sweep is told to
+        // give way; the hold gives up after a while, so a failed test leaves no worker spinning
         let hold = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let h = hold.clone();
+        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (h, e) = (hold.clone(), entered.clone());
         a.set_probe(Arc::new(move |p| {
-            while p == "sweep 3" && h.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(1));
+            if p == "sweep 3" {
+                e.store(true, Ordering::SeqCst);
+                let t = std::time::Instant::now();
+                while h.load(Ordering::SeqCst) && t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30)) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
             }
             held(&l).push(p.to_string());
             true
@@ -497,9 +507,12 @@ mod tests {
         let busy = busy_flag(&a);
         busy.store(false, Ordering::SeqCst);
         assert!(a.sweep((0..100).map(|i| format!("sweep {i}")).collect()));
-        wait_until("a few checks", || held(&log).len() >= 3);
+        // the fourth check has started (so giving way now can't keep it from starting)
+        wait_until("the worker inside the fourth check", || entered.load(Ordering::SeqCst));
+        assert_eq!(held(&log).len(), 3);
         busy.store(true, Ordering::SeqCst);
         hold.store(false, Ordering::SeqCst);
+        wait_until("the check in flight", || held(&log).len() >= 4);
         std::thread::sleep(YIELD_POLL * 2);
         let stopped = held(&log).len();
         assert_eq!(stopped, 4, "stopped part way, after the check it was in");

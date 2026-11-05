@@ -27,22 +27,20 @@ fn concurrent_requests_wait_for_one_generation() {
     assert!(got.windows(2).all(|w| Arc::ptr_eq(&w[0], &w[1])), "every request got the same pixels");
 }
 
-/// Run `f` on a thread of its own and wait for it at most `secs`: a deadlock fails the test instead of hanging it.
+/// Run `f` on a thread of its own and wait for it at most `secs` (stretched by
+/// `LIGHTCRAFT_TIME_SCALE`): a deadlock fails the test instead of hanging it.
+#[track_caller]
 fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(f());
     });
-    rx.recv_timeout(std::time::Duration::from_secs(secs)).expect("deadlocked")
+    lightcraft_testkit::recv_within(&rx, std::time::Duration::from_secs(secs), "the requests finish (not deadlocked)")
 }
 
-/// Wait (at most ten seconds) until `n` callers wait for `slot`'s generation.
+/// Wait (at most ten seconds, stretched by `LIGHTCRAFT_TIME_SCALE`) until `n` callers wait for `slot`'s generation.
 fn until_waiting(slot: &SceneSlot, n: usize) {
-    let started = std::time::Instant::now();
-    while slot.lock().waiting < n {
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "the callers never got to wait");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    lightcraft_testkit::wait_until(std::time::Duration::from_secs(10), "the callers get to wait", || slot.lock().waiting >= n);
 }
 
 fn pixels(n: usize) -> lightcraft_raster::Rgb32f {
@@ -310,7 +308,8 @@ fn scenes_are_generated_when_the_global_pool_is_broken() {
     };
     let (stdout, stderr) = (drain(Box::new(child.stdout.take().unwrap())), drain(Box::new(child.stderr.take().unwrap())));
     // A deadlocked child fails the test instead of hanging CI.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(120));
+    let deadline = std::time::Instant::now() + limit;
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -318,7 +317,7 @@ fn scenes_are_generated_when_the_global_pool_is_broken() {
         if std::time::Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("the child process did not finish within 120 s");
+            panic!("the child process did not finish within {limit:?}");
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };

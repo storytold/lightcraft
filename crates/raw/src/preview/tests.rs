@@ -22,7 +22,7 @@ fn a_multi_strip_jpeg_ifd_costs_no_descriptor_vector() {
     let file = TiffWriter::default().write(&[ifd]).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || tx.send(embedded_preview(&file)));
-    assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(2)), Ok(None));
+    assert_eq!(rx.recv_timeout(lightcraft_testkit::scaled(std::time::Duration::from_secs(2)).max(std::time::Duration::from_secs(2))), Ok(None));
 }
 
 /// CR3 candidates claim overlapping extents: each block's first bytes double as a 40-byte jump marker so
@@ -51,7 +51,11 @@ fn cr3_preview_boxes_stop_walking_when_the_budget_is_spent() {
     assert_eq!(f.len(), total);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || tx.send(cr3_preview_boxes(&f).map(|s| s.len())));
-    assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(2)), Ok(None), "no PRVW candidate is a JPEG");
+    assert_eq!(
+        rx.recv_timeout(lightcraft_testkit::scaled(std::time::Duration::from_secs(2)).max(std::time::Duration::from_secs(2))),
+        Ok(None),
+        "no PRVW candidate is a JPEG"
+    );
 }
 
 /// A minimal RAF: the fixed header (JPEG offset/length at 84/88), the JPEG, then a raw tail the

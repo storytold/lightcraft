@@ -23,6 +23,11 @@ pub const WIDTH: f32 = 280.0;
 const MARGIN: i8 = 8;
 const CROSS: f32 = 16.0;
 
+/// Whether `task` has a row yet: from [`SHOW_AFTER_MS`] on.
+pub(crate) fn due(task: &TaskInfo) -> bool {
+    task.age_ms >= SHOW_AFTER_MS
+}
+
 /// "3 of 25", "12 of 340 MB", "40 %"; empty while the amount of work isn't known.
 pub fn count_text(t: &TaskInfo) -> String {
     if t.total == 0 {
@@ -62,7 +67,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     // look again soon: a young task becomes due, bars move
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
-    let tasks: Vec<&TaskInfo> = all.iter().filter(|t| t.age_ms >= SHOW_AFTER_MS).collect();
+    let tasks: Vec<&TaskInfo> = all.iter().filter(|t| due(t)).collect();
     if tasks.is_empty() {
         return;
     }

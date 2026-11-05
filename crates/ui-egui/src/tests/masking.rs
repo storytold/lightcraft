@@ -1790,7 +1790,9 @@ fn ai_masks_without_the_model_offer_the_download() {
     let e = h.app.run("mask.add", json!({"kind": "prompt", "text": "sky"})).unwrap_err();
     assert!(e.starts_with(lightcraft_engine::segment::NOT_INSTALLED), "{e}");
     assert!(develop(&h).masks.is_empty());
-    assert!(t.elapsed() < SETTLE, "{:?}", t.elapsed());
+    // a guard over the whole sequence, measured after it ran: it stretches on a slow machine and
+    // never shrinks below SETTLE
+    assert!(t.elapsed() < lightcraft_testkit::scaled(SETTLE).max(SETTLE), "{:?}", t.elapsed());
 }
 
 fn color_samples(h: &Headless) -> serde_json::Value {
