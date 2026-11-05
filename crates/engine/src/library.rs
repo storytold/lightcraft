@@ -544,7 +544,6 @@ impl Session {
                 log::error!("library: {e} (every change is in its snapshot)");
             }
         }
-        self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // Photo ids belong to one library; denoise work must not carry into the next.
         self.denoise.library_changed();
         self.media.denoise.clear();
