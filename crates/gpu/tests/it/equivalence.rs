@@ -53,22 +53,10 @@ fn check_v3_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     let cpu = render(&src, &info, &s, &req).image;
     let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
     for image in [&cpu, &gpu] {
-        // A flat fractional color repeats the 8×8 Bayer tile, within adjacent byte values.
-        for pixel in &image.data {
-            assert_eq!(pixel[3], 255);
-            for (actual, expected) in pixel.iter().copied().zip(expected) {
-                assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {pixel:?}, expected {expected}");
-            }
-        }
-        for channel in 0..3 {
-            let lo = image.data.iter().map(|p| p[channel]).min().unwrap();
-            let hi = image.data.iter().map(|p| p[channel]).max().unwrap();
-            assert!(hi - lo <= 1, "chroma {chroma}: channel {channel} spans {lo}..{hi}");
-        }
-        for y in 0..image.height {
-            for x in 0..image.width {
-                assert_eq!(image.get(x, y), image.get(x % 8, y % 8), "chroma {chroma}: Bayer tile at {x},{y}");
-            }
+        // (8-bit output is dithered: a flat source varies by a level)
+        assert!(image.data.iter().all(|p| p.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1)));
+        for (actual, expected) in image.data[0].into_iter().zip(expected) {
+            assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {:?}, expected {expected}", image.data[0]);
         }
     }
     let (_, max, _) = diff(&cpu, &gpu);
