@@ -7,7 +7,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use lightcraft_develop::DevelopSettings;
@@ -43,10 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     settings.optics.lens_profile = info.lens.is_some();
     render(&source, &info, &settings, &dir.join("baseline.png"))?;
     if let Some(path) = args.get(2) {
-        let data = std::fs::read(path)?;
-        if data.len() > 64 * 1024 {
-            return Err("candidate opcodes exceed 64 KiB".into());
-        }
+        let data = read_candidates(std::fs::File::open(path)?)?;
         header.opcodes.list3 = serde_json::from_slice(&data)?;
         validate_candidates(&header.opcodes.list3)?;
         info.lens = files::embedded_lens(&header);
@@ -54,6 +51,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         render(&source, &info, &settings, &dir.join("candidate.png"))?;
     }
     Ok(())
+}
+
+/// Read one byte beyond the limit to distinguish a complete input from an oversized one.
+fn read_candidates(reader: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut data = Vec::new();
+    reader.take(65_537).read_to_end(&mut data)?;
+    if data.len() > 65_536 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "candidate opcodes exceed 64 KiB"));
+    }
+    Ok(data)
 }
 
 /// Diagnostic inputs have a deliberately small range; reject arbitrary operations and invalid gains.
@@ -92,4 +99,20 @@ fn render(source: &Rgb32f, info: &SourceInfo, settings: &DevelopSettings, path: 
     let image = lightcraft_codecs::encode::EncodeImage::rgba8(&rendered.image);
     std::fs::write(path, lightcraft_codecs::encode::encode_png(&image, &Default::default())?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hostile stream must be rejected after at most limit + 1 bytes, without reading to EOF.
+    #[test]
+    fn candidate_reader_bounds_the_read_and_accepts_the_exact_limit() {
+        let mut endless = std::io::repeat(b' ');
+        let mut counted = (&mut endless).take(1_000_000);
+        let error = read_candidates(&mut counted).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(counted.limit(), 1_000_000 - 65_537);
+        assert_eq!(read_candidates(std::io::repeat(b' ').take(65_536)).unwrap().len(), 65_536);
+    }
 }

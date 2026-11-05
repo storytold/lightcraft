@@ -5,6 +5,8 @@ Run: python3 -m unittest discover -s docs/raw -p 'test_nikon_lens_probe.py'
 
 import struct
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -35,6 +37,80 @@ class Measurements(unittest.TestCase):
         directory = struct.pack("<HHHII", 1, 6, 7, 100, 500)
         with self.assertRaisesRegex(ValueError, "entry range"):
             probe.tiff_entries(directory, 0, "<")
+
+    def test_truncated_nef_blocks_fail_before_indexing(self):
+        """A version-only block must raise a useful error, not IndexError."""
+        header = b"II*\0" + struct.pack("<I", 8)
+        blob = b"Nikon\0" + bytes(4) + header
+        for tag, name in (
+            (5, "DistortionInfo"),
+            (6, "VignetteInfo"),
+            (8, "optical center"),
+        ):
+            entries = {5: bytes(72), 6: bytes(104), 8: bytes(20)}
+            entries[tag] = b"0100"
+            with self.subTest(tag=tag), mock.patch.object(
+                Path, "read_bytes", return_value=header
+            ), mock.patch.object(
+                probe,
+                "tiff_entries",
+                side_effect=[{330: struct.pack("<I", 8)}, {0xC7D5: blob}, entries],
+            ):
+                with self.assertRaisesRegex(ValueError, "truncated " + name):
+                    probe.nef_blocks(Path("unused.nef"))
+
+    def test_one_tile_parity_is_not_a_brightness_validation_set(self):
+        """Thousands of pairs from only one split cannot produce valid statistics."""
+        raw = dict(crop=dict(x=0, y=0, width=1920, height=1280))
+        meta = dict(
+            center=[0, 0],
+            zoom=0,
+            distortion_k=[0, 0, 0],
+            vignette_polynomial=[0, 0, 0, 0, 0, 0, 0.4, 0, 1],
+            vignette_tail=0.4,
+        )
+        yy, xx = np.mgrid[:320, :480]
+        parity = (xx // 24 + yy // 24) % 2
+        for keep, missing in ((0, "validation"), (1, "training")):
+            sensor = np.full((320, 480, 3), 0.3)
+            sensor[parity != keep] = 0
+            with self.subTest(keep=keep), mock.patch.object(
+                probe, "sample", return_value=sensor
+            ):
+                with self.assertRaisesRegex(ValueError, "not enough " + missing):
+                    probe.vignette_fit(
+                        sensor, Image.new("RGB", (480, 320), (128, 128, 128)), raw, meta
+                    )
+
+    def test_radial_coverage_and_json_must_be_finite(self):
+        """Neither missing corners nor non-finite values may be reported as evidence."""
+        train = np.arange(1200) % 2 == 0
+        with self.assertRaisesRegex(ValueError, "radial bin"):
+            probe.validate_fit_samples(train, np.full(1200, 0.2))
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                probe.json_text({"statistic": value})
+
+    def test_nonfinite_solver_statistics_are_rejected(self):
+        """A failed numerical result must not reach the report serializer."""
+        sensor = np.full((320, 480, 3), 0.3)
+        raw = dict(crop=dict(x=0, y=0, width=1920, height=1280))
+        meta = dict(
+            center=[0, 0],
+            zoom=0,
+            distortion_k=[0, 0, 0],
+            vignette_polynomial=[0, 0, 0, 0, 0, 0, 0.4, 0, 1],
+            vignette_tail=0.4,
+        )
+        with mock.patch.object(probe, "sample", return_value=sensor), mock.patch.object(
+            np.linalg, "lstsq", return_value=(np.full(22, np.nan), None, None, None)
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "non-finite brightness fit statistics"
+            ):
+                probe.vignette_fit(
+                    sensor, Image.new("RGB", (480, 320), (128, 128, 128)), raw, meta
+                )
 
     def test_opcode_gain_preserves_radius_center_and_eighth_power(self):
         """DNG normalization must retain a shifted center and the unnamed r^8 term."""

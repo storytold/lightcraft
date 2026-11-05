@@ -29,6 +29,25 @@ from PIL import Image
 from scipy import ndimage, optimize, signal
 
 
+def json_text(value, **kwargs):
+    """Reject non-finite output instead of writing nonstandard JSON NaN/Infinity."""
+    return json.dumps(value, allow_nan=False, **kwargs)
+
+
+def validate_fit_samples(train, radius):
+    """Require both tile parities and radial coverage before fitting or averaging.
+
+    At least 250 pairs in each split, and 32 in each inner/middle/outer bin
+    of each split, keep empty or tiny regions from masquerading as evidence.
+    """
+    for name, split in (("training", train), ("validation", ~train)):
+        if np.count_nonzero(split) < 250:
+            raise ValueError(f"not enough {name} brightness pairs")
+        for lo, hi in ((0, 0.35), (0.35, 0.75), (0.75, 0.95)):
+            if np.count_nonzero(split & (radius >= lo) & (radius < hi)) < 32:
+                raise ValueError(f"not enough {name} pairs in radial bin {lo} to {hi}")
+
+
 def tiff_entries(data, offset, order):
     """Read one bounded classic-TIFF IFD, without following arbitrary pointers."""
     if offset < 0 or offset + 2 > len(data):
@@ -77,6 +96,13 @@ def nef_blocks(path):
                 return n / d
 
             distortion, vignette, center = (entries[k] for k in (5, 6, 8))
+            for name, block, minimum in (
+                ("DistortionInfo", distortion, 72),
+                ("VignetteInfo", vignette, 104),
+                ("optical center", center, 20),
+            ):
+                if len(block) < minimum:
+                    raise ValueError(f"truncated {name} block: need {minimum} bytes")
             return dict(
                 distortion_version=distortion[:4].decode("ascii"),
                 distortion_mode=distortion[4],
@@ -326,11 +352,16 @@ def vignette_fit(camera, jpeg, raw, meta):
     x = r2[mask]
     complete = np.polyval(poly, np.sqrt(x))
     named = 1 + x * (poly[6] + x * (poly[4] + x * poly[2]))
-    if len(green) < 500 or not np.all(complete > 0):
+    validate_fit_samples(train, radius)
+    if not all(np.isfinite(a).all() for a in (green, response, colours, complete)):
+        raise ValueError("non-finite brightness pairs or gain")
+    if not np.all(complete > 0):
         raise ValueError("not enough valid brightness pairs or nonpositive gain")
 
     def fit(gain):
-        corrected = green + np.log(np.maximum(gain, 1e-5))
+        if not np.isfinite(gain).all() or not np.all(gain > 0):
+            raise ValueError("non-finite or nonpositive candidate gain")
+        corrected = green + np.log(gain)
         knots = np.linspace(-11, 1, 17)
         design = np.stack(
             [np.ones_like(green), corrected]
@@ -343,13 +374,16 @@ def vignette_fit(camera, jpeg, raw, meta):
         test = ~train
         ring = test & (radius >= 0.75)
         inner = test & (radius <= 0.35)
-        return dict(
+        statistics = dict(
             training_log_rmse=float(np.sqrt(np.mean(residual[train] ** 2))),
             heldout_log_rmse=float(np.sqrt(np.mean(residual[test] ** 2))),
             outer_log_bias=float(np.mean(residual[ring])),
             inner_log_bias=float(np.mean(residual[inner])),
             outer_minus_inner=float(np.mean(residual[ring]) - np.mean(residual[inner])),
         )
+        if not all(math.isfinite(value) for value in statistics.values()):
+            raise ValueError("non-finite brightness fit statistics")
+        return statistics
 
     candidates = {
         "none": np.ones_like(x),
@@ -368,6 +402,8 @@ def vignette_fit(camera, jpeg, raw, meta):
         method="bounded",
         options={"xatol": 0.01},
     )
+    if not fitted.success or not math.isfinite(fitted.x):
+        raise ValueError("brightness strength optimization did not converge")
     result["fitted_strength"] = dict(
         alpha=float(fitted.x), **fit(1 + fitted.x * (complete - 1))
     )
@@ -451,7 +487,7 @@ def prepare(path, folder, binary):
         raise ValueError("this probe currently requires an sRGB camera JPEG")
     meta = nef_blocks(path)
     meta.update(exif=exif, sha256=hashlib.sha256(path.read_bytes()).hexdigest())
-    (folder / "metadata.json").write_text(json.dumps(meta, indent=2) + "\n")
+    (folder / "metadata.json").write_text(json_text(meta, indent=2) + "\n")
     if not (folder / "camera.jpg").exists():
         data = subprocess.check_output(["exiftool", "-b", "-JpgFromRaw", str(path)])
         if not data:
@@ -472,7 +508,7 @@ def prepare(path, folder, binary):
         ("vignette-tail", True, meta["vignette_tail"]),
     ]:
         ops = folder / (name + ".json")
-        ops.write_text(json.dumps(opcodes(raw, meta, vig, strength), indent=2) + "\n")
+        ops.write_text(json_text(opcodes(raw, meta, vig, strength), indent=2) + "\n")
     return raw, meta
 
 
@@ -524,10 +560,10 @@ def main():
                 (folder / "candidate.png").replace(folder / (name + ".png"))
                 scores[name] = score(Image.open(folder / (name + ".png")), jpeg)
             result["experimental_renders_no_look_refit"] = scores
-        (folder / "measurements.json").write_text(json.dumps(result, indent=2) + "\n")
+        (folder / "measurements.json").write_text(json_text(result, indent=2) + "\n")
         print(
             path.name,
-            json.dumps(
+            json_text(
                 dict(
                     baseline=result["baseline"],
                     fitted_strength=result["vignette"]["fitted_strength"],
@@ -537,9 +573,7 @@ def main():
         )
         print(
             "distortion",
-            json.dumps(
-                {k: v for k, v in result["distortion"].items() if k != "points"}
-            ),
+            json_text({k: v for k, v in result["distortion"].items() if k != "points"}),
             flush=True,
         )
 
