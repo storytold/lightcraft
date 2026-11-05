@@ -18,7 +18,8 @@ struct Locals {
 
     /// SDR white in the units of an extended-range float framebuffer (patch: HDR display output).
     output_scale: f32,
-    _padding: f32,
+    /// 1: the float framebuffer is PQ encoded and `output_scale` is SDR white in cd/m².
+    output_pq: u32,
 };
 @group(0) @binding(0) var<uniform> r_locals: Locals;
 
@@ -172,5 +173,28 @@ fn fs_main_extended_linear_framebuffer(in: VertexOutput) -> @location(0) vec4<f3
     let tex_gamma = sample_texture(in);
     let out_color_gamma = in.color * tex_gamma;
     let out_color_linear = linear_from_gamma_rgb(out_color_gamma.rgb) * r_locals.output_scale;
+    if r_locals.output_pq == 1u {
+        return vec4<f32>(pq_from_nits(bt2020_from_srgb(out_color_linear)), out_color_gamma.a);
+    }
     return vec4<f32>(out_color_linear, out_color_gamma.a);
+}
+
+// BT.2100 PQ surfaces carry BT.2020 primaries; the UI and the loupe are linear sRGB / Rec.709.
+fn bt2020_from_srgb(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        dot(c, vec3<f32>(0.627404, 0.329283, 0.043313)),
+        dot(c, vec3<f32>(0.069097, 0.919540, 0.011362)),
+        dot(c, vec3<f32>(0.016391, 0.088013, 0.895595)),
+    );
+}
+
+// SMPTE ST 2084 inverse EOTF: cd/m² (0..10000) to the PQ signal (0..1). Negative input is 0.
+fn pq_from_nits(nits: vec3<f32>) -> vec3<f32> {
+    let m1 = 0.1593017578125;
+    let m2 = 78.84375;
+    let c1 = 0.8359375;
+    let c2 = 18.8515625;
+    let c3 = 18.6875;
+    let y = pow(clamp(nits, vec3<f32>(0.0), vec3<f32>(10000.0)) / 10000.0, vec3<f32>(m1));
+    return pow((c1 + c2 * y) / (1.0 + c3 * y), vec3<f32>(m2));
 }

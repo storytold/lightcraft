@@ -15,7 +15,10 @@ each marked `Patch (HDR display output)` in the source:
 
 - `WgpuConfiguration::hdr_output` (default `false`): configure the window surfaces as
   `Rgba16Float` in `SurfaceColorSpace::ExtendedSrgbLinear` (scRGB on Windows, EDR on macOS,
-  extended linear sRGB on Vulkan / Wayland) when the surface offers it (`hdr_surface_format`).
+  extended linear sRGB on Vulkan / Wayland) when the surface offers it (`hdr_surface_format`); else
+  `Rgba16Float` in `SurfaceColorSpace::Bt2100Pq` (GNOME's Mutter, where Mesa offers PQ only): the
+  `output_pq` uniform makes the shader convert to BT.2020 and PQ-encode, `Renderer::set_pq_output`,
+  and `capture.rs` decodes it.
 - `RenderState::{target_color_space, surface_formats, display_hdr_info}`: the colour space
   chosen, what the first surface offered, and the display's `wgpu::DisplayHdrInfo`, re-queried
   on every surface configure (resize, moved window, OS HDR switch).

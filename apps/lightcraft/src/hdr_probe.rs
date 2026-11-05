@@ -5,6 +5,7 @@
 //! log folder (else the temp folder).
 
 use eframe::egui_wgpu::RenderState;
+use eframe::wgpu;
 use lightcraft_ui_egui::HdrOutput;
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -67,6 +68,13 @@ fn describe(state: &RenderState, log: &mut Log) {
     log.line(format!("display HDR facts: {info:?}"));
     log.line(format!("tone-map headroom: {:?}", info.as_ref().and_then(|i| i.tone_map_headroom())));
     log.line(format!("decision: {:?}", hdr_display::report(Some(state))));
+    if state.target_format == wgpu::TextureFormat::Rgba16Float && state.target_color_space == wgpu::SurfaceColorSpace::Bt2100Pq {
+        log.line("surface: float BT.2100 PQ (the compositor offers no extended-linear range; SDR white is drawn at the PQ reference level)".into());
+    } else if state.target_color_space == wgpu::SurfaceColorSpace::Auto {
+        let float_spaces: Vec<_> =
+            state.surface_formats.iter().filter(|f| f.format == wgpu::TextureFormat::Rgba16Float).map(|f| f.color_spaces).collect();
+        log.line(format!("surface: SDR; no float surface in extended-linear or PQ (float offers: {float_spaces:?})"));
+    }
 }
 
 impl eframe::App for Probe {
@@ -153,7 +161,7 @@ pub fn run(seconds: u64, log_dir: Option<std::path::PathBuf>) -> eframe::Result 
     }
     let mut wgpu_options = crate::window_gpu::base_options();
     hdr_display::configure(&mut wgpu_options);
-    wgpu_options.hdr_output = true;
+    wgpu_options.hdr_output = hdr_display::wanted();
     log.line(format!("compositor headroom: {:?}", hdr_display::read_compositor_headroom()));
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,

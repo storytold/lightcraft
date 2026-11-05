@@ -244,6 +244,11 @@ pub trait HdrOutput {
     /// primaries) as the loupe's HDR texture, replacing the previous one. Highlights are clipped
     /// to [`clip_headroom`] of the display's headroom.
     fn upload(&mut self, width: usize, height: usize, rgb: &[f32]) -> Result<egui::TextureId, String>;
+    /// Like [`Self::upload`], into a second texture: the part of a zoomed-in photo on screen
+    /// ([`render::Slot::HdrRegion`]), drawn over the whole-frame one.
+    fn upload_region(&mut self, width: usize, height: usize, rgb: &[f32]) -> Result<egui::TextureId, String> {
+        self.upload(width, height, rgb)
+    }
 }
 
 /// The headroom an HDR loupe texture is clipped to for a display `headroom`: rounded up to the
@@ -440,6 +445,9 @@ pub struct LightcraftApp {
     /// The window render the loupe asked for last, by job key (see [`region`]); kept for the few
     /// windows whose textures can be on screen, and for the inspector.
     pub region_view: Option<region::RegionView>,
+    /// The zoomed window the HDR display's float render is asked for ([`render::Slot::HdrRegion`]):
+    /// (its job key, the window). `None` when the loupe isn't zoomed in or shows no HDR.
+    pub hdr_region_wanted: Option<(u64, region::RegionView)>,
     /// The same for the Before side of a Before/After view.
     pub region_before_view: Option<region::RegionView>,
     /// The loupe's render sizes while a pinch or two-finger scroll runs.
@@ -563,6 +571,7 @@ impl LightcraftApp {
             brush_live: None,
             loupe_shown: None,
             region_view: None,
+            hdr_region_wanted: None,
             region_before_view: None,
             size_hold: Default::default(),
             drag_scale: Default::default(),

@@ -68,6 +68,9 @@ pub enum Slot {
     /// HDR display ([`crate::HdrOutput`]): its result waits in [`Renderer::hdr_view_result`] for
     /// the upload.
     HdrView,
+    /// The part of the zoomed-in loupe that is on screen, as linear float for an HDR display
+    /// ([`Slot::Region`]'s HDR counterpart): its result waits in [`Renderer::hdr_region_result`].
+    HdrRegion,
 }
 
 /// The loupe's HDR texture ([`Slot::HdrView`]), drawn in place of [`Slot::Main`]'s 8-bit one.
@@ -78,6 +81,15 @@ pub struct HdrView {
     pub key: u64,
     pub tex: egui::TextureId,
     pub size: [usize; 2],
+}
+
+/// The zoomed window's HDR texture ([`Slot::HdrRegion`]), drawn over the whole-frame one.
+#[derive(Clone, Copy, Debug)]
+pub struct HdrRegionTex {
+    pub photo: PhotoId,
+    /// The [`Slot::HdrRegion`] job key it was rendered for.
+    pub key: u64,
+    pub tex: egui::TextureId,
 }
 
 pub struct Tex {
@@ -226,6 +238,12 @@ pub struct Renderer {
     pub hdr_view: Option<HdrView>,
     /// The key of an HDR render whose upload failed (not asked for again).
     pub hdr_view_tried: Option<u64>,
+    /// The last [`Slot::HdrRegion`] render, not yet uploaded.
+    pub hdr_region_result: Option<(PhotoId, u64, lightcraft_pipeline::DeepImage)>,
+    /// The zoomed window's HDR texture, once uploaded.
+    pub hdr_region: Option<HdrRegionTex>,
+    /// The window job whose upload failed (not asked again).
+    pub hdr_region_tried: Option<u64>,
     pub last_main_ms: f64,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
@@ -308,6 +326,9 @@ impl Renderer {
             hdr_view_result: None,
             hdr_view: None,
             hdr_view_tried: None,
+            hdr_region_result: None,
+            hdr_region: None,
+            hdr_region_tried: None,
             last_main_ms: 0.0,
             completed: 0,
             keep_pixels: false,
@@ -857,6 +878,13 @@ impl Renderer {
             if slot == Slot::HdrView {
                 if let Some(deep) = rendered.deep {
                     self.hdr_view_result = Some((r.photo, r.key, deep));
+                    changed = true;
+                }
+                continue;
+            }
+            if slot == Slot::HdrRegion {
+                if let Some(deep) = rendered.deep {
+                    self.hdr_region_result = Some((r.photo, r.key, deep));
                     changed = true;
                 }
                 continue;
