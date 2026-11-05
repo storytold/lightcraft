@@ -270,10 +270,11 @@ fn nikon_existing_library_and_smart_preview_refresh_preserve_edits() {
         let (_, tone, stored) = crate::smart::decode(&old).unwrap();
         assert_eq!(tone, Some(old_tone));
         assert!(stored.unwrap().lens.is_none());
-        let offline_render = s.render_now(id, 96, 96).unwrap();
+        let offline_render = s.render_now(id, 600, 600).unwrap();
         assert!(!offline_render.image.data.is_empty());
+        let cached = s.media.source_ref(s.catalog.photo(id).unwrap(), crate::media::SourceLevel::Preview);
+        assert!(matches!(cached, crate::media::SourceRef::Loaded(source) if source.from_proxy), "the offline loupe cached the proxy");
         std::fs::rename(&offline, &original).unwrap();
-        s.media.forget(id);
         let result = s.execute("library.smartPreviews", &json!({"ids":[id.0]})).unwrap();
         assert_eq!(result["refreshed"], 1, "{result}");
         assert!(!crate::smart::is_stale(&preview));

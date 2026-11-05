@@ -14,9 +14,10 @@ Corrections.
 
 ## Where the data comes from
 
-The [ExifTool Nikon tag names](https://exiftool.org/TagNames/Nikon.html) give the names of NikonNEFInfo and its
-DistortionInfo entry (`0x0005`): DistortionCorrection and RadialDistortionCoefficient1 to 3. Nothing else was taken
-from other software. The rest was worked out by comparing LightCraft's uncorrected render of each NEF with the
+The [ExifTool Nikon tag-name documentation](https://exiftool.org/TagNames/Nikon.html) gives tag identities and offsets
+for NikonNEFInfo and its DistortionInfo entry (`0x0005`), including DistortionCorrection and
+RadialDistortionCoefficient1 to 3. The ExifTool executable also extracts metadata and embedded JPEG data black-box.
+The mapping was worked out independently by comparing LightCraft's uncorrected render of each NEF with the
 full-size JPEG the camera embeds in it. That JPEG is always distortion-corrected with Z lenses ("On (Required)"), and
 with other lenses when Auto distortion control is on. The comparison matched textured patches between the two images
 (normalised cross-correlation on the green channel at quarter size).
@@ -159,8 +160,9 @@ candidate gain = 1 + strength * (P(rho) - 1)
 Here `rho` is the unwarped source radius over the image-area half diagonal,
 about the recorded optical center. The ordering, powers, normalization and
 strength are hypotheses derived from the files and camera-JPEG comparisons.
-Only tag identities and the named coefficient offsets came from ExifTool's
-tag-name documentation. No external decoder implementation was read.
+Tag identities and the named coefficient offsets came from ExifTool's tag-name
+documentation; its executable also extracts file metadata and embedded JPEG data
+black-box. No external decoder implementation was read.
 
 The unnamed term matters: at `rho = 1`, the named three alone give gains of
 0.912 on the Z 6 and 2.790 on the Z 7; the complete polynomial gives 1.705 and
@@ -196,6 +198,14 @@ are switched off, so existing edited photos on any process can change tone or
 color when decoded again. `LOOK_VERSION` and `RENDER_CACHE_VERSION` are advanced
 together. Old smart previews are rebuilt from online originals and retained
 with their stored pixels, tone and lens data while originals are offline.
+Build Smart Previews reads the original independently of decoded-source caches,
+so a proxy cached by the offline loupe cannot prevent rebuilding after reconnect.
+
+The 2026-11-05 audit of all 747 open PR patches found a highest assigned
+`LOOK_VERSION` of 25 (#1206) and a highest `RENDER_CACHE_VERSION` of
+8,589,934,600 (#160, `8 | (2 << 32)`). This change uses 26 and 8,589,934,601.
+Other PRs still assign 14 or 76, and #784 assigns 24 and 81. Whichever look or
+render change lands later must renumber above the versions already on main.
 
 Reload from Disk refreshes catalog lens metadata. It enables a newly found
 profile for an untouched photo without an import preset; an edited photo keeps
@@ -226,4 +236,4 @@ None of my photos, crops or reference images are committed, only the numbers abo
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | minor | Z 6 / Z 7 distortion, correction-mode guards, cache and library migration coverage; vignette model remains unshipped |
+| 2026-11-05 | minor | Z 6 / Z 7 distortion, correction-mode guards, reconnect-safe smart-preview rebuilds, cache-version collision audit and probe geometry guards; vignette model remains unshipped |

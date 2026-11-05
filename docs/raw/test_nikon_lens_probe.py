@@ -38,6 +38,29 @@ class Measurements(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "entry range"):
             probe.tiff_entries(directory, 0, "<")
 
+    def test_geometry_requires_radial_matches_and_valid_fit_denominators(self):
+        raw = dict(crop=dict(width=1920, height=1280))
+        meta = dict(center=[0, 0], distortion_k=[0, 0, 0], zoom=0)
+        # Twenty-one reliable matches can all lie in the excluded central disk.
+        points = np.tile([239.5, 159.5, 239.5, 159.5, 239.5, 159.5], (21, 1))
+        with self.assertRaisesRegex(ValueError, "radial.*matches"):
+            probe.geometry_details(points, raw, meta)
+        points[:, 0] += 100
+        points[:, 2] += 100
+        points[:, 4] += 100
+        with self.subTest(zoom=-1), self.assertRaisesRegex(ValueError, "zoom.*denominator"):
+            probe.geometry_details(points, raw, dict(meta, zoom=-1))
+        no_measured_radius = points.copy()
+        no_measured_radius[:, 4:6] = [239.5, 159.5]
+        with self.assertRaisesRegex(ValueError, "zoom fit.*denominator"):
+            probe.geometry_details(no_measured_radius, raw, meta)
+        rho2 = (400 / (np.hypot(1919, 1279) / 2)) ** 2
+        with self.assertRaisesRegex(ValueError, "zoom fit.*denominator"):
+            probe.geometry_details(points, raw, dict(meta, distortion_k=[0, 0, -1 / rho2]))
+        for invalid in (float("nan"), float("inf")):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "non-finite"):
+                probe.geometry_details(points, raw, dict(meta, zoom=invalid))
+
     def test_truncated_nef_blocks_fail_before_indexing(self):
         """A version-only block must raise a useful error, not IndexError."""
         header = b"II*\0" + struct.pack("<I", 8)

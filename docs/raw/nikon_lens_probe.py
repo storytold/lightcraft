@@ -10,8 +10,9 @@ Run on SHA-256-verified, local CC0 corpus files:
 
 Outputs contain camera images and must remain outside version control. Never point
 this at private originals when sharing the output folder. TIFF fields are read
-here directly. Only tag identities/offsets come from ExifTool's tag-name docs;
-no external decoder implementation is used. Models are hypotheses, not production
+here directly. ExifTool's documentation gives tag identities and offsets; the tool
+extracts metadata and embedded JPEG data black-box. No external decoder implementation
+is read. Models are hypotheses, not production
 corrections. The default render uses the existing camera look; replacing optics
 after source loading deliberately does not refit that look.
 """
@@ -273,7 +274,18 @@ def patches(camera, jpeg, raw, meta):
 
 def geometry_details(points, raw, meta):
     """Radial residuals, reversed-order control, and an independently fitted zoom."""
+    points = np.asarray(points, dtype=float)
+    if points.ndim != 2 or points.shape[1] < 6 or not np.isfinite(points).all():
+        raise ValueError("invalid or non-finite geometry patch positions")
     cw, ch = raw["crop"]["width"] - 1, raw["crop"]["height"] - 1
+    numbers = np.asarray([cw, ch, *meta["center"], *meta["distortion_k"], meta["zoom"]])
+    if not np.isfinite(numbers).all():
+        raise ValueError("non-finite geometry dimensions or lens coefficients")
+    if cw <= 0 or ch <= 0:
+        raise ValueError("geometry needs an image area wider and taller than one pixel")
+    zoom_denominator = 1 + meta["zoom"]
+    if zoom_denominator <= 0:
+        raise ValueError("geometry zoom denominator 1 + zoom must be positive")
     cx, cy = cw / 2 + meta["center"][0], ch / 2 + meta["center"][1]
     dx = (points[:, 0] + 0.5) * 4 - 0.5 - cx
     dy = (points[:, 1] + 0.5) * 4 - 0.5 - cy
@@ -285,16 +297,21 @@ def geometry_details(points, raw, meta):
     k1, k2, k3 = meta["distortion_k"]
     x = rho**2
     unscaled = length * (1 + x * (k3 + x * (k2 + x * k1)))
-    predicted = unscaled / (1 + meta["zoom"])
-    reversed_order = length * (1 + x * (k1 + x * (k2 + x * k3))) / (1 + meta["zoom"])
+    predicted = unscaled / zoom_denominator
+    reversed_order = length * (1 + x * (k1 + x * (k2 + x * k3))) / zoom_denominator
+    if not all(np.isfinite(array).all() for array in (rho, measured, unscaled, predicted, reversed_order)):
+        raise ValueError("non-finite geometry radii or distortion predictions")
     use = (rho > 0.15) & (rho < 0.95)
-    zoom = (
-        1
-        / (np.dot(unscaled[use], measured[use]) / np.dot(unscaled[use], unscaled[use]))
-        - 1
-    )
+    count = int(np.count_nonzero(use))
+    if count < 20:
+        raise ValueError(f"too few radial geometry matches: {count}; need at least 20 with 0.15 < rho < 0.95")
+    norm = float(np.dot(unscaled[use], unscaled[use]))
+    projected = float(np.dot(unscaled[use], measured[use]))
+    if not math.isfinite(norm) or not math.isfinite(projected) or norm <= 0 or projected <= 0:
+        raise ValueError("geometry zoom fit has a zero, negative or non-finite denominator; check matched radii")
+    zoom = norm / projected - 1
     radial = np.abs(measured[use] - predicted[use])
-    return dict(
+    result = dict(
         before_radial_median_px=float(np.median(np.abs(measured[use] - length[use]))),
         before_radial_p95_px=float(
             np.quantile(np.abs(measured[use] - length[use]), 0.95)
@@ -309,6 +326,9 @@ def geometry_details(points, raw, meta):
         radius_min=float(rho.min()),
         radius_max=float(rho.max()),
     )
+    if not all(math.isfinite(value) for value in result.values()):
+        raise ValueError("non-finite geometry fit statistics")
+    return result
 
 
 def vignette_fit(camera, jpeg, raw, meta):
