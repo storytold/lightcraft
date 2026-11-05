@@ -456,6 +456,7 @@ mod tests {
             warp: Some(lightcraft_develop::EmbeddedWarp { planes: [[1.0, -0.1, 0.03, 0.0, 0.0, 0.0]; 3], ..Default::default() }),
             vignette: None,
             stages: Default::default(),
+            source: Default::default(),
         }
     }
     fn old_rw2() -> lightcraft_catalog::Photo {

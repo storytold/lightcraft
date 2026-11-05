@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(any(unix, windows)))]
 use std::time::SystemTime;
 
-use lightcraft_catalog::safe_file::same_file;
+use lightcraft_catalog::safe_file::{same_file, same_file_strict};
 use lightcraft_catalog::{Catalog, Source};
 
 /// The directory entry a screenshot is about to write, pinned at request admission.
@@ -127,7 +127,8 @@ impl OriginalGuard {
         put(format!("{name}.xmp"), PathBuf::from(format!("{}.xmp", path.to_string_lossy())), format!("the XMP sidecar of {label}"));
     }
 
-    /// `Err` (a message for the user) when writing `target` would replace a protected file.
+    /// `Err` (a message for the user) when writing `target` would replace a protected file, or
+    /// create a protected sidecar that isn't there yet.
     pub fn check(&self, target: &Path) -> Result<(), String> {
         self.check_target(target, false)
     }
@@ -141,20 +142,36 @@ impl OriginalGuard {
 
     fn check_target(&self, target: &Path, hard_links: bool) -> Result<(), String> {
         if std::fs::symlink_metadata(target).is_err() {
-            return Ok(()); // nothing there to replace
+            return self.check_new(target); // nothing there to replace
         }
         let mut names: Vec<String> = target.file_name().map(|n| n.to_string_lossy().to_lowercase()).into_iter().collect();
         if let Some(n) = std::fs::canonicalize(target).ok().and_then(|c| c.file_name().map(|n| n.to_string_lossy().to_lowercase())) {
             names.push(n);
         }
+        // The identity check refuses a target whose file identity cannot be read, so an unreadable
+        // hard link to an original is not taken for an ordinary file.
+        let refuse_if_same = |p: &Path, what: &str| -> Result<(), String> {
+            let same = if hard_links {
+                same_file_strict(p, target).map_err(|e| {
+                    format!(
+                        "{}: LightCraft cannot tell whether this is {what} in the library ({e}) and never writes over an original (choose another folder or file name)",
+                        target.display()
+                    )
+                })?
+            } else {
+                same_file(p, target)
+            };
+            if same {
+                return Err(format!(
+                    "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
+                    target.display()
+                ));
+            }
+            Ok(())
+        };
         for n in &names {
             for (p, what) in self.by_name.get(n).into_iter().flatten() {
-                if same_file(p, target) {
-                    return Err(format!(
-                        "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
-                        target.display()
-                    ));
-                }
+                refuse_if_same(p, what)?;
             }
         }
         // An imported hard link or symlink can have a different name from its original. A write
@@ -166,15 +183,34 @@ impl OriginalGuard {
             if !hard_links && std::fs::read_link(p).is_err() {
                 continue;
             }
-            if same_file(p, target) {
-                return Err(format!(
-                    "{} is {what} in the library: LightCraft never writes over an original (choose another folder or file name)",
-                    target.display()
-                ));
+            refuse_if_same(p, what)?;
+        }
+        Ok(())
+    }
+
+    /// A new file with a sidecar's name in that sidecar's folder would be read back as the
+    /// photo's edits. The folders are compared by identity, so `sub/../` or a link counts.
+    fn check_new(&self, target: &Path) -> Result<(), String> {
+        if !is_xmp(target) {
+            return Ok(());
+        }
+        let Some(name) = target.file_name().map(|n| n.to_string_lossy().to_lowercase()) else { return Ok(()) };
+        for (p, what) in self.by_name.get(&name).into_iter().flatten() {
+            if same_file(folder_of(p), folder_of(target)) {
+                return Err(format!("{} would become {what} in the library (choose another folder or file name)", target.display()));
             }
         }
         Ok(())
     }
+}
+
+fn is_xmp(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
+}
+
+/// The folder `path` is in (`.` for a bare file name).
+fn folder_of(path: &Path) -> &Path {
+    path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."))
 }
 
 impl crate::Session {
@@ -183,12 +219,13 @@ impl crate::Session {
         OriginalGuard::new(&self.catalog)
     }
 
-    /// `Err` when writing `path` would replace a catalogued photo's original or sidecar. A free
-    /// path (the usual case) is answered without building the guard over the whole library.
+    /// `Err` when writing `path` would replace a catalogued photo's original or sidecar, or
+    /// create one of its sidecars. A free path that isn't an `.xmp` (the usual case) is answered
+    /// without building the guard over the whole library.
     pub fn check_write_target(&self, path: &str) -> Result<(), String> {
         let path = Path::new(path);
-        if std::fs::symlink_metadata(path).is_err() {
-            return Ok(()); // nothing there to replace
+        if std::fs::symlink_metadata(path).is_err() && !is_xmp(path) {
+            return Ok(()); // nothing there to replace, and no sidecar to create
         }
         self.original_guard().check(path)
     }
@@ -203,6 +240,10 @@ impl crate::Session {
         let parent = p.parent().filter(|d| !d.as_os_str().is_empty()).and_then(|d| std::fs::canonicalize(d).ok());
         match std::fs::symlink_metadata(p) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // nothing there yet, but a new file with a photo's sidecar name would be read as its edits
+                if is_xmp(p) {
+                    self.original_guard().check(p)?;
+                }
                 Ok(WriteTarget { path: path.to_string(), state: WriteTargetState::Absent, parent })
             }
             Err(error) => Err(format!("{path}: {error}")),
@@ -284,6 +325,32 @@ mod tests {
     }
 
     #[test]
+    fn a_sidecar_that_isnt_there_yet_is_protected_too() {
+        let d = std::env::temp_dir().join(format!("lc-originals-new-sidecar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        let orig = d.join("IMG_1.jpg");
+        std::fs::write(&orig, b"original").unwrap();
+        let mut c = Catalog::default();
+        let p = Photo::new(PhotoId(1), Source::File { path: orig.to_string_lossy().to_string() }, "IMG_1.jpg", "JPEG", 10, 10, "2026-01-01");
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let g = OriginalGuard::new(&c);
+        assert!(g.check(&d.join("IMG_1.xmp")).unwrap_err().contains("XMP sidecar of IMG_1.jpg"));
+        assert!(g.check(&d.join("IMG_1.jpg.xmp")).is_err(), "the appended spelling");
+        assert!(g.check(&d.join("sub/../IMG_1.xmp")).is_err(), "another spelling of the folder");
+        assert!(g.check(&d.join("sub/IMG_1.xmp")).is_ok(), "the same name in another folder");
+        assert!(g.check(&d.join("other.xmp")).is_ok(), "no photo of that name");
+        assert!(g.check(&d.join("missing/IMG_1.xmp")).is_ok(), "a folder that isn't there");
+        // a write pinned ahead of time (a queued screenshot) is refused the same way
+        let mut s = crate::Session::new();
+        s.catalog = c;
+        let pinned = s.pin_write_target(&d.join("IMG_1.xmp").to_string_lossy());
+        assert!(pinned.unwrap_err().contains("XMP sidecar of IMG_1.jpg"));
+        assert!(s.pin_write_target(&d.join("sub/IMG_1.xmp").to_string_lossy()).is_ok(), "the same name in another folder");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn write_targets_pin_absent_paths_and_recheck_the_current_library() {
         let d = std::env::temp_dir().join(format!("lc-write-targets-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -337,6 +404,48 @@ mod tests {
             symlink(&original, &link).unwrap();
             assert!(s.pin_write_target(&link.to_string_lossy()).unwrap_err().contains("original"));
         }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_hard_link_whose_identity_cannot_be_read_is_refused() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let d = std::env::temp_dir().join(format!("lc-unreadable-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let mut s = crate::Session::new();
+        let original = d.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let photo = Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().to_string() }, "IMG_1.jpg", "JPEG", 10, 10, "2026-01-01");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let linked = d.join("shot.png");
+        std::fs::hard_link(&original, &linked).unwrap();
+
+        // A handle that shares nothing makes every other open of the file fail, so the file
+        // identity of either name cannot be read while it is held.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(&original).unwrap();
+        let refused = s.pin_write_target(&linked.to_string_lossy()).unwrap_err();
+        // Except with SeBackupPrivilege enabled (an admin's Git Bash, so every Windows CI gate leg):
+        // a backup-semantics open of both names, as the guard's identity read uses, gets past the
+        // held handle. The guard then sees the link and refuses it as the original instead (#3228).
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        let backup_open = |p: &std::path::Path| std::fs::OpenOptions::new().read(true).custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(p).is_ok();
+        if backup_open(&original) && backup_open(&linked) {
+            assert!(refused.contains("is the original"), "{refused}");
+            assert!(!refused.contains("cannot tell whether"), "{refused}");
+            lightcraft_testkit::skip!(
+                System,
+                "a backup-semantics open gets past share_mode(0) here (SeBackupPrivilege is enabled), so the \"cannot tell whether\" refusal can't be tested"
+            );
+        } else {
+            assert!(refused.contains("cannot tell whether"), "{refused}");
+        }
+        drop(held);
+
+        let refused = s.pin_write_target(&linked.to_string_lossy()).unwrap_err();
+        assert!(refused.contains("original"), "{refused}");
+        assert!(!refused.contains("cannot tell whether"), "{refused}");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

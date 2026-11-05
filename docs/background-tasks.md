@@ -66,6 +66,6 @@ guard.detail(&file_name);
 ## Testing
 
 Assert the row (`session.activity.list()`: kind, label, total, `cancellable`), that `activity.cancel(id)` stops the
-job, and that the row is gone once the job ends. `crates/ui-egui/src/tests_activity.rs` has the helpers, and the
+job, and that the row is gone once the job ends. `crates/ui-egui/src/tests/activity.rs` has the helpers, and the
 job-specific tests show the pattern (`tests_sync.rs`, `export_task.rs`, `tests_denoise.rs`…). A row only appears
 on screen once its task is 0.5 s old, so tests that click its ✕ wait for `activity:cancel:<id>` first.

@@ -20,7 +20,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Cancel Background Task",
             [],
             None,
-            "{id} | {all: true} → {cancelled: n} — ask a task (or every cancellable task) to stop; it stops at its next file or photo. An unknown id (it may have just finished) or a task that can't be cancelled is an error",
+            "{id} | {all: true} → {cancelled: n} — ask a task (or every cancellable task) to stop; it stops at its next file or photo (a preview build also stops between a photo's own previews). An unknown id (it may have just finished) or a task that can't be cancelled is an error",
             always,
             |s, p| {
                 const C: &str = "activity.cancel";
