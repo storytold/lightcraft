@@ -619,12 +619,23 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
     use crate::media::SourceRef;
     match source {
         // (a smart preview keeps the file's own colour: an imported camera profile is applied when the original is read)
-        SourceRef::File { path, max_edge, loader, denoise, .. } => {
-            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, reduced: None })
+        SourceRef::File { path, max_edge, loader, denoise, outliers, .. } => {
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, outliers, reduced: None })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
         _ => None,
     }
+}
+
+/// A fresh original for a stale smart refresh, keeping the photo's mosaic decode options.
+/// Imported colour profiles and display/source caches must not become proxy pixels.
+#[cfg(not(target_arch = "wasm32"))]
+fn refresh_source(media: &mut crate::media::MediaCache, photo: &lightcraft_catalog::Photo, max_edge: usize) -> crate::media::SourceRef {
+    let mut source = media.origin_ref(&photo.source, max_edge);
+    if let crate::media::SourceRef::File { outliers, .. } = &mut source {
+        *outliers = photo.develop.removes_hot_pixels();
+    }
+    source
 }
 
 /// The file-system half of Build / Discard Smart Previews (runs on a worker thread in the app).
@@ -817,7 +828,7 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
     let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
     let jobs: Vec<SmartJob> = photos
         .iter()
-        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
+        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(refresh_source(&mut s.media, p, max_edge)), preview_fitted_look(p)))
         .collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
@@ -1042,6 +1053,7 @@ mod tests {
             fallback: None,
             denoise: None,
             camera_profile: None,
+            outliers: false,
             reduced: None,
         };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
@@ -1057,5 +1069,93 @@ mod tests {
         assert_eq!(r["done"], json!(ids.len()), "{r}");
         assert_eq!(r["total"], json!(ids.len()));
         assert_eq!(r["failed"], json!(0));
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod smart_decode_tests {
+    use crate::media::SourceLevel;
+    use lightcraft_catalog::{Photo, PhotoId, Source};
+    use std::sync::Arc;
+
+    fn temp(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lc-smart-decode-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn smart_build_and_refresh_keep_the_photos_hot_pixel_decode() {
+        for outliers in [false, true] {
+            let dir = temp(if outliers { "fresh-hot-on" } else { "fresh-hot-off" });
+            let mut photo = Photo::new(
+                PhotoId(1),
+                Source::File { path: dir.join("original.arw").to_string_lossy().into_owned() },
+                "original.arw",
+                "ARW",
+                32,
+                24,
+                "2026-11-05T00:00:00",
+            );
+            photo.kind = lightcraft_catalog::MediaKind::Raw;
+            let mut settings = lightcraft_develop::DevelopSettings::for_raw(5200.0, 0.0);
+            settings.detail.nr_outliers = outliers;
+            photo.develop = Arc::new(settings);
+            let path = crate::smart::sharded_file_path(&dir, &photo);
+            let mut session = crate::Session::new();
+            session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+            session.media.smart_dir = Some(dir.clone());
+            // A cached raw decoded with the other hot-pixel setting cannot stand in.
+            let cached = crate::media::DecodedSource {
+                outliers: !outliers,
+                ..crate::media::DecodedSource::new(
+                    Arc::new(lightcraft_raster::Rgb32f::new(32, 24)),
+                    Some(lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() }),
+                )
+            };
+            session.media.insert_source(PhotoId(1), SourceLevel::Preview, cached);
+            let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = seen.clone();
+            session.media.file_loader = Some(Arc::new(move |_, _, with| {
+                assert!(with.dcp.is_none(), "smart pixels keep the original camera colour");
+                log.lock().unwrap().push(with.outliers);
+                let value = if with.outliers { 0.4 } else { 0.2 };
+                Ok((
+                    lightcraft_raster::Rgb32f::from_fn(32, 24, |_, _| [value; 3]),
+                    lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() },
+                ))
+            }));
+            let result = session.execute("library.smartPreviews", &serde_json::json!({"ids": [1]})).unwrap();
+            assert_eq!(result["built"], 1, "{result}");
+            assert_eq!(*seen.lock().unwrap(), [outliers], "manual build decodes the original with the photo's option");
+            let check_pixels = || {
+                let proxy = crate::smart::load(&path).unwrap();
+                let expected = if outliers { 0.4 } else { 0.2 };
+                assert!(
+                    proxy.image.data.iter().flatten().all(|v| (v - expected).abs() < 0.02),
+                    "the loaded proxy carries the requested decode, not cached black pixels"
+                );
+                assert!(proxy.from_proxy && !proxy.outliers, "a proxy has no raw mosaic decode flag");
+                assert!(proxy.fits_outliers(false) && proxy.fits_outliers(true), "offline proxies retain the upstream no-mosaic contract");
+            };
+            check_pixels();
+            // Force a stale look without changing its pixels, then exercise the actual refresh worker.
+            let bytes = std::fs::read(&path).unwrap();
+            let start = b"LCSP1\n".len();
+            let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+            let mut header: serde_json::Value = serde_json::from_slice(&bytes[start..nl]).unwrap();
+            header["look_version"] = serde_json::json!(0);
+            let mut stale = bytes[..start].to_vec();
+            stale.extend_from_slice(header.to_string().as_bytes());
+            stale.extend_from_slice(&bytes[nl..]);
+            std::fs::write(&path, stale).unwrap();
+            assert!(crate::smart::is_stale_for(&path, true));
+            super::refresh_stale_smart_previews(&mut session).unwrap().join().unwrap();
+            assert_eq!(*seen.lock().unwrap(), [outliers, outliers], "refresh also decodes a fresh original with the photo's option");
+            assert!(!crate::smart::is_stale_for(&path, true));
+            check_pixels();
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 }
