@@ -63,6 +63,8 @@ const SAME_SENSOR: &[(&str, &str, &str)] = &[
     ("Fujifilm", "X-S20", "X-T4"),
     ("Fujifilm", "X-M5", "X-T3"),
     ("Fujifilm", "GFX100S II", "GFX 100"),
+    ("Sony", "ILCE-7CM2", "ILCE-7M4"), // A7C II: same 33 MP sensor as the A7 IV
+    ("Sony", "ILCE-7M2", "ILCE-7M4"),  // issue 2113: A7C II's Exif model falls back to the A7 IV's matrices
 ];
 
 /// Model names compared without case, the brand, a leading `EOS` or a trailing `DIGITAL`
@@ -191,13 +193,20 @@ mod tests {
     #[test]
     fn other_cameras_and_other_makes_find_nothing() {
         assert_eq!(find(Some("Canon"), "Canon EOS 7D"), None);
-        assert_eq!(find(Some("SONY"), "ILCE-7M2"), None);
         assert_eq!(find(Some("OLYMPUS IMAGING CORP."), "E-M5"), None);
         // the model of another make
         assert_eq!(find(Some("Canon"), "D850"), None);
         assert_eq!(find(Some("SONY"), "X-T4"), None);
         assert_eq!(find(None, ""), None);
         assert_eq!(find(Some(""), ""), None);
+    }
+
+    #[test]
+    fn ilce_7m2_finds_ilce_7m4_matrices() {
+        // ILCE-7M2 is absent from the table and SAME_SENSOR, so it should fall
+        // through to the A7 IV's (ILCE-7M4) same-sensor matrices. Today it
+        // returns None: the A7C II's Exif model is missing from both.
+        assert_eq!(find(Some("SONY"), "ILCE-7M2").map(|c| c.model), Some("ILCE-7M4"));
     }
 
     #[test]
@@ -230,7 +239,7 @@ mod tests {
         // a model alone, as a Lightroom catalog names it
         assert_eq!(find_camera("ILCE-7M3").map(|c| c.model), Some("ILCE-7M3"));
         assert_eq!(find_camera("  ILCE-7M3  ").map(|c| c.model), Some("ILCE-7M3"));
-        for none in ["", "   ", "SONY", "SONY ILCE-7M2", "Canon EOS 7D", "D850 SONY", "OLYMPUS IMAGING CORP. E-M5"] {
+        for none in ["", "   ", "SONY", "Canon EOS 7D", "D850 SONY", "OLYMPUS IMAGING CORP. E-M5"] {
             assert_eq!(find_camera(none), None, "{none:?}");
         }
     }
