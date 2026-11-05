@@ -555,6 +555,15 @@ impl UiState {
         self.hidden_panels.is_some() && self.no_panel_shown()
     }
 
+    /// Drop Hide All Panels' snapshot once a panel is shown, so closing that panel again and
+    /// pressing Shift+Tab shows the usual panels instead of the old arrangement. Run after each
+    /// UI command and once a frame (for panels shown by a click).
+    pub fn forget_hidden_panels_once_shown(&mut self) {
+        if self.hidden_panels.is_some() && !self.no_panel_shown() {
+            self.hidden_panels = None;
+        }
+    }
+
     /// Which colour grading wheels (shadows, midtones, highlights) are hidden for viewing `photo`.
     pub fn grading_hidden_for(&self, photo: lightcraft_catalog::PhotoId) -> [bool; 3] {
         match self.grading_hidden {

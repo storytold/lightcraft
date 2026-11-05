@@ -270,3 +270,18 @@ fn a_panel_shown_and_closed_again_forgets_the_hidden_arrangement() {
     key(&mut h, "Tab", true);
     assert_eq!(shown(&h), (true, RightPanel::Keywords, false, true), "the usual panels, with the right panel F8 remembers");
 }
+
+/// The same within one batch of commands, with no frame between showing and closing the panel.
+#[test]
+fn a_panel_shown_and_closed_within_one_batch_forgets_the_arrangement_too() {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    app.ui.left_panel = false;
+    app.ui.right = RightPanel::Keywords;
+    app.ui.presets = true;
+    app.ui.filmstrip = false;
+    app.run("view.allPanels", json!({})).unwrap();
+    assert!(app.ui.all_panels_hidden());
+    app.run("view.filmstrip", json!({})).unwrap();
+    app.run("view.filmstrip", json!({})).unwrap();
+    assert!(app.ui.hidden_panels.is_none(), "showing the filmstrip dropped the snapshot");
+}
