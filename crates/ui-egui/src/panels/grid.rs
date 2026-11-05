@@ -298,7 +298,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
     let total = app.session.source_total();
     let counted = super::chips::count_text(ids.len(), total, !chips.is_empty());
-    let cnt = if sel_n > 1 { crate::i18n::tr_format!("{sel_n} selected · {counted}", counted = counted, sel_n = sel_n) } else { counted };
+    let cnt = if sel_n > 0 { crate::i18n::tr_format!("{sel_n} selected · {counted}", counted = counted, sel_n = sel_n) } else { counted };
     match app.session.browse.clone().filter(|_| app.session.source == lightcraft_engine::LibrarySource::Folder) {
         Some(b) => {
             let local = app.caches.grid.local(&app.session.catalog, &ids, generation);

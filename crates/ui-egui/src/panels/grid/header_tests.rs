@@ -17,6 +17,41 @@ fn breadcrumbs_open_their_folder_as_spelled() {
     assert!(to("").is_empty() && to("/").is_empty() && to(r"\\").is_empty());
 }
 
+/// Issue #3776: one selected photo is counted in the header as two or more are ("1 selected · 3
+/// photos"); with nothing selected the header shows the photo count alone.
+#[test]
+fn the_header_counts_a_single_selected_photo() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    for selected in [0, 1, 2] {
+        let mut session = lightcraft_engine::Session::new();
+        for i in 0..3 {
+            let id = session.catalog.alloc_photo_id();
+            let p = Photo::new(id, Source::File { path: format!("/pics/{i}.jpg") }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+            session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        session.selection.ids = session.catalog.photos().take(selected).map(|p| p.id).collect();
+        let mut app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+        app.ui.view = crate::state::ViewMode::PhotoGrid;
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        h.step();
+        h.step();
+        assert_eq!(h.app.session.selection.ids.len(), selected, "the selection is kept");
+        let painted = h.painted_text();
+        let expected = if selected == 0 { "3 photos".to_string() } else { format!("{selected} selected · 3 photos") };
+        assert!(painted.contains(&expected), "{selected} selected: the header shows {expected:?}: {painted:?}");
+        if selected == 0 {
+            assert!(!painted.iter().any(|s| s.contains("selected ·")), "nothing selected, no count: {painted:?}");
+        }
+    }
+    // a language whose word for "selected" agrees with the number reads "noun: number", right for one as for many
+    for (locale, expected) in [(Locale::Es, "Seleccionadas: 1 · x"), (Locale::PtBr, "Selecionadas: 1 · x"), (Locale::Sv, "Markerade: 1 · x")] {
+        crate::i18n::set_language(locale);
+        let one = crate::i18n::tr_format!("{sel_n} selected · {counted}", sel_n = 1, counted = "x");
+        crate::i18n::set_language(Locale::En);
+        assert_eq!(one, expected, "{locale:?}");
+    }
+}
+
 fn text_bounds(shape: &egui::Shape, out: &mut Vec<Rect>) {
     match shape {
         egui::Shape::Text(text) => out.push(text.visual_bounding_rect()),
