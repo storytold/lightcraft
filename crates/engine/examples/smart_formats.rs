@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let start = Instant::now();
         let raw = std::fs::read(&path)?;
         let probe = files::probe_bytes(&path, &raw)?;
-        let (img, info) = files::load_vec(raw, 2560)?;
+        let (img, info) = files::load_vec(raw, 2560, Default::default())?;
         println!(
             "{}",
             serde_json::json!({"source": path, "width": img.width, "height": img.height,
