@@ -103,6 +103,80 @@ fn refit_crop_angle(touched: bool, before: CropGeometry, d: &mut DevelopSettings
 
 const CROP_ANGLE: &str = "crop.angle";
 
+/// Whether a white balance mode renders its own white instead of the numbers stored on the photo: `As Shot`
+/// renders the source's as-shot white, and on a raw edited in Kelvin a named preset renders its own Kelvin / tint
+/// ([`WbMode::preset`]). Either way a number written into `temp` / `tint` is stored but read by nothing, so the
+/// panel shows the number while the render uses the mode's white. `Custom` reads its stored numbers, and so does
+/// `Auto` on such a raw: its white is resolved and stored when the mode is set (`develop.wb`), not at render time.
+fn wb_mode_ignores_its_numbers(mode: WbMode, info: &lightcraft_pipeline::SourceInfo) -> bool {
+    mode == WbMode::AsShot || (info.raw && !info.relative_wb && mode.preset().is_some())
+}
+
+/// Bring a photo's settings onto the scale and mode a white balance partial names, so a one-field partial means
+/// what it says (issue #2910, and its review). `None` when the partial needs no such preparation: it names both
+/// numbers, neither, or a mode of its own. [`merge_settings_for_photo`] and `preset.apply` both start here, and
+/// both finish with `normalize_wb` so the photo ends on the scale it is edited on.
+pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value, info: &lightcraft_pipeline::SourceInfo) -> Option<DevelopSettings> {
+    let mut d = (*d).clone();
+    let wb = partial.get("wb").and_then(Value::as_object);
+    // the partial names one of the two numbers, and not both or neither
+    let one_field = wb.is_some_and(|wb| wb.contains_key("temp") != wb.contains_key("tint"));
+    if !one_field {
+        return None;
+    }
+    // a photo whose source is edited in Kelvin is the one with two scales to trip over
+    let kelvin_source = info.raw && !info.relative_wb;
+    // the scale the partial's numbers are written on: an unmentioned scale means the relative scale, as `merged` reads it
+    let partial_scale = match wb.as_ref().and_then(|wb| wb.get("scale")).and_then(Value::as_str) {
+        Some("kelvin") => lightcraft_develop::WbScale::Kelvin,
+        _ => lightcraft_develop::WbScale::Legacy,
+    };
+    // put the photo onto the scale it is edited on: its values marked Kelvin, or a look still on the relative
+    // scale converted to the Kelvin / tint that renders the same
+    lightcraft_pipeline::local::normalize_wb(&mut d, info);
+    // a mode that answers its own white would swallow the partial's number: write the white the photo really
+    // renders as Custom values, so the number means what it says and the other field carries that white's look
+    if !wb.is_some_and(|wb| wb.contains_key("mode")) && wb_mode_ignores_its_numbers(d.wb.mode, info) {
+        let (t, tint) = lightcraft_pipeline::local::effective_wb(info, &d);
+        (d.wb.mode, d.wb.temp, d.wb.tint) = (WbMode::Custom, t, tint);
+    }
+    if kelvin_source && partial_scale == lightcraft_develop::WbScale::Legacy {
+        // and onto the partial's scale, so the field the partial leaves out is the photo's own look read there
+        let as_shot = (info.as_shot_temp, info.as_shot_tint);
+        let (kt, ktint) = lightcraft_pipeline::local::effective_wb(info, &d);
+        if let Some((lt, ltint)) = lightcraft_pipeline::local::kelvin_to_legacy(kt, ktint, as_shot) {
+            (d.wb.mode, d.wb.temp, d.wb.tint, d.wb.scale) = (WbMode::Custom, lt, ltint, lightcraft_develop::WbScale::Legacy);
+        }
+    }
+    Some(d)
+}
+
+/// Merge a partial settings JSON into a photo's settings (issue #2910). `DevelopSettings::merged` keeps a white
+/// balance that names no scale on the relative scale; on a photo edited in Kelvin the field the partial does not
+/// name (a partial with only `temp`, or only `tint`) would then be read on the other scale, giving a white neither
+/// the photo nor the partial asked for. A one-field white balance partial is therefore resolved against the photo
+/// first: the photo's white balance is brought onto the partial's scale with the photo's as-shot white
+/// (`kelvin_to_legacy` / `legacy_to_kelvin` via `normalize_wb`), the partial merges unchanged, and the result lands
+/// back on the photo's editing scale (`normalize_wb`), where the kept field carries the look the photo had.
+/// Partials naming both fields, or neither, mean the same as before. A photo whose white balance mode renders its
+/// own white — `As Shot`, or a named preset on a raw edited in Kelvin — has that white written out as Custom values
+/// first ([`wb_mode_ignores_its_numbers`]), because a mode that answers its own white would otherwise store the
+/// partial's number without any render reading it; a partial that names a `mode` itself stays authoritative.
+pub(crate) fn merge_settings_for_photo(
+    d: &DevelopSettings,
+    partial: &Value,
+    info: &lightcraft_pipeline::SourceInfo,
+) -> std::result::Result<DevelopSettings, serde_json::Error> {
+    let prepared = prepare_photo_for_wb_partial(d, partial, info);
+    let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
+    let mut out = prepared.as_ref().unwrap_or(d).merged(partial)?;
+    if on_kelvin_scale {
+        // and the result back onto the scale this photo is edited on
+        lightcraft_pipeline::local::normalize_wb(&mut out, info);
+    }
+    Ok(out)
+}
+
 /// `v` as a list of numbers; `None` unless it is an array of nothing but numbers.
 fn numbers(v: Option<&Value>) -> Option<Vec<f64>> {
     v?.as_array()?.iter().map(Value::as_f64).collect()
@@ -308,8 +382,10 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("develop.merge", "Apply Settings JSON", [], None, "{settings: partial DevelopSettings JSON, label?}", has_active, |s, p| {
             let partial = p.get("settings").cloned().ok_or_else(|| bad("develop.merge", "missing settings"))?;
             let label = str_param(p, "label").unwrap_or("Edit").to_string();
+            let id = active(s, "develop.merge")?;
+            let info = s.source_info(id);
             edit(s, "develop.merge", &label, |d| {
-                *d = d.merged(&partial).map_err(|e| bad("develop.merge", e.to_string()))?;
+                *d = merge_settings_for_photo(d, &partial, &info).map_err(|e| bad("develop.merge", e.to_string()))?;
                 Ok(())
             })
         }),
@@ -385,7 +461,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Reset Section",
             [],
             None,
-            "{section: light|curve|color|mixer|grading|effects|vignette|grain|detail|optics|geometry}",
+            "{section: profile|light|curve|color|mixer|grading|effects|vignette|grain|detail|optics|geometry}",
             has_active,
             |s, p| {
                 let sec = section_param(p, "develop.resetSection")?;
@@ -436,24 +512,51 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"mix": m}))
             }
         ),
-        cmd!("develop.auto", "Auto Settings", ["Photo"], Some("Shift+A"), "{}", has_active, |s, _| {
-            let id = active(s, "develop.auto")?;
-            let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.auto", e))?;
-            let info = s.source_info(id);
-            let d = s.develop_of(id).unwrap_or_default();
-            let a = lightcraft_pipeline::auto::auto_tone(&src, &info, &d);
-            edit(s, "develop.auto", "Auto", |d| {
-                d.light.exposure = a.exposure;
-                d.light.contrast = a.contrast;
-                d.light.highlights = a.highlights;
-                d.light.shadows = a.shadows;
-                d.light.whites = a.whites;
-                d.light.blacks = a.blacks;
-                d.color.vibrance = a.vibrance;
-                d.color.saturation = a.saturation;
-                Ok(())
-            })?;
-            Ok(serde_json::to_value(a).unwrap_or_default())
+        cmd!("develop.auto", "Auto Settings", ["Photo"], Some("Shift+A"), "{}", has_selection, |s, p| {
+            const C: &str = "develop.auto";
+            let ids = s.targets(p)?;
+            // a wrong id is a bad request, unlike a photo that can't be read just now
+            if let Some(id) = ids.iter().find(|id| s.catalog.photo(**id).is_none()) {
+                return Err(bad(C, format!("no such photo: {}", id.0)));
+            }
+            let mut first: Option<Value> = None;
+            let mut ops: Vec<Op> = Vec::new();
+            let mut failed = None;
+            for id in ids {
+                // a photo that can't be read (offline, no decoder) is left out, not the whole selection
+                let src = match s.source_now(id, SourceLevel::Thumb) {
+                    Ok(src) => src,
+                    Err(e) => {
+                        failed.get_or_insert(e);
+                        continue;
+                    }
+                };
+                let info = s.source_info(id);
+                let d = s.develop_of(id).unwrap_or_default();
+                let a = lightcraft_pipeline::auto::auto_tone(&src, &info, &d);
+                if first.is_none() {
+                    first = Some(serde_json::to_value(a).unwrap_or_default());
+                }
+                let mut nd = (*d).clone();
+                nd.light.exposure = a.exposure;
+                nd.light.contrast = a.contrast;
+                nd.light.highlights = a.highlights;
+                nd.light.shadows = a.shadows;
+                nd.light.whites = a.whites;
+                nd.light.blacks = a.blacks;
+                nd.color.vibrance = a.vibrance;
+                nd.color.saturation = a.saturation;
+                if let Some(op) = s.develop_op(id, nd, "Auto") {
+                    ops.push(op);
+                }
+            }
+            if let (None, Some(e)) = (&first, failed) {
+                return Err(bad(C, e));
+            }
+            if !ops.is_empty() {
+                s.commit("Auto", Op::Batch { ops })?;
+            }
+            Ok(first.unwrap_or_default())
         }),
         cmd!(
             "develop.wb",
@@ -533,8 +636,16 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("develop.profile", "Set Profile", [], None, "{id: profile id (see profiles.list), amount?: 0..200}", has_active, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("develop.profile", "missing id"))?.to_string();
-            if !crate::presets::PROFILES.iter().any(|x| x.id == id) && !s.lut_profiles.iter().any(|x| x.id == id) {
+            if !crate::presets::PROFILES.iter().any(|x| x.id == id)
+                && !s.lut_profiles.iter().any(|x| x.id == id)
+                && !s.dcp_profiles.iter().any(|x| x.id == id)
+            {
                 return Err(bad("develop.profile", format!("unknown profile `{id}`")));
+            }
+            // an imported camera profile whose file is missing or damaged: choosing it would develop with the
+            // file's own colour without saying so
+            if crate::cmd::dcp_profiles::is_dcp_id(&id) && !s.media.camera_profiles.contains_key(&id) {
+                return Err(bad("develop.profile", format!("camera profile `{id}` can't be used: its file is missing or damaged")));
             }
             edit(s, "develop.profile", "Profile", |d| {
                 d.profile.id = id.clone();
@@ -546,7 +657,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("profile.favorite", "Favorite Profile", [], None, "{id, favorite?: bool} (toggles when omitted)", always, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("profile.favorite", "missing id"))?.to_string();
-            if crate::presets::profile(&id).is_none() && !s.lut_profiles.iter().any(|x| x.id == id) {
+            if crate::presets::profile(&id).is_none() && !s.lut_profiles.iter().any(|x| x.id == id) && !s.dcp_profiles.iter().any(|x| x.id == id) {
                 return Err(bad("profile.favorite", format!("unknown profile `{id}`")));
             }
             let on = s.profile_favorites.contains(&id);
@@ -1068,7 +1179,26 @@ pub fn specs() -> Vec<CommandSpec> {
             let ops = ids
                 .iter()
                 .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                .filter_map(|(id, d)| s.develop_op(id, preset.apply(&d, amount), &format!("Preset: {}", preset.name)))
+                .filter_map(|(id, d)| {
+                    // a hand-written preset may name one white balance number only, and then it means the same as
+                    // a partial: bring the photo onto that scale first, with its own as-shot white, and put the
+                    // result back on the scale the photo is edited on (issue #2910) — the merge `develop.merge` uses
+                    let info = s.source_info(id);
+                    let prepared = prepare_photo_for_wb_partial(&d, &preset.settings, &info);
+                    let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
+                    let base: &DevelopSettings = prepared.as_ref().unwrap_or(&d);
+                    // Amount is measured from the import look only when the photo has one.
+                    // Otherwise the current settings (on the partial's WB scale) are its baseline.
+                    let imported = s.catalog.photo(id).filter(|p| p.import_look.is_some() && amount != 1.0).map(|p| p.import_defaults());
+                    let prepared_import =
+                        imported.as_ref().map(|d| prepare_photo_for_wb_partial(d, &preset.settings, &info).unwrap_or_else(|| d.clone()));
+                    let original = prepared_import.as_ref().unwrap_or(base);
+                    let mut next = preset.apply_on(base, original, amount);
+                    if on_kelvin_scale {
+                        lightcraft_pipeline::local::normalize_wb(&mut next, &info);
+                    }
+                    s.develop_op(id, next, &format!("Preset: {}", preset.name))
+                })
                 .collect::<Vec<_>>();
             s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
             ok()
@@ -1156,7 +1286,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "preset.update";
                 let id = active(s, c)?;
-                let current = s.develop_of(id).unwrap_or_default().to_json();
+                let current = s.develop_of(id).unwrap_or_default().to_json_for_merge();
                 let groups = groups_param(p, c)?;
                 let pr = user_preset(s, p, c)?;
                 pr.settings = match groups {
