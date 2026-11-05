@@ -760,6 +760,42 @@ fn remove_location_holds_for_original_and_dng_exports() {
 }
 
 #[test]
+fn malformed_exif_gps_still_blocks_original_when_removing_location() {
+    use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+    let dir = temp_dir("export-malformed-exif-gps");
+    let source = dir.join("Malformed.jpg");
+    let mut gps = IfdBuilder::new();
+    gps.set(t::GPS_LATITUDE_REF, Value::Ascii("N".into()));
+    gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (60, 1), (0, 1)]));
+    gps.set(t::GPS_LONGITUDE_REF, Value::Ascii("E".into()));
+    gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(10, 1), (0, 1), (0, 1)]));
+    let mut ifd0 = IfdBuilder::new();
+    ifd0.set_child(t::GPS_IFD, gps);
+    let exif = TiffWriter::default().write(&[ifd0]).unwrap();
+    let pixels = [90u8; 12];
+    let image = lightcraft_codecs::EncodeImage::new(2, 2, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let encoded = lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let original = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &encoded).unwrap();
+    std::fs::write(&source, &original).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [source.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    assert!(session.catalog.photo(id).unwrap().meta.gps.is_none(), "invalid subdivisions are not projected into the imported photo");
+    let parsed = lightcraft_meta::try_extract(&original).unwrap();
+    assert!(parsed.gps.is_none(), "the malformed coordinate is not projected after validation");
+
+    let destination = crate::export::Destination { dir: dir.join("out").to_string_lossy().into(), exact: None };
+    let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
+    let error = disk_batch(&mut session, id, &options, &destination).expect_err("Original must not preserve embedded EXIF GPS");
+    assert!(error.contains("can't remove the location"), "{error}");
+    assert!(!dir.join("out/Malformed.jpg").exists(), "no copy was written");
+    assert_eq!(std::fs::read(&source).unwrap(), original, "source bytes remain unchanged");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn remove_location_refuses_original_with_embedded_place_names() {
     let dir = temp_dir("export-noloc-place-fields");
     let value = "Embedded Place";

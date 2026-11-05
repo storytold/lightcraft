@@ -176,6 +176,13 @@ fn original_folder(source: &lightcraft_catalog::Source) -> Option<String> {
     (!dir.is_empty()).then_some(dir)
 }
 
+/// Whether the source's parsed EXIF GPS IFD contains location-bearing tags. This complements
+/// `Metadata::gps`: invalid coordinate subdivisions are intentionally not projected as a typed
+/// location, but an Original copy would still preserve those source tags unchanged.
+fn original_embeds_exif_gps(bytes: &[u8]) -> bool {
+    lightcraft_meta::embedded(bytes).exif.as_deref().is_some_and(lightcraft_meta::exif_embeds_gps_location)
+}
+
 /// Why an export of `out` pixels (`w`, `h`), from a photo of `native_px` pixels at its own size,
 /// can't be made on a computer with `ram` bytes, given its working memory `weight`: an export
 /// enlarged past the photo's size that needs more memory than the computer has would fail to
@@ -249,7 +256,7 @@ impl PreparedExport {
                                 .into_iter()
                                 .flatten()
                                 .any(|value| !value.trim().is_empty());
-                        if metadata.gps.is_some() || embeds_place_name {
+                        if metadata.gps.is_some() || original_embeds_exif_gps(&bytes) || embeds_place_name {
                             return Err(format!(
                                 "{label}: can't remove the location from an original file that embeds GPS or place names; export as JPEG or TIFF, or as DNG for a raw photo"
                             ));

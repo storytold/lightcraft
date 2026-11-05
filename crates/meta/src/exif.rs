@@ -36,6 +36,13 @@ pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata,
     Ok(m)
 }
 
+/// Whether a parsed EXIF block contains GPS location-bearing tags, even if their values cannot
+/// be projected into a valid [`Gps`] position. Used by Original export's location-removal guard.
+pub fn exif_embeds_gps_location(bytes: &[u8]) -> bool {
+    let Ok(tiff) = Tiff::parse(strip_exif_header(bytes)) else { return false };
+    tiff.gps().is_some_and(|gps| [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE].into_iter().any(|tag| gps.contains(tag)))
+}
+
 fn text(ifd: Option<&Ifd>, tag: u16) -> Option<String> {
     let s = ifd?.string(tag)?;
     let s = s.trim().to_string();
@@ -152,7 +159,12 @@ fn dms(ifd: &Ifd, tag: u16) -> Option<f64> {
     let v = ifd.value(tag)?;
     let part = |i: usize| if i < v.count() { v.get_f64(i) } else { Some(0.0) };
     let d = v.get_f64(0)?;
-    let deg = d + part(1)? / 60.0 + part(2)? / 3600.0;
+    let m = part(1)?;
+    let s = part(2)?;
+    if !d.is_finite() || d < 0.0 || !m.is_finite() || !(0.0..60.0).contains(&m) || !s.is_finite() || !(0.0..60.0).contains(&s) {
+        return None;
+    }
+    let deg = d + m / 60.0 + s / 3600.0;
     deg.is_finite().then_some(deg)
 }
 
@@ -559,6 +571,58 @@ pub(crate) mod tests {
         assert_eq!(read(" ", valid.clone()), None, "NUL ref");
         assert_eq!(read("", valid.clone()), None, "empty ref");
         assert_eq!(read("X", valid), None, "invalid ref");
+    }
+
+    fn gps_from_components_with_refs(lat: Vec<(u32, u32)>, lon: Vec<(u32, u32)>, lat_ref: &str, lon_ref: &str) -> Option<Gps> {
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE_REF, Value::Ascii(lat_ref.into()));
+        gps.set(t::GPS_LATITUDE, Value::Rational(lat));
+        gps.set(t::GPS_LONGITUDE_REF, Value::Ascii(lon_ref.into()));
+        gps.set(t::GPS_LONGITUDE, Value::Rational(lon));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::GPS_IFD, gps);
+        read_exif(&TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()).gps
+    }
+
+    fn gps_from_components(lat: Vec<(u32, u32)>, lon: Vec<(u32, u32)>) -> Option<Gps> {
+        gps_from_components_with_refs(lat, lon, "N", "E")
+    }
+
+    #[test]
+    fn exif_gps_rejects_invalid_subdivisions() {
+        let valid_axis = vec![(10, 1), (0, 1), (0, 1)];
+        for invalid in
+            [vec![(45, 1), (60, 1), (0, 1)], vec![(45, 1), (90, 1), (0, 1)], vec![(45, 1), (0, 1), (60, 1)], vec![(45, 1), (0, 1), (90, 1)]]
+        {
+            assert!(gps_from_components(invalid.clone(), valid_axis.clone()).is_none(), "latitude {invalid:?}");
+            assert!(gps_from_components(valid_axis.clone(), invalid.clone()).is_none(), "longitude {invalid:?}");
+        }
+    }
+
+    #[test]
+    fn exif_gps_preserves_valid_subdivisions() {
+        let gps =
+            gps_from_components(vec![(45, 1), (5999, 100), (5999, 100)], vec![(10, 1), (30, 1), (0, 1)]).expect("fractional components below 60");
+        assert!((gps.latitude - (45.0 + 59.99 / 60.0 + 59.99 / 3600.0)).abs() < 1e-10);
+        assert_eq!(gps.longitude, 10.5);
+        assert_eq!(
+            gps_from_components_with_refs(vec![(45, 1), (30, 1), (0, 1)], vec![(10, 1), (30, 1), (0, 1)], "S", "W")
+                .map(|g| (g.latitude, g.longitude)),
+            Some((-45.5, -10.5))
+        );
+        assert_eq!(
+            gps_from_components(vec![(45, 1)], vec![(10, 1), (30, 1)]).map(|g| (g.latitude, g.longitude)),
+            Some((45.0, 10.5)),
+            "missing minutes / seconds retain their zero defaults"
+        );
+        assert_eq!(
+            gps_from_components(vec![(0, 1), (0, 1), (0, 1)], vec![(0, 1), (0, 1), (0, 1)]).map(|g| (g.latitude, g.longitude)),
+            Some((0.0, 0.0))
+        );
+        assert_eq!(
+            gps_from_components(vec![(90, 1), (0, 1), (0, 1)], vec![(180, 1), (0, 1), (0, 1)]).map(|g| (g.latitude, g.longitude)),
+            Some((90.0, 180.0))
+        );
     }
 
     #[test]

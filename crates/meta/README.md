@@ -25,6 +25,11 @@ with more than three colon-separated components is rejected as a whole, allowing
 fallback to supply the capture time. The original tag remains available in All Metadata. JPEG ICC data is exposed only when its APP2 chunks form a complete, consistent, uniquely numbered sequence;
 malformed or truncated ICC sequences leave unrelated readable metadata available and produce no profile.
 
+EXIF GPS degrees, minutes and seconds are validated before decimal conversion: each component must be finite and
+nonnegative, and minutes / seconds must be below 60. Malformed subdivisions do not create a typed location, while
+the source tags remain available in All Metadata. Original export with Remove Location Info still refuses a source
+whose parsed EXIF GPS IFD contains location-bearing tags, even when those coordinates are invalid.
+
 ## XMP namespaces
 
 Written: `dc`, `xmp`, `photoshop`, `exif`, `exifEX`, `tiff`, `lr` (`hierarchicalSubject`) and ours,

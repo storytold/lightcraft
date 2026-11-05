@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### EXIF GPS locations are validated before use
+- EXIF GPS minutes and seconds at or above 60 are no longer folded into plausible coordinates. Original export with Remove Location Info refuses a copy when EXIF location data is present or cannot be verified.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
