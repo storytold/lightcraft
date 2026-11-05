@@ -405,6 +405,39 @@ fn survey_command_click_takes_the_photo_out() {
     assert_eq!((sel(&h), active(&h)), (vec![a], Some(a)), "the last photo stays in the survey");
 }
 
+/// Hover photo `id`'s survey tile, as a person does, so its × appears; then click the × in its corner.
+fn click_x(h: &mut Headless, id: u64) {
+    let name = format!("cull:{id}");
+    let tile = h.app.widgets.iter().find(|(w, _)| *w == name).map(|(_, r)| *r).expect("the tile is laid out");
+    h.app.synthetic.push(egui::Event::PointerMoved(tile.center()));
+    h.settle(SETTLE);
+    click_with(h, egui::pos2(tile.right() - 16.0, tile.top() + 16.0), egui::Modifiers::NONE);
+}
+
+/// The × in a survey tile's corner takes the photo out of the survey. It shows while the pointer is
+/// over the tile, and it must stay while the pointer is on the × itself (#1639, #3614): the tile
+/// loses its hover to the ×, and an × tied to that hover vanished before the click landed.
+#[test]
+fn survey_x_takes_the_photo_out() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    click_x(&mut h, c);
+    let sel: Vec<u64> = h.app.session.selection.ids.iter().map(|p| p.0).collect();
+    let active = h.app.session.selection.active.map(|p| p.0);
+    assert_eq!((sel, active), (vec![a, b], Some(b)), "the photo whose × was clicked left the survey; the active one stays active");
+}
+
+/// The × on the active survey photo takes it out too, and the last remaining photo becomes active,
+/// as a ⌘/Ctrl-click on it does.
+#[test]
+fn survey_x_on_the_active_photo_activates_the_last_one() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    click_x(&mut h, b);
+    let sel: Vec<u64> = h.app.session.selection.ids.iter().map(|p| p.0).collect();
+    assert_eq!((sel, h.app.session.selection.active.map(|p| p.0)), (vec![a, c], Some(c)));
+}
+
 /// ⌘/Ctrl-click on the active survey photo while others remain: it leaves, and the last
 /// remaining photo becomes active, so the keys still act on a photo on screen.
 #[test]
