@@ -317,6 +317,40 @@ mod tests {
         assert_eq!(within_20_s(move || create_on(scope, Duration::from_secs(30), B, || Ok(3))), Ok(3));
     }
 
+    // Given a creation given up on that finishes after all, its late device is leaked, never
+    // dropped (that would call back into the driver that just hung)
+    #[test]
+    fn a_late_device_is_leaked_not_dropped() {
+        /// Stands in for a device: dropping it is what the driver would see.
+        struct Late(Arc<AtomicBool>);
+        impl Drop for Late {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        static STUCK: Stuck = Stuck::new();
+        static GATE: Gate = Gate::new();
+        static ACTIVE: Mutex<u32> = Mutex::new(0);
+        let local = Local::new("late-leaked", &STUCK, &GATE, &ACTIVE);
+        let (release, blocked) = mpsc::channel::<()>();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&dropped);
+        let scope = local.scope();
+        let r = within_20_s(move || {
+            create_on(scope, Duration::from_millis(100), B, move || -> Result<Late, String> {
+                let _ = blocked.recv(); // "inside the driver" until the test lets go
+                Ok(Late(flag))
+            })
+        });
+        assert!(r.is_err(), "given up on");
+
+        // the driver answers: the worker disposes of the late device before its work token
+        // (declared first, dropped last), so once the gate is idle it is done with it
+        drop(release);
+        assert!(GATE.wait_idle(Duration::from_secs(20)), "the late creation ended");
+        assert!(!dropped.load(Ordering::Relaxed), "the late device was dropped instead of leaked");
+    }
+
     // Given a creation left behind past its limit, the process is not idle for a quit (issue #620:
     // no driver teardown under it) and the crash sentinel stays, until the driver work really
     // ends; the quit's own wait stays bounded meanwhile
