@@ -322,16 +322,23 @@ pub fn check_gaps(md: &str) -> Vec<String> {
     problems
 }
 
+/// The header's `**Changes:**` field: only this link.
+const CHANGES_LINK: &str = "**Changes:** [revision history](#revision-history)";
+
 /// A doc whose header (the lines before its first `## ` heading) carries a `Last updated` date or a
-/// `Change` note: every PR that touches the doc would edit that one line and conflict with every
-/// other open PR. Changes go in the doc's `## Revision history` table instead.
+/// change note (a `Change` field, or a `Changes` field holding more than [`CHANGES_LINK`]): every
+/// PR that touches the doc would edit that one line and conflict with every other open PR. Changes
+/// go in the doc's `## Revision history` table instead.
 pub fn check_header(path: &str, md: &str) -> Option<String> {
-    let (i, _) = md
-        .lines()
-        .enumerate()
-        .take_while(|(_, l)| !l.starts_with("## "))
-        .find(|(_, l)| l.contains("**Last updated:**") || l.contains("**Change:**"))?;
-    Some(format!("{path}:{}: the header has a `Last updated` or `Change` field: add a row to the doc's revision history instead", i + 1))
+    let (i, _) = md.lines().enumerate().take_while(|(_, l)| !l.starts_with("## ")).find(|(_, l)| {
+        l.contains("**Last updated:**")
+            || l.contains("**Change:**")
+            || l.split(" · ").map(|f| f.trim_start_matches("> ").trim()).any(|f| f.starts_with("**Changes:**") && f != CHANGES_LINK)
+    })?;
+    Some(format!(
+        "{path}:{}: the header has a `Last updated` date or a change note: keep `{CHANGES_LINK}` there and add a row to the doc's revision history instead",
+        i + 1
+    ))
 }
 
 fn check_headers(root: &Path) -> Result<Vec<String>, String> {
@@ -510,6 +517,10 @@ old
         assert!(check_header("docs/a.md", dated).is_some_and(|p| p.starts_with("docs/a.md:3: ")));
         let noted = "# Doc\n> **Change:** minor (x)\n";
         assert!(check_header("docs/b.md", noted).is_some_and(|p| p.starts_with("docs/b.md:2: ")));
+        let in_link = "# Doc\n> **Changes:** [revision history](#revision-history) (2026-11-05: x)\n";
+        assert!(check_header("docs/c.md", in_link).is_some_and(|p| p.starts_with("docs/c.md:2: ")));
+        let instead = "# Doc\n> **Last reviewed:** 2026-10-10 · **Changes:** minor (x)\n";
+        assert!(check_header("docs/d.md", instead).is_some());
     }
 
     #[test]
