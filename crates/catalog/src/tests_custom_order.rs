@@ -76,5 +76,5 @@ fn custom_order_survives_a_snapshot_and_journal_round_trip() {
     assert_eq!(serde_json::from_str::<Op>(&json).unwrap(), op);
     // an album without one doesn't write the field (older builds read it unchanged)
     assert!(!Catalog::new().to_snapshot().contains("photo_order"));
-    const { assert!(crate::journal::VERSION >= 10, "SetAlbumPhotoOrder is catalog format 10") };
+    const { assert!(crate::journal::VERSION >= 12, "SetAlbumPhotoOrder is catalog format 12") };
 }

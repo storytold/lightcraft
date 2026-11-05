@@ -236,9 +236,11 @@ fn op_variants_are_versioned() {
             Op::SetFolderRecord { .. } => 6,
             Op::SetAsShotWb { .. } => 7,
             Op::SetHistoryCursor { .. } => 8,
-            Op::SetAlbumPhotoOrder { .. } => 10,
+            Op::SetAlbumPhotoOrder { .. } => 12,
         }
     }
+    /// v11: `EmbeddedLens.source` (v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 11;
     let newest = since(&Op::SetAlbumPhotoOrder { id: AlbumId(1), order: vec![] });
-    assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
+    assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
