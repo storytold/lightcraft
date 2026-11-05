@@ -512,6 +512,7 @@ impl Session {
             stages: None,
             view_cache: None,
             display: None,
+            on_screen: false,
             slide: None,
             preview_cut: None,
             display_fit: None,
@@ -527,6 +528,8 @@ impl Session {
             key,
             cached: Vec::new(),
             embedded,
+            embedded_cache: None,
+            embedded_on_disk: false,
             minimum_embedded_edge,
             small: Some(Box::new(small)),
         })
