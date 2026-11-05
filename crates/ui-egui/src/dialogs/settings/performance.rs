@@ -1,7 +1,9 @@
 use super::widgets::{check, choices, heading, hint, row};
 #[cfg(not(target_arch = "wasm32"))]
 use super::widgets::{label_width, path_label};
-use super::{CACHE_SIZES, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Tokens, Value, json, register};
+use super::{
+    CACHE_SIZES, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Tokens, Value, json, register,
+};
 
 // --------------------------------------------------------------------------------- Performance
 
@@ -49,6 +51,21 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         let opts = [(0u32, auto.as_str()), (512, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB")];
         choices(ui, "settingsMemory", &opts, &mut app.ui.settings.memory_mb);
     });
+    row(ui, t, crate::i18n::tr("Hot pixel limit"), |ui| {
+        let opts: Vec<(f32, String)> = HOT_PIXEL_LIMITS
+            .iter()
+            .map(|p| (*p, if *p == HOT_PIXEL_LIMIT_DEFAULT { format!("{p} % ({})", crate::i18n::tr("default")) } else { format!("{p} %") }))
+            .collect();
+        let opts: Vec<(f32, &str)> = opts.iter().map(|(p, l)| (*p, l.as_str())).collect();
+        choices(ui, "settingsHotPixels", &opts, &mut app.ui.settings.hot_pixel_limit);
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "Remove Hot Pixels (Detail) leaves a raw unchanged when more than this share of its photosites would be replaced: such a photo doesn't look like hot pixels on a sensor.",
+        ),
+    );
     heading(ui, t, crate::i18n::tr("Preview cache"));
     let cur = app.session.cache_mb;
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {

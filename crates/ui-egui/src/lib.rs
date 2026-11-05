@@ -375,6 +375,8 @@ pub struct LightcraftApp {
     pub(crate) disk_notice: Option<(u64, String)>,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
+    /// The hot pixel limit last applied (percent).
+    hot_pixels_applied: Option<f32>,
     /// The display profile setting last applied (`app.displayProfile`).
     pub(crate) display_applied: Option<String>,
     /// Why the display profile setting could not be applied (shown in Settings ▸ Display).

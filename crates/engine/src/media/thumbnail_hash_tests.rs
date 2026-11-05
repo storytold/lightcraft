@@ -281,6 +281,83 @@ fn a_render_that_panics_fails_instead_of_never_answering() {
     assert_eq!(r.rendered.err().as_deref(), Some("the render failed unexpectedly: preview reader bug"));
 }
 
+/// A raw photo's smart preview has no mosaic left: it stands in with the box on or off, so an offline raw keeps
+/// reusing the decoded proxy instead of reading the file again for every render.
+#[test]
+fn a_smart_preview_fits_either_hot_pixel_setting() {
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let decoded = DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), Some(raw));
+    assert!(decoded.fits_outliers(false) && !decoded.fits_outliers(true), "a raw decode must match the box");
+    let proxy = DecodedSource { from_proxy: true, ..decoded };
+    assert!(proxy.fits_outliers(false) && proxy.fits_outliers(true));
+}
+
+/// The Remove Hot Pixels box decides how a raw is decoded (#1345): the loader is told, and a source decoded with
+/// the other setting is not reused. A rendered file has no mosaic, so its source stays.
+#[test]
+fn hot_pixel_box_decodes_the_raw_again() {
+    let mut s = session();
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = asked.clone();
+    let raw = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let is_raw = raw.clone();
+    s.media.file_loader = Some(Arc::new(move |_, _, with: crate::media::RawDecode<'_>| {
+        log.lock().unwrap().push(with.outliers);
+        Ok((Rgb32f::new(8, 8), SourceInfo { raw: is_raw.load(std::sync::atomic::Ordering::Relaxed), ..Default::default() }))
+    }));
+    let set = |s: &mut crate::Session, on: bool| {
+        let mut d = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+        d.detail.nr_outliers = on;
+        // a new edit each time, so a render cached for earlier settings is not simply shown again
+        d.light.exposure += 0.1;
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "box".into(), edited: None }).unwrap();
+    };
+    let render = |s: &mut crate::Session| {
+        let r = s.thumb_job(PhotoId(1), 256).unwrap().run();
+        s.accept(&r);
+    };
+    render(&mut s);
+    render(&mut s);
+    assert_eq!(*asked.lock().unwrap(), [false], "decoded once, then cached");
+    set(&mut s, true);
+    render(&mut s);
+    render(&mut s);
+    assert_eq!(*asked.lock().unwrap(), [false, true], "switched on: decoded again with the filter, then cached");
+    set(&mut s, false);
+    render(&mut s);
+    assert_eq!(*asked.lock().unwrap(), [false, true, false]);
+    // not a raw: the box changes nothing, the cached source is kept
+    raw.store(false, std::sync::atomic::Ordering::Relaxed);
+    s.media.forget(PhotoId(1));
+    set(&mut s, false);
+    render(&mut s);
+    set(&mut s, true);
+    render(&mut s);
+    assert_eq!(*asked.lock().unwrap(), [false, true, false, false]);
+}
+
+/// With the Detail section's eye off, Remove Hot Pixels contributes nothing either: the raw is decoded without it.
+#[test]
+fn detail_eye_off_decodes_the_raw_without_hot_pixel_removal() {
+    let mut s = session();
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = asked.clone();
+    s.media.file_loader = Some(Arc::new(move |_, _, with: crate::media::RawDecode<'_>| {
+        log.lock().unwrap().push(with.outliers);
+        Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, ..Default::default() }))
+    }));
+    for eye in [true, false] {
+        let mut d = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+        d.detail.nr_outliers = true;
+        d.set_section_enabled("detail", eye);
+        d.light.exposure += 0.1;
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "eye".into(), edited: None }).unwrap();
+        let r = s.thumb_job(PhotoId(1), 256).unwrap().run();
+        s.accept(&r);
+    }
+    assert_eq!(*asked.lock().unwrap(), [true, false]);
+}
+
 /// CodeRabbit on #3544: a stand-in job decoding a camera JPEG when Discard Preview Cache clears the
 /// cache doesn't put the picture back: it writes for the generation it was made in (memory and
 /// disk alike), as render jobs do.
