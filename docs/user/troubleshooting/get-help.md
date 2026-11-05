@@ -29,7 +29,9 @@ When thumbnails or previews don't appear, appear slowly, or keep the computer bu
 $env:RUST_LOG = "warn,lightcraft*=info,lightcraft_ui_egui::render=debug"; & "C:\Program Files\LightCraft\lightcraft.exe"
 ```
 
-The log then has a line for each picture LightCraft asks for, with its file, and a line for how it ended: drawn, or dropped and why (for example, scrolled out of view, or replaced by a newer request). A file that can't be read is still a warning. So the log shows whether a file was asked for once or many times. `LIGHTCRAFT_LOG=debug` instead turns on the detailed log of all of LightCraft.
+The log then has a line for each picture LightCraft asks for, with its file, and usually a line for how it ended: drawn, or dropped and why (for example, scrolled out of view, or replaced by a newer request). A few requests that are dropped while they wait, such as when photos are removed or LightCraft quits, have no ending line. A file that can't be read is still a warning. So the log shows whether a file was asked for once or many times. `LIGHTCRAFT_LOG=debug` instead turns on the detailed log of all of LightCraft.
+
+This log names the files LightCraft draws, with their folders. Look through it before you share it, and remove any names you'd rather keep private.
 
 ## Still stuck?
 
