@@ -140,6 +140,39 @@ pub fn legacy_to_kelvin(temp: f64, tint: f64, as_shot: (f64, f64)) -> (f64, f64)
     }
 }
 
+/// The relative-scale `(temp, tint)` that [`legacy_to_kelvin`] would read as the Kelvin `(temp, tint)` on a source
+/// whose real as-shot white is `as_shot`: the inverse of [`legacy_white`]'s composition. It runs the Bradford step
+/// backwards — the old target's cone response times the old reference's over the as-shot white's — and reads the
+/// result back through [`xy_to_temp_tint`]. `(6500, 0)` is the relative scale's as-shot reference, so the Kelvin
+/// white of the source itself maps exactly to it. `None` when the arithmetic has nowhere to go (a non-finite input,
+/// a white outside the chromaticity plane, or an as-shot cone response of zero, where the forward step discarded it).
+pub fn kelvin_to_legacy(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<(f64, f64)> {
+    use lightcraft_color::{BRADFORD, Xy};
+    if !(temp.is_finite() && tint.is_finite() && as_shot.0.is_finite() && as_shot.1.is_finite()) {
+        return None;
+    }
+    if (temp - as_shot.0).abs() < 1e-9 && (tint - as_shot.1).abs() < 1e-9 {
+        // the source's own white: the relative scale's as-shot reference, exactly
+        return Some((6500.0, 0.0));
+    }
+    let cones = |t: f64, tint: f64| BRADFORD.apply(temp_tint_to_xy(t, tint).to_xyz());
+    let (target, reference, shot) = (cones(temp, tint), cones(6500.0, 0.0), cones(as_shot.0, as_shot.1));
+    let inverse = BRADFORD.inverse()?;
+    let mut old = [0.0; 3];
+    for i in 0..3 {
+        if shot[i].abs() < 1e-12 {
+            return None;
+        }
+        old[i] = target[i] * reference[i] / shot[i];
+    }
+    let xy = Xy::from_xyz(inverse.apply(old));
+    if !(xy.x.is_finite() && xy.y.is_finite() && xy.y > 0.0) {
+        return None;
+    }
+    let (t, tint) = xy_to_temp_tint(xy);
+    (t.is_finite() && tint.is_finite()).then_some((t, tint))
+}
+
 /// Bring the white balance of `d` onto the scale `info` is edited on, before a new value is written into it: on a
 /// raw with a Kelvin scale the values are marked Kelvin, and ones still on the relative scale become the Custom
 /// Kelvin / tint that renders the same ([`legacy_to_kelvin`]; a preset mode's look is kept as that custom
@@ -557,6 +590,11 @@ pub struct PlaneSigmas {
     pub chroma: Option<f32>,
 }
 
+/// Gaussian sigma (pixels) of the texture / sharpening band at `px_per_long`.
+pub fn texture_sigma(px_per_long: f64) -> f32 {
+    (0.0018 * px_per_long as f32).max(0.6)
+}
+
 pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
     // A hidden mask, or one with no components, does not change the picture. Its sliders must
@@ -581,7 +619,7 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
         || local_any(|a| a.sharpness)
         || local_any(|a| a.noise)
         || s.masks.iter().filter(live).any(|m| m.adjust.defringe > 0.0))
-    .then(|| (0.0018 * ppl).max(0.6));
+    .then(|| texture_sigma(px_per_long));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
     let chroma = (local_any(|a| a.moire) || s.masks.iter().filter(live).any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
     let base_detail = if base.is_some() { tone_base_detail(s, px_per_long) } else { 0 };
@@ -703,6 +741,7 @@ pub fn airlight_of(mut v: Vec<f32>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightcraft_color::cct::xy_to_uv;
 
     #[test]
     fn guided_preserves_step_edges_and_flattens_texture() {
@@ -795,6 +834,70 @@ mod tests {
         let mut img = Rgb32f::filled(2, 2, [0.1, 0.2, 0.3]);
         scene_linear_pre(&mut img, &SourceInfo::default(), &s);
         assert!((img.get(1, 1)[2] - 0.6).abs() < 1e-5);
+    }
+
+    /// [`kelvin_to_legacy`] inverts [`legacy_to_kelvin`] over the whole relative slider range and back: the
+    /// round trip returns the start, in both directions, to the precision of the Kelvin / tint parametrisation.
+    #[test]
+    fn kelvin_to_legacy_inverts_legacy_to_kelvin() {
+        for as_shot in [(4986.0, -2.0), (6500.0, 0.0), (3200.0, 14.0), (9500.0, -12.0)] {
+            // the relative slider's whole reach: temp 0..100 (2000–13550 K around 6500), tint −150..150
+            for pct in [0.0, 12.5, 25.0, 50.0, 75.0, 100.0] {
+                for tint in [-150.0, -40.0, 0.0, 33.0, 150.0] {
+                    let (lt, ltint) = controls_relative(pct, tint);
+                    let (kt, ktint) = legacy_to_kelvin(lt, ltint, as_shot);
+                    // past the Kelvin parametrisation's own reach (its search runs 1000–50000 K) the forward
+                    // conversion has already clamped, so the pair is not expected to come back
+                    if !(1050.0..=49_000.0).contains(&kt) {
+                        continue;
+                    }
+                    let back = kelvin_to_legacy(kt, ktint, as_shot).unwrap();
+                    let (x1, y1) = xy_to_uv(temp_tint_to_xy(lt, ltint));
+                    let (x2, y2) = xy_to_uv(temp_tint_to_xy(back.0, back.1));
+                    // the pair may differ by more than the slider's own step at the extreme corners (the Kelvin
+                    // parametrisation is read back through a search), but never by much, and the white it renders
+                    // is the same
+                    assert!(
+                        (back.0 - lt).abs() <= lt.abs() * 0.01 && (back.1 - ltint).abs() < 0.5,
+                        "as shot {as_shot:?}: relative ({lt}, {ltint}) -> kelvin ({kt}, {ktint}) -> {back:?}"
+                    );
+                    assert!((x1 - x2).hypot(y1 - y2) < 1e-3, "as shot {as_shot:?}: relative ({lt}, {ltint}) -> kelvin ({kt}, {ktint}) -> {back:?}");
+                }
+            }
+            // the other direction: every white the relative scale can hold maps back to a pair that renders the same
+            for kt in [as_shot.0, 2500.0, 4200.0, 6500.0, 12000.0] {
+                for ktint in [-60.0, 0.0, 45.0] {
+                    let Some((lt, ltint)) = kelvin_to_legacy(kt, ktint, as_shot) else { continue };
+                    // outside the slider's reach the relative scale has no value for this white: the forward
+                    // conversion would clamp, so the round trip is not expected to close there
+                    if !(2000.0..=13550.0).contains(&lt) || ltint.abs() > 150.0 {
+                        continue;
+                    }
+                    let (kt2, ktint2) = legacy_to_kelvin(lt, ltint, as_shot);
+                    let (x1, y1) = xy_to_uv(temp_tint_to_xy(kt, ktint));
+                    let (x2, y2) = xy_to_uv(temp_tint_to_xy(kt2, ktint2));
+                    assert!(
+                        (x1 - x2).hypot(y1 - y2) < 1e-3,
+                        "as shot {as_shot:?}: kelvin ({kt}, {ktint}) -> relative ({lt}, {ltint}) -> ({kt2}, {ktint2})"
+                    );
+                }
+            }
+            // the source's own white is the relative scale's as-shot reference, exactly
+            assert_eq!(kelvin_to_legacy(as_shot.0, as_shot.1, as_shot), Some((6500.0, 0.0)));
+        }
+        // the exact inverse of the special case inside legacy_to_kelvin
+        assert_eq!(kelvin_to_legacy(4986.0, -2.0, (4986.0, -2.0)), Some((6500.0, 0.0)));
+        assert_eq!(legacy_to_kelvin(6500.0, 0.0, (4986.0, -2.0)), (4986.0, -2.0));
+        // hostile numbers answer None, never a panic or a plausible lie
+        assert_eq!(kelvin_to_legacy(f64::NAN, 0.0, (5000.0, 0.0)), None);
+        assert_eq!(kelvin_to_legacy(5000.0, f64::INFINITY, (5000.0, 0.0)), None);
+        assert_eq!(kelvin_to_legacy(5000.0, 0.0, (f64::NAN, 0.0)), None);
+    }
+
+    /// The relative scale's `(temp, tint)` for a slider temperature at `pct` % (2000–7000 K fill the left half) and tint.
+    fn controls_relative(pct: f64, tint: f64) -> (f64, f64) {
+        let t = if pct <= 50.0 { 2000.0 + pct * 100.0 } else { 7000.0 + (pct - 50.0) * 131.0 };
+        (t, tint)
     }
 }
 
