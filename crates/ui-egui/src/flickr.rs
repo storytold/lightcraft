@@ -104,9 +104,14 @@ pub struct FlickrUi {
     /// Counts album reads: only the answer to the latest one is kept. Clearing the list (another
     /// account) or adding a just-made album moves it on, so an older read never overwrites them.
     pub albums_read: u64,
-    /// Counts sign-in attempts: Cancel moves it on, so a request-token answer that arrives after
-    /// it neither resumes the sign-in nor opens the browser.
-    pub sign_in_attempt: u64,
+    /// Stops the album read in progress (a new read, or another account, sets it).
+    pub albums_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Numbers the sign-in steps (request token, code exchange): the one holding `busy` is
+    /// `busy_step`. Cancel, a sign-out or a new key stop that step and free `busy` at once, so a
+    /// new sign-in can start; the stopped step's late answer, no longer the holder, is ignored.
+    pub busy_step: u64,
+    /// Stops the sign-in step holding `busy`.
+    pub busy_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// The stored API key the Key field was last filled from (a key changed elsewhere refills it).
     pub loaded_key: String,
     /// An upload in progress.
@@ -256,13 +261,19 @@ mod native {
                 if app.flickr.uploading() {
                     return Err(crate::i18n::tr("Wait for the upload to Flickr to finish (or stop it) first").to_string());
                 }
-                // a request-token answer still on its way belongs to the old sign-in (or key)
-                app.flickr.sign_in_attempt = app.flickr.sign_in_attempt.wrapping_add(1);
-                app.session.execute(id, p).map_err(|e| e.to_string())
+                let key_before = app.session.flickr_status()["apiKey"].clone();
+                let r = app.session.execute(id, p).map_err(|e| e.to_string());
+                // only once the change is made (and saved): a sign-in step still on its way belongs
+                // to the old sign-in or key, so it stops. A refused change, or the same key again,
+                // leaves a sign-in under way alone.
+                if r.is_ok() && (id == "flickr.signOut" || app.session.flickr_status()["apiKey"] != key_before) {
+                    stop_step(app);
+                }
+                r
             }
             "flickr.cancelSignIn" => {
-                // a request-token answer still on its way is ignored when it comes
-                app.flickr.sign_in_attempt = app.flickr.sign_in_attempt.wrapping_add(1);
+                // the step under way stops, and its answer is ignored if it comes anyway
+                stop_step(app);
                 app.session.flickr_cancel_sign_in();
                 app.flickr.authorize_url = None;
                 app.flickr.code.clear();
@@ -280,17 +291,25 @@ mod native {
         if app.flickr.albums_loading {
             return Ok(());
         }
+        read_albums(app)
+    }
+
+    /// Start an album read now, stopping one already under way (whose answer is then ignored).
+    fn read_albums(app: &mut LightcraftApp) -> Result<(), String> {
         let (client, token) = lightcraft_engine::flickr::albums_request(&app.session)?;
+        stop_album_read(app);
         let account = token.token.clone();
         app.flickr.albums_account = Some(account.clone());
         app.flickr.albums_loading = true;
         app.flickr.albums_read = app.flickr.albums_read.wrapping_add(1);
         let read = app.flickr.albums_read;
+        let cancel = Arc::new(AtomicBool::new(false));
+        app.flickr.albums_cancel = Some(cancel.clone());
         let r = crate::tasks::spawn(
             app,
             "Reading Flickr albums",
             None,
-            move || lightcraft_engine::flickr::list_albums(&client, &token, &AtomicBool::new(false)),
+            move || lightcraft_engine::flickr::list_albums(&client, &token, &cancel),
             move |app, _, r| {
                 // a newer read (or a newer list) replaced this one, or another account signed in
                 // meanwhile: this answer is out of date
@@ -298,6 +317,7 @@ mod native {
                     return;
                 }
                 app.flickr.albums_loading = false;
+                app.flickr.albums_cancel = None;
                 match r {
                     Ok(list) => {
                         app.flickr.albums = Some(list.into_iter().map(|a| (a.id, a.title, a.photos)).collect());
@@ -309,9 +329,50 @@ mod native {
         );
         if let Err(e) = r {
             app.flickr.albums_loading = false;
+            app.flickr.albums_cancel = None;
             return Err(e);
         }
         Ok(())
+    }
+
+    /// Stop the album read under way, if any: its worker gives up at once (no thread or
+    /// connection left waiting on Flickr).
+    fn stop_album_read(app: &mut LightcraftApp) {
+        if let Some(c) = app.flickr.albums_cancel.take() {
+            c.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Start a sign-in step: it holds `busy` until it ends or is stopped. Its number, and the flag
+    /// its worker checks.
+    fn begin_step(app: &mut LightcraftApp) -> (u64, Arc<AtomicBool>) {
+        app.flickr.busy_step = app.flickr.busy_step.wrapping_add(1);
+        app.flickr.busy = Some("Contacting Flickr…");
+        app.flickr.error = None;
+        let cancel = Arc::new(AtomicBool::new(false));
+        app.flickr.busy_cancel = Some(cancel.clone());
+        (app.flickr.busy_step, cancel)
+    }
+
+    /// A sign-in step ended: whether it still held `busy` (and so is still the current step). A
+    /// stopped or superseded step frees nothing, since `busy` may belong to a newer step now.
+    fn end_step(app: &mut LightcraftApp, step: u64) -> bool {
+        if app.flickr.busy.is_some() && app.flickr.busy_step == step {
+            app.flickr.busy = None;
+            app.flickr.busy_cancel = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Stop the sign-in step under way, if any, and free `busy` at once.
+    fn stop_step(app: &mut LightcraftApp) {
+        if let Some(c) = app.flickr.busy_cancel.take() {
+            c.store(true, Ordering::Relaxed);
+        }
+        app.flickr.busy = None;
+        app.flickr.busy_step = app.flickr.busy_step.wrapping_add(1);
     }
 
     /// The signed-in account (its token's public half).
@@ -327,6 +388,7 @@ mod native {
             app.flickr.albums = None;
             app.flickr.albums_error = None;
             app.flickr.albums_loading = false;
+            stop_album_read(app);
             app.flickr.albums_account = current;
             app.flickr.albums_read = app.flickr.albums_read.wrapping_add(1);
         }
@@ -338,19 +400,16 @@ mod native {
             return Err("Flickr is already being contacted".into());
         }
         let client = app.session.flickr_client()?;
-        app.flickr.busy = Some("Contacting Flickr…");
-        app.flickr.error = None;
-        app.flickr.sign_in_attempt = app.flickr.sign_in_attempt.wrapping_add(1);
-        let attempt = app.flickr.sign_in_attempt;
+        let (step, cancel) = begin_step(app);
         let r = crate::tasks::spawn(
             app,
             "Signing in to Flickr",
             Some("flickr"),
-            move || client.request_token(&AtomicBool::new(false)).map(|req| (client.authorize_url(&req), req)),
+            move || client.request_token(&cancel).map(|req| (client.authorize_url(&req), req)),
             move |app, ctx, r| {
-                app.flickr.busy = None;
-                // cancelled while Flickr was answering: nothing to resume, no browser
-                if app.flickr.sign_in_attempt != attempt {
+                // stopped (cancel, sign-out, new key) while Flickr was answering: nothing to
+                // resume, no browser
+                if !end_step(app, step) {
                     return;
                 }
                 match r {
@@ -372,7 +431,7 @@ mod native {
             },
         );
         if let Err(e) = r {
-            app.flickr.busy = None;
+            end_step(app, step);
             return Err(e);
         }
         Ok(json!({"started": true}))
@@ -388,19 +447,18 @@ mod native {
         }
         let request = app.session.flickr_pending().cloned().ok_or("start the sign-in first")?;
         let client = app.session.flickr_client()?;
-        app.flickr.busy = Some("Contacting Flickr…");
-        app.flickr.error = None;
+        let (step, cancel) = begin_step(app);
         let asked = request.clone();
         let r = crate::tasks::spawn(
             app,
             "Signing in to Flickr",
             Some("flickr"),
-            move || client.access_token(&asked, &code, &AtomicBool::new(false)),
+            move || client.access_token(&asked, &code, &cancel),
             move |app, ctx, r| {
-                app.flickr.busy = None;
-                // cancelled (or restarted) while the code was being exchanged: the token is dropped,
-                // so a cancelled sign-in never becomes the account
-                if app.session.flickr_pending() != Some(&request) {
+                // stopped, cancelled or restarted while the code was being exchanged: the token is
+                // dropped, so a cancelled sign-in never becomes the account
+                let current = end_step(app, step);
+                if !current || app.session.flickr_pending() != Some(&request) {
                     return;
                 }
                 let r = r.map_err(|e| e.to_string()).and_then(|token| {
@@ -421,7 +479,7 @@ mod native {
             },
         );
         if let Err(e) = r {
-            app.flickr.busy = None;
+            end_step(app, step);
             return Err(e);
         }
         Ok(json!({"started": true}))
@@ -492,10 +550,18 @@ mod native {
                     // is still this account's)
                     let photos = r["uploaded"].as_u64().unwrap_or(0).saturating_sub(album_failed);
                     if app.flickr.albums_account.as_deref() == Some(account.as_str()) {
-                        app.flickr.albums.get_or_insert_with(Vec::new).insert(0, (id.to_string(), title.to_string(), photos));
-                        // a read that started before the album existed must not drop it
-                        app.flickr.albums_read = app.flickr.albums_read.wrapping_add(1);
-                        app.flickr.albums_loading = false;
+                        // a list that was never read, or a read under way that started before the
+                        // album existed: read it again, so the list is complete and has it
+                        let reread = app.flickr.albums.is_none() || app.flickr.albums_loading;
+                        let list = app.flickr.albums.get_or_insert_with(Vec::new);
+                        // a read that finished meanwhile may list it already
+                        if !list.iter().any(|(a, _, _)| a == id) {
+                            list.insert(0, (id.to_string(), title.to_string(), photos));
+                        }
+                        if reread && let Err(e) = read_albums(app) {
+                            app.flickr.albums_loading = false;
+                            app.flickr.albums_error = Some(e);
+                        }
                     }
                 }
                 if r["cancelled"] == true {

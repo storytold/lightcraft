@@ -221,9 +221,16 @@ fn a_change_that_cannot_be_saved_is_undone() {
     // the folder becomes a file: nothing can be saved there any more
     std::fs::remove_dir_all(&d).unwrap();
     std::fs::write(&d, b"not a folder").unwrap();
+    // a sign-in under way when a sign-out can't be saved: both stay as they were
+    let req = lightcraft_flickr::RequestToken { token: "req".into(), secret: "reqsecret".into() };
+    s.flickr_begin_sign_in(req.clone());
+    assert!(s.execute("flickr.signOut", &json!({})).is_err());
+    assert_eq!(s.flickr_pending(), Some(&req), "the sign-in under way is kept");
+    // a finished sign-in that can't be saved: not kept, and its spent request token isn't offered again
     let token = lightcraft_flickr::Token { token: "acc".into(), secret: "accsecret".into(), ..Default::default() };
     assert!(s.flickr_finish_sign_in(token).is_err());
     assert_eq!(s.flickr_status()["signedIn"], false, "a sign-in the file doesn't have isn't kept");
+    assert_eq!(s.flickr_pending(), None, "the request token was used up by the exchange");
     assert!(s.execute("flickr.setApiKey", &json!({"key": "other", "secret": "key"})).is_err());
     assert_eq!(s.flickr_status()["apiKey"], "k", "nor a key");
     let _ = std::fs::remove_file(&d);
