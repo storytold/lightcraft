@@ -51,17 +51,17 @@ pub enum MergeKind {
 }
 
 impl MergeKind {
-    /// Refuse what the options alone rule out, before any photo is read: a panorama cap below the
-    /// 0.1 MP the stitch makes at the least (`parse` refuses it too; a [`MergeKind`] can also be built
-    /// directly), and an HDR panorama whose set bracket doesn't divide the photos into at least two
+    /// Refuse what the options alone rule out, before any photo is read: a panorama cap below
+    /// 0.1 MP, the smallest the stitch keeps (`parse` refuses it too; a [`MergeKind`] can also be
+    /// built directly), and an HDR panorama whose set bracket doesn't divide the photos into at least two
     /// positions, or (a bracket left to EXIF) can't be divided so by any bracket of two or more.
     pub(crate) fn check_before_reading(&self, photos: usize) -> std::result::Result<(), String> {
         let pano = match self {
             MergeKind::Panorama { pano } | MergeKind::HdrPanorama { pano, .. } => pano,
             MergeKind::Hdr { .. } => return Ok(()),
         };
-        if pano.max_megapixels > 0.0 && pano.max_megapixels < 0.1 {
-            return Err(format!("maxMegapixels: {} is below the 0.1 MP a panorama has at the least", pano.max_megapixels));
+        if pano.max_megapixels > 0.0 && pano.max_megapixels < MIN_MEGAPIXELS {
+            return Err(below_least_cap(pano.max_megapixels));
         }
         if let MergeKind::HdrPanorama { bracket, .. } = self
             && *bracket >= 2
@@ -509,7 +509,7 @@ fn reaches_floor(r: &lightcraft_merge::PanoResult, floor: f64, areas: &[(f64, f6
     }
     Err(format!(
         "not enough memory for this panorama: its photos had to be decoded smaller to fit the merge's memory, and the panorama of them has {canvas:.1} MP, under the {} MP it is made at the least; merge fewer or smaller photos, ask for a smaller panorama, or close other apps",
-        (floor * 10.0).round() / 10.0
+        round_megapixels(floor)
     ))
 }
 
@@ -611,9 +611,14 @@ pub(crate) fn panorama_floor(asked: f64, frame_px: f64) -> f64 {
     MIN_PANORAMA_MEGAPIXELS.min(asked).max(MIN_MEGAPIXELS).min(frame_px / 1e6)
 }
 
-/// `mp` megapixels as the refusal names them: to 0.1 MP, or two significant digits below 0.1 MP
+/// The refusal of a `maxMegapixels` of `v`, below [`MIN_MEGAPIXELS`] (the stitch would raise it).
+fn below_least_cap(v: f64) -> String {
+    format!("maxMegapixels: {v} is below {MIN_MEGAPIXELS} MP, the smallest size limit the stitch keeps")
+}
+
+/// `mp` megapixels as the refusals name them: to 0.1 MP, or two significant digits below 0.1 MP
 /// (a floor of tiny photos), so `0.05` isn't named as 0.1 MP.
-fn round_megapixels(mp: f64) -> f64 {
+pub(crate) fn round_megapixels(mp: f64) -> f64 {
     if !(mp > 0.0 && mp < 0.1) {
         return (mp * 10.0).round() / 10.0;
     }
@@ -730,9 +735,7 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
         serde_json::from_value(p.get("projection").cloned().unwrap_or(json!("auto"))).map_err(|e| bad(format!("projection: {e}")))?;
     // the stitch raises a cap below 0.1 MP to 0.1 MP, so a smaller one couldn't be kept: refused, not exceeded
     let max_megapixels = match p.get("maxMegapixels").and_then(Value::as_f64) {
-        Some(v) if v > 0.0 && v < MIN_MEGAPIXELS => {
-            return Err(bad(format!("maxMegapixels: {v} is below {MIN_MEGAPIXELS} MP, the smallest size limit the stitch keeps")));
-        }
+        Some(v) if v > 0.0 && v < MIN_MEGAPIXELS => return Err(bad(below_least_cap(v))),
         Some(v) if v > 0.0 => v.min(MAX_MEGAPIXELS),
         _ => MAX_MEGAPIXELS,
     };

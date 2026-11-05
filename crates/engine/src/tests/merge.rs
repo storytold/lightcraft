@@ -364,6 +364,18 @@ fn a_panorama_is_planned_before_its_photos_are_decoded() {
     }
 }
 
+/// Photos under the stitch's least cap (two of 250 × 100 px, 0.05 MP) are planned against their own
+/// size as the floor, which they can make, not 0.1 MP, which they can't: 5 MB holds their stitch
+/// (68 bytes a pixel, 3.4 MB) but not a 0.1 MP one (6.8 MB), and 3 MB is refused naming 0.05 MP.
+#[test]
+fn photos_under_the_least_cap_are_planned_at_their_own_size() {
+    use crate::merge::plan_memory;
+    let tiny = vec![crate::merge::PhotoSize::new(250, 100, 20_000).unwrap(); 2];
+    assert_eq!(plan_memory(&panorama(), &tiny, 5e6), Ok(None));
+    let e = plan_memory(&panorama(), &tiny, 3e6).unwrap_err();
+    assert!(e.contains("the panorama 0.05 MP, the smallest it is made,") && e.contains("needs about 4 MB"), "{e}");
+}
+
 /// A panorama's photos are decoded smaller only while its stitch still reaches its floor, which
 /// follows the photos' own size (smaller frames don't lower it); one that would have to go below it
 /// is refused before any photo is read.
@@ -542,7 +554,7 @@ fn a_refused_merge_decodes_nothing() {
 
 /// What the options alone rule out is refused before any photo is read: brackets of 4 that don't
 /// divide six photos into positions, and (a `MergeKind` built directly, not through `parse`) a
-/// panorama cap below the 0.1 MP the stitch makes at the least.
+/// panorama cap below 0.1 MP, the smallest the stitch keeps.
 #[test]
 fn options_that_cant_work_are_refused_before_any_photo_is_read() {
     use std::sync::atomic::Ordering;
@@ -558,7 +570,7 @@ fn options_that_cant_work_are_refused_before_any_photo_is_read() {
     ] {
         let (job, reads) = counted_job(kind.clone(), known(), None, 1e12);
         let e = job.run(&|_, _| true).err().unwrap_or_default();
-        assert!(e.contains("below the 0.1 MP"), "{kind:?}: {e}");
+        assert!(e.contains("below 0.1 MP, the smallest size limit the stitch keeps"), "{kind:?}: {e}");
         assert_eq!(reads.load(Ordering::SeqCst), 0, "{kind:?}: no photo read");
     }
     // a bracket left to EXIF: five photos can't be divided into two positions by any bracket

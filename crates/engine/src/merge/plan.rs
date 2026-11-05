@@ -9,7 +9,9 @@
 //! after decoding, from the real frames). Just before each photo is decoded its header is read
 //! again and the plan checked with it ([`holds`]).
 
-use super::{MIN_PREVIEW_MEGAPIXELS, MergeKind, PANO_BLEND_BYTES, PANO_TILE_BYTES, PREVIEW_EDGE, fit_with_floor, mb, panorama_floor};
+use super::{
+    MIN_PREVIEW_MEGAPIXELS, MergeKind, PANO_BLEND_BYTES, PANO_TILE_BYTES, PREVIEW_EDGE, fit_with_floor, mb, panorama_floor, round_megapixels,
+};
 
 /// Bytes per pixel of a decoded photo held as a frame (32-bit float RGB).
 pub(crate) const FRAME_BYTES: f64 = 12.0;
@@ -248,11 +250,6 @@ fn least_need((bytes, stitch): (f64, Option<f64>), floor: Option<f64>) -> f64 {
     bytes.max((px * FRAME_BYTES + at_least * PANO_TILE_BYTES).max(at_least * PANO_BLEND_BYTES))
 }
 
-/// "`floor` MP": a floor as the refusals name it.
-fn megapixels(floor: f64) -> f64 {
-    (floor * 10.0).round() / 10.0
-}
-
 fn what(kind: &MergeKind, preview: bool) -> &'static str {
     match (kind, preview) {
         (_, true) => "merge preview",
@@ -299,7 +296,7 @@ pub(crate) fn plan_memory(kind: &MergeKind, sizes: &[PhotoSize], room: f64) -> R
     let least = MIN_PLANNED_EDGE.min(long).max(keeps);
     if least >= long || !fits(Some(least)) {
         // at the smallest frames: the photos' decode and merges, or the stitch at its floor
-        let at = megapixels(floor);
+        let at = round_megapixels(floor);
         let how = if least < long {
             format!("even with its photos made {least} px on the long side and the panorama {at} MP, the smallest it is made,")
         } else {

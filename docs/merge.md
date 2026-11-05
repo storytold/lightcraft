@@ -113,9 +113,10 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
 - Panorama output keeps the photos' resolution, up to `maxMegapixels` (default 512) and what fits in the merge's
   memory: the blend peaks at ~68 bytes per output pixel, and projecting needs ~36 beside the photos' 12. When that is
   less than the photos' resolution, the result says `limit: "memory"`. It is made no smaller than its floor: 40 MP,
-  or the smaller `maxMegapixels` asked for (at least 0.1 MP), or the photos' own pixels when they have less. A merge
-  whose memory can't hold the floor is refused with the memory it needs and has (issue #3708; until then the 40 MP
-  floor was kept whatever the memory, and could run out of it).
+  or the smaller `maxMegapixels` asked for (a `maxMegapixels` below 0.1 is refused: the stitch keeps no smaller size
+  limit), or the photos' own pixels when they have less, even under 0.1 MP (the stitch never scales photos up). A
+  merge whose memory can't hold the floor is refused with the memory it needs and has (issue #3708; until then the
+  40 MP floor was kept whatever the memory, and could run out of it).
 - Photos for a panorama that don't fit at full size are decoded smaller, but only while the stitch still reaches
   its floor (which follows the photos' own size, not the smaller frames'); a merge that would have to go below it is
   refused before any photo is decoded (only the header of a photo the catalog has no size for is read first). They keep at least twice the floor's pixels (a panorama is taken to keep half
