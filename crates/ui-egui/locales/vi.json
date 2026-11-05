@@ -2684,5 +2684,13 @@
   "Set up name suggestions…": "Thiết lập gợi ý tên…",
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
-  "Bottom bar": "Thanh dưới cùng"
+  "Bottom bar": "Thanh dưới cùng",
+  "AI masks": "Mặt nạ AI",
+  "Device": "Thiết bị",
+  "Last photo": "Ảnh gần nhất",
+  "Remote worker": "Worker từ xa",
+  "Run on": "Chạy trên",
+  "Automatic (GPU when available)": "Tự động (GPU nếu có)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Mặt nạ Đối tượng và Mô tả phân tích mỗi ảnh một lần, trên card đồ họa trừ khi chọn CPU hoặc tắt “Dùng GPU để kết xuất”. Trên bộ xử lý việc này lâu hơn nhiều.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Tự động chạy mô hình trên card đồ họa của máy Mac. Hãy chọn CPU nếu mặt nạ AI bị lỗi ở đó; trên bộ xử lý chúng chạy lâu hơn nhiều."
 }

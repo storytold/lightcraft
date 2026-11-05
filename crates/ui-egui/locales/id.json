@@ -2370,5 +2370,13 @@
   "Set up name suggestions…": "Siapkan saran nama…",
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
-  "Bottom bar": "Bilah bawah"
+  "Bottom bar": "Bilah bawah",
+  "AI masks": "Masker AI",
+  "Device": "Perangkat",
+  "Last photo": "Foto terakhir",
+  "Remote worker": "Worker jarak jauh",
+  "Run on": "Jalankan di",
+  "Automatic (GPU when available)": "Otomatis (GPU jika tersedia)",
+  "Object and Describe masks analyze each photo once, on the graphics card unless CPU is chosen or “Use the GPU for rendering” is off. On the processor that takes much longer.": "Masker Objek dan Deskripsikan menganalisis setiap foto sekali, di kartu grafis kecuali CPU dipilih atau “Gunakan GPU untuk rendering” dimatikan. Di prosesor hal itu jauh lebih lama.",
+  "Automatic runs the model on the Mac's graphics card. Choose CPU if AI masks fail there; on the processor they take much longer.": "Otomatis menjalankan model di kartu grafis Mac. Pilih CPU jika masker AI gagal di sana; di prosesor prosesnya jauh lebih lama."
 }
