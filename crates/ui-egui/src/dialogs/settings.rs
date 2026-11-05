@@ -57,8 +57,8 @@ pub const TABS: &[(&str, &str)] = &[
     ("denoise", "AI Denoise"),
 ];
 
-/// Thumbnail cache sizes offered (MB).
-const CACHE_SIZES: [u32; 5] = [512, 1024, 2048, 4096, 8192];
+/// Preview cache sizes offered (MB; 0 = automatic: room for every photo of the library).
+const CACHE_SIZES: [u32; 8] = [512, 1024, 2048, 4096, 8192, 51_200, 204_800, 0];
 
 const LABEL_W: f32 = 150.0;
 
