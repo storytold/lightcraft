@@ -269,9 +269,9 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v10: `Photo.file_orientation` (v9: `Photo.preview_checked` and
-    /// `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 10;
+    /// v12: `Photo.file_orientation` (v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
+    /// `Photo.preview_checked` and `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 12;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

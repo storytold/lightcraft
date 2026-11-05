@@ -200,6 +200,21 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
     Ok(json!({"path": out, "id": new, "original": id.0}))
 }
 
+/// The op that forgets a photo's [`lightcraft_catalog::Photo::file_orientation`] (`None` when it has none): after a
+/// relink to a file that could not be read, the former file's orientation would otherwise stand for the new one.
+pub(crate) fn forget_orientation_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo) -> Option<Op> {
+    ph.file_orientation.is_some().then(|| Op::SetContent {
+        id,
+        width: ph.width,
+        height: ph.height,
+        file_size: ph.file_size,
+        content_hash: ph.content_hash.clone(),
+        preview_only: ph.preview_only.clone(),
+        preview_checked: ph.preview_checked.clone(),
+        file_orientation: None,
+    })
+}
+
 /// The op that brings a photo up to date with what its file is now (`info`, a fresh probe), or
 /// `None` when nothing changed. Covers a raw that became decodable (or stopped being: a different
 /// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`], and a
@@ -307,8 +322,8 @@ pub(crate) fn reload_ops(
         ops.append(&mut mine);
         changed.push(id);
     }
-    // virtual copies share the file
-    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
+    // virtual copies that share the file (a copy linked to a file of its own is not this file's)
+    for c in cat.photos().filter(|c| c.copy_of == Some(id) && c.source == ph.source) {
         let theirs: Vec<Op> =
             content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
         if !theirs.is_empty() {
@@ -536,6 +551,7 @@ mod tests {
             warp: Some(lightcraft_develop::EmbeddedWarp { planes: [[1.0, -0.1, 0.03, 0.0, 0.0, 0.0]; 3], ..Default::default() }),
             vignette: None,
             stages: Default::default(),
+            source: Default::default(),
         }
     }
     fn old_rw2() -> lightcraft_catalog::Photo {

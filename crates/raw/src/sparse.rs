@@ -121,7 +121,8 @@ impl Ranges {
 
     /// The parts of `[start, end)` not covered.
     pub fn gaps(&self, start: u64, end: u64) -> Ranges {
-        let mut out = Ranges::new();
+        // the gaps come in order, apart from each other: pushed, not merged in one by one
+        let mut out = Vec::new();
         let mut at = start;
         for &(a, b) in &self.0 {
             if b <= at {
@@ -131,24 +132,20 @@ impl Ranges {
                 break;
             }
             if a > at {
-                out.insert(at, a);
+                out.push((at, a));
             }
             at = at.max(b);
         }
         if at < end {
-            out.insert(at, end);
+            out.push((at, end));
         }
-        out
+        Ranges(out)
     }
 
     /// These ranges without the ones in `other`.
     pub fn minus(&self, other: &Ranges) -> Ranges {
         let mut out = Ranges::new();
-        for &(a, b) in &self.0 {
-            for &(x, y) in other.gaps(a, b).spans() {
-                out.insert(x, y);
-            }
-        }
+        out.extend(self.0.iter().flat_map(|&(a, b)| other.gaps(a, b).0));
         out
     }
 }
@@ -201,12 +198,17 @@ fn plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
 struct Want<'a> {
     len: u64,
     loaded: &'a Ranges,
-    need: Ranges,
+    /// What is missing, as found; merged once into the plan (merging each find into the ranges so
+    /// far was a copy of them per find: quadratic over a file of many out-of-line values).
+    need: Vec<(u64, u64)>,
+    /// `need` is merged when it reaches this long, so repeated finds of one gap stay bounded by
+    /// the distinct gaps (merging when it doubles keeps the cost linear).
+    compact_at: usize,
 }
 
 impl<'a> Want<'a> {
     fn new(bytes: &[u8], loaded: &'a Ranges) -> Self {
-        Self { len: bytes.len() as u64, loaded, need: Ranges::new() }
+        Self { len: bytes.len() as u64, loaded, need: Vec::new(), compact_at: 64 }
     }
 
     /// Whether `[start, end)` (clipped to the file) is loaded; asks for what isn't.
@@ -215,15 +217,21 @@ impl<'a> Want<'a> {
         if self.loaded.contains(start, end) {
             return true;
         }
-        for &(a, b) in self.loaded.gaps(start, end).spans() {
-            self.need.insert(a, b);
+        self.need.extend(self.loaded.gaps(start, end).0);
+        if self.need.len() >= self.compact_at {
+            let mut merged = Ranges::new();
+            merged.extend(std::mem::take(&mut self.need));
+            self.need = merged.spans().to_vec();
+            self.compact_at = (self.need.len() * 2).max(64);
         }
         false
     }
 
     /// `Need` when something is missing.
     fn into_plan(self) -> Option<HeaderPlan> {
-        (!self.need.is_empty()).then_some(HeaderPlan::Need(self.need))
+        let mut need = Ranges::new();
+        need.extend(self.need);
+        (!need.is_empty()).then_some(HeaderPlan::Need(need))
     }
 }
 
@@ -557,6 +565,35 @@ mod tests {
         cut.insert(15, 32);
         assert_eq!(r.minus(&cut).spans(), &[(10, 15), (32, 40)]);
         assert_eq!(r.total(), 20);
+    }
+
+    #[test]
+    fn a_plan_of_many_missing_values_is_gathered_in_one_merge() {
+        // 200 000 loaded spans with a byte missing between each: every gap wanted once
+        let mut loaded = Ranges::new();
+        loaded.extend((0..20_000u64).map(|i| (i * 4, i * 4 + 3)));
+        let bytes = vec![0u8; 80_000];
+        let mut w = Want::new(&bytes, &loaded);
+        for i in 0..20_000u64 {
+            assert!(!w.want(i * 4 + 2, i * 4 + 4));
+        }
+        let Some(HeaderPlan::Need(need)) = w.into_plan() else { panic!("a plan") };
+        assert_eq!(need.spans().len(), 20_000);
+        assert_eq!(need.total(), 20_000);
+        assert_eq!(loaded.gaps(0, 12).spans(), &[(3, 4), (7, 8), (11, 12)]);
+    }
+
+    #[test]
+    fn repeated_wants_of_one_gap_keep_the_buffer_bounded() {
+        let loaded = Ranges::new();
+        let bytes = vec![0u8; 1000];
+        let mut w = Want::new(&bytes, &loaded);
+        for _ in 0..100_000 {
+            assert!(!w.want(10, 20));
+            assert!(w.need.len() <= 64);
+        }
+        let Some(HeaderPlan::Need(need)) = w.into_plan() else { panic!("a plan") };
+        assert_eq!(need.spans(), &[(10, 20)]);
     }
 
     #[test]

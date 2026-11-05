@@ -314,7 +314,7 @@ pub struct Photo {
     /// The file's own orientation (EXIF, or a raw's own record such as a CRW's), as the import or
     /// browse that catalogued it read it; `width` × `height` already include it. `None` when the
     /// file wasn't read (an offline original, a raw shown from its preview) and in catalogs from
-    /// before format v10. A Lightroom catalog import compares it with the catalog's orientation,
+    /// before format v12. A Lightroom catalog import compares it with the catalog's orientation,
     /// which is the file's turned by any Rotate Left / Right made in Lightroom.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_orientation: Option<lightcraft_geom::Orientation>,
