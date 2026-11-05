@@ -70,6 +70,8 @@ impl LightcraftApp {
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
         tasks::poll(self, ctx);
+        // after the poll: a lookup that just finished is cleared, so photos queued meanwhile are looked up now
+        crate::lens_db::tick(self);
         updates_ui::tick(self, ctx);
         self.preview_build_status(ctx);
         self.save_status(ctx);
@@ -303,6 +305,10 @@ impl LightcraftApp {
         let generation = self.session.library_generation();
         if self.shown_library == Some(generation) {
             return;
+        }
+        // (the first library shown takes the place of none: nothing was searching another one)
+        if self.shown_library.is_some() {
+            crate::find_similar::library_changed(self);
         }
         self.shown_library = Some(generation);
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
