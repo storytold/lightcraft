@@ -463,6 +463,10 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("develop.auto", "Auto Settings", ["Photo"], Some("Shift+A"), "{}", has_selection, |s, p| {
             const C: &str = "develop.auto";
             let ids = s.targets(p)?;
+            // a wrong id is a bad request, unlike a photo that can't be read just now
+            if let Some(id) = ids.iter().find(|id| s.catalog.photo(**id).is_none()) {
+                return Err(bad(C, format!("no such photo: {}", id.0)));
+            }
             let mut first: Option<Value> = None;
             let mut ops: Vec<Op> = Vec::new();
             let mut failed = None;

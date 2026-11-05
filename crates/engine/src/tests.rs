@@ -529,6 +529,7 @@ fn auto_skips_a_selected_photo_it_cannot_read() {
     assert_eq!(s.develop_of(PhotoId(good.0)).unwrap().color.vibrance, 30.0, "the readable photo got Auto");
     s.execute("library.select", &json!({"ids": [missing.0], "active": missing.0})).unwrap();
     assert!(s.execute("develop.auto", &json!({})).is_err(), "with nothing readable the error is reported");
+    assert!(s.execute("develop.auto", &json!({"ids": [good.0, 999_999]})).is_err(), "a wrong id is refused, not skipped");
 }
 
 #[test]
