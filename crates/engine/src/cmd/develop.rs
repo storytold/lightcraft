@@ -1174,7 +1174,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "preset.update";
                 let id = active(s, c)?;
-                let current = s.develop_of(id).unwrap_or_default().to_json();
+                let current = s.develop_of(id).unwrap_or_default().to_json_for_merge();
                 let groups = groups_param(p, c)?;
                 let pr = user_preset(s, p, c)?;
                 pr.settings = crate::upright_transfer::without_correction(match groups {

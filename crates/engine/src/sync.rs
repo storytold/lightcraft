@@ -722,7 +722,8 @@ fn sidecar_has_news(
         return false;
     }
     let Ok(text) = std::fs::read_to_string(&file) else { return false };
-    let Ok(mut sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
+    let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
+    let mut sc = sc.with_file_orientation(path);
     // A held crop cannot be compared with the catalog's oriented crop. Report it as news so
     // synchronizing can say why the crop was left unverified.
     if let Some(held) = framed(&mut sc, path, probe)
@@ -922,7 +923,8 @@ fn read_sidecar(
         return Err(format!("{}: too large for an XMP sidecar", file.display()));
     }
     let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-    let mut sc = crate::sidecar::parse_sidecar(&text, target).map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut sc =
+        crate::sidecar::parse_sidecar(&text, target).map(|sc| sc.with_file_orientation(path)).map_err(|e| format!("{}: {e}", file.display()))?;
     framed(&mut sc, path, probe);
     Ok(sc)
 }
