@@ -683,23 +683,38 @@ pub fn manage_body(
     }
 }
 
+/// The distinct values, sorted.
+fn distinct<'a>(values: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
+    let mut v: Vec<&str> = values.collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
 /// The toast after an import (`preset.import` / `mask.importEffects` result): how many effects,
 /// in how many groups, and the settings they carry that LightCraft can't apply.
 pub fn import_toast(v: &Value) -> String {
     let rows: Vec<&Value> = v["effects"].as_array().or_else(|| v["imported"].as_array()).into_iter().flatten().collect();
-    let n = rows.len();
-    let mut msg = crate::i18n::tr_format!("Imported {e} mask effect{} (Masking ▸ Effect)", if n == 1 { "" } else { "s" }, e = n);
-    let mut groups: Vec<&str> = rows.iter().filter_map(|r| r["group"].as_str()).filter(|g| !g.is_empty()).collect();
-    groups.sort_unstable();
-    groups.dedup();
+    let mut msg = imported_effects_message(rows.len());
+    let groups = distinct(rows.iter().filter_map(|r| r["group"].as_str()).filter(|g| !g.is_empty()));
     if !groups.is_empty() {
-        msg += &crate::i18n::tr_format!(" in {g} group{}", if groups.len() == 1 { "" } else { "s" }, g = groups.len());
+        msg += &in_groups_message(groups.len());
     }
-    let mut skipped: Vec<&str> = rows.iter().flat_map(|r| r["unmapped"].as_array().into_iter().flatten()).filter_map(Value::as_str).collect();
-    skipped.sort_unstable();
-    skipped.dedup();
+    let skipped = distinct(rows.iter().flat_map(|r| r["unmapped"].as_array().into_iter().flatten()).filter_map(Value::as_str));
     if !skipped.is_empty() {
-        msg += &crate::i18n::tr_format!(" — kept but not applied: {}", skipped.join(", "));
+        msg += &not_applied_message(&skipped);
     }
     msg
+}
+
+fn imported_effects_message(n: usize) -> String {
+    crate::i18n::tr_format!("Imported {e} mask effect{} (Masking ▸ Effect)", crate::i18n::plural_s(n), e = n)
+}
+
+fn in_groups_message(groups: usize) -> String {
+    crate::i18n::tr_format!(" in {g} group{}", crate::i18n::plural_s(groups), g = groups)
+}
+
+fn not_applied_message(settings: &[&str]) -> String {
+    crate::i18n::tr_format!(" — kept but not applied: {}", settings.join(", "))
 }
