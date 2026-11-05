@@ -92,7 +92,7 @@ fn persistent_keys_name_the_process_the_settings_render_with() {
     let keys = [
         (s.thumb_job(PhotoId(1), 256).unwrap().cache.unwrap().1, None, 256),
         (s.view_key(&p, true), Some("view"), 1),
-        (crate::Session::variant_key(&p, &newer, 256), Some("variant"), 256),
+        (crate::Session::variant_key(&p, &newer, 256, 0), Some("variant"), 256),
     ];
     for (key, kind, size) in keys {
         assert_ne!(key, unnamed(kind, size), "old builds did not name their resolved process");
@@ -124,7 +124,7 @@ fn v1_and_v2_photos_keep_the_render_cache_keys_they_had() {
         let keys = [
             s.thumb_job(PhotoId(1), 256).unwrap().cache.unwrap().1 == before_v3(None, 256),
             s.view_key(&p, true) == before_v3(Some("view"), 1),
-            crate::Session::variant_key(&p, &settings, 256) == before_v3(Some("variant"), 256),
+            crate::Session::variant_key(&p, &settings, 256, 0) == before_v3(Some("variant"), 256),
         ];
         let old = process <= Process::V2;
         assert_eq!(keys, [old; 3], "{process:?}: thumbnail, view and variant keys");
@@ -196,7 +196,7 @@ fn hash_cache_is_bounded_weak_and_shared_settings_remain_independent() {
 #[test]
 fn source_from_before_content_reload_is_not_accepted() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
     let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
     assert!(old.loaded.is_some());
     s.catalog
@@ -220,7 +220,7 @@ fn source_from_before_content_reload_is_not_accepted() {
 #[test]
 fn source_from_before_a_lens_profile_change_is_not_accepted() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
     let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
     assert!(old.loaded.is_some());
     let lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
@@ -258,7 +258,7 @@ fn a_hover_preview_key_follows_the_lens_profile() {
 #[test]
 fn a_render_that_panics_fails_instead_of_never_answering() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _| panic!("decoder bug")));
+    s.media.file_loader = Some(Arc::new(|_, _, _| panic!("decoder bug")));
     let mut job = s.thumb_job(PhotoId(1), 256).unwrap();
     job.request_id = 42;
     let (key, level, source_key) = (job.key, job.level, job.source_key);
