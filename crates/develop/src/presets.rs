@@ -155,7 +155,7 @@ fn negative_json(s: &DevelopSettings) -> Value {
 
 /// The subset of `s` covering `groups`, as a partial JSON object.
 pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
-    let full = s.to_json();
+    let full = s.to_json_for_merge();
     let mut out = Map::new();
     for g in groups {
         for k in g.keys() {
@@ -223,7 +223,7 @@ pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> Devel
     } else {
         // interpolated against every field of `s`, including the Negative group its saved JSON leaves out while off (a
         // missing base object would turn the patch's group into null and drop the whole preset)
-        let mut base = s.to_json();
+        let mut base = s.to_json_for_merge();
         if let Some(o) = base.as_object_mut() {
             o.insert("negative".into(), negative_json(s));
         }
