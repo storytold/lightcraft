@@ -145,26 +145,34 @@ impl Frame {
     /// output, of which a windowed render is a part, or, in the crop tool's uncropped view, the
     /// crop the edit exports (#3484).
     pub fn vignette_frame(&self, s: &DevelopSettings, w: usize, h: usize) -> (Affine, (f64, f64)) {
-        let (vx, vy, fw, fh) = self.view.map_or((0.0, 0.0, w as f64, h as f64), |v| (v.x, v.y, v.full_w, v.full_h));
-        let offset = Affine::translate(Vec2::new(vx, vy));
-        let whole = (offset, (fw, fh));
+        let whole = self.output_vignette_frame(w, h);
         if !self.uncropped {
             return whole;
         }
+        let (offset, (fw, fh)) = whole;
         let cropped = self.export_crop(s);
         let (cw, ch) = cropped.native_size();
         // a crop with nothing in it has no frame: the vignette stays on the whole photo
         if !(cw > 0.0 && ch > 0.0 && cw.is_finite() && ch.is_finite()) {
             return whole;
         }
+        // the export counts each side of a crop below a pixel as one (`Frame::aspect`, `fit`):
+        // so does its vignette's frame, which keeps the export's shape on the same crop
+        let size = (cw.max(1.0), ch.max(1.0));
         // the whole uncropped output → oriented pixels (flips included) → the crop's own pixels
         let to_oriented = Frame { crop: CropGeometry::default(), ..cropped.clone() }.out_to_oriented(fw as usize, fh as usize);
-        let Some(to_crop) = cropped.crop.output_to_source(self.ow, self.oh, cw, ch).inverse() else { return whole };
+        let Some(to_crop) = cropped.crop.output_to_source(self.ow, self.oh, size.0, size.1).inverse() else { return whole };
         let a = to_crop * to_oriented * offset;
         if a.0.iter().any(|v| !v.is_finite()) {
             return whole;
         }
-        (a, (cw, ch))
+        (a, size)
+    }
+
+    /// [`Frame::vignette_frame`] of the whole output, of which a windowed `w × h` render is a part.
+    pub fn output_vignette_frame(&self, w: usize, h: usize) -> (Affine, (f64, f64)) {
+        let (vx, vy, fw, fh) = self.view.map_or((0.0, 0.0, w as f64, h as f64), |v| (v.x, v.y, v.full_w, v.full_h));
+        (Affine::translate(Vec2::new(vx, vy)), (fw, fh))
     }
 
     /// This frame with the crop the cropped render of `s` has ([`crate::frame_for`]): bounded,

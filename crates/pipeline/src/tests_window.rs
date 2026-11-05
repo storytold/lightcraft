@@ -646,10 +646,205 @@ fn the_crop_tools_vignette_crop_is_exactly_the_exports() {
         assert!(export.crop.rect.width() < rect.width() * 0.999, "{name}: the export's crop is shrunk");
         assert_eq!(tool.export_crop(&s).crop, export.crop, "{name}");
         let (_, size) = tool.vignette_frame(&s, W, H);
-        assert_eq!(size, export.native_size(), "{name}");
+        // (the repeated floors leave sides below a pixel: the export counts each as one)
+        let (nw, nh) = export.native_size();
+        assert_eq!(size, (nw.max(1.0), nh.max(1.0)), "{name}");
     }
     // the floor is reached twice when the estimate shrinks the crop again
     let mut s = DevelopSettings::default();
     (s.optics.distortion, s.optics.remove_ca, s.crop.geometry.rect) = (-100.0, true, corner);
     assert!(crate::frame_for(&src, &info, &s, true).crop.rect.width() < corner.width() * 0.001);
+}
+
+/// Where `export` pixel `q` (centre coordinates) sits in the vignette's frame, as the export's
+/// vignette sees it (`(x + 0.5) / w`) and as the crop tool's view (`tool`, a `fw × fh` render,
+/// optionally its window `win`) sees it: both as `|2n − 1|` per axis, which is all the vignette
+/// reads, so a flip doesn't matter.
+fn vignette_positions(
+    s: &DevelopSettings,
+    export: &crate::geometry::Frame,
+    tool: &crate::geometry::Frame,
+    (fw, fh): (usize, usize),
+    win: Option<PixelWindow>,
+    q: lightcraft_geom::Point,
+) -> ([f64; 2], [f64; 2]) {
+    let (ew, eh) = export.fit(W, H);
+    let oriented = export.out_to_oriented(ew, eh).apply(q);
+    let Some(to_render) = tool.out_to_oriented(fw, fh).inverse() else { panic!("the crop tool's view has no inverse") };
+    let r = to_render.apply(oriented);
+    let (frame, r, (w, h)) = match win {
+        Some(win) => (tool.window(fw, fh, win), lightcraft_geom::Point::new(r.x - win.x as f64, r.y - win.y as f64), (win.w, win.h)),
+        None => (tool.clone(), r, (fw, fh)),
+    };
+    let (a, (vw, vh)) = frame.vignette_frame(s, w, h);
+    let v = a.apply(r);
+    let axes = |x: f64, y: f64| [(2.0 * x - 1.0).abs(), (2.0 * y - 1.0).abs()];
+    (axes(v.x / vw, v.y / vh), axes(q.x / ew as f64, q.y / eh as f64))
+}
+
+// Given a crop smaller than a source pixel on a side, which the export frames with each side
+// counted as one pixel (`Frame::aspect`, `fit`), the crop tool's vignette has the export's shape:
+// the same place in the frame and the same aspect, also turned, flipped or in a window
+#[test]
+fn the_crop_tools_vignette_has_the_exports_shape_for_crops_below_a_pixel() {
+    let src = flat();
+    let info = SourceInfo::default();
+    let (sw, sh) = (src.width as f64, src.height as f64);
+    let px = |x0: f64, y0: f64, w: f64, h: f64| Rect { x0, y0, x1: x0 + w / sw, y1: y0 + h / sh };
+    let cases: [(&str, Rect, f64, bool, Option<PixelWindow>); 7] = [
+        ("ordinary", Rect { x0: 0.12, y0: 0.15, x1: 0.6, y1: 0.75 }, 5.0, false, None),
+        (
+            "ordinary, flipped, window",
+            Rect { x0: 0.12, y0: 0.15, x1: 0.6, y1: 0.75 },
+            5.0,
+            true,
+            Some(PixelWindow { x: 300, y: 200, w: 320, h: 240 }),
+        ),
+        ("0.25 × 0.75 px", px(0.4, 0.4, 0.25, 0.75), 0.0, false, None),
+        ("0.5 × 40 px", px(0.4, 0.3, 0.5, 40.0), 0.0, false, None),
+        ("40 × 0.5 px", px(0.3, 0.4, 40.0, 0.5), 0.0, false, None),
+        ("0.25 × 0.75 px, turned, flipped", px(0.4, 0.4, 0.25, 0.75), 10.0, true, None),
+        ("0.5 × 40 px, window", px(0.4, 0.3, 0.5, 40.0), 0.0, false, Some(PixelWindow { x: 350, y: 180, w: 200, h: 200 })),
+    ];
+    for (name, rect, angle, flip, win) in cases {
+        let mut s = crop_tool_vignette();
+        s.crop.geometry.rect = rect;
+        s.crop.geometry.angle = angle;
+        s.crop.flip_h = flip;
+        let export = crate::frame_for(&src, &info, &s, true);
+        let tool = crate::frame_for(&src, &info, &s, false);
+        let full = tool.fit(W, H);
+        let (nw, nh) = export.native_size();
+        let (_, size) = tool.vignette_frame(&s, full.0, full.1);
+        assert_eq!(size, (nw.max(1.0), nh.max(1.0)), "{name}: the vignette's frame counts each side as at least a pixel");
+        assert_eq!(size.0 / size.1, export.aspect(), "{name}: the export's aspect");
+        let (ew, eh) = export.fit(W, H);
+        for (fx, fy) in [(0.5, 0.5), (0.1, 0.2), (0.9, 0.35), (0.3, 0.95)] {
+            let q = lightcraft_geom::Point::new(fx * ew as f64, fy * eh as f64);
+            let (tool_at, export_at) = vignette_positions(&s, &export, &tool, full, win, q);
+            for k in 0..2 {
+                assert!((tool_at[k] - export_at[k]).abs() < 1e-6, "{name} at {fx}, {fy}: crop tool {tool_at:?}, export {export_at:?}");
+            }
+        }
+    }
+}
+
+// Given crops far below a pixel, whose vignette frame the f32 kernels can't evaluate (a size
+// that rounds to 0 in f32; coefficients that fit f32 but overflow at the far edge, turned or not;
+// positions that fit but overflow when raised to the vignette's power, also only at Roundness
+// −100's power of 8), the crop tool shows the whole-photo vignette instead of none
+#[test]
+fn the_crop_tools_vignette_falls_back_to_the_whole_photo_where_f32_cant_hold_its_frame() {
+    let cases: [(&str, Rect, f64, f64); 7] = [
+        ("1e-50 square", Rect { x0: 0.0, y0: 0.0, x1: 1e-50, y1: 1e-50 }, 0.0, 0.0),
+        ("1e-50 wide", Rect { x0: 0.0, y0: 0.2, x1: 1e-50, y1: 0.8 }, 0.0, 0.0),
+        ("1e-39: the far edge overflows", Rect { x0: 0.0, y0: 0.0, x1: 1e-39, y1: 1e-39 }, 0.0, 0.0),
+        ("1e-39 turned: cancellation", Rect { x0: 0.0, y0: 0.0, x1: 1e-39, y1: 1e-39 }, 45.0, 0.0),
+        ("1e-22: the square overflows", Rect { x0: 0.0, y0: 0.0, x1: 1e-22, y1: 1e-22 }, 0.0, 0.0),
+        ("1e-22 at Roundness -100", Rect { x0: 0.0, y0: 0.0, x1: 1e-22, y1: 1e-22 }, 0.0, -100.0),
+        ("1e-6 at Roundness -100: the 8th power overflows", Rect { x0: 0.0, y0: 0.0, x1: 1e-6, y1: 1e-6 }, 0.0, -100.0),
+    ];
+    for (name, rect, angle, roundness) in cases {
+        let mut s = crop_tool_vignette();
+        s.vignette.roundness = roundness;
+        // the fallback the crop tool already had: a crop with nothing in it
+        let mut empty = s.clone();
+        empty.crop.geometry.rect = Rect { x0: 0.3, y0: 0.3, x1: 0.3, y1: 0.3 };
+        empty.crop.geometry.angle = 0.0;
+        let expected = uncropped(&empty, None);
+        // the whole-photo vignette is there to fall back to: the corners are darker than the middle
+        let (mid, corner) = (expected.get(expected.width / 2, expected.height / 2)[1], expected.get(2, 2)[1]);
+        assert!(mid as i32 - corner as i32 > 40, "{name}: no vignette in the expected render");
+        s.crop.geometry.rect = rect;
+        s.crop.geometry.angle = angle;
+        let shown = uncropped(&s, None);
+        assert!(shown.data == expected.data, "{name}: the crop tool doesn't show the whole-photo vignette");
+    }
+    // …while a crop of 1e-6 at the default Roundness (power 2) holds in f32: its vignette stays on
+    // the crop, so the photo's middle, far from it, is as dark as its corners
+    let mut s = crop_tool_vignette();
+    s.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: 0.0, y0: 0.0, x1: 1e-6, y1: 1e-6 }, angle: 0.0 };
+    let shown = uncropped(&s, None);
+    let (mid, far) = (shown.get(shown.width / 2, shown.height / 2)[1], shown.get(shown.width - 3, shown.height - 3)[1]);
+    assert!(mid.abs_diff(far) <= 2, "the 1e-6 crop's vignette is not on the crop: middle {mid}, far corner {far}");
+}
+
+// Given vignette frames whose f32 evaluation overflows only at some stage (an affine product, the
+// power of 8 but not of 2, a size of 0 or NaN), the guard rejects exactly those, and keeps the
+// whole output's frame
+#[test]
+fn the_vignette_frame_guard_bounds_every_stage_of_the_kernels() {
+    use crate::finish::vig_frame_fits_f32 as fits;
+    let id = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    assert!(fits(id, [960.0, 640.0], (960, 640), 8.0), "the whole output");
+    // the products overflow, though the coefficients and the frame's size fit
+    assert!(!fits([1e38, 0.0, -1e38, 1.0, 0.0, 0.0], [1.0, 1.0], (480, 320), 2.0));
+    // …also where the division by a large frame would bring the position back into range
+    assert!(!fits([1e38, 0.0, 0.0, 1.0, 0.0, 0.0], [1e30, 1e30], (480, 320), 2.0));
+    // …and where they cancel at the far corner, but not at the others
+    assert!(!fits([1e30, 0.0, -1e30, 1.0, 0.0, 0.0], [1.0, 1.0], (480, 480), 2.0));
+    // a square within 16× of f32::MAX: the kernels' rounding could still overflow it
+    assert!(fits([1e18, 0.0, 0.0, 1.0, 0.0, 0.0], [1.0, 1.0], (1, 1), 2.0));
+    assert!(!fits([1e19, 0.0, 0.0, 1.0, 0.0, 0.0], [1.0, 1.0], (1, 1), 2.0));
+    // the positions fit, and their squares, but not their 8th powers
+    let big = [1e4, 0.0, 0.0, 1e4, 0.0, 0.0];
+    assert!(fits(big, [1.0, 1.0], (960, 640), 2.0));
+    assert!(!fits(big, [1.0, 1.0], (960, 640), 8.0));
+    // an extreme aspect overflows the scaling
+    assert!(!fits(id, [1e38, 1e-3], (960, 640), 2.0));
+    for size in [[0.0, 640.0], [-960.0, 640.0], [960.0, f32::NAN], [f32::INFINITY, 640.0]] {
+        assert!(!fits(id, size, (960, 640), 2.0), "{size:?}");
+    }
+    assert!(!fits([f32::INFINITY, 0.0, 0.0, 1.0, 0.0, 0.0], [960.0, 640.0], (960, 640), 2.0));
+    assert!(!fits(id, [960.0, 640.0], (960, 640), f32::NAN));
+}
+
+// Given a crop of at least a pixel on each side, the crop tool's vignette frame is exactly the one
+// it had before crops below a pixel were framed like the export (#3621 review): the same affine
+// and size, bit for bit, whole or in a window, flipped, turned, under lens corrections
+#[test]
+fn ordinary_crops_keep_their_vignette_frame() {
+    use lightcraft_geom::{Affine, CropGeometry, Vec2};
+    // the formula as it was at 5204ee01: the crop's own size, unclamped
+    let before = |f: &crate::geometry::Frame, s: &DevelopSettings, w: usize, h: usize| {
+        let (vx, vy, fw, fh) = f.view.map_or((0.0, 0.0, w as f64, h as f64), |v| (v.x, v.y, v.full_w, v.full_h));
+        let offset = Affine::translate(Vec2::new(vx, vy));
+        let cropped = f.export_crop(s);
+        let (cw, ch) = cropped.native_size();
+        let to_oriented = crate::geometry::Frame { crop: CropGeometry::default(), ..cropped.clone() }.out_to_oriented(fw as usize, fh as usize);
+        let Some(to_crop) = cropped.crop.output_to_source(f.ow, f.oh, cw, ch).inverse() else { panic!("no inverse") };
+        (to_crop * to_oriented * offset, (cw, ch))
+    };
+    let src = flat();
+    let info = SourceInfo::default();
+    let cases: [(&str, Rect, f64, bool, bool, f64, Option<PixelWindow>); 6] = [
+        ("off-centre, turned", Rect { x0: 0.12, y0: 0.15, x1: 0.6, y1: 0.75 }, 5.0, false, false, 0.0, None),
+        ("flip H", Rect { x0: 0.3, y0: 0.05, x1: 0.95, y1: 0.6 }, -3.0, true, false, 0.0, None),
+        (
+            "flip V, window",
+            Rect { x0: 0.3, y0: 0.05, x1: 0.95, y1: 0.6 },
+            -3.0,
+            false,
+            true,
+            0.0,
+            Some(PixelWindow { x: 120, y: 90, w: 300, h: 200 }),
+        ),
+        ("lens corrected", Rect { x0: 0.0, y0: 0.0, x1: 0.7, y1: 0.8 }, 0.0, false, false, -80.0, None),
+        ("a crop of 1.5 × 1.5 px", Rect { x0: 0.5, y0: 0.5, x1: 0.5 + 1.5 / 480.0, y1: 0.5 + 1.5 / 320.0 }, 0.0, false, false, 0.0, None),
+        ("uncut", Rect::UNIT, 0.0, false, false, 0.0, None),
+    ];
+    for (name, rect, angle, flip_h, flip_v, distortion, win) in cases {
+        let mut s = crop_tool_vignette();
+        s.crop.geometry = CropGeometry { rect, angle };
+        (s.crop.flip_h, s.crop.flip_v, s.optics.distortion) = (flip_h, flip_v, distortion);
+        let tool = crate::frame_for(&src, &info, &s, false);
+        let (fw, fh) = tool.fit(W, H);
+        let (frame, w, h) = match win {
+            Some(win) => (tool.window(fw, fh, win), win.w, win.h),
+            None => (tool, fw, fh),
+        };
+        let (cw, ch) = frame.export_crop(&s).native_size();
+        assert!(cw >= 1.0 && ch >= 1.0, "{name}: {cw} × {ch}");
+        assert_eq!(frame.vignette_frame(&s, w, h), before(&frame, &s, w, h), "{name}");
+    }
 }
