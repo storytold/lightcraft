@@ -854,12 +854,7 @@ fn draw_camera_full(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, img_rec
     if !crate::region::same_aspect(tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32, display_aspect) {
         return false;
     }
-    p.with_clip_rect(p.clip_rect().intersect(cover)).image(
-        tex.id(),
-        img_rect,
-        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-        Color32::WHITE,
-    );
+    p.with_clip_rect(p.clip_rect().intersect(cover)).image(tex.id(), img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     true
 }
 
