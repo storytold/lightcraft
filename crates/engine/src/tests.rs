@@ -29,6 +29,7 @@ mod ids_params;
 mod import;
 mod import_move;
 mod keyword_list;
+mod lens_refresh;
 mod libops;
 mod library;
 mod lightroom_folder;
