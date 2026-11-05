@@ -344,13 +344,17 @@ impl MediaCache {
         {
             return SourceRef::Loaded(Box::new(a));
         }
-        // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
+        // a thumbnail of a photo whose preview or full source is decoded (the one in the loupe) is cut from it; not
         // with a denoised picture, which the thumbnail would lose, nor from one decoded with another camera profile
         if cached
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
-            && let Some(big) = self.get_source(p.id, SourceLevel::Preview).filter(|b| b.fits_outliers(outliers))
-            && (big.camera_profile == wanted.as_ref().map(|(tag, _)| tag.clone()) || (big.from_proxy && self.original_offline(p)))
+            && let Some(big) = [SourceLevel::Preview, SourceLevel::Full].into_iter().find_map(|level| {
+                self.get_source(p.id, level).filter(|b| {
+                    b.fits_outliers(outliers)
+                        && (b.camera_profile.as_deref() == wanted.as_ref().map(|(tag, _)| tag.as_str()) || (b.from_proxy && self.original_offline(p)))
+                })
+            })
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }

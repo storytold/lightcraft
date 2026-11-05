@@ -104,8 +104,6 @@ impl LoadedCameraProfile {
         Ok(LoadedCameraProfile { profile: Arc::new(profile), fingerprint: Hasher128::new().update(bytes).finish().0 as u64 | 1 })
     }
 }
-    }
-}
 
 #[cfg(test)]
 mod thumbnail_hash_tests;
