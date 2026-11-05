@@ -85,6 +85,9 @@ fn available_space(path: &std::path::Path, custom: bool) -> Result<u64, String> 
     let folder = if !custom && !path.exists() { path.parent().unwrap_or(path) } else { path };
     #[cfg(any(unix, windows))]
     {
+        // statvfs fails for a missing path, but Windows names the volume from the path's text
+        // (`GetVolumePathNameW`): a missing folder would report the free space of its drive letter.
+        std::fs::metadata(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
         fs4::available_space(folder).map_err(|e| format!("{}: {e}", folder.display()))
     }
     #[cfg(not(any(unix, windows)))]
@@ -311,6 +314,8 @@ mod tests {
         assert!(intercept(&mut app, "library.smartPreviews", &json!({})).is_none(), "Compact stays immediate");
         assert!(intercept(&mut app, "library.smartPreviews", &json!({"discard": true, "format": "lossless"})).is_none());
         assert!(available_space(&dir.join("missing/volume"), true).is_err(), "never report the system drive for a missing custom folder");
+        assert!(available_space(&dir.join("missing/Smart Previews"), false).is_err(), "nor for a default folder whose library folder is gone");
+        assert!(available_space(&dir.join("Smart Previews"), false).is_ok(), "a default folder not built yet reports its library's drive");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
