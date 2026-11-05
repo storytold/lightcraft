@@ -1,5 +1,6 @@
 use super::quick::{QuickJob, content_key, source_info};
 use super::render::{RenderJob, RenderResult};
+use super::settings_hash::with_process;
 use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
@@ -73,7 +74,8 @@ impl crate::Session {
             ^ lens.rotate_left(37);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
-            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
+            with_process(&mut k, &settings).u64(crate::camera_profiles::cache_key());
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
@@ -142,12 +144,8 @@ impl crate::Session {
     /// `profile_salt`: [`MediaCache::camera_profile_salt`] of `settings`' profile.
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64) -> Hash128 {
         let mut k = Hasher128::new();
-        k.str(&content_key(p))
-            .str("variant")
-            .u64(settings.hash64())
-            .u64(edge as u64)
-            .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key());
+        k.str(&content_key(p)).str("variant").u64(settings.hash64()).u64(edge as u64).u64(RENDER_CACHE_VERSION);
+        with_process(&mut k, settings).u64(crate::camera_profiles::cache_key());
         if profile_salt != 0 {
             k.str("dcp").u64(profile_salt);
         }
@@ -270,12 +268,8 @@ impl crate::Session {
     /// included as in [`Self::variant_key`]. `profile_salt`: [`MediaCache::camera_profile_salt`] of the photo's profile.
     pub(crate) fn view_key(p: &Photo, apply_crop: bool, profile_salt: u64) -> Hash128 {
         let mut k = Hasher128::new();
-        k.str(&content_key(p))
-            .str("view")
-            .u64(p.develop.hash64())
-            .u64(apply_crop as u64)
-            .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key());
+        k.str(&content_key(p)).str("view").u64(p.develop.hash64()).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION);
+        with_process(&mut k, &p.develop).u64(crate::camera_profiles::cache_key());
         if profile_salt != 0 {
             k.str("dcp").u64(profile_salt);
         }
@@ -550,5 +544,38 @@ impl crate::Session {
         }
         self.media.insert_source(id, level, r);
         Ok(image)
+    }
+
+    /// [`Session::source_now`] for several photos at once, each with the facts its decoder gave
+    /// ([`Session::source_info`], read before another photo can push it out of the cache): the
+    /// ones not in memory are decoded in parallel, so a selection costs about one decode per core,
+    /// not one after another. In the order of `ids`. Callers pass a few at a time (all of them are
+    /// held decoded until this returns).
+    pub(crate) fn sources_now(&mut self, ids: &[PhotoId], level: SourceLevel) -> Vec<(PhotoId, Result<(Arc<Rgb32f>, SourceInfo), String>)> {
+        use rayon::prelude::*;
+        let refs: Vec<(PhotoId, Option<SourceRef>)> =
+            ids.iter().map(|&id| (id, self.catalog.photo(id).cloned().map(|p| self.media.source_ref(&p, level)))).collect();
+        let loaded: Vec<(PhotoId, Result<super::source::DecodedSource, String>)> =
+            refs.into_par_iter().map(|(id, r)| (id, r.ok_or_else(|| "no such photo".to_string()).and_then(|r| r.load_source()))).collect();
+        loaded
+            .into_iter()
+            .map(|(id, r)| {
+                let r = r.map(|r| {
+                    let image = r.image.clone();
+                    if let Some(info) = &r.info {
+                        self.learn_as_shot_wb(id, info);
+                    }
+                    // read before the insert: the cache's budget may evict this very entry, and
+                    // the header facts alone lack the decoder's camera colour
+                    let facts = match r.info {
+                        Some(_) => r.info_or(self.catalog.photo(id).map(|p| source_info(p)).unwrap_or_default()),
+                        None => self.source_info(id),
+                    };
+                    self.media.insert_source(id, level, r);
+                    (image, facts)
+                });
+                (id, r)
+            })
+            .collect()
     }
 }

@@ -86,18 +86,23 @@ pub enum Process {
     V2,
     /// Pixel-scale sharpening with working Radius and Detail controls.
     V3,
+    /// V3, with Contrast and Blacks on a raw's camera look calibrated to Lightroom: the
+    /// camera curve keeps V2 Whites and fitted pointwise operators follow it
+    /// (`lightcraft_pipeline::light_v3`, `docs/light-v3.md`).
+    V4,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 3] = [Process::V1, Process::V2, Process::V3];
-    pub const LATEST: Process = Process::V3;
+    pub const ALL: [Process; 4] = [Process::V1, Process::V2, Process::V3, Process::V4];
+    pub const LATEST: Process = Process::V4;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
             Process::V3 => ProcessVersion(3),
+            Process::V4 => ProcessVersion(4),
         }
     }
 }
