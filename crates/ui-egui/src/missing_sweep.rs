@@ -90,7 +90,6 @@ pub fn ask(app: &mut LightcraftApp, reply: Sender<Value>) -> Outcome {
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = cancel.clone();
     let work = move |task: lightcraft_engine::activity::TaskHandle| {
-        task.progress(0, total);
         // (a panic is this check's failure, answered to the callers: they would wait for it in vain)
         lightcraft_engine::guard::catch("Missing Photos", || {
             missing::sweep(files, |f| exists(f), || flag.load(Ordering::Relaxed), |done| task.progress(done as u64, total))
@@ -113,7 +112,7 @@ pub fn ask(app: &mut LightcraftApp, reply: Sender<Value>) -> Outcome {
             app.missing.kept = Some(Kept { library, snapshot, at: Instant::now(), answer });
         }
     };
-    if let Err(e) = crate::tasks::spawn_tracked(app, LABEL, KIND, cancel, work, done) {
+    if let Err(e) = crate::tasks::spawn_tracked(app, LABEL, KIND, cancel, total, work, done) {
         app.missing.fail(library, &e);
     }
     Outcome::Later
