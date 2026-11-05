@@ -61,7 +61,11 @@ fn the_report_file_and_the_issue_hold_what_was_chosen() {
     assert!(text.contains("Export hangs at 90 %") && text.contains("Version: ") && text.contains("== lightcraft.log =="), "{text}");
     // this run's log only, with the home folder and the photo's name hidden
     assert!(!text.contains("lightcraft.1.log") && !text.contains("the run before"), "{text}");
-    assert!(text.contains("~/Pictures/<photo>.CR2") && !text.contains("Ann birthday"), "{text}");
+    assert!(!text.contains("Ann birthday"), "{text}");
+    // the home folder becomes `~` only where there is one to find (CI runners may have none)
+    if crate::bug_report::home_dir().is_some() {
+        assert!(text.contains("~/Pictures/<photo>.CR2"), "{text}");
+    }
     assert_eq!(*revealed.lock().unwrap(), vec![path.clone()]);
     let url = opened.lock().unwrap().last().cloned().expect("the issue opened");
     assert!(
@@ -121,4 +125,29 @@ fn without_a_log_the_issue_holds_the_system_info_only() {
     h.step();
     assert!(!has(&h, "check:reportBugPrevious"), "no previous logs to offer");
     assert!(h.painted_text().join("\n").contains("keeps no log"));
+}
+
+/// A report that can't be written keeps the dialog, and what was typed, open with the error, through
+/// the control channel as through its button (#1128 review).
+#[test]
+#[cfg(unix)]
+fn a_report_that_cant_be_written_keeps_the_dialog() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, log) = log_dir("unwritable");
+    let (mut h, _, opened) = app(Some(log));
+    let r = h.request("ui.menu.invoke", json!({"id": "app.reportBug"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    if let Some(crate::state::Dialog::ReportBug { opts, .. }) = h.app.ui.dialog.as_mut() {
+        opts.what = "Export hangs".into();
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(r["ok"], false, "the report file can't be written: {r}");
+    match &h.app.ui.dialog {
+        Some(crate::state::Dialog::ReportBug { opts, .. }) => assert_eq!(opts.what, "Export hangs", "what was typed is kept"),
+        other => panic!("the dialog closed: {other:?}"),
+    }
+    assert!(opened.lock().unwrap().is_empty(), "no issue opened for a report that wasn't made");
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,7 +1,8 @@
 //! Help ▸ Report a Bug… (issue #1015): a bug report as a text file to attach and a pre-filled GitHub
-//! issue. It holds what happened, the System Info rows and the logs. Nothing is sent: the file is
-//! written next to the logs and shown in the file manager, the link opens in the browser, and the
-//! person submits the issue on GitHub themselves.
+//! issue. It holds what happened, the System Info rows and the logs. LightCraft uploads nothing itself:
+//! the file is written next to the logs and shown in the file manager, and the issue opens in the
+//! browser with its text in the link (so that text reaches GitHub's page), for the person to check
+//! and submit there themselves.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -41,6 +42,13 @@ pub struct LogInfo {
     pub bytes: u64,
     /// The last [`EXCERPT_LINES`] lines.
     pub tail: String,
+    /// This run's log (the others are the two runs before it).
+    #[serde(default)]
+    pub current: bool,
+    /// What the report file takes from it (its last [`MAX_LOG_BYTES`]), read when the dialog opened, so the
+    /// file holds what the preview described.
+    #[serde(skip)]
+    pub text: String,
 }
 
 /// This run's log (`log_file`) and the two before it (`lightcraft.1.log`, `lightcraft.2.log`), those
@@ -55,7 +63,8 @@ pub fn logs(log_file: Option<&str>) -> Vec<LogInfo> {
             let text = read_end(path, MAX_LOG_BYTES)?;
             let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(text.len() as u64);
             let name = path.file_name()?.to_string_lossy().to_string();
-            Some(LogInfo { name, path: path.to_string_lossy().to_string(), bytes, tail: last_lines(&text, EXCERPT_LINES).to_string() })
+            let tail = last_lines(&text, EXCERPT_LINES).to_string();
+            Some(LogInfo { name, path: path.to_string_lossy().to_string(), bytes, tail, current: path.as_path() == current, text })
         })
         .collect()
 }
@@ -66,11 +75,14 @@ fn read_end(path: &std::path::Path, max: u64) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     let start = len.saturating_sub(max);
-    file.seek(SeekFrom::Start(start)).ok()?;
+    // one byte before the cut tells whether it falls inside a line
+    let from = start.saturating_sub(1);
+    file.seek(SeekFrom::Start(from)).ok()?;
     let mut bytes = Vec::new();
-    file.take(max).read_to_end(&mut bytes).ok()?;
-    let text = String::from_utf8_lossy(&bytes).into_owned();
-    if start == 0 {
+    file.take(max + (start - from)).read_to_end(&mut bytes).ok()?;
+    let at_line_start = start == 0 || bytes.first() == Some(&b'\n');
+    let text = String::from_utf8_lossy(bytes.get((start - from) as usize..).unwrap_or(&[])).into_owned();
+    if at_line_start {
         return Some(text);
     }
     // (cut in the middle of a line: start at the next one)
@@ -92,7 +104,7 @@ fn last_lines(text: &str, n: usize) -> &str {
 
 /// The home folder, for [`redact`].
 pub fn home_dir() -> Option<String> {
-    ["HOME", "USERPROFILE"].iter().find_map(|v| std::env::var(v).ok()).filter(|h| h.trim_end_matches(['/', '\\']).len() > 1)
+    ["HOME", "USERPROFILE"].iter().filter_map(|v| std::env::var(v).ok()).find(|h| h.trim_end_matches(['/', '\\']).len() > 1)
 }
 
 /// `text` with the home folder replaced by `~` and the name of every photo file (or its sidecar) by
@@ -104,6 +116,8 @@ pub fn redact(text: &str, home: Option<&str>) -> String {
         let slashed = home.replace('\\', "/");
         if slashed != home {
             out = out.replace(&slashed, "~");
+            // a Windows path as `{:?}` writes it: `C:\\Users\\ann`
+            out = out.replace(&home.replace('\\', "\\\\"), "~");
         }
     }
     hide_photo_names(&out)
@@ -120,13 +134,16 @@ fn is_photo_extension(ext: &str) -> bool {
 }
 
 /// Every `name.ext` with a photo (or sidecar) extension becomes `<photo>.ext`. After a path separator
-/// the name runs back to it, spaces and all (`Pictures/Ann birthday.CR2`); elsewhere it starts after
-/// the last space (`sidecar IMG_0001.xmp`).
+/// the name runs back to it, spaces and all (`Pictures/Ann birthday.CR2`); inside quotes it runs back
+/// to the opening quote (`"Ann birthday.CR2"`); elsewhere it starts after the last space
+/// (`sidecar IMG_0001.xmp`).
 fn hide_photo_names(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     // where the name before a '.' would start: after the last path separator while no other break
     // came after it, else after the last space or break; never before the end of the last name hidden
     let (mut after_path, mut after_space, mut hidden_end, mut copied) = (None::<usize>, 0usize, 0usize, 0usize);
+    // after an opening `"` or `` ` `` while it is open: a quoted name without a folder is hidden whole
+    let mut after_quote = None::<usize>;
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     for (i, &(at, c)) in chars.iter().enumerate() {
         let next = at + c.len_utf8();
@@ -141,7 +158,13 @@ fn hide_photo_names(text: &str) -> String {
         if c == '/' || c == '\\' {
             after_path = Some(next);
             after_space = next;
-        } else if separates(c) && !in_word && !(in_basename && matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '\'' | ',' | ';' | '=')) {
+        } else if separates(c)
+            && !in_word
+            && !(in_basename && matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '\'' | ',' | ';' | '=' | '"' | '`' | '<' | '>' | '|'))
+        {
+            if c == '"' || c == '`' {
+                after_quote = if after_quote.is_some() { None } else { Some(next) };
+            }
             after_path = None;
             after_space = next;
         } else if c.is_whitespace() {
@@ -152,7 +175,7 @@ fn hide_photo_names(text: &str) -> String {
             let ext = text.get(next..end).unwrap_or("");
             // a path's last name runs back to its separator; once a name there was hidden, a later
             // name starts after the last space like any word
-            let base = after_path.filter(|p| hidden_end <= *p).unwrap_or(after_space);
+            let base = after_path.filter(|p| hidden_end <= *p).or(after_quote).unwrap_or(after_space);
             let start = base.max(hidden_end).max(copied);
             let name = text.get(start..at).unwrap_or("");
             if !ext.is_empty() && is_photo_extension(ext) && !name.trim().is_empty() {
@@ -230,8 +253,11 @@ fn issue_with(rows: &[(String, String)], opts: &ReportOptions, log: Option<&LogI
     let url_of = |title: &str, body: &str| format!("{}?title={}&body={}", crate::links::FEEDBACK, encode(title), encode(body));
     let mut lines = log_lines.as_slice();
     let mut what = what;
+    let mut shortened = false;
+    let note = if attached { " … (shortened to fit the link: the full text is in the report file)" } else { " … (shortened to fit the link)" };
     loop {
-        let body = body_of(&what, lines);
+        let shown = if shortened { format!("{what}{note}") } else { what.clone() };
+        let body = body_of(&shown, lines);
         let url = url_of(&title, &body);
         if url.len() <= MAX_URL {
             return Issue { title, body, url };
@@ -239,9 +265,11 @@ fn issue_with(rows: &[(String, String)], opts: &ReportOptions, log: Option<&LogI
         if let Some(rest) = lines.get(1..) {
             lines = rest;
         } else if !what.is_empty() {
-            // a very long description: keep its start (the report file has all of it)
+            // a very long description: keep its start, and say so (the report file, when there is one, has
+            // all of it)
             let keep = what.chars().count() * 9 / 10;
             what = what.chars().take(keep).collect();
+            shortened = true;
         } else {
             let url = url_of(&title, "");
             return Issue { title, url, body: String::new() };
@@ -249,7 +277,8 @@ fn issue_with(rows: &[(String, String)], opts: &ReportOptions, log: Option<&LogI
     }
 }
 
-/// The report file's text: what happened, the system rows and each log, whole (up to its last 4 MB).
+/// The report file's text: what happened, the system rows and each log (up to its last 4 MB, which its name
+/// says when it is longer).
 pub fn file_text(rows: &[(String, String)], opts: &ReportOptions, logs: &[(String, String)], when: &str) -> String {
     let home = home_dir();
     let private = |t: &str| if opts.private { redact(t, home.as_deref()) } else { t.to_string() };
@@ -269,7 +298,7 @@ pub fn file_text(rows: &[(String, String)], opts: &ReportOptions, logs: &[(Strin
 
 /// The logs a report takes: this run's, and the two before it when asked for.
 pub fn chosen(logs: &[LogInfo], opts: &ReportOptions) -> Vec<LogInfo> {
-    logs.iter().enumerate().filter(|(i, _)| *i == 0 || opts.previous_logs).map(|(_, l)| l.clone()).collect()
+    logs.iter().filter(|l| l.current || opts.previous_logs).cloned().collect()
 }
 
 /// The System Info rows (Help ▸ System Info…), also the system part of a bug report.
@@ -334,14 +363,28 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 pub fn create(app: &mut LightcraftApp, opts: &ReportOptions, rows: &[(String, String)], logs: &[LogInfo]) -> Result<Value, String> {
     let logs = chosen(logs, opts);
     let when = (app.session.clock)();
-    let file = app.services.log_file.as_deref().map(std::path::Path::new).and_then(|log| {
+    // a report file only when there are logs to put in it: what the dialog's preview says
+    let file = app.services.log_file.as_deref().filter(|_| !logs.is_empty()).map(std::path::Path::new).and_then(|log| {
         let stamp: String = when.chars().filter(|c| c.is_ascii_digit()).take(14).collect();
         Some(log.parent()?.join(format!("lightcraft-report-{stamp}.txt")))
     });
     let mut path = None;
     if let Some(file) = &file {
-        let full: Vec<(String, String)> =
-            logs.iter().map(|l| (l.name.clone(), read_end(std::path::Path::new(&l.path), MAX_LOG_BYTES).unwrap_or_default())).collect();
+        // the text read when the dialog opened (what its preview described); read now only for a report made
+        // without the dialog. A log longer than the limit is named with the part it gives.
+        let full: Vec<(String, String)> = logs
+            .iter()
+            .map(|l| {
+                let text =
+                    if l.text.is_empty() { read_end(std::path::Path::new(&l.path), MAX_LOG_BYTES).unwrap_or_default() } else { l.text.clone() };
+                let name = if l.bytes > MAX_LOG_BYTES {
+                    format!("{} (its last {} MB of {:.0} MB)", l.name, MAX_LOG_BYTES >> 20, l.bytes as f64 / f64::from(1u32 << 20))
+                } else {
+                    l.name.clone()
+                };
+                (name, text)
+            })
+            .collect();
         let text = file_text(rows, opts, &full, &when);
         let p = file.to_string_lossy().to_string();
         lightcraft_engine::export::write_file(&p, text.as_bytes())?;
@@ -364,7 +407,7 @@ pub fn dialog_body(ui: &mut egui::Ui, t: &crate::theme::Tokens, opts: &mut Repor
     ui.set_min_width(520.0);
     ui.label(
         egui::RichText::new(tr(
-            "Nothing is sent. Create Report saves a report file to attach, and opens a new GitHub issue filled in with what is shown below, for you to check and submit.",
+            "LightCraft uploads nothing itself. Create Report saves a report file to attach, and opens a new GitHub issue in your browser filled in with what is shown below: check it there before you submit it.",
         ))
         .color(t.text_dim),
     );
@@ -392,7 +435,7 @@ pub fn dialog_body(ui: &mut egui::Ui, t: &crate::theme::Tokens, opts: &mut Repor
         tr("This session keeps no log, so there is no report file: the issue holds the system info only.").to_string()
     } else {
         let names: Vec<String> = chosen.iter().map(|l| format!("{} ({:.0} KB)", l.name, l.bytes as f64 / 1024.0)).collect();
-        format!("{} {}", tr("The report file holds the same, and these logs whole:"), names.join(", "))
+        format!("{} {}", tr("The report file holds the same, and these logs (up to the last 4 MB of each):"), names.join(", "))
     };
     ui.label(egui::RichText::new(files).color(t.text_dim));
     let r = ui.button(tr("Copy to Clipboard"));
@@ -411,7 +454,14 @@ mod tests {
     }
 
     fn log(tail: &str) -> LogInfo {
-        LogInfo { name: "lightcraft.log".into(), path: String::new(), bytes: tail.len() as u64, tail: tail.into() }
+        LogInfo {
+            name: "lightcraft.log".into(),
+            path: String::new(),
+            bytes: tail.len() as u64,
+            tail: tail.into(),
+            current: true,
+            text: String::new(),
+        }
     }
 
     #[test]
@@ -433,6 +483,51 @@ mod tests {
         assert_eq!(redact(r"C:\Users\ann\Smith, J. {2}.NEF", Some(r"C:\Users\ann")), r"~\<photo>.NEF");
         // after a hidden name, the same marks end words again
         assert_eq!(redact("/Users/ann/x.jpg (DSC_1.nef)", home), "~/<photo>.jpg (<photo>.nef)");
+    }
+
+    /// CodeRabbit on #3763: a cut that falls exactly on a line start keeps that line; one inside a line drops
+    /// the partial line.
+    #[test]
+    fn read_end_keeps_a_whole_first_line() {
+        let dir = std::env::temp_dir().join(format!("lc-read-end-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("log.txt");
+        std::fs::write(&p, "aaaa\nbbbb\ncccc\n").unwrap();
+        assert_eq!(read_end(&p, 10).unwrap(), "bbbb\ncccc\n", "the cut is at the start of bbbb");
+        assert_eq!(read_end(&p, 8).unwrap(), "cccc\n", "the cut is inside bbbb");
+        assert_eq!(read_end(&p, 100).unwrap(), "aaaa\nbbbb\ncccc\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn redact_hides_quoted_names_and_debug_formatted_homes() {
+        // a debug-formatted Windows path doubles its backslashes
+        assert_eq!(redact(r#"path: "C:\\Users\\ann\\x.jpg""#, Some(r"C:\Users\ann")), r#"path: "~\\<photo>.jpg""#);
+        // a quoted name with no folder before it is hidden whole
+        assert_eq!(redact(r#"could not read "Ann birthday.CR2": truncated"#, None), r#"could not read "<photo>.CR2": truncated"#);
+        // quotes, pipes and angle brackets inside a path's last name are part of it
+        assert_eq!(redact("/Users/ann/a|b <c>.jpg", Some("/Users/ann")), "~/<photo>.jpg");
+    }
+
+    #[test]
+    fn this_runs_log_is_chosen_by_name_not_position() {
+        let older =
+            LogInfo { name: "lightcraft.1.log".into(), path: String::new(), bytes: 1, tail: String::new(), current: false, text: String::new() };
+        let current = LogInfo { current: true, name: "lightcraft.log".into(), ..older.clone() };
+        let both_logs = [older.clone(), current.clone()];
+        let opts = ReportOptions::default();
+        assert!(chosen(std::slice::from_ref(&older), &opts).is_empty(), "only an older log: none is this run's");
+        assert_eq!(chosen(&both_logs, &opts), std::slice::from_ref(&current));
+        let both = ReportOptions { previous_logs: true, ..Default::default() };
+        assert_eq!(chosen(&both_logs, &both).len(), 2);
+    }
+
+    #[test]
+    fn a_shortened_description_says_so() {
+        let opts = ReportOptions { what: "x".repeat(20_000), ..Default::default() };
+        let issue = issue_with(&rows(), &opts, None, false, &|t: &str| t.to_string());
+        assert!(issue.url.len() <= MAX_URL);
+        assert!(issue.body.contains("(shortened to fit the link)"), "{}", &issue.body[issue.body.len().saturating_sub(200)..]);
     }
 
     #[test]
