@@ -84,17 +84,25 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
+    /// Pixel-scale sharpening with working Radius and Detail controls.
+    V3,
+    /// V3, with Contrast and Blacks on a raw's camera look calibrated to Lightroom: the
+    /// camera curve keeps V2 Whites and fitted pointwise operators follow it
+    /// (`lightcraft_pipeline::light_v3`, `docs/light-v3.md`).
+    V4,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
-    pub const LATEST: Process = Process::V2;
+    pub const ALL: [Process; 4] = [Process::V1, Process::V2, Process::V3, Process::V4];
+    pub const LATEST: Process = Process::V4;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
+            Process::V4 => ProcessVersion(4),
         }
     }
 }
@@ -624,6 +632,13 @@ pub struct Detail {
     pub nr_color: f64,
     pub nr_color_detail: f64,
     pub nr_color_smoothness: f64,
+    /// Replace single outlier photosites (noise spikes far above all their same-colour neighbours) in the
+    /// raw mosaic before demosaicing, so they do not become coloured dots (#1345). On for newly imported
+    /// raws ([`crate::DevelopSettings::for_raw`]); off for edits saved before it existed, so they look the
+    /// same. Raw files only. Omitted when off, so settings saved before it keep their JSON (and hash, and with it
+    /// their cached thumbnails).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub nr_outliers: bool,
 }
 
 impl Default for Detail {
@@ -641,6 +656,7 @@ impl Default for Detail {
             nr_color: 0.0,
             nr_color_detail: 50.0,
             nr_color_smoothness: 50.0,
+            nr_outliers: false,
         }
     }
 }
