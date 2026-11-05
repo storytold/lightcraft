@@ -1,6 +1,6 @@
 # Process versions
 
-> **Last updated:** 2026-11-05 · **Change:** minor (V5: raw tone curves roll off into white in stops, #1632)
+> **Changes:** [revision history](#revision-history)
 
 Every photo's develop settings record the **rendering process** they are interpreted by
 (`DevelopSettings::process`, a `ProcessVersion` in `crates/develop/src/settings.rs`). Lightroom calls
@@ -103,4 +103,5 @@ extra field and retain their existing cached renders. No cache-version bump is n
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | V5: a raw's tone curve rolls off into white in stops, so raising Exposure keeps recorded highlights (#1632) |
 | 2026-10-12 | minor | Calibrated Contrast and Blacks, V2 Whites, resolved-process cache keys and number coordination |
