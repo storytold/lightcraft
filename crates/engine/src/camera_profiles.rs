@@ -304,16 +304,26 @@ mod tests {
         assert_eq!(cache_key(), cache_key_with_lens(directory.as_deref(), lens_key));
         assert_ne!(cache_key(), cache_key_with_lens(directory.as_deref(), 0), "public camera key must forward the loaded lens key");
         let first = cache_key();
+        // The culling path now reuses rendered views before decoding. Their identity
+        // must follow the same loaded lens snapshot as camera fitting and thumbnails.
+        let mut session = crate::Session::with_demo();
+        let id = session.active().unwrap();
+        let view = session.loupe_job(id, 64, 64, true).unwrap();
+        let (views, view_key) = view.view_cache.as_ref().unwrap();
+        views.put_memory(*view_key, std::sync::Arc::new(lightcraft_raster::Rgba8::from_fn(64, 64, |_, _| [7, 19, 31, 255])));
+        assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_some());
         let file = directory.unwrap().join("lens.xml");
         let xml = std::fs::read_to_string(&file).unwrap();
         std::fs::write(&file, xml.replace("-0.03", "-0.05")).unwrap();
         assert_eq!(cache_key(), first, "unreloaded files do not change the loaded database");
         crate::lens_profiles::replaced();
         assert_ne!(cache_key(), first, "camera keys follow runtime lens replacements too");
+        assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_none(), "a view from the old snapshot is not reused");
         assert_eq!(cache_key(), cache_key_with_lens(dir().as_deref(), crate::lens_profiles::cache_key()));
         std::fs::write(&file, xml).unwrap();
         crate::lens_profiles::reload();
         assert_eq!(cache_key(), first, "restored semantic data restores the camera key");
+        assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_some(), "restoring the snapshot restores its view identity");
     }
 
     #[test]
