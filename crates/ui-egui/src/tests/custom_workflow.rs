@@ -90,6 +90,15 @@ fn album_operations_are_live_and_plain_source_clears_them() {
     app.run("album.addPhotos", json!({"id": a, "ids": [ids[0].0, ids[1].0]})).unwrap();
     app.run("album.addPhotos", json!({"id": b, "ids": [ids[1].0, ids[2].0]})).unwrap();
     app.run("library.source", json!({"kind": "album", "id": a})).unwrap();
+    app.session.filter.flags = vec![lightcraft_catalog::Flag::Reject];
+    app.session.filter.labels = vec![lightcraft_catalog::ColorLabel::Red];
+    app.session.filter.only = vec![ids[2]];
+    app.session.filter.only_none = true;
+    app.run("view.combineAlbums", json!({"ids": [a, b]})).unwrap();
+    assert!(app.session.filter.flags.is_empty());
+    assert!(app.session.filter.labels.is_empty());
+    assert!(app.session.filter.only.is_empty());
+    assert!(!app.session.filter.only_none);
     for (operation, expected) in
         [("union", vec![ids[0], ids[1], ids[2]]), ("intersection", vec![ids[1]]), ("difference", vec![ids[0]]), ("exclusive", vec![ids[0], ids[2]])]
     {

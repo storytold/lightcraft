@@ -81,7 +81,15 @@ pub fn command(app: &mut LightcraftApp, params: &Value) -> Result<Value, String>
     }
     // A source choice starts a fresh view; ordinary filters can be applied to the result next.
     let filter = lightcraft_catalog::Filter { rule_set: Some(set), ..Default::default() };
-    let filter = serde_json::to_value(filter).map_err(|e| e.to_string())?;
+    let mut filter = serde_json::to_value(filter).map_err(|e| e.to_string())?;
+    let fields = filter.as_object_mut().ok_or("view.combineAlbums: couldn't serialize the filter")?;
+    // These defaults are normally omitted by Filter's serializer. library.filter merges a
+    // partial payload, so spell them out to keep a previous Find Similar or multi-select filter
+    // from narrowing the new source view.
+    fields.insert("flags".into(), json!([]));
+    fields.insert("labels".into(), json!([]));
+    fields.insert("only".into(), json!([]));
+    fields.insert("onlyNone".into(), json!(false));
     app.session.source = LibrarySource::All;
     app.session.execute("library.filter", &filter).map_err(|e| e.to_string())?;
     app.ui.search.clear();
