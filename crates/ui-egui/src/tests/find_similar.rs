@@ -40,7 +40,7 @@ fn app_on_a_slow_drive(guard: Duration) -> (Headless, Drive) {
     let drive = Drive { open: Arc::new(AtomicBool::new(false)), reads: Arc::new(AtomicUsize::new(0)), on_ui: Arc::new(AtomicUsize::new(0)) };
     let (ui, open, reads, on_ui) = (std::thread::current().id(), drive.open.clone(), drive.reads.clone(), drive.on_ui.clone());
     let deadline = Instant::now() + guard;
-    app.session.media.file_loader = Some(Arc::new(move |path: &str, _| {
+    app.session.media.file_loader = Some(Arc::new(move |path: &str, _, _| {
         // (the grid reads the photos for its thumbnails too, on threads of its own)
         let thread = std::thread::current();
         if thread.name().is_some_and(|n| n.starts_with("similar-") || n.contains(LABEL)) {
@@ -195,7 +195,7 @@ fn a_search_that_cannot_start_leaves_no_row() {
 #[test]
 fn a_photo_that_cannot_be_read_says_so() {
     let (mut h, _) = app_on_a_slow_drive(Duration::ZERO);
-    h.app.session.media.file_loader = Some(Arc::new(|path: &str, _| Err(format!("{path}: gone"))));
+    h.app.session.media.file_loader = Some(Arc::new(|path: &str, _, _| Err(format!("{path}: gone"))));
     h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
     until_done(&mut h);
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
