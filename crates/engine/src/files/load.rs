@@ -1,7 +1,7 @@
 use super::colour::bin_factor;
 use super::preview::{fit_box, load_embedded_preview};
 use super::probe::preview_reason;
-use super::{Arc, CameraColourModel, DenoiseSpec, Filter, HIGHLIGHT_CLIP, Orientation, Rgb32f, SourceInfo, fit, xy_to_temp_tint};
+use super::{Arc, CameraColourModel, DcpProfile, DenoiseSpec, Filter, HIGHLIGHT_CLIP, Orientation, Rgb32f, SourceInfo, fit, xy_to_temp_tint};
 
 /// Decode a file into a linear Rec.2020 image no larger than `max_edge`, oriented.
 ///
@@ -9,27 +9,41 @@ use super::{Arc, CameraColourModel, DenoiseSpec, Filter, HIGHLIGHT_CLIP, Orienta
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false).map(|(img, _, info, _)| (img, info)))
+    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false, None).map(|(img, _, info, _)| (img, info)))
+}
+
+/// [`load_bytes`] developing a raw file with an imported camera profile (`dcp`) in place of its own colour model.
+pub fn load_bytes_with(bytes: &[u8], max_edge: usize, dcp: Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false, dcp).map(|(img, _, info, _)| (img, info)))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
-pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false).map(|(img, _, info, _)| (img, info)))
+pub fn load_vec(bytes: Vec<u8>, max_edge: usize, dcp: Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false, dcp).map(|(img, _, info, _)| (img, info)))
 }
 
 /// [`load_vec`] for a thumbnail: a DNG that keeps reduced-resolution copies of its raw image (Lightroom's HDR and
 /// panorama merges) develops the smallest that covers `max_edge` instead of the whole image. The flag says whether
 /// it did: such a picture is not the full image, and an export never renders from it.
-pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo, bool), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true).map(|(img, _, info, reduced)| (img, info, reduced)))
+pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize, dcp: Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo, bool), String> {
+    rayon::scope(move |_| {
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true, dcp).map(|(img, _, info, reduced)| (img, info, reduced))
+    })
 }
 
 /// [`load_vec`] that also develops the photo's cached denoised picture (`spec`) from the same decode: the plain
 /// picture, the denoised one (`None` when it cannot be read or does not fit this raw: the plain one is then all
 /// there is) and the source facts. Both pictures are the same size.
-pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false).map(|(img, twin, info, _)| (img, twin, info)))
+pub fn load_vec_pair(
+    bytes: Vec<u8>,
+    max_edge: usize,
+    spec: &DenoiseSpec,
+    dcp: Option<&DcpProfile>,
+) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
+    rayon::scope(move |_| {
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false, dcp).map(|(img, twin, info, _)| (img, twin, info))
+    })
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
@@ -59,6 +73,7 @@ fn load_bytes_now(
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
     allow_reduced: bool,
+    dcp: Option<&DcpProfile>,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo, bool), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
         // a thumbnail (`allow_reduced`, never an export) of a DNG that keeps smaller copies of its raw image
@@ -92,20 +107,46 @@ fn load_bytes_now(
         let dng_lens_ops = (raw.format == lightcraft_raw::RawFormat::Dng && raw.opcodes.list3.iter().any(|op| op.is_lens_correction()))
             .then(|| raw.opcodes.list3.clone());
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+        // A camera profile without a tone curve of its own (most chart-made ones: a matrix, maybe a hue/saturation map)
+        // keeps the contrast the photo has without it: the file's own DNG tone curve, else the tone of the look fitted
+        // to its camera JPEG. (A chart pins colour, not a rendering: its curve would be a choice, and this one is the
+        // camera's.)
+        let kept_tone = match dcp {
+            Some(p) if p.color.profile.tone_curve.is_none() => raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve).or_else(|| {
+                let own = raw.color.clone();
+                // the same proxy as the starting colour's fit below: the DNG's lens opcodes back in, no embedded lens
+                let tone = with_dng_lens_ops(&mut raw, dng_lens_ops.as_ref(), lens.as_ref(), list3, |raw, embedded| {
+                    crate::camera_preview::starting_colour(raw, &bytes, lens_geometry.as_ref(), embedded)
+                })
+                .2
+                .map(|look| look.tone);
+                raw.color = own;
+                tone
+            }),
+            _ => None,
+        };
+        // An imported camera profile replaces the file's colour model (its matrices and look; the shot's white stays), so
+        // the starting colour and the white balance scale below come from it, not from a fitted or built-in look.
+        // (the white balance stays on the scale the file and its camera give, the one the catalog's
+        // `Photo::relative_wb` and the quick previews use: a profile's matrices must not turn a relative white balance
+        // into Kelvin, which would read existing edits as absolute temperatures)
+        let own_scale = dcp.map(|_| WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata));
+        if let Some(p) = dcp {
+            raw.color = p.applied_to(&raw.color);
+        }
         // Which scale white balance is edited on, and the as-shot white on it, from the file's own colour tags or
         // the camera's measured matrices (`Photo::relative_wb` decides the same from the catalog's camera)
         let scale = WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
+        let scale = match &own_scale {
+            Some(own) => scale.keeping_classification_of(own),
+            None => scale,
+        };
         // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
         let ((xy, t, camera_look), mattes) = rayon::join(
             || {
-                let removed = dng_lens_ops.map(|ops| std::mem::replace(&mut raw.opcodes.list3, ops));
-                // With the opcodes restored, the proxy already includes vignetting; do not apply it twice.
-                let embedded = if removed.is_some() { None } else { lens.as_ref() };
-                let colour = crate::camera_preview::starting_colour(&mut raw, &bytes, lens_geometry.as_ref(), embedded);
-                if let Some(ops) = removed {
-                    raw.opcodes.list3 = ops;
-                }
-                colour
+                with_dng_lens_ops(&mut raw, dng_lens_ops.as_ref(), lens.as_ref(), list3, |raw, embedded| {
+                    crate::camera_preview::starting_colour(raw, &bytes, lens_geometry.as_ref(), embedded)
+                })
             },
             || dng_mattes(&bytes, &info),
         );
@@ -183,7 +224,12 @@ fn load_bytes_now(
                 let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
                 Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
             });
-        let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
+        let camera_tone = camera_tone_of(
+            dcp.is_some(),
+            camera_look.as_ref().map(|p| p.tone),
+            raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve),
+            kept_tone,
+        );
         let local_tone = local_tone(&raw);
         let (temp, tint) = scale.as_shot(xy);
         return Ok((
@@ -260,6 +306,13 @@ impl WbScaleOf {
         };
         let covered = camera.is_some() || presets;
         WbScaleOf { own_matrix, relative: fitted && !covered, legacy_relative: fitted && covered, scale_white, camera }
+    }
+
+    /// This scale (a raw's, with an imported camera profile's colour model) on the white-balance scale `own` (the
+    /// same raw's with its own colour) gives: relative, or Kelvin edited on the relative scale before. The matrices,
+    /// and so the colour and the as-shot reading, stay this scale's.
+    pub(super) fn keeping_classification_of(self, own: &WbScaleOf) -> Self {
+        WbScaleOf { relative: own.relative, legacy_relative: own.legacy_relative, ..self }
     }
 
     /// What a DNG of this raw's camera RGB declares so that it shows the white balance as this scale does: the
@@ -347,4 +400,106 @@ pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve) -> Opti
         [x, curve.eval(x).min(0.9995)]
     });
     lightcraft_pipeline::tone::CameraTone::new(knots)
+}
+
+/// A raw's `OpcodeList3`.
+fn list3(raw: &mut lightcraft_raw::RawImage) -> &mut Vec<lightcraft_raw::Opcode> {
+    &mut raw.opcodes.list3
+}
+
+/// `fit(raw, embedded)` with a DNG's lens opcodes `ops` back in `raw`'s `OpcodeList3` (`list3`), as its preview has
+/// them applied, and the list as it was afterwards. With the opcodes restored the proxy already includes the
+/// vignetting, so `embedded` is `None` then (else `lens`): every tone fit of one photo sees the same proxy.
+fn with_dng_lens_ops<R, L, T>(
+    raw: &mut R,
+    ops: Option<&Vec<lightcraft_raw::Opcode>>,
+    lens: Option<&L>,
+    list3: fn(&mut R) -> &mut Vec<lightcraft_raw::Opcode>,
+    fit: impl FnOnce(&mut R, Option<&L>) -> T,
+) -> T {
+    let removed = ops.map(|ops| std::mem::replace(list3(raw), ops.clone()));
+    let embedded = if removed.is_some() { None } else { lens };
+    let out = fit(raw, embedded);
+    if let Some(ops) = removed {
+        *list3(raw) = ops;
+    }
+    out
+}
+
+/// The tone a raw's starting look gets from its camera: `look` (the tone of the look fitted to the camera JPEG),
+/// `curve` (the colour model's own tone curve: the file's, or with an imported camera profile, the profile's) and
+/// `kept` (the photo's own tone, kept for a profile without a curve). With a camera profile (`profile`), its curve
+/// comes first, then the kept tone, and the fitted look's only last: the look was fitted without the profile, so it
+/// must not replace the profile's curve or the contrast kept for it. Without one, the fitted look leads as before.
+fn camera_tone_of<T>(profile: bool, look: Option<T>, curve: Option<T>, kept: Option<T>) -> Option<T> {
+    if profile { curve.or(kept).or(look) } else { look.or(curve).or(kept) }
+}
+
+#[cfg(test)]
+mod camera_tone_tests {
+    use super::camera_tone_of;
+
+    /// CodeRabbit on #1063: with an imported camera profile, a fitted camera look's tone replaced the profile's own
+    /// tone curve and the tone kept for a profile without one. Without a profile the order is unchanged.
+    #[test]
+    fn a_camera_profiles_curve_and_kept_tone_come_before_the_fitted_look() {
+        assert_eq!(camera_tone_of(true, Some("look"), Some("profile"), Some("kept")), Some("profile"));
+        assert_eq!(camera_tone_of(true, Some("look"), None, Some("kept")), Some("kept"));
+        assert_eq!(camera_tone_of(true, Some("look"), None, None), Some("look"));
+        assert_eq!(camera_tone_of(false, Some("look"), Some("file"), Some("kept")), Some("look"));
+        assert_eq!(camera_tone_of(false, None, Some("file"), Some("kept")), Some("file"));
+        assert_eq!(camera_tone_of::<&str>(false, None, None, None), None);
+    }
+}
+
+#[cfg(test)]
+mod wb_scale_tests {
+    use super::WbScaleOf;
+
+    /// CodeRabbit on #1063: a raw edited on the relative white-balance scale (no colour matrices, none measured for
+    /// its camera) turned to Kelvin once an imported camera profile's matrices replaced its colour, so its existing
+    /// edits (6500 K / 0 = as shot) were read as absolute temperatures, and the catalog and quick previews still
+    /// used the relative scale. The profile's matrices stay; the scale is the file's.
+    #[test]
+    fn a_camera_profile_keeps_a_relative_white_balance_relative() {
+        let format = lightcraft_raw::RawFormat::Cr3;
+        let meta = lightcraft_meta::Metadata::default();
+        let own_color = lightcraft_raw::ColorData::default();
+        let own = WbScaleOf::new(format, &own_color, Some([2.0, 1.0, 1.5]), &meta);
+        assert!(own.relative && !own.own_matrix, "a matrix-less raw of an unmeasured camera is relative");
+        let m = lightcraft_color::Mat3([[0.9, 0.1, 0.0], [0.1, 0.8, 0.1], [0.0, 0.2, 0.8]]);
+        let profiled = lightcraft_raw::ColorData { illuminant: [21, 0], color_matrix: [Some(m), None], ..Default::default() };
+        let with = WbScaleOf::new(format, &profiled, Some([2.0, 1.0, 1.5]), &meta);
+        assert!(!with.relative, "the profile's matrices alone would make it Kelvin");
+        let kept = with.keeping_classification_of(&own);
+        assert!(kept.relative && !kept.legacy_relative && kept.own_matrix, "relative, with the profile's matrices");
+        assert_eq!(kept.as_shot(lightcraft_color::Xy { x: 0.3127, y: 0.329 }), (6500.0, 0.0));
+    }
+}
+
+#[cfg(test)]
+mod lens_ops_tests {
+    use lightcraft_raw::Opcode;
+
+    use super::with_dng_lens_ops;
+
+    fn same(v: &mut Vec<Opcode>) -> &mut Vec<Opcode> {
+        v
+    }
+
+    /// Both tone fits of a DNG (the kept tone for a camera profile without a curve, and the starting colour) see its
+    /// lens opcodes restored and no embedded lens; the list is as it was afterwards (CodeRabbit on #1063: the
+    /// kept-tone fit ran without the opcodes and with the embedded lens).
+    #[test]
+    fn a_dngs_tone_fit_sees_its_lens_opcodes_and_no_embedded_lens() {
+        let vignette = Opcode::FixVignetteRadial { k: [0.1, 0.0, 0.0, 0.0, 0.0], center: [0.5, 0.5] };
+        let ops = vec![vignette.clone()];
+        let mut list: Vec<Opcode> = Vec::new();
+        let lens = 7;
+        let seen = with_dng_lens_ops(&mut list, Some(&ops), Some(&lens), same, |l, embedded| (l.clone(), embedded.copied()));
+        assert_eq!(seen, (vec![vignette], None), "the opcodes are in, the embedded lens is not");
+        assert!(list.is_empty(), "the list is as it was");
+        let seen = with_dng_lens_ops(&mut list, None, Some(&lens), same, |l, embedded| (l.len(), embedded.copied()));
+        assert_eq!(seen, (0, Some(7)), "without DNG lens opcodes the embedded lens is used");
+    }
 }
