@@ -21,6 +21,16 @@
   hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
   loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
 
+### Raising Exposure keeps raw highlights (process 5)
+- Raising Exposure on a raw no longer turns the brightest tones the sensor recorded white (issue #1632). The tone
+  curve now eases into white a stop at a time instead of reaching it within about a stop of the sensor's white: at
+  Exposure +1 and +2 a sky, a lit wall or a face keeps its detail where it used to go flat white. At Exposure 0 the
+  brightest tones render a few codes darker (on average 1 code or less on the photos measured), and fully clipped
+  areas such as a blown sky stay slightly below pure white until Exposure lifts them further. A DNG whose own tone
+  curve already reaches white at the sensor's white renders as before. This is rendering
+  process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
+  to Current Process. See [process versions](process-versions.md).
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
