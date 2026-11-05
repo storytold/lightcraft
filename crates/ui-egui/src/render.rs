@@ -120,6 +120,11 @@ impl Tex {
     pub fn id(&self) -> egui::TextureId {
         self.native.unwrap_or_else(|| egui::TextureHandle::id(&self.tex))
     }
+
+    /// What the texture takes: four bytes a pixel, as [`Renderer::memory`] counts it.
+    fn bytes(&self) -> usize {
+        self.size[0].saturating_mul(self.size[1]).saturating_mul(4)
+    }
 }
 
 /// Draws renders that stayed on the GPU ([`lightcraft_engine::media::ScreenFrame`]): the window's
@@ -385,7 +390,8 @@ pub struct Renderer {
     /// Whether the thumbnail failures logged as warnings keep to their limit, see [`WarnLimit`].
     thumb_warnings: WarnLimit,
     /// The photos a thumbnail was asked for in this frame, and in the one before: the trim keeps
-    /// them whoever asked, see [`Self::evict_thumbs`].
+    /// them whoever asked, see [`Self::evict_thumbs`]. A frame is one that was drawn, see
+    /// [`Self::frame_drawn`].
     thumbs_asked: std::collections::HashSet<PhotoId>,
     thumbs_asked_last: std::collections::HashSet<PhotoId>,
     /// The catalog revision seen at the last poll: a failure is retried once the catalog changes
@@ -1280,11 +1286,12 @@ impl Renderer {
     /// Bytes the thumbnail textures hold (the grid's, the filmstrip's and their stand-ins), counted
     /// as [`Self::memory`] counts a texture: four bytes a pixel.
     pub fn thumb_bytes(&self) -> usize {
-        self.textures
-            .iter()
-            .filter(|(s, _)| matches!(s, Slot::Thumb(_) | Slot::ThumbQuick(_)))
-            .map(|(_, t)| t.size[0].saturating_mul(t.size[1]).saturating_mul(4))
-            .fold(0, usize::saturating_add)
+        self.textures.iter().filter(|(s, _)| matches!(s, Slot::Thumb(_) | Slot::ThumbQuick(_))).map(|(_, t)| t.bytes()).fold(0, usize::saturating_add)
+    }
+
+    /// Bytes the thumbnail textures of photo `id` hold (counted as [`Self::thumb_bytes`] does).
+    pub fn thumb_bytes_of(&self, id: PhotoId) -> usize {
+        [Slot::Thumb(id), Slot::ThumbQuick(id)].iter().filter_map(|s| self.textures.get(s)).map(Tex::bytes).fold(0, usize::saturating_add)
     }
 
     /// Bytes the thumbnail textures may hold before the ones not on screen are dropped: a share
@@ -1318,9 +1325,6 @@ impl Renderer {
 
     /// Collect finished jobs into textures. Returns true if anything changed.
     pub fn poll(&mut self, ctx: &egui::Context, session: &mut Session) -> bool {
-        // (a new frame: what was asked for in the last one is the frame before's now)
-        std::mem::swap(&mut self.thumbs_asked, &mut self.thumbs_asked_last);
-        self.thumbs_asked.clear();
         let cache = &session.media.rendered;
         let generation = cache.generation();
         if self.preview_generation.as_ref().is_some_and(|(old, g)| old.as_ptr() != Arc::as_ptr(cache) || *g != generation) {
@@ -1745,9 +1749,12 @@ impl Renderer {
     /// thumbnail jobs for photos that scrolled out of `keep`. The pictures not in `keep` go once
     /// the thumbnails hold more than their share of the memory budget ([`Self::thumb_budget`]);
     /// the failures remembered for photos not in `keep` go once there are more than
-    /// [`MAX_FAILED_THUMBS`] of them. Neither takes a photo something asked a thumbnail of in
-    /// this frame or the last ([`Self::thumb_asked`]): the Print dialog's cells draw after the
-    /// grid, which trims, and a cell that finds no picture asks the decoder again every frame.
+    /// [`MAX_FAILED_THUMBS`] of them, and a stand-in's failure forgotten takes with it the note
+    /// that it was tried ([`Self::request_quick`] asks once for each job), so the photo is asked
+    /// for again when it comes back on screen. None of it takes a photo something asked a
+    /// thumbnail of in this frame or the last ([`Self::thumb_asked`]), its queued job included:
+    /// the Print dialog's cells draw after the grid, which trims, and a cell whose job went would
+    /// ask again every frame, and wait at the back of the queue each time.
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>) {
         self.evict_thumbs_within(keep, self.thumb_budget());
     }
@@ -1757,12 +1764,25 @@ impl Renderer {
         self.thumbs_asked.insert(id);
     }
 
+    /// A frame was drawn: what was asked for in it is the frame before's now. The host's UI pass
+    /// calls this once it is laid out for good. [`Self::poll`] doesn't: it also runs on the logic
+    /// ticks of a hidden window, where no view draws, and counting those would age the asks away
+    /// before the first frame drawn after the window comes back.
+    pub fn frame_drawn(&mut self) {
+        std::mem::swap(&mut self.thumbs_asked, &mut self.thumbs_asked_last);
+        self.thumbs_asked.clear();
+    }
+
     /// [`Self::evict_thumbs`] with the bytes the thumbnails may hold given (the tests ask for 0:
     /// every picture nothing shows goes).
     fn evict_thumbs_within(&mut self, keep: &std::collections::HashSet<PhotoId>, max_bytes: usize) {
-        self.thumb_inputs.retain(|id, _| keep.contains(id));
+        // (a photo something asked a thumbnail of in this frame or the last stays too: its job, its
+        // picture and its failure)
+        let (asked, last) = (std::mem::take(&mut self.thumbs_asked), std::mem::take(&mut self.thumbs_asked_last));
+        let shown = |id: &PhotoId| keep.contains(id) || asked.contains(id) || last.contains(id);
+        self.thumb_inputs.retain(|id, _| shown(id));
         let dropped = self.pool.reprioritize(|s, p| match s {
-            Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id) && p <= 11 => None,
+            Slot::Thumb(id) | Slot::ThumbQuick(id) if !shown(id) && p <= 11 => None,
             _ => Some(p),
         });
         for s in dropped {
@@ -1775,7 +1795,7 @@ impl Renderer {
         let requests = &mut self.requests;
         let pending = &mut self.pending;
         self.queue.retain(|q| match q.slot {
-            Slot::Thumb(id) if !keep.contains(&id) && q.priority <= 10 => {
+            Slot::Thumb(id) if !shown(&id) && q.priority <= 10 => {
                 pending.remove(&q.slot);
                 gone.push((q.slot, requests.remove(&q.slot)));
                 false
@@ -1785,17 +1805,23 @@ impl Renderer {
         for (s, request) in gone {
             self.decided(|| abandoned_line(s, request.as_ref(), "scrolled out of view before it started"));
         }
-        // (a photo something asked a thumbnail of in this frame or the last stays too)
-        let (asked, last) = (std::mem::take(&mut self.thumbs_asked), std::mem::take(&mut self.thumbs_asked_last));
-        let shown = |id: &PhotoId| keep.contains(id) || asked.contains(id) || last.contains(id);
         if self.thumb_bytes() > max_bytes {
             self.textures.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !shown(id)));
             self.quick_tried.retain(|s, _| !matches!(s, Slot::ThumbQuick(id) if !shown(id)));
         }
         // A failure is remembered so that the grid, which asks every frame, doesn't send the same
-        // unreadable file back to the decoder: the cells on screen keep theirs.
+        // unreadable file back to the decoder: the cells on screen keep theirs. A stand-in is asked
+        // for once for each job (`quick_tried`), so the note goes with its failure: left behind, it
+        // would keep the photo from being asked for again, with no failure left to say why.
         if self.failed_thumbs() > MAX_FAILED_THUMBS {
-            self.failed.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !shown(id)));
+            let quick_tried = &mut self.quick_tried;
+            self.failed.retain(|s, f| {
+                let forget = matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !shown(id));
+                if forget && quick_tried.get(s) == Some(&f.0) {
+                    quick_tried.remove(s);
+                }
+                !forget
+            });
         }
         self.thumbs_asked = asked;
         self.thumbs_asked_last = last;

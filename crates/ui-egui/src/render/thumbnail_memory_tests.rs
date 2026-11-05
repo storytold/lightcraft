@@ -118,6 +118,45 @@ fn the_failures_remembered_for_the_grid_are_bounded() {
     assert!(r.failed.contains_key(&Slot::Main), "a view's failure is not the grid's to drop");
 }
 
+// Given the failure of a stand-in (an unedited raw whose camera preview can't be read) forgotten
+// with the others of a long scroll, the photo is asked for again when it comes back on screen: the
+// note that the stand-in was tried went with its failure. Left behind, it kept the grid from asking,
+// and the cell stayed empty, with no failure left to say why. A cell on screen keeps its failure
+// and its note, and so does a newer try that the failure forgotten isn't about.
+#[test]
+fn a_stand_in_is_asked_for_again_once_its_failure_is_forgotten() {
+    let (mut app, ctx) = unreadable_raws(3);
+    let ask = |app: &mut crate::LightcraftApp, id: u64| crate::panels::grid::request_thumb(app, PhotoId(id), 384, 10);
+    for id in [1, 2] {
+        ask(&mut app, id);
+    }
+    assert_eq!(app.renderer.pool.run_inline(2), 2);
+    app.renderer.poll(&ctx, &mut app.session);
+    for id in [1, 2] {
+        assert!(app.renderer.failed.contains_key(&Slot::ThumbQuick(PhotoId(id))), "the stand-in of photo {id} failed");
+        ask(&mut app, id);
+    }
+    assert_eq!(app.renderer.pool.queued(), 0, "while the failures are remembered, the decoder isn't asked again");
+    // (photo 3 was edited since its failure: its note is the newer try's)
+    app.renderer.quick_tried.insert(Slot::ThumbQuick(PhotoId(3)), 99);
+    fail(&mut app.renderer, Slot::ThumbQuick(PhotoId(3)), 3);
+
+    // a long scroll away from photo 1: more failures than are kept, nothing asks for it, photo 2 is on screen
+    for id in 4..=MAX_FAILED_THUMBS as u64 + 4 {
+        fail(&mut app.renderer, Slot::Thumb(PhotoId(id)), id);
+    }
+    app.renderer.frame_drawn();
+    app.renderer.frame_drawn();
+    app.renderer.evict_thumbs(&on_screen([2]));
+    assert!(!app.renderer.failed.contains_key(&Slot::ThumbQuick(PhotoId(1))), "forgotten with the others");
+    assert!(app.renderer.failed.contains_key(&Slot::ThumbQuick(PhotoId(2))), "the cell on screen keeps its failure");
+    ask(&mut app, 2);
+    assert_eq!(app.renderer.pool.queued(), 0, "and the decoder isn't asked again for it");
+    assert_eq!(app.renderer.quick_tried.get(&Slot::ThumbQuick(PhotoId(3))), Some(&99), "a newer try keeps its note");
+    ask(&mut app, 1);
+    assert_eq!(app.renderer.pool.queued(), 1, "back on screen, photo 1 is asked for again");
+}
+
 // Given a view that draws after the grid (the Print dialog's cells) and shows photos far from the
 // grid's window, the grid's trim keeps what a view asked a thumbnail of in this frame or the last:
 // a cell that finds no picture asks the decoder again, every frame. Two frames on, nobody asks,
@@ -125,17 +164,16 @@ fn the_failures_remembered_for_the_grid_are_bounded() {
 #[test]
 fn the_trim_keeps_the_thumbnails_another_view_asked_for_in_this_frame_or_the_last() {
     let ctx = egui::Context::default();
-    let mut session = Session::new();
     let mut r = thumbs(&ctx, 1..=20, [128, 128]);
     let held = |r: &Renderer| (1..=20).filter(|&id| r.textures.contains_key(&Slot::Thumb(PhotoId(id)))).collect::<Vec<u64>>();
 
     r.thumb_asked(PhotoId(5));
     r.evict_thumbs_within(&on_screen([7]), 0);
     assert_eq!(held(&r), [5, 7], "asked in this frame, and the one on screen");
-    r.poll(&ctx, &mut session);
+    r.frame_drawn();
     r.evict_thumbs_within(&on_screen([7]), 0);
     assert_eq!(held(&r), [5, 7], "asked in the frame before");
-    r.poll(&ctx, &mut session);
+    r.frame_drawn();
     r.evict_thumbs_within(&on_screen([7]), 0);
     assert_eq!(held(&r), [7], "not asked for two frames");
 
@@ -166,12 +204,73 @@ fn a_print_cell_keeps_its_thumbnail_through_the_grids_trims() {
     app.renderer.textures.insert(Slot::Thumb(PhotoId(2)), tex(&ctx, 2, [256, 256]));
     app.renderer.thumb_asked(PhotoId(2)); // (the frame before, when the cell still asked for it)
     for frame in 0..6 {
-        app.renderer.poll(&ctx, &mut app.session);
-        app.renderer.evict_thumbs_within(&on_screen([1]), 0);
+        app.renderer.evict_thumbs_within(&on_screen([1]), 0); // (the grid draws first)
         let shown = crate::dialogs::print_view::cell_thumbnail(&mut app, PhotoId(2), 256);
         assert!(shown.is_some(), "frame {frame}: the cell shows its picture");
         assert_eq!(app.renderer.thumb_jobs_built, 0, "frame {frame}: and doesn't ask for it again");
+        app.renderer.frame_drawn();
     }
+}
+
+// Given a Print cell whose thumbnail is still queued, and the grid trimming before it every frame
+// with its own window elsewhere, the cell's job stays where it is queued: dropped each frame, the
+// cell would ask again and wait at the back of the queue each time, and never get its turn behind
+// busy workers. Two frames after the last ask it goes like the rest.
+#[test]
+fn the_trim_keeps_the_queued_thumbnail_of_a_photo_a_view_asked_for() {
+    let (mut app, _ctx) = unreadable_library(3);
+    let slot = Slot::Thumb(PhotoId(2));
+    let mut placed = None;
+    for frame in 0..4 {
+        app.renderer.evict_thumbs_within(&on_screen([1]), 0); // (the grid draws first)
+        assert!(crate::dialogs::print_view::cell_thumbnail(&mut app, PhotoId(2), 256).is_none(), "frame {frame}: no picture yet");
+        assert!(app.renderer.is_queued(slot), "frame {frame}: its job is queued");
+        let request = app.renderer.requests[&slot].id;
+        assert_eq!(*placed.get_or_insert(request), request, "frame {frame}: the one asked for in the first frame, not a new one");
+        assert_eq!(app.renderer.thumb_jobs_built, 1, "frame {frame}: and no job is built again");
+        app.renderer.frame_drawn();
+    }
+    app.renderer.frame_drawn();
+    app.renderer.evict_thumbs_within(&on_screen([1]), 0);
+    assert!(!app.renderer.is_queued(slot), "not asked for two frames: its job goes");
+}
+
+// Given photos a view asked a thumbnail of, the asks age with the frames the window draws: the
+// logic ticks a hidden window gets leave them as they were (nothing drew, nothing could ask again),
+// so the first frame drawn after it comes back still finds them. A drawn frame makes them the
+// frame before's, and a second lets them go.
+#[test]
+fn the_asks_age_with_the_frames_drawn_not_with_the_ticks_of_a_hidden_window() {
+    let (app, _ctx) = unreadable_library(3);
+    let mut h = crate::headless::Headless::new(app, [1000.0, 700.0], 1.0);
+    for _ in 0..3 {
+        h.step(); // (the fonts are made, then frames are laid out)
+    }
+    h.app.renderer.thumb_asked(PhotoId(99)); // (a photo no cell shows)
+    let ctx = h.view.ctx.clone();
+    for _ in 0..4 {
+        h.app.logic(&ctx);
+    }
+    assert!(h.app.renderer.thumbs_asked.contains(&PhotoId(99)), "ticks without a frame leave the asks as they were");
+    h.step();
+    assert!(h.app.renderer.thumbs_asked_last.contains(&PhotoId(99)), "a drawn frame makes them the frame before's");
+    assert!(!h.app.renderer.thumbs_asked.contains(&PhotoId(99)));
+    h.step();
+    assert!(!h.app.renderer.thumbs_asked_last.contains(&PhotoId(99)), "and a second lets them go");
+}
+
+// Given the second window on the active photo, it notes the photo for the trim: until the render
+// made for the window arrives, its picture is the photo's thumbnail, which the grid's trim takes
+// when the photo is off screen and the thumbnails are over their share.
+#[test]
+fn the_second_window_notes_the_photo_whose_thumbnail_it_falls_back_on() {
+    let (mut app, ctx) = unreadable_library(3);
+    app.ui.second_window = true;
+    app.session.execute("library.select", &serde_json::json!({"ids": [2]})).unwrap();
+    assert_eq!(app.session.active(), Some(PhotoId(2)));
+    let mut pass = ctx.run_ui(egui::RawInput::default(), |ui| crate::panels::second::show(&mut app, ui.ctx()));
+    pass.textures_delta.clear();
+    assert!(app.renderer.thumbs_asked.contains(&PhotoId(2)));
 }
 
 // Given thumbnails over their share of the budget, or more remembered failures than are kept, the
@@ -193,6 +292,53 @@ fn thumbnails_are_over_their_limit_by_bytes_or_by_remembered_failures() {
         fail(&mut r, Slot::Thumb(PhotoId(id)), id);
     }
     assert!(r.thumbs_over_limit(), "more remembered failures than are kept");
+}
+
+/// The loupe's look-ahead for the open photo `id`, asking for nothing ahead: only its trim runs.
+fn rest_on(app: &mut crate::LightcraftApp, id: u64) {
+    crate::panels::detail::look_ahead(app, PhotoId(id), 64, true, crate::panels::detail::Prepare::Nothing);
+}
+
+/// `n` photos in file-name order, each with a grid thumbnail of `size`.
+fn library_with_thumbnails(n: u64, size: [usize; 2]) -> crate::LightcraftApp {
+    let (mut app, ctx) = unreadable_library(n);
+    app.session.sort.key = lightcraft_catalog::SortKey::FileName;
+    app.session.sort.ascending = true;
+    for id in 1..=n {
+        app.renderer.textures.insert(Slot::Thumb(PhotoId(id)), tex(&ctx, id, size));
+    }
+    app
+}
+
+// Given a loupe resting on one photo, a smaller memory budget (Settings ▸ Performance) trims the
+// thumbnails at once: the trim doesn't wait for a step to another photo.
+#[test]
+fn the_loupe_trims_the_thumbnails_when_the_budget_shrinks_while_it_rests() {
+    let mut app = library_with_thumbnails(300, [256, 256]);
+    let _turn = BudgetGuard::hold();
+    memory::set_budget(1024 * MB);
+    rest_on(&mut app, 150);
+    assert_eq!(app.renderer.thumb_textures(), 300, "75 MiB fit the 256 MiB that a quarter of 1 GiB is");
+    memory::set_budget(256 * MB);
+    rest_on(&mut app, 150);
+    assert!(!app.renderer.thumbs_over_limit(), "75 MiB don't fit the 64 MiB that a quarter of 256 MiB is");
+    assert_eq!(app.renderer.thumb_textures(), 129, "the window of the photos around it, 64 either side, fits and stays whole");
+    assert!(app.renderer.thumb(PhotoId(150)).is_some(), "the open photo's own stays");
+}
+
+// Given thumbnails around the open photo that don't all fit their share of the memory budget, the
+// loupe keeps the nearest ones that do, not its whole window of 129: a small budget is held to even
+// when the grid left large thumbnails behind. The open photo's own stays.
+#[test]
+fn the_loupes_window_of_thumbnails_holds_to_their_share_of_the_budget() {
+    let mut app = library_with_thumbnails(300, [512, 512]);
+    let _turn = BudgetGuard::hold();
+    memory::set_budget(64 * MB);
+    rest_on(&mut app, 150);
+    let kept: Vec<u64> = (1..=300).filter(|&id| app.renderer.thumb(PhotoId(id)).is_some()).collect();
+    assert!(!app.renderer.thumbs_over_limit(), "{} MiB held against the 16 MiB share: {kept:?}", kept.len());
+    assert!(kept.contains(&150) && kept.contains(&149) && kept.contains(&151), "the open photo and its neighbors stay: {kept:?}");
+    assert!(kept.iter().all(|id| id.abs_diff(150) <= 8), "the nearest ones are the ones kept: {kept:?}");
 }
 
 // `ui.inspect` reports the thumbnails beside the stage caches: how many, how much, the limit they
@@ -252,13 +398,31 @@ fn the_warning_limit_tolerates_a_clock_that_stands_still_or_goes_back() {
 
 /// A library whose files can't be read (a drive that sleeps): `n` photos, each failing to decode.
 fn unreadable_library(n: u64) -> (crate::LightcraftApp, egui::Context) {
+    unreadable_files(n, false)
+}
+
+/// [`unreadable_library`] of unedited raws whose camera previews can't be read either: the grid asks
+/// for each one's stand-in (`Slot::ThumbQuick`), and the render behind it fails too.
+fn unreadable_raws(n: u64) -> (crate::LightcraftApp, egui::Context) {
+    unreadable_files(n, true)
+}
+
+fn unreadable_files(n: u64, raw: bool) -> (crate::LightcraftApp, egui::Context) {
     let mut s = Session::new();
     s.media.file_loader = Some(Arc::new(|_, _, _| Err("simulated decode failure".into())));
+    if raw {
+        s.media.preview_loader = Some(Arc::new(|_: &str, _| None));
+    }
     // (`with_fs` sets the file system's thumbnail loader, which wins over `file_loader`)
     s.media.reduced_loader = None;
     for id in 1..=n {
-        let name = format!("IMG_{id:04}.jpg");
-        let photo = Photo::new(PhotoId(id), Source::File { path: format!("/photos/offline/{name}") }, &name, "JPEG", 6000, 4000, "2026-01-01");
+        let (extension, format) = if raw { ("cr3", "CR3") } else { ("jpg", "JPEG") };
+        let name = format!("IMG_{id:04}.{extension}");
+        let mut photo = Photo::new(PhotoId(id), Source::File { path: format!("/photos/offline/{name}") }, &name, format, 6000, 4000, "2026-01-01");
+        if raw {
+            photo.kind = lightcraft_catalog::MediaKind::Raw;
+            photo.develop = Arc::new(photo.camera_defaults());
+        }
         s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
     }
     let mut app = crate::LightcraftApp::new(s, crate::Services::default());

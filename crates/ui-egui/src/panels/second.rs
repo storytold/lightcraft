@@ -42,6 +42,9 @@ fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         );
         return;
     };
+    // (its thumbnail is the last picture below, until the render made for this window arrives: the
+    // grid's trim keeps the photos a view asked a thumbnail of, see `Renderer::evict_thumbs`)
+    app.renderer.thumb_asked(id);
     // a render sized for this window
     let ppp = ui.ctx().pixels_per_point();
     let side = super::detail::texture_side(ui.ctx()).clamp(64, 4096);
