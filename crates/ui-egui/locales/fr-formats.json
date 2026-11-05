@@ -161,6 +161,8 @@
   "{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.": "Impossible d’écrire {n} modification{} sur le disque : {e}\nSi vous quittez maintenant, {} seront perdues.",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "{n} modification{} enregistrée(s) en mémoire mais non écrite(s) sur le disque : {e}\nLightCraft réessaiera automatiquement ; quitter maintenant entraînerait la perte de {}.",
   "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry": "{n} modification{} enregistrée(s) en mémoire mais non écrite(s) sur le disque : {e} — LightCraft réessaiera.",
+  "{n} file{} skipped (not a supported photo type)": "Fichiers ignorés (type de photo non pris en charge) : {n}{:.0}",
+  "{n} folder{} could not be read": "Dossiers illisibles : {n}{:.0}",
   "{n} found · {sel} selected": "{n} trouvé(s) · {sel} sélectionné(s)",
   "{n} photos": "{n} photos",
   "{n} photos in {} are hidden by the filters above": "Les filtres ci-dessus masquent {n} photos dans {}",

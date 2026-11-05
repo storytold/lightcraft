@@ -698,6 +698,10 @@
   "Invert Component": "Odwróć składnik",
   "Invert Mask": "Odwróć maskę",
   "JPEG (Large)": "JPEG (duży)",
+  "Instagram Feed": "Instagram – kanał",
+  "Instagram Story / Reel": "Instagram Story / Reel",
+  "Web / Portfolio": "Web / portfolio",
+  "Full Resolution Master": "Master w pełnej rozdzielczości",
   "JPEG (Small)": "JPEG (mały)",
   "Join the ArtCraft Discord": "Dołącz do Discorda ArtCraft",
   "Join the ArtCraft Discord…": "Dołącz do Discorda ArtCraft…",
@@ -2343,5 +2347,6 @@
   "Ignore face (blurry / not a face)": "Ignoruj twarz (rozmyta / nie jest twarzą)",
   "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Kliknij, aby zaznaczyć twarze lub usunąć zaznaczenie. Shift-kliknięcie rozszerza działanie na zakres. Dwukrotne kliknięcie otwiera zdjęcie.",
   "Ignore Faces": "Ignoruj twarze",
-  "Restore Ignored Faces": "Przywróć ignorowane twarze"
+  "Restore Ignored Faces": "Przywróć ignorowane twarze",
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
 }

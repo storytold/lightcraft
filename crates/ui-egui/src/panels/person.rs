@@ -63,7 +63,7 @@ fn select_confirmed(selection: &mut Selection, faces: &[Face], target: &Face, sh
     }
 }
 
-/// One face: which photo, which of its regions, the box to show it by, and (for the "More" faces) how alike.
+/// One face: which photo, which of its regions, its catalog box, and (for the "More" faces) how alike.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Face {
     pub photo: u64,
@@ -84,14 +84,13 @@ pub struct PersonPage {
     pub pending: usize,
 }
 
-/// Parse a tile reference, preferring its detector-aligned display box over the catalog box.
+/// Keep the catalog box for commands; the detector-aligned display box is resolved when drawing.
 fn face_of(v: &Value) -> Option<Face> {
     let rect = |r: &Value| Some(lightcraft_geom::Rect { x0: r["x0"].as_f64()?, y0: r["y0"].as_f64()?, x1: r["x1"].as_f64()?, y1: r["y1"].as_f64()? });
     Some(Face {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
-        // shown by the detector's box when the scan has one: every face equally close
-        rect: rect(&v["view"]).or_else(|| rect(&v["rect"]))?,
+        rect: rect(&v["rect"])?,
         score: v["score"].as_f64().unwrap_or(0.0) as f32,
     })
 }
@@ -268,7 +267,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
             let ignore = ui.add_enabled(count > 0, egui::Button::new(crate::i18n::tr("Ignore selected faces")));
             register(ui, "person:ignoreSelected", ignore.rect);
             if ignore.clicked() {
-                let faces: Vec<_> = app.ui.person_selection.faces.iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
+                let faces: Vec<_> = page
+                    .confirmed
+                    .iter()
+                    .filter(|face| app.ui.person_selection.faces.contains(&(face.photo, face.index)))
+                    .map(|face| json!({"photo": face.photo, "index": face.index, "rect": face.rect}))
+                    .collect();
                 match app.run("faces.ignore", json!({"faces": faces})) {
                     Ok(_) => {
                         app.ui.person_selection.faces.clear();
@@ -414,7 +418,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 app.ui.dismissed_faces.insert((f.photo, f.index));
             }
             Hit::Ignore => {
-                if let Err(error) = app.run("faces.ignore", json!({"faces": [{"photo": f.photo, "index": f.index}]})) {
+                if let Err(error) = app.run("faces.ignore", json!({"faces": [{"photo": f.photo, "index": f.index, "rect": f.rect}]})) {
                     app.toast(ui.ctx(), error);
                 }
             }
@@ -462,7 +466,8 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
     let hovered = resp.hovered() || x_resp.as_ref().is_some_and(|x| x.hovered()) || above_resp.as_ref().is_some_and(|x| x.hovered());
     let p = ui.painter();
     p.rect_filled(r, 3.0, t.canvas);
-    if let Some(job) = app.session.face_job(lightcraft_catalog::PhotoId(f.photo), f.rect, (r.width() * ppp).ceil() as usize)
+    let photo = lightcraft_catalog::PhotoId(f.photo);
+    if let Some(job) = app.session.face_job(photo, app.session.face_view(photo, f.rect), (r.width() * ppp).ceil() as usize)
         && let Some(tex) = app.renderer.variant(job)
     {
         p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -527,6 +532,72 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_keep_the_catalog_box_instead_of_the_detector_view() {
+        let catalog = lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.8, y1: 0.9 };
+        let view = lightcraft_geom::Rect { x0: 0.3, y0: 0.2, x1: 0.6, y1: 0.6 };
+        let face = json!({"photo": 1, "index": 0, "rect": catalog, "view": view});
+        let page = parse(&json!({"confirmed": [face.clone()], "more": [face]}));
+        assert_eq!(page.confirmed[0].rect, catalog);
+        assert_eq!(page.more[0].rect, catalog);
+        assert!(face_of(&json!({"photo": 1, "index": 0, "view": view})).is_none(), "a display box cannot identify a catalog region");
+    }
+
+    /// Even a stale page handed to the UI must not let either ignore action target an index's
+    /// replacement. Deliberately retain the old response: normal revision refresh is a separate
+    /// defense, and must not mask a missing rectangle in either command payload.
+    #[test]
+    fn person_ignore_actions_reject_reused_indices_without_an_undo_step() {
+        use lightcraft_catalog::Op;
+        use lightcraft_meta::{Region, RegionKind};
+        let timeout = std::time::Duration::from_secs(15);
+        for action in ["bulk", "confirmed", "more"] {
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+            let ids: Vec<_> = app.session.catalog.photos().take(2).map(|photo| photo.id).collect();
+            let rect = lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 };
+            let replacement = lightcraft_geom::Rect { x0: 0.5, y0: 0.2, x1: 0.8, y1: 0.6 };
+            for (i, id) in ids.iter().enumerate() {
+                let mut meta = app.session.catalog.photo(*id).unwrap().meta.clone();
+                let name = (i != 0 || action != "more").then(|| "Person".into());
+                meta.regions = vec![Region { rect, kind: RegionKind::Face, name, description: None }];
+                if i == 0 {
+                    meta.regions.push(Region { rect: replacement, ..meta.regions[0].clone() });
+                }
+                app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+            }
+            let mut page = parse(&app.session.execute("faces.person", &json!({"name": "Person"})).unwrap());
+            if action == "more" {
+                page.more = vec![Face { photo: ids[0].0, index: 0, rect, score: 0.8 }];
+                page.ready = true;
+            }
+            app.session.execute("photo.removeRegion", &json!({"id": ids[0].0, "index": 0})).unwrap();
+            let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+            h.app.run("view.person", json!({"name": "Person"})).unwrap();
+            // Inject an old rendered response, independent of the normal revision invalidation.
+            h.app.caches.person_page = Some(("Person".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, h.time(), Arc::new(page)));
+            h.settle(timeout);
+            let before: Vec<_> = ids.iter().map(|id| h.app.session.catalog.photo(*id).unwrap().meta.regions.clone()).collect();
+            let undo = h.app.session.undo.len();
+            if action == "bulk" {
+                h.app.ui.person_selection.active = true;
+                h.app.ui.person_selection.faces.extend(ids.iter().map(|id| (id.0, 0)));
+                h.step();
+                assert_eq!(h.request("ui.clickWidget", json!({"id": "person:ignoreSelected"}), timeout)["ok"], true);
+            } else {
+                let prefix = if action == "more" { "more-face" } else { "person-face" };
+                let opened = h.request("ui.clickWidget", json!({"id": format!("{prefix}:{}:0", ids[0].0), "button": "right"}), timeout);
+                assert_eq!(opened["ok"], true, "{opened}");
+                h.step();
+                assert_eq!(h.request("ui.clickWidget", json!({"id": "person:ignoreFace"}), timeout)["ok"], true);
+            }
+            h.step();
+            for (id, regions) in ids.iter().zip(&before) {
+                assert_eq!(&h.app.session.catalog.photo(*id).unwrap().meta.regions, regions, "{action}: no selected face may change");
+            }
+            assert_eq!(h.app.session.undo.len(), undo, "{action}: a refused stale action adds no undo step");
+        }
+    }
 
     /// The suggested-face context menu must persist ignoring, without confirming the suggestion.
     #[test]

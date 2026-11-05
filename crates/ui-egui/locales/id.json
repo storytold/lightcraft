@@ -972,6 +972,10 @@
   "It tests this album, so testing it back would loop": "Album itu sudah menjadikan album ini sebagai syarat; menjadikannya syarat di sini akan menimbulkan perulangan",
   "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).": "Hasil pengurangan noise foto ini belum dibuat, dan tidak dibuat secara otomatis (Pengaturan, Pengurangan noise AI).",
   "JPEG (Large)": "JPEG (besar)",
+  "Instagram Feed": "Umpan Instagram",
+  "Instagram Story / Reel": "Instagram Story / Reel",
+  "Web / Portfolio": "Web / Portofolio",
+  "Full Resolution Master": "Master Resolusi Penuh",
   "JPEG (Small)": "JPEG (kecil)",
   "Join the ArtCraft Discord": "Gabung ke Discord ArtCraft",
   "Join the ArtCraft Discord…": "Gabung ke Discord ArtCraft…",
@@ -2391,5 +2395,6 @@
   "Ignore face (blurry / not a face)": "Abaikan wajah (buram / bukan wajah)",
   "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Klik wajah untuk memilih atau membatalkan pilihan. Shift-klik memperluas tindakan ke suatu rentang. Klik dua kali membuka foto.",
   "Ignore Faces": "Abaikan Wajah",
-  "Restore Ignored Faces": "Pulihkan Wajah yang Diabaikan"
+  "Restore Ignored Faces": "Pulihkan Wajah yang Diabaikan",
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
 }

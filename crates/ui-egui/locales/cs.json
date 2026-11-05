@@ -954,6 +954,10 @@
   "It tests this album, so testing it back would loop": "Testuje toto album, takže zpětný test vytvoří smyčku",
   "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).": "Obraz s redukovaným šumem ještě není vytvořen a obrazy se nevytvářejí automaticky (Nastavení, Redukce šumu pomocí AI).",
   "JPEG (Large)": "JPEG (velký)",
+  "Instagram Feed": "Instagram Feed",
+  "Instagram Story / Reel": "Instagram Story / Reel",
+  "Web / Portfolio": "Web / portfolio",
+  "Full Resolution Master": "Master v plném rozlišení",
   "JPEG (Small)": "JPEG (malý)",
   "Join the ArtCraft Discord": "Připojit se k Discordu ArtCraft",
   "Join the ArtCraft Discord…": "Připojit se k Discordu ArtCraft…",
@@ -2463,5 +2467,6 @@
   "Ignore face (blurry / not a face)": "Ignorovat obličej (rozmazaný / není obličej)",
   "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Kliknutím vyberete obličeje nebo zrušíte výběr. Shift-kliknutí rozšíří akci na rozsah. Dvojitým kliknutím otevřete fotografii.",
   "Ignore Faces": "Ignorovat obličeje",
-  "Restore Ignored Faces": "Obnovit ignorované obličeje"
+  "Restore Ignored Faces": "Obnovit ignorované obličeje",
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
 }

@@ -1064,6 +1064,10 @@
   "Join the ArtCraft Discord": "Gå med i ArtCraft på Discord",
   "Join the ArtCraft Discord…": "Gå med i ArtCraft på Discord…",
   "JPEG (Large)": "JPEG (stor)",
+  "Instagram Feed": "Instagram-flöde",
+  "Instagram Story / Reel": "Instagram-story / Reel",
+  "Web / Portfolio": "Webb / Portfölj",
+  "Full Resolution Master": "Master i full upplösning",
   "JPEG (Small)": "JPEG (liten)",
   "JPEG with the same name (`IMG_0001.CR3` + `IMG_0001.JPG`) no longer share one sidecar: the raw keeps `IMG_0001.xmp`,": "JPEG med samma namn (`IMG_0001.CR3` + `IMG_0001.JPG`) delar inte längre en sidofil: raw-filen behåller `IMG_0001.xmp`,",
   "Keep in Local": "Behåll i Lokalt",
@@ -2478,5 +2482,6 @@
   "Ignore face (blurry / not a face)": "Ignorera ansikte (suddigt / inte ett ansikte)",
   "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Klicka på ansikten för att markera eller avmarkera. Skift-klick utökar åtgärden till ett intervall. Dubbelklick öppnar ett foto.",
   "Ignore Faces": "Ignorera ansikten",
-  "Restore Ignored Faces": "Återställ ignorerade ansikten"
+  "Restore Ignored Faces": "Återställ ignorerade ansikten",
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
 }
