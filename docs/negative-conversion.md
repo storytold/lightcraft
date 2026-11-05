@@ -1,7 +1,7 @@
 # Film negative conversion: development plan
 
-> **Status:** v1 built (see [What v1 has](#what-v1-has)) · **Last updated:** 2026-11-02 · **Owner decision needed:** see
-> [Open questions](#open-questions)
+> **Status:** v1 built (see [What v1 has](#what-v1-has)) · **Owner decision needed:** see [Open questions](#open-questions) ·
+> **Changes:** [revision history](#revision-history)
 
 Lots of people scan film by photographing it with a digital camera, or use a film scanner, and then invert the
 negative in Lightroom with the Negative Lab Pro (NLP) plug-in. LightCraft has no plug-in support (gap 19 in
@@ -329,3 +329,9 @@ covered natively, and add an entry to [whats-new.md](whats-new.md).
 3. **Colour models:** are three generic models enough for v1, or should we fit more from contributed scans of
    colour charts?
 4. **Gap tracking:** should this get its own row in [gaps.md](gaps.md), or stay part of gap 19?
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-02 | minor | v1 built; plan updated to match |
