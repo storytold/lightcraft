@@ -232,7 +232,7 @@ mod tests {
             s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
         }
         let seen = files.clone();
-        s.media.file_loader = Some(Arc::new(move |path: &str, _| {
+        s.media.file_loader = Some(Arc::new(move |path: &str, _, _| {
             let started = {
                 let mut reads = seen.reads.lock().unwrap();
                 *reads.entry(path.to_string()).or_default() += 1;
