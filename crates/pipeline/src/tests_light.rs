@@ -38,7 +38,8 @@ fn check_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     s.light.contrast = 100.0;
     s.light.blacks = 80.0;
     let image = render(&src, &info, &s, &RenderRequest::fit(64, 64)).image;
-    assert!(image.data.iter().all(|p| *p == image.data[0]));
+    // (8-bit output is dithered: a flat source varies by a level)
+    assert!(image.data.iter().all(|p| p.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1)));
     for (actual, expected) in image.data[0].into_iter().zip(expected) {
         assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {:?}, expected {expected}", image.data[0]);
     }
@@ -311,7 +312,8 @@ fn v3_sliders_move_a_grey_ramp_their_way() {
         ("light.blacks", -60.0),
     ] {
         let r = shot(id, v);
-        assert!(r.windows(2).all(|w| luma(w[1]) >= luma(w[0])), "{id} {v}: the ramp is no longer increasing");
+        // (within a level of 8-bit dither)
+        assert!(r.windows(2).all(|w| luma(w[1]) >= luma(w[0]) - 1), "{id} {v}: the ramp is no longer increasing");
         assert!(r.iter().all(|p| p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1), "{id} {v}: the ramp is no longer grey");
         let diff = |lo: usize, hi: usize| (lo..hi).map(|x| luma(r[x]) - luma(plain[x])).sum::<i32>();
         let (dark, light) = (diff(40, 90), diff(170, 220));
