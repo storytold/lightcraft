@@ -37,12 +37,13 @@ of it.
   fallback (`unwrap_or…`) only where it can't silently corrupt a document. An unfinished feature returns an
   "unsupported" error or is disabled. Sole exception: a provably infallible literal, as `#[allow(clippy::expect_used)]`
   + `.expect("why it can't fail")`.
-- **`unsafe` lives only in `crates/sysmem` and `crates/macos-open`**. The latter registers the macOS
-  Open Documents Apple event through objc2 behind a safe, main-thread-only queue. `sysmem` has one
-  FFI call, `malloc_zone_pressure_relief`, that returns freed
-  allocator pages to macOS after raw decodes. Every other production crate root has `#![forbid(unsafe_code)]`. A new
-  unsafe need goes in an isolated, well-tested helper crate like it: `// SAFETY:` on every block, a safe API, a safe
-  fallback where possible, and a line here naming it.
+- **`unsafe` lives only in `crates/sysmem`** (one FFI call, `malloc_zone_pressure_relief`, that returns freed
+  allocator pages to macOS after raw decodes), **`crates/wincolor`** (Win32 calls that read the colour profile
+  Windows assigns to the monitor showing the window, and whether Windows colour-manages that monitor itself) **and
+  `crates/macos-open`** (registers the macOS Open Documents Apple event through objc2 behind a safe, main-thread-only
+  queue). Every other production crate root has `#![forbid(unsafe_code)]`. A new unsafe need goes in an isolated,
+  well-tested helper crate like them: `// SAFETY:` on every block, a safe API, a safe fallback where possible, and a
+  line here naming it.
 - **Input-derived numbers are hostile:** `get()` instead of `[i]`/`[a..b]` for offsets from files, users, agents or
   arithmetic on them; checked/saturating math for lengths, offsets and counts; no division by zero, NaN/inf or negative
   casts to `usize`; cap allocations sized by input; slice strings only at char boundaries.
@@ -125,6 +126,12 @@ of it.
   with `/usr/bin/time`. Record numbers in `plan/STATUS.md` → Metrics. Budgets: slider update ≤ 16 ms (draft) / loupe
   ≤ 60 ms on ~2.5 MP; export ≤ 1 s per 24 MP JPEG.
 - Never commit media: test images are procedural (`lightcraft-scenes`) or CC0 downloads in the gitignored `corpus/`.
+- **Flaky tests:** a test that fails, then passes on a rerun of the same commit, is flaky. Don't rerun until it
+  passes and move on: open an issue with the failing log, and if it failed on two unrelated PRs, quarantine it with
+  `#[ignore = "flaky: #<issue>"]` (a doctest: an `ignore` code fence and a comment naming the issue) in a PR of its
+  own until the issue is fixed. Never quarantine a test that fails every time; fix the code or the test. A test that
+  hangs is a failure too: under `cargo test`, libtest's "has been running for over 60 seconds" line names it; under
+  nextest (`LIGHTCRAFT_NEXTEST=1`), its `SLOW` lines do.
 - A test that can't run here (no GPU, corpus file, craft-fonts face, model) calls `lightcraft_testkit::skip!(Gpu, "why")`
   before it returns, not a bare `eprintln!`. `cargo xtask ci` then lists the skips and the machine's GPU adapters and
   data, and writes `target/ci/report.json` and `target/ci/summary.md` (Markdown for a PR).
