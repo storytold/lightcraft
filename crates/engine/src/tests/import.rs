@@ -303,6 +303,149 @@ fn browsing_a_folder_lists_its_photos_without_adding_them() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// PERF-CULL-1: the Local view reads only what the library lacks, newest file first for the default
+/// (newest capture first) sort, so the first screen is read first; other sorts follow their key.
+#[test]
+fn browsing_queues_unknown_files_in_the_order_the_view_shows_them() {
+    use lightcraft_catalog::{Sort, SortKey};
+    let dir = temp_dir("browse-order");
+    let set_time = |p: &Path, secs: u64| {
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        std::fs::File::options().write(true).open(p).unwrap().set_modified(t).unwrap();
+    };
+    for (name, seed, secs) in [("a.png", 1u8, 300u64), ("b.png", 2, 100), ("c.png", 3, 200)] {
+        write_png(&dir.join(name), seed);
+        set_time(&dir.join(name), 1_700_000_000 + secs);
+    }
+    let mut s = Session::new().with_fs();
+    let known = dir.join("b.png").to_string_lossy().to_string();
+    s.execute("library.import", &json!({"paths": [known.clone()]})).unwrap();
+    let files: Vec<String> = ["a.png", "b.png", "c.png", "gone.png"].iter().map(|n| dir.join(n).to_string_lossy().to_string()).collect();
+    let (input, _) = crate::import::ScanInput::new(&mut s, &[]);
+    let names = |v: Vec<String>| v.iter().map(|f| Path::new(f).file_name().unwrap().to_string_lossy().to_string()).collect::<Vec<_>>();
+    // newest first, the file already in the library left out, an unreadable one last
+    let q = crate::import::browse_queue(&input, files.clone(), &Sort::default());
+    assert_eq!(names(q), ["a.png", "c.png", "gone.png"]);
+    let q = crate::import::browse_queue(&input, files.clone(), &Sort { ascending: true, ..Sort::default() });
+    assert_eq!(names(q), ["c.png", "a.png", "gone.png"]);
+    let q = crate::import::browse_queue(&input, files.clone(), &Sort { key: SortKey::FileName, ascending: false, ..Sort::default() });
+    assert_eq!(names(q), ["gone.png", "c.png", "a.png"]);
+    // by size an unreadable file is last in both directions (it was sized 0, first when ascending)
+    for ascending in [true, false] {
+        let q = crate::import::browse_queue(&input, files.clone(), &Sort { key: SortKey::FileSize, ascending, ..Sort::default() });
+        assert_eq!(names(q).last().map(String::as_str), Some("gone.png"), "ascending {ascending}");
+    }
+    let q = crate::import::browse_queue(&input, files, &Sort { key: SortKey::Rating, ..Sort::default() });
+    assert_eq!(names(q), ["gone.png", "c.png", "a.png"], "new photos tie on rating: by name, descending as the view");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Choosing another folder while a browse orders its files (`cancel` set) stops the ordering: no queue comes
+/// back, and nothing more is read (CodeRabbit on #3055). Browsing hands back the probes of earlier scans it took.
+#[test]
+fn a_cancelled_browse_stops_ordering_and_keeps_earlier_probes() {
+    use lightcraft_catalog::{Sort, SortKey};
+    use std::sync::atomic::AtomicBool;
+    let dir = temp_dir("browse-cancel");
+    write_png(&dir.join("a.png"), 1);
+    write_png(&dir.join("b.png"), 2);
+    let files: Vec<String> = ["a.png", "b.png"].iter().map(|n| dir.join(n).to_string_lossy().to_string()).collect();
+    let mut s = Session::new().with_fs();
+    s.import_probes.insert(files[0].clone(), crate::media::ProbeInfo { file_size: 1, ..Default::default() });
+    let (mut input, _) = crate::import::ScanInput::new(&mut s, &[]);
+    for key in [SortKey::CaptureDate, SortKey::FileSize, SortKey::FileName, SortKey::Random] {
+        let sort = Sort { key, ..Sort::default() };
+        assert_eq!(crate::import::browse_queue_until(&input, files.clone(), &sort, &AtomicBool::new(true)), None, "{key:?}");
+        assert_eq!(crate::import::browse_queue_until(&input, files.clone(), &sort, &AtomicBool::new(false)).map(|q| q.len()), Some(2), "{key:?}");
+    }
+    let probes = input.take_probes();
+    assert!(probes.contains_key(&files[0]), "the earlier scan's probe comes back");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Browsing a folder with its subfolders lists nothing inside the library's own folder (the
+/// import that follows would read it as photos), as the import's scan skips it.
+#[test]
+fn browsing_with_subfolders_skips_the_librarys_own_folder() {
+    let dir = temp_dir("browse-skip-lib");
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    write_png(&dir.join("a.png"), 1);
+    write_png(&dir.join("lib").join("inside.png"), 2);
+    let (input, _) = crate::import::ScanInput::new(&mut s, &[]);
+    let root = dir.to_string_lossy().to_string();
+    let names = |v: Vec<String>| v.iter().map(|f| Path::new(f).file_name().unwrap().to_string_lossy().to_string()).collect::<Vec<_>>();
+    assert_eq!(names(crate::import::browse_files(&input, &root, true).unwrap()), ["a.png"]);
+    assert_eq!(names(crate::import::browse_files(&input, &root, false).unwrap()), ["a.png"]);
+    // the library's folder chosen itself, with or without its subfolders
+    let lib = dir.join("lib").to_string_lossy().to_string();
+    assert!(crate::import::browse_files(&input, &lib, false).unwrap().is_empty());
+    assert!(crate::import::browse_files(&input, &lib, true).unwrap().is_empty());
+    // the library's folder by another name: through `..`, or a symlink to it
+    std::fs::create_dir_all(dir.join("other")).unwrap();
+    let around = dir.join("other").join("..").join("lib").to_string_lossy().to_string();
+    assert!(crate::import::browse_files(&input, &around, false).unwrap().is_empty(), "{around}");
+    assert!(crate::import::browse_files(&input, &around, true).unwrap().is_empty(), "{around}");
+    #[cfg(unix)]
+    {
+        let alias = dir.join("alias");
+        std::os::unix::fs::symlink(dir.join("lib"), &alias).unwrap();
+        let alias = alias.to_string_lossy().to_string();
+        assert!(crate::import::browse_files(&input, &alias, false).unwrap().is_empty(), "{alias}");
+        assert!(crate::import::browse_files(&input, &alias, true).unwrap().is_empty(), "{alias}");
+    }
+    // a folder next to the library named through it is outside it: browsed (CodeRabbit on #3077)
+    std::fs::create_dir_all(dir.join("outside")).unwrap();
+    write_png(&dir.join("outside").join("next.png"), 3);
+    let next = dir.join("lib").join("..").join("outside").to_string_lossy().to_string();
+    assert_eq!(names(crate::import::browse_files(&input, &next, false).unwrap()), ["next.png"], "{next}");
+    assert_eq!(names(crate::import::browse_files(&input, &next, true).unwrap()), ["next.png"], "{next}");
+    // under the folder's one spelling: the paths match the folder's own, so the catalog's records are found
+    // (CodeRabbit on #3055)
+    let direct = dir.join("outside").to_string_lossy().to_string();
+    for sub in [false, true] {
+        assert_eq!(crate::import::browse_files(&input, &next, sub).unwrap(), crate::import::browse_files(&input, &direct, sub).unwrap());
+    }
+    // a folder inside the library that isn't there is an error too, not an empty folder
+    let gone = dir.join("lib").join("not-there").to_string_lossy().to_string();
+    assert!(crate::import::browse_files(&input, &gone, false).is_err(), "{gone}");
+    // a folder that can't be listed is an error, not an empty folder (its photos aren't "gone")
+    let missing = dir.join("not-there").to_string_lossy().to_string();
+    assert!(crate::import::browse_files(&input, &missing, false).is_err());
+    assert!(crate::import::browse_files(&input, &missing, true).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Browsing's queue breaks ties the way the catalog does (by name, in the view's direction), and
+/// the import- and edit-date sorts, where new photos tie, go by name rather than file time.
+#[test]
+fn browsing_breaks_ties_by_name_in_the_views_direction() {
+    use lightcraft_catalog::{Sort, SortKey};
+    let dir = temp_dir("browse-ties");
+    // names and file times run in opposite directions; x and y share a time and a size
+    for (name, secs) in [("x.png", 100u64), ("y.png", 100), ("z.png", 50)] {
+        write_png(&dir.join(name), 7);
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
+        std::fs::File::options().write(true).open(dir.join(name)).unwrap().set_modified(t).unwrap();
+    }
+    let files: Vec<String> = ["y.png", "z.png", "x.png"].iter().map(|n| dir.join(n).to_string_lossy().to_string()).collect();
+    let order = |key: SortKey, ascending: bool| {
+        let mut f = files.clone();
+        crate::import::browse_order(&mut f, &Sort { key, ascending, ..Sort::default() });
+        f.iter().map(|f| Path::new(f).file_name().unwrap().to_string_lossy().to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(order(SortKey::CaptureDate, false), ["y.png", "x.png", "z.png"]);
+    assert_eq!(order(SortKey::CaptureDate, true), ["z.png", "x.png", "y.png"]);
+    for key in [SortKey::ImportDate, SortKey::EditDate, SortKey::Rating] {
+        assert_eq!(order(key, true), ["x.png", "y.png", "z.png"], "{key:?}");
+        assert_eq!(order(key, false), ["z.png", "y.png", "x.png"], "{key:?}");
+    }
+    assert_eq!(order(SortKey::FileSize, true), ["x.png", "y.png", "z.png"]);
+    assert_eq!(order(SortKey::FileSize, false), ["z.png", "y.png", "x.png"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Photos a.png, b.png, c.png imported from `old`, then: a renamed into `moved`; b renamed, with
 /// an impostor (same name and size, other bytes) under its old name; c gone, with two impostors.
 fn renamed_and_ambiguous_scene(tag: &str) -> (std::path::PathBuf, Session) {
@@ -2784,4 +2927,70 @@ fn a_file_arriving_beside_its_raws_stem_reads_its_own_sidecar() {
     assert_eq!(r["sidecars"], 0, "{r}");
     assert_eq!(read(&s, "IMG_3.TIF"), 0, "the catalogued raw owns IMG_3.xmp");
     let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A folder's one spelling: `.` is the current folder, `.` and `..` are taken out, never above the
+/// root (CodeRabbit on #3055 / #3080).
+#[test]
+fn a_browsed_folder_has_one_spelling() {
+    use crate::import::browse_path;
+    let root = std::env::temp_dir();
+    assert_eq!(browse_path(&root.join("lib").join("..").join("outside")).unwrap(), root.join("outside"));
+    assert_eq!(browse_path(&root.join(".").join("a").join(".").join("b")).unwrap(), root.join("a").join("b"));
+    let top: PathBuf = root.ancestors().last().map(Path::to_path_buf).unwrap_or_default();
+    assert_eq!(browse_path(&top.join("..").join("x")).unwrap(), top.join("x"), "never above the root");
+    assert_eq!(browse_path(Path::new(".")).unwrap(), std::env::current_dir().unwrap(), "`.` is the current folder");
+    assert_eq!(browse_path(Path::new("a/..")).unwrap(), std::env::current_dir().unwrap());
+    // the UI's spelling, without the disk: the same where no link comes before a `..`
+    let by_name = crate::import::browse_spelling(&root.join("lib").join("..").join("outside")).unwrap();
+    assert_eq!(by_name, root.join("outside"));
+    assert_eq!(crate::import::browse_spelling(Path::new(".")).unwrap(), std::env::current_dir().unwrap());
+}
+
+/// `link/..` is the folder the system reads (POSIX: above where the link points; Windows: the
+/// folder holding the link): browsing it lists what the system lists there (CodeRabbit on #3055 /
+/// #3077 / #3080).
+#[test]
+fn a_link_before_dotdot_names_the_folder_the_system_reads() {
+    let dir = temp_dir("browse-link-dotdot");
+    std::fs::create_dir_all(dir.join("real").join("sub")).unwrap();
+    write_png(&dir.join("real").join("in-real.png"), 1);
+    write_png(&dir.join("beside-link.png"), 2);
+    let link = dir.join("link");
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(dir.join("real").join("sub"), &link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_dir(dir.join("real").join("sub"), &link);
+    if let Err(e) = made {
+        lightcraft_testkit::skip!(System, "can't make a folder link here: {e}");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let mut s = Session::new().with_fs();
+    let (input, _) = crate::import::ScanInput::new(&mut s, &[]);
+    let through = link.join("..");
+    let names = |v: Vec<String>| v.iter().map(|f| Path::new(f).file_name().unwrap().to_string_lossy().to_string()).collect::<Vec<_>>();
+    let listed = names(crate::import::browse_files(&input, &through.to_string_lossy(), false).unwrap());
+    let mut system: Vec<String> =
+        std::fs::read_dir(&through).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.ends_with(".png")).collect();
+    system.sort();
+    assert_eq!(listed, system, "{}", through.display());
+    #[cfg(unix)]
+    assert_eq!(listed, ["in-real.png"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A broken link before `..` is an error, not the link's own folder by name: the system can't read
+/// `broken/..` either (CodeRabbit on #3577).
+#[cfg(unix)]
+#[test]
+fn a_broken_link_before_dotdot_is_an_error() {
+    let dir = temp_dir("browse-broken-link-dotdot");
+    std::fs::create_dir_all(&dir).unwrap();
+    let link = dir.join("broken");
+    std::os::unix::fs::symlink(dir.join("nowhere"), &link).unwrap();
+    assert!(crate::import::browse_path(&link.join("..")).is_err());
+    // without reading the disk the spelling is still the folder by name
+    assert_eq!(crate::import::browse_spelling(&link.join("..")).unwrap(), dir);
+    let _ = std::fs::remove_dir_all(&dir);
 }
