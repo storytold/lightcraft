@@ -3,6 +3,7 @@
 //! The rule engine works on a small, metadata-independent model so it can be
 //! unit-tested; `from_metadata` builds that model from `cargo metadata`.
 
+use super::{layers, metadata};
 use serde_json::Value;
 
 /// Where a workspace crate sits.
@@ -248,6 +249,40 @@ pub fn describe(class: Option<Class>) -> String {
         Some(Class::Testkit) => "testkit".into(),
         Some(Class::Exempt) => "exempt".into(),
         None => "UNREGISTERED".into(),
+    }
+}
+
+pub(crate) fn cmd_layers() -> Result<(), String> {
+    let crates = layers::from_metadata(&metadata()?)?;
+    println!("Dependency layering (plan/architecture.md §3)\n");
+    println!("{:<28} {:<14} workspace deps", "crate", "layer");
+    for c in &crates {
+        let ws: Vec<String> = c
+            .deps
+            .iter()
+            .filter(|d| d.workspace)
+            .map(|d| {
+                let k = match d.kind {
+                    layers::DepKind::Normal => "",
+                    layers::DepKind::Dev => " (dev)",
+                    layers::DepKind::Build => " (build)",
+                };
+                format!("{}{k}", layers::short_name(&d.name))
+            })
+            .collect();
+        println!("{:<28} {:<14} {}", c.name, layers::describe(layers::classify(&c.name)), ws.join(", "));
+    }
+    let violations = layers::check(&crates);
+    println!();
+    if violations.is_empty() {
+        println!("OK: {} crates, no layering violations.", crates.len());
+        Ok(())
+    } else {
+        println!("{} violation(s):", violations.len());
+        for v in &violations {
+            println!("  - {v}");
+        }
+        Err(format!("{} layering violation(s)", violations.len()))
     }
 }
 

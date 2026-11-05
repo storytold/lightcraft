@@ -255,8 +255,19 @@ fn fdct_quant(block: &[f32; 64], recip: &[f32; 64], out: &mut [i16; 64]) {
         aan_1d(&mut d, c, 8);
     }
     for i in 0..64 {
-        out[i] = (d[i] * recip[i]).round() as i16;
+        out[i] = round_i16(d[i] * recip[i]);
     }
+}
+/// `x.round() as i16` (half away from zero, saturating, NaN to 0) for every `x` (checked for all of them), in plain
+/// arithmetic: without SSE4.1 `f32::round` is a libm call, one per coefficient, that keeps the loop from vectorising.
+#[inline(always)]
+fn round_i16(x: f32) -> i16 {
+    // (below 2^24 the truncation is exact and so is the remainder)
+    let c = x.clamp(-65536.0, 65536.0);
+    let t = c as i32;
+    let f = c - t as f32;
+    let r = t + i32::from(f >= 0.5) - i32::from(f <= -0.5);
+    r.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
 }
 
 #[inline]
@@ -395,31 +406,30 @@ fn encode_with(
         (true, _) | (false, ChromaSubsampling::S444) => (1usize, 1usize),
         (false, _) => (2, 2),
     };
-    // colour conversion (JFIF YCbCr, full range, level-shifted) in one pass; chroma averaged 2×2 for 4:2:0
-    let n = width * height;
     #[cfg(feature = "parallel")]
     use rayon::prelude::*;
-    // 4:4:4: Y, Cb, Cr at full resolution in one pass; 4:2:0: Y here, chroma below straight from 2×2 RGB means
+    // colour conversion (JFIF YCbCr, full range, level-shifted) of the pixel rows `rows`, one band's worth at a
+    // time (in the band's task: the planes of the whole image would be ~290 MB at 24 MP, written and read back
+    // once): 4:4:4 Y, Cb, Cr at full resolution in one pass; 4:2:0 Y, and chroma (rows `crows` of the
+    // half-size planes) straight from 2×2 RGB means (conversion is linear: average first, then convert once)
     let ncomp = if gray || hs == 2 { 1 } else { 3 };
-    let mut full: Vec<Vec<f32>> = (0..ncomp).map(|_| vec![0f32; n]).collect();
-    {
-        let rows: Vec<(usize, Vec<&mut [f32]>)> = {
-            let mut its: Vec<_> = full.iter_mut().map(|p| p.chunks_mut(width)).collect();
-            (0..height).map_while(|y| Some((y, its.iter_mut().map(|it| it.next()).collect::<Option<_>>()?))).collect()
-        };
-        let conv = |(y, mut out): (usize, Vec<&mut [f32]>)| {
+    let (cw, ch) = (width.div_ceil(2), height.div_ceil(2));
+    let convert = |rows: std::ops::Range<usize>, crows: std::ops::Range<usize>| -> Vec<Plane> {
+        let mut full: Vec<Vec<f32>> = (0..ncomp).map(|_| vec![0f32; rows.len() * width]).collect();
+        for (k, y) in rows.clone().enumerate() {
             let src = &data[y * width * channels..(y + 1) * width * channels];
+            let mut out: Vec<&mut [f32]> = full.iter_mut().map(|p| &mut p[k * width..(k + 1) * width]).collect();
             if gray {
                 for (o, p) in out[0].iter_mut().zip(src.chunks_exact(channels)) {
                     *o = p[0] as f32 - 128.0;
                 }
-                return;
+                continue;
             }
             if out.len() == 1 {
                 for (o, p) in out[0].iter_mut().zip(src.chunks_exact(channels)) {
                     *o = 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32 - 128.0;
                 }
-                return;
+                continue;
             }
             for (x, p) in src.chunks_exact(channels).enumerate() {
                 let (r, g, b) = (p[0] as f32, p[1] as f32, p[2] as f32);
@@ -427,37 +437,26 @@ fn encode_with(
                 out[1][x] = -0.168_736 * r - 0.331_264 * g + 0.5 * b;
                 out[2][x] = 0.5 * r - 0.418_688 * g - 0.081_312 * b;
             }
-        };
-        #[cfg(feature = "parallel")]
-        rows.into_par_iter().for_each(conv);
-        #[cfg(not(feature = "parallel"))]
-        rows.into_iter().for_each(conv);
-    }
-    let mut it = full.into_iter();
-    let mut planes = vec![Plane { w: width, h: height, data: it.next().unwrap_or_default() }];
-    planes.extend(it.map(|c| Plane { w: width, h: height, data: c }));
-    if !gray && hs == 2 {
-        // conversion is linear: average RGB over 2×2 first, then convert once
-        let (cw, ch) = (width.div_ceil(2), height.div_ceil(2));
-        let (mut cb, mut cr) = (vec![0f32; cw * ch], vec![0f32; cw * ch]);
-        let down = |(cy, (ob, or)): (usize, (&mut [f32], &mut [f32]))| {
-            let (y0, y1) = (2 * cy, (2 * cy + 1).min(height - 1));
-            let (r0, r1) = (&data[y0 * width * channels..], &data[y1 * width * channels..]);
-            for cx in 0..cw {
-                let (x0, x1) = (2 * cx * channels, (2 * cx + 1).min(width - 1) * channels);
-                let s = |k: usize| (r0[x0 + k] as f32 + r0[x1 + k] as f32 + r1[x0 + k] as f32 + r1[x1 + k] as f32) * 0.25;
-                let (r, g, b) = (s(0), s(1), s(2));
-                ob[cx] = -0.168_736 * r - 0.331_264 * g + 0.5 * b;
-                or[cx] = 0.5 * r - 0.418_688 * g - 0.081_312 * b;
+        }
+        let mut planes: Vec<Plane> = full.into_iter().map(|data| Plane { w: width, h: rows.len(), data }).collect();
+        if !gray && hs == 2 {
+            let (mut cb, mut cr) = (vec![0f32; cw * crows.len()], vec![0f32; cw * crows.len()]);
+            for (cy, (ob, or)) in crows.clone().zip(cb.chunks_mut(cw).zip(cr.chunks_mut(cw))) {
+                let (y0, y1) = (2 * cy, (2 * cy + 1).min(height - 1));
+                let (r0, r1) = (&data[y0 * width * channels..], &data[y1 * width * channels..]);
+                for cx in 0..cw {
+                    let (x0, x1) = (2 * cx * channels, (2 * cx + 1).min(width - 1) * channels);
+                    let s = |k: usize| (r0[x0 + k] as f32 + r0[x1 + k] as f32 + r1[x0 + k] as f32 + r1[x1 + k] as f32) * 0.25;
+                    let (r, g, b) = (s(0), s(1), s(2));
+                    ob[cx] = -0.168_736 * r - 0.331_264 * g + 0.5 * b;
+                    or[cx] = 0.5 * r - 0.418_688 * g - 0.081_312 * b;
+                }
             }
-        };
-        #[cfg(feature = "parallel")]
-        cb.par_chunks_mut(cw).zip(cr.par_chunks_mut(cw)).enumerate().for_each(down);
-        #[cfg(not(feature = "parallel"))]
-        cb.chunks_mut(cw).zip(cr.chunks_mut(cw)).enumerate().for_each(down);
-        planes.push(Plane { w: cw, h: ch, data: cb });
-        planes.push(Plane { w: cw, h: ch, data: cr });
-    }
+            planes.push(Plane { w: cw, h: crows.len(), data: cb });
+            planes.push(Plane { w: cw, h: crows.len(), data: cr });
+        }
+        planes
+    };
 
     let ql = scaled_quant(&Q_LUMA, quality);
     let qc = scaled_quant(&Q_CHROMA, quality);
@@ -473,7 +472,12 @@ fn encode_with(
         let (mut blk, mut q) = ([0f32; 64], [0i16; 64]);
         let (mut tokens, mut freq) = (Vec::new(), [[0u64; 256]; 4]);
         let mut pred = [0i32; 3];
-        for mcu_y in band * rows_per_band..((band + 1) * rows_per_band).min(my) {
+        let (m0, m1) = (band * rows_per_band, ((band + 1) * rows_per_band).min(my));
+        // the band's planes, its MCU row `m0` at their top (blocks past the image's bottom repeat its last row,
+        // which is the band's last row then)
+        let planes = convert(m0 * mcu_h..(m1 * mcu_h).min(height), m0 * 8..(m1 * 8).min(ch));
+        for mcu_y in m0..m1 {
+            let mcu_y = mcu_y - m0;
             for mcu_x in 0..mx {
                 for vy in 0..vs {
                     for hx in 0..hs {
@@ -497,7 +501,6 @@ fn encode_with(
     let tokenized: Vec<(Vec<Token>, [Freq; 4])> = bands.par_iter().map(tokenize_band).collect();
     #[cfg(not(feature = "parallel"))]
     let tokenized: Vec<(Vec<Token>, [Freq; 4])> = bands.iter().map(tokenize_band).collect();
-    drop(planes);
     // the tables: DC luma, AC luma, DC chroma, AC chroma
     let tables: [([u8; 16], Vec<u8>); 4] = if optimize {
         let mut total = [[0u64; 256]; 4];
@@ -746,6 +749,34 @@ mod tests {
         assert_eq!(jpeg_decoder::Decoder::new(&std[..]).decode().unwrap(), jpeg_decoder::Decoder::new(&opt[..]).decode().unwrap());
     }
 
+    /// The bytes written for 4:4:4, 4:2:0, grayscale and RGBA input at a size cut into many bands, with partial MCUs
+    /// at the right and bottom edges, pinned: each band converts its own rows to YCbCr, which must not change a bit.
+    #[test]
+    fn encoded_bytes_are_pinned() {
+        let fnv = |b: &[u8]| b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &x| (h ^ u64::from(x)).wrapping_mul(0x100_0000_01b3));
+        let (w, h) = (1203, 1037);
+        let rgb = test_rgb(w, h);
+        let gray: Vec<u8> = rgb.as_chunks::<3>().0.iter().map(|p| p[1]).collect();
+        let rgba: Vec<u8> = rgb.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        let got = [
+            fnv(&encode(&rgb, w, h, 3, 90, ChromaSubsampling::S444, &[])),
+            fnv(&encode(&rgb, w, h, 3, 75, ChromaSubsampling::S420, &[])),
+            fnv(&encode(&gray, w, h, 1, 90, ChromaSubsampling::S444, &[])),
+            fnv(&encode(&rgba, w, h, 4, 85, ChromaSubsampling::S444, &[])),
+        ];
+        assert_eq!(got, PINNED, "{got:#x?}");
+    }
+    /// [`round_i16`] against `f32::round` at the halves, the ends of `i16`, NaN and infinities, and a spread of every
+    /// magnitude (all 2^32 inputs were compared once, offline).
+    #[test]
+    fn round_i16_is_round_as_i16() {
+        let special = [0.5f32, -0.5, 1.5, -1.5, 2.5, -2.5, 0.499_999_97, -0.499_999_97, 32767.5, -32768.5, 32766.5, 1e9, -1e9];
+        let all = special.into_iter().chain([f32::NAN, f32::INFINITY, f32::NEG_INFINITY]).chain((0..=u32::MAX).step_by(9973).map(f32::from_bits));
+        for x in all {
+            assert_eq!(round_i16(x), x.round() as i16, "{x:e}");
+        }
+    }
+    const PINNED: [u64; 4] = [0x52ba_772a_589c_1430, 0x013f_8364_821f_1dde, 0xb2a3_b5e5_aef3_7402, 0x08df_d6dc_aa2f_1c78];
     #[test]
     fn grayscale_and_quality_monotone() {
         let (w, h) = (300, 200);
