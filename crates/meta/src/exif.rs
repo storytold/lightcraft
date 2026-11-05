@@ -36,11 +36,28 @@ pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata,
     Ok(m)
 }
 
-/// Whether a parsed EXIF block contains GPS location-bearing tags, even if their values cannot
-/// be projected into a valid [`Gps`] position. Used by Original export's location-removal guard.
+/// Whether a parsed EXIF block contains GPS position, altitude, or destination-coordinate tags.
+/// Invalid coordinate values still count because an Original copy preserves their source tags.
 pub fn exif_embeds_gps_location(bytes: &[u8]) -> bool {
-    let Ok(tiff) = Tiff::parse(strip_exif_header(bytes)) else { return false };
-    tiff.gps().is_some_and(|gps| [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE].into_iter().any(|tag| gps.contains(tag)))
+    exif_gps_tag_presence(bytes).unwrap_or(false)
+}
+
+/// Whether a source file contains location-bearing EXIF tags. JPEG APP1 packets are all inspected;
+/// other containers use their parsed embedded EXIF block. Invalid EXIF packets are not treated as
+/// evidence of GPS by this helper.
+pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        return crate::container::jpeg_embeds_exif_gps_location(bytes);
+    }
+    crate::container::embedded(bytes).exif.as_deref().map(exif_embeds_gps_location).unwrap_or_else(|| exif_embeds_gps_location(bytes))
+}
+
+/// Return tag presence separately from parse failure so container privacy checks can fail closed.
+pub(crate) fn exif_gps_tag_presence(bytes: &[u8]) -> Option<bool> {
+    let tiff = Tiff::parse(strip_exif_header(bytes)).ok()?;
+    Some(tiff.gps().is_some_and(|gps| {
+        [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE].into_iter().any(|tag| gps.contains(tag))
+    }))
 }
 
 fn text(ifd: Option<&Ifd>, tag: u16) -> Option<String> {
@@ -562,6 +579,7 @@ pub(crate) mod tests {
         assert_eq!(read("X", valid), None, "invalid ref");
     }
 
+    /// Build a GPS IFD fixture and project it using the requested hemisphere references.
     fn gps_from_components_with_refs(lat: Vec<(u32, u32)>, lon: Vec<(u32, u32)>, lat_ref: &str, lon_ref: &str) -> Option<Gps> {
         let mut gps = IfdBuilder::new();
         gps.set(t::GPS_LATITUDE_REF, Value::Ascii(lat_ref.into()));
@@ -573,10 +591,25 @@ pub(crate) mod tests {
         read_exif(&TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()).gps
     }
 
+    /// Build a north/east GPS IFD fixture and return its projected location.
     fn gps_from_components(lat: Vec<(u32, u32)>, lon: Vec<(u32, u32)>) -> Option<Gps> {
         gps_from_components_with_refs(lat, lon, "N", "E")
     }
 
+    /// Destination coordinates count as location data even without the primary position tags.
+    #[test]
+    fn exif_gps_destination_tags_are_location_bearing() {
+        for tag in [t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE] {
+            let mut gps = IfdBuilder::new();
+            gps.set(tag, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set_child(t::GPS_IFD, gps);
+            let bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+            assert!(exif_embeds_gps_location(&bytes), "destination tag {tag}");
+        }
+    }
+
+    /// Invalid EXIF GPS subdivisions are rejected for latitude and longitude.
     #[test]
     fn exif_gps_rejects_invalid_subdivisions() {
         let valid_axis = vec![(10, 1), (0, 1), (0, 1)];
@@ -588,6 +621,7 @@ pub(crate) mod tests {
         }
     }
 
+    /// Valid fractional subdivisions, hemispheres, zeroes, missing parts, and endpoints survive.
     #[test]
     fn exif_gps_preserves_valid_subdivisions() {
         let gps =
@@ -662,6 +696,20 @@ fn reciprocal(v: Option<f64>) -> Option<lightcraft_tiff::Value> {
     ((inv - inv.round()).abs() < 1e-6 && inv.round() <= u32::MAX as f64).then(|| lightcraft_tiff::Value::Rational(vec![(1, inv.round() as u32)]))
 }
 
+/// Convert valid decimal coordinates to DMS, rounding total milliseconds before splitting so
+/// carries cannot emit 60 seconds or minutes.
+fn gps_dms(value: f64, max_degrees: u32) -> Option<lightcraft_tiff::Value> {
+    let magnitude = value.abs();
+    if !magnitude.is_finite() || magnitude > f64::from(max_degrees) {
+        return None;
+    }
+    let total_millis = (magnitude * 3_600_000.0).round() as u64;
+    let degrees = (total_millis / 3_600_000) as u32;
+    let minutes = ((total_millis % 3_600_000) / 60_000) as u32;
+    let seconds_millis = (total_millis % 60_000) as u32;
+    Some(lightcraft_tiff::Value::Rational(vec![(degrees, 1), (minutes, 1), (seconds_millis, 1000)]))
+}
+
 /// Serialise the interchange subset of `meta` as a TIFF-structured Exif block (little-endian, no
 /// `Exif\0\0` prefix): IFD0 (make, model, software, artist, copyright, description, orientation,
 /// date), the Exif IFD (capture settings, lens) and, when present, the GPS IFD.
@@ -717,20 +765,15 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
         }
     }
     ifd0.set_child(t::EXIF_IFD, ex);
-    if let Some(g) = meta.gps {
-        let dms = |v: f64| {
-            let v = v.abs();
-            let d = v.floor();
-            let m = ((v - d) * 60.0).floor();
-            let s = (v - d - m / 60.0) * 3600.0;
-            Value::Rational(vec![(d as u32, 1), (m as u32, 1), ((s * 1000.0).round() as u32, 1000)])
-        };
+    if let Some(g) = meta.gps
+        && let (Some(latitude), Some(longitude)) = (gps_dms(g.latitude, 90), gps_dms(g.longitude, 180))
+    {
         let mut gps = IfdBuilder::new();
         gps.set(t::GPS_VERSION_ID, Value::Byte(vec![2, 3, 0, 0]));
         gps.set(t::GPS_LATITUDE_REF, Value::Ascii(if g.latitude < 0.0 { "S" } else { "N" }.into()));
-        gps.set(t::GPS_LATITUDE, dms(g.latitude));
+        gps.set(t::GPS_LATITUDE, latitude);
         gps.set(t::GPS_LONGITUDE_REF, Value::Ascii(if g.longitude < 0.0 { "W" } else { "E" }.into()));
-        gps.set(t::GPS_LONGITUDE, dms(g.longitude));
+        gps.set(t::GPS_LONGITUDE, longitude);
         if let Some(a) = g.altitude {
             gps.set(t::GPS_ALTITUDE_REF, Value::Byte(vec![u8::from(a < 0.0)]));
             gps.set(t::GPS_ALTITUDE, Value::Rational(vec![rational(a.abs())]));
@@ -763,6 +806,27 @@ mod write_tests {
         }
     }
 
+    /// Coordinates rounding at a DMS boundary remain readable after the writer carries units.
+    #[test]
+    fn gps_writer_rounding_carries_before_splitting_dms() {
+        for (latitude, longitude) in [(1.2, -45.99999999), (-89.99999999, 179.99999999)] {
+            let metadata = Metadata { gps: Some(Gps { latitude, longitude, altitude: None }), ..Default::default() };
+            let written = write_exif(&metadata);
+            let tiff = Tiff::parse(&written).unwrap();
+            let gps = tiff.gps().unwrap();
+            for tag in [t::GPS_LATITUDE, t::GPS_LONGITUDE] {
+                let seconds = gps.value(tag).and_then(|value| value.get_f64(2)).expect("written DMS has seconds");
+                assert!((0.0..60.0).contains(&seconds), "{tag} emitted {seconds} seconds");
+            }
+            let read = read_exif(&written).gps.expect("the rounded position remains readable");
+            let expected_latitude = if latitude < 0.0 { -latitude.abs() } else { latitude.abs() };
+            let expected_longitude = if longitude < 0.0 { -longitude.abs() } else { longitude.abs() };
+            assert!((read.latitude - expected_latitude).abs() <= 0.5 / 3_600_000.0, "{read:?}");
+            assert!((read.longitude - expected_longitude).abs() <= 0.5 / 3_600_000.0, "{read:?}");
+        }
+    }
+
+    /// Invalid EXIF GPS subdivisions remain rejected while valid coordinates round-trip.
     #[test]
     fn exif_round_trips() {
         let m = Metadata {

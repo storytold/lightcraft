@@ -189,6 +189,40 @@ fn presets_conflicts_and_subfolders() {
     assert_eq!(written, ["out/Sub/LC01347.png"]);
 }
 
+/// Issue #2571: a subfolder with `..`, a root or a drive wrote outside the chosen folder. It is
+/// cleaned where the folder is used, so a preset or the Export dialog's field (which set it
+/// without `from_json`) are covered as well as command parameters.
+#[test]
+fn a_subfolder_never_leaves_the_destination_folder() {
+    use crate::export::{Destination, export_batch};
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let to = Destination { dir: "out".into(), exact: None };
+    let written_to = |s: &mut Session, sub: &str| {
+        let o = ExportOptions { subfolder: sub.into(), naming: "x".into(), ..ExportOptions::from_json(&json!({"format": "png", "width": 16})) };
+        let mut written: Vec<String> = Vec::new();
+        let mut write = |p: &str, _: &[u8]| {
+            written.push(p.to_string());
+            Ok(())
+        };
+        export_batch(s, &[id], &o, &to, &mut write, &|_| false).unwrap();
+        written
+    };
+    for (sub, want) in [
+        ("../../escaped", "out/escaped/x.png"),
+        ("..", "out/x.png"),
+        ("/etc", "out/etc/x.png"),
+        ("C:\\Windows", "out/C__Windows/x.png"),
+        ("a/./b/../c", "out/a/b/c/x.png"),
+        (" Client / Jobs ", "out/Client/Jobs/x.png"),
+    ] {
+        assert_eq!(written_to(&mut s, sub), [want], "{sub:?}");
+    }
+    // command parameters get the same cleaning
+    let o = ExportOptions::from_json(&json!({"subfolder": "../up"}));
+    assert_eq!(o.subfolder, "up");
+}
+
 #[test]
 fn prepared_exports_run_on_another_thread() {
     fn send<T: Send>(_: &T) {}
@@ -668,12 +702,16 @@ fn remove_location_holds_for_original_and_dng_exports() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A second EXIF APP1 packet with malformed coordinates still blocks a privacy-sensitive copy.
 #[test]
 fn malformed_exif_gps_still_blocks_original_when_removing_location() {
     use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
 
     let dir = temp_dir("export-malformed-exif-gps");
     let source = dir.join("Malformed.jpg");
+    let mut first_ifd0 = IfdBuilder::new();
+    first_ifd0.set(t::MAKE, Value::Ascii("No GPS camera".into()));
+    let first_exif = TiffWriter::default().write(&[first_ifd0]).unwrap();
     let mut gps = IfdBuilder::new();
     gps.set(t::GPS_LATITUDE_REF, Value::Ascii("N".into()));
     gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (60, 1), (0, 1)]));
@@ -681,13 +719,24 @@ fn malformed_exif_gps_still_blocks_original_when_removing_location() {
     gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(10, 1), (0, 1), (0, 1)]));
     let mut ifd0 = IfdBuilder::new();
     ifd0.set_child(t::GPS_IFD, gps);
-    let exif = TiffWriter::default().write(&[ifd0]).unwrap();
+    let second_exif = TiffWriter::default().write(&[ifd0]).unwrap();
     let pixels = [90u8; 12];
     let image = lightcraft_codecs::EncodeImage::new(2, 2, 3, lightcraft_codecs::Samples::U8(&pixels));
-    let encoded = lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() };
-    let original = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &encoded).unwrap();
+    let jpeg = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
+    let mut original = vec![0xff, 0xd8];
+    for exif in [&first_exif, &second_exif] {
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(exif);
+        let segment_len = (payload.len() + 2) as u16;
+        original.extend_from_slice(&[0xff, 0xe1]);
+        original.extend_from_slice(&segment_len.to_be_bytes());
+        original.extend_from_slice(&payload);
+    }
+    original.extend_from_slice(jpeg.get(2..).expect("encoded JPEG has an SOI marker"));
     std::fs::write(&source, &original).unwrap();
 
+    assert!(lightcraft_meta::embedded(&original).exif.as_deref().is_some_and(|first| !lightcraft_meta::exif_embeds_gps_location(first)));
+    assert!(lightcraft_meta::source_embeds_exif_gps_location(&original), "the second EXIF APP1 contains GPS tags");
     let mut session = Session::new().with_fs();
     session.execute("library.import", &json!({"paths": [source.to_string_lossy()]})).unwrap();
     let id = session.catalog.photos().next().unwrap().id;

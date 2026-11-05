@@ -204,6 +204,55 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
     out
 }
 
+/// Check every JPEG Exif APP1 packet for location tags. Truncated or unparseable Exif packets
+/// fail closed because an Original copy cannot establish that location data is absent.
+pub(crate) fn jpeg_embeds_exif_gps_location(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
+        return false;
+    }
+    let mut i = 2usize;
+    loop {
+        if bytes.get(i) != Some(&0xff) {
+            return true;
+        }
+        let Some(marker_at) = i.checked_add(1) else { return true };
+        let Some(&marker) = bytes.get(marker_at) else { return true };
+        if marker == 0xff {
+            i = marker_at;
+            continue;
+        }
+        if marker == 0xd8 || (0xd0..=0xd7).contains(&marker) || marker == 0x01 {
+            let Some(next) = marker_at.checked_add(1) else { return true };
+            i = next;
+            continue;
+        }
+        if marker == 0xd9 || marker == 0xda {
+            return false;
+        }
+        let Some(length_start) = i.checked_add(2) else { return true };
+        let Some(length_end) = i.checked_add(4) else { return true };
+        let Some(length) = bytes.get(length_start..length_end) else { return true };
+        let (Some(&hi), Some(&lo)) = (length.first(), length.get(1)) else { return true };
+        let segment_length = usize::from(u16::from_be_bytes([hi, lo]));
+        if segment_length < 2 {
+            return true;
+        }
+        let Some(payload_start) = i.checked_add(4) else { return true };
+        let Some(segment_end) = i.checked_add(2).and_then(|at| at.checked_add(segment_length)) else { return true };
+        if segment_end > bytes.len() {
+            return true;
+        }
+        let Some(payload) = bytes.get(payload_start..segment_end) else { return true };
+        if marker == 0xe1 && payload.starts_with(b"Exif\0") {
+            let Some(exif) = payload.get(6..) else { return true };
+            if crate::exif::exif_gps_tag_presence(exif) != Some(false) {
+                return true;
+            }
+        }
+        i = segment_end;
+    }
+}
+
 /// IPTC-IIM block (resource 0x0404) from a Photoshop image-resource stream (`8BIM` records).
 fn photoshop_iptc(mut b: &[u8]) -> Option<Vec<u8>> {
     while b.len() >= 12 && &b[..4] == b"8BIM" {
@@ -346,6 +395,39 @@ mod tests {
         assert_eq!(m.caption.as_deref(), Some("A caption"));
     }
 
+    /// The Original-export scan checks each Exif APP1 packet, not only the first one.
+    #[test]
+    fn jpeg_gps_guard_checks_each_exif_app1() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let exif = |destination_tag: Option<u16>| {
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set(t::MAKE, Value::Ascii("No GPS camera".into()));
+            if let Some(tag) = destination_tag {
+                let mut gps = IfdBuilder::new();
+                gps.set(tag, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+                ifd0.set_child(t::GPS_IFD, gps);
+            }
+            TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+        };
+        let jpeg = |blocks: &[Vec<u8>]| {
+            let mut bytes = vec![0xff, 0xd8];
+            for block in blocks {
+                let mut payload = b"Exif\0\0".to_vec();
+                payload.extend_from_slice(block);
+                bytes.extend(seg(0xe1, &payload));
+            }
+            bytes.extend_from_slice(&[0xff, 0xd9]);
+            bytes
+        };
+        let empty = exif(None);
+        let destination = exif(Some(t::GPS_DEST_LATITUDE));
+        assert_eq!(crate::exif::exif_gps_tag_presence(&empty), Some(false));
+        assert!(!crate::source_embeds_exif_gps_location(&jpeg(std::slice::from_ref(&empty))));
+        assert!(crate::source_embeds_exif_gps_location(&jpeg(&[empty, destination])));
+    }
+
+    /// Invalid EXIF GPS coordinates leave XMP fallback available and valid EXIF remains preferred.
     #[test]
     fn jpeg_gps_falls_back_from_invalid_exif_and_keeps_valid_exif() {
         use crate::Gps;
