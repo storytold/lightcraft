@@ -313,14 +313,12 @@ impl Preset {
 /// The preset's masks, added to the photo's own (ones it already has are skipped), their effect
 /// scaled by the amount.
 fn add_masks(out: &mut DevelopSettings, masks: &[Value], amount: f64) {
-    let mut next = out.masks.iter().map(|m| m.id).max().unwrap_or(0);
     for m in masks {
         let Ok(mut m) = serde_json::from_value::<crate::Mask>(m.clone()) else { continue };
         if out.masks.iter().any(|q| q.name == m.name && q.components == m.components) {
             continue;
         }
-        next += 1;
-        m.id = next;
+        m.id = out.next_mask_id();
         m.adjust.amount = (m.adjust.amount * amount).clamp(0.0, 200.0);
         out.masks.push(m);
     }

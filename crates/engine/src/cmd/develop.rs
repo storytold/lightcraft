@@ -1100,9 +1100,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     let prepared = prepare_photo_for_wb_partial(&d, &preset.settings, &info);
                     let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
                     let base: &DevelopSettings = prepared.as_ref().unwrap_or(&d);
-                    // the preset composes on the photo's original state, not the visible edits (issue #2159)
-                    let original = s.catalog.photo(id).map(|p| p.import_defaults()).unwrap_or_default();
-                    let mut next = preset.apply_on(base, &original, amount);
+                    // Amount is measured from the import look only when the photo has one.
+                    // Otherwise the current settings (on the partial's WB scale) are its baseline.
+                    let imported = s.catalog.photo(id).filter(|p| p.import_look.is_some() && amount != 1.0).map(|p| p.import_defaults());
+                    let prepared_import =
+                        imported.as_ref().map(|d| prepare_photo_for_wb_partial(d, &preset.settings, &info).unwrap_or_else(|| d.clone()));
+                    let original = prepared_import.as_ref().unwrap_or(base);
+                    let mut next = preset.apply_on(base, original, amount);
                     if on_kelvin_scale {
                         lightcraft_pipeline::local::normalize_wb(&mut next, &info);
                     }
