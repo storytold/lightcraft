@@ -252,6 +252,8 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
     let max_px = if opts.max_megapixels.is_nan() { MAX_MEGAPIXELS } else { opts.max_megapixels.clamp(0.1, MAX_MEGAPIXELS) } * 1e6;
     let surface = (bx1 - bx0) * (by1 - by0);
     let mut s = (max_px / surface).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0)).min(1.0);
+    // the photos' own pixel density, before any limit: 1 for a perspective panorama
+    let mut native_scale = 1.0f64;
     if projection != Projection::Perspective {
         // The sensors are rectilinear: a frame holds more pixels per degree than a
         // spherical or cylindrical surface at the same focal length. Raise the
@@ -274,6 +276,7 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
             need = need.max((w / sx).max(h / sy) / fmed);
         }
         let fit = (max_px / surface).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0));
+        native_scale = need;
         s = s.max(need.min(fit));
     }
     let f_out = fmed * s;
@@ -425,7 +428,7 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
         rms_before,
         rms,
         fov,
-        native_megapixels: (bx1 - bx0) * (by1 - by0) / 1e6,
+        native_megapixels: surface * native_scale * native_scale / 1e6,
         focal: f_out,
         origin: (ox, oy),
         color,

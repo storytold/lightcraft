@@ -301,3 +301,32 @@ fn a_wide_angle_trio_keeps_the_photos_resolution() {
     eprintln!("wide-angle trio → {}×{} = {:.1} MP for three 12 MP frames", res.image.width, res.image.height, mp);
     assert!(mp >= 18.0, "the canvas is only {mp:.1} MP, one photo's worth, instead of the trio's own resolution");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spherical_native_megapixels_reflects_density_scale() {
+        let shots = [
+            Shot { yaw: -22.0, pitch: 0.5, roll: 0.3, gain: 1.0 },
+            Shot { yaw: 0.0, pitch: -0.4, roll: 0.0, gain: 1.0 },
+            Shot { yaw: 21.0, pitch: 0.8, roll: -0.4, gain: 1.0 },
+        ];
+        let mp = |r: &lightcraft_merge::pano::PanoResult| (r.image.width * r.image.height) as f64 / 1e6;
+        let spherical = run(&shots, 800.0, &PanoOptions { projection: Projection::Spherical, ..Default::default() }).0;
+        assert!(
+            (mp(&spherical) / spherical.native_megapixels - 1.0).abs() < 0.02,
+            "spherical canvas {} MP for {} MP native",
+            mp(&spherical),
+            spherical.native_megapixels
+        );
+        let perspective = run(&shots, 800.0, &PanoOptions { projection: Projection::Perspective, ..Default::default() }).0;
+        assert!(
+            (mp(&perspective) / perspective.native_megapixels - 1.0).abs() < 0.02,
+            "perspective canvas {} MP for {} MP native",
+            mp(&perspective),
+            perspective.native_megapixels
+        );
+    }
+}
