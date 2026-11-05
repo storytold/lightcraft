@@ -290,6 +290,7 @@ impl RenderJob {
                 loaded: None,
                 quick: Some(QuickSource::Cached),
                 display: None,
+                frame: None,
             };
         }
         if let Some((cache, key)) = &self.cache
