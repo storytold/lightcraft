@@ -1845,13 +1845,13 @@ fn existing_photo_settings_are_not_rewritten() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Issue #1632: a DNG's `ProfileToneCurve` is the finish stage's camera curve, so process V3 extends
+/// Issue #1632: a DNG's `ProfileToneCurve` is the finish stage's camera curve, so process V5 extends
 /// it past its last point (the sensor's white, scene 1.0) with the stop roll-off as well. A curve
-/// that reaches white there renders as under V2 up to it and white past it; one that ends below
+/// that reaches white there renders as under V4 up to it and white past it; one that ends below
 /// white (here 0.9) keeps what Exposure lifts past the sensor's white apart instead of reaching
 /// 8-bit 255 within a stop.
 #[test]
-fn v3_extends_a_dng_tone_curve_past_white_in_stops() {
+fn v5_extends_a_dng_tone_curve_past_white_in_stops() {
     use lightcraft_color::transfer::linear_to_srgb;
     use lightcraft_develop::{DevelopSettings, Process};
     use lightcraft_pipeline::SourceInfo;
@@ -1864,15 +1864,15 @@ fn v3_extends_a_dng_tone_curve_past_white_in_stops() {
     };
     let to_white = [0.0, 0.0, 0.03, 0.09, 0.18, 0.4, 0.5, 0.78, 1.0, 1.0];
     for y in [0.01, 0.05, 0.18, 0.5, 0.9] {
-        assert_eq!(code(&to_white, Process::V3, y), code(&to_white, Process::V2, y), "{y}");
+        assert_eq!(code(&to_white, Process::V5, y), code(&to_white, Process::V4, y), "{y}");
     }
     for y in [1.0, 2.0, 4.0] {
-        assert_eq!((code(&to_white, Process::V2, y), code(&to_white, Process::V3, y)), (255.0, 255.0), "{y}");
+        assert_eq!((code(&to_white, Process::V4, y), code(&to_white, Process::V5, y)), (255.0, 255.0), "{y}");
     }
     let below_white = [0.0, 0.0, 0.03, 0.09, 0.18, 0.4, 0.5, 0.72, 1.0, 0.9];
     let at = |process, ev: f32| code(&below_white, process, ev.exp2());
-    assert_eq!(at(Process::V3, 0.0), at(Process::V2, 0.0));
-    assert_eq!(at(Process::V2, 1.0), 255.0, "V2 is frozen");
-    let (white, beyond) = (at(Process::V3, 0.0), at(Process::V3, 1.0));
+    assert_eq!(at(Process::V5, 0.0), at(Process::V4, 0.0));
+    assert_eq!(at(Process::V4, 1.0), 255.0, "V4 is frozen");
+    let (white, beyond) = (at(Process::V5, 0.0), at(Process::V5, 1.0));
     assert!(beyond < 254.0 && beyond - white >= 3.0, "{white} then {beyond} a stop past the sensor's white");
 }

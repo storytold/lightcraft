@@ -169,14 +169,19 @@ pub(super) fn dro_off(own_tone: &CameraTone) -> CameraTone {
     // Past its last knot a curve goes on as a shoulder whose rate comes from its last two knots
     // (`CameraTone::apply`): lowering the second-last knot more than the last steepens it, and the
     // extended highlights would end up above the fitted curve. Raise the second-last knot (never
-    // above the fitted curve) until the rate is at most the fitted curve's. Process V3's shoulder
-    // (`CameraTone::apply_rolloff`) stays below too: at a knot (x, 1 − g) with slope s, its gap at
-    // u = 2^t − 1 stops past x is g / (1 + s·x·u / g); with g' ≥ g and s'/g' ≤ s/g here,
-    // s'/g'² ≤ s/g² and the lowered gap is never the smaller one. `at_most` checks both anyway.
+    // above the fitted curve) until the rate is at most the fitted curve's. Process V5's shoulder
+    // (`CameraTone::apply_rolloff`) past a knot (x, 1 − g) with slope s has the gap
+    // g / (1 + c·ln(1 + u) + P·(u − ln(1 + u))) at u = 2^t − 1, t stops past x, with c = s·x/g and
+    // P = max(s, 0.1)·x/g. With g' ≥ g (the last knot only comes down), the lowered gap is never
+    // the smaller one when s'/g'² ≤ s/g², which also gives max(s', 0.1)/g'² ≤ max(s, 0.1)/g²:
+    // raise the second-last knot for that too. `at_most` checks both anyway.
     let ([a, b], last) = ([own[30], own[31]], knots[31]);
-    let rate = ((b[1] - a[1]) / (b[0] - a[0])).clamp(0.1, 16.0) / (1.0 - b[1]).max(0.01);
-    let floor = last[1] - rate * (1.0 - last[1]).max(0.01) * (b[0] - a[0]);
-    knots[30][1] = knots[30][1].max(floor).min(last[1]);
+    let dx = b[0] - a[0];
+    let rate = ((b[1] - a[1]) / dx).clamp(0.1, 16.0) / (1.0 - b[1]).max(0.01);
+    let floor = last[1] - rate * (1.0 - last[1]).max(0.01) * dx;
+    let gaps = (1.0 - last[1]) / (1.0 - b[1]).max(f32::MIN_POSITIVE);
+    let floor_v5 = last[1] - ((b[1] - a[1]) / dx).max(0.0) * gaps * gaps * dx;
+    knots[30][1] = knots[30][1].max(floor).max(floor_v5).min(last[1]);
     let Some(tone) = CameraTone::new(knots).and_then(|tone| tone.with_chroma(*own_tone.chroma())) else { return *own_tone };
     if !at_most(&tone, own_tone) {
         return *own_tone;
@@ -185,8 +190,8 @@ pub(super) fn dro_off(own_tone: &CameraTone) -> CameraTone {
 }
 
 /// Whether curve `a` is nowhere brighter than `b` over the scene luminances the finish stage's tone
-/// table covers ([`ToneMap::camera`]), under every process: V1 and V2 extend a curve past its last
-/// knot with [`CameraTone::apply`], V3 with [`CameraTone::apply_rolloff`] (issue #1632).
+/// table covers ([`ToneMap::camera`]), under every process: V1 to V4 extend a curve past its last
+/// knot with [`CameraTone::apply`], V5 with [`CameraTone::apply_rolloff`] (issue #1632).
 pub(super) fn at_most(a: &CameraTone, b: &CameraTone) -> bool {
     use lightcraft_pipeline::tone::{GREY, LUT_MAX_EV, LUT_MIN_EV, LUT_N};
     (0..LUT_N).all(|i| {

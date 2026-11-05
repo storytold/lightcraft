@@ -7,6 +7,7 @@ mod album_missing;
 mod album_order;
 mod album_remove;
 mod albums_local;
+mod autosync_wb;
 mod color;
 mod constrain_crop;
 mod crop_angle;
@@ -49,6 +50,8 @@ mod settings_files;
 mod shelved_folder;
 mod slide;
 mod slideshow_export;
+#[cfg(not(target_arch = "wasm32"))]
+mod slow_drive;
 mod spots;
 mod sync;
 mod view_follow;

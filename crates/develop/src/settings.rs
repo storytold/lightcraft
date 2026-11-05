@@ -84,21 +84,29 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
-    /// A raw's camera tone curve rolls off into white in stops past its last fitted knot, so
-    /// highlights the sensor recorded keep their detail when Exposure lifts them (issue #1632).
+    /// Pixel-scale sharpening with working Radius and Detail controls.
     V3,
+    /// V3, with Contrast and Blacks on a raw's camera look calibrated to Lightroom: the
+    /// camera curve keeps V2 Whites and fitted pointwise operators follow it
+    /// (`lightcraft_pipeline::light_v3`, `docs/light-v3.md`).
+    V4,
+    /// V4, with a raw's tone curve rolling off into white in stops past its last fitted knot, so
+    /// highlights the sensor recorded keep their detail when Exposure lifts them (issue #1632).
+    V5,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 3] = [Process::V1, Process::V2, Process::V3];
-    pub const LATEST: Process = Process::V3;
+    pub const ALL: [Process; 5] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5];
+    pub const LATEST: Process = Process::V5;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
             Process::V3 => ProcessVersion(3),
+            Process::V4 => ProcessVersion(4),
+            Process::V5 => ProcessVersion(5),
         }
     }
 }

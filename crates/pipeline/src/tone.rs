@@ -91,7 +91,7 @@ impl CameraTone {
         1.0 - (1.0 - b[1]) * (-(y - b[0]) * slope / (1.0 - b[1]).max(0.01)).exp()
     }
 
-    /// [`CameraTone::apply`] as process V3 extends it past the last knot (issue #1632). The curve is
+    /// [`CameraTone::apply`] as process V5 extends it past the last knot (issue #1632). The curve is
     /// fitted only to camera JPEG tones below 0.85, so its last knot lies 1 to 3 stops below the
     /// sensor's white on most photos and everything above it is extrapolated. [`CameraTone::apply`]
     /// closes the gap to white exponentially in linear light: it reaches 8-bit 255 within about a
@@ -122,21 +122,23 @@ impl CameraTone {
 /// white.
 const CAMERA_MIN_SLOPE: f32 = 0.1;
 
-/// Stops in which the gap between a V3 curve and white halves, far past where its shoulder starts
+/// Stops in which the gap between a V5 curve and white halves, far past where its shoulder starts
 /// ([`CameraTone::apply_rolloff`], [`ToneMap::rolloff_hdr`]). With 1, the sensor's white renders at
 /// 8-bit 239–250 on the CC0 corpus files with a camera curve (Sony, Nikon, Fujifilm) at Exposure 0
 /// and below 254 up to Exposure +2, where the extension of [`CameraTone::apply`] reaches 254–255 by
 /// Exposure +1 (issue #1632).
 pub const ROLLOFF_STOPS: f32 = 1.0;
 
-/// Process V3's shoulder past a knee at scene luminance `x` and display `o` (below 1), where the
+/// Process V5's shoulder past a knee at scene luminance `x` and display `o` (below 1), where the
 /// curve rises at `slope` (display per unit of scene luminance): the gap to white is
 /// `gap / (1 + c·(2^(k·t) − 1))` at `t = log2(y / x)` stops past the knee, `k = 1 / ROLLOFF_STOPS`,
 /// so it halves every [`ROLLOFF_STOPS`] stops in the end. `c` gives it the curve's slope at the
 /// knee: d(display)/d(stop) there is `slope · x · ln 2` on the curve and `gap · c · k · ln 2` on the
-/// shoulder. When `slope` is below `min_slope`, `d · u²` (with `u = 2^(k·t) − 1`) joins the
-/// denominator: it adds no slope at the knee, so the join keeps the curve's own slope, and it makes
-/// up the difference to `min_slope`'s pace further up (the gap then quarters every stop in the end).
+/// shoulder. When `slope` is below `min_slope`, `d · (u − ln(1 + u))` (with `u = 2^(k·t) − 1`)
+/// joins the denominator: it adds no slope at the knee, so the join keeps the curve's own slope, and
+/// far up it grows like `d · u`, so the shoulder closes on white at `min_slope`'s pace (the gap still
+/// halves every [`ROLLOFF_STOPS`] stops in the end). A term growing faster than `u` would close a
+/// flat curve on white faster than a steeper one far up, and a darker curve would end up above it.
 /// Monotone for `y ≥ x`, finite and at most 1; in real numbers it only approaches white, while in
 /// `f32` the gap rounds to 0 eventually.
 fn rolloff_past(y: f32, [x, o]: [f32; 2], slope: f32, min_slope: f32) -> f32 {
@@ -149,15 +151,25 @@ fn rolloff_past(y: f32, [x, o]: [f32; 2], slope: f32, min_slope: f32) -> f32 {
     let u = (k * (y / x).log2()).exp2() - 1.0;
     // each term only when its coefficient is positive: `0 · ∞` is NaN far up
     let linear = if c > 0.0 { c * u } else { 0.0 };
-    let quadratic = if d > 0.0 { d * u * u } else { 0.0 };
-    1.0 - gap / (1.0 + linear + quadratic)
+    let floor = if d > 0.0 { d * past_join(u) } else { 0.0 };
+    1.0 - gap / (1.0 + linear + floor)
 }
 
-/// Stops below its white point where process V3's generic raw curve ([`ToneMap::rolloff_hdr`])
+/// `u − ln(1 + u)` for `u ≥ 0`: 0 with no slope at 0, then rising like `u` (infinite for infinite
+/// `u`). In `f64`, where the difference keeps its digits down to tiny `u`.
+fn past_join(u: f32) -> f32 {
+    if u.is_infinite() {
+        return u;
+    }
+    let u = f64::from(u);
+    (u - u.ln_1p()).max(0.0) as f32
+}
+
+/// Stops below its white point where process V5's generic raw curve ([`ToneMap::rolloff_hdr`])
 /// leaves the extended Reinhard curve for the [`ROLLOFF_STOPS`] shoulder, instead of clipping at
 /// the white point. With ½, the sensor's white of a raw without a camera curve (scene 1.0, about
 /// ¼ stop below that white point at default settings) renders at about 8-bit 235, 248 and 252 at
-/// Exposure 0, +1 and +2 where V1 and V2 render 239, 255 and 255 (issue #1632).
+/// Exposure 0, +1 and +2 where V1 to V4 render 239, 255 and 255 (issue #1632).
 pub const GENERIC_KNEE_STOPS: f32 = 0.5;
 
 /// Scene EV over grey where [`ToneMap::hdr`] starts lifting highlights above the SDR curve.
@@ -182,7 +194,7 @@ impl ToneMap {
         ToneMap::camera_with(|y| curve.apply(y), curve.chroma, contrast, whites, blacks, peak)
     }
 
-    /// [`ToneMap::camera_hdr`] of process V3: past its last knot the camera curve rolls off in stops
+    /// [`ToneMap::camera_hdr`] of process V5: past its last knot the camera curve rolls off in stops
     /// ([`CameraTone::apply_rolloff`]) instead of closing on white within a stop of the sensor's.
     pub fn camera_rolloff_hdr(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
         ToneMap::camera_with(|y| curve.apply_rolloff(y), curve.chroma, contrast, whites, blacks, peak)
@@ -217,7 +229,7 @@ impl ToneMap {
         ToneMap::generic(contrast, whites, blacks, peak, false)
     }
 
-    /// [`ToneMap::hdr`] of process V3 (issue #1632): from [`GENERIC_KNEE_STOPS`] below the white
+    /// [`ToneMap::hdr`] of process V5 (issue #1632): from [`GENERIC_KNEE_STOPS`] below the white
     /// point the curve rolls off into white in stops, with the same value and slope at the join,
     /// instead of reaching white about ¼ stop past the sensor's white and clipping there. The
     /// result stays below 1 (SDR white) and is the same as [`ToneMap::hdr`]'s below the join.
@@ -236,7 +248,7 @@ impl ToneMap {
         let b = (blacks / 100.0) as f32;
         // extended Reinhard with white point wl: y(1 + y/wl²)/(1 + y), reaching 1 at wl
         let reinhard = |y: f32| y * (1.0 + y / (wl * wl)) / (1.0 + y);
-        // V3's knee, below the white point, and the curve's slope there: (1 + y(2 + y)/wl²)/(1 + y)²
+        // V5's knee, below the white point, and the curve's slope there: (1 + y(2 + y)/wl²)/(1 + y)²
         let knee = wl * (-GENERIC_KNEE_STOPS).exp2();
         let knee_slope = (1.0 + knee * (2.0 + knee) / (wl * wl)) / ((1.0 + knee) * (1.0 + knee));
         let knee = [knee, reinhard(knee)];
