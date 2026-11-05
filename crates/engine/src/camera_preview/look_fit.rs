@@ -97,7 +97,8 @@ pub(super) fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], co
 /// its look and none switches attempt (a refit that just clears the gate on all pixels must not
 /// replace a look fitted away from edges). A photo that had no look gets one when the search
 /// without the clipped pixels finds it, and otherwise the [`fit_partial`] look when that is clearly
-/// closer to the camera JPEG than the neutral fallback (in the `measured` colour when the model has one).
+/// closer to the camera JPEG than the neutral fallback: in the `measured` colour when the model has
+/// one and that passes, else in the generic colour, so a measured colour never costs a photo its look.
 pub(super) fn fit_look_with(
     sensor: &Rgb32f,
     reference: &Rgb32f,
@@ -110,11 +111,10 @@ pub(super) fn fit_look_with(
     // from the proxies as they are: the retries' filters (clipped pixels, edges) don't remove them
     let bright = HighlightCheck { pairs: highlights(sensor, reference), dro, grey: false };
     let Some((look, attempt)) = search_ordered(sensor, reference, colour.clone(), TONE_FITS, &bright) else {
-        return unclipped
-            .as_ref()
-            .and_then(|u| search_ordered(u, reference, colour, TONE_FITS, &bright))
-            .map(|(look, _)| look)
-            .or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference, &bright, measured));
+        return unclipped.as_ref().and_then(|u| search_ordered(u, reference, colour, TONE_FITS, &bright)).map(|(look, _)| look).or_else(|| {
+            let fit_on = unclipped.as_ref().unwrap_or(sensor);
+            measured.and_then(|m| fit_partial(fit_on, reference, &bright, Some(m))).or_else(|| fit_partial(fit_on, reference, &bright, None))
+        });
     };
     let Some(unclipped) = unclipped else { return Some(look) };
     let refit = fit_attempt(&unclipped, reference, &colour, attempt, &bright);

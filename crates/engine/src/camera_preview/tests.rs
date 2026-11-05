@@ -1799,6 +1799,52 @@ fn partial_look_takes_the_measured_colour() {
     assert!(with < without * 0.5, "measured colour {with:.5}, generic {without:.5}");
 }
 
+/// A measured colour that misses the partial look's gates costs the photo nothing: it gets the generic partial look
+/// it would have had without one, not the spectral branch's default tone curve.
+#[test]
+fn partial_look_keeps_the_generic_colour_when_the_measured_one_misses_the_gates() {
+    let (sensor, reference) = lens_corrected_foliage();
+    let none = vec![false; sensor.data.len()];
+    let generic = fit_look(&sensor, &reference, &none, None).expect("a partial look");
+    // a grey that is red minus blue: its brightness doesn't follow the scene's, so no tone curve can fix it
+    let wrong = Mat3([[1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, -1.0]]);
+    let check = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
+    assert!(fit_partial(&sensor, &reference, &check, Some(wrong)).is_none(), "the measured colour misses the gates");
+    let look = fit_look_with(&sensor, &reference, &none, None, false, Some(wrong)).expect("the generic partial look");
+    assert_eq!((look.matrix.0, look.tone), (generic.matrix.0, generic.tone));
+}
+
+/// [`fit_preview`] derives the model's measured colour from the raw and hands it to the partial look: a covered model
+/// without a camera profile (the EOS R50) whose full look misses the gates opens in exactly that colour. The same file
+/// from a model without measured matrices keeps the generic partial look.
+#[test]
+fn fit_preview_gives_a_covered_models_partial_look_its_measured_colour() {
+    use lightcraft_raw::color::{as_shot_white_xy, camera_transform};
+    // each proxy pixel from 2×2 file pixels: the file's preview is large enough, and the proxy is the scene again
+    let (w, h) = (192usize, 128usize);
+    let (sensor, reference) = lens_corrected_foliage();
+    let at = |image: &Rgb32f, x: usize, y: usize| image.data[(y / 2) * image.width + x / 2];
+    let (mut raw, _) = grey_raw_with_jpeg((w, h), |_, _| 0.0, |_, _| 0.0, [1.0; 3]);
+    raw.format = RawFormat::Cr3;
+    raw.data = lightcraft_raw::RawData::F32((0..w * h).flat_map(|i| at(&sensor, i % w, i / w)).collect());
+    raw.metadata.make = Some("Canon".into());
+    raw.metadata.model = Some("Canon EOS R50".into());
+    let srgb = |v: f32| if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    let pixels: Vec<u8> = (0..w * h).flat_map(|i| at(&reference, i % w, i / w).map(|v| (srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8)).collect();
+    let bytes = tiff_with_jpeg((w, h), &pixels);
+    assert!(crate::camera_profiles::get("Canon EOS R50").is_none(), "a local EOS R50 profile takes the place of this path");
+    let transform = camera_transform(&raw, as_shot_white_xy(&raw));
+    let measured = measured_colour(&raw, &transform).expect("the EOS R50 shares the EOS R10's matrices");
+    let look = fit_preview(&raw, &bytes, &transform, None, None).0.expect("a partial look");
+    assert_eq!(look.matrix, measured, "the partial look takes the model's measured colour");
+    assert!(look.hue_sat.is_none(), "a partial look, not a full one");
+
+    raw.metadata.model = Some("Canon EOS Unknown".into());
+    let generic = fit_preview(&raw, &bytes, &transform, None, None).0.expect("the generic partial look");
+    assert_ne!(generic.matrix, measured);
+    assert!(generic.hue_sat.is_none());
+}
+
 /// A colourful scene with fine detail (foliage) and its camera JPEG ([`bright_camera`]) with barrel distortion.
 fn lens_corrected_foliage() -> (Rgb32f, Rgb32f) {
     let (w, h) = (96usize, 64usize);
@@ -2113,7 +2159,12 @@ fn grey_raw_with_jpeg(
             tint.map(|t| (srgb(v * t).clamp(0.0, 1.0) * 255.0).round() as u8)
         })
         .collect();
-    let image = lightcraft_codecs::EncodeImage::new(w as u32, h as u32, 3, lightcraft_codecs::Samples::U8(&pixels));
+    (raw, tiff_with_jpeg((w, h), &pixels))
+}
+
+/// The bytes of a minimal TIFF holding one camera JPEG of 8-bit sRGB `pixels`.
+fn tiff_with_jpeg((w, h): (usize, usize), pixels: &[u8]) -> Vec<u8> {
+    let image = lightcraft_codecs::EncodeImage::new(w as u32, h as u32, 3, lightcraft_codecs::Samples::U8(pixels));
     let jpeg = lightcraft_codecs::encode_jpeg(&image, 95, lightcraft_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
     // II*, IFD0 at 8 with JPEGInterchangeFormat (0x201) and its length (0x202), the JPEG after it
     let mut tiff = b"II*\0\x08\0\0\0\x02\0".to_vec();
@@ -2126,7 +2177,7 @@ fn grey_raw_with_jpeg(
     tiff.extend(0u32.to_le_bytes());
     assert_eq!(tiff.len(), 38);
     tiff.extend(jpeg);
-    (raw, tiff)
+    tiff
 }
 
 /// [`monochrome_look`] on a synthetic raw file: an ILCE-7M4 whose camera JPEG is black and white gets the tone curve,
