@@ -102,7 +102,8 @@ for good. wgpu's native calls are synchronous, so each compute device (rendering
 now created on a thread of its own (`lc-gpu-device`, `crates/gpu/src/init.rs`), and the caller waits
 at most `LIGHTCRAFT_GPU_INIT_TIMEOUT` seconds (default 30: a first run that compiles every kernel with
 FXC takes seconds). Rendering and faces compile their kernels on that thread, so the limit covers
-them; denoise compiles a model's kernels later (`nn::runner`), under the denoise card setup's own
+them, and building the rendering kernels on the window's device (`adopt_window_device`) runs there
+too; denoise compiles a model's kernels later (`nn::runner`), under the denoise card setup's own
 30 s limit (`set_up_card`, `crates/engine/src/denoise/gpu.rs`), which this setting does not change.
 Past the limit that device is unavailable for the process, with the reason
 `GPU device creation did not finish in 30 s (LIGHTCRAFT_GPU_INIT_TIMEOUT): …` reported like any other
@@ -412,8 +413,8 @@ and build time.
 ## Drawing renders straight from the GPU
 The desktop app creates the window's wgpu device with the adapter's limits and hands it to the GPU
 renderer (`lightcraft_gpu::adopt_window_device`, on a background thread at startup: the kernels
-build there; the crash sentinel covers it), so rendering and drawing share one device. A slider
-drag's drafts of the views (Detail, Before, the zoomed window, hover, Compare, the second window)
+build there, under the crash sentinel and the device creation time limit), so rendering and
+drawing share one device. A slider drag's drafts of the views (Detail, Before, the zoomed window, hover, Compare, the second window)
 are then marked `RenderJob::on_screen`: the render ends in an `Rgba8Unorm` texture
 (`lightcraft_gpu::render_display` → `Output::Display`) that egui-wgpu draws as a native texture
 (`ScreenTextures` in `ui-egui`, implemented by the app) - no readback, no conversion to egui's
