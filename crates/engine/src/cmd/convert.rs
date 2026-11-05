@@ -212,13 +212,24 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
             let _ = std::fs::remove_file(&out);
         }
         return match existing {
-            Some((id, path)) => Ok(json!({"path": path, "id": id, "original": ph.id.0})),
+            Some((copy, path)) => {
+                // a restored copy left its stack when it was deleted; one still stacked on the original stays as it is
+                let stacked = s.catalog.stack_of(lightcraft_catalog::PhotoId(copy)).is_some_and(|st| st.photos.contains(&id));
+                if !stacked {
+                    stack_on_top(s, copy, id.0);
+                }
+                Ok(json!({"path": path, "id": copy, "original": id.0}))
+            }
             None => Err(bad(C, "the edit copy could not be added")),
         };
     };
-    // stack: the edit on top of the original, expanded so both show
-    let _ = s.execute("stack.group", &json!({"ids": [new, id.0], "top": new, "collapsed": false}));
+    stack_on_top(s, new, id.0);
     Ok(json!({"path": out, "id": new, "original": id.0}))
+}
+
+/// Stack an edit copy on top of its original, expanded so both show.
+fn stack_on_top(s: &mut Session, copy: u64, original: u64) {
+    let _ = s.execute("stack.group", &json!({"ids": [copy, original], "top": copy, "collapsed": false}));
 }
 
 /// The op that brings a photo up to date with what its file is now (`info`, a fresh probe), or

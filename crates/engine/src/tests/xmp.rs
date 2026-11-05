@@ -1384,6 +1384,9 @@ fn external_edit_again_after_the_copy_was_trashed_keeps_the_file_the_restored_co
     let photo = s.catalog.photo(id).expect("in the library");
     assert!(!photo.deleted, "restored from Recently Deleted");
     assert_eq!(photo.source, lightcraft_catalog::Source::File { path: path.to_string() }, "and its file is there");
+    // it left the stack when it was deleted: it is stacked on the original again
+    let st = s.catalog.stack_of(id).expect("restacked");
+    assert_eq!((st.top(), st.photos.contains(&orig)), (id, true));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
