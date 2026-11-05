@@ -1760,6 +1760,68 @@ fn tone_fit_order_quantile_first_conditional_median_as_fallback() {
     assert_eq!(swapped.tone, conditional.tone);
 }
 
+/// A white sheet filling the frame around a darker subject, as in an ILCE-7M3 burst that posterised: in the sensor
+/// proxy the sheet brightens toward the frame's edges (0.18 in the middle, 0.41 at the corners), while the camera JPEG
+/// renders the edges darker than its global curve does (its own vignetting or local tone: 2.3 EV at the corners). The
+/// brightest scene pixels are then the ones the JPEG renders darker than the sheet's middle. Returns the sensor proxy
+/// and the camera JPEG proxy.
+fn edge_brightened_sheet() -> (Rgb32f, Rgb32f) {
+    let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+    let (w, h) = (96usize, 64usize);
+    let mut sensor = Rgb32f::new(w, h);
+    let mut reference = sensor.clone();
+    let mut seed = 0x51ed_270b_u32;
+    let mut next = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        f32::from((seed >> 16) as u16) / 65536.0
+    };
+    for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+        let (dx, dy) = ((i % w) as f32 / (w - 1) as f32 * 2.0 - 1.0, (i / w) as f32 / (h - 1) as f32 * 2.0 - 1.0);
+        let r2 = (dx * dx + dy * dy) / 2.0;
+        let subject = ((dx + 0.15) / 0.45).powi(2) + (dy / 0.6).powi(2) < 1.0;
+        let (y, tint) = if subject {
+            // a darker, warm subject (skin, a blanket)
+            (0.04 + 0.08 * next(), [1.0 + 0.5 * next(), 0.8, 0.55 + 0.3 * next()])
+        } else {
+            // the sheet, brighter toward the edges in the raw, with a little colour from the room
+            (0.18 * 2f32.powf(1.2 * r2) * (0.95 + 0.1 * next()), [0.85 + 0.3 * next(), 1.0, 0.85 + 0.3 * next()])
+        };
+        *src = tint.map(|v| v * y / luminance_2020(tint));
+        let p = known.apply_f32(*src);
+        let l = luminance_2020(p);
+        let edges = 2f32.powf(-2.3 * r2);
+        *dst = p.map(|v| v * (1.0 - (-2.5 * l).exp()) / l * edges);
+    }
+    (sensor, reference)
+}
+
+/// The conditional-median fallback is refused when its pooling holds a wide scene range at one level: on a frame whose
+/// camera JPEG is darker toward the edges, where the raw is brightest, the JPEG's medians fall as the scene brightens,
+/// and the pooled curve held everything above the sheet's middle at one grey (a flat top over 1.2 stops on the
+/// ILCE-7M3 frames). The quantile look misses the gates there, as on those frames (by 0.04), so the photo gets no
+/// full look.
+#[test]
+fn conditional_median_refuses_a_curve_pooled_over_a_wide_scene_range() {
+    let (sensor, reference) = edge_brightened_sheet();
+    assert!(fit_pairs_ordered(&sensor, &reference, None, &[ToneFit::Quantile]).is_none(), "the quantile look misses the gates");
+    let look = fit_pairs(&sensor, &reference);
+    assert!(look.is_none(), "no look from a pooled curve: {:?}", look.map(|l| *l.tone.knots()));
+
+    // The same on luminance pairs alone: the JPEG's median falls by a third over the scene's brighter stop.
+    let ramp = |n: usize, f: &dyn Fn(f64) -> f64| -> Vec<(f64, f64)> {
+        (0..n).map(|i| 0.02 * 25f64.powf(i as f64 / (n - 1) as f64)).map(|x| (x, f(x))).collect()
+    };
+    let curve = |x: f64| 1.0 - (-2.5 * x).exp();
+    let falling = ramp(4000, &|x| if x < 0.25 { curve(x) } else { curve(0.25) * (0.25 / x).powf(0.6) });
+    assert!(fit_tone_conditional(falling).is_none(), "a pooled block over the top 1.0 stop");
+    // A short dip (about two bins) still pools into a flat step and the curve is kept, as before.
+    let dip = ramp(4000, &|x| if (0.095..0.115).contains(&x) { curve(0.095) * 0.92 } else { curve(x) });
+    let tone = fit_tone_conditional(dip).expect("a short pooled step is kept");
+    let knots = tone.knots();
+    let flat = knots.windows(2).filter(|w| w[1][1] == w[0][1]).count();
+    assert!((1..=3).contains(&flat), "the dip pools into one short step: {knots:?}");
+}
+
 /// The camera look of `scene` (the known matrix of these tests, then a bright camera curve).
 fn bright_camera(p: [f32; 3]) -> [f32; 3] {
     let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
