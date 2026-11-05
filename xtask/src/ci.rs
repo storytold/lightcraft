@@ -436,7 +436,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
 /// adapter can't pass silently. The skip log is created empty first and must still be there; the
 /// tests run with [`ci_report::SKIP_LOG_REQUIRED_ENV`], so a skip that can't be logged fails its
 /// test, and a line of the log that isn't a skip record fails the step. Nothing to run (a hardware
-/// adapter, none, a failed probe) is not a failure.
+/// adapter, none, a failed probe, even of one backend) is not a failure.
 fn gpu_software(
     root: &Path,
     probe: &dyn Fn(),
@@ -446,7 +446,7 @@ fn gpu_software(
     probe();
     let found = ci_report::software_only(&gpu.borrow());
     let Some((backend, adapter)) = found else {
-        eprintln!("no software-only GPU setup (a hardware adapter, none, or the probe failed): nothing to run");
+        eprintln!("no software-only GPU setup (a hardware adapter, none, or a probe failed): nothing to run");
         return Ok(());
     };
     let log = ci_report::skip_log(root, "gpu-software");

@@ -337,7 +337,8 @@ grep '"need":"gpu"' "$log" | grep -v -e 'lost on purpose' -e 'memory never ran o
 ```
 
 `cargo xtask ci` does this by itself when the probe finds only a software adapter (step
-`gpu-software`, #3516; under `--quick` when `lightcraft-gpu` changed), so the CI gate runs the
+`gpu-software`, #3516; under `--quick` when `lightcraft-gpu` changed; not when a backend's probe
+failed, as that backend may have the hardware adapter), so the CI gate runs the
 equivalence tests on lavapipe, and fails if a GPU test still skips other than those listed in
 `SOFTWARE_ADAPTER_SKIPS` (`xtask/src/ci_report.rs`), by name, with why they can't run there.
 

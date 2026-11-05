@@ -179,10 +179,13 @@ pub const ALLOW_SOFTWARE_ENV: &str = "LIGHTCRAFT_GPU_ALLOW_SOFTWARE";
 
 /// The software adapter the `gpu-software` step runs the GPU tests on: the first `Cpu` adapter
 /// (backend, name) when no backend lists a hardware one. `None` when there is a hardware adapter
-/// (its GPU tests already run), no adapter at all, or the probe failed (the report says why). A
-/// backend whose own probe failed counts as having no adapter.
+/// (its GPU tests already run), no adapter at all, or the probe failed (the report says why),
+/// for the whole machine or for one backend: a backend whose probe failed may have the hardware
+/// adapter (a driver that crashes while it is enumerated, issue #136), so "only a software
+/// adapter" is unknown there and a machine with a GPU must not get the step.
 pub fn software_only(gpu: &Value) -> Option<(String, String)> {
-    if gpu.get("error").is_some() || !hardware_backends(gpu).is_empty() {
+    let backends = gpu["backends"].as_array().map(Vec::as_slice).unwrap_or_default();
+    if gpu.get("error").is_some() || backends.iter().any(|b| b.get("error").is_some()) || !hardware_backends(gpu).is_empty() {
         return None;
     }
     gpu["backends"].as_array().into_iter().flatten().find_map(|b| {
@@ -704,7 +707,9 @@ mod tests {
         let only_cpu = gpu(json!([{"backend": "vulkan", "adapters": [llvmpipe]}]));
         assert_eq!(software_only(&only_cpu), Some(("vulkan".to_owned(), "llvmpipe (LLVM 20.1.2, 256 bits)".to_owned())));
         let failed_then_cpu = gpu(json!([{"backend": "vulkan", "adapters": [], "error": "crashed"}, {"backend": "dx12", "adapters": [warp]}]));
-        assert_eq!(software_only(&failed_then_cpu), Some(("dx12".to_owned(), "Microsoft Basic Render Driver".to_owned())));
+        assert_eq!(software_only(&failed_then_cpu), None, "the backend that failed may have the hardware adapter");
+        let cpu_then_failed = gpu(json!([{"backend": "vulkan", "adapters": [llvmpipe]}, {"backend": "gl", "adapters": [], "error": "crashed"}]));
+        assert_eq!(software_only(&cpu_then_failed), None, "whichever backend failed");
 
         let hardware_too = gpu(json!([{"backend": "vulkan", "adapters": [llvmpipe]}, {"backend": "dx12", "adapters": [warp, intel]}]));
         assert_eq!(software_only(&hardware_too), None, "a hardware adapter's GPU tests already run");
