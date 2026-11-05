@@ -43,8 +43,8 @@ pub fn exif_embeds_gps_location(bytes: &[u8]) -> bool {
 }
 
 /// Whether a source file contains location-bearing EXIF tags or an embedded EXIF block that cannot
-/// be parsed. JPEG APP1 packets and all PNG/WebP EXIF chunks are inspected; when a container has no
-/// separate EXIF block, the whole source is checked as a possible TIFF-structured EXIF stream.
+/// be parsed. JPEG APP1 packets, raw CR3 CMT4 GPS data, and all PNG/WebP EXIF chunks are inspected;
+/// when a container has no separate EXIF block, the whole source is checked as a possible TIFF-structured EXIF stream.
 pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
     if let Some(has_location) = crate::container::png_webp_embeds_exif_gps_location(bytes) {
         return has_location;
@@ -52,10 +52,28 @@ pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
     if bytes.starts_with(&[0xff, 0xd8]) {
         return crate::container::jpeg_embeds_exif_gps_location(bytes);
     }
+    if let Some(cr3) = crate::cr3::parse_cr3(bytes)
+        && cr3.cmt[3].is_some_and(|cmt4| cr3_cmt4_embeds_gps_location(cmt4) != Some(false))
+    {
+        return true;
+    }
     match crate::container::embedded(bytes).exif.as_deref() {
         Some(exif) => exif_gps_tag_presence(exif).unwrap_or(true),
         None => exif_embeds_gps_location(bytes),
     }
+}
+
+/// CMT4 is already the GPS IFD, unlike a normal EXIF block which points to a GPS IFD.
+/// Treat an unreadable CMT4 as location-bearing because an Original copy preserves its bytes.
+fn cr3_cmt4_embeds_gps_location(bytes: &[u8]) -> Option<bool> {
+    let tiff = Tiff::parse(strip_exif_header(bytes)).ok()?;
+    let gps = tiff.ifds.first()?;
+    Some(
+        gps.contains(t::GPS_IFD)
+            || [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE]
+                .into_iter()
+                .any(|tag| gps.contains(tag)),
+    )
 }
 
 /// Return tag presence separately from parse failure so Original-copy privacy checks can fail closed.
