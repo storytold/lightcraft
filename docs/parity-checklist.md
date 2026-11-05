@@ -801,6 +801,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | LR-LIB-PEOPLE: face boxes another app drew on the photo as stored land on the upright photo (#2674) |
 | 2026-11-02 | minor | LRC-DEV-AUTOSYNC (N-A3, note 18): Auto Sync carries white balance as a mode or on each photo's own scale: As Shot and Auto per photo (were the active photo's numbers), a Temp move keeps each photo's tint, the same number on photos of the same scale, a photo of another scale (a JPEG beside a raw) moves by as much; Sync Settings unchanged; status unchanged |
 | 2026-10-29 | minor | LR-PREF-LOCALSTORAGE, LRC-LIB-PREVIEWS: the preview cache stays uncapped and warns once per session when its drive has under 10 % or 20 GB free, with a button to Settings → Performance; statuses unchanged |
 | 2026-10-27 | minor | LRC-LIB-PREVIEWS: the loupe shows built and prepared previews instead of rendering again, builds skip what is there and Build Previews with one photo open builds the view; LRC-PERF-PREP new (🟡): preparing photos in the background per mode |
