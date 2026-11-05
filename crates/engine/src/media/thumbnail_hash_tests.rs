@@ -94,7 +94,7 @@ fn source_from_before_content_reload_is_not_accepted() {
 #[test]
 fn source_from_before_a_lens_profile_change_is_not_accepted() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
     let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
     assert!(old.loaded.is_some());
     let lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
