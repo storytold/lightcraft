@@ -172,10 +172,14 @@ impl Session {
 
     /// Sign-in finished: keep the account's token (saved at once).
     pub fn flickr_finish_sign_in(&mut self, token: Token) -> Result<(), String> {
-        self.change_flickr(|f| {
+        let r = self.change_flickr(|f| {
             f.pending = None;
             f.account.token = Some(token);
-        })
+        });
+        // the request token was spent on the exchange (Flickr takes it once, RFC 5849 §2.3): even
+        // when the account can't be saved it is never offered again; the sign-in starts over
+        self.flickr.pending = None;
+        r
     }
 
     /// Drop a sign-in in progress (nothing on disk changes).

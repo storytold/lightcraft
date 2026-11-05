@@ -611,7 +611,12 @@ fn request(method: &str, url: &Url, headers: &[(&str, String)], body: Option<&[u
         // whole body went: its answer says more than the broken send. When none can be read (a
         // reset can drop it), the send's own error stands. A cancel is never read past.
         Err(HttpError::Cancelled) => return Err(HttpError::Cancelled),
-        Err(e) => read_final_head(&mut conn, limits).map_err(|_| e)?,
+        Err(e) => match read_final_head(&mut conn, limits) {
+            Ok(head) => head,
+            // cancelled while waiting for that answer: a cancel, not a failed send
+            Err(HttpError::Cancelled) => return Err(HttpError::Cancelled),
+            Err(_) => return Err(e),
+        },
     };
     let find = |name: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str());
     let body = if status == 204 || status == 304 || (100..200).contains(&status) {
@@ -909,9 +914,9 @@ mod tests {
         server.join().unwrap();
     }
 
-    #[test]
-    fn a_refusal_sent_while_the_body_was_going_is_the_answer() {
-        // the server refuses as soon as it has the head, and reads no further
+    /// A server that answers `reply` as soon as it has the head, then reads no further (holding
+    /// the connection until the client has its answer); the client's answer to a large POST.
+    fn refused_while_sending(reply: &'static [u8]) -> Result<Response, HttpError> {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("http://{}", l.local_addr().unwrap());
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
@@ -923,8 +928,7 @@ mod tests {
                 let n = s.read(&mut buf).unwrap();
                 got.extend_from_slice(&buf[..n]);
             }
-            s.write_all(b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 8\r\n\r\ntoo big!").unwrap();
-            // hold the connection open (unread) until the client has its answer
+            s.write_all(reply).unwrap();
             let _ = done_rx.recv_timeout(Duration::from_secs(30));
         });
         let cancel = AtomicBool::new(false);
@@ -932,12 +936,22 @@ mod tests {
         // far more than the socket buffers hold: the send stalls once the server stops reading
         let body = vec![0u8; 64 * 1024 * 1024];
         let url = Url::parse(&format!("{addr}/upload")).unwrap();
-        let r = post(&url, &[], &body, &limits);
+        let r = post(&url, &[], &body, &limits).map(|mut r| {
+            let _ = r.read_to_end(64, &limits);
+            r
+        });
         let _ = done_tx.send(());
-        let mut r = r.expect("the server's answer, not the stalled send");
-        assert_eq!(r.status, 413);
-        assert_eq!(r.read_to_end(64, &limits).unwrap(), b"too big!");
         server.join().unwrap();
+        r
+    }
+
+    #[test]
+    fn a_refusal_sent_while_the_body_was_going_is_the_answer() {
+        let r = refused_while_sending(b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 8\r\n\r\ntoo big!");
+        assert_eq!(r.expect("the server's answer, not the stalled send").status, 413);
+        // any final status is the answer: a refused sign-in reaches the caller as one
+        let r = refused_while_sending(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
+        assert_eq!(r.expect("the server's answer").status, 401);
     }
 
     #[test]
