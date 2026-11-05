@@ -883,14 +883,14 @@ const BAYER_8X8: [u8; 64] = [
 
 /// Returns the ordered Bayer 8×8 dither threshold offset in `0..1` for pixel `(x, y)`.
 #[inline]
-fn bayer_dither_offset(x: usize, y: usize) -> f32 {
+pub(crate) fn bayer_dither_offset(x: usize, y: usize) -> f32 {
     let idx = (y & 7) * 8 + (x & 7);
     (BAYER_8X8[idx] as f32 + 0.5) / 64.0
 }
 
 /// Quantizes display-curve-encoded value `v` (0..1) to 8-bit integer with 8×8 ordered Bayer dithering.
 #[inline]
-fn enc(v: f32, dither: f32) -> u8 {
+pub(crate) fn enc(v: f32, dither: f32) -> u8 {
     let y = v.clamp(0.0, 1.0) * 255.0;
     // Guard against floating point rounding error (e.g. sRGB <-> Rec.2020 matrix conversion)
     // where numerical white (1.0) evaluates to ~254.95.

@@ -103,10 +103,14 @@ pub(crate) fn finish(
     }
     fp.curves = crate::finish::curve_luts(&input.predecessors(&settings.curve));
     fp.refine_sat = 1.0;
-    let samples = crate::finish::finish_with(p, &fp, false, true, |_x, _y, e| e);
+    // the samples, and the 8-bit pixels as `finish` dithers them at the same place in the output
+    let samples = crate::finish::finish_with(p, &fp, false, true, |x, y, e| {
+        let d = crate::finish::bayer_dither_offset(x, y);
+        (e, [crate::finish::enc(e[0], d), crate::finish::enc(e[1], d), crate::finish::enc(e[2], d), 255])
+    });
+    let (samples, data): (Vec<[f32; 3]>, Vec<[u8; 4]>) = samples.into_iter().unzip();
     let histogram = of_encoded(&samples, fp.out_luma);
-    let encode = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-    let image = Rgba8 { width: w, height: h, data: samples.iter().map(|c| [encode(c[0]), encode(c[1]), encode(c[2]), 255]).collect() };
+    let image = Rgba8 { width: w, height: h, data };
     Rendered { image, histogram, deep: None }
 }
 
