@@ -115,12 +115,22 @@ impl Pixel for [f32; 4] {
     }
 }
 
-/// Resize to `w × h` (separable; horizontal pass then vertical pass).
+/// Resize to `w × h` (separable; horizontal pass then vertical pass, or the other way round when
+/// that intermediate would be far larger: widening a tall, narrow strip kept every source row at
+/// the new width, gigabytes from a small source).
 pub fn resize<T: Pixel>(img: &Image<T>, w: usize, h: usize, filter: Filter) -> Image<T> {
     let (w, h) = (w.max(1), h.max(1));
     if img.width == w && img.height == h {
         return img.clone();
     }
+    if w.saturating_mul(img.height) > img.width.saturating_mul(h).saturating_mul(4) {
+        return horizontal(&vertical(img, h, filter), w, filter);
+    }
+    vertical(&horizontal(img, w, filter), h, filter)
+}
+
+/// Each row resampled to `w` wide.
+fn horizontal<T: Pixel>(img: &Image<T>, w: usize, filter: Filter) -> Image<T> {
     let wx = weights(img.width, w, filter);
     let mut tmp = Image::<T>::new(w, img.height);
     par_rows(&mut tmp.data, w, |y, row| {
@@ -134,12 +144,18 @@ pub fn resize<T: Pixel>(img: &Image<T>, w: usize, h: usize, filter: Filter) -> I
             *o = acc;
         }
     });
+    tmp
+}
+
+/// Each column resampled to `h` tall.
+fn vertical<T: Pixel>(img: &Image<T>, h: usize, filter: Filter) -> Image<T> {
+    let w = img.width;
     let wy = weights(img.height, h, filter);
     let mut out = Image::<T>::new(w, h);
     par_rows(&mut out.data, w, |y, row| {
         let (lo, ws) = &wy[y];
         for (k, wt) in ws.iter().enumerate() {
-            let src = tmp.row(lo + k);
+            let src = img.row(lo + k);
             for (o, s) in row.iter_mut().zip(src) {
                 *o = o.madd(*s, *wt);
             }
@@ -177,6 +193,16 @@ pub fn half<T: Pixel>(img: &Image<T>) -> Image<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn widening_a_tall_strip_resamples_its_columns_first() {
+        // 1 × 400 000 to 4000 × 8: horizontal-first kept 400 000 rows of 4000 (25 GB of RGBA f32)
+        let mut strip = Image::<[f32; 4]>::new(1, 400_000);
+        strip.data.iter_mut().for_each(|p| *p = [0.25, 0.5, 0.75, 1.0]);
+        let out = resize(&strip, 4000, 8, Filter::Mitchell);
+        assert_eq!((out.width, out.height), (4000, 8));
+        assert!(out.data.iter().all(|p| (p[1] - 0.5).abs() < 1e-3), "a flat strip stays flat");
+    }
 
     #[test]
     fn constant_image_stays_constant() {
