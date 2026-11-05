@@ -618,7 +618,8 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             if hide {
                 if !app.ui.no_panel_shown() {
                     let u = &mut app.ui;
-                    u.hidden_panels = Some(crate::state::HiddenPanels { left_panel: u.left_panel, right: u.right, presets: u.presets, filmstrip: u.filmstrip });
+                    u.hidden_panels =
+                        Some(crate::state::HiddenPanels { left_panel: u.left_panel, right: u.right, presets: u.presets, filmstrip: u.filmstrip });
                     u.left_panel = false;
                     u.presets = false;
                     u.filmstrip = false;
