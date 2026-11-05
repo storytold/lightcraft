@@ -95,7 +95,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Read Metadata from File",
             ["Photo"],
             None,
-            "{ids?} — reads each photo's XMP sidecar (or a raw/DNG's embedded XMP): metadata and develop settings, one undo step; never writes the sidecar, even with auto-write on → {read, failed, warnings?: [{path, code, profile?, mode?, fields?}]}",
+            "{ids?} — reads each photo's XMP sidecar, or embedded XMP in raw/DNG and JPEG files when no sidecar exists: metadata and develop settings, one undo step; never writes the sidecar, even with auto-write on; JPEG uses the first complete standard XMP APP1 before SOS/EOI, within 16 MiB of headers and 4096 marker/fill steps; an unreadable sidecar fails without embedded fallback → {read, failed, warnings?: [{path, code, profile?, mode?, fields?}]}",
             has_selection,
             read
         ),
