@@ -1,5 +1,6 @@
 use super::quick::{QuickJob, content_key, source_info};
 use super::render::{RenderJob, RenderResult};
+use super::settings_hash::with_process;
 use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
@@ -64,7 +65,8 @@ impl crate::Session {
             ^ lens.rotate_left(29);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
-            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
+            with_process(&mut k, &settings).u64(crate::camera_profiles::cache_key());
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
@@ -117,12 +119,8 @@ impl crate::Session {
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
         let mut k = Hasher128::new();
-        k.str(&content_key(p))
-            .str("variant")
-            .u64(settings.hash64())
-            .u64(edge as u64)
-            .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key());
+        k.str(&content_key(p)).str("variant").u64(settings.hash64()).u64(edge as u64).u64(RENDER_CACHE_VERSION);
+        with_process(&mut k, settings).u64(crate::camera_profiles::cache_key());
         let lens = super::quick::lens_key(p);
         if lens != 0 {
             k.u64(lens);
@@ -240,12 +238,8 @@ impl crate::Session {
     /// included as in [`Self::variant_key`].
     pub(crate) fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
         let mut k = Hasher128::new();
-        k.str(&content_key(p))
-            .str("view")
-            .u64(p.develop.hash64())
-            .u64(apply_crop as u64)
-            .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key());
+        k.str(&content_key(p)).str("view").u64(p.develop.hash64()).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION);
+        with_process(&mut k, &p.develop).u64(crate::camera_profiles::cache_key());
         let lens = super::quick::lens_key(p);
         if lens != 0 {
             k.u64(lens);
