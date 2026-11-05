@@ -3797,6 +3797,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-film"
+version = "0.18.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "lightcraft-geocode"
 version = "0.18.0"
 dependencies = [
@@ -4043,6 +4050,7 @@ dependencies = [
  "lightcraft-slideshow",
  "lightcraft-testkit",
  "log",
+ "pollster 1.0.1",
  "serde",
  "serde_json",
  "toml",
