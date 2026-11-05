@@ -2409,5 +2409,9 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de herramientas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)",
+  "Render to DNG": "Renderizar a DNG",
+  "Rendering to DNG": "Renderizando a DNG",
+  "Render to DNG stopped unexpectedly": "La renderización a DNG se detuvo inesperadamente",
+  "Library changed: the rendered DNGs were written but not added": "La biblioteca cambió: los DNG renderizados se escribieron pero no se añadieron"
 }

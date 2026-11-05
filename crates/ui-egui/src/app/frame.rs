@@ -77,6 +77,8 @@ impl LightcraftApp {
         self.save_status(ctx);
         self.ai_mask_detail(ctx, now);
         self.place_names_outcome(ctx);
+        // also in full-screen preview, so a finished render isn't left waiting
+        crate::render_dng_task::poll(self, ctx);
         self.slideshow_tick(ctx, now);
         panels::denoise::pump_background(self, ctx, now);
         panels::faces::pump_background(self, ctx, now);

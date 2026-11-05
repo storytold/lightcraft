@@ -2408,5 +2408,9 @@
   "Top bar": "頂部列",
   "Tool strip": "工具列",
   "Bottom bar": "底部列",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "防止 G-SYNC/FreeSync 閃爍（下次啟動時生效）",
+  "Render to DNG": "渲染為 DNG",
+  "Rendering to DNG": "正在渲染為 DNG",
+  "Render to DNG stopped unexpectedly": "渲染為 DNG 意外停止",
+  "Library changed: the rendered DNGs were written but not added": "資料庫已變更：已寫出算圖的 DNG，但未加入"
 }

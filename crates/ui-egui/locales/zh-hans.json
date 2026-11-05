@@ -2408,5 +2408,9 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "Render to DNG": "渲染为 DNG",
+  "Rendering to DNG": "正在渲染为 DNG",
+  "Render to DNG stopped unexpectedly": "渲染为 DNG 意外停止",
+  "Library changed: the rendered DNGs were written but not added": "资料库已更改：已写出渲染的 DNG，但未添加"
 }

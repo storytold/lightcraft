@@ -116,6 +116,8 @@ impl LightcraftApp {
             review_pending: None,
             shown_library: None,
             export: None,
+            render_dng: None,
+            last_render_dng: None,
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,

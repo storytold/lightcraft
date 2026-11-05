@@ -41,6 +41,7 @@ pub mod recheck;
 pub mod region;
 pub mod reload;
 pub mod render;
+pub mod render_dng_task;
 pub mod shortcuts;
 pub mod sidebar;
 pub mod softpaint;
@@ -333,6 +334,9 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// A background Photo ▸ Render to DNG in progress, and the last one's result.
+    pub render_dng: Option<render_dng_task::RenderDngTask>,
+    pub last_render_dng: Option<serde_json::Value>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).

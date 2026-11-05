@@ -2405,5 +2405,9 @@
   "Top bar": "Верхня панель",
   "Tool strip": "Панель інструментів",
   "Bottom bar": "Нижня панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)",
+  "Render to DNG": "Рендерити в DNG",
+  "Rendering to DNG": "Рендеринг у DNG",
+  "Render to DNG stopped unexpectedly": "Рендеринг у DNG несподівано зупинено",
+  "Library changed: the rendered DNGs were written but not added": "Бібліотеку змінено: відрендерені DNG записано, але не додано"
 }

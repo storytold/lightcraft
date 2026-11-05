@@ -2407,5 +2407,9 @@
   "Top bar": "上部バー",
   "Tool strip": "ツールバー",
   "Bottom bar": "下部バー",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSyncのちらつきを防ぐ（次回起動時に適用）",
+  "Render to DNG": "DNG にレンダリング",
+  "Rendering to DNG": "DNG にレンダリング中",
+  "Render to DNG stopped unexpectedly": "DNG へのレンダリングが予期せず停止しました",
+  "Library changed: the rendered DNGs were written but not added": "ライブラリが切り替わりました。レンダリングした DNG は書き出されましたが、追加されていません"
 }
