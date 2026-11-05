@@ -1462,7 +1462,7 @@ fn review_metadata_reread_refreshes_pixels_after_exif_changes() {
     let path = dir.join("rotated.jpg");
     let load = s.media.file_loader.clone().unwrap();
     for level in [SourceLevel::Thumb, SourceLevel::Preview, SourceLevel::Full] {
-        let (image, _) = load(path.to_str().unwrap(), level.max_edge()).unwrap();
+        let (image, _) = load(path.to_str().unwrap(), level.max_edge(), None).unwrap();
         s.media.insert(id, level, std::sync::Arc::new(image));
         assert!(s.media.has_source(id, level));
     }
@@ -1476,7 +1476,7 @@ fn review_metadata_reread_refreshes_pixels_after_exif_changes() {
     let p = s.catalog.photo(id).unwrap();
     assert_eq!((p.width, p.height), (40, 60));
     assert_ne!(p.content_hash, old_hash);
-    let (image, _) = load(path.to_str().unwrap(), usize::MAX).unwrap();
+    let (image, _) = load(path.to_str().unwrap(), usize::MAX, None).unwrap();
     assert_eq!((image.width, image.height), (40, 60));
     s.undo_step().unwrap();
     assert_eq!((s.catalog.photo(id).unwrap().width, s.catalog.photo(id).unwrap().height), (60, 40));
