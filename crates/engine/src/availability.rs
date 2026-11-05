@@ -136,8 +136,8 @@ impl State {
         }
     }
 
-    /// The sweep is over or dropped: its list goes, and the room it took (a path for every photo of
-    /// the library) with it.
+    /// The sweep's list goes, and the room it took (a path for every photo of the library) with it: its last
+    /// path is taken, it is over, or it is dropped.
     fn end_sweep(&mut self) {
         self.sweep = VecDeque::new();
     }
@@ -327,6 +327,11 @@ impl Availability {
                                 st.worker = false;
                                 return;
                             };
+                            if st.sweep.is_empty() {
+                                // (the last path: the list gives back its room now, not when the worker next finds nothing asked,
+                                // which a share that answers slowly can put off for long)
+                                st.end_sweep();
+                            }
                             let fresh = st.known.get(&p).is_some_and(|kept| kept.at.elapsed() < RECHECK);
                             if !fresh && !st.queued.contains(&p) {
                                 break (p, false);
@@ -715,6 +720,29 @@ mod tests {
         a.restart_sweeps();
         assert_eq!(lock(&a.state).sweep.capacity(), 0);
         busy.store(false, Ordering::SeqCst);
+        wait_idle(&a);
+    }
+
+    #[test]
+    fn a_sweep_gives_back_the_room_its_list_took_as_soon_as_its_last_path_is_taken() {
+        let mut a = Availability::default();
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        // the last path is taken from the list, and then the worker waits on it (a share that does not answer)
+        let hold = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (l, h) = (log.clone(), hold.clone());
+        a.set_probe(Arc::new(move |p| {
+            held(&l).push(p.to_string());
+            while p == "sweep 999" && h.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            true
+        }));
+        a.run_in_background(Arc::new(|| {}));
+        assert!(a.sweep((0..1_000).map(|i| format!("sweep {i}")).collect()));
+        wait_until("the last path is being checked", || held(&log).iter().any(|p| p == "sweep 999"));
+        assert_eq!(a.sweeping(), 0, "nothing of the sweep is left to check");
+        assert_eq!(lock(&a.state).sweep.capacity(), 0, "the list goes with its last path, not once the worker has nothing else to do");
+        hold.store(false, Ordering::SeqCst);
         wait_idle(&a);
     }
 

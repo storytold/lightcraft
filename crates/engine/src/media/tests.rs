@@ -704,6 +704,9 @@ fn a_smart_preview_is_asked_about_only_once_its_original_is_known_to_be_offline(
     assert_eq!(m.availability.gone_len(), 1, "only the original that is gone is found gone");
     // the photo on the drive that is away now asks about its smart preview, and uses it once it is there
     assert!(matches!(m.source_ref(&away, SourceLevel::Thumb), SourceRef::File { .. }), "not known to be there yet");
+    // (that call itself asked about it: the poll below would queue the check whether it had or not)
+    let away_proxy_path = away_proxy.to_string_lossy().into_owned();
+    wait(&|| asked.lock().unwrap().contains(&away_proxy_path));
     wait(&|| m.availability.exists(&away_proxy.to_string_lossy()) == Some(true));
     assert!(matches!(m.source_ref(&away, SourceLevel::Thumb), SourceRef::Smart { path } if path == away_proxy));
     // the other one is read from its file, with the proxy left for the render worker to find
