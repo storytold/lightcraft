@@ -10,6 +10,8 @@ use lightcraft_ui_egui::{LightcraftApp, Services};
 
 #[test]
 fn shutdown_leaves_no_render_worker_running() {
+    // an integration test builds the library without cfg(test), so Headless::new doesn't register it
+    let _watch = lightcraft_testkit::watch();
     let services = Services { png: None, ..Default::default() };
     let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), services), [1200.0, 760.0], 1.0);
     // frames until the grid's thumbnails are being rendered on the workers
