@@ -356,6 +356,7 @@ mod tests {
             collection_content: Vec::new(),
             stacks: Vec::new(),
             warnings: Vec::new(),
+            skipped: Vec::new(),
         }
     }
 
@@ -401,6 +402,7 @@ mod tests {
                 collection_content: Vec::new(),
                 stacks: Vec::new(),
                 warnings: Vec::new(),
+                skipped: Vec::new(),
             },
             normal: Prepared::default(),
             index: ImportIndex::default(),

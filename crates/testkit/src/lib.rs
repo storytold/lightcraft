@@ -16,7 +16,7 @@
 //!
 //! It prints the note to stderr as before and, when the [`SKIP_LOG_ENV`] variable names a file
 //! (`cargo xtask ci` sets it), appends one JSON line there:
-//! `{"need":"gpu","reason":"no GPU adapter","test":"camera_tone","binary":"equivalence","location":"crates/gpu/tests/equivalence.rs:22"}`.
+//! `{"need":"gpu","reason":"no GPU adapter","test":"equivalence::camera_tone","binary":"it","location":"crates/gpu/tests/it/equivalence.rs:22"}`.
 //! `cargo xtask ci` lists the skips by need and reason in its summary and in
 //! `target/ci/report.json`. A test that runs part of its checks (e.g. only the CPU half) records
 //! the part it could not run the same way.
@@ -142,13 +142,13 @@ mod tests {
 
     #[test]
     fn an_entry_is_one_json_line_with_its_text_escaped() {
-        let line = entry(Need::Corpus, "skip: C:\\corpus\\raw \"absent\"\n\u{1}", "corpus::decodes", "corpus", "crates\\raw\\tests\\corpus.rs", 28);
+        let line = entry(Need::Corpus, "skip: C:\\corpus\\raw \"absent\"\n\u{1}", "corpus::decodes", "it", "crates\\raw\\tests\\it\\corpus.rs", 28);
         assert!(line.ends_with('\n'));
         assert_eq!(line.matches('\n').count(), 1, "{line}");
         assert_eq!(
             line,
             "{\"need\":\"corpus\",\"reason\":\"skip: C:\\\\corpus\\\\raw \\\"absent\\\"\\n\\u0001\",\"test\":\"corpus::decodes\",\
-             \"binary\":\"corpus\",\"location\":\"crates/raw/tests/corpus.rs:28\"}\n"
+             \"binary\":\"it\",\"location\":\"crates/raw/tests/it/corpus.rs:28\"}\n"
         );
     }
 
@@ -164,10 +164,14 @@ mod tests {
 
     #[test]
     fn appended_lines_accumulate() {
+        // Exclusive, private: the pid-derived name in a shared /tmp can be planted by another account
+        // (CWE-59), so an existing directory fails the test instead of it symlinking inside.
         let dir = std::env::temp_dir().join(format!("lightcraft-testkit-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir(&dir).unwrap();
         let log = dir.join("skips.jsonl");
-        let _ = std::fs::remove_file(&log);
+        if std::fs::symlink_metadata(&log).is_ok() {
+            std::fs::remove_file(&log).unwrap();
+        }
         let threads: Vec<_> = (0..8)
             .map(|i| {
                 let log = log.clone();

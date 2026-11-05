@@ -186,6 +186,9 @@ impl ToneMap {
         let w = (whites / 100.0) as f32;
         let b = (blacks / 100.0) as f32;
         let m = GREY.powf(1.0 / 2.2);
+        // Neutral sliders are the identity up to white (issue #1945): the SDR shoulder below would
+        // pull 1.0 down to 0.9875 (8-bit 255 to 254), so it only shapes an edited curve.
+        let neutral = c == 0.0 && w == 0.0 && b == 0.0;
         let lut = (0..LUT_N)
             .map(|i| {
                 let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
@@ -203,12 +206,12 @@ impl ToneMap {
                     p += w * 0.12 * 0.5;
                 }
                 let mut o = p.max(0.0).powf(2.2);
-                // short shoulder: slope 1 at 0.95, reaching 1.0 at 1.05
+                // short shoulder (SDR, edited curves): slope 1 at 0.95, reaching 1.0 at 1.05
                 if peak > 1.0 && o > 0.95 {
                     // exponential shoulder: slope 1 at 0.95, asymptote at `peak`
                     let r = peak - 0.95;
                     o = 0.95 + r * (1.0 - (-(o - 0.95) / r).exp());
-                } else if o > 0.95 {
+                } else if o > 0.95 && !neutral {
                     let d = (o - 0.95).min(0.1);
                     o = 0.95 + d - d * d / 0.2;
                 }
@@ -411,10 +414,13 @@ mod tests {
     #[test]
     fn display_identity_and_monotone() {
         let t = ToneMap::display(0.0, 0.0, 0.0);
-        for i in 1..=95 {
+        // up to and including white (issue #1945: 1.0 came out as 0.9875, 8-bit 255 as 254); the
+        // tolerance is the LUT's interpolation next to the clip at 1.0, far below an 8-bit level
+        for i in 1..=100 {
             let y = i as f32 / 100.0;
-            assert!((t.apply(y) - y).abs() < 2e-3, "{y} -> {}", t.apply(y));
+            assert!((t.apply(y) - y).abs() < 1e-3, "{y} -> {}", t.apply(y));
         }
+        assert_eq!(t.apply(4.0), 1.0, "neutral values pushed above white clip");
         for (c, w, b) in [(100.0, 100.0, -100.0), (-100.0, -100.0, 100.0), (60.0, -40.0, 30.0)] {
             let t = ToneMap::display(c, w, b);
             let mut prev = -1.0;
@@ -426,6 +432,17 @@ mod tests {
         }
         let c = ToneMap::display(60.0, 0.0, 0.0);
         assert!(c.apply(0.05) < 0.05 && c.apply(0.7) > 0.7);
+    }
+
+    #[test]
+    fn display_shoulder_stays_on_edited_curves() {
+        // The short shoulder is part of the V1 look of edited curves (docs/process-versions.md);
+        // only neutral settings are the identity.
+        for (c, w, b) in [(20.0, 0.0, 0.0), (0.0, 10.0, 0.0), (0.0, 0.0, -5.0)] {
+            let t = ToneMap::display(c, w, b);
+            let o = t.apply(1.0);
+            assert!(o < 0.999 && o > 0.95, "{c} {w} {b}: {o}");
+        }
     }
 
     #[test]
