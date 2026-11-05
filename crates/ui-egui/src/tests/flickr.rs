@@ -485,3 +485,89 @@ fn signing_out_drops_a_sign_in_still_on_its_way() {
     assert_eq!(h.app.session.flickr_status()["pending"], false, "the old sign-in is not resumed");
     assert!(opened.lock().unwrap().is_empty(), "no approval page opened");
 }
+
+#[test]
+fn a_new_sign_in_can_start_right_after_a_cancel() {
+    let base = fake(Duration::from_millis(1500));
+    let (mut h, opened) = app(&base);
+    h.app.session.flickr_set_api_key("k", "s").unwrap();
+    h.app.run("flickr.signIn", json!({})).unwrap();
+    assert!(h.app.flickr.busy.is_some());
+    let first = h.app.flickr.busy_cancel.clone().expect("the step can be stopped");
+    h.app.run("flickr.cancelSignIn", json!({})).unwrap();
+    assert!(h.app.flickr.busy.is_none(), "Cancel frees the sign-in at once");
+    assert!(first.load(std::sync::atomic::Ordering::Relaxed), "the stopped step's worker is told to give up");
+    // a new sign-in starts without waiting for the old request; it is the one that goes on
+    h.app.run("flickr.signIn", json!({})).unwrap();
+    assert!(h.step_until(T, |h| h.app.session.flickr_status()["pending"] == true), "the new sign-in reaches the approval step");
+    assert!(h.app.flickr.busy.is_none());
+    assert_eq!(opened.lock().unwrap().len(), 1, "one approval page, for the new sign-in");
+}
+
+#[test]
+fn a_new_key_stops_a_sign_in_under_way_and_the_same_key_does_not() {
+    let base = fake(Duration::from_millis(400));
+    let (mut h, opened) = app(&base);
+    h.app.session.flickr_set_api_key("k", "s").unwrap();
+    // the same key again changes nothing: the sign-in goes on
+    h.app.run("flickr.signIn", json!({})).unwrap();
+    h.app.run("flickr.setApiKey", json!({"key": "k", "secret": "s"})).unwrap();
+    assert!(h.app.flickr.busy.is_some(), "still signing in");
+    assert!(h.step_until(T, |h| h.app.session.flickr_status()["pending"] == true));
+    assert_eq!(opened.lock().unwrap().len(), 1);
+    // another key while a sign-in is on its way: it stops, and its answer (for the old key) is dropped
+    h.app.run("flickr.cancelSignIn", json!({})).unwrap();
+    h.app.run("flickr.signIn", json!({})).unwrap();
+    h.app.run("flickr.setApiKey", json!({"key": "other", "secret": "key"})).unwrap();
+    assert!(h.app.flickr.busy.is_none(), "the old key's sign-in stops at once");
+    for _ in 0..30 {
+        h.step();
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    assert_eq!(h.app.session.flickr_status()["pending"], false, "not resumed for the new key");
+    assert_eq!(opened.lock().unwrap().len(), 1, "no approval page for the old key");
+}
+
+#[test]
+fn switching_accounts_stops_the_album_read() {
+    let base = fake(Duration::from_millis(1500));
+    let (mut h, _) = app(&base);
+    signed_in(&mut h);
+    h.app.run("flickr.albums", json!({})).unwrap();
+    let read = h.app.flickr.albums_cancel.clone().expect("the read can be stopped");
+    h.app.run("flickr.signOut", json!({})).unwrap();
+    h.step();
+    assert!(read.load(std::sync::atomic::Ordering::Relaxed), "the old account's read is told to give up");
+    assert!(!h.app.flickr.albums_loading && h.app.flickr.albums.is_none());
+}
+
+#[test]
+fn a_new_album_made_before_the_list_was_read_brings_the_whole_list() {
+    let base = fake(Duration::ZERO);
+    let (mut h, _) = app(&base);
+    signed_in(&mut h);
+    assert!(h.app.flickr.albums.is_none(), "the album list hasn't been read");
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    h.app.run("flickr.upload", json!({"ids": ids, "longEdge": 128, "newAlbum": "Road Trip"})).unwrap();
+    assert!(h.step_until(T, |h| h.app.flickr.last_result.is_some()));
+    assert!(h.app.flickr.albums_loading, "the list is read, not left holding only the new album");
+    assert!(h.step_until(T, |h| !h.app.flickr.albums_loading));
+    let ids: Vec<String> = h.app.flickr.albums.clone().unwrap().into_iter().map(|(id, _, _)| id).collect();
+    assert_eq!(ids, ["501", "502"], "the list as Flickr gives it");
+}
+
+#[test]
+fn a_new_album_already_in_the_list_is_not_added_twice() {
+    let base = fake(Duration::ZERO);
+    let (mut h, _) = app(&base);
+    signed_in(&mut h);
+    h.app.run("flickr.albums", json!({})).unwrap();
+    assert!(h.step_until(T, |h| h.app.flickr.albums.is_some()));
+    // a read that finished before the upload's answer already lists the album it made
+    h.app.flickr.albums.as_mut().unwrap().insert(0, ("601".into(), "Road Trip".into(), 1));
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    h.app.run("flickr.upload", json!({"ids": ids, "longEdge": 128, "newAlbum": "Road Trip"})).unwrap();
+    assert!(h.step_until(T, |h| h.app.flickr.last_result.is_some()));
+    let n = h.app.flickr.albums.as_ref().unwrap().iter().filter(|(id, _, _)| id == "601").count();
+    assert_eq!(n, 1, "listed once");
+}
