@@ -38,7 +38,7 @@ impl Session {
         }
         // the preset's depth is judged against the format written, known only now (`path`); a
         // depth the call passes itself is the caller's, and validated as such
-        if !p.get("bitDepth").is_some_and(|d| !d.is_null()) {
+        if p.get("bitDepth").is_none_or(|d| d.is_null()) {
             crate::export::ExportOptions::drop_unfit_depth(&mut out, fallback);
         }
         Ok(out)

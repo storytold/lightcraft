@@ -166,7 +166,8 @@ pub(crate) fn decode_v1(src: &[u8], w: usize, h: usize, bits_per_sample: u32) ->
                 have -= dl;
                 if v & (1 << (dl - 1)) == 0 { v - ((1 << dl) - 1) } else { v }
             };
-            if pos > src.len().saturating_add(8) {
+            // bits really consumed, not the zero-padded lookahead: a stream cut short by even one byte is truncated
+            if (pos as u64 * 8).saturating_sub(u64::from(have)) > src.len() as u64 * 8 {
                 return Err(RawError::Corrupt("SRW compressed data truncated".into()));
             }
             let p = col & 1;
@@ -479,6 +480,17 @@ mod tests {
         let (w, h) = (34, 5);
         let img = image(w, h);
         assert_eq!(decode_v1(&encode_v1(&img, w, h), w, h, 12).unwrap(), img);
+    }
+
+    #[test]
+    fn huffman_stream_cut_short_is_truncated_not_zero_padded() {
+        let (w, h) = (34, 5);
+        let img = image(w, h);
+        let full = encode_v1(&img, w, h);
+        let same = |n: usize| decode_v1(&full[..n], w, h, 12).is_ok_and(|d| d == img);
+        let needed = (0..=full.len()).find(|&n| same(n)).unwrap();
+        assert!(needed > 0 && needed + 4 >= full.len(), "only the final word's padding may be missing");
+        assert!(!same(needed - 1) && decode_v1(&full[..needed - 1], w, h, 12).is_err(), "one byte short is truncated");
     }
 
     /// 32773 with options 7 (no quantizer, left prediction, explicit lengths of 12 bits) and initial value 100.

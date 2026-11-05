@@ -27,9 +27,9 @@ pub fn try_read_exif_with(bytes: &[u8], opts: &ParseOptions) -> Result<Metadata,
     let data = strip_exif_header(bytes);
     let tiff = Tiff::parse_with(data, opts)?;
     let mut m = from_tiff(&tiff);
-    // Panasonic writes no LensModel, only the name in its maker note (and in a RW2 that note is not in the raw's own Exif)
+    // Panasonic (and some Canons) write no LensModel, only the name in their maker note
     if m.lens_model.is_none() {
-        m.lens_model = panasonic_maker_note_lens(data, &tiff);
+        m.lens_model = panasonic_maker_note_lens(data, &tiff).or_else(|| canon_maker_note_lens(data, &tiff));
     }
     // the maker note's values are offsets into the stream, which `from_tiff` doesn't have
     m.focus = crate::focus::read(data, &tiff, m.make.as_deref(), m.model.as_deref(), m.orientation);
@@ -201,6 +201,23 @@ fn panasonic_jpg_from_raw_lens(tiff: &Tiff) -> Option<String> {
     panasonic_lens(data, &Tiff::parse(data).ok()?)
 }
 
+/// Canon maker note tag `0x0095` (LensModel in the ExifTool Canon tag names): the lens name as ASCII. Older
+/// bodies instead record a numeric LensType (CameraSettings, tag `0x0001`, index 22), which is no name to read.
+const CANON_LENS_MODEL: u16 = 0x0095;
+
+/// The lens name in a Canon maker note of this Exif stream (`data` starts at its TIFF header): the note of
+/// its own Exif IFD. Only consulted when Make is Canon, so other vendors' plain notes are never read as lenses.
+fn canon_maker_note_lens(data: &[u8], tiff: &Tiff) -> Option<String> {
+    let make = tiff.ifds.first().and_then(|i| i.string(t::MAKE)).unwrap_or_default();
+    if !make.trim().to_ascii_uppercase().starts_with("CANON") {
+        return None;
+    }
+    let exif = tiff.exif()?;
+    let e = exif.get(t::MAKER_NOTE)?;
+    let mn = lightcraft_tiff::makernote::parse_makernote(data, e.offset, e.count() as u64, tiff.order, &make)?;
+    text(Some(&mn.ifd), CANON_LENS_MODEL)
+}
+
 /// Nikon maker note tag `0x0084` (Lens in the ExifTool Nikon tag names): shortest and longest focal length, then the
 /// widest aperture at each, as rationals, like Exif LensSpecification. Zero for a lens that doesn't report itself.
 const NIKON_LENS: u16 = 0x0084;
@@ -224,6 +241,53 @@ fn nikon_lens_spec(exif: Option<&Ifd>, make: Option<&str>, order: lightcraft_tif
 pub(crate) mod tests {
     use super::*;
     use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+
+    fn capture_time_tiff(original: Option<&str>, digitized: Option<&str>, ifd0_time: Option<&str>, xmp: Option<&str>) -> Vec<u8> {
+        let mut exif = IfdBuilder::new();
+        if let Some(value) = original {
+            exif.set(t::DATE_TIME_ORIGINAL, Value::Ascii(value.into()));
+        }
+        if let Some(value) = digitized {
+            exif.set(t::DATE_TIME_DIGITIZED, Value::Ascii(value.into()));
+        }
+        let mut ifd0 = IfdBuilder::new();
+        if let Some(value) = ifd0_time {
+            ifd0.set(t::DATE_TIME, Value::Ascii(value.into()));
+        }
+        ifd0.set_child(t::EXIF_IFD, exif);
+        if let Some(packet) = xmp {
+            ifd0.set(t::XMP, Value::Byte(packet.as_bytes().to_vec()));
+        }
+        TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+    }
+
+    #[test]
+    fn exif_clock_invalid_original_uses_the_next_valid_exif_time() {
+        let invalid = "2026:01:01 12:34:56:99";
+        let digitized = capture_time_tiff(Some(invalid), Some("2026:01:02 10:00:00"), Some("2026:01:03 11:00:00"), None);
+        assert_eq!(read_exif(&digitized).capture_time.map(|date| date.to_iso()), Some("2026-01-02T10:00:00".into()));
+
+        let ifd0 = capture_time_tiff(Some(invalid), Some("2026:01:02 10:00:00:"), Some("2026:01:03 11:00:00"), None);
+        assert_eq!(read_exif(&ifd0).capture_time.map(|date| date.to_iso()), Some("2026-01-03T11:00:00".into()));
+
+        let none = capture_time_tiff(Some(invalid), Some("2026:01:02 10:00:00:junk"), Some("2026:01:03 11:00:00:"), None);
+        assert_eq!(read_exif(&none).capture_time, None);
+
+        let original = capture_time_tiff(Some("2026:01:04 12:00:00"), Some("2026:01:02 10:00:00"), Some("2026:01:03 11:00:00"), None);
+        assert_eq!(read_exif(&original).capture_time.map(|date| date.to_iso()), Some("2026-01-04T12:00:00".into()));
+    }
+
+    #[test]
+    fn exif_clock_invalid_original_allows_xmp_fallback_and_keeps_raw_tag() {
+        let capture = DateTime::parse_iso("2026-01-02T10:00:00Z");
+        let packet = crate::write_xmp(&Metadata { capture_time: capture, ..Default::default() }, None);
+        let bytes = capture_time_tiff(Some("2026:01:01 12:34:56:99"), None, None, Some(&packet));
+        assert_eq!(crate::extract(&bytes).capture_time.map(|date| date.to_iso()), Some("2026-01-02T10:00:00+00:00".into()));
+
+        let without_fallback = capture_time_tiff(Some("2026:01:01 12:34:56:junk"), None, None, None);
+        assert_eq!(crate::extract(&without_fallback).capture_time, None);
+        assert!(crate::embedded(&without_fallback).exif.is_some(), "rejecting the projection must retain the embedded EXIF block");
+    }
 
     /// An Exif block from a Panasonic body: no LensModel, the lens name in maker note tag 0x0051, whose value
     /// lies outside the note's IFD at an offset relative to the Exif TIFF header (as Panasonic writes it).
@@ -295,6 +359,68 @@ pub(crate) mod tests {
         assert_eq!(m.lens_model.as_deref(), Some("LUMIX S 85/F1.8"));
         assert_eq!(m.focal_length, Some(85.0));
         assert_eq!(crate::extract(&rw2).lens_model.as_deref(), Some("LUMIX S 85/F1.8"));
+    }
+
+    /// Canon maker note tags: `0x0095` holds the lens name as ASCII; `0x0001` is CameraSettings, a table of
+    /// int16s whose index 22 is the numeric LensType.
+    const CANON_LENS_MODEL_TAG: u16 = 0x0095;
+    const CANON_CAMERA_SETTINGS: u16 = 0x0001;
+
+    /// An Exif block from a Canon EOS 5D: `Canon` / `Canon EOS 5D` in IFD0, no LensModel tag, and a plain maker
+    /// note whose IFD (value offsets relative to the enclosing TIFF header, as Canon writes it) records
+    /// CameraSettings with the numeric LensType at index 22 and, when `lens` is given, the name at `0x0095`.
+    fn canon_exif(order: ByteOrder, lens: Option<&str>) -> Vec<u8> {
+        let note = |at: u32| {
+            // The plain IFD: entry count, one or two 12-byte entries and the next-IFD pointer, then the
+            // out-of-line values (CameraSettings, then the lens name when present).
+            // pointer, then the out-of-line values (CameraSettings, then the lens name when present).
+            let settings_at = at + 2 + 12 * (1 + lens.is_some() as u32) + 4;
+            let name_at = settings_at + 60;
+            let mut v = Vec::new();
+            let entry = |v: &mut Vec<u8>, tag: u16, kind: u16, count: u32, off: u32| {
+                order.put_u16(v, tag);
+                order.put_u16(v, kind);
+                order.put_u32(v, count);
+                order.put_u32(v, off);
+            };
+            order.put_u16(&mut v, 1 + lens.is_some() as u16);
+            entry(&mut v, CANON_CAMERA_SETTINGS, 3, 30, settings_at);
+            if let Some(name) = lens {
+                entry(&mut v, CANON_LENS_MODEL_TAG, 2, name.len() as u32, name_at);
+            }
+            order.put_u32(&mut v, 0);
+            for i in 0..30u16 {
+                order.put_u16(&mut v, if i == 22 { 178 } else { 0 }); // 22: numeric LensType, no name
+            }
+            if let Some(name) = lens {
+                v.extend_from_slice(name.as_bytes());
+            }
+            v
+        };
+        let build = |at: u32| {
+            let mut exif = IfdBuilder::new();
+            exif.set(t::MAKER_NOTE, Value::Undefined(note(at)));
+            exif.set(t::FOCAL_LENGTH, Value::Rational(vec![(50, 1)]));
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set(t::MAKE, Value::Ascii("Canon".into()));
+            ifd0.set(t::MODEL, Value::Ascii("Canon EOS 5D".into()));
+            ifd0.set_child(t::EXIF_IFD, exif);
+            TiffWriter::new(order, false).write(&[ifd0]).unwrap()
+        };
+        // the note's own offset is only known once it is laid out; its length doesn't change
+        let first = build(0);
+        let at = Tiff::parse(&first).unwrap().exif().unwrap().get(t::MAKER_NOTE).unwrap().offset as u32;
+        build(at)
+    }
+
+    #[test]
+    fn canon_maker_note_lens_fills_lens_model() {
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let m = read_exif(&canon_exif(order, Some("Canon EF 50mm f/1.8 II")));
+            assert_eq!(m.lens_model.as_deref(), Some("Canon EF 50mm f/1.8 II"));
+            // a note that only records the numeric LensType has no name to fill in
+            assert_eq!(read_exif(&canon_exif(order, None)).lens_model, None);
+        }
     }
 
     /// An Exif block from a Nikon body whose maker note records the lens (tag 0x0084) and no LensModel or
@@ -512,6 +638,20 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
             ex.set(tag, v);
         }
     }
+    if let Some(d) = meta.capture_time {
+        // an offset past 18 h is not a real one (a deserialized value can be anything): write none
+        let offset = d.offset_minutes.filter(|o| o.unsigned_abs() <= 18 * 60).map(|o| {
+            let sign = if o < 0 { '-' } else { '+' };
+            format!("{sign}{:02}:{:02}", o.unsigned_abs() / 60, o.unsigned_abs() % 60)
+        });
+        let subsec = (d.millis != 0).then(|| format!("{:03}", d.millis));
+        for (tag, v) in [(t::OFFSET_TIME, &offset), (t::OFFSET_TIME_ORIGINAL, &offset), (t::SUBSEC_TIME, &subsec), (t::SUBSEC_TIME_ORIGINAL, &subsec)]
+        {
+            if let Some(v) = v {
+                ex.set(tag, Value::Ascii(v.clone()));
+            }
+        }
+    }
     ifd0.set_child(t::EXIF_IFD, ex);
     if let Some(g) = meta.gps {
         let dms = |v: f64| {
@@ -539,6 +679,25 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
 #[cfg(test)]
 mod write_tests {
     use super::*;
+
+    #[test]
+    fn capture_time_offset_and_subsec_round_trip() {
+        for iso in ["2026-09-20T05:40:00.250+02:00", "2026-09-20T05:40:00.005-03:30", "2026-09-20T05:40:00"] {
+            let m = Metadata { capture_time: DateTime::parse_iso(iso), ..Default::default() };
+            assert_eq!(read_exif(&write_exif(&m)).capture_time, m.capture_time, "{iso}");
+        }
+    }
+
+    /// A deserialized offset can be any i16, `i16::MIN` included: writing must not overflow.
+    #[test]
+    fn extreme_capture_time_offsets_do_not_panic() {
+        for o in [i16::MIN, i16::MAX, -1081, 1081] {
+            let mut dt = DateTime::parse_iso("2026-09-20T05:40:00").unwrap();
+            dt.offset_minutes = Some(o);
+            let m = Metadata { capture_time: Some(dt), ..Default::default() };
+            assert_eq!(read_exif(&write_exif(&m)).capture_time.map(|d| d.offset_minutes), Some(None), "{o}");
+        }
+    }
 
     #[test]
     fn exif_round_trips() {
