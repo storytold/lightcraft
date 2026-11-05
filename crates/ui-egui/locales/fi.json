@@ -2399,5 +2399,6 @@
   "One of them is a whole disk: remove a disk by itself": "Yksi niistä on kokonainen levy: poista levy erikseen",
   "Remove Folders from Library": "Poista kansiot kirjastosta",
   "That includes the photos in the folders inside them.": "Tämä sisältää niiden sisällä olevissa kansioissa olevat kuvat.",
-  "The photos stay in All Photos. Undo brings the albums back.": "Kuvat pysyvät kohdassa Kaikki kuvat. Kumoa palauttaa albumit."
+  "The photos stay in All Photos. Undo brings the albums back.": "Kuvat pysyvät kohdassa Kaikki kuvat. Kumoa palauttaa albumit.",
+  "Another library was opened since this window appeared: nothing was changed": "Toinen kirjasto avattiin tämän ikkunan ilmestymisen jälkeen: mitään ei muutettu"
 }

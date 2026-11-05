@@ -167,7 +167,8 @@ fn the_welcome_tour_is_translated_in_every_catalog() {
 /// one without a translation shows the English.
 #[test]
 fn the_texts_for_several_chosen_sidebar_rows_are_translated_in_every_language() {
-    const TEXTS: [&str; 16] = [
+    const TEXTS: [&str; 17] = [
+        "Another library was opened since this window appeared: nothing was changed",
         "Choose one album to rename it",
         "Choose one folder to rename it",
         "Choose one folder to synchronize it",

@@ -2488,5 +2488,6 @@
   "One of them is a whole disk: remove a disk by itself": "Jedna z nich je celý disk: disk odeberte samostatně",
   "Remove Folders from Library": "Odebrat složky z knihovny",
   "That includes the photos in the folders inside them.": "Patří sem i fotografie ve složkách uvnitř nich.",
-  "The photos stay in All Photos. Undo brings the albums back.": "Fotografie zůstanou ve „Všech fotografiích“. Zpět alba vrátí."
+  "The photos stay in All Photos. Undo brings the albums back.": "Fotografie zůstanou ve „Všech fotografiích“. Zpět alba vrátí.",
+  "Another library was opened since this window appeared: nothing was changed": "Od zobrazení tohoto okna byla otevřena jiná knihovna: nic nebylo změněno"
 }

@@ -2606,5 +2606,6 @@
   "One of them is a whole disk: remove a disk by itself": "Uno di essi è un disco intero: rimuovi un disco da solo",
   "Remove Folders from Library": "Rimuovi cartelle dalla libreria",
   "That includes the photos in the folders inside them.": "Sono incluse le foto nelle cartelle al loro interno.",
-  "The photos stay in All Photos. Undo brings the albums back.": "Le foto restano in Tutte le foto. Annulla ripristina gli album."
+  "The photos stay in All Photos. Undo brings the albums back.": "Le foto restano in Tutte le foto. Annulla ripristina gli album.",
+  "Another library was opened since this window appeared: nothing was changed": "Nel frattempo è stata aperta un'altra libreria: non è stato modificato nulla"
 }

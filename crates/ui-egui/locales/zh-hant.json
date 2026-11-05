@@ -2443,5 +2443,6 @@
   "Remove Folders from Library": "從照片庫移除資料夾",
   "That includes the photos in the folders inside them.": "其中也包括這些資料夾內各子資料夾中的照片。",
   "The photos stay in All Photos. Undo brings the albums back.": "照片仍保留在「所有照片」中。復原即可還原這些相簿。",
-  "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "照片仍保留在「所有照片」中。刪除資料夾也會刪除其中的相簿。可以復原。"
+  "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "照片仍保留在「所有照片」中。刪除資料夾也會刪除其中的相簿。可以復原。",
+  "Another library was opened since this window appeared: nothing was changed": "此視窗出現後開啟了另一個照片庫：未變更任何內容"
 }

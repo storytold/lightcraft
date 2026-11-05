@@ -2287,5 +2287,6 @@
   "Remove Folders from Library": "Remover pastas da biblioteca",
   "That includes the photos in the folders inside them.": "Isso inclui as fotos das pastas dentro delas.",
   "The photos stay in All Photos. Undo brings the albums back.": "As fotos continuam em Todas as fotos. Desfazer traz os álbuns de volta.",
-  "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "As fotos continuam em Todas as fotos. Excluir uma pasta também exclui os álbuns dela. Você pode desfazer."
+  "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "As fotos continuam em Todas as fotos. Excluir uma pasta também exclui os álbuns dela. Você pode desfazer.",
+  "Another library was opened since this window appeared: nothing was changed": "Outra biblioteca foi aberta depois que esta janela apareceu: nada foi alterado"
 }

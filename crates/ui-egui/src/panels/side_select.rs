@@ -62,6 +62,12 @@ pub enum Several {
     RemoveFolders { paths: Vec<String>, count: usize },
 }
 
+/// The question about `rows` as it is asked now: bound to the library that is open. Album ids are numbered per library, and a keyword of
+/// that name or a folder of that path can be another one in a library that opens later, so [`several_run`] refuses it there.
+fn question(app: &LightcraftApp, rows: Several) -> Dialog {
+    Dialog::Several { rows, library: app.session.library_generation() }
+}
+
 fn same_id(a: &u64, b: &u64) -> bool {
     a == b
 }
@@ -139,7 +145,7 @@ pub(crate) fn keys_frame(app: &mut LightcraftApp, ctx: &egui::Context) {
 pub(crate) fn delete_asked(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     let Some(list) = app.ui.side.keys else { return false };
     let dialog = match list {
-        SideList::Albums => Some(albums_shown(app)).filter(|ids| ids.len() > 1).map(|ids| delete_albums_dialog(&ids)),
+        SideList::Albums => Some(albums_shown(app)).filter(|ids| ids.len() > 1).map(|ids| delete_albums_dialog(app, &ids)),
         SideList::Keywords => Some(app.session.filter.keywords_wanted()).filter(|k| k.len() > 1).map(|k| delete_keywords_dialog(app, &k)),
         SideList::KeywordList => Some(list_picked(app)).filter(|k| k.len() > 1).map(|k| delete_keywords_dialog(app, &k)),
         SideList::Folders => {
@@ -181,7 +187,7 @@ pub(crate) fn outline(app: &LightcraftApp, ui: &egui::Ui, list: SideList, chosen
 fn remove_folders_dialog(app: &LightcraftApp, paths: &[String]) -> Dialog {
     let f = lightcraft_catalog::Filter { library_folders: paths.to_vec(), ..Default::default() };
     let count = app.session.catalog.query(&f, &lightcraft_catalog::Sort::default()).len();
-    Dialog::Several(Several::RemoveFolders { paths: paths.to_vec(), count })
+    question(app, Several::RemoveFolders { paths: paths.to_vec(), count })
 }
 
 /// A new frame of the left panel: the rows of the last one are what a click now is on.
@@ -296,14 +302,14 @@ pub(crate) fn albums_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ids: &[u64
     let delete = item(ui, "albums:delete", crate::i18n::tr_format!("Delete {n} Albums…", n = n), true)
         .on_hover_text(crate::i18n::tr("The photos stay in All Photos. Undo brings the albums back."));
     if delete.clicked() {
-        app.ui.dialog = Some(delete_albums_dialog(ids));
+        app.ui.dialog = Some(delete_albums_dialog(app, ids));
         ui.close();
     }
 }
 
 /// The confirmation for deleting several albums.
-pub(crate) fn delete_albums_dialog(ids: &[u64]) -> Dialog {
-    Dialog::Several(Several::DeleteAlbums { ids: ids.to_vec() })
+pub(crate) fn delete_albums_dialog(app: &LightcraftApp, ids: &[u64]) -> Dialog {
+    question(app, Several::DeleteAlbums { ids: ids.to_vec() })
 }
 
 // ---- Folders (of the library)
@@ -470,7 +476,7 @@ pub(crate) fn delete_keywords_dialog(app: &LightcraftApp, keywords: &[String]) -
     let paths: Vec<String> = keywords.iter().map(|k| cat.keyword_path(k).unwrap_or_else(|| k.clone())).collect();
     let has = |p: &lightcraft_catalog::Photo| p.meta.keywords.iter().any(|k| paths.iter().any(|g| lightcraft_catalog::keywords::is_under(k, g)));
     let count = cat.photos().filter(|p| p.in_library() && has(p)).count();
-    Dialog::Several(Several::DeleteKeywords { keywords: paths, count })
+    question(app, Several::DeleteKeywords { keywords: paths, count })
 }
 
 // ---- The Keyword List (right panel)
@@ -584,9 +590,15 @@ fn names(ui: &mut egui::Ui, all: Vec<String>) {
     }
 }
 
-/// Do what the confirmation asked. A refusal is toasted by `act` (the reason, for as long as any
-/// refusal stays), and the `Err` keeps the whole error for the control channel.
-pub(crate) fn several_run(app: &mut LightcraftApp, s: &Several) -> Result<serde_json::Value, String> {
+/// Do what the confirmation asked, in the library it was asked in: once another one has opened, its ids, names and paths mean something else
+/// there (or nothing), so nothing is changed. A refusal is toasted (the reason, for as long as any refusal stays) by this or by `act_told`,
+/// and the `Err` keeps the whole error for the control channel.
+pub(crate) fn several_run(app: &mut LightcraftApp, s: &Several, library: u64) -> Result<serde_json::Value, String> {
+    if library != app.session.library_generation() {
+        let why = crate::i18n::tr("Another library was opened since this window appeared: nothing was changed").to_string();
+        app.ui.toast = Some((why.clone(), app.tick_now() + crate::REFUSAL_SECONDS, None));
+        return Err(why);
+    }
     match s {
         Several::DeleteAlbums { ids } => app.act_told("album.delete", json!({"ids": ids})),
         Several::DeleteKeywords { keywords, .. } => {

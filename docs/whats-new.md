@@ -350,8 +350,9 @@
   telling which album is meant.
 - Right-click one of several rows chosen to act on them all, as one step to undo: move albums into a folder, export
   them, or delete them; give folders a color label or remove them from the library; give keywords to the selected
-  photos, take them away, merge them or delete them. Deleting or removing several asks first and says what goes.
-  Right-click a row that is not among them and you get that row's own menu; the others stay chosen.
+  photos, take them away, merge them or delete them. Deleting or removing several asks first and says what goes; if
+  another library is opened while it asks, OK changes nothing and says so. Right-click a row that is not among them
+  and you get that row's own menu; the others stay chosen.
 - Dragging one of several albums or keywords moves them all (albums go into the folder they are dropped in or
   beside; dropped beside a row, the one you dragged is placed there and the others come into that folder).
 - Right after choosing several rows with Cmd or Shift, the Delete key asks about those rows. Click anywhere else,

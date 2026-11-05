@@ -3693,6 +3693,7 @@
   "Bottom bar": "ქვედა ზოლი",
   "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
   "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "Another library was opened since this window appeared: nothing was changed": "ამ ფანჯრის გამოჩენის შემდეგ სხვა ბიბლიოთეკა გაიხსნა: არაფერი შეცვლილა",
   "Choose one album to rename it": "სახელის შესაცვლელად აირჩიეთ ერთი ალბომი",
   "Choose one folder to rename it": "სახელის შესაცვლელად აირჩიეთ ერთი საქაღალდე",
   "Choose one folder to synchronize it": "სინქრონიზაციისთვის აირჩიეთ ერთი საქაღალდე",

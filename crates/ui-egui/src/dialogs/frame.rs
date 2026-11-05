@@ -191,7 +191,7 @@ pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
     match dlg {
         Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } | Dialog::RemoveFolder { .. }
         // (every several-rows action deletes or removes)
-        | Dialog::Several(_) => {
+        | Dialog::Several { .. } => {
             ConfirmStyle::Plain
         }
         _ if only_shows(dlg) => ConfirmStyle::Plain,

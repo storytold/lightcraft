@@ -448,7 +448,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::RenamePerson { .. } => "Rename Person",
         Dialog::KeywordTag { editing: None, .. } => "Create Keyword Tag",
         Dialog::KeywordTag { .. } => "Edit Keyword Tag",
-        Dialog::Several(s) => crate::panels::side_select::several_title(s),
+        Dialog::Several { rows, .. } => crate::panels::side_select::several_title(rows),
         Dialog::DeleteKeyword { .. } => "Delete Keyword",
         Dialog::MoveKeyword { .. } => "Merge Keywords",
         Dialog::KeywordSet { .. } => "Edit Keyword Set",
@@ -580,7 +580,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
         Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
-        Dialog::Several(s) => crate::panels::side_select::several_button(s),
+        Dialog::Several { rows, .. } => crate::panels::side_select::several_button(rows),
         Dialog::SaveEffect { .. }
         | Dialog::NewAlbum { .. }
         | Dialog::NewSmartAlbum { .. }
@@ -741,7 +741,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
         }
         // several rows: one that can't be deleted or removed refuses them all; `several_run`
         // already toasted the reason, which says which
-        Err(_) if matches!(dlg, Dialog::Several(_)) => closed = true,
+        Err(_) if matches!(dlg, Dialog::Several { .. }) => closed = true,
         // the SAM 3 dialog stays open to show the download (or why it can't start)
         Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
             if let Dialog::SamModel { error, .. } = dlg {
@@ -2143,7 +2143,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::KeywordTag { .. } => keyword_tag_body(app, ui, t, confirm, dlg),
         Dialog::KeywordSet { .. } => keyword_set_body(ui, t, confirm, dlg),
         Dialog::MoveKeyword { .. } => move_keyword_body(ui, t, dlg),
-        Dialog::Several(s) => crate::panels::side_select::several_body(ui, s, &app.session.catalog),
+        Dialog::Several { rows, .. } => crate::panels::side_select::several_body(ui, rows, &app.session.catalog),
         Dialog::DeleteKeyword { .. } => delete_keyword_body(ui, t, dlg),
         Dialog::SaveEffect { name, group, fields, amount, brush } => {
             if crate::panels::mask_effects::save_body(app, ui, name, group, fields, amount, brush) {

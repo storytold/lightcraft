@@ -201,7 +201,7 @@ fn the_menu_of_several_albums_deletes_them_after_asking_as_one_step() {
     assert!(!has(&h, &format!("albumDelete:{c}")), "not the single album's Delete");
     let undo = h.app.session.undo.len();
     click(&mut h, "sideMenu:albums:delete");
-    assert_eq!(h.app.ui.dialog, Some(Dialog::Several(Several::DeleteAlbums { ids: vec![a, c] })));
+    assert_eq!(h.app.ui.dialog, several_question(&h, Several::DeleteAlbums { ids: vec![a, c] }));
     ask(&mut h, "ui.dialog.cancel", json!({}));
     let exists = |h: &Headless, id: u64| h.app.session.catalog.album(AlbumId(id)).is_some();
     assert!(exists(&h, a) && exists(&h, c), "Cancel keeps them");
@@ -391,7 +391,7 @@ fn cmd_click_shows_several_folders_and_the_menu_removes_them_after_asking() {
     click(&mut h, "sideMenu:folders:remove");
     assert_eq!(
         h.app.ui.dialog,
-        Some(Dialog::Several(Several::RemoveFolders { paths: vec!["/pics/trip".to_string(), "/pics/work".to_string()], count: 3 }))
+        several_question(&h, Several::RemoveFolders { paths: vec!["/pics/trip".to_string(), "/pics/work".to_string()], count: 3 })
     );
     let undo = h.app.session.undo.len();
     click(&mut h, "button:dialogOk");
@@ -460,7 +460,7 @@ fn the_keyword_list_deletes_several_after_one_question() {
     click(&mut h, "keywordList:delete");
     assert_eq!(
         h.app.ui.dialog,
-        Some(Dialog::Several(Several::DeleteKeywords { keywords: vec!["Sel K1".to_string(), "Sel K2".to_string()], count: 2 }))
+        several_question(&h, Several::DeleteKeywords { keywords: vec!["Sel K1".to_string(), "Sel K2".to_string()], count: 2 })
     );
     ask(&mut h, "ui.dialog.cancel", json!({}));
     assert!(h.app.session.catalog.has_keyword("Sel K1"), "Cancel kept them");
@@ -516,7 +516,12 @@ fn dragging_one_of_several_keywords_nests_them_all() {
 }
 
 fn several_dialog(h: &Headless) -> bool {
-    matches!(h.app.ui.dialog, Some(Dialog::Several(_)))
+    matches!(h.app.ui.dialog, Some(Dialog::Several { .. }))
+}
+
+/// The question about `rows` as asked in the library that is open.
+fn several_question(h: &Headless, rows: Several) -> Option<Dialog> {
+    Some(Dialog::Several { rows, library: h.app.session.library_generation() })
 }
 
 #[test]
@@ -534,7 +539,7 @@ fn delete_asks_about_several_rows_just_chosen_and_is_the_photos_otherwise() {
     cmd_click(&mut h, &row(c));
     assert!(has(&h, &format!("highlight:album:{a}")));
     ask(&mut h, "ui.key", json!({"key": "Backspace"}));
-    assert_eq!(h.app.ui.dialog, Some(Dialog::Several(Several::DeleteAlbums { ids: vec![a, c] })));
+    assert_eq!(h.app.ui.dialog, several_question(&h, Several::DeleteAlbums { ids: vec![a, c] }));
     ask(&mut h, "ui.dialog.cancel", json!({}));
     assert!(h.app.session.catalog.album(AlbumId(a)).is_some(), "asking deleted nothing");
     // forward Delete too
@@ -558,7 +563,7 @@ fn delete_asks_about_several_keywords_picked_in_the_keyword_list() {
     ask(&mut h, "ui.key", json!({"key": "Backspace"}));
     assert_eq!(
         h.app.ui.dialog,
-        Some(Dialog::Several(Several::DeleteKeywords { keywords: vec!["Sel K1".to_string(), "Sel K2".to_string(), "Sel K3".to_string()], count: 2 }))
+        several_question(&h, Several::DeleteKeywords { keywords: vec!["Sel K1".to_string(), "Sel K2".to_string(), "Sel K3".to_string()], count: 2 })
     );
     click(&mut h, "button:dialogOk");
     assert!(!h.app.session.catalog.has_keyword("Sel K2"));
@@ -667,6 +672,116 @@ fn a_refused_question_about_several_rows_closes_its_dialog() {
     click(&mut h, "button:dialogOk");
     assert!(h.app.session.catalog.album(AlbumId(a)).is_some(), "refused as a whole");
     assert!(!several_dialog(&h), "the question closes with its refusal: {:?}", h.app.ui.dialog);
+}
+
+/// A library folder that goes with the test, however it ends.
+struct Scratch(std::path::PathBuf);
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Another library, empty, opened as the menu bar or an agent does while a question is up.
+fn open_another_library(h: &mut Headless, tag: &str) -> Scratch {
+    let dir = Scratch(std::env::temp_dir().join(format!("lc-multi-select-{tag}-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+    h.app.session.open_library(&dir.0, false).unwrap();
+    h.settle(SETTLE);
+    dir
+}
+
+/// The question about two albums, up in the demo library.
+fn question_about_two_albums(h: &mut Headless) -> [u64; 2] {
+    let ([a, _, c, _], _) = four_albums(h);
+    click(h, &row(a));
+    cmd_click(h, &row(c));
+    right_click(h, &row(c));
+    click(h, "sideMenu:albums:delete");
+    assert!(several_dialog(h), "{:?}", h.app.ui.dialog);
+    [a, c]
+}
+
+/// Another library with an album under each number the question holds (album numbers are per library).
+fn albums_numbered_like(h: &mut Headless, asked: [u64; 2]) {
+    let top = asked[0].max(asked[1]);
+    let made: Vec<u64> = (1..=top).map(|n| run(h, "album.create", json!({"name": format!("Other {n}")}))["id"].as_u64().unwrap()).collect();
+    assert!(asked.iter().all(|id| made.contains(id)), "{asked:?} name albums there too: {made:?}");
+}
+
+/// A question asked in one library is not answered in another: album numbers are per library, so
+/// once another library has opened the same numbers name other albums there, and OK would delete those.
+#[test]
+fn a_question_about_several_albums_is_refused_once_another_library_opened() {
+    let mut h = app("info");
+    let asked = question_about_two_albums(&mut h);
+    let _other = open_another_library(&mut h, "albums-button");
+    albums_numbered_like(&mut h, asked);
+    click(&mut h, "button:dialogOk");
+    for id in asked {
+        assert!(h.app.session.catalog.album(AlbumId(id)).is_some(), "album {id} of the library that opened is still there");
+    }
+    assert!(!several_dialog(&h), "the refused question closes: {:?}", h.app.ui.dialog);
+    let said = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(said.contains("Another library was opened"), "the toast says why: {said:?}");
+}
+
+/// The control channel's confirm of a question that another library made stale answers with the
+/// reason, and changes nothing.
+#[test]
+fn a_confirm_of_several_albums_is_refused_with_the_reason_once_another_library_opened() {
+    let mut h = app("info");
+    let asked = question_about_two_albums(&mut h);
+    let _other = open_another_library(&mut h, "albums-control");
+    albums_numbered_like(&mut h, asked);
+    let r = h.request("ui.dialog.confirm", json!({}), std::time::Duration::from_secs(10));
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().unwrap_or_default().contains("Another library was opened"), "{r}");
+    for id in asked {
+        assert!(h.app.session.catalog.album(AlbumId(id)).is_some(), "album {id} of the library that opened is still there");
+    }
+}
+
+/// A keyword with the name the question holds is another keyword in the library that opened since.
+#[test]
+fn a_question_about_several_keywords_is_refused_once_another_library_opened() {
+    let (mut h, _) = keyword_list();
+    click(&mut h, "keywordRow:Sel K1");
+    cmd_click(&mut h, "keywordRow:Sel K2");
+    click(&mut h, "keywordList:delete");
+    assert!(several_dialog(&h), "{:?}", h.app.ui.dialog);
+    let _other = open_another_library(&mut h, "keywords");
+    for name in ["Sel K1", "Sel K2"] {
+        run(&mut h, "keyword.create", json!({"name": name}));
+    }
+    click(&mut h, "button:dialogOk");
+    assert!(
+        h.app.session.catalog.has_keyword("Sel K1") && h.app.session.catalog.has_keyword("Sel K2"),
+        "the keywords of the library that opened stay"
+    );
+    assert!(!several_dialog(&h), "{:?}", h.app.ui.dialog);
+}
+
+/// A folder with the path the question holds is another folder in the library that opened since.
+#[test]
+fn a_question_about_several_folders_is_refused_once_another_library_opened() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg", "/pics/work/c.jpg"]);
+    click(&mut h, "libraryFolderToggle:/pics");
+    click(&mut h, "source:libfolder:/pics/trip");
+    cmd_click(&mut h, "source:libfolder:/pics/work");
+    right_click(&mut h, "source:libfolder:/pics/work");
+    click(&mut h, "sideMenu:folders:remove");
+    assert!(several_dialog(&h), "{:?}", h.app.ui.dialog);
+    let _other = open_another_library(&mut h, "folders");
+    for path in ["/pics/trip/x.jpg", "/pics/work/y.jpg"] {
+        let id = h.app.session.catalog.alloc_photo_id();
+        let p = Photo::new(id, Source::File { path: path.into() }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+        h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    click(&mut h, "button:dialogOk");
+    assert_eq!(h.app.session.catalog.photos().filter(|p| p.in_library()).count(), 2, "the photos of the library that opened stay in it");
+    assert!(!several_dialog(&h), "{:?}", h.app.ui.dialog);
 }
 
 /// A keyword that is gone is not picked any more: the row left alone has its own menu.

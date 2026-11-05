@@ -3523,5 +3523,6 @@
   "One of them is a whole disk: remove a disk by itself": "Einer davon ist ein ganzer Datenträger: einen Datenträger einzeln entfernen",
   "Remove Folders from Library": "Ordner aus Bibliothek entfernen",
   "That includes the photos in the folders inside them.": "Das schließt die Fotos in den enthaltenen Unterordnern ein.",
-  "The photos stay in All Photos. Undo brings the albums back.": "Die Fotos bleiben in „Alle Fotos“. Rückgängig stellt die Alben wieder her."
+  "The photos stay in All Photos. Undo brings the albums back.": "Die Fotos bleiben in „Alle Fotos“. Rückgängig stellt die Alben wieder her.",
+  "Another library was opened since this window appeared: nothing was changed": "Seit dem Erscheinen dieses Fensters wurde eine andere Bibliothek geöffnet: Es wurde nichts geändert"
 }

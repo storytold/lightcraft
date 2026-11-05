@@ -2413,5 +2413,6 @@
   "One of them is a whole disk: remove a disk by itself": "Salah satunya adalah satu disk penuh: keluarkan disk secara terpisah",
   "Remove Folders from Library": "Keluarkan folder dari pustaka",
   "That includes the photos in the folders inside them.": "Ini mencakup foto di dalam folder yang ada di dalamnya.",
-  "The photos stay in All Photos. Undo brings the albums back.": "Foto tetap ada di Semua foto. Urungkan mengembalikan album."
+  "The photos stay in All Photos. Undo brings the albums back.": "Foto tetap ada di Semua foto. Urungkan mengembalikan album.",
+  "Another library was opened since this window appeared: nothing was changed": "Pustaka lain telah dibuka setelah jendela ini muncul: tidak ada yang diubah"
 }
