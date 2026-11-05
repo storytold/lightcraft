@@ -14,12 +14,17 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod dates;
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub mod fault;
 pub mod folders;
 mod index;
 pub mod journal;
 pub mod keywords;
 pub mod local;
 pub mod lock;
+#[cfg(not(target_arch = "wasm32"))]
+mod log_writer;
 pub mod model;
 pub mod query;
 pub mod rules;
@@ -1490,6 +1495,8 @@ mod tests_journal;
 mod tests_local;
 #[cfg(test)]
 mod tests_lock;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_log_thread;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]

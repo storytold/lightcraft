@@ -76,19 +76,32 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
         app.quit_prompt = Some(QuitPrompt::Tasks(tasks_message(names.len(), &names.join(", "))));
         return false;
     }
-    if app.session.unsaved().is_none() {
+    // what the catalog log's thread was handed is written first, and what it holds read now: a
+    // change it accepted but hasn't written yet must not pass for saved (review of #3557)
+    let flushed = app.session.flush_log();
+    if flushed.is_ok() && app.session.unsaved().is_none() {
         return true;
     }
     let _ = app.session.persist();
-    if app.session.unsaved().is_some()
-        && let Err(e) = app.session.close_library()
-    {
-        log::error!("quit: library not saved: {e}");
+    // a snapshot of everything in memory saves what the log couldn't take
+    let mut closed = Ok(());
+    if flushed.is_err() || app.session.unsaved().is_some() {
+        closed = app.session.close_library();
+        if let Err(e) = &closed {
+            log::error!("quit: library not saved: {e}");
+        }
     }
-    match app.session.unsaved() {
-        None => true,
-        Some((n, e)) => {
+    match (app.session.unsaved(), flushed, closed) {
+        (None, Ok(()), _) | (None, _, Ok(())) => true,
+        (Some((n, e)), _, _) => {
             app.quit_prompt = Some(QuitPrompt::Unsaved(unsaved_message(n, e)));
+            false
+        }
+        // the snapshot landed; only the log's reset after it failed
+        (None, Err(_), Err(_)) if app.session.snapshot_holds_everything() => true,
+        // the log's thread didn't finish and the snapshot failed: changes may be lost
+        (None, Err(_), Err(e)) => {
+            app.quit_prompt = Some(QuitPrompt::Unsaved(unsaved_message(1, &e.to_string())));
             false
         }
     }
