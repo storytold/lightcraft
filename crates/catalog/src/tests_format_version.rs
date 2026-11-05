@@ -41,7 +41,7 @@ fn legacy_faces_upgrade_without_losing_assignments_or_boxes() {
         description: Some("retained".into()),
     }];
     base.apply(Op::SetMeta { id, meta: Box::new(meta.clone()) }).unwrap();
-    for version in [9, 10, 11] {
+    for version in [9, 10, 11, 12] {
         let m = MemStore::new();
         m.set(
             SNAPSHOT,
@@ -50,7 +50,7 @@ fn legacy_faces_upgrade_without_losing_assignments_or_boxes() {
         let (mut journal, mut catalog, report) = Journal::open(Box::new(m.clone())).unwrap();
         assert_eq!(report.upgraded_from, Some(version));
         assert_eq!(snapshot_version(&m), u64::from(VERSION));
-        assert!(snapshot_version(&m) > 11, "older builds must refuse the format before decoding ignored faces");
+        assert!(snapshot_version(&m) > 12, "older builds must refuse the format before decoding ignored faces");
         assert_eq!(catalog.photo(id).unwrap().meta, meta);
 
         let mut ignored = meta.clone();
@@ -281,8 +281,10 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v12: the persisted `RegionKind::IgnoredFace` value in metadata regions.
-    const NEWEST_FIELDS: u32 = 12;
+    /// v13: the persisted `RegionKind::IgnoredFace` value in metadata regions (v12: `Catalog.grids`
+    /// and `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
+    /// `Photo.preview_checked` and `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 13;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

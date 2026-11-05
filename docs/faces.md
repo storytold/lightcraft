@@ -351,7 +351,7 @@ Face naming, ignore/restore, and face-box edits remain catalog-only through
 Undo and Redo, even when automatic XMP writing is enabled. They do not mark photos as developed
 or add develop-history entries. The ignored-face review refreshes whenever the catalog revision changes, including direct-session commands and deletion/restoration. Unrelated changes preserve the page and selection; changed review entries clear selections so stale region indices cannot be reused. Reading XMP retains local ignored regions, even when the foreign region list omits them; matching boxes keep their original ignored data. Mixed commands and merged Undo/Redo write XMP only for photos with ordinary metadata or develop changes; photos with face-only changes keep their sidecars untouched. If both kinds of changes affect the same photo, its ordinary change still triggers the normal metadata write.
 
-Ignored faces require **catalog format 12**. Opening an existing library (format 11 or earlier) upgrades its
+Ignored faces require **catalog format 13**. Opening an existing library (format 12 or earlier) upgrades its
 catalog automatically, preserving existing face assignments and boxes. Older builds then
 refuse the newer format instead of trying to decode it as an older catalog.
 
