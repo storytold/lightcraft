@@ -8,6 +8,19 @@
   decomposed Vietnamese letters lost their stacked marks. Text is now composed before it is laid out, so both draw as
   they do in the app (issue #3480, #3277).
 
+## 2026-10-31
+
+### Find Similar Photos no longer freezes the window
+- The first search reads every photo in the library, and it did that on the thread that draws the window, so in a large
+  library the app stopped responding and Windows offered to close it (issue #3468). The photos are now read in the
+  background: a "Find Similar Photos" row in the activity stack counts them, you can keep working meanwhile, and its ✕
+  stops the search. A stopped search leaves the view as it was, and the next one goes on from what was read. The menu
+  item is off while a search runs, and opening another library stops it. When a search ends the grid shows the photos it
+  found, also from the Photo menu, and a message says how many. `library.findSimilar` from the control channel and
+  `mcp --connect` still gets `{photos}`, now when the search ends; a caller that stops waiting (the control server
+  gives a request 60 s) can ask again once that search has ended (while it runs, a new request is refused as already
+  running), and what was read isn't read again.
+
 ## 2026-10-30
 
 ### Lens distortion correction for the Sony A7 III
