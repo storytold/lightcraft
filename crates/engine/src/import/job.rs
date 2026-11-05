@@ -276,7 +276,7 @@ impl ImportJob {
         // as long as they are still there, as they were: a file gone or changed since is probed again
         let cached = reusable_probes(&todo, &mut self.cache, cancel, |seen, info| {
             // (the web's files are not std::fs files: kept as probed)
-            cfg!(target_arch = "wasm32") || matches!(seen, Seen::At { is_file: true, len } if len == info.file_size)
+            cfg!(target_arch = "wasm32") || seen.unchanged_since(info)
         });
         let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
         // Reading the files is the slow part of adding them where they are: it is counted on its

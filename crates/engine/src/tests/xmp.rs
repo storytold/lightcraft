@@ -784,6 +784,30 @@ fn embedded_jpeg_develop_settings_apply_on_import() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// #2993: a JPEG whose embedded develop settings are rewritten at the same length between a scan
+/// (the import dialog listing its folder) and the import comes in with the settings it has now:
+/// the scan's probe is used again only for a file as it was, size and modification time.
+#[test]
+fn embedded_jpeg_settings_rewritten_after_a_scan_import_as_they_are_now() {
+    let src = temp_dir("jpeg-xmp-scan-rewrite");
+    let path = src.join("edited.jpg");
+    write_jpeg_xmp(&path, &jpeg_develop_packet(""));
+    let mut s = Session::new().with_fs();
+    let found = crate::import::scan(&mut s, &[src.to_string_lossy().to_string()]);
+    assert!(found.iter().any(|c| c.name == "edited.jpg" && c.error.is_none()), "{found:?}");
+    let size = std::fs::metadata(&path).unwrap().len();
+    write_jpeg_xmp(&path, &jpeg_develop_packet("").replace(r#"crs:Contrast2012="+30""#, r#"crs:Contrast2012="-30""#));
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), size, "rewritten at the same size");
+    // saved a few seconds later, as an editor saving it would
+    let later = std::fs::metadata(&path).unwrap().modified().unwrap() + std::time::Duration::from_secs(5);
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().unwrap().len(), 1, "{r}");
+    let photo = s.catalog.photos().find(|p| p.file_name == "edited.jpg").unwrap().clone();
+    assert_eq!(photo.develop.light.contrast, -30.0, "the settings the file has now, not the scan's");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 #[test]
 fn embedded_jpeg_xmp_reread_refreshes_metadata_and_undoes_once() {
     let src = temp_dir("jpeg-xmp-refresh");
