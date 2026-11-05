@@ -698,6 +698,10 @@
   "Invert Component": "Odwróć składnik",
   "Invert Mask": "Odwróć maskę",
   "JPEG (Large)": "JPEG (duży)",
+  "Instagram Feed": "Instagram – kanał",
+  "Instagram Story / Reel": "Instagram Story / Reel",
+  "Web / Portfolio": "Web / portfolio",
+  "Full Resolution Master": "Master w pełnej rozdzielczości",
   "JPEG (Small)": "JPEG (mały)",
   "Join the ArtCraft Discord": "Dołącz do Discorda ArtCraft",
   "Join the ArtCraft Discord…": "Dołącz do Discorda ArtCraft…",
@@ -2347,5 +2351,6 @@
   "no smart preview build to confirm": "brak tworzenia podglądów inteligentnych do potwierdzenia",
   "the free-space check stopped unexpectedly": "sprawdzanie wolnego miejsca zostało nieoczekiwanie przerwane",
   "the smart preview folder changed; start the build again to check its free space": "folder podglądów inteligentnych został zmieniony; rozpocznij tworzenie ponownie, aby sprawdzić wolne miejsce",
-  "wait for the free-space check to finish": "poczekaj na zakończenie sprawdzania wolnego miejsca"
+  "wait for the free-space check to finish": "poczekaj na zakończenie sprawdzania wolnego miejsca",
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
 }

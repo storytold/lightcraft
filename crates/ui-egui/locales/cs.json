@@ -954,6 +954,10 @@
   "It tests this album, so testing it back would loop": "Testuje toto album, takže zpětný test vytvoří smyčku",
   "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).": "Obraz s redukovaným šumem ještě není vytvořen a obrazy se nevytvářejí automaticky (Nastavení, Redukce šumu pomocí AI).",
   "JPEG (Large)": "JPEG (velký)",
+  "Instagram Feed": "Instagram Feed",
+  "Instagram Story / Reel": "Instagram Story / Reel",
+  "Web / Portfolio": "Web / portfolio",
+  "Full Resolution Master": "Master v plném rozlišení",
   "JPEG (Small)": "JPEG (malý)",
   "Join the ArtCraft Discord": "Připojit se k Discordu ArtCraft",
   "Join the ArtCraft Discord…": "Připojit se k Discordu ArtCraft…",
@@ -2471,5 +2475,6 @@
   "no smart preview build to confirm": "žádné vytvoření inteligentních náhledů nečeká na potvrzení",
   "the free-space check stopped unexpectedly": "kontrola volného místa se neočekávaně zastavila",
   "the smart preview folder changed; start the build again to check its free space": "složka inteligentních náhledů se změnila; znovu spusťte vytvoření náhledů a zkontrolujte volné místo",
-  "wait for the free-space check to finish": "počkejte na dokončení kontroly volného místa"
+  "wait for the free-space check to finish": "počkejte na dokončení kontroly volného místa",
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
 }

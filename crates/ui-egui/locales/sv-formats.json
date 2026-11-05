@@ -352,5 +352,7 @@
     "other": "{count} smarta förhandsgranskningar · {size:.1} MiB"
   },
   "could not check smart preview storage: {e}": "Kunde inte kontrollera lagringen för smarta förhandsgranskningar: {e}",
-  "free space is unavailable for {path} on this platform": "Ledigt utrymme är inte tillgängligt för {path} på den här plattformen"
+  "free space is unavailable for {path} on this platform": "Ledigt utrymme är inte tillgängligt för {path} på den här plattformen",
+  "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}"
 }

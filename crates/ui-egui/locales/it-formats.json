@@ -350,5 +350,7 @@
     "few": "La cartella delle anteprime avanzate è cambiata. File sorgente che non è stato possibile rimuovere: {count}.",
     "many": "La cartella delle anteprime avanzate è cambiata. File sorgente che non è stato possibile rimuovere: {count}.",
     "other": "La cartella delle anteprime avanzate è cambiata. File sorgente che non è stato possibile rimuovere: {count}."
-  }
+  },
+  "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
 }

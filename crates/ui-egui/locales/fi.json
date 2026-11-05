@@ -967,6 +967,10 @@
   "It tests this album, so testing it back would loop": "Se testaa tätä albumia, joten sen testaaminen takaisin muodostaisi silmukan",
   "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).": "Sen kohinanpoistettua kuvaa ei ole vielä tehty, eikä kuvia tehdä itsestään (Asetukset, Tekoälykohinanpoisto).",
   "JPEG (Large)": "JPEG (suuri)",
+  "Instagram Feed": "Instagram-syöte",
+  "Instagram Story / Reel": "Instagram-story / Reel",
+  "Web / Portfolio": "Web / Portfolio",
+  "Full Resolution Master": "Täysresoluutioinen masteri",
   "JPEG (Small)": "JPEG (pieni)",
   "Join the ArtCraft Discord": "Liity ArtCraftin Discordiin",
   "Join the ArtCraft Discord…": "Liity ArtCraftin Discordiin…",
@@ -2383,5 +2387,6 @@
   "Build Anyway": "Luo silti",
   "Smart Preview Format": "Älyesikatselujen muoto",
   "Checking free space…": "Tarkistetaan vapaata tilaa…",
-  "Build": "Luo"
+  "Build": "Luo",
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
 }
