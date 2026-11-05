@@ -49,6 +49,7 @@ pub struct LightroomTask {
 
 impl LightroomTask {
     #[cfg(not(target_arch = "wasm32"))]
+    /// Capture the owner session, task identity and cancellation state before starting background work.
     fn new(
         s: &lightcraft_engine::Session,
         kind: Kind,
@@ -96,6 +97,7 @@ impl LightroomTask {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    /// Expose the current phase and counters without waiting for the worker.
     fn status(&self) -> Value {
         let kind = match self.kind {
             Kind::Sources => "sources",
@@ -165,6 +167,7 @@ pub fn is_running(app: &LightcraftApp) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Refuse a second Lightroom task while a read or another import owns the session.
 fn busy(app: &LightcraftApp) -> Result<(), String> {
     if app.lightroom.is_some() {
         return Err("a Lightroom catalog task is already running".into());

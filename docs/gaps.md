@@ -91,6 +91,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-05 | minor | Gap 3: process V5 rolls a raw's tone curve off into white in stops, so raising Exposure keeps the highlights the sensor recorded (#1632); the gap stays open (no Lightroom comparison) and hours are unchanged |
+| 2026-11-05 | minor | LRC-LIB-CATALOG-IMPORT: replace UNC check-then-open with no-follow, handle-relative reads for originals, sidecars and previews; document the logical-share trust boundary and add redirect/replacement regressions; status remains partial |
 | 2026-11-04 | minor | Lightroom import discovers distinct UNC sources from the catalog and asks for per-share checkbox consent, including with Always merge; local-only catalogs show no network controls; review handles more than 32 discovered sources, cancellation and competing dialogs; Windows import preflights network reparse points; migration remains approximate |
 | 2026-10-27 | minor | Gap 26: the loupe shows built previews (they were rendered again), photos ahead and the whole view are prepared in the background with settings per mode; gap not closed |
 | 2026-10-27 | minor | Gap 26: culling speed measured and improved (progressive Local browse, camera previews made ahead, a CR3's smallest covering JPEG, camera JPEG first at 100 %); what is left listed; gap not closed |

@@ -1465,6 +1465,7 @@ fn a_root_missing_here_is_found_relative_to_the_catalog() {
 }
 
 #[test]
+/// Source discovery deduplicates catalog paths without touching their remote originals.
 fn discovers_distinct_network_sources_without_reading_originals() {
     use SqlValue::{Integer as I, Text as T};
     let paths = [
@@ -1515,6 +1516,7 @@ fn a_local_catalog_can_reference_an_explicitly_selected_network_share() {
 }
 
 #[test]
+/// Malformed grants fail before catalog reads or library changes.
 fn invalid_network_share_options_fail_before_reading_or_changing_the_library() {
     let mut session = crate::Session::new();
     let before = session.catalog.to_snapshot();

@@ -120,7 +120,7 @@ pub(super) fn fit_box(max_edge: usize) -> lightcraft_codecs::DecodeOptions {
 /// the whole file, which is what the decode of one can hold.
 pub fn fs_preview_loader() -> PreviewLoader {
     Arc::new(|path: &str, max_edge: usize| {
-        let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
+        let len = crate::doc_path::original_metadata(std::path::Path::new(path)).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(len.saturating_mul(2)) } else { gate.acquire_urgent(len.saturating_mul(2)) };
         if let Some(image) = preview_window(path, max_edge)
@@ -130,7 +130,7 @@ pub fn fs_preview_loader() -> PreviewLoader {
         {
             return Some(image);
         }
-        embedded_preview_srgb(&std::fs::read(path).ok()?, max_edge)
+        embedded_preview_srgb(&crate::doc_path::read_original(path).ok()?, max_edge)
     })
 }
 
@@ -178,7 +178,7 @@ impl PreviewRead {
 pub fn preview_window(path: &str, max_edge: usize) -> Result<Option<(Vec<u8>, Vec<u8>, PreviewRead)>, String> {
     use std::io::{Read, Seek, SeekFrom};
 
-    let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut file = crate::doc_path::open_original(path).map_err(|e| format!("{path}: {e}"))?;
     let total = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
     let mut prefix = read_prefix(&mut file, path, total)?;
 
