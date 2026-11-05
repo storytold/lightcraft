@@ -23,6 +23,129 @@ fn render_failure_paths_are_escaped_and_missing_sources_still_identified() {
     assert!(render_failure_message(Slot::Main, PhotoId(42), Some(&demo), "decode failed").contains("demo scene 7"));
 }
 
+/// Issue #2682: the log could not tell a file asked for 37 times from one asked once and failing
+/// inside. At debug level every request is a line naming its file, and so is how it ended when it
+/// drew nothing (a failure stays the warning it was).
+#[test]
+fn each_render_request_and_how_it_ended_is_a_debug_line_with_its_file() {
+    let ends =
+        |lines: &[String]| -> Vec<String> { lines.iter().map(|l| l.rsplit_once(": ").map_or(l.clone(), |(_, end)| end.to_string())).collect() };
+    let (mut app, work, ctx) = fixture();
+    let slot = Slot::Thumb(PhotoId(1));
+    let job = |app: &mut crate::LightcraftApp, edge| app.session.render_job(PhotoId(1), edge, edge, false, true).unwrap();
+    // asked once, drawn
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, j.run());
+    // asked twice: the first answer comes after the second request and is dropped
+    let (a, b) = (job(&mut app, 128), job(&mut app, 160));
+    app.renderer.request(slot, a, 10);
+    app.renderer.request(slot, b, 10);
+    let (_, b) = take_job(&work);
+    let (_, a) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, a.run());
+    finish(&mut app, &work, &ctx, slot, b.run());
+    // a stand-in that comes back after the thumbnail itself is not used
+    let quick = Slot::ThumbQuick(PhotoId(1));
+    let mut j = job(&mut app, 64);
+    j.request_id = lightcraft_preview::next_tick();
+    app.renderer.requests.insert(quick, Requested { look: None, id: j.request_id, source: Some(j.origin.clone()) });
+    finish(&mut app, &work, &ctx, quick, j.run());
+    // a render still running when everything is forgotten says so once, when it comes back
+    let j = job(&mut app, 200);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    app.renderer.forget_all();
+    finish(&mut app, &work, &ctx, slot, j.run());
+    assert_eq!(
+        ends(&app.renderer.decisions),
+        [
+            "requested",
+            "produced in 0 ms",
+            "requested",
+            "requested",
+            "abandoned, a newer request replaced it",
+            "produced in 0 ms",
+            "abandoned, the thumbnail itself came first",
+            "requested",
+            "abandoned, no longer wanted when it finished"
+        ]
+    );
+    let named = |app: &crate::LightcraftApp| {
+        assert!(
+            app.renderer.decisions.iter().all(|l| l.starts_with("render Thumb") && l.contains(", PhotoId(1), file \"audit.jpg\": ")),
+            "{:?}",
+            app.renderer.decisions
+        );
+    };
+    named(&app);
+
+    // a file that fails asks nothing while its failure stands, and says so when it is asked again
+    let (mut app, work, ctx) = fixture();
+    app.session.media.file_loader = Some(Arc::new(|_, _| Err("simulated decode failure".into())));
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, j.run());
+    assert_eq!(app.renderer.failure_messages.len(), 1, "the failure is the warning it was");
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    app.session.catalog.apply(Op::SetRating { id: PhotoId(1), rating: 3 }).unwrap();
+    app.renderer.poll(&ctx, &mut app.session);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    assert_eq!(ends(&app.renderer.decisions), ["requested", "requested again after a failure"]);
+    named(&app);
+
+    // requests that end before they run: the same render moved to another priority, a newer render
+    // in its place, scrolled out of view, everything forgotten
+    let (mut app, _, _) = fixture();
+    app.renderer.set_offload(Box::new(Blocked));
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 5);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let j = job(&mut app, 128);
+    app.renderer.request(slot, j, 10);
+    app.renderer.evict_thumbs(&Default::default(), 0);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 5);
+    app.renderer.forget_all();
+    assert_eq!(
+        ends(&app.renderer.decisions),
+        [
+            "requested",
+            "still waiting, moved to priority 10",
+            "abandoned, a newer request replaced it before it started",
+            "requested",
+            "abandoned, scrolled out of view before it started",
+            "requested",
+            "abandoned, the renderer started over (another library, or the previews were cleared)"
+        ]
+    );
+    named(&app);
+
+    // a stand-in still waiting that the grid moves up while it scrolls says so
+    let mut s = Session::new();
+    s.media.preview_loader = Some(Arc::new(|_, _| Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })));
+    let mut raw = (*photo()).clone();
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    raw.develop = Arc::new(raw.camera_defaults());
+    let (mut app, _, _) = fixture_with(s, raw);
+    app.renderer.pool = JobPool::new(0); // nothing starts until run_inline
+    crate::panels::grid::request_thumb(&mut app, PhotoId(1), 384, 5);
+    crate::panels::grid::request_thumb(&mut app, PhotoId(1), 384, 10);
+    assert_eq!(ends(&app.renderer.decisions), ["stand-in requested", "still waiting, moved to priority 11"]);
+    named(&app);
+    // a view shows whichever photo is open: its file names it
+    let main = Requested { look: None, id: 1, source: Some(Source::File { path: "trip/IMG_1.nef".into() }) };
+    assert_eq!(
+        abandoned_line(Slot::Main, Some(&main), "a newer request replaced it"),
+        "render Main, file \"trip/IMG_1.nef\": abandoned, a newer request replaced it"
+    );
+}
+
 struct Blocked;
 impl RenderOffload for Blocked {
     fn try_start(&mut self, _: Slot, job: RenderJob) -> Option<RenderJob> {
