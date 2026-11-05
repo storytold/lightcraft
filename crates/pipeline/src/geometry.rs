@@ -210,10 +210,8 @@ impl Frame {
         let a = self.aspect();
         let (mw, mh) = (max_w.max(1) as f64, max_h.max(1) as f64);
         // a box that is already this aspect up to rounding (an export size) is the size: fitting
-        // into it again rounds twice and can lose a pixel of the edge that was asked for. A
-        // reduced source (a thumbnail or preview proxy) rounds its aspect differently from the
-        // full photo, so allow a whole pixel of slack rather than half a pixel.
-        if (mw - 1.0) / a <= mh + 1.0 && (mw + 1.0) / a >= mh - 1.0 {
+        // into it again rounds twice and can lose a pixel of the edge that was asked for.
+        if (mw - 0.5) / a <= mh + 0.5 && (mw + 0.5) / a >= mh - 0.5 {
             return (max_w.max(1), max_h.max(1));
         }
         let (w, h) = if mw / mh > a { (mh * a, mh) } else { (mw, mw / a) };
