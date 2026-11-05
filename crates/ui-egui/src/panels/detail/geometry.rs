@@ -1,9 +1,9 @@
 #[cfg(test)]
 use super::info::label_badge_rect;
-use super::{Affine, Frame, LightcraftApp, PhotoId, Point, Pos2, Rect, Zoom, json, pos2, vec2};
+use super::{Affine, Color32, Frame, LightcraftApp, PhotoId, Point, Pos2, Rect, Zoom, json, pos2, vec2};
 
 /// Screen ↔ normalized-image mapping for the displayed frame.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CanvasMap {
     pub(super) rect: Rect,
     to_norm: Affine,
@@ -65,6 +65,96 @@ impl CanvasMap {
         let q = self.from_norm.apply(n);
         pos2(self.rect.left() + q.x as f32 / self.k, self.rect.top() + q.y as f32 / self.k)
     }
+}
+
+/// How the crop tool holds its view still while the crop changes (issue #1643). As in Lightroom the
+/// crop box stays upright on screen and the photo turns and moves beneath it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CropLayout {
+    /// Straightening, rotating or moving: the box keeps its centre on screen (`centre`) and the
+    /// scale (`k` points per pixel of the oriented photo); the photo turns and slides under it.
+    Pinned { centre: Pos2, k: f32 },
+    /// Resizing: the photo stays where it is and the box follows the handle.
+    Frozen(CanvasMap),
+}
+
+/// The loupe's zoom, pan and display scale, which the crop tool's unpinned layout follows.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ViewPort {
+    pub zoom: Zoom,
+    pub pan: (f32, f32),
+    pub ppp: f32,
+}
+
+/// The crop tool's view of the photo: the crop box upright, the whole photo around it, turned by
+/// the straighten angle.
+#[derive(Clone, Debug)]
+pub(crate) struct CropView {
+    /// Normalized photo ↔ screen, through the crop box (upright on screen).
+    pub map: CanvasMap,
+    /// The photo's corners on screen (top-left, top-right, bottom-right, bottom-left of the
+    /// uncropped render).
+    pub photo: [Pos2; 4],
+    /// The crop box's centre on screen, and screen points per pixel of the oriented photo.
+    pub centre: Pos2,
+    pub k: f32,
+}
+
+impl CropView {
+    /// The photo's bounding box on screen.
+    pub fn bounds(&self) -> Rect {
+        Rect::from_points(&self.photo)
+    }
+}
+
+/// Lay the crop tool's view out in `area`: held as `layout` says while the crop is being changed,
+/// otherwise the turned photo placed as the loupe places a photo (Fit, Fill or a zoom percentage,
+/// panned). `frame` is the uncropped frame the loupe renders.
+pub(crate) fn crop_view(frame: &Frame, crop: lightcraft_geom::CropGeometry, area: Rect, layout: Option<&CropLayout>, view: ViewPort) -> CropView {
+    let cf = Frame { crop, ..frame.clone() };
+    let (nw, nh) = cf.native_size();
+    let (nw, nh) = ((nw as f32).max(1e-3), (nh as f32).max(1e-3));
+    // the uncropped render's corners, as normalized photo points (its flips included)
+    let uv_to_norm = frame.out_to_norm(1, 1);
+    let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(u, v)| uv_to_norm.apply(Point::new(u, v)));
+    let finite = |k: f32| k.is_finite() && k > 0.0;
+    let map = match layout {
+        Some(CropLayout::Frozen(m)) => m.clone(),
+        _ => {
+            let (centre, k) = match layout {
+                Some(CropLayout::Pinned { centre, k }) if centre.is_finite() && finite(*k) => (*centre, *k),
+                _ => {
+                    // the turned photo at one point per pixel around a box centred on the origin,
+                    // scaled and placed to fit the area
+                    let unit = CanvasMap::new(&cf, Rect::from_center_size(Pos2::ZERO, vec2(nw, nh)));
+                    let b = Rect::from_points(&corners.map(|c| unit.screen(c)));
+                    let (bw, bh) = (b.width().max(1e-3), b.height().max(1e-3));
+                    let px = [bw.round().max(1.0) as usize, bh.round().max(1.0) as usize];
+                    let placed = fit_rect(area, bw / bh, view.zoom, px, view.ppp, view.pan);
+                    let k = placed.width() / bw;
+                    let k = if finite(k) { k } else { 1.0 };
+                    (placed.center() - b.center().to_vec2() * k, k)
+                }
+            };
+            CanvasMap::new(&cf, Rect::from_center_size(centre, vec2(nw * k, nh * k)))
+        }
+    };
+    let photo = corners.map(|c| map.screen(c));
+    let quad = cf.crop_quad_norm().map(|c| map.screen(c));
+    let centre = pos2(quad.iter().map(|q| q.x).sum::<f32>() / 4.0, quad.iter().map(|q| q.y).sum::<f32>() / 4.0);
+    let k = quad[0].distance(quad[1]) / nw;
+    CropView { map, photo, centre, k: if finite(k) { k } else { 1.0 } }
+}
+
+/// The uncropped render drawn turned and placed as the crop tool's view lays it out.
+pub(super) fn crop_view_mesh(tex: egui::TextureId, view: &CropView) -> egui::Shape {
+    let mut mesh = egui::epaint::Mesh::with_texture(tex);
+    for (pos, uv) in view.photo.iter().zip([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]) {
+        mesh.vertices.push(egui::epaint::Vertex { pos: *pos, uv: pos2(uv.0, uv.1), color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    egui::Shape::mesh(mesh)
 }
 
 pub(crate) fn fit_rect(area: Rect, aspect: f32, zoom: Zoom, img_px: [usize; 2], ppp: f32, pan: (f32, f32)) -> Rect {

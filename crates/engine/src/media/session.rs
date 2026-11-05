@@ -1,6 +1,8 @@
 use super::quick::{QuickJob, content_key, source_info};
 use super::render::{RenderJob, RenderResult};
-use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
+use super::source::{
+    PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket, without_crop,
+};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
 impl crate::Session {
@@ -36,6 +38,10 @@ impl crate::Session {
     ) -> Option<RenderJob> {
         let p = self.catalog.photo(id)?.clone();
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
+        // the crop tool's uncropped view doesn't depend on the crop box or the straighten angle: a
+        // drag of either must not re-render it (issue #1643)
+        let uncropped = !apply_crop && !settings.crop.geometry.is_identity();
+        let settings = if uncropped { Arc::new(without_crop(&settings)) } else { settings };
         let level = SourceLevel::for_size(if thumb_bucket.is_some() {
             max_w.max(max_h) // (grid thumbnails of tight crops stay cheap)
         } else {
@@ -50,7 +56,7 @@ impl crate::Session {
         let content = Hasher128::new().str(&content_key).finish().0 as u64;
         let source_key = super::quick::source_identity(&p);
         // Temporary "before" settings must not replace the photo's cached develop hash.
-        let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
+        let settings_hash = if before || uncropped { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
         let lens = super::quick::lens_key(&p);
         let key = settings_hash
@@ -239,7 +245,7 @@ impl crate::Session {
         let mut k = Hasher128::new();
         k.str(&content_key(p))
             .str("view")
-            .u64(p.develop.hash64())
+            .u64(if apply_crop { p.develop.hash64() } else { without_crop(&p.develop).hash64() })
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key());

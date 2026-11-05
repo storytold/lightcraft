@@ -34,9 +34,10 @@ use filmstrip::film_label;
 pub(crate) use filmstrip::film_spoken;
 pub(crate) use filmstrip::filmstrip;
 use filmstrip::navigator;
-pub use geometry::CanvasMap;
 #[cfg(test)]
 pub(crate) use geometry::focus_box;
+pub use geometry::{CanvasMap, CropLayout};
+use geometry::{CropView, ViewPort, crop_view, crop_view_mesh};
 use geometry::{animated_rect, middle_pan};
 pub(crate) use geometry::{fit_rect, fit_texture_rect, focus_pan, navigate_gesture, output_px, pan_image, snap_fit_rect, texture_side};
 #[cfg(test)]
@@ -68,10 +69,13 @@ pub enum Gesture {
         spot: usize,
         source: bool,
     },
+    /// Crop tool: resizing by handle `handle` (0..7), or moving the photo under the box (8).
     CropHandle {
         handle: u8,
         start: lightcraft_geom::Rect,
         angle: f64,
+        /// The view as the drag started: pointer positions mean photo points through it.
+        map: CanvasMap,
     },
     /// Straighten tool: a line drawn along something that should be level (or plumb).
     StraightenLine {
@@ -168,14 +172,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
+    // the crop tool: the crop box upright and the photo turned around it, held still while the crop
+    // changes so the photo moves under the box (issue #1643). Laid out before the zoom gestures,
+    // which act on the turned photo's bounds as the view places them.
+    let mut cview = crop_tool_view(app, &frame, &d, main_area, ppp, crop_tool);
+    let (gesture_rect, gesture_px) = gesture_view(cview.as_ref(), img_rect, native);
     let navigating = areas.iter().any(|&view_area| {
-        let view_img = in_pane(view_area, img_rect);
-        navigate_gesture(app, ui, &resp, view_area, view_img, native) || middle_pan(app, ui, &resp, view_area, view_img)
+        let view_img = in_pane(view_area, gesture_rect);
+        navigate_gesture(app, ui, &resp, view_area, view_img, gesture_px) || middle_pan(app, ui, &resp, view_area, view_img)
     });
     if navigating {
         target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
         img_rect = target_rect;
+        cview = crop_tool_view(app, &frame, &d, main_area, ppp, crop_tool);
     }
+    (target_rect, img_rect) = settle_crop_view(app, &frame, cview.as_ref(), (target_rect, img_rect));
     let before_img = in_pane(areas[0], img_rect);
     let before_target = in_pane(areas[0], target_rect);
     app.image_rect = Some(img_rect);
@@ -203,7 +214,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         native_long,
         texture_side,
         draft,
-        windows: overlay_supports_window(overlay),
+        // (the crop tool shows the whole photo, turned: no zoomed windows)
+        windows: !crop_tool && overlay_supports_window(overlay),
     };
     let plan = loupe_plan(app, id, look, sizes);
     // time the full-size drafts where they are what shows: under a window the whole-frame draft
@@ -271,7 +283,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let windows = request_windows(app, &window_ctx, window_views);
     let p = ui.painter_at(canvas);
-    let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, slot, r, clip);
+    let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, slot, r, clip, cview.as_ref().filter(|_| r == img_rect));
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
     if app.ui.soft_proof && !fullscreen {
         proof_surround(app, &p, &t, canvas);
@@ -323,7 +335,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     // the line of a wipe over both
     draw_wipe_line(app.ui.before_after, &p, img_rect, line);
-    let map = CanvasMap::new(&frame, img_rect);
+    let map = cview.as_ref().map_or_else(|| CanvasMap::new(&frame, img_rect), |v| v.map.clone());
     let over = OverPhoto { photo: &photo, d: &d, map: &map, canvas, img_rect, fullscreen, crop_tool, clipping: !show_before };
     photo_overlays(app, ui, &p, &over);
     // Cursor selection must also run on gesture frames, when tool input is suppressed.
@@ -704,6 +716,39 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
     }
 }
 
+/// The crop tool's view of the photo in `main_area` (none in other tools). Its layout is only held
+/// while a crop drag is under way.
+fn crop_tool_view(app: &mut LightcraftApp, frame: &Frame, d: &DevelopSettings, main_area: Rect, ppp: f32, crop_tool: bool) -> Option<CropView> {
+    if !crop_tool || app.session.interaction.is_none() {
+        app.crop_layout = None;
+    }
+    crop_tool.then(|| crop_view(frame, d.crop.geometry, main_area, app.crop_layout.as_ref(), ViewPort { zoom: app.ui.zoom, pan: app.ui.pan, ppp }))
+}
+
+/// The rect and pixel size the zoom gestures act on: the crop tool's turned photo as its view
+/// places it, else the photo's rect.
+fn gesture_view(crop: Option<&CropView>, img_rect: Rect, native: [usize; 2]) -> (Rect, [usize; 2]) {
+    match crop {
+        Some(v) => {
+            let b = v.bounds();
+            (b, [(b.width() / v.k).round().max(1.0) as usize, (b.height() / v.k).round().max(1.0) as usize])
+        }
+        None => (img_rect, native),
+    }
+}
+
+/// Hold the crop tool's view still from the first frame of a crop drag; the rect the uncropped
+/// render is sized for (the photo at the view's scale) and the turned photo's bounds, or `rects`
+/// (target, image) when there is no crop view.
+fn settle_crop_view(app: &mut LightcraftApp, frame: &Frame, v: Option<&CropView>, rects: (Rect, Rect)) -> (Rect, Rect) {
+    let Some(v) = v else { return rects };
+    if app.session.interaction.is_some() && app.crop_layout.is_none() {
+        app.crop_layout = Some(CropLayout::Pinned { centre: v.centre, k: v.k });
+    }
+    let b = v.bounds();
+    (Rect::from_center_size(b.center(), vec2(frame.ow as f32 * v.k, frame.oh as f32 * v.k)), b)
+}
+
 /// The loupe's render plan, without a window for a view the GPU already refused one for.
 fn loupe_plan(app: &LightcraftApp, id: PhotoId, look: u64, sizes: crate::region::ViewSizes) -> crate::region::LoupePlan {
     let plan = crate::region::plan(&app.ui.settings, sizes);
@@ -783,7 +828,17 @@ fn request_before(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) {
 
 /// What a view slot shows: its own render of this photo, else the stand-ins (no blank frame
 /// between photos, and the full render replaces them in place). Returns what it drew.
-fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot: Slot, r: Rect, clip: Rect) -> &'static str {
+#[allow(clippy::too_many_arguments)]
+fn draw_slot(
+    app: &LightcraftApp,
+    p: &egui::Painter,
+    id: PhotoId,
+    ppp: f32,
+    slot: Slot,
+    r: Rect,
+    clip: Rect,
+    crop: Option<&CropView>,
+) -> &'static str {
     let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
     let (tex, what) = if let Some(t) = mine(slot) {
         (t, "render")
@@ -794,8 +849,16 @@ fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot
     } else {
         return "none";
     };
-    let image_rect = snap_fit_rect(fit_texture_rect(r, tex.size), tex.size, ppp);
-    p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    match crop {
+        // the crop tool: the uncropped render drawn turned under the upright crop box
+        Some(v) => {
+            p.with_clip_rect(clip).add(crop_view_mesh(tex.tex.id(), v));
+        }
+        None => {
+            let image_rect = snap_fit_rect(fit_texture_rect(r, tex.size), tex.size, ppp);
+            p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+    }
     what
 }
 
@@ -1113,6 +1176,10 @@ mod tests {
     use egui::{Color32, Pos2, Rect, pos2};
 
     /// A rotated `w` × `h` box centred on `centre`.
+    fn corners(r: Rect) -> [Pos2; 4] {
+        [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()]
+    }
+
     fn box_at(centre: Pos2, w: f32, h: f32, angle: f32) -> [Pos2; 4] {
         let (s, c) = angle.to_radians().sin_cos();
         [(-w, -h), (w, -h), (w, h), (-w, h)].map(|(x, y)| pos2(centre.x + (x * c - y * s) / 2.0, centre.y + (x * s + y * c) / 2.0))
@@ -1138,51 +1205,59 @@ mod tests {
     #[test]
     fn the_dimming_outside_a_rotated_crop_is_exactly_the_photo_minus_the_box() {
         let img = Rect::from_min_max(pos2(100.0, 50.0), pos2(500.0, 650.0));
-        // boxes inside the photo, poking out of it, and bigger than it
+        // boxes inside the photo, poking out of it, and bigger than it; the photo upright (the box
+        // turned) or turned under an upright box, as the crop tool shows it (issue #1643)
         for (w, h) in [(240.0, 360.0), (420.0, 300.0), (700.0, 900.0)] {
             for angle in [0.0f32, 5.0, 15.0, 30.0, -45.0, 90.0, 137.0, 200.0] {
                 let quad = box_at(img.center() + egui::vec2(30.0, -20.0), w, h, angle);
-                let mesh = outside_crop_mesh(img, &quad, Color32::BLACK);
-                let tris: Vec<[Pos2; 3]> = mesh
-                    .indices
-                    .chunks(3)
-                    .map(|t| [mesh.vertices[t[0] as usize].pos, mesh.vertices[t[1] as usize].pos, mesh.vertices[t[2] as usize].pos])
-                    .collect();
-                let (mut inside, mut outside) = (0, 0);
-                let mut y = img.top() - 20.0;
-                while y < img.bottom() + 20.0 {
-                    let mut x = img.left() - 20.0;
-                    while x < img.right() + 20.0 {
-                        let p = pos2(x, y);
-                        let in_box = sides(&quad, p);
-                        let in_img = sides(&[img.left_top(), img.right_top(), img.right_bottom(), img.left_bottom()], p);
-                        // a pixel on an edge may fall either way: skip the boundaries themselves
-                        if in_box.iter().chain(&in_img).any(|d| d.abs() < 1.0) {
-                            x += 7.0;
-                            continue;
-                        }
-                        let expected = if in_img.iter().all(|d| *d > 0.0) && !in_box.iter().all(|d| *d > 0.0) { 1 } else { 0 };
-                        // a sample on the seam between two of a strip's fan triangles is in both
-                        // or in neither, depending on rounding: count it both ways
-                        let covered = |eps: f32| tris.iter().filter(|t| sides(*t, p).iter().all(|d| *d > eps)).count();
-                        let (at_least, at_most) = (covered(0.01), covered(-0.01));
-                        assert!(
-                            at_least <= expected && expected <= at_most,
-                            "{w}×{h} box at {angle}°: ({x}, {y}) lies in {at_least}..={at_most} triangle(s), not {expected}"
-                        );
-                        if expected == 1 {
-                            outside += 1
-                        } else if in_img.iter().all(|d| *d > 0.0) {
-                            inside += 1
-                        }
-                        x += 7.0;
-                    }
-                    y += 7.0;
-                }
-                // (a box bigger than the photo swallows it whole at some angles)
-                assert!(inside > 50 && (outside > 50 || w > img.width()), "{w}×{h} at {angle}°: {outside} dimmed, {inside} clear samples");
+                assert_dims_photo_minus_box(&corners(img), &quad, w > img.width(), &format!("{w}×{h} box at {angle}°"));
+                let turned = box_at(img.center(), img.width(), img.height(), -angle);
+                let upright = box_at(img.center() + egui::vec2(30.0, -20.0), w, h, 0.0);
+                assert_dims_photo_minus_box(&turned, &upright, w > img.width(), &format!("{w}×{h} box on a photo at {angle}°"));
             }
         }
+    }
+
+    /// Every sampled point of `photo` outside `quad` lies in exactly one of the dimming mesh's
+    /// triangles; no point inside the box or outside the photo lies in any.
+    fn assert_dims_photo_minus_box(photo: &[Pos2; 4], quad: &[Pos2; 4], swallowed: bool, what: &str) {
+        let mesh = outside_crop_mesh(photo, quad, Color32::BLACK);
+        let tris: Vec<[Pos2; 3]> = mesh
+            .indices
+            .chunks(3)
+            .map(|t| [mesh.vertices[t[0] as usize].pos, mesh.vertices[t[1] as usize].pos, mesh.vertices[t[2] as usize].pos])
+            .collect();
+        let bounds = Rect::from_points(photo);
+        let (mut inside, mut outside) = (0, 0);
+        let mut y = bounds.top() - 20.0;
+        while y < bounds.bottom() + 20.0 {
+            let mut x = bounds.left() - 20.0;
+            while x < bounds.right() + 20.0 {
+                let p = pos2(x, y);
+                let in_box = sides(quad, p);
+                let in_img = sides(photo, p);
+                // a pixel on an edge may fall either way: skip the boundaries themselves
+                if in_box.iter().chain(&in_img).any(|d| d.abs() < 1.0) {
+                    x += 7.0;
+                    continue;
+                }
+                let expected = if in_img.iter().all(|d| *d > 0.0) && !in_box.iter().all(|d| *d > 0.0) { 1 } else { 0 };
+                // a sample on the seam between two of a strip's fan triangles is in both or in
+                // neither, depending on rounding: count it both ways
+                let covered = |eps: f32| tris.iter().filter(|t| sides(*t, p).iter().all(|d| *d > eps)).count();
+                let (at_least, at_most) = (covered(0.01), covered(-0.01));
+                assert!(at_least <= expected && expected <= at_most, "{what}: ({x}, {y}) lies in {at_least}..={at_most} triangle(s), not {expected}");
+                if expected == 1 {
+                    outside += 1
+                } else if in_img.iter().all(|d| *d > 0.0) {
+                    inside += 1
+                }
+                x += 7.0;
+            }
+            y += 7.0;
+        }
+        // (a box bigger than the photo swallows it whole at some angles)
+        assert!(inside > 50 && (outside > 50 || swallowed), "{what}: {outside} dimmed, {inside} clear samples");
     }
 
     /// A flat or broken box dims nothing rather than something arbitrary (or panicking).
@@ -1193,9 +1268,9 @@ mod tests {
         let line = [pos2(10.0, 10.0), pos2(90.0, 10.0), pos2(90.0, 10.0), pos2(10.0, 10.0)];
         let nan = [pos2(f32::NAN, 10.0), pos2(90.0, 10.0), pos2(90.0, 50.0), pos2(10.0, 50.0)];
         for quad in [point, line, nan] {
-            assert!(outside_crop_mesh(img, &quad, Color32::BLACK).indices.is_empty(), "{quad:?}");
+            assert!(outside_crop_mesh(&corners(img), &quad, Color32::BLACK).indices.is_empty(), "{quad:?}");
         }
-        assert!(outside_crop_mesh(Rect::NAN, &box_at(pos2(50.0, 50.0), 20.0, 20.0, 10.0), Color32::BLACK).indices.is_empty());
+        assert!(outside_crop_mesh(&corners(Rect::NAN), &box_at(pos2(50.0, 50.0), 20.0, 20.0, 10.0), Color32::BLACK).indices.is_empty());
     }
 
     /// A raw's embedded JPEG shown while the raw decodes, or the last render while an edit renders,

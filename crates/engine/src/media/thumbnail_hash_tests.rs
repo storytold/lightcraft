@@ -42,6 +42,27 @@ fn hashes_match_uncached_keys_and_are_not_recomputed_for_sizes_metadata_or_befor
     s.thumb_job(PhotoId(1), 256).unwrap();
     assert_eq!(s.media.settings_hashes.computations, 3);
 }
+/// Issue #1643: straightening or moving the crop box in the crop tool doesn't re-render its
+/// uncropped view; the cropped view (and anything else) still changes with the crop.
+#[test]
+fn the_uncropped_view_ignores_the_crop_box_and_angle() {
+    let mut s = session();
+    let keys = |s: &mut crate::Session| {
+        let open = s.loupe_job(PhotoId(1), 800, 600, false).unwrap();
+        let shut = s.loupe_job(PhotoId(1), 800, 600, true).unwrap();
+        (open.key, open.view_cache.unwrap().1, shut.key)
+    };
+    let before = keys(&mut s);
+    let mut edit = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+    edit.crop.geometry = lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(0.2, 0.2, 0.7, 0.8), angle: 7.5 };
+    s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edit.clone()), label: "crop".into(), edited: None }).unwrap();
+    let cropped = keys(&mut s);
+    assert_eq!((before.0, before.1), (cropped.0, cropped.1), "the uncropped view is the same render");
+    assert_ne!(before.2, cropped.2, "the cropped view follows the crop");
+    edit.light.exposure = 1.0;
+    s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edit), label: "edit".into(), edited: None }).unwrap();
+    assert_ne!(keys(&mut s).0, cropped.0, "other edits still re-render it");
+}
 #[test]
 fn hash_cache_is_bounded_weak_and_shared_settings_remain_independent() {
     let mut hashes = SettingsHashes::default();

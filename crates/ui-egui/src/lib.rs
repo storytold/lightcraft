@@ -281,6 +281,8 @@ pub struct LightcraftApp {
     next_widget_hits: Vec<(String, widgets::WidgetHit)>,
     /// In-progress on-canvas gesture (brush stroke points, gradient drag…).
     pub gesture: Option<panels::detail::Gesture>,
+    /// The crop tool's view held still while the crop is dragged, rotated or straightened (issue #1643).
+    pub crop_layout: Option<panels::detail::CropLayout>,
     /// Space is held over a tool on the photo: the view's hand has the pointer ([`space_hand`]).
     pub space_hand: Option<space_hand::SpaceHand>,
     /// The brush stroke being painted, as drawn on the photo until it's committed (issue #517).

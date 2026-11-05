@@ -1,4 +1,4 @@
-use super::geometry::CanvasMap;
+use super::geometry::{CanvasMap, CropLayout};
 use super::{
     Affine, Color32, DevelopSettings, Frame, Gesture, LightcraftApp, PhotoId, Point, Pos2, Rect, Stroke, Tokens, json, pos2, register, vec2,
 };
@@ -24,13 +24,13 @@ pub(super) fn crop_overlay(
         return;
     }
     if app.ui.tool == "straighten" {
-        straighten_overlay(app, ui, resp, false);
+        straighten_overlay(app, ui, resp, false, d.crop.geometry.angle);
         return;
     }
     // hold ⌘ and drag: draw a straighten line without leaving the crop tool
     let cmd_drag = resp.drag_started() && ui.input(|i| i.modifiers.command);
     if cmd_drag || matches!(app.gesture, Some(Gesture::StraightenLine { .. })) {
-        straighten_overlay(app, ui, resp, true);
+        straighten_overlay(app, ui, resp, true, d.crop.geometry.angle);
         return;
     }
     if resp.hovered() && ui.input(|i| i.modifiers.command) {
@@ -52,8 +52,12 @@ pub(super) fn crop_overlay(
     // top-left corner elsewhere)
     let quad = flipped_corners(&pts, frame.flip_h, frame.flip_v);
     if pts.len() == 4 {
-        p.add(outside_crop_mesh(map.rect, &quad, Color32::from_black_alpha(150)));
+        let uv_to_norm = frame.out_to_norm(1, 1);
+        let photo = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(u, v)| map.screen(uv_to_norm.apply(Point::new(u, v))));
+        p.add(outside_crop_mesh(&photo, &quad, Color32::from_black_alpha(150)));
     }
+    // the box's centre: what a rotation turns the photo about (it stays put on screen)
+    let box_centre = pos2(pts.iter().map(|q| q.x).sum::<f32>() / 4.0, pts.iter().map(|q| q.y).sum::<f32>() / 4.0);
     p.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, Color32::WHITE)));
     // overlay guides
     let lerp = |a: Pos2, b: Pos2, t: f32| a + (b - a) * t;
@@ -141,24 +145,31 @@ pub(super) fn crop_overlay(
             return;
         }
         let d = app.session.develop_of(id).unwrap_or_default();
-        app.gesture = Some(match handles.iter().position(|h| h.distance(q) < 12.0) {
-            Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
-            None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
-            None => {
-                let c = map.screen(Point::new(0.5, 0.5));
-                Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (q - c).angle() }
-            }
-        });
+        let (start, angle) = (d.crop.geometry.rect, d.crop.geometry.angle);
+        // screen points per pixel of the photo: the box's width on screen over its width in pixels
+        let native_w = Frame { crop: d.crop.geometry, ..frame.clone() }.native_size().0 as f32;
+        let k = pts[0].distance(pts[1]) / native_w.max(1e-3);
+        let pinned = Some(CropLayout::Pinned { centre: box_centre, k });
+        let (gesture, layout) = match handles.iter().position(|h| h.distance(q) < 12.0) {
+            Some(h) => (Gesture::CropHandle { handle: h as u8, start, angle, map: map.clone() }, Some(CropLayout::Frozen(map.clone()))),
+            None if inside(q) => (Gesture::CropHandle { handle: 8, start, angle, map: map.clone() }, pinned),
+            None => (Gesture::CropRotate { start_angle: angle, a0: (q - box_centre).angle() }, pinned),
+        };
+        app.gesture = Some(gesture);
+        app.crop_layout = layout;
     }
     if resp.dragged()
         && let Some(q) = resp.interact_pointer_pos()
     {
         match app.gesture.clone() {
-            Some(Gesture::CropHandle { handle, start, angle }) => {
+            Some(Gesture::CropHandle { handle, start, angle, map }) => {
                 // The crop model decides what the drag does (anchor, aspect lock, image bounds): see
                 // `lightcraft_geom::drag_crop`; the UI only reports where the pointer started and is.
                 let n = to_straight(map.norm(q), angle, frame);
                 let orig = ui.input(|i| i.pointer.press_origin()).map(|q0| to_straight(map.norm(q0), angle, frame)).unwrap_or(n);
+                // moving: the photo follows the pointer under the box, so the box moves the other way
+                // over the photo
+                let (orig, n) = if handle == 8 { (n, orig) } else { (orig, n) };
                 // Shift keeps the current proportions for this drag only; the Lock toggle is untouched.
                 let keep_ratio = ui.input(|i| i.modifiers.shift);
                 let _ = app.run(
@@ -167,9 +178,11 @@ pub(super) fn crop_overlay(
                 );
             }
             Some(Gesture::CropRotate { start_angle, a0 }) => {
-                let c = map.screen(Point::new(0.5, 0.5));
-                let a = (q - c).angle();
-                let ang = (start_angle + (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
+                let a = (q - box_centre).angle();
+                // (the turn since the press, taken the short way round: the pointer crossing the box's
+                // left side flips the angle between -180 and 180 degrees)
+                let turn = (a - a0 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                let ang = (start_angle + turn.to_degrees() as f64).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
                 let _ = app.run("crop.straighten", json!({"angle": shown_angle}));
             }
@@ -178,6 +191,7 @@ pub(super) fn crop_overlay(
     }
     if resp.drag_stopped() {
         app.gesture = None;
+        app.crop_layout = None;
         let _ = app.run("develop.endInteraction", json!({}));
     }
     if let Some(at) = readout_at {
@@ -227,7 +241,9 @@ fn crop_keys(
         // the drag runs in the straightened crop frame, as a pointer drag from the handle would;
         // the arrows follow the screen
         let angle = d.crop.geometry.angle;
-        let to_q = at + vec2(dx as f32 * map.rect.width(), dy as f32 * map.rect.height());
+        // (a step is a fraction of the photo's size on screen: in the crop tool `map.rect` is the crop box)
+        let photo = app.image_rect.map_or(map.rect.size(), |r| r.size());
+        let to_q = at + vec2(dx as f32 * photo.x, dy as f32 * photo.y);
         let (from, to) = (to_straight(map.norm(at), angle, frame), to_straight(map.norm(to_q), angle, frame));
         let started = app.run("develop.beginInteraction", json!({"label": "Crop"})).and_then(|_| app.begin_crop().map(|_| serde_json::Value::Null));
         if let Err(e) = started {
@@ -331,7 +347,8 @@ fn guided_overlay(
     d: &DevelopSettings,
     id: PhotoId,
 ) {
-    let p = ui.painter_at(map.rect.expand(8.0));
+    // in the crop tool `map.rect` is the crop box: guides on the photo around it must still show
+    let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect.expand(8.0)));
     let col = Color32::from_rgb(255, 196, 40);
     // the selected guide: brighter, so the Delete key has a visible target
     let selected = app.ui.selected_guide.filter(|(photo, _)| *photo == id.0).map(|(_, i)| i);
@@ -499,9 +516,9 @@ pub(super) fn flipped_corners(pts: &[Pos2], flip_h: bool, flip_v: bool) -> [Pos2
 /// the two rectangles are aligned. Rotated, those quads cross themselves and each other, which
 /// showed as dimmed wedges inside the crop and doubly dark ones outside, growing with the angle.
 /// A degenerate quad (a point, a line, a non-finite corner) dims nothing.
-pub(super) fn outside_crop_mesh(img: Rect, quad: &[Pos2; 4], color: Color32) -> egui::epaint::Mesh {
+pub(super) fn outside_crop_mesh(photo: &[Pos2; 4], quad: &[Pos2; 4], color: Color32) -> egui::epaint::Mesh {
     let mut mesh = egui::epaint::Mesh::default();
-    if !quad.iter().all(|q| q.x.is_finite() && q.y.is_finite()) || !img.is_finite() {
+    if !quad.iter().chain(photo).all(|q| q.x.is_finite() && q.y.is_finite()) {
         return mesh;
     }
     let centre = pos2((quad[0].x + quad[1].x + quad[2].x + quad[3].x) / 4.0, (quad[0].y + quad[1].y + quad[2].y + quad[3].y) / 4.0);
@@ -529,11 +546,10 @@ pub(super) fn outside_crop_mesh(img: Rect, quad: &[Pos2; 4], color: Color32) -> 
         }
         Some(out)
     };
-    let photo = [img.left_top(), img.right_top(), img.right_bottom(), img.left_bottom()];
     for i in 0..4 {
         let outside = |q: Pos2| side(i, q).map(|d| -d);
         let inside_next = |q: Pos2| side(i + 1, q);
-        let Some(strip) = clip(&photo, &outside).and_then(|poly| clip(&poly, &inside_next)) else { return egui::epaint::Mesh::default() };
+        let Some(strip) = clip(photo, &outside).and_then(|poly| clip(&poly, &inside_next)) else { return egui::epaint::Mesh::default() };
         if strip.len() < 3 {
             continue;
         }
@@ -554,7 +570,9 @@ fn frame_crop_quad(d: &DevelopSettings, frame: &Frame) -> [Point; 4] {
 /// Straighten tool: drag along a horizon (or a vertical) to set the crop angle; double-click = Auto.
 /// The image is shown unrotated in the crop view, so the line's on-screen angle is its image angle.
 /// `held`: drawn with ⌘ held in the crop tool, which stays active afterwards.
-fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool) {
+/// The Straighten tool's level line. The crop tool shows the photo already turned by `angle`: a
+/// line drawn on screen at some slope lies at that slope minus `angle` in the photo.
+fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, held: bool, angle: f64) {
     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     if !held && resp.double_clicked() {
         app.auto_straighten(ui.ctx());
@@ -576,15 +594,22 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         app.gesture = None;
         let v = b - a;
         if v.length() > 8.0 {
-            let mut deg = v.y.atan2(v.x).to_degrees() as f64;
-            // fold to the nearest axis: a line closer to vertical straightens plumb lines
-            while deg > 45.0 {
-                deg -= 90.0;
+            // the line's slope in the photo, folded to the nearest axis: a line closer to vertical
+            // straightens plumb lines
+            let fold = |mut deg: f64| {
+                while deg > 45.0 {
+                    deg -= 90.0;
+                }
+                while deg < -45.0 {
+                    deg += 90.0;
+                }
+                deg
+            };
+            let deg = v.y.atan2(v.x).to_degrees() as f64 - angle;
+            if deg.is_finite() {
+                let deg = fold(deg);
+                let _ = app.run("crop.straighten", json!({"angle": (-deg * 100.0).round() / 100.0}));
             }
-            while deg < -45.0 {
-                deg += 90.0;
-            }
-            let _ = app.run("crop.straighten", json!({"angle": (-deg * 100.0).round() / 100.0}));
         }
         if !held {
             app.ui.tool.clear();

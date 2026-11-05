@@ -56,6 +56,14 @@ impl SourceLevel {
     }
 }
 
+/// `s` without its crop box and straighten angle (flips and the aspect lock kept): what an
+/// uncropped render (the crop tool's view) depends on.
+pub(super) fn without_crop(s: &DevelopSettings) -> DevelopSettings {
+    let mut s = s.clone();
+    s.crop.geometry = lightcraft_geom::CropGeometry::default();
+    s
+}
+
 /// Pixels along the source's long edge that an output `out_long` pixels long needs: a crop shows
 /// only part of the photo, so its pixels come from a source that many times larger (the source
 /// level is chosen from this, or a tight crop shown at its own pixels would be a stretched preview).
