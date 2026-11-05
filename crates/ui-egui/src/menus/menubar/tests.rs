@@ -896,7 +896,13 @@ fn smart_preview_menu_clicks_keep_build_and_discard_separate() {
         assert_eq!(r["ok"], true, "{case}: {r}");
         h.settle(timeout);
         if case == "discard" {
-            assert!(!proxy.exists(), "the explicit Discard row still discards");
+            // `settle` doesn't wait for the background discard's thread (slower on Windows)
+            let done = h.step_until(timeout, |h| h.app.session.preview_build.as_ref().is_some_and(|b| !b.running()));
+            let build = h.app.session.preview_build.as_ref();
+            assert!(done, "the discard never finished: {:?}", build.map(|b| b.what));
+            assert_eq!(build.map(|b| b.what), Some("discarding smart previews"));
+            let error = build.and_then(|b| b.error.lock().unwrap().clone());
+            assert!(!proxy.exists(), "the explicit Discard row still discards: {error:?}");
         } else {
             assert!(proxy.exists(), "{case}: clicking Build discarded an offline original's only proxy");
             if case != "compact" {
