@@ -67,6 +67,20 @@ fn size_limit_respected() {
     assert!(b.len() <= kb as usize * 1024);
 }
 
+/// The quantisation tables of a JPEG: what its quality sets, whatever the pixels.
+fn quant_tables(jpeg: &[u8]) -> Vec<u8> {
+    let (mut i, mut tables) = (2, Vec::new());
+    while jpeg[i] == 0xFF && jpeg[i + 1] != 0xDA {
+        let len = usize::from(u16::from_be_bytes([jpeg[i + 2], jpeg[i + 3]]));
+        if jpeg[i + 1] == 0xDB {
+            tables.extend_from_slice(&jpeg[i + 4..i + 2 + len]);
+        }
+        i += 2 + len;
+    }
+    assert!(!tables.is_empty(), "no quantisation tables");
+    tables
+}
+
 // Issue #3033: a size limit can cut the quality far below the requested one, so each file says
 // what it settled on; without a limit the file is written at the requested quality and says nothing
 #[test]
@@ -74,11 +88,15 @@ fn a_size_limit_reports_the_quality_it_settled_on() {
     let mut s = crate::Session::with_demo();
     let ids: Vec<_> = s.visible().iter().copied().take(1).collect();
     let limited = ExportOptions::from_json(&json!({"format": "jpeg", "quality": 90, "limitKb": 8, "width": 512}));
-    let (files, _, _) = lanes_batch(&mut s, &ids, &limited, 1, true, usize::MAX);
+    let (files, written, _) = lanes_batch(&mut s, &ids, &limited, 1, true, usize::MAX);
     let files = files.unwrap();
     let q = files[0]["quality"].as_u64().unwrap_or_else(|| panic!("no quality: {files:?}"));
     assert!((1..90).contains(&q), "{files:?}");
     assert!(files[0]["bytes"].as_u64().unwrap() <= 8 * 1024, "{files:?}");
+    // the number is the file's: it has the tables that quality writes (not the same bytes: a GPU
+    // render may differ from a CPU one by an LSB, see `shape`)
+    let at_q = encode_image(&test_image(), &ExportOptions { quality: q as u8, ..Default::default() }).unwrap();
+    assert_eq!(quant_tables(&written[0].1), quant_tables(&at_q), "reported quality {q}");
     let plain = ExportOptions::from_json(&json!({"format": "jpeg", "quality": 90, "width": 512}));
     let (files, _, _) = lanes_batch(&mut s, &ids, &plain, 1, true, usize::MAX);
     assert!(files.unwrap()[0].get("quality").is_none());
