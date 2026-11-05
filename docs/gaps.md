@@ -188,3 +188,4 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-24 | patch | LR-META-XMP: sidecar keywords are written as names in `dc:subject` and paths in `lr:hierarchicalSubject`, so other DAMs can search them; ranked gaps and estimates unchanged |
 | 2026-10-20 | minor | Opt-in Windows DirectComposition preference added; VRR hardware verification pending; parity counts unchanged |
 | 2026-10-25 | minor | Gap 1: first chart-calibrated model, the Canon EOS D60 (ColorChecker Classic under tungsten and sun, `crates/raw/src/chart_table.rs`); the gap stays open, hours unchanged |
+| 2026-11-05 | patch | TEST-TIFF-ZIP: level 6 avoids oversized noisy ZIP TIFFs with the shipped zlib-rs backend; compression-tag and decode checks cover 8/16-bit files, and export guidance agrees across UI and MCP. Ranked gaps and counts unchanged. |

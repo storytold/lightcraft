@@ -2684,5 +2684,7 @@
   "Set up name suggestions…": "Thiết lập gợi ý tên…",
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
-  "Bottom bar": "Thanh dưới cùng"
+  "Bottom bar": "Thanh dưới cùng",
+  "At 16 bit, LZW is often larger than no compression, and larger than ZIP at about the same speed. Use it only if other software needs LZW.": "Ở 16 bit, LZW thường lớn hơn khi không nén và lớn hơn ZIP với tốc độ gần như nhau. Chỉ dùng khi phần mềm khác cần LZW.",
+  "LZW is usually larger than ZIP and can be larger than no compression. Use it only if other software needs LZW.": "LZW thường lớn hơn ZIP và có thể lớn hơn khi không nén. Chỉ dùng khi phần mềm khác cần LZW."
 }

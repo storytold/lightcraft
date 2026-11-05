@@ -2459,5 +2459,7 @@
   "The Tags button lists placeholders for the template, such as {date} or {seq}. Each file is renamed on disk along with its XMP sidecar; a name that is taken gets -1, -2…": "Knappen Taggar visar platshållare för mallen, till exempel {date} eller {seq}. Varje fil byter namn på disken tillsammans med sin XMP-sidofil; ett namn som redan finns får -1, -2…",
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
-  "Bottom bar": "Nedre fältet"
+  "Bottom bar": "Nedre fältet",
+  "At 16 bit, LZW is often larger than no compression, and larger than ZIP at about the same speed. Use it only if other software needs LZW.": "Med 16 bitar blir LZW ofta större än okomprimerat och större än ZIP, med ungefär samma hastighet. Använd det bara om annan programvara kräver LZW.",
+  "LZW is usually larger than ZIP and can be larger than no compression. Use it only if other software needs LZW.": "LZW blir oftast större än ZIP och kan bli större än okomprimerat. Använd det bara om annan programvara kräver LZW."
 }

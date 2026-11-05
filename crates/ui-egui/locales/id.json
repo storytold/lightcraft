@@ -2370,5 +2370,7 @@
   "Set up name suggestions…": "Siapkan saran nama…",
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
-  "Bottom bar": "Bilah bawah"
+  "Bottom bar": "Bilah bawah",
+  "At 16 bit, LZW is often larger than no compression, and larger than ZIP at about the same speed. Use it only if other software needs LZW.": "Pada 16 bit, LZW sering lebih besar daripada tanpa kompresi, dan lebih besar daripada ZIP dengan kecepatan yang hampir sama. Gunakan hanya jika perangkat lunak lain memerlukan LZW.",
+  "LZW is usually larger than ZIP and can be larger than no compression. Use it only if other software needs LZW.": "LZW biasanya lebih besar daripada ZIP dan bisa lebih besar daripada tanpa kompresi. Gunakan hanya jika perangkat lunak lain memerlukan LZW."
 }

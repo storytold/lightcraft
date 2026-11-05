@@ -235,7 +235,7 @@ pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &Encod
     let comp = match compression {
         TiffCompression::None => Compression::Uncompressed,
         TiffCompression::Lzw => Compression::Lzw,
-        TiffCompression::Deflate => Compression::Deflate(DeflateLevel::Fast),
+        TiffCompression::Deflate => Compression::Deflate(DeflateLevel::Balanced),
         TiffCompression::PackBits => Compression::Packbits,
     };
     let float = matches!(img.samples, Samples::F32(_));

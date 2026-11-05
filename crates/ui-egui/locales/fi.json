@@ -2356,5 +2356,7 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "At 16 bit, LZW is often larger than no compression, and larger than ZIP at about the same speed. Use it only if other software needs LZW.": "16-bittisenä LZW on usein suurempi kuin pakkaamaton ja suurempi kuin ZIP, ja lähes yhtä nopea. Käytä sitä vain, jos muu ohjelma vaatii LZW:n.",
+  "LZW is usually larger than ZIP and can be larger than no compression. Use it only if other software needs LZW.": "LZW on yleensä suurempi kuin ZIP ja voi olla suurempi kuin pakkaamaton. Käytä sitä vain, jos muu ohjelma vaatii LZW:n."
 }
