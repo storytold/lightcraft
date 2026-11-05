@@ -67,6 +67,8 @@ fn olympus_and_samsung_bodies_decode_like_the_camera_jpeg() {
         ("orf-olympus-e-330.orf", (3280, 2450), 0xc938_38fa_9822_c81a, true),
         ("orf-olympus-e-500.orf", (3360, 2504), 0x5e22_2ac8_17ed_89d9, true),
         ("orf-olympus-e-m5-mark-ii.orf", (9280, 6932), 0xa222_be38_c767_7782, true),
+        ("orf-olympus-em1.orf", (4640, 3472), 0xc61b_0bb3_5170_4735, true),
+        ("orf-olympus-em10iii.orf", (4640, 3472), 0xedc1_ec6d_15a8_a303, true),
         ("orf-olympus-pen-f.orf", (10400, 7796), 0x415e_bf27_092e_9897, true),
         ("orf-olympus-sh-2.orf", (4624, 3470), 0xb25b_8d24_4ade_1f3d, true),
         ("orf-olympus-sp510uz.orf", (3088, 2309), 0xa885_b7ca_83ba_02f1, true),

@@ -1198,7 +1198,14 @@ fn auto_import_waits_for_a_browse_that_starts_during_its_listing() {
     assert!(h.app.import.is_none(), "no Auto Import for the browse to replace");
     // the browse finds one photo of its own and imports it
     let found = ImportCandidate { path: dir.path("trip/a.png"), ..Default::default() };
-    tx.send(crate::import::ScanEnd::Done(ScanOutput { candidates: vec![found], probes: Default::default() })).unwrap();
+    tx.send(crate::import::ScanEnd::Done(ScanOutput {
+        candidates: vec![found],
+        probes: Default::default(),
+        truncated: false,
+        unreadable: 0,
+        unsupported: 0,
+    }))
+    .unwrap();
     drop(tx);
     assert!(h.step_until(T, |h| h.app.import.is_some()), "the browse starts its import");
     assert!(h.step_until(T, |h| h.app.import.is_none()), "and it ends");

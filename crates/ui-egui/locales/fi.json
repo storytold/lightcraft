@@ -967,6 +967,10 @@
   "It tests this album, so testing it back would loop": "Se testaa tätä albumia, joten sen testaaminen takaisin muodostaisi silmukan",
   "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).": "Sen kohinanpoistettua kuvaa ei ole vielä tehty, eikä kuvia tehdä itsestään (Asetukset, Tekoälykohinanpoisto).",
   "JPEG (Large)": "JPEG (suuri)",
+  "Instagram Feed": "Instagram-syöte",
+  "Instagram Story / Reel": "Instagram-story / Reel",
+  "Web / Portfolio": "Web / Portfolio",
+  "Full Resolution Master": "Täysresoluutioinen masteri",
   "JPEG (Small)": "JPEG (pieni)",
   "Join the ArtCraft Discord": "Liity ArtCraftin Discordiin",
   "Join the ArtCraft Discord…": "Liity ArtCraftin Discordiin…",
@@ -2366,5 +2370,6 @@
   "This file's name cannot be represented as UTF-8.": "Tämän tiedoston nimeä ei voi esittää UTF-8-muodossa.",
   "The open request contains no files.": "Avauspyyntö ei sisällä tiedostoja.",
   "The open request contains an invalid number of files.": "Avauspyyntö sisältää virheellisen määrän tiedostoja.",
-  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Kirjasto vaihtui ennen kuin nämä kuvat voitiin tuoda. Avaa kuvat uudelleen halutussa kirjastossa."
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Kirjasto vaihtui ennen kuin nämä kuvat voitiin tuoda. Avaa kuvat uudelleen halutussa kirjastossa.",
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
 }

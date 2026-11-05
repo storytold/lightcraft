@@ -319,5 +319,7 @@
   "{name} is installed": "{name} on asennettu",
   "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä",
   "{n} files you opened haven't been imported yet. Quitting discards these requests.": "Avaamiasi tiedostoja on vielä tuomatta: {n}. Lopettaminen hylkää nämä pyynnöt.",
-  "File {n} in the open request is not a file URL.": "Avauspyynnön tiedosto {n} ei ole tiedoston URL-osoite."
+  "File {n} in the open request is not a file URL.": "Avauspyynnön tiedosto {n} ei ole tiedoston URL-osoite.",
+  "{n} folder{} could not be read": "Kansiot, joita ei voitu lukea: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Ohitetut tiedostot (ei tuettu valokuvatyyppi): {n}{:.0}"
 }

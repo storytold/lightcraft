@@ -322,5 +322,7 @@
   "{n} selected photo{} · {pages} page{}": "{n} foto dipilih · {pages} halaman{:.0}{:.0}",
   "{n} photo{} in view · {slides} slide{} · {time}": "{n} foto di tampilan · {slides} slide · {time}{:.0}{:.0}",
   "{n} files you opened haven't been imported yet. Quitting discards these requests.": "{n} file yang Anda buka belum diimpor. Keluar akan membuang permintaan ini.",
-  "File {n} in the open request is not a file URL.": "Berkas {n} dalam permintaan untuk membuka bukan URL berkas."
+  "File {n} in the open request is not a file URL.": "Berkas {n} dalam permintaan untuk membuka bukan URL berkas.",
+  "{n} folder{} could not be read": "Folder yang tidak bisa dibaca: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}"
 }

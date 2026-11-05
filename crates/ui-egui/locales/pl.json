@@ -698,6 +698,10 @@
   "Invert Component": "Odwróć składnik",
   "Invert Mask": "Odwróć maskę",
   "JPEG (Large)": "JPEG (duży)",
+  "Instagram Feed": "Instagram – kanał",
+  "Instagram Story / Reel": "Instagram Story / Reel",
+  "Web / Portfolio": "Web / portfolio",
+  "Full Resolution Master": "Master w pełnej rozdzielczości",
   "JPEG (Small)": "JPEG (mały)",
   "Join the ArtCraft Discord": "Dołącz do Discorda ArtCraft",
   "Join the ArtCraft Discord…": "Dołącz do Discorda ArtCraft…",
@@ -2331,5 +2335,6 @@
   "This file's name cannot be represented as UTF-8.": "Nazwy tego pliku nie można przedstawić w UTF-8.",
   "The open request contains no files.": "Żądanie otwarcia nie zawiera plików.",
   "The open request contains an invalid number of files.": "Żądanie otwarcia zawiera nieprawidłową liczbę plików.",
-  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Biblioteka zmieniła się przed zaimportowaniem tych zdjęć. Otwórz zdjęcia ponownie w wybranej bibliotece."
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Biblioteka zmieniła się przed zaimportowaniem tych zdjęć. Otwórz zdjęcia ponownie w wybranej bibliotece.",
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
 }

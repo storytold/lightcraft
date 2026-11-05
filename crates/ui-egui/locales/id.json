@@ -972,6 +972,10 @@
   "It tests this album, so testing it back would loop": "Album itu sudah menjadikan album ini sebagai syarat; menjadikannya syarat di sini akan menimbulkan perulangan",
   "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).": "Hasil pengurangan noise foto ini belum dibuat, dan tidak dibuat secara otomatis (Pengaturan, Pengurangan noise AI).",
   "JPEG (Large)": "JPEG (besar)",
+  "Instagram Feed": "Umpan Instagram",
+  "Instagram Story / Reel": "Instagram Story / Reel",
+  "Web / Portfolio": "Web / Portofolio",
+  "Full Resolution Master": "Master Resolusi Penuh",
   "JPEG (Small)": "JPEG (kecil)",
   "Join the ArtCraft Discord": "Gabung ke Discord ArtCraft",
   "Join the ArtCraft Discord…": "Gabung ke Discord ArtCraft…",
@@ -2380,5 +2384,6 @@
   "This file's name cannot be represented as UTF-8.": "Nama berkas ini tidak dapat direpresentasikan dalam UTF-8.",
   "The open request contains no files.": "Permintaan untuk membuka tidak berisi berkas.",
   "The open request contains an invalid number of files.": "Permintaan untuk membuka berisi jumlah berkas yang tidak valid.",
-  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Pustaka berubah sebelum foto-foto ini dapat diimpor. Buka kembali foto di pustaka yang diinginkan."
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Pustaka berubah sebelum foto-foto ini dapat diimpor. Buka kembali foto di pustaka yang diinginkan.",
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
 }

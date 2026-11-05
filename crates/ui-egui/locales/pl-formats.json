@@ -322,5 +322,7 @@
   "{name} is installed": "{name} jest zainstalowany",
   "{name} is installed and in use: face recognition is on": "{name} jest zainstalowany i używany: rozpoznawanie twarzy jest włączone",
   "{n} files you opened haven't been imported yet. Quitting discards these requests.": "Liczba otwartych plików, które nie zostały jeszcze zaimportowane: {n}. Zakończenie programu odrzuci te żądania.",
-  "File {n} in the open request is not a file URL.": "Plik {n} w żądaniu otwarcia nie jest adresem URL pliku."
+  "File {n} in the open request is not a file URL.": "Plik {n} w żądaniu otwarcia nie jest adresem URL pliku.",
+  "{n} folder{} could not be read": "Nie udało się odczytać folderów: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}"
 }

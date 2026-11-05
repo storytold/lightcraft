@@ -1064,6 +1064,10 @@
   "Join the ArtCraft Discord": "Gå med i ArtCraft på Discord",
   "Join the ArtCraft Discord…": "Gå med i ArtCraft på Discord…",
   "JPEG (Large)": "JPEG (stor)",
+  "Instagram Feed": "Instagram-flöde",
+  "Instagram Story / Reel": "Instagram-story / Reel",
+  "Web / Portfolio": "Webb / Portfölj",
+  "Full Resolution Master": "Master i full upplösning",
   "JPEG (Small)": "JPEG (liten)",
   "JPEG with the same name (`IMG_0001.CR3` + `IMG_0001.JPG`) no longer share one sidecar: the raw keeps `IMG_0001.xmp`,": "JPEG med samma namn (`IMG_0001.CR3` + `IMG_0001.JPG`) delar inte längre en sidofil: raw-filen behåller `IMG_0001.xmp`,",
   "Keep in Local": "Behåll i Lokalt",
@@ -2469,5 +2473,6 @@
   "This file's name cannot be represented as UTF-8.": "Namnet på den här filen kan inte representeras som UTF-8.",
   "The open request contains no files.": "Begäran om att öppna innehåller inga filer.",
   "The open request contains an invalid number of files.": "Begäran om att öppna innehåller ett ogiltigt antal filer.",
-  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Biblioteket ändrades innan de här fotona kunde importeras. Öppna fotona igen i det avsedda biblioteket."
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Biblioteket ändrades innan de här fotona kunde importeras. Öppna fotona igen i det avsedda biblioteket.",
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
 }

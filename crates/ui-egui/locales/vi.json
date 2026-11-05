@@ -889,6 +889,10 @@
   "It tests this album, so testing it back would loop": "Nó kiểm tra album này, nên kiểm tra ngược lại sẽ tạo vòng lặp",
   "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).": "Ảnh đã khử nhiễu chưa được tạo, và ảnh không tự tạo (Cài đặt, AI Denoise).",
   "JPEG (Large)": "JPEG (Lớn)",
+  "Instagram Feed": "Bảng tin Instagram",
+  "Instagram Story / Reel": "Instagram Story / Reel",
+  "Web / Portfolio": "Web / Hồ sơ",
+  "Full Resolution Master": "Master độ phân giải đầy đủ",
   "JPEG (Small)": "JPEG (Nhỏ)",
   "JPEG with the same name (`IMG_0001.CR3` + `IMG_0001.JPG`) no longer share one sidecar: the raw keeps `IMG_0001.xmp`,": "JPEG cùng tên (`IMG_0001.CR3` + `IMG_0001.JPG`) không còn dùng chung một sidecar: raw giữ `IMG_0001.xmp`,",
   "Join the ArtCraft Discord": "Tham gia Discord ArtCraft",
@@ -2694,5 +2698,6 @@
   "This file's name cannot be represented as UTF-8.": "Tên tệp này không thể biểu diễn bằng UTF-8.",
   "The open request contains no files.": "Yêu cầu mở không chứa tệp nào.",
   "The open request contains an invalid number of files.": "Yêu cầu mở chứa số lượng tệp không hợp lệ.",
-  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Thư viện đã thay đổi trước khi có thể nhập các ảnh này. Hãy mở lại ảnh trong thư viện mong muốn."
+  "The library changed before these photos could be imported. Open the photos again in the intended library.": "Thư viện đã thay đổi trước khi có thể nhập các ảnh này. Hãy mở lại ảnh trong thư viện mong muốn.",
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
 }
