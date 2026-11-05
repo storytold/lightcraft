@@ -214,13 +214,14 @@ pub(super) fn section(
 
 // ------------------------------------------------------------------------------ HDR
 
-/// The Light panel's HDR row: the HDR switch and Visualize HDR, then (HDR on) the headroom limit.
 /// The Light panel's HDR settings while HDR editing is on (the switch itself is the HDR button
-/// next to B&W): Visualize HDR range and the headroom limit.
-pub(super) fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
-    if !d.hdr.enabled {
-        return;
-    }
+/// next to B&W): Visualize HDR range and the headroom limit. They slide open and shut with the
+/// histogram's change of layout; another photo shows its own at once.
+pub(super) fn hdr_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId) {
+    super::hdr_flow::drawer(ui, egui::Id::unique(("hdrSettings", id)), d.hdr.enabled, |ui| hdr_settings(app, ui, d));
+}
+
+fn hdr_settings(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
         let mut v = app.ui.hdr_visualize;
         let r = ui.checkbox(&mut v, "Visualize HDR");
