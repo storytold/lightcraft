@@ -211,7 +211,7 @@ pub fn register(frames: &[Frame], progress: &Progress) -> Result<(Vec<Option<Cam
         }
     }
     let long = sizes[ids[0]].0.max(sizes[ids[0]].1) as f64;
-    let exif_f = frames[ids[0]].metadata.focal_length_35mm.filter(|v| *v > 1.0).map(|f35| f35 / 36.0 * long);
+    let exif_f = exif_focal(&frames[ids[0]]);
     let hom_f = (!fs.is_empty()).then(|| median(fs.clone())).filter(|f| *f > 0.1 * long && *f < 20.0 * long);
     let f0 = exif_f.or(hom_f).unwrap_or(long * 1.07);
     let cams = camera::initial_cameras(&ids, &sizes, &pairs, f0);
@@ -221,6 +221,12 @@ pub fn register(frames: &[Frame], progress: &Progress) -> Result<(Vec<Option<Cam
     let mut cams = adj.cameras;
     camera::straighten(&mut cams);
     Ok((cams, adj.rms_before, adj.rms))
+}
+
+/// A frame's focal length in pixels, from EXIF's 35 mm equivalent.
+fn exif_focal(frame: &Frame) -> Option<f64> {
+    let long = frame.width().max(frame.height()) as f64;
+    frame.metadata.focal_length_35mm.filter(|v| *v > 1.0).map(|f35| f35 / 36.0 * long)
 }
 
 /// Stitch `frames` (oriented, linear) into a panorama.
@@ -251,34 +257,13 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
     // output scale: native resolution, limited to max_megapixels and the longest edge
     let max_px = if opts.max_megapixels.is_nan() { MAX_MEGAPIXELS } else { opts.max_megapixels.clamp(0.1, MAX_MEGAPIXELS) } * 1e6;
     let surface = (bx1 - bx0) * (by1 - by0);
-    let mut s = (max_px / surface).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0)).min(1.0);
-    // the photos' own pixel density, before any limit: 1 for a perspective panorama
-    let mut native_scale = 1.0f64;
-    if projection != Projection::Perspective {
-        // The sensors are rectilinear: a frame holds more pixels per degree than a
-        // spherical or cylindrical surface at the same focal length. Raise the
-        // output scale until the canvas matches the frames' own pixel density, so
-        // the photos keep their resolution in the panorama - but never beyond the
-        // size limits above.
-        let mut need = 1.0f64;
-        for &i in &used {
-            if i >= cams.len() || i >= frames.len() {
-                continue;
-            }
-            let Some(c) = cams[i] else { continue };
-            if c.f <= 0.0 || fmed <= 0.0 {
-                continue;
-            }
-            let fr = &frames[i];
-            let (w, h) = (fr.width() as f64, fr.height() as f64);
-            let sx = 2.0 * (0.5 * w / c.f).atan();
-            let sy = 2.0 * (0.5 * h / c.f).atan();
-            need = need.max((w / sx).max(h / sy) / fmed);
-        }
-        let fit = (max_px / surface).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0));
-        native_scale = need;
-        s = s.max(need.min(fit));
-    }
+    // Bundle adjustment fits the focal length freely, and a few wide frames can settle it below the
+    // lens's: the canvas, sized from it, then holds fewer pixels than the photos do. The lens's own
+    // focal length, where EXIF gives it, sets the native scale instead: a canvas pixel at the centre
+    // of a frame is then one pixel of the photo, and nothing is upsampled past that.
+    let lens = used.iter().filter_map(|&i| exif_focal(&frames[i])).fold(0.0, f64::max);
+    let native = if fmed > 0.0 { (lens / fmed).max(1.0) } else { 1.0 };
+    let s = (max_px / surface).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0)).min(native);
     let f_out = fmed * s;
     let (ox, oy) = (bx0 * s, by0 * s);
     let (cw, ch) = (((bx1 - bx0) * s).ceil() as usize + 1, ((by1 - by0) * s).ceil() as usize + 1);
@@ -428,7 +413,7 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
         rms_before,
         rms,
         fov,
-        native_megapixels: surface * native_scale * native_scale / 1e6,
+        native_megapixels: surface * native * native / 1e6,
         focal: f_out,
         origin: (ox, oy),
         color,
