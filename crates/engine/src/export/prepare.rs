@@ -1,5 +1,5 @@
 use super::batch::run_batch;
-use super::encoding::{export_metadata, gain_map_jpeg, removes_location, rendered};
+use super::encoding::{encode_gain_map_with_quality, encode_rendered_with_quality, export_metadata, removes_location};
 use super::options::ExportFormat;
 use super::params::apple_photos_unsupported;
 use super::{ExportOptions, Metadata, OutputDepth};
@@ -214,10 +214,9 @@ impl PreparedExport {
                     Some(hj) => {
                         let hr = hj.run().rendered?;
                         let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
-                        let (bytes, q) = gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?;
-                        (bytes, opts.limit_kb.map(|_| q))
+                        encode_gain_map_with_quality(&r.image, &hdr, &opts, meta.as_ref())?
                     }
-                    None => rendered(&r, &opts, meta.as_ref())?,
+                    None => encode_rendered_with_quality(&r, &opts, meta.as_ref())?,
                 };
                 Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback, limit_quality })
             }

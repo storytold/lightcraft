@@ -1970,6 +1970,22 @@ fn export_dialog_warns_when_a_size_limit_is_tight() {
     assert_eq!(shown(&mut h, full), (true, false), "cropped to a quarter");
 }
 
+/// Issue #3033: the toast after a background export names the quality a size limit settled on.
+#[test]
+fn export_toast_names_the_quality_a_size_limit_settled_on() {
+    let mut h = demo([1200.0, 900.0]);
+    h.app.services.write_shared = Some(std::sync::Arc::new(|_: &str, _: &[u8]| Ok(())));
+    let p = json!({"format": "jpeg", "quality": 90, "limitKb": 8, "width": 512, "dir": "/lc-test-out", "background": true});
+    let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), Duration::from_secs(10));
+    assert_eq!(r["ok"], true, "{r}");
+    let t0 = Instant::now();
+    while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(120) {
+        h.step();
+    }
+    let toast = h.app.ui.toast.as_ref().map(|(m, ..)| m.clone()).unwrap_or_default();
+    assert!(toast.contains("JPEG quality ") && toast.contains(" to fit the size limit"), "{toast}");
+}
+
 /// Review of #1966: a `path` whose extension names no format exports JPEG here, so its
 /// `bitDepth` is checked against JPEG's, not let through to an 8-bit file.
 #[test]

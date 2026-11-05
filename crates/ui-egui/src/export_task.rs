@@ -221,7 +221,7 @@ const LOW_LIMIT_QUALITY: u64 = 40;
 pub fn limit_quality_note(files: &[Value], requested: u8) -> Option<String> {
     let q = files.iter().filter_map(|f| f.get("quality").and_then(Value::as_u64)).filter(|&q| q < u64::from(requested)).min()?;
     Some(if q < LOW_LIMIT_QUALITY {
-        crate::i18n::tr_format!("JPEG quality {q} to fit the size limit (a smaller size keeps more quality)", q = q)
+        crate::i18n::tr_format!("JPEG quality {q} to fit the size limit (a smaller size or a larger limit keeps more quality)", q = q)
     } else {
         crate::i18n::tr_format!("JPEG quality {q} to fit the size limit", q = q)
     })
@@ -434,7 +434,7 @@ mod tests {
     use super::*;
 
     /// Issue #3033: the toast says which quality a size limit settled on (the lowest of the batch)
-    /// and, when it is low, that a smaller size keeps more; nothing when the limit lowered nothing.
+    /// and, when it is low, what keeps more; nothing when the limit lowered nothing.
     #[test]
     fn a_size_limit_quality_reads_well() {
         assert_eq!(limit_quality_note(&[json!({"path": "a.jpg"})], 90), None);
@@ -442,7 +442,7 @@ mod tests {
         let fine = limit_quality_note(&[json!({"path": "a.jpg", "quality": 90}), json!({"path": "b.jpg", "quality": 72})], 90);
         assert_eq!(fine.as_deref(), Some("JPEG quality 72 to fit the size limit"));
         let low = limit_quality_note(&[json!({"path": "a.jpg", "quality": 12}), json!({"error": "disk full"})], 90);
-        assert_eq!(low.as_deref(), Some("JPEG quality 12 to fit the size limit (a smaller size keeps more quality)"));
+        assert_eq!(low.as_deref(), Some("JPEG quality 12 to fit the size limit (a smaller size or a larger limit keeps more quality)"));
     }
 
     /// The whole toast line: the size limit's note comes before " · cancelled" and only with a limit.

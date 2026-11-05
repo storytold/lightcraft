@@ -1418,7 +1418,15 @@ fn export_quality_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions, 
 
 /// Export dialog: the caution when a JPEG size limit is tight at the chosen size. Issue #3033: too
 /// few bytes per pixel break skies into flat blocks.
-fn export_limit_warning(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, opts: &ExportOptions, full_size: bool, resize: &Resize, limit_kb: u32) {
+fn export_limit_warning(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    opts: &ExportOptions,
+    full_size: bool,
+    resize: &Resize,
+    limit_kb: u32,
+) {
     use lightcraft_engine::export::ExportFormat as F;
     if opts.format == F::Jpeg && limit_kb > 0 && size_limit_tight(app, full_size, resize, limit_kb) {
         let warn = "At this size the limit leaves little data per pixel, so skies and other smooth areas can turn blotchy. A smaller size or a larger limit keeps more quality.";

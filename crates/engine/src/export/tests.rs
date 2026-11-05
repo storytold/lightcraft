@@ -107,8 +107,9 @@ fn hdr_jpeg_size_limit_respected() {
     let opts = ExportOptions { hdr: true, quality: 100, limit_kb: Some(u32::MAX), ..Default::default() };
     let full = encode_gain_map_jpeg(&img, &hdr, &opts, None).unwrap();
     let kb = (full.len() / 2048) as u32;
-    let limited = encode_gain_map_jpeg(&img, &hdr, &ExportOptions { limit_kb: Some(kb), ..opts.clone() }, None).unwrap();
+    let (limited, q) = encoding::encode_gain_map_with_quality(&img, &hdr, &ExportOptions { limit_kb: Some(kb), ..opts.clone() }, None).unwrap();
     assert!(limited.len() <= kb as usize * 1024, "{} bytes exceeds {kb} KB", limited.len());
+    assert!(q.is_some_and(|q| q < 100), "the limit lowered the quality: {q:?}");
     let decoded = lightcraft_codecs::gainmap::read_jpeg(&limited).unwrap();
     assert!(decoded.meta.alternate_headroom > 1.0, "the gain map must survive size limiting");
     let impossible = encode_gain_map_jpeg(&img, &hdr, &ExportOptions { limit_kb: Some(1), ..opts }, None);
