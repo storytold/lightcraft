@@ -17,7 +17,7 @@ All algorithms are our own implementations from published papers (cited in the m
   one exposure is skipped), one after the other in the activity stack.
 - **Commands** (CLI, MCP, control channel):
   - `merge.hdr {ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false, preview=false, showOverlay=false, previewPath?}`
-  - `merge.panorama {ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, maxMegapixels (default: the photos' own resolution), preview, previewPath?}`
+  - `merge.panorama {ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, maxMegapixels=512 (0 or less: 512; the output keeps the photos' own resolution up to it), preview, previewPath?}`
   - `merge.hdrPanorama {ids?, bracket=0 (from EXIF), …both sets of options}`
   - `merge.hdrBatch {ids?, align, deghost, autoSettings, stack}` → `{merged: [{id, path, …}], failed: [{photos, error}]}`
 - **CLI:** `lightcraft-cli merge hdr|panorama|hdr-panorama|hdr-batch [options] FILES…` (`hdr-batch` finds the brackets
@@ -85,12 +85,12 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   not patch synthesis.
 - *Create Stack*: the result goes on top of a collapsed stack of its sources (`Catalog::stack_with_ops`); its
   caption also lists them.
-- Panorama output keeps the photos' resolution, up to `maxMegapixels` (default 512) and what fits in the merge's
-  memory (three quarters of the RAM, less the cache budget): the blend peaks at ~68 bytes per output pixel, and
-  projecting needs ~36 beside the photos' 12. When that is less than the photos' resolution, the result says
-  `limit: "memory"`. It is made no smaller than its floor: 40 MP, or the smaller `maxMegapixels` asked for (a
-  `maxMegapixels` below 0.1 is refused: the stitch keeps no smaller size limit), or the photos' own pixels when they
-  have less, even under 0.1 MP (the stitch never scales photos up). A merge whose memory can't hold the floor is
+- Panorama output keeps the photos' resolution, up to `maxMegapixels` (default 512, also when it is 0 or less) and
+  what fits in the merge's memory (three-quarters of the RAM, less the cache budget): the blend peaks at ~68 bytes per
+  output pixel, and projecting needs ~36 beside the photos' 12. When that is less than the photos' resolution, the
+  result says `limit: "memory"`. It is made no smaller than its floor: 40 MP, or the smaller `maxMegapixels` asked
+  for (a positive `maxMegapixels` below 0.1 is refused: the stitch keeps no smaller size limit), or the photos' own
+  pixels when they have less, even under 0.1 MP (the stitch never scales photos up). A merge whose memory can't hold the floor is
   refused with the memory it needs and has (issue #3708; until then the 40 MP floor was kept whatever the memory, and
   could run out of it).
 - HDR memory: every frame is held as 32-bit float RGB (~0.86 GB per 67 MP frame at the peak, plus ~1.2 GB); full-size
