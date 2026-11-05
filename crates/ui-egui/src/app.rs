@@ -132,6 +132,7 @@ impl LightcraftApp {
             disk_space_notice: false,
             disk_notice: None,
             memory_applied: None,
+            hot_pixels_applied: None,
             display_applied: None,
             display_error: None,
             screen_profile: None,

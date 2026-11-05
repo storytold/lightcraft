@@ -619,8 +619,8 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
     use crate::media::SourceRef;
     match source {
         // (a smart preview keeps the file's own colour: an imported camera profile is applied when the original is read)
-        SourceRef::File { path, max_edge, loader, denoise, .. } => {
-            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, reduced: None })
+        SourceRef::File { path, max_edge, loader, denoise, outliers, .. } => {
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, outliers, reduced: None })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
         _ => None,
@@ -1042,6 +1042,7 @@ mod tests {
             fallback: None,
             denoise: None,
             camera_profile: None,
+            outliers: false,
             reduced: None,
         };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
