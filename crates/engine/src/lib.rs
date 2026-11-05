@@ -160,6 +160,8 @@ pub struct PersonChoices {
     pub key: String,
     /// The face that shows them in People; `None` for their largest one.
     pub cover: Option<lightcraft_catalog::PersonCover>,
+    /// The faces set aside as "not them"; `None` for none.
+    pub dismissed: Option<Vec<lightcraft_catalog::FaceRef>>,
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
@@ -900,7 +902,11 @@ impl Session {
                     Some(v) => self.person_covers.insert(c.key.clone(), v),
                     None => self.person_covers.remove(&c.key),
                 };
-                PersonChoices { key: c.key, cover }
+                let dismissed = match c.dismissed {
+                    Some(v) => self.person_dismissed.insert(c.key.clone(), v),
+                    None => self.person_dismissed.remove(&c.key),
+                };
+                PersonChoices { key: c.key, cover, dismissed }
             })
             .collect();
         self.people_gen = self.people_gen.wrapping_add(1);

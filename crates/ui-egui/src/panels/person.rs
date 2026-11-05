@@ -83,6 +83,11 @@ fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
     let page = Arc::new(parse(&v));
     app.caches.person_page = Some((name.to_string(), rev, indexed, now, page.clone()));
     app.caches.person_page_gen = app.session.people_gen;
+    // the engine's page leaves out the faces set aside for good, so those hidden at once have done their job: one
+    // brought back meanwhile (by an agent, say) shows again, and a face that took a hidden one's place on its photo
+    // isn't hidden in its stead
+    let key = name.to_lowercase();
+    app.ui.dismissed_faces.retain(|(n, ..)| *n != key);
     page
 }
 

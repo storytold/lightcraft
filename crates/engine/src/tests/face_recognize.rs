@@ -434,6 +434,49 @@ fn faces_person_lists_a_persons_faces_and_looks_for_more_only_while_recognition_
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// #3249: a face set aside for a person is a counter-example: the faces more like it than like them move down, for
+/// them only; and a merge undone gives the other person back the faces they had set aside.
+#[test]
+fn faces_set_aside_move_their_look_alikes_down_and_a_merge_undone_gives_them_back() {
+    let d = temp("person-counter");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let mut ids = s.catalog.photos().map(|p| p.id).collect::<Vec<_>>();
+    ids.sort();
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, Some("Bob"))]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None)]);
+    set_regions(&mut s, c, vec![region(0.1, None)]);
+    for (id, x, v) in [
+        (a, 0.1, unit64(&[(0, 1.0)])),
+        (a, 0.5, unit64(&[(0, 1.0), (1, 0.6)])),
+        (b, 0.1, unit64(&[(0, 1.0), (1, 0.3)])),
+        (b, 0.5, unit64(&[(0, 1.0), (2, 0.5)])),
+        (c, 0.1, unit64(&[(0, 1.0), (1, 0.6)])),
+    ] {
+        s.faces.index.insert(id.0, &region(x, None).rect, v);
+    }
+    let more = |s: &mut Session, name: &str| -> Vec<(u64, u64)> {
+        let r = s.execute("faces.person", &json!({"name": name})).unwrap();
+        r["more"].as_array().unwrap().iter().map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap())).collect()
+    };
+    assert_eq!(more(&mut s, "Ann"), vec![(b.0, 0), (b.0, 1), (c.0, 0)], "best first");
+    // the face on c is not Ann: b's first face, more like it than like Ann, goes after the other one
+    s.execute("faces.dismiss", &json!({"name": "Ann", "photo": c.0, "index": 0})).unwrap();
+    assert_eq!(more(&mut s, "Ann"), vec![(b.0, 1), (b.0, 0)]);
+    // for Bob, whose face it may be, nothing moves
+    assert_eq!(more(&mut s, "Bob")[0], (c.0, 0), "still offered to Bob, first");
+    // Ann merged into Bob: her set-aside face is his too while merged; undone, Bob has none again, and Ann keeps hers
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Bob", "merge": true})).unwrap();
+    assert_eq!(s.person_dismissed.get("bob").map(Vec::len), Some(1));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((s.person_dismissed.get("bob"), s.person_dismissed.get("ann").map(Vec::len)), (None, Some(1)));
+    assert_eq!(more(&mut s, "Bob")[0], (c.0, 0), "offered to Bob again");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.person_dismissed.get("bob").map(Vec::len), Some(1), "redone, merged again");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 fn unit64(parts: &[(usize, f32)]) -> Vec<f32> {
     let mut v = vec![0.0f32; 64];
     for (i, x) in parts {
