@@ -1,6 +1,40 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### Korean and Vietnamese text in exports draws whole
+- macOS often stores Korean file names decomposed (NFD), each syllable as its jamo. Contact-sheet captions, export
+  watermarks, slideshow overlays and print page text drew those as loose jamo (`ㅈㅔㅈㅜㄷㅗ` for `제주도`), and
+  decomposed Vietnamese letters lost their stacked marks. Text is now composed before it is laid out, so both draw as
+  they do in the app (issue #3480, #3277).
+
+## 2026-10-31
+
+### Find Similar Photos no longer freezes the window
+- The first search reads every photo in the library, and it did that on the thread that draws the window, so in a large
+  library the app stopped responding and Windows offered to close it (issue #3468). The photos are now read in the
+  background: a "Find Similar Photos" row in the activity stack counts them, you can keep working meanwhile, and its ✕
+  stops the search. A stopped search leaves the view as it was, and the next one goes on from what was read. The menu
+  item is off while a search runs, and opening another library stops it. When a search ends the grid shows the photos it
+  found, also from the Photo menu, and a message says how many. `library.findSimilar` from the control channel and
+  `mcp --connect` still gets `{photos}`, now when the search ends; a caller that stops waiting (the control server
+  gives a request 60 s) can ask again once that search has ended (while it runs, a new request is refused as already
+  running), and what was read isn't read again.
+
 ## 2026-10-30
+
+### Lens distortion correction for the Sony A7 III
+- Raws from the Sony A7 III (ILCE-7M3) now get the camera's own distortion correction, read from the file, like
+  the A7R IVA's: straight lines stay straight at wide angles (the FE 16–35 F4 ZA at 16 mm shifts detail near the
+  corners by up to about 40 px on a 24 MP photo) and at long ones (the FE 28–70 at 70 mm). Measured against the
+  camera's JPEG, the median error is well under a pixel (up to about 1.5 px in the 16 mm corners). Optics ▸ Enable Lens Corrections turns it off and Profile Distortion scales
+  it; photos imported before this pick it up with Photo ▸ Reload from Disk. Vignetting and chromatic aberration
+  from Sony files are not applied yet.
+
+### Lens corrections without grey corners
+- Lens profiles, the camera's own distortion correction, manual Distortion and Chromatic Aberration now crop just
+  inside the corrected photo, as in Lightroom, so no grey corners or edge marks show. Perspective corrections still
+  need Constrain Crop to do the same.
 
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.
@@ -349,6 +383,12 @@
   nothing and says nothing when none of them is left, and counts only the photos it changed.
 
 ## 2026-10-23
+
+### Export subfolders stay inside the export folder
+- An export subfolder (typed in the Export dialog, saved in a preset or passed to `export`) can no longer lead
+  outside the chosen folder (issue #2571). `..` and `.` parts and a leading `/` are dropped, and `\` and `:` become
+  `_`, so a shared preset with `../..` in its subfolder writes inside your folder instead of elsewhere on disk.
+  Nested subfolders such as `Client/Jobs` still work.
 
 ### Videos in the grid are no longer sent to the image decoders
 - A video in the library (an MP4 or MOV brought in from a Lightroom catalog) no longer asks the image decoders for a
