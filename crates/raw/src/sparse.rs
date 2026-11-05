@@ -707,7 +707,8 @@ mod tests {
             loaded.insert(0, len as u64);
             let _ = tx.send(header_plan(&tiff, &loaded));
         });
-        rx.recv_timeout(std::time::Duration::from_secs(20)).expect("header_plan took longer than 20 s");
+        rx.recv_timeout(lightcraft_testkit::scaled(std::time::Duration::from_secs(20)).max(std::time::Duration::from_secs(20)))
+            .expect("header_plan took longer than 20 s (stretched by LIGHTCRAFT_TIME_SCALE)");
     }
 
     /// A TIFF with a million one-byte strips listed in descending order and all byte counts 0:
@@ -743,7 +744,9 @@ mod tests {
             loaded.insert(0, len);
             let _ = tx.send(header_plan(&tiff, &loaded));
         });
-        let plan = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("header_plan took longer than 20 s");
+        let plan = rx
+            .recv_timeout(lightcraft_testkit::scaled(std::time::Duration::from_secs(20)).max(std::time::Duration::from_secs(20)))
+            .expect("header_plan took longer than 20 s (stretched by LIGHTCRAFT_TIME_SCALE)");
         assert!(!matches!(plan, HeaderPlan::Need(_)), "{plan:?}");
     }
 }

@@ -82,7 +82,7 @@ fn the_real_model_denoises_real_raws_through_the_engine() {
         let photo = lightcraft_engine::catalog::PhotoId(id);
         let started = Instant::now();
         let mut state = Value::Null;
-        while started.elapsed() < Duration::from_secs(600) {
+        while started.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(600)) {
             s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
             state = s.execute("denoise.status", &json!({"id": id})).unwrap()["photo"].clone();
             if matches!(state["state"].as_str(), Some("ready" | "failed")) {

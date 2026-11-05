@@ -343,7 +343,7 @@ fn real_download_of_yunet_installs_it_and_detects() {
             Some("running") | Some("done") => {}
             _ => panic!("{r}"),
         }
-        assert!(t0.elapsed() < std::time::Duration::from_secs(120), "{r}");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(120)), "{r}");
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     println!("downloaded and installed in {:?}", t0.elapsed());
@@ -375,7 +375,7 @@ fn real_downloads_of_the_recognisers_start_and_can_be_cancelled() {
                 break;
             }
             assert!(row["state"] == "running", "{r}");
-            assert!(t0.elapsed() < std::time::Duration::from_secs(60), "{r}");
+            assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(60)), "{r}");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         s.execute("faces.models.downloadCancel", &json!({"id": id})).unwrap();

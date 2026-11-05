@@ -42,8 +42,8 @@ impl Calls {
 }
 
 /// The sleeping drive: every file-system call waits until [`Nas::wake`] (or takes one of the
-/// calls [`Nas::let_through`] allows). A watchdog wakes it after [`WATCHDOG`] and records that it
-/// had to (some frame was waiting for the drive).
+/// calls [`Nas::let_through`] allows). A watchdog wakes it after [`WATCHDOG`] (× the test time
+/// scale) and records that it had to (some frame was waiting for the drive).
 #[derive(Default)]
 struct Nas {
     /// (awake, calls let through while asleep)
@@ -58,7 +58,7 @@ impl Nas {
         let dog = nas.clone();
         std::thread::spawn(move || {
             let state = dog.state.lock().unwrap();
-            let (mut state, _) = dog.changed.wait_timeout_while(state, WATCHDOG, |s| !s.0).unwrap();
+            let (mut state, _) = dog.changed.wait_timeout_while(state, lightcraft_testkit::scaled(WATCHDOG).max(WATCHDOG), |s| !s.0).unwrap();
             if !state.0 {
                 dog.forced.store(true, Ordering::SeqCst);
                 state.0 = true;
@@ -69,8 +69,17 @@ impl Nas {
     }
     fn wait(&self) {
         let state = self.state.lock().unwrap();
-        let mut state = self.changed.wait_while(state, |s| !s.0 && s.1 == 0).unwrap();
-        if !state.0 {
+        // bounded without the watchdog thread too, should it be gone: it wakes the drive after
+        // WATCHDOG, so only a call nothing will ever wake gets to twice that
+        let limit = lightcraft_testkit::scaled(WATCHDOG * 2).max(WATCHDOG * 2);
+        let (mut state, waited) = self.changed.wait_timeout_while(state, limit, |s| !s.0 && s.1 == 0).unwrap();
+        if waited.timed_out() {
+            // wake the drive as the watchdog would have, so the calls after this one don't each
+            // wait the whole limit again
+            self.forced.store(true, Ordering::SeqCst);
+            state.0 = true;
+            self.changed.notify_all();
+        } else if !state.0 {
             state.1 -= 1;
         }
     }
@@ -157,7 +166,7 @@ fn offline_originals_never_block_a_frame() {
     frames_while_asleep(&mut h, &nas, 20, "Missing Photos");
     // the probe runs on the background worker: give it time to start on a loaded machine
     let asked = std::time::Instant::now();
-    while calls.n.load(Ordering::SeqCst) == 0 && asked.elapsed() < std::time::Duration::from_secs(5) {
+    while calls.n.load(Ordering::SeqCst) == 0 && asked.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(5)) {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(calls.n.load(Ordering::SeqCst) > 0, "the probe was asked");
@@ -166,7 +175,7 @@ fn offline_originals_never_block_a_frame() {
     // the drive answers: the view fills in as the background checks find the files gone
     nas.wake();
     let t0 = Instant::now();
-    while h.app.session.visible().len() < N as usize && t0.elapsed() < Duration::from_secs(60) {
+    while h.app.session.visible().len() < N as usize && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(60)) {
         h.step();
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -223,7 +232,7 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     let batch = lightcraft_engine::import::batch_size();
     nas.let_through(batch);
     let t0 = Instant::now();
-    while h.app.import.as_ref().is_some_and(|t| t.imported < batch) && t0.elapsed() < Duration::from_secs(60) {
+    while h.app.import.as_ref().is_some_and(|t| t.imported < batch) && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(60)) {
         h.step();
         assert!(!nas.forced(), "an import frame waited for the sleeping drive");
         std::thread::sleep(Duration::from_millis(5));
@@ -236,7 +245,7 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     assert_eq!(r["ok"], true, "{r}");
     nas.wake();
     let t0 = Instant::now();
-    while h.app.import.is_some() && t0.elapsed() < Duration::from_secs(60) {
+    while h.app.import.is_some() && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(60)) {
         h.step();
         std::thread::sleep(Duration::from_millis(5));
     }

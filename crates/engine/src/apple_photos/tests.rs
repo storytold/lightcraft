@@ -293,11 +293,7 @@ fn a_panicking_runner_frees_the_slot() {
     assert!(imports.running().is_none());
     // on a worker
     let job = import_job(&panicky, &imports, paths.clone(), "", true, None).unwrap();
-    let t0 = std::time::Instant::now();
-    while !job.finished() {
-        assert!(t0.elapsed() < Duration::from_secs(20));
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    lightcraft_testkit::wait_until(Duration::from_secs(20), "the worker's import ends", || job.finished());
     assert!(stopped(&job), "{}", job.json());
     // an export's reservation, waiting and not
     let out = imports.reserve(panicky.clone(), "").unwrap().run(&[json!({"path": paths[0]})], false);
@@ -305,10 +301,7 @@ fn a_panicking_runner_frees_the_slot() {
     assert!(imports.running().is_none());
     let started = imports.reserve(panicky, "").unwrap().start(&[json!({"path": paths[0]})]);
     let job = imports.get(started["job"].as_u64().unwrap()).unwrap();
-    while !job.finished() {
-        assert!(t0.elapsed() < Duration::from_secs(20));
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    lightcraft_testkit::wait_until(Duration::from_secs(20), "the reservation's import ends", || job.finished());
     assert!(stopped(&job));
     // the slot is free: the next import runs
     assert_eq!(import_job(&good, &imports, paths, "", false, None).unwrap().json()["imported"], 1);
@@ -339,19 +332,15 @@ fn waiting_for_idle_outlasts_a_running_import() {
 /// for. The deadline follows the job: the write allowance while the export writes, then the
 /// import's own time limit from when Photos was asked, not one deadline fixed at the start
 /// (which gave up with the import still inside its limit). Scaled down: 300 ms of writing,
-/// imports limited to 1.5 s (+ 0.1 s).
+/// imports limited to 1.5 s (+ 0.1 s). Every time here is [`stretched`] together: the windows
+/// keep their proportions, and a slow machine gets more room around each edge.
 #[test]
 fn shutdown_follows_an_export_into_its_import() {
     let (dir, paths) = files("shutdown", 2);
-    let limits = WaitLimits {
-        writing: Duration::from_millis(300),
-        import: |_| Duration::from_millis(1500),
-        margin: Duration::from_millis(100),
-        cap: Duration::from_secs(20),
-    };
+    let limits = WaitLimits { writing: stretched(300), import: |_| stretched(1500), margin: stretched(100), cap: stretched(20_000) };
     let taking = |ms: u64| -> Runner {
         Arc::new(move |args: &[String], _| {
-            std::thread::sleep(Duration::from_millis(ms));
+            std::thread::sleep(stretched(ms));
             let n = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
             Ok(Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
         })
@@ -362,48 +351,57 @@ fn shutdown_follows_an_export_into_its_import() {
     let reserved = imports.reserve(taking(1000), "").unwrap();
     let written: Vec<Value> = paths.iter().map(|p| json!({"path": p})).collect();
     let exporter = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(150));
+        std::thread::sleep(stretched(150));
         reserved.run(&written, false)
     });
     let t0 = std::time::Instant::now();
     assert!(imports.wait_idle_within(limits), "waited for the import, not just the write allowance");
-    assert!(t0.elapsed() >= Duration::from_millis(1000), "{:?}", t0.elapsed());
+    assert!(t0.elapsed() >= stretched(1000), "{:?}", t0.elapsed());
     assert_eq!(exporter.join().unwrap()["imported"], 2);
     // an import past its own limit is given up on at its deadline (not the cap)
     let job = import_job(&taking(3000), &imports, paths.clone(), "", true, None).unwrap();
     let t0 = std::time::Instant::now();
     assert!(!imports.wait_idle_within(limits));
     let waited = t0.elapsed();
-    assert!(waited >= Duration::from_millis(1500) && waited < Duration::from_millis(2900), "{waited:?}");
-    while !job.finished() {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    assert!(waited >= stretched(1500) && waited < stretched(2900), "{waited:?}");
+    lightcraft_testkit::wait_until_at_least(Duration::from_secs(20), "the 3 s import ends", || job.finished());
     // an export that never hands its files over: the write allowance, then it's left
     let held = imports.reserve(taking(0), "").unwrap();
     let t0 = std::time::Instant::now();
     assert!(!imports.wait_idle_within(limits));
     let waited = t0.elapsed();
-    assert!(waited >= Duration::from_millis(300) && waited < Duration::from_millis(1500), "{waited:?}");
+    assert!(waited >= stretched(300) && waited < stretched(1500), "{waited:?}");
     drop(held);
     assert!(imports.wait_idle_within(limits));
     // and the cap holds over everything
     let job = import_job(&taking(1000), &imports, paths, "", true, None).unwrap();
     let t0 = std::time::Instant::now();
-    assert!(!imports.wait_idle_within(WaitLimits { cap: Duration::from_millis(200), ..limits }));
-    assert!(t0.elapsed() < Duration::from_millis(900));
-    while !job.finished() {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    assert!(!imports.wait_idle_within(WaitLimits { cap: stretched(200), ..limits }));
+    assert!(t0.elapsed() < stretched(900), "{:?}", t0.elapsed());
+    lightcraft_testkit::wait_until_at_least(Duration::from_secs(20), "the 1 s import ends", || job.finished());
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// A runner that waits for `go` (at most 20 s, so a regression fails instead of hanging), then
-/// answers one id per file.
+/// `ms` milliseconds stretched by `LIGHTCRAFT_TIME_SCALE`, never shrunk: the shutdown test's
+/// limits and Photos' answers stretch together, so each window keeps its edges in order.
+fn stretched(ms: u64) -> Duration {
+    let d = Duration::from_millis(ms);
+    lightcraft_testkit::scaled(d).max(d)
+}
+
+/// How long [`delayed`]'s runner holds Photos at most: 20 s, stretched by
+/// `LIGHTCRAFT_TIME_SCALE` and never shrunk, so a regression fails instead of hanging.
+fn hold() -> Duration {
+    let hold = Duration::from_secs(20);
+    lightcraft_testkit::scaled(hold).max(hold)
+}
+
+/// A runner that waits for `go` (at most [`hold`]), then answers one id per file.
 fn delayed() -> (Runner, std::sync::mpsc::Sender<()>) {
     let (go, wait) = std::sync::mpsc::channel::<()>();
     let wait = Mutex::new(wait);
     let r: Runner = Arc::new(move |args: &[String], _| {
-        let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        let _ = wait.lock().unwrap().recv_timeout(hold());
         let files = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
         Ok(Output { status: Some(0), stdout: (0..files).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
     });
@@ -419,7 +417,10 @@ fn a_slow_import_runs_as_a_job_and_refuses_a_second_one() {
     let imports = Imports::default();
     let t0 = std::time::Instant::now();
     let job = import_job(&runner, &imports, paths.clone(), " Trip ", true, None).unwrap();
-    assert!(t0.elapsed() < Duration::from_secs(5), "the caller doesn't wait for Photos");
+    // Photos is held until `go`: had the caller waited for it, the job would be over by now
+    assert!(!job.finished(), "the caller doesn't wait for Photos");
+    // nor does it wait a while first: it returns well inside the hold (both stretch alike)
+    assert!(t0.elapsed() < hold() / 4, "the caller returns at once: {:?} (hold {:?})", t0.elapsed(), hold());
     assert_eq!(job.json(), json!({"job": 1, "running": true, "requested": 2, "album": "Trip"}));
     assert_eq!(imports.running().map(|j| j.id), Some(1));
     let e = import_job(&runner, &imports, paths.clone(), "", true, None).unwrap_err();
@@ -427,10 +428,7 @@ fn a_slow_import_runs_as_a_job_and_refuses_a_second_one() {
     let e = imports.reserve(runner.clone(), "").err().unwrap();
     assert!(e.contains("still adding"), "{e}");
     go.send(()).unwrap();
-    while !job.finished() {
-        assert!(t0.elapsed() < Duration::from_secs(20), "the job finishes");
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    lightcraft_testkit::wait_until(Duration::from_secs(20), "the job finishes", || job.finished());
     assert!(job.take_announcement() && !job.take_announcement(), "announced once");
     let done = imports.get(1).unwrap().json();
     assert_eq!((done["running"].as_bool(), done["imported"].as_u64(), done["album"].as_str()), (Some(false), Some(2), Some("Trip")), "{done}");
@@ -472,17 +470,13 @@ fn imports_of_their_own_show_in_the_activity_stack() {
     let (a, rows) = (activity.clone(), seen.clone());
     let runner: Runner = Arc::new(move |args: &[String], _| {
         rows.lock().unwrap().push(a.list());
-        let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        let _ = wait.lock().unwrap().recv_timeout(hold());
         let n = args.len() - args.iter().position(|x| x == MARKER).unwrap() - 2;
         Ok(Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
     });
     let imports = Imports::default();
     let ended = |job: &ImportJob| {
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        while !(job.finished() && activity.list().is_empty()) {
-            assert!(std::time::Instant::now() < deadline, "the import ends and its row goes");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        lightcraft_testkit::wait_until(Duration::from_secs(20), "the import ends and its row goes", || job.finished() && activity.list().is_empty());
     };
     // waiting for Photos here
     go.send(()).unwrap();

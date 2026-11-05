@@ -304,7 +304,7 @@ mod tests {
         fn new(open: &Arc<AtomicUsize>, idle: Duration, before: impl FnOnce(&mut TcpStream)) -> Self {
             let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
             let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-            client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            client.set_read_timeout(Some(lightcraft_testkit::scaled(Duration::from_secs(3)).max(Duration::from_secs(3)))).unwrap();
             let (stream, _) = listener.accept().unwrap();
             // Small test messages must not wait for Nagle's algorithm or a delayed ACK.
             client.set_nodelay(true).unwrap();
@@ -369,7 +369,7 @@ mod tests {
         // this thread runs.
         let mut connection = Connection::new(&open, Duration::from_millis(100), |c| c.write_all(request(1).as_bytes()).unwrap());
         for id in [1, 2] {
-            let req = connection.requests.recv_timeout(Duration::from_secs(10)).unwrap();
+            let req = lightcraft_testkit::recv_within(&connection.requests, Duration::from_secs(10), "the request reaches the app");
             assert_eq!(req.method, "engine.commands");
             assert!(req.take());
             if id == 1 {
@@ -401,10 +401,17 @@ mod tests {
     #[test]
     fn a_request_to_an_app_drawing_no_frames_is_given_up_with_a_reason() {
         let (req, rrx) = ControlRequest::new("ui.inspect", json!({}));
+        // The overall timeout and the bound on giving up both stretch with LIGHTCRAFT_TIME_SCALE,
+        // so the bound stays half the timeout on a loaded machine. Neither shrinks below its
+        // unscaled value: at LIGHTCRAFT_TIME_SCALE=0.1 the bound would be 0.5 s, which a loaded
+        // machine can miss even when the 50 ms frame window works.
+        let timeout = lightcraft_testkit::scaled(Duration::from_secs(10)).max(Duration::from_secs(10));
         let t0 = std::time::Instant::now();
-        let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(50), Duration::from_secs(10));
-        // the frame window (50 ms), not the 10 s timeout; the margin is for a slow machine
-        assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
+        let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(50), timeout);
+        // Given up by the frame window (50 ms), not the timeout, which answers "timeout". The
+        // reason alone can't tell: a wait that slept out the whole timeout before checking the
+        // frame window would still answer "not visible", so the return is bounded too.
+        assert!(t0.elapsed() < timeout / 2, "given up after {:?} (timeout {timeout:?})", t0.elapsed());
         assert_eq!(r["ok"], false);
         assert!(r["error"].as_str().unwrap().contains("not visible"), "{r}");
         assert!(!req.take(), "the app does not run it once it shows up");
@@ -421,7 +428,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(200));
             let _ = reply.send(json!({"ok": true, "result": 1}));
         });
-        let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(20), Duration::from_secs(10));
+        let r = await_reply(&rrx, &req.state, || 7, || {}, Duration::from_millis(20), lightcraft_testkit::scaled(Duration::from_secs(10)));
         assert_eq!(r["ok"], true, "{r}");
         worker.join().unwrap();
     }
@@ -437,7 +444,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(150));
             let _ = reply.send(json!({"ok": true, "result": 2}));
         });
-        let r = await_reply(&rrx, &state, || n.fetch_add(1, Ordering::SeqCst), || {}, Duration::from_millis(30), Duration::from_secs(10));
+        let r = await_reply(
+            &rrx,
+            &state,
+            || n.fetch_add(1, Ordering::SeqCst),
+            || {},
+            Duration::from_millis(30),
+            lightcraft_testkit::scaled(Duration::from_secs(10)),
+        );
         assert_eq!(r["ok"], true, "{r}");
         worker.join().unwrap();
     }
@@ -538,11 +552,14 @@ mod tests {
             let (s, _) = listener.accept().unwrap();
             serve(s, &tx, &egui::Context::default(), IDLE_TIMEOUT);
         });
+        // the program lives about 4 s, stretched by LIGHTCRAFT_TIME_SCALE (never shrunk)
+        let lives = lightcraft_testkit::scaled(Duration::from_secs(4)).max(Duration::from_secs(4));
         let mut c = TcpStream::connect(addr).unwrap();
-        c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
-        // the connection is being served: start a program that lives about 4 s
+        c.set_read_timeout(Some(lives * 5)).unwrap();
+        // the connection is being served: start the program (`ping -n` waits a second between pings)
         std::thread::sleep(Duration::from_millis(200));
-        let mut child = std::process::Command::new("cmd").args(["/c", "ping -n 5 127.0.0.1 >nul"]).spawn().unwrap();
+        let ping = format!("ping -n {} 127.0.0.1 >nul", lives.as_secs().saturating_add(1));
+        let mut child = std::process::Command::new("cmd").args(["/c", ping.as_str()]).spawn().unwrap();
         std::thread::sleep(Duration::from_millis(200));
         // junk makes the server answer once and close
         c.write_all(b"hello\n").unwrap();
@@ -554,7 +571,7 @@ mod tests {
         let _ = child.wait();
         assert!(read.is_ok(), "the close must be clean, not a reset: {read:?}");
         assert!(text.contains("closing the connection"), "{text}");
-        assert!(waited < Duration::from_secs(2), "the client saw the close only after {waited:?}, when the program exited");
+        assert!(waited < lives / 2, "the client saw the close only after {waited:?}, when the program exited (it lives {lives:?})");
     }
 
     #[test]
@@ -567,7 +584,7 @@ mod tests {
             serve_stream(s, |_, _| Some(json!({"ok": true})));
         });
         let mut c = TcpStream::connect(addr).unwrap();
-        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        c.set_read_timeout(Some(lightcraft_testkit::scaled(Duration::from_secs(10)).max(Duration::from_secs(10)))).unwrap();
         c.write_all(b"{\"id\":7,\"method\":\"x\"}\nhello\n").unwrap();
         let mut replies = BufReader::new(c.try_clone().unwrap());
         let (mut first, mut second) = (String::new(), String::new());
@@ -602,14 +619,19 @@ mod tests {
             t0.elapsed()
         });
         let mut c = TcpStream::connect(addr).unwrap();
-        // one byte every 100 ms: each read returns well within its 500 ms timeout
-        for _ in 0..100 {
+        // one byte every 100 ms: each read returns well within its 500 ms timeout. The peer keeps it up for
+        // 10 s, and the drain must end well before: within DRAIN_TIME and a second. Both stretch with
+        // LIGHTCRAFT_TIME_SCALE (never shrunk), so the trickle always lasts five times the bound.
+        let at_least = |d: Duration| lightcraft_testkit::scaled(d).max(d);
+        let (trickle, bound) = (at_least(Duration::from_secs(10)), at_least(DRAIN_TIME + Duration::from_secs(1)));
+        let t0 = std::time::Instant::now();
+        while t0.elapsed() < trickle {
             if done.load(Ordering::SeqCst) || c.write_all(b"x").is_err() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
         let drained = server.join().unwrap();
-        assert!(drained < DRAIN_TIME + Duration::from_secs(1), "drained for {drained:?}");
+        assert!(drained < bound, "drained for {drained:?} (bound {bound:?}, the peer trickles for {trickle:?})");
     }
 }

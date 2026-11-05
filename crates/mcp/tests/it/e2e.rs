@@ -233,7 +233,8 @@ impl Backend for HoldAfterFirst {
         self.inner.set_progress(hook.map(|mut hook| -> ProgressHook {
             Box::new(move |done, total, name| {
                 // bounded, so a cancel that is never read fails the test instead of hanging it
-                let until = Instant::now() + Duration::from_secs(20);
+                // (stretched by LIGHTCRAFT_TIME_SCALE, never shrunk: the test lets go of it)
+                let until = Instant::now() + lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
                 while done == 1 && done < total && hold.load(Ordering::SeqCst) && Instant::now() < until {
                     if !hook(done, total, name) {
                         return false;
@@ -248,8 +249,9 @@ impl Backend for HoldAfterFirst {
 
 type Rx = std::sync::mpsc::Receiver<Value>;
 
+#[track_caller]
 fn next_msg(rx: &Rx) -> Value {
-    rx.recv_timeout(Duration::from_secs(30)).expect("MCP reply/progress")
+    lightcraft_testkit::recv_within(rx, Duration::from_secs(30), "MCP reply/progress")
 }
 
 fn assert_query_photos(photos: &[Value]) {
