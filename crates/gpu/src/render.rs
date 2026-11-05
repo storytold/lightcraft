@@ -1660,6 +1660,22 @@ fn masks(
 mod tests {
     use super::*;
 
+    /// [`super::render`] read back as pixels (never handed over as a texture), as these tests compare them.
+    fn render(
+        gpu: &Gpu,
+        src: &Arc<Rgb32f>,
+        info: &SourceInfo,
+        s: &DevelopSettings,
+        req: &RenderRequest,
+        stages: Option<&GpuStages>,
+        fault: Option<crate::Fault>,
+    ) -> Option<Rendered> {
+        match super::render(gpu, src, info, s, req, stages, fault, false)? {
+            Output::Image(r) => Some(r),
+            Output::Display { .. } => None,
+        }
+    }
+
     thread_local! {
         pub(super) static FRAME_AIRLIGHT_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }

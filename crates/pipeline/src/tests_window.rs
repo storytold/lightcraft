@@ -140,6 +140,7 @@ fn hidden_masks_do_not_expand_window_context() {
         &s,
         &p.frame,
         p.px_per_long,
+        p.native_long as f64,
         req.quality,
         &mut planes,
         None,
@@ -832,14 +833,24 @@ fn refined_mask_alpha_survives_exposure_edit() {
         &s,
         &p.frame,
         p.px_per_long,
+        p.native_long as f64,
         req.quality,
         &mut planes,
         None,
         (&mut alphas, crate::masks::AlphaKeys { geo: 0, image: 0 }),
     );
     s.light.exposure = 1.0;
-    let b =
-        local::prepare(img, &s, &p.frame, p.px_per_long, req.quality, &mut planes, None, (&mut alphas, crate::masks::AlphaKeys { geo: 0, image: 0 }));
+    let b = local::prepare(
+        img,
+        &s,
+        &p.frame,
+        p.px_per_long,
+        p.native_long as f64,
+        req.quality,
+        &mut planes,
+        None,
+        (&mut alphas, crate::masks::AlphaKeys { geo: 0, image: 0 }),
+    );
     assert_eq!(a.masks[0].alpha.data, b.masks[0].alpha.data);
     assert_eq!(a.masks[0].alpha.data.as_ptr(), b.masks[0].alpha.data.as_ptr(), "unchanged refined alpha must be reused");
 }

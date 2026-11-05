@@ -50,7 +50,7 @@ fn check_v3_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     s.light.contrast = 100.0;
     s.light.blacks = 80.0;
     let req = RenderRequest::fit(64, 64);
-    let cpu = render(&src, &info, &s, &req).image;
+    let cpu = render(&src, &info, &s, &req).unwrap().image;
     let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
     for image in [&cpu, &gpu] {
         assert!(image.data.iter().all(|p| *p == image.data[0]));
@@ -1433,7 +1433,7 @@ fn clarity_with_hidden_or_empty_tone_masks_matches_cpu_and_full() {
                     s.effects.clarity = 100.0;
                 }
                 let name = format!("{process:?} local_clarity={local_clarity} empty={empty}");
-                let sig = lightcraft_pipeline::local::plane_sigmas(&s, 1200.0, Quality::Full);
+                let sig = lightcraft_pipeline::local::plane_sigmas(&s, 1200.0, 1200.0, Quality::Full);
                 assert!(sig.base.is_none(), "{name}: hidden and empty masks do not select the tone base");
                 check(&name, &src, &info, &s, &RenderRequest::fit(1200, 800));
                 // Full-resolution guided filters isolate context support. The

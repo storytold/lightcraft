@@ -934,6 +934,7 @@ mod tests {
             &s,
             &plan.frame,
             plan.px_per_long,
+            plan.native_long as f64,
             Quality::Full,
             &mut local::Planes::default(),
             None,

@@ -289,6 +289,7 @@ pub(crate) mod tests {
                 &s,
                 &full.frame,
                 full.px_per_long,
+                full.native_long as f64,
                 req.quality,
                 &mut planes,
                 None,

@@ -23,7 +23,18 @@ fn exact_replacements_wait_100_ms_and_failures_do_not_restart_the_wait() {
         let tex = ctx.load_texture("bounded", egui::ColorImage::filled([1, 1], egui::Color32::BLACK), egui::TextureOptions::LINEAR);
         r.textures.insert(
             slot,
-            Tex { look: None, key: job.clone().bounded_window().key, photo, tex, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+            Tex {
+                look: None,
+                key: job.clone().bounded_window().key,
+                photo,
+                tex,
+                size: [1, 1],
+                histogram: None,
+                ms: 0.0,
+                quick: None,
+                pixels: None,
+                native: None,
+            },
         );
         let request = |r: &mut Renderer, time| {
             let input = crate::headless::HeadlessView::raw_input(egui::vec2(300.0, 200.0), 1.0, time, vec![]);
