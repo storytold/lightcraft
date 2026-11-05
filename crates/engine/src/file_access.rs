@@ -9,7 +9,7 @@
 //!   folder, the rest of the path being plain names (`..` below a missing folder is refused, and so
 //!   is a link that leads nowhere).
 //! - The result must lie inside the root, compared by whole components (`/work2` isn't inside
-//!   `/work`), without regard to case on Windows.
+//!   `/work`), exactly: on Windows what exists is resolved to its real case first.
 //! - Read access is permitted inside either root; write access only inside the write root.
 //!
 //! Roots are in force on a thread inside [`confine`], and in the whole process after
@@ -150,6 +150,7 @@ pub fn confine_process(roots: Arc<AutomationRoots>) -> bool {
 struct Restore(Option<Scope>);
 
 impl Drop for Restore {
+    /// Put the thread's previous scope back.
     fn drop(&mut self) {
         let previous = self.0.take();
         SCOPE.with(|s| *s.borrow_mut() = previous);
@@ -267,25 +268,12 @@ fn resolve(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Is `path` (resolved) `root` or inside it, component by component (without regard to case on
-/// Windows, whose file systems ignore it)?
+/// Is `path` (resolved) `root` or inside it, component by component? Exactly, on Windows too: what
+/// exists has its real case from [`resolve`], and a folder that doesn't exist yet may be a different
+/// one from the root where a parent folder is case sensitive.
 fn inside(path: &Path, root: &Path) -> bool {
     let mut path = path.components();
-    root.components().all(|r| path.next().is_some_and(|p| same_component(p, r)))
-}
-
-/// Compares two path components, ignoring case on Windows.
-fn same_component(a: Component, b: Component) -> bool {
-    if a == b {
-        return true;
-    }
-    if !cfg!(windows) {
-        return false;
-    }
-    match (a.as_os_str().to_str(), b.as_os_str().to_str()) {
-        (Some(a), Some(b)) => a.to_lowercase() == b.to_lowercase(),
-        _ => false,
-    }
+    root.components().all(|r| path.next() == Some(r))
 }
 
 /// A Windows device name (`CON`, `NUL`, `COM1`… also with an extension), which names no file.
@@ -299,6 +287,62 @@ fn is_device_name(component: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A name that differs in case is another name until the file system says otherwise.
+    #[test]
+    fn names_are_compared_exactly() {
+        let root = Path::new("/data/Photos");
+        assert!(inside(Path::new("/data/Photos/new/file"), root));
+        assert!(!inside(Path::new("/data/PHOTOS/file"), root));
+        assert!(!inside(Path::new("/DATA/Photos/file"), root));
+        if cfg!(windows) {
+            let root = Path::new(r"C:\data\Photos");
+            assert!(inside(Path::new(r"c:\data\Photos\file"), root), "a drive letter is one drive in either case");
+            assert!(!inside(Path::new(r"C:\data\PHOTOS\file"), root));
+        }
+    }
+
+    /// In a case-sensitive folder a missing `PHOTOS` is not the root `Photos`, and creating it would leave the root.
+    #[cfg(windows)]
+    #[test]
+    fn a_case_sensitive_folder_keeps_a_differently_cased_name_out() {
+        let base = std::env::temp_dir().join(format!("lc-access-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let set = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&base).arg("enable").output().unwrap();
+        if !set.status.success() {
+            println!("CASE-SENSITIVE-FOLDER-UNAVAILABLE: {set:?}");
+            return;
+        }
+        println!("CASE-SENSITIVE-FOLDER-USED");
+        std::fs::create_dir(base.join("Photos")).unwrap();
+        let roots = AutomationRoots::new(None, Some(&base.join("Photos"))).unwrap().unwrap();
+        assert_eq!(roots.check(base.join("Photos/new.txt"), Access::Write), Ok(()));
+        let e = roots.check(base.join("PHOTOS/new.txt"), Access::Write).unwrap_err();
+        assert!(e.contains("outside the write root"), "{e}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A junction is a link too: removing or renaming one acts on it where it stands.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_is_written_where_it_stands() {
+        let base = std::env::temp_dir().join(format!("lc-access-junction-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (root, outside) = (base.join("root"), base.join("outside"));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let junction = outside.join("backdir");
+        let made = std::process::Command::new("cmd").arg("/c").arg("mklink").arg("/J").arg(&junction).arg(root.join("sub")).output().unwrap();
+        assert!(made.status.success(), "{made:?}");
+        let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+        let e = roots.check(&junction, Access::Write).unwrap_err();
+        assert!(e.contains("outside the write root"), "{e}");
+        assert!(roots.check(&junction, Access::Read).is_ok(), "read follows it");
+        assert!(roots.check(junction.join("new"), Access::Write).is_ok(), "a file under it really is in the root");
+        let _ = std::fs::remove_dir(&junction);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// Writing to a link replaces, renames or removes the link where it stands, whatever it points to.
     #[cfg(unix)]
@@ -341,10 +385,12 @@ mod tests {
         (base, roots)
     }
 
+    /// A path as text.
     fn s(p: PathBuf) -> String {
         p.to_string_lossy().into_owned()
     }
 
+    /// Paths inside the roots pass and others dont.
     #[test]
     fn paths_inside_the_roots_pass_and_others_dont() {
         let (base, roots) = folders("inside");
@@ -361,6 +407,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// A sibling with the same prefix is outside.
     #[test]
     fn a_sibling_with_the_same_prefix_is_outside() {
         let (base, roots) = folders("prefix");
@@ -370,6 +417,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// Parent traversal is resolved or refused.
     #[test]
     fn parent_traversal_is_resolved_or_refused() {
         let (base, roots) = folders("dotdot");
@@ -384,6 +432,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// Relative paths resolve against the working directory.
     #[test]
     fn relative_paths_resolve_against_the_working_directory() {
         let (base, roots) = folders("relative");
@@ -392,6 +441,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// A missing root is an error and none is no confinement.
     #[test]
     fn a_missing_root_is_an_error_and_none_is_no_confinement() {
         let (base, _) = folders("missing");
@@ -412,6 +462,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// Links are followed before comparing.
     #[test]
     fn links_are_followed_before_comparing() {
         let (base, roots) = folders("links");
@@ -447,9 +498,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// On windows a path takes its real case and devices are refused.
     #[cfg(windows)]
     #[test]
-    fn windows_ignores_case_and_refuses_devices() {
+    fn on_windows_a_path_takes_its_real_case_and_devices_are_refused() {
         let (base, roots) = folders("case");
         let upper = s(base.join("IN/a.jpg"));
         assert_eq!(roots.check(&upper, Access::Read), Ok(()), "{upper}");
@@ -461,6 +513,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// Scopes nest and stay on their thread.
     #[test]
     fn scopes_nest_and_stay_on_their_thread() {
         let (base, roots) = folders("scopes");
@@ -482,6 +535,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// Device names.
     #[test]
     fn device_names() {
         for d in ["CON", "nul", "Com1", "LPT9.txt", "aux.jpg", "NUL ", "COM¹", "lpt³.txt"] {

@@ -251,6 +251,7 @@ fn a_photo_named_twice_is_merged_once() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A merge of a bare file name is written in the current folder.
 #[test]
 fn a_merge_of_a_bare_file_name_is_written_in_the_current_folder() {
     assert_eq!(crate::merge::output_dir("IMG_0.dng"), std::path::Path::new("."));

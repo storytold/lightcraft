@@ -176,6 +176,7 @@ impl Backend for Headless {
         })
     }
 
+    /// The roots this backend was given.
     fn automation_roots(&self) -> Option<Arc<AutomationRoots>> {
         self.roots.clone()
     }

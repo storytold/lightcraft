@@ -629,6 +629,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     lightcraft_engine::file_access::confine(roots.as_ref(), || run_tool(b, name, args))
 }
 
+/// Run one tool; [`call_tool`] has already put the backend's roots in force.
 fn run_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     let args = if args.is_null() { &json!({}) } else { args };
     if !args.is_object() {

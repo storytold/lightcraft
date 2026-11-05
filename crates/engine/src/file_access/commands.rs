@@ -497,6 +497,7 @@ mod tests {
         })
     }
 
+    /// Every registered command is classified once.
     #[test]
     fn every_registered_command_is_classified_once() {
         let unclassified: Vec<&str> = command_specs().iter().map(|c| c.id).filter(|id| policy(id).is_none()).collect();
@@ -510,6 +511,7 @@ mod tests {
         }
     }
 
+    /// Every command documenting a path declares it.
     #[test]
     fn every_command_documenting_a_path_declares_it() {
         let undeclared: Vec<&str> = command_specs()
@@ -520,6 +522,7 @@ mod tests {
         assert!(undeclared.is_empty(), "these document a path parameter: {undeclared:?}");
     }
 
+    /// A temporary folder with `in`, `out` and `outside`, and roots on the first two.
     fn roots(tag: &str) -> (std::path::PathBuf, Arc<AutomationRoots>) {
         let base = std::env::temp_dir().join(format!("lc-file-access-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -535,6 +538,7 @@ mod tests {
         name.rsplit('.').fold(value, |inner, part| json!({ part: inner }))
     }
 
+    /// Every declared path is refused outside and allowed inside.
     #[test]
     fn every_declared_path_is_refused_outside_and_allowed_inside() {
         let (base, roots) = roots("declared");
@@ -555,6 +559,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// Unknown and refused commands fail closed.
     #[test]
     fn unknown_and_refused_commands_fail_closed() {
         let (base, roots) = roots("closed");
@@ -566,6 +571,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// Too deep a list is refused not skipped.
     #[test]
     fn too_deep_a_list_is_refused_not_skipped() {
         let (base, roots) = roots("deep");
@@ -604,13 +610,14 @@ mod tests {
         "model_download.rs",
         "preset_import.rs",
         "slide_template.rs",
-        "smart.rs",
     ];
 
+    /// Does this line of source open a file?
     fn opens_files(code: &str) -> bool {
         ["std::fs::", "File::open", "File::create", "OpenOptions::new", "safe_file::write"].iter().any(|api| code.contains(api))
     }
 
+    /// Every Rust source file under `dir`.
     fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap().flatten() {
             let path = entry.path();
@@ -624,6 +631,7 @@ mod tests {
         }
     }
 
+    /// File access outside the checks is accounted for.
     #[test]
     fn file_access_outside_the_checks_is_accounted_for() {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

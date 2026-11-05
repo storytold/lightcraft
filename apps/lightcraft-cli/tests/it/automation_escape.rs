@@ -23,6 +23,7 @@ const WRITE_NAMES: &[&str] = &["path", "dir", "destination", "folder", "into", "
 /// Fetches from the network whatever it is given, into the app's own folder.
 const NOT_WALKED: &[&str] = &["lens.downloadDatabase"];
 
+/// Write a small PNG at `path`.
 fn png(path: &Path) {
     let img = lightcraft_raster::Rgba8::from_fn(48, 32, |x, y| [(x * 5) as u8, (y * 7) as u8, 100, 255]);
     std::fs::write(path, lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
@@ -52,6 +53,7 @@ struct Mcp {
 }
 
 impl Mcp {
+    /// Start the real binary over stdio, with the roots asked for.
     fn start(base: &Path, read: bool, write: bool) -> Self {
         let mut cmd = Command::new(binary());
         cmd.arg("mcp");
@@ -81,6 +83,7 @@ impl Mcp {
         mcp
     }
 
+    /// Send one JSON-RPC request and wait for its reply, passing over progress notifications.
     fn rpc(&mut self, method: &str, params: Value) -> Value {
         self.next += 1;
         let line = json!({"jsonrpc": "2.0", "id": self.next, "method": method, "params": params});
@@ -96,16 +99,19 @@ impl Mcp {
         }
     }
 
+    /// Call a tool.
     fn tool(&mut self, name: &str, arguments: Value) -> Value {
         self.rpc("tools/call", json!({"name": name, "arguments": arguments}))
     }
 
+    /// Call a tool that has to succeed.
     fn ok(&mut self, name: &str, arguments: Value) -> Value {
         let r = self.tool(name, arguments);
         assert_eq!(r["result"]["isError"], false, "{name}: {r}");
         r
     }
 
+    /// Call a tool that has to be refused by the automation roots.
     fn refused(&mut self, name: &str, arguments: Value) {
         let r = self.tool(name, arguments);
         assert_eq!(r["result"]["isError"], true, "{name}: {r}");
@@ -114,6 +120,7 @@ impl Mcp {
 }
 
 impl Drop for Mcp {
+    /// Stop the server with the test.
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -281,18 +288,21 @@ fn walk(tag: &str, read: bool, write: bool) -> Vec<String> {
     found
 }
 
+/// No command or tool leaves both roots.
 #[test]
 fn no_command_or_tool_leaves_both_roots() {
     let found = walk("both", true, true);
     assert!(found.is_empty(), "{found:#?}");
 }
 
+/// No command or tool leaves a read only root.
 #[test]
 fn no_command_or_tool_leaves_a_read_only_root() {
     let found = walk("read", true, false);
     assert!(found.is_empty(), "{found:#?}");
 }
 
+/// No command or tool leaves a write only root.
 #[test]
 fn no_command_or_tool_leaves_a_write_only_root() {
     let found = walk("write", false, true);
@@ -306,6 +316,7 @@ fn without_roots_the_walk_does_find_its_way_out() {
     assert!(!found.is_empty(), "the walk reached nothing outside, so its passes would prove nothing");
 }
 
+/// Work inside the roots still works and refusals say why.
 #[test]
 fn work_inside_the_roots_still_works_and_refusals_say_why() {
     let base = folders("work");
@@ -341,6 +352,7 @@ fn work_inside_the_roots_still_works_and_refusals_say_why() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Links inside a root are followed before they are judged.
 #[cfg(unix)]
 #[test]
 fn links_inside_a_root_are_followed_before_they_are_judged() {

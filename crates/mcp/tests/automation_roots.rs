@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 const SECRET: &str = "TOP SECRET PHOTO CONTENT";
 
+/// Write a small PNG at `path` and a sidecar holding `text`, to catch a leak of it.
 fn create_test_image(path: &Path, text: &str) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
@@ -29,6 +30,7 @@ fn create_test_image(path: &Path, text: &str) {
     std::fs::write(path.with_extension("png.xmp"), xmp).unwrap();
 }
 
+/// A server confined to `in` and `out` of a new temporary folder, as asked.
 fn confined(tag: &str, read: bool, write: bool) -> (Server, PathBuf) {
     let base = std::env::temp_dir().join(format!("lc-mcp-roots-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
@@ -47,10 +49,12 @@ fn confined(tag: &str, read: bool, write: bool) -> (Server, PathBuf) {
     (server, base)
 }
 
+/// A path as text.
 fn s(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// Call a tool: (is it an error, its text, the whole reply).
 fn call(server: &mut Server, name: &str, args: Value) -> (bool, String, Value) {
     let line = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}}).to_string();
     let reply: Value = serde_json::from_str(&server.handle_line(&line).unwrap()).unwrap();
@@ -60,18 +64,21 @@ fn call(server: &mut Server, name: &str, args: Value) -> (bool, String, Value) {
     (result["isError"] == true, text, reply)
 }
 
+/// Call a tool that has to succeed; its text.
 fn ok(server: &mut Server, name: &str, args: Value) -> String {
     let (error, text, _) = call(server, name, args.clone());
     assert!(!error, "{name} {args}: {text}");
     text
 }
 
+/// Call a tool that has to be refused for the reason `why`.
 fn refused(server: &mut Server, name: &str, args: Value, why: &str) {
     let (error, text, _) = call(server, name, args.clone());
     assert!(error && text.contains(why), "{name} {args} should be refused ({why}): {text}");
     assert!(!text.contains(SECRET), "{name}: {text} leaked secret!");
 }
 
+/// Imports only from inside read root.
 #[test]
 fn imports_only_from_inside_read_root() {
     let (mut server, base) = confined("import", true, true);
@@ -96,6 +103,7 @@ fn imports_only_from_inside_read_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Exports only to inside write root.
 #[test]
 fn exports_only_to_inside_write_root() {
     let (mut server, base) = confined("export", true, true);
@@ -120,6 +128,7 @@ fn exports_only_to_inside_write_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Denied write does not truncate existing file.
 #[test]
 fn denied_write_does_not_truncate_existing_file() {
     let (mut server, base) = confined("trunc", true, true);
@@ -135,6 +144,7 @@ fn denied_write_does_not_truncate_existing_file() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Read only root permits reads but denies all writes.
 #[test]
 fn read_only_root_permits_reads_but_denies_all_writes() {
     let (mut server, base) = confined("readonly", true, false);
@@ -147,6 +157,7 @@ fn read_only_root_permits_reads_but_denies_all_writes() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Write only root permits writes and reads under write root.
 #[test]
 fn write_only_root_permits_writes_and_reads_under_write_root() {
     let (mut server, base) = confined("writeonly", false, true);
@@ -161,6 +172,7 @@ fn write_only_root_permits_writes_and_reads_under_write_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Batch operations stop and do not leak on confined errors.
 #[test]
 fn batch_operations_stop_and_do_not_leak_on_confined_errors() {
     let (mut server, base) = confined("batch", true, true);
@@ -173,6 +185,7 @@ fn batch_operations_stop_and_do_not_leak_on_confined_errors() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Sidecar write refused outside write root.
 #[test]
 fn sidecar_write_refused_outside_write_root() {
     let (mut server, base) = confined("sidecar", true, true);
@@ -189,6 +202,7 @@ fn sidecar_write_refused_outside_write_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Folder browse refused outside read root.
 #[test]
 fn folder_browse_refused_outside_read_root() {
     let (mut server, base) = confined("browse", true, true);
@@ -204,6 +218,7 @@ fn folder_browse_refused_outside_read_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Render photo in memory succeeds under confinement.
 #[test]
 fn render_photo_in_memory_succeeds_under_confinement() {
     let (mut server, base) = confined("render", true, true);
@@ -228,6 +243,7 @@ fn render_photo_in_memory_succeeds_under_confinement() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Symlink directory outside read root is not traversed.
 #[test]
 fn symlink_directory_outside_read_root_is_not_traversed() {
     let (mut server, base) = confined("symlink_dir", true, true);
@@ -245,6 +261,7 @@ fn symlink_directory_outside_read_root_is_not_traversed() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Mask import effects symlink directory outside read root is not traversed.
 #[test]
 fn mask_import_effects_symlink_directory_outside_read_root_is_not_traversed() {
     let (mut server, base) = confined("mask_symlink_dir", true, true);
@@ -264,6 +281,7 @@ fn mask_import_effects_symlink_directory_outside_read_root_is_not_traversed() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Folder create refused outside write root.
 #[test]
 fn folder_create_refused_outside_write_root() {
     let (mut server, base) = confined("folder_create", true, true);
@@ -296,6 +314,7 @@ fn folder_create_refused_outside_write_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Folder rename and move refused outside write root.
 #[test]
 fn folder_rename_and_move_refused_outside_write_root() {
     let (mut server, base) = confined("folder_ops", true, true);
@@ -328,6 +347,7 @@ fn folder_rename_and_move_refused_outside_write_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Photo move to folder refused outside write root.
 #[test]
 fn photo_move_to_folder_refused_outside_write_root() {
     let (mut server, base) = confined("move_photo", true, true);
@@ -359,6 +379,7 @@ fn photo_move_to_folder_refused_outside_write_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Photo rename refused outside write root.
 #[test]
 fn photo_rename_refused_outside_write_root() {
     let (mut server, base) = confined("photo_rename", true, true);
@@ -381,6 +402,7 @@ fn photo_rename_refused_outside_write_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Import mode move refused without source write authority.
 #[test]
 fn import_mode_move_refused_without_source_write_authority() {
     let (mut server, base) = confined("import_move", true, true);
@@ -396,6 +418,7 @@ fn import_mode_move_refused_without_source_write_authority() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Lightroom commands refused outside read root.
 #[test]
 fn lightroom_commands_refused_outside_read_root() {
     let (mut server, base) = confined("lrcat", true, true);
@@ -409,6 +432,7 @@ fn lightroom_commands_refused_outside_read_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Lightroom wal symlink outside read root is refused.
 #[test]
 fn lightroom_wal_symlink_outside_read_root_is_refused() {
     let (mut server, base) = confined("lrcat_wal", true, true);
@@ -435,6 +459,7 @@ fn lightroom_wal_symlink_outside_read_root_is_refused() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Library import preview refused outside read root.
 #[test]
 fn library_import_preview_refused_outside_read_root() {
     let (mut server, base) = confined("preview", true, true);
@@ -445,6 +470,7 @@ fn library_import_preview_refused_outside_read_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// [`confined`] with a library on disk, for commands that need one.
 fn confined_with_library(tag: &str, read: bool, write: bool) -> (Server, PathBuf) {
     let base = std::env::temp_dir().join(format!("lc-mcp-roots-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
@@ -463,6 +489,7 @@ fn confined_with_library(tag: &str, read: bool, write: bool) -> (Server, PathBuf
     (server, base)
 }
 
+/// Photo duplicate refused outside write root and in read only root.
 #[test]
 fn photo_duplicate_refused_outside_write_root_and_in_read_only_root() {
     // 1. With write root = out/, source photo is in in/photo.png (outside write root).
@@ -489,6 +516,7 @@ fn photo_duplicate_refused_outside_write_root_and_in_read_only_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Photo convert to dng refused outside write root and in read only root.
 #[test]
 fn photo_convert_to_dng_refused_outside_write_root_and_in_read_only_root() {
     // 1. With write root = out/, attempting to convert a photo in in/ is refused write into in/.
@@ -514,6 +542,7 @@ fn photo_convert_to_dng_refused_outside_write_root_and_in_read_only_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Library smart previews location refused outside write root and in read only root.
 #[test]
 fn library_smart_previews_location_refused_outside_write_root_and_in_read_only_root() {
     // 1. With write root = out/, moving or creating smart previews outside write root is refused.
@@ -543,6 +572,7 @@ fn library_smart_previews_location_refused_outside_write_root_and_in_read_only_r
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Photo relink refused outside read root.
 #[test]
 fn photo_relink_refused_outside_read_root() {
     let (mut server, base) = confined("relink", true, true);
@@ -556,6 +586,7 @@ fn photo_relink_refused_outside_read_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Merge refused when the file would land outside the write root.
 #[test]
 fn merge_refused_when_the_file_would_land_outside_the_write_root() {
     let (mut server, base) = confined("merge", true, true);
@@ -573,6 +604,7 @@ fn merge_refused_when_the_file_would_land_outside_the_write_root() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// Smart previews stay put unless their folder can be written.
 #[test]
 fn smart_previews_stay_put_unless_their_folder_can_be_written() {
     let (mut server, base) = confined_with_library("smart-existing", true, true);

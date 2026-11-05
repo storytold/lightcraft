@@ -47,8 +47,9 @@ The rules:
   a read root nothing can be written; with neither option nothing is confined.
 - **Links are followed before a path is judged.** Both the roots and every path are resolved first, so `..`, a link to a
   file or folder outside, and a link that leads nowhere are refused before anything is opened. A file that doesn't exist
-  yet is judged by its nearest existing folder. Comparison is by whole path components (`/work2` isn't inside `/work`),
-  without regard to case on Windows, where reserved device names (`CON`, `NUL`, `COM1`…) are refused too.
+  yet is judged by its nearest existing folder. Comparison is by whole path components (`/work2` isn't inside `/work`)
+  and exact: a folder that exists counts in its real case, so `C:\\WORK` finds `C:\\Work` on an ordinary Windows volume, and a
+  name that doesn't exist yet has to match. Reserved Windows device names (`CON`, `NUL`, `COM1`…) are refused too.
 - **Writing to a link acts on the link.** A write can replace, rename or remove the link itself, so a link's own folder
   has to be inside the write root too, whatever the link points to. A file under a linked folder is judged where it
   really is. A write root that is itself a link is used through paths below it: the link alone isn't writable unless its

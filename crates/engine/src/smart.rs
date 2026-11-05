@@ -357,7 +357,11 @@ pub fn migrate(from: &Path, to: &Path, what: Existing) -> (usize, Vec<String>) {
             .and_then(|n| n.strip_suffix(".lcsp"))
             .filter(|stem| stem.len() == 32 && stem.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()))
             .map_or_else(|| to.join(name), |stem| to.join(&stem[..2]).join(name));
-        let r = match what {
+        // a link among the shards can lead out of the automation roots: judged before it is touched
+        let judged = crate::file_access::check_write(&src)
+            .and_then(|()| if what == Existing::Discard { Ok(()) } else { crate::file_access::check_write(&dst) })
+            .map_err(std::io::Error::other);
+        let r = judged.and_then(|()| match what {
             Existing::Discard => std::fs::remove_file(&src),
             _ => {
                 let parent = dst.parent().unwrap_or(to);
@@ -377,7 +381,7 @@ pub fn migrate(from: &Path, to: &Path, what: Existing) -> (usize, Vec<String>) {
                     }
                 })
             }
-        };
+        });
         match r {
             Ok(()) => done += 1,
             Err(err) => failed.push(format!("{}: {err}", src.display())),

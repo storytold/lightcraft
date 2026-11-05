@@ -66,6 +66,7 @@ impl AutomationArgs {
 mod tests {
     use super::*;
 
+    /// Roots are taken once and other arguments are left.
     #[test]
     fn roots_are_taken_once_and_other_arguments_are_left() {
         let mut roots = AutomationArgs::new(None, None);
@@ -80,6 +81,7 @@ mod tests {
         assert_eq!(roots.read_root, Some("a folder".into()));
     }
 
+    /// Invalid operands leave roots unchanged.
     #[test]
     fn invalid_operands_leave_roots_unchanged() {
         for flag in ["--automation-read-root", "--automation-write-root"] {
@@ -95,6 +97,7 @@ mod tests {
         }
     }
 
+    /// Explicit dash folder and relative dash folder are valid.
     #[test]
     fn explicit_dash_folder_and_relative_dash_folder_are_valid() {
         let mut roots = AutomationArgs::new(None, None);

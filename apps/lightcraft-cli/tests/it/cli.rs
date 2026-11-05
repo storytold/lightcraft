@@ -1153,6 +1153,7 @@ fn denoise_serve_runs_tiles_for_another_computer() {
     let _ = std::fs::remove_dir_all(&models);
 }
 
+/// Mcp refuses automation roots with connect.
 #[test]
 fn mcp_refuses_automation_roots_with_connect() {
     let o = Command::new(binary()).args(["mcp", "--connect", "127.0.0.1:7980", "--automation-read-root", "C:\\"]).output().unwrap();
@@ -1161,6 +1162,7 @@ fn mcp_refuses_automation_roots_with_connect() {
     assert!(err.contains("--automation-read-root and --automation-write-root confine the in-process server; a running app is not confined by them, so drop --connect"), "{err}");
 }
 
+/// Mcp validates automation root flags.
 #[test]
 fn mcp_validates_automation_root_flags() {
     // Missing argument value
