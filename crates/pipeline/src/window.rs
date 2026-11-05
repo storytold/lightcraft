@@ -2,7 +2,7 @@
 //! reuse; filter support is computed here, before the CPU and GPU share a plan.
 
 use lightcraft_develop::{DevelopSettings, MaskShape};
-use lightcraft_raster::blur::box_radii;
+use lightcraft_raster::blur::{box_radii, gauss_taps};
 
 use crate::{PixelWindow, Quality, geometry::Frame, local, masks, masks::Mattes};
 
@@ -28,19 +28,21 @@ fn guided_radius(sigma: f32) -> usize {
 pub(crate) fn margin(
     s: &DevelopSettings,
     (frame, full_w, full_h): (&Frame, usize, usize),
-    detail_scale: f32,
+    (detail_scale, native_long): (f32, f64),
     q: Quality,
     mattes: Option<&Mattes>,
     shown: Option<u32>,
 ) -> usize {
     let ppl = frame.px_per_long(full_w);
     let out_long = full_w.max(full_h);
-    let sig = local::context_plane_sigmas(s, ppl, q);
+    let sig = local::context_plane_sigmas(s, ppl, native_long, q);
     let mut radius = sig.base.map_or(0, |sg| guided_radius(sg) + sig.base_detail);
     radius = radius.max(sig.clarity.map_or(0, guided_radius));
     for sigma in [sig.texture, sig.dark, sig.chroma].into_iter().flatten() {
         radius = radius.max(gaussian_radius(sigma));
     }
+    // process V3's pixel-scale sharpening blur is an exact Gaussian of its own taps
+    radius = radius.max(sig.sharpen.map_or(0, |sg| gauss_taps(sg).len() / 2));
     // Mask alpha is prepared in parallel with the local planes. Its refinement
     // reads the shape's blurred alpha, so those supports add too.
     for mask in s.masks.iter().filter(|m| (m.visible || shown == Some(m.id)) && !m.components.is_empty()) {

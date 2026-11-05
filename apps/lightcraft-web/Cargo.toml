@@ -80,3 +80,5 @@ heif = ["lightcraft-codecs/heif"]
 
 [dev-dependencies]
 egui = { workspace = true }
+lightcraft-color = { workspace = true }
+lightcraft-raw = { workspace = true }

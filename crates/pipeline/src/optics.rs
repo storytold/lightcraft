@@ -605,40 +605,63 @@ pub const DEFRINGE_REF_LONG: f64 = 4000.0;
 
 /// Neighbourhood read by Defringe, shared with the window planner. Zero when disabled.
 pub(crate) fn defringe_radius(s: &DevelopSettings, scale: f64) -> usize {
+    defringe_params(s, scale).map_or(0, |p| p.radius)
+}
+
+/// Defringe's resolved parameters (the CPU stage below and the GPU kernels both read these).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DefringeParams {
+    /// Radius (output px) of the lightness min / max filters that find edges.
+    pub radius: usize,
+    /// Purple and green OkLab hue ranges (degrees, lo ≤ hi) and strengths (0..1).
+    pub purple: (f32, f32),
+    pub green: (f32, f32),
+    pub purple_strength: f32,
+    pub green_strength: f32,
+}
+
+/// Defringe's parameters for `s` at `scale` output pixels per reference pixel, or `None` when it
+/// does nothing.
+pub fn defringe_params(s: &DevelopSettings, scale: f64) -> Option<DefringeParams> {
     let o = &s.optics;
     if !s.section_enabled("optics") || (o.defringe_purple_amount <= 0.0 && o.defringe_green_amount <= 0.0) {
-        return 0;
+        return None;
     }
+    // as far as the sliders go (0–20): an amount from a damaged catalog or sidecar made the
+    // radius overflow
     let max_amt = o.defringe_purple_amount.max(o.defringe_green_amount).min(20.0);
-    // Fringe width in source px grows with the amount (1..7 px), in output px at least one.
-    let radius = ((1.0 + max_amt * 0.3) * scale).round();
-    if radius.is_finite() { radius.max(1.0) as usize } else { 1 }
+    // fringe width in source px grows with the amount (1..7 px), in output px at least one
+    let radius = ((1.0 + max_amt * 0.3) * scale).round().max(1.0);
+    // (an absurd scale must not ask for a filter wider than any image; the stages clamp it to theirs)
+    let radius = if radius.is_finite() { radius.min(1e6) as usize } else { 1 };
+    let range = |lo: f64, hi: f64, span: (f32, f32)| {
+        let a = span.0 + (span.1 - span.0) * (lo / 100.0) as f32;
+        let b = span.0 + (span.1 - span.0) * (hi / 100.0) as f32;
+        (a.min(b), a.max(b))
+    };
+    Some(DefringeParams {
+        radius,
+        purple: range(o.defringe_purple_hue_lo, o.defringe_purple_hue_hi, PURPLE_HUES),
+        green: range(o.defringe_green_hue_lo, o.defringe_green_hue_hi, GREEN_HUES),
+        purple_strength: (o.defringe_purple_amount / 8.0).min(1.0) as f32,
+        green_strength: (o.defringe_green_amount / 8.0).min(1.0) as f32,
+    })
 }
 
 /// Defringe: desaturate purple / green colour fringes that sit next to high-contrast edges. `scale` is output
 /// pixels per reference pixel (output long edge / [`DEFRINGE_REF_LONG`]) so the fringe width is the same
 /// fraction of the image at any size.
 pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
-    let o = &s.optics;
-    let radius = defringe_radius(s, scale);
-    if radius == 0 {
+    let Some(DefringeParams { radius, purple: pr, green: gr, purple_strength: ps, green_strength: gs }) = defringe_params(s, scale) else {
         return;
-    }
+    };
     let (w, h) = (img.width, img.height);
-    let radius = radius.min(w.max(h).max(1));
+    // never wider than the picture
+    let radius = radius.clamp(1, w.max(h).max(1));
     // perceptual lightness and its local range (dilated contrast)
     let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
     let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };
     let (lo, hi) = (min_filter(&l, radius, false), min_filter(&l, radius, true));
-    let range = |lo: f64, hi: f64, span: (f32, f32)| {
-        let a = span.0 + (span.1 - span.0) * (lo / 100.0) as f32;
-        let b = span.0 + (span.1 - span.0) * (hi / 100.0) as f32;
-        (a.min(b), a.max(b))
-    };
-    let pr = range(o.defringe_purple_hue_lo, o.defringe_purple_hue_hi, PURPLE_HUES);
-    let gr = range(o.defringe_green_hue_lo, o.defringe_green_hue_hi, GREEN_HUES);
-    let ps = (o.defringe_purple_amount / 8.0).min(1.0) as f32;
-    let gs = (o.defringe_green_amount / 8.0).min(1.0) as f32;
     for_rows(&mut img.data, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;

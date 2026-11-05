@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use lightcraft_engine::files::{load_bytes, probe_bytes};
+use lightcraft_engine::files::{load_bytes_with, probe_bytes};
 use lightcraft_engine::media::{FileLoader, FileProbe};
 
 /// Prefix of the catalog paths of files kept in browser storage.
@@ -144,9 +144,11 @@ impl Originals {
     /// Engine hooks that decode/probe from memory.
     pub fn hooks(&self) -> (FileLoader, FileProbe) {
         let s = self.clone();
-        let loader: FileLoader = Arc::new(move |path: &str, max_edge: usize| {
+        // (an imported camera profile is not applied on the web, as in the render worker: a raw keeps its own colour,
+        // whether it decodes in a worker or inline when workers are unavailable)
+        let loader: FileLoader = Arc::new(move |path: &str, max_edge: usize, _dcp: Option<&lightcraft_engine::media::DcpProfile>| {
             let bytes = s.get(path).ok_or_else(|| format!("{path}: the original is still loading from browser storage"))?;
-            load_bytes(&bytes, max_edge)
+            load_bytes_with(&bytes, max_edge, None)
         });
         let s = self.clone();
         let probe: FileProbe = Arc::new(move |path: &str| {
@@ -235,6 +237,64 @@ mod tests {
         assert_eq!(p.content_hash.as_deref(), Some(hash.as_str()), "storage key = catalog content hash");
         let out = session.render_now(id, 20, 20).unwrap();
         assert_eq!(out.image.width, 20);
+    }
+
+    /// CodeRabbit on #1063: without web workers a render runs inline and handed the selected camera profile to this
+    /// loader, which applied it, so the picture differed from the worker's (which keeps the raw's own colour, the
+    /// documented web behaviour). The loader now ignores it.
+    #[test]
+    fn the_web_loader_keeps_a_raws_own_colour_with_a_camera_profile() {
+        use lightcraft_raw::*;
+        let (w, h) = (32usize, 24usize);
+        let raw = RawImage {
+            format: RawFormat::Dng,
+            width: w,
+            height: h,
+            cpp: 1,
+            data: RawData::U16((0..w * h).map(|i| 256 + ((i % w) * 300 + (i / w) * 200) as u16).collect()),
+            cfa: Cfa::bayer("RGGB"),
+            bits: 14,
+            black: BlackLevel::uniform(256.0),
+            white: vec![16000.0],
+            active_area: Rect::new(0, 0, w, h),
+            crop: Rect::new(0, 0, w, h),
+            orientation: Orientation::Normal,
+            color: ColorData {
+                illuminant: [21, 0],
+                color_matrix: [Some(lightcraft_color::Mat3([[0.9, 0.2, -0.15], [-0.3, 1.25, 0.08], [0.02, -0.12, 0.85]])), None],
+                as_shot_neutral: Some([0.5, 1.0, 0.7]),
+                ..Default::default()
+            },
+            wb_multipliers: None,
+            linearized: false,
+            pixel_aspect: 1.0,
+            opcodes: OpcodeLists::default(),
+            metadata: Default::default(),
+            lens_metadata: Default::default(),
+        };
+        let dng = write_dng(&raw, &DngWriteOptions::default()).unwrap();
+        // our own numbers: a matrix that swaps the camera's red and blue
+        let swap = lightcraft_color::Mat3([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]).mul(&lightcraft_color::Mat3([
+            [3.2406, -1.5372, -0.4986],
+            [-0.9689, 1.8758, 0.0415],
+            [0.0557, -0.2040, 1.0570],
+        ]));
+        let profile = dcp::DcpProfile {
+            name: "Swap".into(),
+            camera_model: "LightCraft Test Camera".into(),
+            color: ColorData { illuminant: [21, 0], color_matrix: [Some(swap), None], ..Default::default() },
+        };
+        assert_ne!(
+            load_bytes_with(&dng, 64, Some(&profile)).unwrap().0.data,
+            load_bytes_with(&dng, 64, None).unwrap().0.data,
+            "the profile changes a raw's colour where it is applied"
+        );
+        let store = Originals::default();
+        store.insert("h1", Arc::from(dng));
+        let (loader, _) = store.hooks();
+        let with = loader("web/h1/a.dng", 64, Some(&profile)).unwrap();
+        let without = loader("web/h1/a.dng", 64, None).unwrap();
+        assert_eq!(with.0.data, without.0.data, "the web loader leaves it out");
     }
 
     #[test]

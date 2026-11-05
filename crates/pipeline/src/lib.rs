@@ -34,6 +34,10 @@ pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod light_v3;
+// generated (`light_v3_params.rs`), kept in its own compact layout
+#[rustfmt::skip]
+pub mod light_v3_params;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
@@ -254,6 +258,8 @@ pub(crate) struct Prepared {
     pub base: Arc<Plane>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
+    /// Log luminance blurred at the sharpen radius (the pixel-scale band sharpening boosts).
+    pub sharpen_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
@@ -390,7 +396,7 @@ impl StageCache {
             }
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
-            let planes = planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1));
+            let planes = planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1));
             #[cfg(not(target_arch = "wasm32"))]
             let planes = planes.chain(e.masks.planes()).chain(e.masks.refinement_planes());
             for p in planes {
@@ -466,6 +472,8 @@ pub struct Plan<'a> {
     pub px_per_long: f64,
     /// Long edge of the source buffer (px).
     pub src_long: usize,
+    /// Long edge of the original photo, shared by sharpening and noise reduction.
+    pub native_long: usize,
     /// Output pixels per pixel of the original photo ([`SourceInfo::native_long`], else the source
     /// buffer), at most 1: the scale of noise reduction, whose radii are in the original's pixels.
     pub detail_scale: f32,
@@ -517,7 +525,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
     let detail_scale = local::detail_scale(px_per_long, native_long);
     #[cfg(not(target_arch = "wasm32"))]
-    let needs_airlight = req.window.is_some() && local::context_plane_sigmas(s, px_per_long, req.quality).dark.is_some();
+    let needs_airlight = req.window.is_some() && local::context_plane_sigmas(s, px_per_long, native_long as f64, req.quality).dark.is_some();
     #[cfg(target_arch = "wasm32")]
     let mut fixed_air = None;
     let mut keep = None;
@@ -538,7 +546,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             #[cfg(not(target_arch = "wasm32"))]
             let work = {
                 let shown = req.overlay.mask(s).map(|m| m.id);
-                let margin = window::margin(s, (&frame, full_w, full_h), detail_scale, req.quality, info.mattes.as_deref(), shown);
+                let margin = window::margin(s, (&frame, full_w, full_h), (detail_scale, native_long as f64), req.quality, info.mattes.as_deref(), shown);
                 let work = window::expand(win, full_w, full_h, margin);
                 // Spots upstream of the filters must supply the expanded context too.
                 let work = spots::window_for_reads_checked(s, &frame, full_w, full_h, px_per_long, work).unwrap_or(PixelWindow {
@@ -611,6 +619,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         h,
         px_per_long,
         src_long,
+        native_long,
         detail_scale,
         geo,
         lin_key,
@@ -865,6 +874,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         frame,
         plan.guidance_view,
         px_per_long,
+        plan.native_long as f64,
         req.quality,
         &mut planes,
         plan.mattes.as_ref(),
@@ -971,7 +981,8 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
 /// (the one the render evaluated, or for a hidden mask a fresh evaluation).
 fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> {
     if o.reads_detail() {
-        return visualize::sharpen_plane(o, &plan.settings, &prep.log_l, prep.texture_blur.as_deref(), plan.px_per_long);
+        let band = if local::pixel_sharpen(&plan.settings) { &prep.sharpen_blur } else { &prep.texture_blur };
+        return visualize::sharpen_plane(o, &plan.settings, &prep.log_l, band.as_deref(), plan.px_per_long, plan.native_long as f64);
     }
     let m = o.mask(&plan.settings)?;
     if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
@@ -1039,11 +1050,17 @@ mod tests_geometry;
 #[cfg(test)]
 mod tests_hdr;
 #[cfg(test)]
+mod tests_legacy;
+#[cfg(test)]
+mod tests_light;
+#[cfg(test)]
 mod tests_local;
 #[cfg(test)]
 mod tests_mask_geometry;
 #[cfg(test)]
 mod tests_nr_scale;
+#[cfg(test)]
+mod tests_sharpen;
 #[cfg(test)]
 mod tests_tone;
 #[cfg(test)]
