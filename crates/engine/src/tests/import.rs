@@ -2126,6 +2126,7 @@ fn smart_previews_from_an_older_look_fit_are_refreshed() {
     }
 }
 
+/// Discard can finish while a refresh loads the original, and the refresh must leave the proxy absent.
 #[test]
 fn smart_preview_discard_can_finish_during_an_opening_refresh_load() {
     use std::sync::{Arc, Mutex, mpsc};
@@ -2160,6 +2161,7 @@ fn smart_preview_discard_can_finish_during_an_opening_refresh_load() {
     let _ = std::fs::remove_dir_all(&case.lib);
 }
 
+/// An unreadable proxy keeps the refresh pending until the original proxy file can be inspected.
 #[test]
 fn smart_preview_refresh_retries_when_a_proxy_cannot_be_read() {
     let mut case = SmartLookCase::new("ARW", "unreadable");
@@ -2178,6 +2180,7 @@ fn smart_preview_refresh_retries_when_a_proxy_cannot_be_read() {
     assert!(crate::smart::look_checked(&case.dir));
 }
 
+/// Exercise the offline and online refresh paths for one RAW format.
 fn smart_look_refresh_for(format: &str) {
     let mut case = SmartLookCase::new(format, format);
     assert_current_smart_look_is_not_rebuilt(&mut case);
@@ -2202,6 +2205,7 @@ struct SmartLookCase {
 }
 
 impl SmartLookCase {
+    /// Create an isolated library with a RAW stand-in and a PNG control.
     fn new(format: &str, name: &str) -> Self {
         let src = temp_dir(&format!("smartlook-src-{name}"));
         let lib = temp_dir(&format!("smartlook-lib-{name}"));
@@ -2248,6 +2252,7 @@ fn assert_current_smart_look_is_not_rebuilt(case: &mut SmartLookCase) {
     assert_eq!(case.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
+/// Verify that offline originals preserve their proxies and leave the refresh pending.
 fn keep_offline_previews(case: &mut SmartLookCase) -> (Vec<u8>, Vec<u8>) {
     // old headers (no field), originals offline: kept unchanged, and still marked stale
     for f in [&case.file, &case.png_file] {
@@ -2274,6 +2279,7 @@ fn keep_offline_previews(case: &mut SmartLookCase) -> (Vec<u8>, Vec<u8>) {
     (old_bytes, png_bytes)
 }
 
+/// Verify that reconnecting an original rebuilds its proxy and invalidates older thumbnail writes.
 fn refresh_online_previews(case: &mut SmartLookCase, old_bytes: &[u8], png_bytes: &[u8]) {
     // The original comes back: a later library opening retries the pending refresh.
     std::fs::rename(case.src.with_extension("offline"), &case.src).unwrap();

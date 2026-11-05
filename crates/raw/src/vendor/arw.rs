@@ -1514,6 +1514,7 @@ mod tests {
         assert_eq!(sr2_black_in(&sr2_block(start, 27152, BLACK_LEVEL, 2166, [4; 4], None), start, Little), None);
     }
 
+    /// Verify Sony word storage uses the same levels in dark and bright frames and survives DNG export.
     #[test]
     fn uncompressed_12_bit_word_levels_do_not_depend_on_scene_brightness() {
         use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};

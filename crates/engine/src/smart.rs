@@ -449,6 +449,7 @@ pub fn is_stale_for(path: &Path, look: bool) -> bool {
     stale_status(path, look).unwrap_or(false)
 }
 
+/// Check whether a valid proxy needs rebuilding, propagating transient file I/O errors.
 pub(crate) fn stale_status(path: &Path, look: bool) -> std::io::Result<bool> {
     Ok(proxy_header(path)?.is_some_and(|h| {
         header_encode_version(&h) < ENCODE_VERSION || (look && header_look_version(&h) < u64::from(crate::camera_preview::LOOK_VERSION))
