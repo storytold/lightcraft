@@ -1084,7 +1084,7 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
         cover: None,
         dismissed: 0,
     };
-    h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page)));
+    h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page.clone())));
     h.step();
     let x = format!("more-face-x:{}:0", ids[1].0);
     let r = h.request("ui.clickWidget", json!({"id": x}), t);
@@ -1118,6 +1118,17 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
     h.settle(SETTLE);
     assert!(h.app.session.person_dismissed.is_empty());
     assert!(h.app.ui.dismissed_faces.is_empty());
+    // set aside again, then brought back by an agent while the page is open: hidden here no longer either
+    h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page)));
+    h.app.caches.person_page_gen = h.app.session.people_gen;
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": x}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.dismissed_faces.contains(&("jane doe".into(), ids[1].0, 0)));
+    h.request("engine.execute", json!({"command": "faces.dismiss", "params": {"name": "Jane Doe", "restore": true}}), t);
+    h.settle(SETTLE);
+    assert!(h.app.ui.dismissed_faces.is_empty(), "{:?}", h.app.ui.dismissed_faces);
 }
 
 /// A person's More grid confirms a score-bounded batch through either ↑ or the focused tile's A key. Both
@@ -1156,11 +1167,12 @@ fn person_more_confirms_all_above_with_one_undo_step() {
         cover: None,
         dismissed: 0,
     };
+    // a face just set aside, hidden until the page is asked for again (which then leaves it out itself)
     let set_page = |h: &mut Headless| {
         h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page.clone())));
+        h.app.ui.dismissed_faces.insert(("jane doe".into(), ids[4].0, 0));
         h.step();
     };
-    h.app.ui.dismissed_faces.insert(("jane doe".into(), ids[4].0, 0));
     set_page(&mut h);
     let bulk_id = format!("more-face-above:{}:0", ids[2].0);
     assert!(h.request("ui.widgets", json!({"filter": "more-face-above:"}), t).to_string().contains(&bulk_id));
