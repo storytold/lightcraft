@@ -1,7 +1,9 @@
 use super::widgets::{check, choices, heading, hint, row};
 #[cfg(not(target_arch = "wasm32"))]
 use super::widgets::{label_width, path_label};
-use super::{CACHE_SIZES, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Tokens, Value, json, register};
+use super::{
+    CACHE_SIZES, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, LABEL_W, LightcraftApp, PREVIEW_LIMITS, RichText, Tokens, Value, json, register,
+};
 
 // --------------------------------------------------------------------------------- Performance
 
