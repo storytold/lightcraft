@@ -7918,6 +7918,7 @@ version = "0.18.0"
 dependencies = [
  "brotli",
  "flate2",
+ "rustix 1.1.5",
  "serde_json",
  "sha2",
 ]
