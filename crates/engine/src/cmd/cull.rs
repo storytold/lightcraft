@@ -112,15 +112,10 @@ fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
     let id = super::photo_id(p, C)?.or(s.active()).ok_or_else(|| super::bad(C, "no photo"))?;
     let min = p.get("similarity").and_then(Value::as_f64).unwrap_or(0.8) as f32;
     let all: Vec<PhotoId> = s.catalog.photos().filter(|q| q.in_library()).map(|q| q.id).collect();
-    let sig = |s: &mut Session, id: PhotoId| -> Option<[f32; 64]> {
+    compute_signatures(s, std::iter::once(id).chain(all.iter().copied()));
+    let sig = |s: &Session, id: PhotoId| -> Option<[f32; 64]> {
         let key = s.catalog.photo(id).map(|p| crate::media::content_key(p))?;
-        if let Some(v) = s.signatures.get(&key) {
-            return Some(*v);
-        }
-        let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
-        let v = lightcraft_pipeline::cull::signature(&src);
-        s.signatures.insert(key, v);
-        Some(v)
+        s.signatures.get(&key).copied()
     };
     let me = sig(s, id).ok_or_else(|| super::bad(C, "can't read the photo"))?;
     let mut hits: Vec<(PhotoId, f32)> = Vec::new();
@@ -140,6 +135,42 @@ fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
         s.filter.only_none = s.filter.only.is_empty();
     }
     Ok(json!({"photos": hits.iter().map(|(i, v)| json!({"id": i.0, "similarity": (v * 1000.0).round() / 1000.0})).collect::<Vec<_>>()}))
+}
+
+/// Cache the signatures of `ids` that are not cached yet (by content key). The thumbnail-level
+/// sources are decoded side by side, each once, as background work (so their memory waits at the
+/// work gate) and dropped once measured; a photo that can't be read gets none.
+fn compute_signatures(s: &mut Session, ids: impl Iterator<Item = PhotoId>) {
+    use crate::media::{SourceLevel, SourceRef};
+    use rayon::prelude::*;
+    let mut keys = std::collections::HashSet::new();
+    let mut jobs = Vec::new();
+    for id in ids {
+        let Some(p) = s.catalog.photo(id).cloned() else { continue };
+        let key = crate::media::content_key(&p);
+        if s.signatures.contains_key(&key) || !keys.insert(key.clone()) {
+            continue;
+        }
+        let mut source = s.media.source_ref(&p, SourceLevel::Thumb);
+        // (as a grid thumbnail: a raw that keeps a smaller copy of its image develops that)
+        if let SourceRef::File { reduced, .. } = &mut source {
+            reduced.clone_from(&s.media.reduced_loader);
+        }
+        jobs.push((id, key, source));
+    }
+    let done: Vec<_> = jobs
+        .into_par_iter()
+        .filter_map(|(id, key, source)| {
+            let src = crate::memory::in_background(|| source.load_source()).ok()?;
+            Some((id, key, lightcraft_pipeline::cull::signature(&src.image), src.info))
+        })
+        .collect();
+    for (id, key, v, info) in done {
+        if let Some(info) = &info {
+            s.learn_as_shot_wb(id, info);
+        }
+        s.signatures.insert(key, v);
+    }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
