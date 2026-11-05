@@ -736,6 +736,8 @@ fn alpha_keys_change_with_every_input_of_the_alpha() {
     }
     let mut m = radial.clone();
     (m.id, m.name, m.adjust.exposure, m.adjust.clarity) = (9, "Renamed".into(), 1.0, 30.0);
+    // (a component's name: `evaluate_one` never reads it)
+    m.components[0].name = Some("Renamed component".into());
     assert_eq!(key(&m), key(&radial));
     // the frame for every mask; the image and the exposure for the masks that read them
     let (other_geo, other_image) = (AlphaKeys { geo: 3, ..keys }, AlphaKeys { image: 4, ..keys });

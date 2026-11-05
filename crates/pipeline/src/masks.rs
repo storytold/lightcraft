@@ -259,7 +259,7 @@ impl<H: std::hash::Hasher> std::fmt::Write for HashWrite<'_, H> {
 /// [`evaluate_one`] reads — its components, Refine Edges, Invert and Amount, the frame its
 /// coordinates are on ([`Mask::on_photo`]: on the photo before the warp, or an old mask's corrected
 /// frame), the render's frame, and the image and exposure for the masks that read them ([`reads`]).
-/// Not its other sliders, name or id.
+/// Not its other sliders, its components' names, its name or id.
 pub fn alpha_key(m: &Mask, keys: AlphaKeys, ev: f32) -> u64 {
     use std::fmt::Write;
     use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash, Hasher};
@@ -269,8 +269,12 @@ pub fn alpha_key(m: &Mask, keys: AlphaKeys, ev: f32) -> u64 {
     image.then_some(keys.image).hash(&mut h);
     exposure.then_some(ev.to_bits()).hash(&mut h);
     (m.refine.to_bits(), m.invert, m.adjust.amount.to_bits(), m.on_photo).hash(&mut h);
-    // (`Debug` of an f64 round-trips: distinct definitions write distinct text)
-    let _ = write!(HashWrite(&mut h), "{:?}", m.components);
+    // each component's op, invert and shape, as `evaluate_one` reads them (not its name); `Debug`
+    // of an f64 round-trips, so distinct definitions write distinct text
+    m.components.len().hash(&mut h);
+    for c in &m.components {
+        let _ = write!(HashWrite(&mut h), "{:?}", (c.op, c.invert, &c.shape));
+    }
     h.finish()
 }
 
