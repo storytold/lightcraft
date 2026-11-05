@@ -18,13 +18,29 @@ pub mod lru;
 pub mod pool;
 
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-pub use disk::{DiskCache, decode_jpeg, encode_jpeg};
+pub use disk::{DiskCache, decode_jpeg, encode_jpeg, jpeg_dims};
 pub use hash::{Hash128, Hasher128, hash_bytes};
 use lightcraft_raster::Rgba8;
 pub use lru::{Lru, next_tick};
 pub use pool::JobPool;
+
+/// Images that deferred disk writes ([`PreviewCache::put_deferred`]) may hold waiting for the writer, in bytes. A
+/// write that would go past it is skipped (the image stays in memory; a later render writes it), so renders that
+/// arrive faster than the disk takes them can't pile up threads and memory (issue #1522).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_QUEUED_BYTES: usize = 128 << 20;
+
+/// A deferred disk write waiting for the cache's writer thread.
+#[cfg(not(target_arch = "wasm32"))]
+struct Write {
+    generation: u64,
+    key: Hash128,
+    img: Arc<Rgba8>,
+    cost: usize,
+}
 
 /// Rendered-thumbnail cache: memory LRU over an optional disk cache.
 pub struct PreviewCache {
@@ -32,17 +48,37 @@ pub struct PreviewCache {
     generation: RwLock<Option<u64>>,
     mem: Mutex<Lru<Hash128, Arc<Rgba8>>>,
     disk: Option<DiskCache>,
+    /// The writer thread's queue (started with the first deferred write), and the bytes waiting in it.
+    #[cfg(not(target_arch = "wasm32"))]
+    writer: Mutex<Option<std::sync::mpsc::Sender<Write>>>,
+    queued: Arc<AtomicUsize>,
 }
 
 impl PreviewCache {
     /// Memory-only cache of at most `mem_bytes`.
     pub fn memory(mem_bytes: usize) -> PreviewCache {
-        PreviewCache { generation: RwLock::new(Some(0)), mem: Mutex::new(Lru::new(mem_bytes)), disk: None }
+        Self::new(mem_bytes, None)
+    }
+
+    fn new(mem_bytes: usize, disk: Option<DiskCache>) -> PreviewCache {
+        PreviewCache {
+            generation: RwLock::new(Some(0)),
+            mem: Mutex::new(Lru::new(mem_bytes)),
+            disk,
+            #[cfg(not(target_arch = "wasm32"))]
+            writer: Mutex::new(None),
+            queued: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Bytes of images waiting for a deferred disk write.
+    pub fn queued_bytes(&self) -> usize {
+        self.queued.load(Ordering::Relaxed)
     }
 
     /// Memory LRU + disk cache in `dir` (at most `disk_bytes`).
     pub fn with_disk(mem_bytes: usize, dir: &Path, disk_bytes: u64) -> PreviewCache {
-        PreviewCache { generation: RwLock::new(Some(0)), mem: Mutex::new(Lru::new(mem_bytes)), disk: Some(DiskCache::new(dir, disk_bytes)) }
+        Self::new(mem_bytes, Some(DiskCache::new(dir, disk_bytes)))
     }
 
     pub fn disk(&self) -> Option<&DiskCache> {
@@ -72,20 +108,80 @@ impl PreviewCache {
         Some(img)
     }
 
-    pub fn put(&self, key: Hash128, img: Arc<Rgba8>) {
-        self.put_at(self.generation(), key, img);
+    /// The size of the image kept under `key` (memory, else disk: read from its file's header), without
+    /// loading it or changing what is kept.
+    pub fn dims(&self, key: Hash128) -> Option<(usize, usize)> {
+        if self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner).is_none() {
+            return None;
+        }
+        if let Some(v) = self.mem.lock().unwrap_or_else(|e| e.into_inner()).peek(&key) {
+            return Some((v.width, v.height));
+        }
+        self.disk.as_ref()?.dims(key)
     }
 
-    pub fn put_at(&self, generation: u64, key: Hash128, img: Arc<Rgba8>) {
+    /// The size of the image kept under `key` where it lasts: on disk when the cache has a disk (a copy only
+    /// in memory, whose deferred write may have been skipped, doesn't count), else in memory. Nothing is
+    /// loaded or changed.
+    pub fn stored_dims(&self, key: Hash128) -> Option<(usize, usize)> {
+        match &self.disk {
+            Some(d) if self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner).is_some() => d.dims(key),
+            Some(_) => None,
+            None => self.dims(key),
+        }
+    }
+
+    /// The memory LRU's copy of `key`, without looking on disk.
+    pub fn get_memory(&self, key: Hash128) -> Option<Arc<Rgba8>> {
+        if self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner).is_none() {
+            return None;
+        }
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned()
+    }
+
+    /// Keep `img` in memory only (it is never written to disk): for pictures that are cheap
+    /// enough to make again, such as a raw's decoded camera JPEG, but worth keeping for a revisit.
+    pub fn put_memory(&self, key: Hash128, img: Arc<Rgba8>) {
+        // (the guard is held through the insertion: a clear can't come between the look and the insertion)
+        let current = self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if current.is_none() {
+            return;
+        }
+        let c = cost(&img);
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(key, img, c);
+        drop(current);
+    }
+
+    /// [`Self::put_memory`] for a job that captured `generation`: nothing is kept once the cache
+    /// was cleared (or retired) after that, so a job started before Discard Preview Cache can't
+    /// put its picture back.
+    pub fn put_memory_at(&self, generation: u64, key: Hash128, img: Arc<Rgba8>) {
+        // (the guard is held through the insertion: a clear can't come between the look and the insertion)
         let current = self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *current != Some(generation) {
             return;
         }
-        if let Some(d) = &self.disk {
-            d.put(key, &img);
-        }
         let c = cost(&img);
         self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(key, img, c);
+        drop(current);
+    }
+
+    pub fn put(&self, key: Hash128, img: Arc<Rgba8>) {
+        let _ = self.put_at(self.generation(), key, img);
+    }
+
+    /// [`Self::put`] for a job of `generation`. Returns whether the image is kept where it lasts: `false` when
+    /// the cache was cleared or retired since the job was made (nothing is kept; see [`Self::generation`] to
+    /// tell), or when the disk cache could not write the file (the image is kept in memory all the same).
+    pub fn put_at(&self, generation: u64, key: Hash128, img: Arc<Rgba8>) -> bool {
+        let current = self.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *current != Some(generation) {
+            return false;
+        }
+        let written = self.disk.as_ref().is_none_or(|d| d.put(key, &img));
+        let c = cost(&img);
+        self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(key, img, c);
+        written
     }
 
     /// Like [`Self::put`], but the disk write (a JPEG encode) happens on a background thread, so
@@ -102,25 +198,56 @@ impl PreviewCache {
         let c = cost(&img);
         self.mem.lock().unwrap_or_else(|e| e.into_inner()).insert(key, img.clone(), c);
         drop(current);
-        if self.disk.is_none() {
-            return;
+        let Some(d) = &self.disk else { return };
+        #[cfg(target_arch = "wasm32")]
+        {
+            d.put(key, &img);
         }
-        let me = self.clone();
-        let write = move || {
-            let current = me.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if *current != Some(generation) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = d;
+            if self.queued.load(Ordering::Relaxed).saturating_add(c) > MAX_QUEUED_BYTES {
+                log::debug!("preview cache: disk writes are behind; this one is skipped (the image stays in memory)");
                 return;
             }
-            if let Some(d) = &me.disk {
-                d.put(key, &img);
+            let mut writer = self.writer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if writer.is_none() {
+                *writer = self.start_writer();
             }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        if std::thread::Builder::new().name("lc-preview-write".into()).spawn(write).is_err() {
-            log::warn!("preview cache: could not start a writer thread");
+            let Some(tx) = writer.as_ref() else { return };
+            self.queued.fetch_add(c, Ordering::Relaxed);
+            if tx.send(Write { generation, key, img, cost: c }).is_err() {
+                self.queued.fetch_sub(c, Ordering::Relaxed);
+                *writer = None;
+            }
         }
-        #[cfg(target_arch = "wasm32")]
-        write();
+    }
+
+    /// The thread that makes the deferred disk writes, one after another. It holds the cache weakly, so it ends
+    /// once the cache is dropped (its queue's sender with it).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_writer(self: &Arc<Self>) -> Option<std::sync::mpsc::Sender<Write>> {
+        let (tx, rx) = std::sync::mpsc::channel::<Write>();
+        let cache = Arc::downgrade(self);
+        let queued = self.queued.clone();
+        let spawned = std::thread::Builder::new().name("lc-preview-write".into()).spawn(move || {
+            for job in rx {
+                if let Some(me) = cache.upgrade() {
+                    let current = me.generation.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if *current == Some(job.generation)
+                        && let Some(d) = &me.disk
+                    {
+                        d.put(job.key, &job.img);
+                    }
+                }
+                queued.fetch_sub(job.cost, Ordering::Relaxed);
+            }
+        });
+        if spawned.is_err() {
+            log::warn!("preview cache: could not start the writer thread");
+            return None;
+        }
+        Some(tx)
     }
 
     /// Drop everything (memory and disk). Does nothing once [`Self::retire`]d.

@@ -41,6 +41,9 @@ pub struct WireJob {
     pub as_shot_temp: f64,
     pub as_shot_tint: f64,
     pub lens: Option<EmbeddedLens>,
+    /// The original's long edge (`SourceInfo::native_long`).
+    #[serde(default)]
+    pub native_long: Option<usize>,
     pub settings: Arc<DevelopSettings>,
     pub max_w: usize,
     pub max_h: usize,
@@ -80,6 +83,7 @@ impl WireJob {
             as_shot_temp: job.info.as_shot_temp,
             as_shot_tint: job.info.as_shot_tint,
             lens: job.info.lens,
+            native_long: job.info.native_long,
             settings: job.settings.clone(),
             max_w: job.request.max_w,
             max_h: job.request.max_h,
@@ -101,6 +105,7 @@ impl WireJob {
             lens: self.lens,
             relative_wb: self.relative_wb,
             legacy_relative_wb: self.legacy_relative_wb,
+            native_long: self.native_long,
             ..Default::default()
         }
     }
@@ -124,7 +129,9 @@ impl WireJob {
     /// Identifies the decoded source this job needs.
     fn source_key(&self) -> String {
         match &self.origin {
-            Source::File { path } => format!("{}:{:?}:{}:{path}", self.cache_generation, self.source_identity, self.max_edge),
+            Source::File { path } => {
+                format!("{}:{:?}:{}:{}:{path}", self.cache_generation, self.source_identity, self.max_edge, self.settings.removes_hot_pixels())
+            }
             Source::Demo { scene } => format!("{}:{:?}:{}:demo:{scene}", self.cache_generation, self.source_identity, self.max_edge),
         }
     }
@@ -176,8 +183,10 @@ impl WorkerCore {
             None => {
                 let src = match (&job.origin, original) {
                     (Source::File { .. }, Some(bytes)) => {
-                        let (image, info) = lightcraft_engine::files::load_bytes(bytes, job.max_edge)?;
-                        DecodedSource::new(Arc::new(image), Some(info))
+                        let outliers = job.settings.removes_hot_pixels();
+                        let with = lightcraft_engine::media::RawDecode { dcp: None, outliers };
+                        let (image, info) = lightcraft_engine::files::load_bytes_decoded(bytes, job.max_edge, with)?;
+                        DecodedSource { outliers, ..DecodedSource::new(Arc::new(image), Some(info)) }
                     }
                     (Source::File { path }, None) => return Err(format!("{path}: original not found in browser storage")),
                     (origin @ Source::Demo { .. }, _) => self.media.origin_ref(origin, job.max_edge).load_source()?,
@@ -469,6 +478,7 @@ mod tests {
             as_shot_temp: 6500.0,
             as_shot_tint: 0.0,
             lens: None,
+            native_long: None,
             settings: Arc::new(DevelopSettings::default()),
             max_w: 32,
             max_h: 32,
@@ -516,7 +526,7 @@ mod tests {
             }
         };
         frame(&mut watch, &mut index); // an empty filtered view: no render request yet
-        cache.clear(); // File ▸ Clear Preview Cache
+        cache.clear(); // File ▸ Discard Preview Cache
         frame(&mut watch, &mut index);
         // the filter is removed: the first thumbnail request (`Workers::try_start`)
         gone.extend(watch.observe(&cache, cache.generation(), &mut index));

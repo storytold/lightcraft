@@ -113,7 +113,10 @@ fn ints(w: Wire<'_>, out: &mut Vec<i64>, cap: usize) -> Result<()> {
 #[derive(Default)]
 pub(super) struct AttributeProto {
     pub name: String,
-    pub f: f32,
+    /// `None` when the file has no float value for the attribute.
+    pub f: Option<f32>,
+    /// The declared attribute type (1 float, 2 int, 3 string, 7 ints); 0 when the file does not say.
+    pub kind: i64,
     pub i: i64,
     pub s: Vec<u8>,
     pub ints: Vec<i64>,
@@ -151,7 +154,7 @@ fn attribute(b: &[u8]) -> Result<AttributeProto> {
     while let Some((n, w)) = fields.next()? {
         match (n, w) {
             (1, Wire::Bytes(b)) => a.name = string(b)?,
-            (2, Wire::F32(v)) => a.f = v,
+            (2, Wire::F32(v)) if a.f.is_none() => a.f = Some(v),
             (3, Wire::Int(v)) => a.i = v as i64,
             (4, Wire::Bytes(b)) => {
                 if b.len() > MAX_STRING {
@@ -160,7 +163,7 @@ fn attribute(b: &[u8]) -> Result<AttributeProto> {
                 a.s = b.to_vec();
             }
             (8, w) => ints(w, &mut a.ints, 16)?,
-            (20, Wire::Int(1 | 2 | 3 | 7)) => {}
+            (20, Wire::Int(v @ (1 | 2 | 3 | 7))) if a.kind == 0 => a.kind = v as i64,
             _ => return Err(NetError::Unsupported("unknown attribute value".into())),
         }
     }

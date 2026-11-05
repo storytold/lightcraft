@@ -349,9 +349,8 @@ fn export_presets(s: &mut Session, p: &Value) -> Result<Value> {
     if chosen.is_empty() {
         return Err(bad(C, "no curve presets to export (save one first, or pass names)"));
     }
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir).map_err(|e| crate::EngineError::Other(format!("{}: {e}", dir.display())))?;
-    }
-    std::fs::write(&path, to_file(&chosen)).map_err(|e| crate::EngineError::Other(format!("{}: {e}", path.display())))?;
+    let target = path.to_string_lossy();
+    s.check_write_target(&target).map_err(|e| bad(C, e))?;
+    crate::export::write_file_durable(&target, to_file(&chosen).as_bytes()).map_err(crate::EngineError::Other)?;
     Ok(json!({"path": path.display().to_string(), "count": chosen.len()}))
 }

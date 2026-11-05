@@ -51,6 +51,34 @@ pub fn spawn<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
 ) -> Result<(), String> {
+    let guard = kind.map(|k| app.session.activity.start(k, label, lightcraft_engine::activity::Cancel::No));
+    start(app, label, guard, work, done)
+}
+
+/// [`spawn`] for a task with progress that can stop: its row (`kind`, `label`) adopts `cancel`,
+/// the flag `work` checks, so the row's ✕ and `activity.cancel` stop it; `work` reports progress
+/// through the handle it is given.
+pub fn spawn_tracked<T: Send + 'static>(
+    app: &mut LightcraftApp,
+    label: &str,
+    kind: &'static str,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    work: impl FnOnce(lightcraft_engine::activity::TaskHandle) -> T + Send + 'static,
+    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
+) -> Result<(), String> {
+    let guard = app.session.activity.start(kind, label, lightcraft_engine::activity::Cancel::Flag(cancel));
+    let handle = guard.handle();
+    start(app, label, Some(guard), move || work(handle), done)
+}
+
+/// Run `work` on a worker thread and list it in `app.tasks` with its activity row (if any).
+fn start<T: Send + 'static>(
+    app: &mut LightcraftApp,
+    label: &str,
+    guard: Option<lightcraft_engine::activity::TaskGuard>,
+    work: impl FnOnce() -> T + Send + 'static,
+    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
+) -> Result<(), String> {
     let (tx, rx) = channel::<Finish>();
     let repaint = app.tasks.repaint.clone();
     let job = move || {
@@ -64,7 +92,6 @@ pub fn spawn<T: Send + 'static>(
     std::thread::Builder::new().name(format!("lc-task-{label}")).spawn(job).map_err(|e| format!("{label}: could not start: {e}"))?;
     #[cfg(target_arch = "wasm32")]
     job();
-    let guard = kind.map(|k| app.session.activity.start(k, label, lightcraft_engine::activity::Cancel::No));
     app.tasks.running.push(Task { label: label.to_string(), rx, _guard: guard });
     Ok(())
 }
@@ -114,5 +141,30 @@ pub fn wait(app: &mut LightcraftApp, ctx: &egui::Context, timeout: std::time::Du
         let _ = timeout;
         poll(app, ctx);
         app.tasks.is_empty()
+    }
+}
+
+/// Wait for a specific task by label and apply finished tasks. Returns `true` once the labeled
+/// task finishes (or is removed), or `false` on timeout. Other background tasks may continue running.
+pub fn wait_for(app: &mut LightcraftApp, ctx: &egui::Context, label: &str, timeout: std::time::Duration) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let t0 = std::time::Instant::now();
+        loop {
+            poll(app, ctx);
+            if !app.tasks.is_running(label) {
+                return true;
+            }
+            if t0.elapsed() > timeout {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = timeout;
+        poll(app, ctx);
+        !app.tasks.is_running(label)
     }
 }

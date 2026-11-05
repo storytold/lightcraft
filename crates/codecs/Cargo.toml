@@ -48,8 +48,13 @@ heif = ["dep:lightcraft-heif"]
 avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 
 [dev-dependencies]
+# tests record why they skip (`cargo xtask ci` lists the skips)
+lightcraft-testkit = { workspace = true }
 # JPEG XL tests read encoded samples without our colour conversion
 jxl-oxide = { workspace = true }
 proptest = { workspace = true }
 # Lossless synthetic HEIC files for the `heif` feature's tests.
 lightcraft-heif = { workspace = true, features = ["testdata"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+dhat = { workspace = true }

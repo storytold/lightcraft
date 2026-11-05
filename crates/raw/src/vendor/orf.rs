@@ -206,7 +206,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let (w, h) = (info.width as usize, info.height as usize);
     let n = w.checked_mul(h).filter(|n| *n > 0 && *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
     let chunks = info.chunks(bytes.len() as u64);
-    let total: u64 = chunks.iter().map(|c| c.len).sum();
+    let total = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len));
     let stated = cfa_from_exif(&tiff);
     let mut two_field = false;
     let (mut data, bits) = if info.compression != 1 {
@@ -230,6 +230,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         (RawData::U16(d), 12)
     } else if total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+        // the strip as it is in the file (clipped at its end), not as its tag states it: one too short
+        // for the samples is a truncated file, refused before they are allocated
+        if (src.len() as u64).saturating_mul(8) < (n as u64).saturating_mul(12) {
+            return Err(RawError::Corrupt("ORF strip shorter than its samples".into()));
+        }
         // the depth is fixed here, so a header-only probe needs the samples only when the file doesn't state its
         // colour-filter layout
         let d = if mode == Mode::Full || stated.is_none() {
@@ -285,7 +290,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let mn = maker_note(bytes, &tiff);
     let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
     let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).map(|v| v as usize))) {
-        Some([Some(x), Some(y), Some(cw), Some(ch)]) if cw > 0 && ch > 0 && x + cw <= w && y + ch <= h => Rect::new(x, y, cw, ch),
+        // checked: the tags are file data; `x + cw` on a hostile value would wrap past the bounds
+        Some([Some(x), Some(y), Some(cw), Some(ch)])
+            if cw > 0 && ch > 0 && x.checked_add(cw).is_some_and(|end| end <= w) && y.checked_add(ch).is_some_and(|end| end <= h) =>
+        {
+            Rect::new(x, y, cw, ch)
+        }
         _ => Rect::new(0, 0, w, h),
     };
     let cfa = stated.unwrap_or_else(|| cfa_from_data(samples, w, active));
@@ -329,8 +339,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         metadata,
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -385,6 +397,15 @@ mod tests {
         b[2] = b'R';
         b[3] = b'O';
         b
+    }
+
+    /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow.
+    #[test]
+    fn strip_byte_counts_past_u64_max_do_not_overflow() {
+        let file = crate::vendor::tests::huge_strip_counts(orf(4, 2, 16, vec![0; 16]));
+        for mode in [Mode::Header, Mode::Full] {
+            let _ = super::decode(&file, mode);
+        }
     }
 
     /// An old-style little-endian Olympus maker note (`OLYMP\0`, version 1, then the IFD) of SHORT (type 3) or

@@ -14,11 +14,12 @@
 
 <p align="center">
   <a href="README.md">English</a> ·
-  <a href="README.zh-hans.md">简体中文</a>
+  <a href="README.zh-hans.md">简体中文</a> ·
+  <a href="README.zh-hant.md">繁體中文</a>
 </p>
 
 <p align="center">
-  <b>照片图库与 raw 显影；Adobe Lightroom 的开源净室实现，用纯 Rust 重建。</b><br>
+  <b>照片图库与 raw 显影；开源、非破坏性的照片图库与 raw 显影工具，用纯 Rust 构建。</b><br>
   在 macOS、Windows 和 Linux 上原生运行，也可通过 WebAssembly 在浏览器中使用，并能由 AI 智能体经 MCP 端到端驱动。
 </p>
 
@@ -240,7 +241,7 @@ lightcraft --control 7980 ~/Pictures/trip
 - **命令注册表。** `engine.commands` 列出可用命令；`develop.controls` 列出每个滑块的范围、
   默认值和当前值。
 - **MCP 服务器。** `lightcraft-cli mcp` 把命令注册表开放给 Claude（或任何 MCP 客户端），
-  同时提供导入、查询、显影、蒙版、渲染（以图像返回）和导出的辅助工具。它既能无界面运行，也能附着
+  同时提供导入、查询、显影、渲染（以图像返回）和导出的辅助工具。蒙版没有专门的辅助工具，请通过 `run_command` 使用（例如 `mask.add`）。它既能无界面运行，也能附着
   到正在运行的应用上，支持截图、点击和手势。见 [docs/mcp.md](docs/mcp.md)。
 
   ```sh
@@ -297,18 +298,18 @@ lightcraft --control 7980 ~/Pictures/trip
 
 ## Feature status
 
-LightCraft 很年轻，而且进展很快。**我们如实所处的位置**（细节见[路线图](ROADMAP.md#where-we-stand)）：
+LightCraft 很年轻，而且进展很快。**我们如实所处的位置**（细节见[路线图](ROADMAP.md)）：
 
-- **按功能数量算，我们达到了 Lightroom 的约 79%**（核心功能 98%），逐行记录在
-  [docs/parity.md](docs/parity.md)。
-- **作为日常替代 Lightroom 的工具，我们更接近 60–70%。** 在单台机器上处理 JPEG/DNG 以及大多数尼康／索尼／
+- **按功能数量算，我们达到了约 79%**（核心功能 98%），逐行记录在
+  [docs/parity-checklist.md](docs/parity-checklist.md)。
+- **作为日常使用的工具，我们更接近 60–70%。** 在单台机器上处理 JPEG/DNG 以及大多数尼康／索尼／
   较老佳能的 raw 都很出色。
 - **最大的缺口：**
-  - **相机色彩校准：** 索尼、尼康、松下、富士和佳能 CR3 的 raw 会从各自的相机 JPEG 得到受保护的估计值，内置 ILCE-7CR、ILCE-7M4、X-H2S 和 X-T4 配置文件；实测校准仍然缺失，其他 raw 或被拒绝的拟合会保留中性矩阵；
+  - **相机色彩校准：** 索尼、尼康、松下、富士和佳能 CR3 的 raw 会从各自的相机 JPEG 得到受保护的估计值，内置 ILCA-99M2、ILCE-7CR、ILCE-7M4、ILCE-7RM5、X-H2S、X-T4、尼康 Z 6II、Z 8 和 D5300 配置文件；实测校准仍然缺失，其他 raw 或被拒绝的拟合会保留中性矩阵；
   - **压缩的奥林巴斯 raw 和不受支持的 CR3 变体：** 这些在有内嵌 JPEG 预览时使用预览。富士无损／有损压缩 RAF 现在能解码传感器数据；[验证与已有图库重新加载说明](docs/raf-compression.md)；
   - **AI 蒙版与降噪：** 主体和天空选择目前是经典启发式算法；
   - **屏幕上的 HDR 显示、视频，以及经典版式中的打印／画册／地图模块。**
-- **接下来做什么：** 见[我们要去往哪里](ROADMAP.md#where-were-going)。
+- **接下来做什么：** 见[我们要去往哪里](ROADMAP.md#upcoming)。
 
 | 领域 | 状态 |
 |---|---|
@@ -332,7 +333,7 @@ LightCraft 很年轻，而且进展很快。**我们如实所处的位置**（�
 | 镜头校正（畸变、暗角、自动 + 手动色差、去边、DNG 文件内嵌的镜头校正以及松下／徕卡 RW2／RWL 畸变数据）、几何（变换、限制裁剪）、垂直校正（自动／水平／垂直／完整／引导式） | ✅ · 相机镜头配置文件（我们自己的）⬜ |
 | 照片合并：HDR（自动对齐、去重影）、全景（球面／圆柱／透视、边界变形、自动裁剪）、HDR 全景 → DNG | ✅ |
 | GPU 管线（wgpu 计算，与 CPU 一致到 1/255 以内）、设备限制／出错时回退到 CPU | ✅ · 浏览器中的 WebGPU 🚧 |
-| AI：分割蒙版、AI 降噪、超分辨率、人脸；视频 | ⬜（见[路线图](ROADMAP.md#where-were-going)） |
+| AI：分割蒙版、AI 降噪、超分辨率、人脸；视频 | ⬜（见[路线图](ROADMAP.md#upcoming)） |
 | 网页版（通过 WASM 在浏览器中使用同一界面）：图库持久化在 OPFS/IndexedDB、Web Worker 渲染、导出下载 | ✅ · WebGPU、Safari/Firefox 测试 🚧 |
 
 <sub>✅ 现已可用 · 🚧 进行中 · ⬜ 尚未开始</sub>
@@ -356,8 +357,60 @@ CI 默认使用行表调试信息，并按启动时可用内存每 1.5 GB 开一
 （每个 CPU 最多一个；读不到内存时为 4 个），所以一台 8 GB、空闲 6 GB 的机器会用 4 个任务构建，
 而一台空闲内存很少的繁忙机器会用更少。测试线程数随之调整，上限为 4。否则，每个 CPU 一个的
 完整调试信息链接器会在任何测试运行之前就耗尽内存。GPU 覆盖范围不变。显式设置
-`CARGO_PROFILE_DEV_DEBUG`、`CARGO_BUILD_JOBS` 和 `RUST_TEST_THREADS` 会覆盖这些默认值。
+`CARGO_PROFILE_DEV_DEBUG`、`CARGO_BUILD_JOBS`、`RUST_TEST_THREADS` 和 `NEXTEST_TEST_THREADS` 会覆盖这些默认值。
 日常开发命令保持它们各自的设置。
+
+**内存受限机器上的 release 构建：** [#1196](https://github.com/storytold/lightcraft/issues/1196)
+报告在 16 GB 的 Arch/AUR 机器上，同时构建桌面应用和 CLI，并启用完整调试信息、thin LTO
+和单个代码生成单元时，链接过程被 OOM 终止。上述 CI 默认设置不适用于普通的
+`cargo build --release`。建议先使用一个构建任务；内存充足时可以尝试两个：
+
+```sh
+CARGO_BUILD_JOBS=1 cargo build --release -p lightcraft -p lightcraft-cli
+# 或者：CARGO_BUILD_JOBS=2 cargo build --release -p lightcraft -p lightcraft-cli
+```
+
+如果打包环境启用了完整调试信息或占用较多内存的 LTO 设置，可以使用仅对本条命令生效的
+覆盖设置，降低源码构建的内存需求：
+
+```sh
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release -p lightcraft -p lightcraft-cli
+```
+
+这些 POSIX shell 赋值只影响本条命令，不修改全局 Cargo 配置或仓库的 release profile。
+关闭 LTO 可能改变性能和二进制大小；关闭调试信息会减少可用的调试细节。这是构建建议，
+并不保证任何机器都有足够内存。下游打包者应串行构建大型二进制文件，并避免在低内存
+构建机器上同时使用完整调试信息、LTO 和单个代码生成单元。PKGBUILD 自己导出的 profile
+设置可以覆盖继承的环境变量；应在本地调整打包配方或联系维护者，而不要假定给
+`makepkg` 添加环境变量前缀就能优先生效。
+
+**Linux/Arch 构建故障：rustc 在 ThinLTO 阶段发生 SIGILL。**
+在 [#2811](https://github.com/storytold/lightcraft/issues/2811) 中，报告者的 Arch Linux x86_64
+机器配备 AMD Ryzen 9 7900X3D 和 64 GB RAM，使用 rustc 1.99.0 / LLVM 23.1.1、AUR
+`lightcraft` `0.7.1-1` 和 `0.13.0-1`、`RUSTFLAGS="-C opt-level=3 -C target-cpu=native"`，
+以及 release 设置 `opt-level=3`、`lto=thin`、`codegen-units=1`。
+`cargo build --frozen --release` 在编译到可执行 crate 时，rustc 因 signal 4
+（`SIGILL` / `ILL_ILLOPN`）崩溃。core dump 指向 LLVM 的 SelectionDAG / vector-combine
+优化路径；编译器的具体根因尚未确定。这不表示所有使用这些硬件或工具链的机器都会失败。
+此故障与上文 [#1196](https://github.com/storytold/lightcraft/issues/1196) 中 16 GB 机器上的
+OOM 终止表现不同，没有证据表明两者根因相同。
+
+直接使用 Cargo 从源码构建时，等价的单条命令 LTO 覆盖方式是：
+
+```sh
+CARGO_PROFILE_RELEASE_LTO=off cargo build --frozen --release
+```
+
+报告者 @rwarmstr 验证成功的是：在 **AUR PKGBUILD 的 `_srcenv()` 函数内部**导出
+`CARGO_PROFILE_RELEASE_LTO=off` 后重新构建上述两个版本，无需更改 `RUSTFLAGS`。
+报告者测试的是 AUR 配方，并未单独验证上面的直接 Cargo 命令。仅在 `makepkg` 前添加变量，
+可能会被 PKGBUILD 自己的 export 覆盖；打包配方必须保留或设置该覆盖值。
+AUR 的 `!lto` 选项行为由 [#2813](https://github.com/storytold/lightcraft/issues/2813) 单独跟踪。
+
+[Cargo 的 LTO 文档](https://doc.rust-lang.org/cargo/reference/profiles.html#lto) 区分了 `false`
+和 `off`：`false` 仍可能在代码生成单元之间执行 thin local LTO（除非 `codegen-units=1`
+或 `opt-level=0`）；`off` 则明确禁用 LTO。上文的低内存配方保持不变。
+此绕过方法仅针对受影响的构建，不是新的默认建议；禁用 LTO 可能改变性能、二进制大小和构建行为。
 
 **中文和日文文字**需要共享字体仓库，这是一个可选的构建输入（所有正式发布版都会包含它）：
 
@@ -367,7 +420,7 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 ```
 
 不指定它时，LightCraft 构建和运行的方式完全相同，只是中文和日文文字没有字形。字体从不提交到
-本仓库；见 [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md)。
+本仓库。
 
 **界面语言：** **编辑 → 语言**（English、简体中文、繁體中文（台灣）、日本語、Português (Brasil)、Español、Deutsch、Русский、Français）或 **设置 → 一般 →
 语言**；选择立即生效并会保留。见 [docs/localization.md](docs/localization.md)。
@@ -429,9 +482,9 @@ egui 前端是一个可替换的 crate；它下面没有任何东西知道 UI �
 
 人和智能体遵循同样的规则，所以请先读 [AGENTS.md](AGENTS.md)。简短版本：
 
-- **净室。** 绝不阅读 Adobe 的二进制文件或 GPL 的 raw／照片代码（darktable、RawTherapee、LibRaw、rawspeed、dcraw……）；
+- **净室。** 绝不阅读专有软件的二进制文件或 GPL 的 raw／照片代码（darktable、RawTherapee、LibRaw、rawspeed、dcraw……）；
   只依据公开规范和黑盒观察来工作。
-- **绝不使用 Adobe 资源：** 不使用 Adobe 产品的图标、截图、预设、配置文件、LUT 或字体。仓库中的每一个
+- **绝不使用专有资源：** 不使用商业产品的图标、截图、预设、配置文件、LUT 或字体。仓库中的每一个
   图像、图标和字体都是原创、公有领域、知识共享、OFL 或宽松许可的，并在同一提交中
   于 [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) 添加条目。新字体提交到
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts)，而不是这里。
@@ -459,9 +512,11 @@ egui 前端是一个可替换的 crate；它下面没有任何东西知道 UI �
 | arm64（骁龙及其他 ARM PC） | `lightcraft-<ver>-windows-arm64.msi` | `lightcraft-<ver>-windows-arm64-portable.zip` |
 | x86（32 位） | `lightcraft-<ver>-windows-x86.msi` | `lightcraft-<ver>-windows-x86-portable.zip` |
 
-安装程序和可执行文件都有代码签名。安装程序会询问安装位置（默认
-`C:\Program Files\LightCraft`；升级会留在你选择的文件夹），结束时有一页确认 LightCraft 已安装，
+安装程序和可执行文件都有代码签名。安装程序会询问为谁安装以及安装位置（默认仅为当前账户，安装到
+`%LOCALAPPDATA%\Programs\ArtCraft\LightCraft`；选择“这台计算机上的所有人”则安装到
+`C:\Program Files\ArtCraft\LightCraft`（32 位版本为 `Program Files (x86)`）；升级会留在你选择的文件夹），结束时有一页确认 LightCraft 已安装，
 并可选择启动它。无人值守安装：`msiexec /i lightcraft-<ver>-windows-x64.msi /qn INSTALLFOLDER="D:\Apps\LightCraft\"`。
+静默安装默认仅为当前用户安装。`INSTALLFOLDER` 只决定安装文件夹，不决定为谁安装；若要为所有用户安装，请在提升权限的终端或部署工具中加上 `ALLUSERS=1`。
 
 ### macOS
 
@@ -554,8 +609,6 @@ Inter（SIL OFL 1.1）。用 [craft-fonts](https://github.com/storytold/craft-fo
 ArtCraft 团队的商标，不在本许可范围内。它们只能在未修改的情况下，作为
 本仓库和 LightCraft 的一部分，按 [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) 使用。
 分支和修改版本必须移除它们。
-
-<sub>Adobe、Photoshop、Illustrator、Premiere Pro、Lightroom、Acrobat、After Effects 和 InDesign 是 Adobe Inc. 在美国和／或其他国家的商标或注册商标。LightCraft 是一个独立的开源项目，与 Adobe Inc. 无隶属关系，也未获其赞助或认可；这些名称仅用于说明它所兼容的工作流。</sub>
 
 <p align="center">
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>

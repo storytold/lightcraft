@@ -152,8 +152,8 @@ fn zero_highlights_and_shadows_render_without_the_base() {
     controls::set(&mut s, "effects.clarity", 40.0);
     // no base plane is computed or read (the per-pixel stage sees log luminance): the render is
     // the one it always was
-    assert_eq!(local::plane_sigmas(&s, 1200.0, Quality::Full).base, None);
-    assert!(local::plane_sigmas(&with("light.shadows", 1.0), 1200.0, Quality::Full).base.is_some());
+    assert_eq!(local::plane_sigmas(&s, 1200.0, 1200.0, Quality::Full).base, None);
+    assert!(local::plane_sigmas(&with("light.shadows", 1.0), 1200.0, 1200.0, Quality::Full).base.is_some());
 }
 
 #[test]
@@ -188,6 +188,27 @@ fn median_matches_a_plain_per_pixel_median() {
 }
 
 #[test]
+fn median_orders_special_values_and_ties_like_total_cmp() {
+    // the running window keeps keys in `f32::total_cmp` order: NaNs of either sign, signed zeros,
+    // infinities and long runs of equal values come out bit for bit as a sorted per-pixel window
+    // does, also on planes narrower or shorter than the window
+    let special = [f32::NAN, -f32::NAN, 0.0, -0.0, f32::INFINITY, f32::NEG_INFINITY, f32::MIN_POSITIVE, -1.0, 1.0, 1.0, 1.0];
+    let bits = |p: &Plane| p.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    for (w, h) in [(1, 1), (2, 3), (5, 1), (19, 7), (61, 9)] {
+        let p = Plane::from_fn(w, h, |x, y| special[(x * 7 + y * 3 + (x * y) % 5) % special.len()]);
+        for r in [1, 2, 9, 24] {
+            let med = |v: &mut Vec<f32>| {
+                v.sort_by(f32::total_cmp);
+                v[r]
+            };
+            let rows = Plane::from_fn(w, h, |x, y| med(&mut (0..=2 * r).map(|k| p.get((x + k).saturating_sub(r).min(w - 1), y)).collect()));
+            let want = Plane::from_fn(w, h, |x, y| med(&mut (0..=2 * r).map(|k| rows.get(x, (y + k).saturating_sub(r).min(h - 1))).collect()));
+            assert_eq!(bits(&local::median_hv(&p, r)), bits(&want), "{w}x{h} r {r}");
+        }
+    }
+}
+
+#[test]
 fn v1_keeps_the_base_it_always_had() {
     // V1's base is the edge-aware filter of log luminance itself, as before process V2: no median
     // radius, and `tone_base` at 0 is that filter bit for bit
@@ -195,7 +216,7 @@ fn v1_keeps_the_base_it_always_had() {
     assert_eq!(ProcessVersion::legacy().process(), Process::V1);
     for ppl in [300.0, 1200.0, 5568.0, 1e6] {
         for q in [Quality::Full, Quality::Draft] {
-            let sig = local::plane_sigmas(&v1, ppl, q);
+            let sig = local::plane_sigmas(&v1, ppl, ppl, q);
             assert!(sig.base.is_some());
             assert_eq!(sig.base_detail, 0, "V1 at {ppl} px");
             assert_eq!(local::tone_base_detail(&v1, ppl), 0);
@@ -208,8 +229,8 @@ fn v1_keeps_the_base_it_always_had() {
     }
     // V2 takes the median wherever the image is big enough for one
     let v2 = with("light.highlights", -100.0);
-    assert_eq!(local::plane_sigmas(&v2, 5568.0, Quality::Full).base_detail, local::base_detail_radius(5568.0));
-    assert_eq!(local::plane_sigmas(&v2, 300.0, Quality::Full).base_detail, 0);
+    assert_eq!(local::plane_sigmas(&v2, 5568.0, 5568.0, Quality::Full).base_detail, local::base_detail_radius(5568.0));
+    assert_eq!(local::plane_sigmas(&v2, 300.0, 300.0, Quality::Full).base_detail, 0);
 }
 
 #[test]
@@ -238,7 +259,7 @@ fn the_base_plane_is_cached_per_process() {
         let warm = render_cached(&src, &info, s, &req, &cache).image;
         assert!(warm == render(&src, &info, s, &req).image, "process {:?}", s.process);
     }
-    let sig = local::plane_sigmas(&s2, W as f64, Quality::Full);
+    let sig = local::plane_sigmas(&s2, W as f64, W as f64, Quality::Full);
     let sg = sig.base.unwrap();
     assert_ne!(local::base_key(&s1, sg, 0), local::base_key(&s2, sg, 0), "the process is part of the key");
     assert_ne!(local::base_key(&s2, sg, 0), local::base_key(&s2, sg, sig.base_detail));

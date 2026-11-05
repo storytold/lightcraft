@@ -11,7 +11,8 @@
 //!   control-channel method names itself (rendering with the engine's pipeline and encoding with
 //!   `lightcraft-codecs`), so agents can develop photos and look at the result without a window.
 //!
-//! Entry points: [`Server::serve`] (stdio loop) and [`Server::handle_line`] (one message).
+//! Entry points: [`Server::serve_stdio`] (process stdin), [`Server::serve`] (caller-managed
+//! streams), and [`Server::handle_line`] (one message).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -32,3 +33,14 @@ pub const DEFAULT_ADDR: &str = "127.0.0.1:7980";
 
 #[cfg(test)]
 mod tests;
+
+/// Held by tests that start a child process (a copy of the test binary) and by tests that run a
+/// loopback socket server, so the two never overlap. On Windows the child can inherit a socket the
+/// server just accepted; when the child exits, Windows closes its copy abortively and the test's
+/// connection is reset ("An existing connection was forcibly closed"), which failed the
+/// `backend` reply tests whenever they ran alongside a child-process test.
+#[cfg(test)]
+pub(crate) fn serial_sockets_and_children() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}

@@ -11,8 +11,9 @@
 //!   either byte order, classic or BigTIFF.
 //!
 //! The reader never panics on malformed input: every offset is bounds-checked, IFD loops are
-//! detected, nesting depth / IFD count are limited and the total amount of decoded value bytes is
-//! capped relative to the input size (so a hostile file cannot make us allocate unboundedly).
+//! detected, nesting depth / IFD count are limited, at most 65,536 directory entry slots are read
+//! across the main chain and child IFDs, and decoded value bytes are capped relative to the input
+//! size (so overlapping tables cannot multiply entry-vector allocations without bound).
 //!
 //! Sources: TIFF 6.0 specification (Adobe, 1992), TIFF Technical Note / supplements, the BigTIFF
 //! design notes (AWare Systems), Adobe DNG specification 1.7 (tag numbers), CIPA DC-008 (Exif 2.32).
@@ -25,7 +26,7 @@ mod reader;
 pub mod tags;
 pub mod writer;
 
-pub use reader::{ParseOptions, parse_ifd_at};
+pub use reader::{DirectoryEntries, EntrySpan, ParseOptions, decode as decode_value, directory_entries, entry_span, parse_ifd_at};
 pub use writer::{IfdBuilder, ImageData, TiffWriter};
 
 use serde::{Deserialize, Serialize};
