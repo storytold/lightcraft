@@ -404,14 +404,8 @@ impl crate::Session {
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let cached = vec![(self.media.rendered.clone(), self.view_key(&p, apply_crop))];
         // (the photo too: a virtual copy shares the file and, unedited, the settings)
-        let h = Hasher128::new()
-            .str(&content_key(&p))
-            .str("quick")
-            .u64(p.develop.hash64())
-            .u64(apply_crop as u64)
-            .u64(id.0)
-            .u64(profile_salt)
-            .finish();
+        let h =
+            Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(id.0).u64(profile_salt).finish();
         let key = h.0 as u64;
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
