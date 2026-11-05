@@ -201,6 +201,39 @@ impl Warp {
         self.corrected_to_source(self.to_corrected(p), ch)
     }
 
+    /// Source px → transformed px (green plane): the inverse of [`Warp::to_source`], by Newton's
+    /// method on it (the warps are smooth and close to the identity, so a few steps reach a
+    /// hundredth of a pixel). `None` when it doesn't converge (a point far outside a strong warp).
+    pub fn from_source(&self, s: Point) -> Option<Point> {
+        if !(s.x.is_finite() && s.y.is_finite()) {
+            return None;
+        }
+        let f = |p: Point| self.to_source(p, 1);
+        // start from where the perspective alone puts it (the lens part moves pixels little)
+        let mut t = self.from_corrected(s);
+        let h = 1e-3 * self.w.max(self.h).max(1.0);
+        for _ in 0..24 {
+            let v = f(t);
+            let (ex, ey) = (v.x - s.x, v.y - s.y);
+            if !(ex.is_finite() && ey.is_finite()) {
+                return None;
+            }
+            if ex.abs() < 1e-4 && ey.abs() < 1e-4 {
+                return Some(t);
+            }
+            let (dx, dy) = (f(Point::new(t.x + h, t.y)), f(Point::new(t.x, t.y + h)));
+            let (a, c) = ((dx.x - v.x) / h, (dx.y - v.y) / h);
+            let (b, d) = ((dy.x - v.x) / h, (dy.y - v.y) / h);
+            let det = a * d - b * c;
+            if !det.is_finite() || det.abs() < 1e-12 {
+                return None;
+            }
+            t = Point::new(t.x - (d * ex - b * ey) / det, t.y - (a * ey - c * ex) / det);
+        }
+        let v = f(t);
+        ((v.x - s.x).abs() < 1e-2 && (v.y - s.y).abs() < 1e-2).then_some(t)
+    }
+
     /// Vignetting compensation gain at source position `src` (px).
     pub fn gain(&self, src: Point) -> f32 {
         let mut g = 1.0;
@@ -375,7 +408,7 @@ pub fn reorient_lens(lens: &EmbeddedLens, o: Orientation, w: f64, h: f64) -> Emb
             EmbeddedWarpStage { planes, center: map_pt(st.center), radius: st.radius * long_ratio, reciprocal: st.reciprocal }
         })
     });
-    EmbeddedLens { warp, vignette, stages }
+    EmbeddedLens { warp, vignette, stages, source: lens.source }
 }
 
 // ------------------------------------------------------------------------------------------ lateral CA
@@ -570,35 +603,60 @@ fn hue_weight(h: f32, lo: f32, hi: f32) -> f32 {
 /// Long edge (px) at which defringe widths are specified: fringes are 1–7 px wide on a ~4000 px image.
 pub const DEFRINGE_REF_LONG: f64 = 4000.0;
 
-/// Defringe: desaturate purple / green colour fringes that sit next to high-contrast edges. `scale` is output
-/// pixels per reference pixel (output long edge / [`DEFRINGE_REF_LONG`]) so the fringe width is the same
-/// fraction of the image at any size.
-pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
+/// Defringe's resolved parameters (the CPU stage below and the GPU kernels both read these).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DefringeParams {
+    /// Radius (output px) of the lightness min / max filters that find edges.
+    pub radius: usize,
+    /// Purple and green OkLab hue ranges (degrees, lo ≤ hi) and strengths (0..1).
+    pub purple: (f32, f32),
+    pub green: (f32, f32),
+    pub purple_strength: f32,
+    pub green_strength: f32,
+}
+
+/// Defringe's parameters for `s` at `scale` output pixels per reference pixel, or `None` when it
+/// does nothing.
+pub fn defringe_params(s: &DevelopSettings, scale: f64) -> Option<DefringeParams> {
     let o = &s.optics;
     if !s.section_enabled("optics") || (o.defringe_purple_amount <= 0.0 && o.defringe_green_amount <= 0.0) {
-        return;
+        return None;
     }
-    let (w, h) = (img.width, img.height);
     // as far as the sliders go (0–20): an amount from a damaged catalog or sidecar made the
     // radius overflow
     let max_amt = o.defringe_purple_amount.max(o.defringe_green_amount).min(20.0);
-    // fringe width in source px grows with the amount (1..7 px), in output px at least one (and
-    // never wider than the picture)
-    let radius = ((1.0 + max_amt * 0.3) * scale).round();
-    let radius = if radius.is_finite() { radius.clamp(1.0, w.max(h).max(1) as f64) as usize } else { 1 };
-    // perceptual lightness and its local range (dilated contrast)
-    let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
-    let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };
-    let (lo, hi) = (min_filter(&l, radius, false), min_filter(&l, radius, true));
+    // fringe width in source px grows with the amount (1..7 px), in output px at least one
+    let radius = ((1.0 + max_amt * 0.3) * scale).round().max(1.0);
+    // (an absurd scale must not ask for a filter wider than any image; the stages clamp it to theirs)
+    let radius = if radius.is_finite() { radius.min(1e6) as usize } else { 1 };
     let range = |lo: f64, hi: f64, span: (f32, f32)| {
         let a = span.0 + (span.1 - span.0) * (lo / 100.0) as f32;
         let b = span.0 + (span.1 - span.0) * (hi / 100.0) as f32;
         (a.min(b), a.max(b))
     };
-    let pr = range(o.defringe_purple_hue_lo, o.defringe_purple_hue_hi, PURPLE_HUES);
-    let gr = range(o.defringe_green_hue_lo, o.defringe_green_hue_hi, GREEN_HUES);
-    let ps = (o.defringe_purple_amount / 8.0).min(1.0) as f32;
-    let gs = (o.defringe_green_amount / 8.0).min(1.0) as f32;
+    Some(DefringeParams {
+        radius,
+        purple: range(o.defringe_purple_hue_lo, o.defringe_purple_hue_hi, PURPLE_HUES),
+        green: range(o.defringe_green_hue_lo, o.defringe_green_hue_hi, GREEN_HUES),
+        purple_strength: (o.defringe_purple_amount / 8.0).min(1.0) as f32,
+        green_strength: (o.defringe_green_amount / 8.0).min(1.0) as f32,
+    })
+}
+
+/// Defringe: desaturate purple / green colour fringes that sit next to high-contrast edges. `scale` is output
+/// pixels per reference pixel (output long edge / [`DEFRINGE_REF_LONG`]) so the fringe width is the same
+/// fraction of the image at any size.
+pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
+    let Some(DefringeParams { radius, purple: pr, green: gr, purple_strength: ps, green_strength: gs }) = defringe_params(s, scale) else {
+        return;
+    };
+    let (w, h) = (img.width, img.height);
+    // never wider than the picture
+    let radius = radius.clamp(1, w.max(h).max(1));
+    // perceptual lightness and its local range (dilated contrast)
+    let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
+    let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };
+    let (lo, hi) = (min_filter(&l, radius, false), min_filter(&l, radius, true));
     for_rows(&mut img.data, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;
