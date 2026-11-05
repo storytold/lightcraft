@@ -130,6 +130,32 @@ fn crop_and_straighten_output_size() {
     assert_eq!((r.image.width, r.image.height), (200, 200));
 }
 
+/// An oversized request is held to the render pixel ceiling, not resolved to the 200000×100000
+/// the caller asked for (issue #3320): pre-fix these came back unclamped, and the resample then
+/// aborted the process trying to allocate them.
+#[test]
+fn an_oversized_request_resolves_to_the_ceiling_size() {
+    let s = DevelopSettings::default();
+    assert_eq!(crate::output_size(8, 4, &s, &RenderRequest::fit(200_000, 100_000)), (32_000, 16_000));
+    let src = Rgb32f::new(8, 4);
+    let p = crate::plan(&src, &SourceInfo::default(), &s, &RenderRequest::fit(200_000, 100_000));
+    assert_eq!((p.w, p.h), (32_000, 16_000), "the render runs at the ceiling, not the request");
+}
+
+/// The crash itself: `render` sizes its resample from the plan, and this request asked it for
+/// 240 GB — `memory allocation of 240000000000 bytes failed`, an abort `catch_unwind` cannot
+/// catch. The plan now resolves at the ceiling and the resample that used to abort succeeds.
+/// Opt-in, as the 5.7 GB buffer at the ceiling is not a default-suite allocation.
+#[ignore = "a 5.7 GB resample buffer at the 512 megapixel ceiling; run with --ignored"]
+#[test]
+fn an_oversized_request_resamples_at_the_clamped_size() {
+    let src = Rgb32f::new(8, 4);
+    let s = DevelopSettings::default();
+    let p = crate::plan(&src, &SourceInfo::default(), &s, &RenderRequest::fit(200_000, 100_000));
+    let img = p.frame.sample(&src, p.w, p.h);
+    assert_eq!((img.width, img.height), (32_000, 16_000));
+}
+
 #[test]
 fn mask_brightens_only_inside() {
     use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
