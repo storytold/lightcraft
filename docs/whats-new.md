@@ -18,7 +18,8 @@
   item is off while a search runs, and opening another library stops it. When a search ends the grid shows the photos it
   found, also from the Photo menu, and a message says how many. `library.findSimilar` from the control channel and
   `mcp --connect` still gets `{photos}`, now when the search ends; a caller that stops waiting (the control server
-  gives a request 60 s) can ask again, and what was read isn't read again.
+  gives a request 60 s) can ask again once that search has ended (while it runs, a new request is refused as already
+  running), and what was read isn't read again.
 
 ## 2026-10-30
 
