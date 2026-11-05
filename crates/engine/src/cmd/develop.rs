@@ -582,28 +582,53 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(json!({"favorite": want}))
         }),
-        cmd!("develop.curve", "Set Point Curve", [], None, "{channel: master|red|green|blue, points: [[x,y],...] in 0..1}", has_active, |s, p| {
-            let ch = str_param(p, "channel").unwrap_or("master").to_string();
-            let mut pts: Vec<Point> = p
-                .get("points")
-                .and_then(Value::as_array)
-                .ok_or_else(|| bad("develop.curve", "missing points"))?
-                .iter()
-                .filter_map(|q| Some(Point::new(q.get(0)?.as_f64()?.clamp(0.0, 1.0), q.get(1)?.as_f64()?.clamp(0.0, 1.0))))
-                .collect();
-            // stored in the order the curve runs, as the editor draws and drags them
-            pts.sort_by(|a, b| a.x.total_cmp(&b.x));
-            edit(s, "develop.curve", "Tone Curve", |d| {
-                match ch.as_str() {
-                    "master" | "rgb" => d.curve.master = pts,
-                    "red" => d.curve.red = pts,
-                    "green" => d.curve.green = pts,
-                    "blue" => d.curve.blue = pts,
-                    other => return Err(bad("develop.curve", format!("unknown channel `{other}`"))),
+        cmd!(
+            "develop.curve",
+            "Set Point Curve",
+            [],
+            None,
+            "{channel: master|red|green|blue, points: [[x,y],...] in 0..1, mask?: id (that mask's local Curve instead of the Tone Curve)}",
+            has_active,
+            |s, p| {
+                let ch = str_param(p, "channel").unwrap_or("master").to_string();
+                let mask = super::curves::mask_param(p, "develop.curve")?;
+                // every point is [x, y] (finite numbers, clamped to 0..1): one that isn't refuses the whole
+                // request, so it never replaces a curve with what is left of it
+                let mut pts: Vec<Point> = p
+                    .get("points")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| bad("develop.curve", "missing points"))?
+                    .iter()
+                    .enumerate()
+                    .map(|(i, q)| {
+                        let xy = q.as_array().filter(|a| a.len() == 2).and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)));
+                        match xy {
+                            Some((x, y)) if x.is_finite() && y.is_finite() => Ok(Point::new(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))),
+                            _ => Err(bad("develop.curve", format!("point {i} is not [x, y] with two numbers: {q}"))),
+                        }
+                    })
+                    .collect::<Result<_>>()?;
+                // stored in the order the curve runs, as the editor draws and drags them
+                pts.sort_by(|a, b| a.x.total_cmp(&b.x));
+                if let Some(m) = mask {
+                    return edit(s, "develop.curve", "Mask Curve", |d| {
+                        let c = super::curves::mask_curve_mut(d, m, "develop.curve")?;
+                        *c.channel_mut(&ch).ok_or_else(|| bad("develop.curve", format!("unknown channel `{ch}`")))? = pts;
+                        Ok(())
+                    });
                 }
-                Ok(())
-            })
-        }),
+                edit(s, "develop.curve", "Tone Curve", |d| {
+                    match ch.as_str() {
+                        "master" | "rgb" => d.curve.master = pts,
+                        "red" => d.curve.red = pts,
+                        "green" => d.curve.green = pts,
+                        "blue" => d.curve.blue = pts,
+                        other => return Err(bad("develop.curve", format!("unknown channel `{other}`"))),
+                    }
+                    Ok(())
+                })
+            }
+        ),
         // ---- crop & rotate
         cmd!("crop.set", "Set Crop", [], None, "{rect?: [x0,y0,x1,y1] normalized in the straightened frame, angle?: degrees}", has_active, |s, p| {
             let id = active(s, "crop.set")?;

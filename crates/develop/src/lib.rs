@@ -65,10 +65,10 @@ impl DevelopSettings {
     }
 
     /// What crs XMP import does to the values it reads, for settings that arrive as JSON (presets, `develop.merge`,
-    /// `render --settings`; issue #1946): every slider clamped through its control spec, point curves in 0..1, and a
-    /// crop with no area left as it was in `before`. The angle is kept within ±45° (not finite: 0). Unrotated, the crop
-    /// is clipped to the photo first; a turned crop may reach past 0..1 and is bounded where the photo's size is known
-    /// (`CropGeometry::bounded`, applied by the pipeline).
+    /// `render --settings`; issue #1946): every slider clamped through its control spec, point curves (the Tone
+    /// Curve's and each mask's local Curve) in 0..1, and a crop with no area left as it was in `before`. The angle is
+    /// kept within ±45° (not finite: 0). Unrotated, the crop is clipped to the photo first; a turned crop may reach past
+    /// 0..1 and is bounded where the photo's size is known (`CropGeometry::bounded`, applied by the pipeline).
     fn keep_in_range(&mut self, before: &DevelopSettings) {
         for c in controls::CONTROLS {
             if let Some(v) = controls::get(self, c.id) {
@@ -76,7 +76,9 @@ impl DevelopSettings {
             }
         }
         let c = &mut self.curve;
-        for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().flatten() {
+        let masks = self.masks.iter_mut().map(|m| &mut m.curve);
+        let local = masks.flat_map(|c| [&mut c.master, &mut c.red, &mut c.green, &mut c.blue]);
+        for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().chain(local).flatten() {
             *p = lightcraft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
         }
         let g = &mut self.crop.geometry;
@@ -230,6 +232,32 @@ mod tests {
     }
 
     #[test]
+    fn a_masks_local_curve_is_written_only_when_it_has_points() {
+        use lightcraft_geom::Point;
+        let mut s = DevelopSettings::default();
+        s.masks.push(Mask { id: 1, ..Default::default() });
+        // no curve: the mask's JSON (and so `hash64`) is what it was before masks had one
+        let plain = s.to_json();
+        assert!(plain["masks"][0].get("curve").is_none());
+        let old = json!({"masks": [{"id": 1, "name": "Mask 1", "visible": true, "invert": false, "components": [], "adjust": {}}]});
+        assert_eq!(DevelopSettings::from_json(&old).unwrap().masks[0].curve, PointCurves::default());
+        // a curve is kept channel by channel, and only the channels that have points are written
+        s.masks[0].curve.master = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.65), Point::new(1.0, 1.0)];
+        s.masks[0].curve.blue = vec![Point::new(0.0, 0.1), Point::new(1.0, 1.0)];
+        let v = s.to_json();
+        assert_eq!(v["masks"][0]["curve"].as_object().map(|o| o.len()), Some(2));
+        let back = DevelopSettings::from_json(&v).unwrap();
+        assert_eq!(back, s);
+        assert_ne!(back.hash64(), DevelopSettings::from_json(&plain).unwrap().hash64());
+        // points on the diagonal are linear but still kept as the editor placed them
+        let mut diag = PointCurves { red: vec![Point::new(0.0, 0.0), Point::new(0.4, 0.4), Point::new(1.0, 1.0)], ..Default::default() };
+        assert!(diag.is_identity() && !diag.is_empty());
+        diag.channel_mut("rgb").unwrap().push(Point::new(0.2, 0.3));
+        assert!(!diag.is_identity());
+        assert!(diag.channel("alpha").is_none());
+    }
+
+    #[test]
     fn white_balance_scale_reads_absent_as_legacy_and_writes_only_kelvin() {
         // settings from before the scale existed: no field, `Legacy`, and written back without it
         let old = json!({"wb": {"mode": "custom", "temp": 5800.0, "tint": 3.0}});
@@ -367,6 +395,9 @@ mod tests {
         // point curves stay in 0..1, as an imported XMP curve does
         let m = base.merged(&json!({"curve": {"master": [{"x": -3, "y": 0}, {"x": 1, "y": 1e308}]}})).unwrap();
         assert_eq!(m.curve.master, vec![lightcraft_geom::Point::new(0.0, 0.0), lightcraft_geom::Point::new(1.0, 1.0)]);
+        // and so do a mask's local Curves
+        let m = base.merged(&json!({"masks": [{"id": 1, "curve": {"blue": [{"x": 2, "y": -1}, {"x": 0.5, "y": 0.5}]}}]})).unwrap();
+        assert_eq!(m.masks[0].curve.blue, vec![lightcraft_geom::Point::new(1.0, 0.0), lightcraft_geom::Point::new(0.5, 0.5)]);
         // a crop with no area is left out, as XMP import leaves out one whose edges are inverted
         for rect in
             [json!({"x0": 0.9, "x1": 0.1, "y0": 0, "y1": 1}), json!({"x0": 1e308, "x1": -1e308, "y0": 0, "y1": 1}), json!({"x0": 0.5, "x1": 0.5})]

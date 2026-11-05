@@ -223,6 +223,98 @@ fn curve_points_from_an_agent_are_stored_in_order() {
     assert!(c[1].0 < c[2].0, "dragged up to its neighbour, not past it: {c:?}");
 }
 
+/// Detail view with the Masking panel on a new radial mask (selected) and its Curve flyout open.
+fn mask_curve_open() -> (Headless, u32) {
+    let services = Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, [1200.0, 2600.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    exec(&mut h, "panel.masking", json!({}));
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    let mask = h.app.session.active_mask.expect("the new mask is selected");
+    h.step();
+    h.step();
+    click_widget(&mut h, "flyout:maskCurve", 1);
+    h.step();
+    (h, mask)
+}
+
+fn mask_curve(h: &Headless, id: u32) -> lightcraft_develop::PointCurves {
+    develop(h).masks.iter().find(|m| m.id == id).expect("the mask").curve.clone()
+}
+
+#[test]
+fn a_masks_curve_editor_edits_that_masks_curve_only() {
+    let (mut h, mask) = mask_curve_open();
+    assert!(h.app.ui.flyout_open("maskCurve"), "the Curve flyout opens");
+    let r = h.request("ui.widgets", json!({"filter": "maskCurve"}), T);
+    let ids: Vec<String> = r["result"].as_array().unwrap().iter().filter_map(|w| w["id"].as_str().map(str::to_string)).collect();
+    for id in ["maskCurve", "maskCurveChannel:master", "maskCurveChannel:red", "maskCurveChannel:green", "maskCurveChannel:blue"] {
+        assert!(ids.iter().any(|x| x == id), "{id} on screen: {ids:?}");
+    }
+    assert!(!ids.iter().any(|x| x == "maskCurveChannel:parametric"), "no parametric curve in a mask: {ids:?}");
+    // dragging the middle of the RGB curve up adds a point to the mask's curve, in one undo step
+    let r = h.request("ui.widgets", json!({"filter": "maskCurve"}), T);
+    let side = r["result"].as_array().unwrap().iter().find(|w| w["id"] == "maskCurve").unwrap()["rect"][2].as_f64().unwrap();
+    let undo_before = h.app.session.undo.len();
+    let r = h.request("ui.dragWidget", json!({"id": "maskCurve", "fx": 0.5, "fy": 0.5, "dx": 0.0, "dy": -0.2 * side, "steps": 12}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let c = pts(&mask_curve(&h, mask).master);
+    assert_eq!(c.len(), 3, "{c:?}");
+    assert!((c[1].0 - 0.5).abs() < 0.03 && (c[1].1 - 0.7).abs() < 0.03, "{c:?}");
+    assert_eq!(h.app.session.undo.len(), undo_before + 1, "one undo step per drag");
+    assert_eq!(develop(&h).curve, lightcraft_develop::ToneCurve::default(), "the Tone Curve stays linear");
+    assert!(!h.app.ui.mask_overlay, "a mask curve edit hides the overlay, as a mask slider does");
+    // `mask: null` edits the photo's Tone Curve: the overlay stays as it is
+    h.app.ui.mask_overlay = true;
+    exec(&mut h, "develop.curve", json!({"channel": "master", "points": [[0.0, 0.05], [1.0, 1.0]], "mask": null}));
+    assert!(h.app.ui.mask_overlay, "a Tone Curve edit leaves the overlay alone");
+    assert_eq!(develop(&h).curve.master.len(), 2, "mask: null is the Tone Curve");
+    // another channel, then double-click resets only it
+    click_widget(&mut h, "maskCurveChannel:red", 1);
+    assert_eq!(h.app.ui.mask_curve_channel, "red");
+    assert_eq!(h.app.ui.curve_channel, "parametric", "the Tone Curve's channel is remembered apart");
+    exec(&mut h, "develop.curve", json!({"channel": "red", "points": S_CURVE, "mask": mask}));
+    h.step();
+    click_widget(&mut h, "maskCurveChannel:red", 2);
+    let c = mask_curve(&h, mask);
+    assert!(c.red.is_empty() && c.master.len() == 3, "only red resets: {c:?}");
+}
+
+#[test]
+fn a_masks_curve_takes_the_point_curve_presets_and_resets() {
+    let (mut h, mask) = mask_curve_open();
+    click_widget(&mut h, "dropdown:maskCurvePreset", 1);
+    click_widget(&mut h, "maskCurvePreset:Strong Contrast", 1);
+    let c = mask_curve(&h, mask);
+    assert_eq!(c.master.len(), 5, "the preset's S-curve: {c:?}");
+    assert!(develop(&h).curve.master.is_empty(), "applied to the mask, not the photo");
+    // saving from the mask's dropdown saves the mask's curve
+    exec(&mut h, "develop.curve", json!({"channel": "blue", "points": [[0.0, 0.08], [1.0, 1.0]], "mask": mask}));
+    h.step();
+    click_widget(&mut h, "dropdown:maskCurvePreset", 1);
+    click_widget(&mut h, "maskCurvePresetMenu:save", 1);
+    let mut dlg = h.app.ui.dialog.take().expect("a name prompt opens");
+    match &mut dlg {
+        crate::state::Dialog::TextPrompt { command, value, params, .. } => {
+            assert_eq!(command, "curve.savePreset");
+            assert_eq!(params["mask"], mask, "{params}");
+            *value = "Mask Look".into();
+        }
+        _ => panic!("a name prompt opens"),
+    }
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg);
+    assert!(r.is_ok(), "{r:?}");
+    h.step();
+    let saved = h.app.session.curve_presets.iter().find(|p| p.name == "Mask Look").expect("saved").clone();
+    assert_eq!((saved.master.len(), saved.blue.len()), (5, 2));
+    // the Reset button under the graph resets the mask's whole curve
+    click_widget(&mut h, "button:maskCurveReset", 1);
+    assert!(mask_curve(&h, mask).is_empty());
+}
+
 /// The settings the parametric graph is drawn from: two neighbouring regions pushed opposite ways,
 /// where the raw sum of their bumps folds back on itself before the renderer's running maximum
 /// straightens it out.
