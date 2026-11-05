@@ -941,8 +941,15 @@ impl Session {
     pub(crate) fn auto_write_sidecars_since(&mut self, log_start: usize) {
         let mut ids = Vec::new();
         if let Some(ops) = self.pending_log.get(log_start..) {
-            ops.iter().for_each(|o| op_photos(o, &mut ids));
+            for (offset, op) in ops.iter().enumerate() {
+                match self.sidecar_policies.get(&log_start.saturating_add(offset)) {
+                    Some(targets) => ids.extend(targets),
+                    None => op_photos(op, &mut ids),
+                }
+            }
         }
+        ids.sort_unstable();
+        ids.dedup();
         self.auto_write_sidecar_ids(ids);
     }
 

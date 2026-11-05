@@ -553,6 +553,7 @@ impl Session {
         self.redo.clear();
         self.interaction = None;
         self.pending_log.clear();
+        self.sidecar_policies.clear();
         self.selection = Selection::default();
         self.source = LibrarySource::All;
         self.library_folder = None;
@@ -703,6 +704,7 @@ impl Session {
             }
             lib.retry_at = None;
             self.pending_log.clear();
+            self.sidecar_policies.clear();
             lib.last_error = None;
         }
         poll_compaction(lib);
@@ -816,6 +818,7 @@ impl Session {
             // the snapshot holds the queued ops: they are saved, never append them again
             log::info!("library: {unlogged} queued change(s) saved in the closing snapshot");
             self.pending_log.clear();
+            self.sidecar_policies.clear();
             lib.unsaved_error = None;
             lib.retry_at = None;
             lib.last_error = None;
