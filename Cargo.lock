@@ -3878,6 +3878,7 @@ dependencies = [
 name = "lightcraft-merge"
 version = "0.18.0"
 dependencies = [
+ "dhat",
  "lightcraft-codecs",
  "lightcraft-color",
  "lightcraft-geom",
