@@ -38,6 +38,8 @@ pub type ScreenProfileFn = Box<dyn FnMut() -> Option<Vec<u8>>>;
 /// Whether an external editor can be started (its name as in [`Services::open_with`]); the
 /// error says why not and what to do (e.g. PhotoCraft isn't installed).
 pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
+/// The program file an editor name runs as (see [`Services::locate_editor`]).
+pub type LocateEditorFn = Box<dyn Fn(&str) -> Option<String>>;
 
 /// Something the host does with the session (web: back up or restore the library in browser
 /// storage); the work may finish asynchronously.
@@ -121,6 +123,9 @@ pub struct Services {
     /// Checked before Edit In renders a copy, so a missing editor leaves no copy behind (none =
     /// assume it can).
     pub check_editor: Option<CheckEditorFn>,
+    /// The program file an editor name runs as (PhotoCraft: where its installers put it), so
+    /// Edit In can ask it for `--wait` support and run it with that (none = use the name as given).
+    pub locate_editor: Option<LocateEditorFn>,
     /// File ▸ Back Up Library…: save the whole library (catalog and originals) as one file the
     /// user keeps (web only: there the library lives in browser storage, which the browser may
     /// clear; on the desktop it is a folder backed up like any other).

@@ -18,6 +18,8 @@ impl LightcraftApp {
     /// Back from an external editor: pick up the files it saved. Reads `i.focused`, which
     /// `run_logic` does not refresh, so it belongs to the UI phase.
     pub(super) fn check_external_editor(&mut self, ctx: &egui::Context) {
+        // saves from an external editor: --wait exits and the modification-time poll
+        crate::external_edit::pump(self, ctx);
         let focused = ctx.input(|i| i.focused);
         if focused && !self.ui.was_focused && !self.ui.external_edits.is_empty() {
             let ids = self.ui.external_edits.clone();

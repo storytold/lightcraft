@@ -110,6 +110,10 @@ pub struct ExportOptions {
     pub add_to_photos: bool,
     /// The Photos album they go into, made when missing (empty = none).
     pub photos_album: String,
+    /// The photo an edit copy is made from (`photo.editExternal`): the file's XMP gets its own
+    /// document id and an `xmpMM:DerivedFrom` link to it. Not an export option users set.
+    #[serde(skip)]
+    pub derived_from: Option<crate::cmd::external_edit::link::DerivedFrom>,
     /// The curve of an HDR AVIF: PQ (default) or HLG.
     pub hdr_transfer: HdrCurve,
 }

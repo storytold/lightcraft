@@ -102,13 +102,22 @@ pub fn encode_image(img: &Rgba8, o: &ExportOptions) -> Result<Vec<u8>, String> {
     encode_with_metadata(img, o, None)
 }
 
+/// The XMP packet written into an export: `meta`, plus the edit copy's link
+/// ([`ExportOptions::derived_from`]) when it has one.
+fn xmp_packet(meta: Option<&Metadata>, o: &ExportOptions) -> Option<String> {
+    use crate::cmd::external_edit::link;
+    let Some(d) = &o.derived_from else { return meta.map(|m| lightcraft_meta::write_xmp(m, None)) };
+    let packet = lightcraft_meta::write_xmp(meta.unwrap_or(&Metadata::default()), None);
+    Some(link::add_link(&packet, &link::new_document_id(&d.file_path), &d.document_id, &d.file_path))
+}
+
 /// Like [`encode_image`], embedding `meta` (already filtered by the policy) as EXIF + XMP.
 pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
     let img = finish_8bit(img, o);
     let space = o.effective_space();
     let profile = icc::write_named(named_space(space));
     let exif = meta.map(lightcraft_meta::write_exif);
-    let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
+    let xmp = xmp_packet(meta, o);
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     // Opaque photo exports need no alpha channel (#1670). Keep real transparency for
     // callers of this encoder, and leave unrelated formats on their existing path.
@@ -258,7 +267,7 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         DeepSamples::U16(_) => icc::write_named(named_space(img.space)),
     };
     let exif = meta.map(lightcraft_meta::write_exif);
-    let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
+    let xmp = xmp_packet(meta, o);
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let (w, h) = (img.width as u32, img.height as u32);
     let e = match &img.samples {
