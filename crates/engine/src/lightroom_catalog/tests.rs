@@ -138,6 +138,7 @@ fn imports_copies_collections_ratings_and_mapped_edits_in_one_undo_step() {
     assert_eq!(r["imported"], 2, "the offline master and virtual copy both count as added");
     assert_eq!(r["missing"].as_array().unwrap().len(), 1);
     let master = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
+    assert_eq!((master.kind, master.source_width, master.source_height), (lightcraft_catalog::MediaKind::Raw, 0, 0));
     assert_eq!(master.rating, 5);
     assert_eq!(master.flag, Flag::Pick);
     assert_eq!(master.meta.keywords, vec!["Travel|Goa"]);

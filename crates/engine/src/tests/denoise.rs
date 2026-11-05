@@ -705,6 +705,8 @@ fn a_photo_whose_file_changed_has_no_picture_until_it_is_made_again() {
             id,
             width: p.width,
             height: p.height,
+            source_width: None,
+            source_height: None,
             file_size: p.file_size + 1,
             content_hash: Some("ffffffffffffffffffffffffffffffff".into()),
             preview_only: None,

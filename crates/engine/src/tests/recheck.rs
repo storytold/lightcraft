@@ -45,6 +45,8 @@ fn library(name: &str) -> Lib {
         id,
         width: p.width,
         height: p.height,
+        source_width: Some(p.source_width),
+        source_height: Some(p.source_height),
         file_size: p.file_size,
         content_hash: p.content_hash.clone(),
         preview_only: p.preview_only.clone(),
