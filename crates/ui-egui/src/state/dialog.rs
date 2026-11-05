@@ -246,6 +246,12 @@ pub enum Dialog {
         #[serde(default)]
         error: Option<String>,
     },
+    /// The first launch offers the lens database (`crate::lens_db`): its size, Download or Not Now. `dir`: where it
+    /// goes; `mirrors`: where it comes from.
+    LensDatabase {
+        dir: String,
+        mirrors: Vec<String>,
+    },
     /// Open Library was given a Lightroom Classic catalog (issue #891): offer File ▸ Import
     /// Lightroom Catalog… with `catalog` (the `.lrcat` found; `None`: ask for it) instead.
     /// `folder`: what was chosen.
