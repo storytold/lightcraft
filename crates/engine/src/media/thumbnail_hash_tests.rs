@@ -37,8 +37,8 @@ fn persistent_keys_name_the_process_the_settings_render_with() {
     let resolved = u64::from(lightcraft_develop::Process::LATEST.version().0);
     let keys = [
         (s.thumb_job(PhotoId(1), 256).unwrap().cache.unwrap().1, None, 256),
-        (crate::Session::view_key(&p, true), Some("view"), 1),
-        (crate::Session::variant_key(&p, &newer, 256), Some("variant"), 256),
+        (crate::Session::view_key(&p, true, 0), Some("view"), 1),
+        (crate::Session::variant_key(&p, &newer, 256, 0), Some("variant"), 256),
     ];
     for (key, kind, size) in keys {
         assert_ne!(key, unnamed(kind, size), "old builds did not name their resolved process");
@@ -69,8 +69,8 @@ fn v1_and_v2_photos_keep_the_render_cache_keys_they_had() {
         };
         let keys = [
             s.thumb_job(PhotoId(1), 256).unwrap().cache.unwrap().1 == before_v3(None, 256),
-            crate::Session::view_key(&p, true) == before_v3(Some("view"), 1),
-            crate::Session::variant_key(&p, &settings, 256) == before_v3(Some("variant"), 256),
+            crate::Session::view_key(&p, true, 0) == before_v3(Some("view"), 1),
+            crate::Session::variant_key(&p, &settings, 256, 0) == before_v3(Some("variant"), 256),
         ];
         let old = process <= Process::V2;
         assert_eq!(keys, [old; 3], "{process:?}: thumbnail, view and variant keys");
