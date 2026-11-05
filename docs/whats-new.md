@@ -452,6 +452,13 @@
 - Saving a sidecar keeps another application's properties even when its namespace uses prefixes such as `lc`
   or `xmp`. Those foreign properties no longer become LightCraft settings or ratings when imported.
 
+### The log can show every thumbnail and preview LightCraft asks for
+- With `RUST_LOG=warn,lightcraft*=info,lightcraft_ui_egui::render=debug` (or `LIGHTCRAFT_LOG=debug`), the log has a
+  line for each picture LightCraft asks for, with its file, and one for how it ended: drawn, or dropped and why.
+  Before, only failures were logged, so the log couldn't tell a file asked for 37 times from one asked for once and
+  failing inside (issue #2682).
+  The usual log is unchanged. See [Get help with a problem](user/troubleshooting/get-help.md).
+
 ### Find Missing Photos finds the files of a library made on Windows
 - A library made on Windows records its originals with Windows paths. Opened on macOS or Linux, its photos are
   missing until relinked, and Find Missing Photos found them only by their content, so it missed every photo it had
@@ -1461,6 +1468,15 @@
 - Photos that tie on the sort key (equal ratings, one import batch, a burst shot within the same second) now sort by
   file name, then id, instead of import order. Recently Added keeps a batch in file name order, and Auto-Stack orders a
   burst by file name, so the first file is the cover.
+
+### More of the rendering on the GPU
+- LUT profiles, masks with Refine Edges and soft proofing into a colour space render on the GPU (they used to send the
+  whole render to the CPU; soft proofing to a printer or paper profile still renders on the CPU), and so do spot removal, defringe and the histogram (they used to bounce the image through the CPU mid-render).
+  Results match the CPU within 3 levels in 8 bits (mean under half a level; `docs/gpu-pipeline.md`).
+- Grid, filmstrip, preset and profile thumbnails render on the GPU once it is ready (about a quarter faster on an RTX
+  5070, and the CPU stays free for decoding raws).
+- While a slider is dragged, the loupe is drawn straight from the GPU: rendering and drawing share the window's
+  graphics device, so drafts are never copied to memory and back (`LIGHTCRAFT_GPU_WINDOW=0` turns this off).
 
 ### Large preset collections
 - A library holding thousands of presets (a Lightroom collection imported whole: 11 000 presets, a 42 MB
