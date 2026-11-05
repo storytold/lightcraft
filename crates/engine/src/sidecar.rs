@@ -390,15 +390,33 @@ impl SidecarData {
     }
 }
 
-/// The orientation the photo file at `path` states, as [`lightcraft_meta::extract`] reads it from the whole file (the
-/// import's): Exif's, else XMP's. A file shorter than [`ORIENTATION_SPAN`] is read whole. Most others state it in the
-/// Exif of their first [`ORIENTATION_SPAN`]; when that part doesn't, the Exif may come later ([`late_orientation`]).
-/// A WebP's or PNG's chunks are always walked, since the last Exif chunk is the one that counts ([`webp_orientation`],
-/// [`png_orientation`]).
+/// The orientation the photo file at `path` states, matching what the import stores on [`crate::media::ProbeInfo`]:
+/// for a raw, the decoder's (`lightcraft_raw::probe_info`: CIFF for a CRW, the raw IFD for a MEF, …); otherwise Exif,
+/// else XMP, as [`lightcraft_meta::extract`] reads it. A file shorter than [`ORIENTATION_SPAN`] is read whole. Most
+/// non-raws state it in the Exif of their first [`ORIENTATION_SPAN`]; when that part doesn't, the Exif may come later
+/// ([`late_orientation`]). A WebP's or PNG's chunks are always walked, since the last Exif chunk is the one that counts
+/// ([`webp_orientation`], [`png_orientation`]).
 fn file_orientation(path: &str) -> Option<lightcraft_meta::Orientation> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut head = Vec::new();
     (&mut file).take(ORIENTATION_SPAN).read_to_end(&mut head).ok()?;
+    // Import takes a raw's orientation from the decoder, not from Exif IFD0 / XMP alone. Re-read and sync must do the
+    // same, or face boxes turned at import are put back and Synchronize Folder reports changes every pass (#2857).
+    if lightcraft_raw::probe(&head).is_some() {
+        let bytes = if (head.len() as u64) < ORIENTATION_SPAN {
+            head
+        } else {
+            file.rewind().ok()?;
+            let mut all = Vec::new();
+            file.read_to_end(&mut all).ok()?;
+            all
+        };
+        return match lightcraft_raw::probe_info(&bytes) {
+            Ok(raw) => Some(raw.orientation),
+            // unsupported / preview-only: same fallback the import uses (`ProbeInfo::orientation` from meta)
+            Err(_) => lightcraft_meta::extract(&bytes).orientation,
+        };
+    }
     if (head.len() as u64) < ORIENTATION_SPAN {
         return lightcraft_meta::extract(&head).orientation;
     }

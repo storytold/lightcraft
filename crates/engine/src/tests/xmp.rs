@@ -670,6 +670,70 @@ fn an_orientation_only_the_xmp_states_leaves_stored_frame_regions_as_written() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Review of #2857 (P2): a MEF keeps orientation on its raw IFD, not IFD0. Import turns face boxes by the decoder's
+/// orientation; Read Metadata from File must use the same source, or the boxes go back to the stored frame and
+/// Synchronize Folder reports changes every pass. The sidecar has no `tiff:Orientation`.
+#[test]
+fn a_raws_decoder_orientation_turns_stored_frame_regions_on_import_and_reread() {
+    let src = temp_dir("regions-mef-orientation");
+    let file = src.join("p.mef");
+    // 16 × 6 CFA strip, orientation 6 on the raw IFD only (IFD0 has none) — same shape as `lightcraft_raw`'s MEF fixture.
+    let px: Vec<u16> = (0..16 * 6).map(|i| (i * 41 % 4096) as u16).collect();
+    let strip: Vec<u8> = px
+        .chunks(2)
+        .flat_map(|p| [(p[0] >> 4) as u8, ((p[0] & 15) << 4) as u8 | (p[1] >> 8) as u8, p[1] as u8])
+        .collect();
+    {
+        use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![16]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![6]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+        raw.set(t::ORIENTATION, Value::Short(vec![6]));
+        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+        raw.set_image(ImageData::Strips { rows_per_strip: 6, strips: vec![strip] });
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("Mamiya-OP Co.,Ltd.".into()));
+        ifd0.set(t::MODEL, Value::Ascii("MAMIYA ZD".into()));
+        ifd0.add_sub_ifd(raw);
+        std::fs::write(&file, TiffWriter::new(ByteOrder::Big, false).write(&[ifd0]).unwrap()).unwrap();
+    }
+    assert!(lightcraft_meta::extract(&std::fs::read(&file).unwrap()).orientation.is_none(), "IFD0 states no orientation");
+    assert_eq!(
+        lightcraft_raw::probe_info(&std::fs::read(&file).unwrap()).unwrap().orientation,
+        lightcraft_meta::Orientation::Rotate90,
+        "decoder reads the raw IFD"
+    );
+    let packet = STORED_FRAME_REGIONS.replace(r#"stDim:w="32" stDim:h="24""#, r#"stDim:w="16" stDim:h="6""#);
+    std::fs::write(src.join("p.xmp"), packet).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let boxes = |s: &Session, when: &str| {
+        let p = s.catalog.photo(id).unwrap();
+        assert_eq!((p.width, p.height), (6, 16), "{when}: upright from orientation 6");
+        assert_eq!(p.meta.regions.len(), 1, "{when}");
+        let r = p.meta.regions[0].rect;
+        [r.x0, r.y0, r.x1, r.y1]
+    };
+    let imported = boxes(&s, "imported");
+    // Without the decoder orientation on re-read, readMetadataFromFile puts the box back to the stored-frame coords.
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["failed"], json!([]), "{read}");
+    let again = boxes(&s, "read again");
+    assert_eq!(imported, again, "import and re-read must agree: imported={imported:?} again={again:?}");
+    let stored = [0.2, 0.325, 0.3, 0.475]; // STORED_FRAME_REGIONS centre/size as x0,y0,x1,y1 for 0.25,0.4,0.1,0.15
+    assert!(
+        imported.iter().zip(stored).any(|(g, w)| (g - w).abs() > 1e-6),
+        "imported boxes should have been turned off the stored frame: {imported:?}"
+    );
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// A raw LightCraft can't decode: a TIFF whose first IFD holds Exif orientation 6, a 40 × 30 JPEG and `packet`.
 fn turned_preview_only_raw(packet: &str) -> Vec<u8> {
     let img = lightcraft_raster::Rgba8::from_fn(40, 30, |x, y| [(x * 6) as u8, (y * 8) as u8, 90, 255]);
