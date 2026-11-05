@@ -246,10 +246,11 @@ const STAGE_BUDGET_SHARE: usize = 4;
 /// that is the UI's own. A smaller budget keeps fewer pictures off screen, a larger one more.
 const THUMB_BUDGET_SHARE: usize = 4;
 
-/// How many failed grid thumbnails are remembered beyond the ones on screen. A failure is
-/// remembered so the grid, which asks every frame, doesn't send the same unreadable file back to
-/// the decoder; scrolling through a whole library whose files can't be read (a drive that sleeps)
-/// would otherwise keep one record, with its error text, for every photo passed.
+/// How many failed grid thumbnails are remembered. A failure is remembered so the grid, which
+/// asks every frame, doesn't send the same unreadable file back to the decoder; scrolling through
+/// a whole library whose files can't be read (a drive that sleeps) would otherwise keep one
+/// record, with its error text, for every photo passed. Past this many, the ones for photos
+/// nothing shows go (the ones on screen count too, and stay).
 const MAX_FAILED_THUMBS: usize = 1024;
 
 /// How many thumbnail failures are logged as warnings in a row, and then how often one more may be.
@@ -383,6 +384,10 @@ pub struct Renderer {
     failed: HashMap<Slot, (u64, String, u64, PhotoId)>,
     /// Whether the thumbnail failures logged as warnings keep to their limit, see [`WarnLimit`].
     thumb_warnings: WarnLimit,
+    /// The photos a thumbnail was asked for in this frame, and in the one before: the trim keeps
+    /// them whoever asked, see [`Self::evict_thumbs`].
+    thumbs_asked: std::collections::HashSet<PhotoId>,
+    thumbs_asked_last: std::collections::HashSet<PhotoId>,
     /// The catalog revision seen at the last poll: a failure is retried once the catalog changes
     /// its photo (a relinked or re-imported file), see [`Self::follow_catalog`].
     catalog_rev: u64,
@@ -495,6 +500,8 @@ impl Renderer {
             quick_edge: HashMap::new(),
             failed: HashMap::new(),
             thumb_warnings: WarnLimit::default(),
+            thumbs_asked: Default::default(),
+            thumbs_asked_last: Default::default(),
             catalog_rev: 0,
             prefetched: HashMap::new(),
             variant_used: HashMap::new(),
@@ -1311,6 +1318,9 @@ impl Renderer {
 
     /// Collect finished jobs into textures. Returns true if anything changed.
     pub fn poll(&mut self, ctx: &egui::Context, session: &mut Session) -> bool {
+        // (a new frame: what was asked for in the last one is the frame before's now)
+        std::mem::swap(&mut self.thumbs_asked, &mut self.thumbs_asked_last);
+        self.thumbs_asked.clear();
         let cache = &session.media.rendered;
         let generation = cache.generation();
         if self.preview_generation.as_ref().is_some_and(|(old, g)| old.as_ptr() != Arc::as_ptr(cache) || *g != generation) {
@@ -1735,13 +1745,20 @@ impl Renderer {
     /// thumbnail jobs for photos that scrolled out of `keep`. The pictures not in `keep` go once
     /// the thumbnails hold more than their share of the memory budget ([`Self::thumb_budget`]);
     /// the failures remembered for photos not in `keep` go once there are more than
-    /// [`MAX_FAILED_THUMBS`] of them.
+    /// [`MAX_FAILED_THUMBS`] of them. Neither takes a photo something asked a thumbnail of in
+    /// this frame or the last ([`Self::thumb_asked`]): the Print dialog's cells draw after the
+    /// grid, which trims, and a cell that finds no picture asks the decoder again every frame.
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>) {
         self.evict_thumbs_within(keep, self.thumb_budget());
     }
 
+    /// Note that something shows `id`'s thumbnail (every caller of `grid::request_thumb`).
+    pub fn thumb_asked(&mut self, id: PhotoId) {
+        self.thumbs_asked.insert(id);
+    }
+
     /// [`Self::evict_thumbs`] with the bytes the thumbnails may hold given (the tests ask for 0:
-    /// every picture not in `keep` goes).
+    /// every picture nothing shows goes).
     fn evict_thumbs_within(&mut self, keep: &std::collections::HashSet<PhotoId>, max_bytes: usize) {
         self.thumb_inputs.retain(|id, _| keep.contains(id));
         let dropped = self.pool.reprioritize(|s, p| match s {
@@ -1768,15 +1785,20 @@ impl Renderer {
         for (s, request) in gone {
             self.decided(|| abandoned_line(s, request.as_ref(), "scrolled out of view before it started"));
         }
+        // (a photo something asked a thumbnail of in this frame or the last stays too)
+        let (asked, last) = (std::mem::take(&mut self.thumbs_asked), std::mem::take(&mut self.thumbs_asked_last));
+        let shown = |id: &PhotoId| keep.contains(id) || asked.contains(id) || last.contains(id);
         if self.thumb_bytes() > max_bytes {
-            self.textures.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id)));
-            self.quick_tried.retain(|s, _| !matches!(s, Slot::ThumbQuick(id) if !keep.contains(id)));
+            self.textures.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !shown(id)));
+            self.quick_tried.retain(|s, _| !matches!(s, Slot::ThumbQuick(id) if !shown(id)));
         }
         // A failure is remembered so that the grid, which asks every frame, doesn't send the same
         // unreadable file back to the decoder: the cells on screen keep theirs.
         if self.failed_thumbs() > MAX_FAILED_THUMBS {
-            self.failed.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id)));
+            self.failed.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !shown(id)));
         }
+        self.thumbs_asked = asked;
+        self.thumbs_asked_last = last;
     }
 
     /// Log a failed render as a warning. Thumbnails share a limit ([`WarnLimit`]): a folder whose
@@ -1796,7 +1818,7 @@ impl Renderer {
             }
         }
         let message = if held_back > 0 {
-            format!("{message} ({held_back} more thumbnail failures since the last warning went unlogged; LIGHTCRAFT_LOG=debug logs each one)")
+            format!("{message} (thumbnail failures not logged since the last warning: {held_back}; LIGHTCRAFT_LOG=debug logs each one)")
         } else {
             message
         };

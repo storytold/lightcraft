@@ -118,6 +118,44 @@ fn the_failures_remembered_for_the_grid_are_bounded() {
     assert!(r.failed.contains_key(&Slot::Main), "a view's failure is not the grid's to drop");
 }
 
+// Given a view that draws after the grid (the Print dialog's cells) and shows photos far from the
+// grid's window, the grid's trim keeps what a view asked a thumbnail of in this frame or the last:
+// a cell that finds no picture asks the decoder again, every frame. Two frames on, nobody asks,
+// and they go like the rest.
+#[test]
+fn the_trim_keeps_the_thumbnails_another_view_asked_for_in_this_frame_or_the_last() {
+    let ctx = egui::Context::default();
+    let mut session = Session::new();
+    let mut r = thumbs(&ctx, 1..=20, [128, 128]);
+    let held = |r: &Renderer| (1..=20).filter(|&id| r.textures.contains_key(&Slot::Thumb(PhotoId(id)))).collect::<Vec<u64>>();
+
+    r.thumb_asked(PhotoId(5));
+    r.evict_thumbs_within(&on_screen([7]), 0);
+    assert_eq!(held(&r), [5, 7], "asked in this frame, and the one on screen");
+    r.poll(&ctx, &mut session);
+    r.evict_thumbs_within(&on_screen([7]), 0);
+    assert_eq!(held(&r), [5, 7], "asked in the frame before");
+    r.poll(&ctx, &mut session);
+    r.evict_thumbs_within(&on_screen([7]), 0);
+    assert_eq!(held(&r), [7], "not asked for two frames");
+
+    for id in 1..=2 * MAX_FAILED_THUMBS as u64 {
+        fail(&mut r, Slot::Thumb(PhotoId(id)), id);
+    }
+    r.thumb_asked(PhotoId(3));
+    r.evict_thumbs(&on_screen([1]));
+    assert_eq!(remembered(&r), HashSet::from([Slot::Thumb(PhotoId(1)), Slot::Thumb(PhotoId(3))]), "a failure a view asked about stays");
+}
+
+// Given a view that asks for a thumbnail through the grid's request, the renderer notes the photo
+// for the trim (the Print dialog, the filmstrip and the loupe's look-ahead all ask this way).
+#[test]
+fn a_thumbnail_request_notes_the_photo_for_the_trim() {
+    let (mut app, _ctx) = unreadable_library(1);
+    crate::panels::grid::request_thumb(&mut app, PhotoId(1), 384, 10);
+    assert!(app.renderer.thumbs_asked.contains(&PhotoId(1)));
+}
+
 // Given thumbnails over their share of the budget, or more remembered failures than are kept, the
 // loupe trims them while stepping through photos, as the grid does while scrolling.
 #[test]
@@ -244,6 +282,6 @@ fn a_flood_of_thumbnail_failures_does_not_flood_the_log() {
     app.renderer.warn_failure(Slot::Thumb(PhotoId(1)), "render Thumb(PhotoId(1)): again".into());
     let last = app.renderer.failure_messages.last().unwrap();
     assert!(last.starts_with("render Thumb(PhotoId(1)): again"), "{last}");
-    assert!(last.contains(&format!("{held} more thumbnail failures")), "{last}");
+    assert!(last.contains(&format!("not logged since the last warning: {held};")), "{last}");
     assert_eq!(app.renderer.thumb_warnings.held_back, 0);
 }
