@@ -257,10 +257,28 @@ fn a_panorama_is_made_no_smaller_than_its_floor() {
     assert!(fit(&lightcraft_merge::PanoOptions { max_megapixels: 0.7, ..full.clone() }, photos, room).unwrap_err().contains("at 0.7 MP"));
     assert!(mp(room).unwrap_err().contains("at 40 MP"), "the full size: refused");
     assert_eq!(panorama_floor(f64::NAN, 1e9), 40.0, "a NaN size asked for is ignored");
-    assert_eq!(panorama_floor(0.01, 1e3), 0.1, "the stitch's least");
+    assert_eq!(panorama_floor(0.01, 1e9), 0.1, "a size asked for under the stitch's least cap is held to it");
     for room in [0.0, -1.0, f64::NAN] {
         assert!(mp(room).unwrap_err().contains("may use 0 MB"), "{room}");
     }
+}
+
+/// Photos with fewer pixels than the stitch's least cap (0.1 MP) make a panorama of their own
+/// size, never larger (the stitch doesn't scale them up): that is its floor, so a memory that holds
+/// it isn't refused for a 0.1 MP panorama the photos can't make (#3708).
+#[test]
+fn a_panorama_of_photos_under_the_least_cap_is_floored_at_their_size() {
+    use crate::merge::{fit_in_memory, panorama_floor};
+    let full = lightcraft_merge::PanoOptions::default();
+    let photos = 5e4; // two 250×100 photos, 0.05 MP
+    assert_eq!(panorama_floor(full.max_megapixels, photos), 0.05);
+    assert_eq!(panorama_floor(0.1, photos), 0.05, "a 0.1 MP cap too");
+    // 5 MB holds a 0.07 MP blend (68 B/px) but not 0.1 MP: made at what fits, not refused
+    let fit = fit_in_memory(&full, photos, 5e6).map(|o| o.max_megapixels);
+    assert!(fit.as_ref().is_ok_and(|mp| (*mp - 5e6 / 68.0 / 1e6).abs() < 1e-9), "{fit:?}");
+    // 3 MB holds less than the photos: refused, naming their size as the smallest it is made
+    let e = fit_in_memory(&full, photos, 3e6).unwrap_err();
+    assert!(e.contains("at 0.05 MP, the smallest it is made") && e.contains("needs about 4 MB"), "{e}");
 }
 
 /// A photo named twice is merged once (issue #1947): `[a, a, a]` is one photo, too few to merge, and `[a, b, a, b]`

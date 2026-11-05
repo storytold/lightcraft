@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use lightcraft_catalog::{PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
-use lightcraft_merge::pano::MAX_MEGAPIXELS;
+use lightcraft_merge::pano::{MAX_MEGAPIXELS, MIN_MEGAPIXELS};
 use lightcraft_merge::{Deghost, Frame, HdrOptions, PanoOptions, Projection};
 use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo};
 use lightcraft_raster::{Rgb32f, Rgba8};
@@ -302,7 +302,7 @@ pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std
         let mb = |b: f64| b / (1u64 << 20) as f64;
         return Err(format!(
             "not enough memory for this panorama: at {} MP, the smallest it is made, it needs about {:.0} MB, its photos included, and the merge may use {:.0} MB; merge fewer or smaller photos, ask for a smaller panorama, or close other apps",
-            (floor * 10.0).round() / 10.0,
+            round_megapixels(floor),
             mb(need).ceil(),
             mb(room.max(0.0)).floor()
         ));
@@ -311,11 +311,24 @@ pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std
 }
 
 /// The smallest a panorama is made to fit its memory (megapixels): [`MIN_PANORAMA_MEGAPIXELS`],
-/// or less when less was `asked` for (`min` ignores a NaN one), or when its photos (`frame_px`
-/// pixels, standing for the panorama's own resolution, known only once they are stitched) have
-/// less; never under the 0.1 MP the stitch makes at the least.
+/// or less when less was `asked` for (`min` ignores a NaN one; never under the 0.1 MP cap the
+/// stitch keeps at the least, [`MIN_MEGAPIXELS`]), or when its photos (`frame_px` pixels,
+/// standing for the panorama's own resolution, known only once they are stitched) have less,
+/// even under 0.1 MP: the stitch never scales photos up, so a floor above them couldn't be made.
 pub(crate) fn panorama_floor(asked: f64, frame_px: f64) -> f64 {
-    MIN_PANORAMA_MEGAPIXELS.min(asked).min(frame_px / 1e6).max(0.1)
+    MIN_PANORAMA_MEGAPIXELS.min(asked).max(MIN_MEGAPIXELS).min(frame_px / 1e6)
+}
+
+/// `mp` megapixels as the refusal names them: to 0.1 MP, or two significant digits below 0.1 MP
+/// (a floor of tiny photos), so `0.05` isn't named as 0.1 MP.
+fn round_megapixels(mp: f64) -> f64 {
+    if !(mp > 0.0 && mp < 0.1) {
+        return (mp * 10.0).round() / 10.0;
+    }
+    // mp > 0, so the exponent is finite; held to 12 digits for a subnormal one
+    let digits = (1.0 - mp.log10().floor()).min(12.0) as i32;
+    let k = 10f64.powi(digits);
+    (mp * k).round() / k
 }
 
 /// The pixels of `frames`.
@@ -413,9 +426,11 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
     let hdr = HdrOptions { align: p.get("align").and_then(Value::as_bool).unwrap_or(true), deghost };
     let projection: Projection =
         serde_json::from_value(p.get("projection").cloned().unwrap_or(json!("auto"))).map_err(|e| bad(format!("projection: {e}")))?;
-    // the stitch makes at least 0.1 MP, so a smaller cap couldn't be kept: refused, not exceeded
+    // the stitch raises a cap below 0.1 MP to 0.1 MP, so a smaller one couldn't be kept: refused, not exceeded
     let max_megapixels = match p.get("maxMegapixels").and_then(Value::as_f64) {
-        Some(v) if v > 0.0 && v < 0.1 => return Err(bad(format!("maxMegapixels: {v} is below the 0.1 MP a panorama has at the least"))),
+        Some(v) if v > 0.0 && v < MIN_MEGAPIXELS => {
+            return Err(bad(format!("maxMegapixels: {v} is below {MIN_MEGAPIXELS} MP, the smallest size limit the stitch keeps")));
+        }
         Some(v) if v > 0.0 => v.min(MAX_MEGAPIXELS),
         _ => MAX_MEGAPIXELS,
     };
@@ -519,7 +534,7 @@ mod tests {
         assert_eq!(super::merge_memory(None), super::merge_memory(Some(8 << 30)));
     }
 
-    /// A cap below the 0.1 MP the stitch makes at the least is refused, not exceeded (#3708).
+    /// A cap below 0.1 MP, the smallest the stitch keeps, is refused, not exceeded (#3708).
     #[test]
     fn a_max_megapixels_below_the_stitch_minimum_is_refused() {
         use super::{MergeKind, parse};
