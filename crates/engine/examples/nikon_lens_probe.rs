@@ -69,6 +69,11 @@ fn validate_candidates(ops: &[lightcraft_raw::Opcode]) -> Result<(), &'static st
     if ops.is_empty() || ops.len() > 2 {
         return Err("provide one or two lens opcodes");
     }
+    if ops.iter().filter(|op| matches!(op, Opcode::WarpRectilinear { .. })).count() > 1
+        || ops.iter().filter(|op| matches!(op, Opcode::FixVignetteRadial { .. })).count() > 1
+    {
+        return Err("provide at most one warp and one radial vignette");
+    }
     for op in ops {
         let center = match op {
             Opcode::WarpRectilinear { planes, center } if planes.len() == 1 && planes.iter().flatten().all(|v| v.is_finite() && v.abs() <= 16.0) => {
@@ -104,6 +109,19 @@ fn render(source: &Rgb32f, info: &SourceInfo, settings: &DevelopSettings, path: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn candidates_reject_duplicate_kinds_and_accept_one_of_each() {
+        use lightcraft_raw::Opcode;
+        let warp = Opcode::WarpRectilinear { planes: vec![[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]], center: [0.5, 0.5] };
+        let vignette = Opcode::FixVignetteRadial { k: [0.0; 5], center: [0.5, 0.5] };
+        assert!(validate_candidates(std::slice::from_ref(&warp)).is_ok());
+        assert!(validate_candidates(std::slice::from_ref(&vignette)).is_ok());
+        assert!(validate_candidates(&[warp.clone(), vignette.clone()]).is_ok());
+        assert!(validate_candidates(&[vignette.clone(), warp.clone()]).is_ok());
+        assert_eq!(validate_candidates(&[warp.clone(), warp]), Err("provide at most one warp and one radial vignette"));
+        assert_eq!(validate_candidates(&[vignette.clone(), vignette]), Err("provide at most one warp and one radial vignette"));
+    }
 
     /// A hostile stream must be rejected after at most limit + 1 bytes, without reading to EOF.
     #[test]

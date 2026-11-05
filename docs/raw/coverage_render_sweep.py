@@ -10,12 +10,79 @@ Use a fresh output directory per binary. The second run reuses the first run's
 reference images and framing. Existing PNGs allow an interrupted run to resume.
 Inputs are only the SHA-256-pinned public corpus rows. Images and binary copies
 stay in gitignored corpus; commit the numerical evidence separately. PreviewTIFF
-rows remain image-structure checks rather than display-ready colour references.
+rows use encoded-luminance correlation for structure only, with no sRGB transfer
+or colour-error metrics. Older PreviewTIFF baseline scores must be regenerated
+with this tool; valid cached PNGs can be reused.
 """
-import argparse, csv, hashlib, io, json, os, subprocess, sys
+import argparse, csv, hashlib, io, json, math, os, subprocess, sys
 from pathlib import Path
+import numpy as np
 from PIL import Image, ImageOps
 from nikon_lens_probe import score
+
+
+def readable_png(path):
+    """Only a complete, decodable PNG can stand in for a completed render."""
+    try:
+        with Image.open(path) as image:
+            if image.format != "PNG":
+                return False
+            image.verify()
+        with Image.open(path) as image:
+            image.load()
+        return True
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+        return False
+
+
+def measure_pair(render, reference, structure_only):
+    if not structure_only:
+        return score(render, reference)
+    # Unknown TIFF encoding: compare spatial luminance without assuming an sRGB transfer function.
+    if reference.width <= 0 or reference.height <= 0:
+        raise ValueError("structure reference dimensions must be positive")
+    height = round(reference.height * 200 / reference.width)
+    if not 1 <= height <= 2000:
+        raise ValueError("structure reference aspect ratio exceeds the scoring limit")
+    size = (200, height)
+    a, b = [
+        np.asarray(ImageOps.grayscale(image).resize(size, Image.Resampling.LANCZOS), dtype=float)
+        for image in (render, reference)
+    ]
+    if np.std(a) < 1e-8 or np.std(b) < 1e-8:
+        raise ValueError("cannot correlate a constant structure image")
+    return dict(r=float(np.corrcoef(a.ravel(), b.ravel())[0, 1]))
+
+
+def compare_record(name, record, base):
+    """Compare scores only after confirming that both runs measured the same inputs."""
+    if not isinstance(base, dict):
+        raise ValueError("baseline record missing or invalid: " + name)
+    for key in ("file_sha256", "reference_sha256", "reference_size", "reference", "rotation"):
+        if base.get(key) != record[key]:
+            raise ValueError("baseline " + key + " differs: " + name)
+    if base.get("metric_kind", "lab_lstar") != record["metric_kind"]:
+        raise ValueError("baseline metric_kind differs; regenerate baseline scores: " + name)
+    keys = ("r", "mean_dl", "outer_mae_dl") if record["metric_kind"] == "lab_lstar" else ("r",)
+    for key in keys:
+        value = base.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError("baseline " + key + " is missing or non-finite: " + name)
+    if not isinstance(base.get("pixel_sha256"), str):
+        raise ValueError("baseline pixel_sha256 is missing or invalid: " + name)
+    record["pixels_changed"] = record["pixel_sha256"] != base["pixel_sha256"]
+    record["delta_r"] = record["r"] - base["r"]
+    if record["metric_kind"] == "lab_lstar":
+        record["delta_abs_mean_dl"] = abs(record["mean_dl"]) - abs(base["mean_dl"])
+
+
+def metrics_regressed(record, base):
+    if record["r"] < base["r"] - 1e-9:
+        return True
+    return record["metric_kind"] == "lab_lstar" and (
+        abs(record["mean_dl"]) > abs(base["mean_dl"]) + 1e-9
+        or record["outer_mae_dl"] > base["outer_mae_dl"] + 1e-9
+    )
 
 
 def main():
@@ -36,8 +103,12 @@ def main():
         )
     )
     previous = json.loads(a.compare.read_text())["records"] if a.compare else None
+    if previous is not None and (
+        not isinstance(previous, dict) or set(previous) != {row["file"] for row in rows}
+    ):
+        raise ValueError("baseline input files differ from the coverage manifest")
     empty = Path("corpus/nikon-lens/empty-lensdb").resolve()
-    empty.mkdir(exist_ok=True)
+    empty.mkdir(parents=True, exist_ok=True)
     env = dict(
         os.environ,
         LIGHTCRAFT_GPU="0",
@@ -65,7 +136,7 @@ def main():
             raise ValueError("SHA-256 mismatch " + row["file"])
         out = a.out / (raw.stem + ".png")
         ref = (a.compare.parent if a.compare else a.out) / (raw.stem + "-reference.png")
-        if not out.exists():
+        if not readable_png(out):
             with (a.out / (raw.stem + ".log")).open("w") as log:
                 subprocess.run(
                     [str(a.cli), "render", str(raw), "-o", str(out), "--size", "1200"],
@@ -143,28 +214,27 @@ def main():
             method=Image.Resampling.LANCZOS,
             centering=(0.5, 0.5),
         )
-        measured = score(framed, reference)
+        structure_only = "PreviewTIFF" in row["reference"]
+        measured = measure_pair(framed, reference, structure_only)
         record = dict(
             file_sha256=digest,
             pixel_sha256=pixel_sha,
             render_size=rendered.size,
             reference=row["reference"],
             reference_sha256=hashlib.sha256(reference.tobytes()).hexdigest(),
-            reference_size=reference.size,
+            reference_size=list(reference.size),
             rotation=rotation,
+            metric_kind="structure_luma" if structure_only else "lab_lstar",
             **measured,
         )
-        if previous:
-            base = previous[row["file"]]
-            record["pixels_changed"] = pixel_sha != base["pixel_sha256"]
-            record["delta_r"] = record["r"] - base["r"]
-            record["delta_abs_mean_dl"] = abs(record["mean_dl"]) - abs(base["mean_dl"])
+        if previous is not None:
+            compare_record(row["file"], record, previous.get(row["file"]))
         results[row["file"]] = record
         (a.out / "scores.json").write_text(
             json.dumps(
                 dict(
                     cli_sha256=cli_sha,
-                    method="CLI PNG 1200px; CPU; 6 Rayon threads; no lens database; largest embedded reference; recorded rotation; center crop-render; Lab L* 200px; outer rho>=0.75; pixel SHA256 includes WxH:RGB: and row-major RGB bytes",
+                    method="CLI PNG 1200px; CPU; 6 Rayon threads; no lens database; largest embedded reference; recorded rotation; center crop-render; Lab L* 200px for display references, encoded-luminance r only for PreviewTIFF; outer rho>=0.75; pixel SHA256 includes WxH:RGB: and row-major RGB bytes",
                     records=results,
                 ),
                 indent=2,
@@ -174,13 +244,11 @@ def main():
         )
         print(row["file"], json.dumps(record, allow_nan=False), flush=True)
 
-    if previous:
+    if previous is not None:
         regressions = [
             name
             for name, record in results.items()
-            if record["r"] < previous[name]["r"] - 1e-9
-            or abs(record["mean_dl"]) > abs(previous[name]["mean_dl"]) + 1e-9
-            or record["outer_mae_dl"] > previous[name]["outer_mae_dl"] + 1e-9
+            if metrics_regressed(record, previous[name])
         ]
         if regressions:
             raise ValueError(
