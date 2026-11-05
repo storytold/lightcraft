@@ -11,13 +11,19 @@
 //! - export downloads the file through the browser.
 //!
 //! `?bench` in the URL runs a scripted first-paint / slider-latency measurement and logs it to the
-//! console (see [`bench`]); `?store=idb` forces the IndexedDB backend, `?store=memory` disables
+//! console (see [`bench`]) on the generated demo photos in an unsaved library (it implies `?store=memory`, so it never edits
+//! the library in browser storage); `?store=idb` forces the IndexedDB backend, `?store=memory` disables
 //! persistence and `?workers=0` renders on the main thread.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod automation;
 pub mod backup;
 pub mod bench;
+// The web host's drop gate, also compiled natively so its queue handling has tests (the module is
+// unused in a native, non-test library build and would otherwise be dead code there).
+#[cfg(any(test, target_arch = "wasm32"))]
+mod drop_gate;
 pub mod files;
 pub mod store;
 pub mod wire;
