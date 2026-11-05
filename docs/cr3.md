@@ -39,7 +39,7 @@ decoded.
 ## Variant status
 
 The supported and rejected CRX coding variants. Every rejection is an explicit `RawError::Unsupported` whose
-text is part of the contract: `crates/raw/tests/cr3_variants.rs` rebuilds each variant as a synthetic CR3
+text is part of the contract: `crates/raw/tests/it/cr3_variants.rs` rebuilds each variant as a synthetic CR3
 fixture and asserts the exact string, and that header probing (`probe_info`, the import path) and full
 decoding fail with the same error, because the engine shows that reason when it falls back to the embedded
 preview. The same tests decode a control fixture at both edges of each accepted range, so a rejection can
@@ -87,7 +87,7 @@ CMP1 bit depth. A lossless sample outside the bit depth is still corrupt data.
 Other unverified coding variants return explicit unsupported errors (the table above lists them all). Header probing validates the same coding variants and
 tile/plane layout as full decoding.
 
-`crates/raw/tests/cr3_corpus.rs` checks every full-sensor sample against a
+`crates/raw/tests/it/cr3_corpus.rs` checks every full-sensor sample against a
 black-box reference, before cropping or colour processing. Public CC0 files
 are downloaded by `cargo xtask corpus --download` and kept outside version
 control. The exact inputs and reference hashes are:
@@ -126,6 +126,18 @@ reproduced the M50 RAW hash above. The RP's 1.6× crop mode writes a single
 tiles. All ten sensor comparisons pass. R8 HEVC preview tracks are distinguished from
 the primary Bayer RAW; the HEVC preview itself is not decoded. Missing corpus
 files are reported as skipped by the tests.
+
+In a tile with a neighbour on its right, the vertical high-pass bands of the level-1 and level-2
+low-pass columns (bands 8 and 5) are entropy coded at an odd width: an even band carries one extra
+column that synthesis does not use. No other band is extended, including the last level's (band 2).
+The decoder takes each band's coded width from this rule. It used to try the synthesis width and up to
+two more columns and keep the first that decoded to the exact end of the stream, but two widths can
+both do that and give different coefficients (#899). The rule was measured on every C-RAW plane in
+`cr3_corpus.rs`: two-tile files at tile widths 2816, 3144, 3192, 3444 and 3564 (G5 X Mark II, M50,
+R100, 250D, RP, R, 90D, M6 Mark II), whose left tiles extend bands 5 and 8 exactly where the rule says,
+and single-tile `0x100` and `0x200` files, which never extend a band. In every plane, each band decodes
+at its coded width and at no other width up to two columns wider, so all sensor hashes are unchanged.
+No public file has three or more C-RAW tiles; a middle tile follows the same rule, which is unverified.
 
 The version `0x200` QP predictor and entropy framing were checked independently.
 Controlled input mutations establish floor averaging of paired QP rows before
@@ -182,7 +194,7 @@ All 110 CR3 files on raw.pixls.us (2026-10-12, every one CC0, 31 folders) decode
 falls back to the preview, so none of them uses a CRX variant the decoder refuses (vertical C-RAW tiles,
 partial-subband or rounded-plane coding, multi-tile 0x200, adaptive low-frequency gains) or a CR3
 sRAW / mRAW. HEIF stills are separate `.HIF` files, not CR3. One file per body is pinned in
-`canon_cr3_bodies_decode_like_the_camera_jpeg` (`crates/raw/tests/cr3_corpus.rs`; URLs and SHA-256 in
+`canon_cr3_bodies_decode_like_the_camera_jpeg` (`crates/raw/tests/it/cr3_corpus.rs`; URLs and SHA-256 in
 `RAW_SAMPLES`, `xtask/src/main.rs`): EOS-1D X Mark III, 90D, 250D, 850D, M200, M50 Mark II, M6 Mark II,
 R, R3, R5, R6, R6 Mark II, R6 Mark III, R7, R10, RP, R50, R50 V and PowerShot G5 X Mark II, G7 X Mark III,
 SX70 HS and V1, C-RAW where the body has a CC0 C-RAW sample. No external decoder was run: the sensor

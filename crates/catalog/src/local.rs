@@ -34,6 +34,15 @@ use serde::Serialize;
 
 use crate::{Catalog, Op, Photo, PhotoId, Source};
 
+/// The Local records of some files ([`Catalog::local_records_of`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalRecords {
+    /// Only a record of having looked: nothing was changed on them and nothing refers to them.
+    pub untouched: Vec<PhotoId>,
+    /// Holding something of the person's, with their files.
+    pub kept: Vec<(PhotoId, String)>,
+}
+
 /// Default for how long a Local folder may go unbrowsed before its untouched records are
 /// forgotten (days).
 pub const DEFAULT_FORGET_DAYS: u32 = 30;
@@ -64,7 +73,8 @@ pub fn folder_of(p: &Photo) -> Option<String> {
         // `/` and `\` are both separators whatever the platform (a catalog can move between them)
         Source::File { path } => {
             let key = crate::query::folder_key(path);
-            key.rsplit_once('/').map(|(dir, _)| if dir.is_empty() { "/".to_string() } else { dir.to_string() })
+            // a drive or share root keeps its trailing `/` in its key (`c:/`, `//srv/share/`)
+            key.rsplit_once('/').map(|(dir, _)| if dir.is_empty() { "/".to_string() } else { crate::query::folder_key(&format!("{dir}/")) })
         }
         Source::Demo { .. } => None,
     }
@@ -174,6 +184,34 @@ impl Catalog {
     /// Folders with a last-browsed time.
     pub fn browsed_folders(&self) -> &BTreeMap<String, String> {
         &self.browsed
+    }
+
+    /// The Local records of `files` (paths as stored), for library photos about to point at
+    /// those files (a folder located where it was browsed, `folder.updateLocation`): a file has one
+    /// record, so the Local one gives way. Told apart: those that are only a record of having
+    /// looked (untouched, see the module docs, and nothing refers to them), which can go, and
+    /// those that hold something of the person's (a rating, an edit, a place in an album), with
+    /// their files. Records in Recently Deleted are not Local records to this.
+    pub fn local_records_of(&self, files: &HashSet<String>) -> LocalRecords {
+        let mut out = LocalRecords::default();
+        if files.is_empty() {
+            return out;
+        }
+        let referenced = self.referenced();
+        for p in self.photos.values().filter(|p| p.local && !p.deleted) {
+            let Source::File { path } = &p.source else { continue };
+            if !files.contains(path) {
+                continue;
+            }
+            if p.untouched_local() && !referenced.contains(&p.id) {
+                out.untouched.push(p.id);
+            } else {
+                out.kept.push((p.id, path.clone()));
+            }
+        }
+        out.untouched.sort_unstable();
+        out.kept.sort_unstable();
+        out
     }
 
     /// Plan forgetting untouched Local records whose folder wasn't browsed for `days` days (as of

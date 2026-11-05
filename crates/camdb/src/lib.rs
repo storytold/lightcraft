@@ -324,7 +324,7 @@ fn spectral_entry(c: &lightcraft_raw::spectral::Camera) -> Entry {
         make: c.make.into(),
         model: c.model.into(),
         aliases: vec![],
-        illuminants: [17, 21],
+        illuminants: c.illuminant,
         color_matrix: c.color_matrix.map(Some),
         forward_matrix: c.forward_matrix.map(Some),
         wb_presets: vec![],
@@ -332,7 +332,13 @@ fn spectral_entry(c: &lightcraft_raw::spectral::Camera) -> Entry {
         white: None,
         provenance: Provenance {
             source: Source::SpectralSensitivities,
-            detail: "rawtoaces-data spectral sensitivities (Academy Software Foundation, Apache-2.0)".into(),
+            // the chart-measured cameras of the same table pair illuminant A with D50 (they stay a stand-in for a
+            // failed JPEG fit, as before the database)
+            detail: if c.illuminant[1] == 23 {
+                "chart-measured matrices from the raw crate's spectral table".into()
+            } else {
+                "rawtoaces-data spectral sensitivities (Academy Software Foundation, Apache-2.0)".into()
+            },
             contributor: None,
         },
     }
@@ -347,7 +353,7 @@ pub fn find(make: Option<&str>, model: &str) -> Option<Entry> {
 
 /// Every entry: the embedded files, then the spectral table.
 pub fn entries() -> Vec<Entry> {
-    embedded().iter().cloned().chain(lightcraft_raw::spectral::cameras().iter().map(spectral_entry)).collect()
+    embedded().iter().cloned().chain(lightcraft_raw::spectral::cameras().map(spectral_entry)).collect()
 }
 
 /// First word of a make, upper case ("NIKON CORPORATION" → "NIKON").
@@ -506,7 +512,7 @@ provenance = { source = "native-dng", detail = "Software: X1 1.0" }
         assert_eq!(s.provenance.source, Source::SpectralSensitivities);
         assert!(s.validate().is_ok());
         assert_eq!(find(Some("Nobody"), "Nothing"), None);
-        assert!(entries().len() >= lightcraft_raw::spectral::cameras().len());
+        assert!(entries().len() >= lightcraft_raw::spectral::cameras().count());
         for e in entries() {
             assert!(e.validate().is_ok(), "{} {}", e.make, e.model);
         }
