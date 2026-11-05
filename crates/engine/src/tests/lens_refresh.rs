@@ -237,7 +237,7 @@ fn a_new_database_profile_changes_the_render_and_cache_keys() {
         let render = s.render_job(id, 800, 600, false, true).unwrap().key;
         let thumb = s.thumb_job(id, 256).unwrap().cache.unwrap().1;
         let p = s.catalog.photo(id).unwrap().clone();
-        (render, thumb, Session::variant_key(&p, &p.develop, 128, 0), Session::view_key(&p, true, 0))
+        (render, thumb, Session::variant_key(&p, &p.develop, 128, 0), s.view_key(&p, true))
     };
     let before = keys(&mut s);
     s.catalog.apply(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens(-0.03))) }).unwrap();
