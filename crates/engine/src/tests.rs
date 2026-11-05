@@ -622,6 +622,24 @@ fn memory_report_counts_decoded_sources_and_renders() {
     assert!(m.rendered.count >= 1, "the thumbnail render is cached");
 }
 
+/// The catalog is the library itself, not a cache: the memory budget doesn't hold it, however big
+/// the library, so the report says what the records take beside the caches, not in their sum.
+#[test]
+fn memory_report_counts_the_catalog_beside_the_caches() {
+    let mut s = demo();
+    let photos = s.catalog.len();
+    assert!(photos > 0);
+    let m = s.memory_report();
+    assert_eq!(m.catalog.count, photos);
+    // at least each record's fixed part (the strings and lists a photo owns come on top)
+    assert!(m.catalog.bytes >= photos * std::mem::size_of::<lightcraft_catalog::Photo>(), "{:?}", m.catalog);
+    // outside the caches' sum
+    assert_eq!(m.engine_bytes, m.thumb_sources.bytes + m.preview_sources.bytes + m.full_source.bytes + m.rendered.bytes);
+    let r = s.execute("library.memory", &json!({})).unwrap();
+    assert_eq!(r["catalog"]["count"], photos);
+    assert_eq!(r["catalog"]["bytes"], m.catalog.bytes);
+}
+
 #[test]
 fn paste_selected_settings_pastes_only_chosen_copied_groups() {
     let mut s = demo();

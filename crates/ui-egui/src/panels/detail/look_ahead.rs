@@ -9,9 +9,9 @@ const AHEAD: usize = 5;
 pub(super) const BEHIND: usize = 1;
 /// The look-ahead's priority: below the loupe's own render (100), above everything else.
 const AHEAD_PRIORITY: u32 = 96;
-/// Thumbnails the loupe keeps while stepping (as many as the grid keeps), and how many photos on
-/// either side of the open one stay when it trims them.
-const MAX_LOUPE_THUMBS: usize = 600;
+/// How many photos on either side of the open one keep their thumbnails when the loupe trims them
+/// (what the filmstrip can show). It trims once the thumbnails are over what the grid keeps them
+/// to, see [`crate::render::Renderer::thumbs_over_limit`].
 const KEEP_AROUND: usize = 64;
 /// The thumbnail size the look-ahead asks for (the filmstrip's at 2x).
 const AHEAD_THUMB_EDGE: usize = 256;
@@ -104,9 +104,9 @@ pub(crate) fn look_ahead(app: &mut LightcraftApp, id: PhotoId, edge: usize, crop
     let targets = app.look_ahead.targets(app, &ids, i, prepare);
     // stepping through a whole wedding in the loupe would keep every thumbnail it ever drew: keep
     // the ones around the photo (what the filmstrip can show) once there are many
-    if app.renderer.thumb_textures() > MAX_LOUPE_THUMBS {
+    if app.renderer.thumbs_over_limit() {
         let keep = ids.iter().skip(i.saturating_sub(KEEP_AROUND)).take(2 * KEEP_AROUND + 1).copied().collect();
-        app.renderer.evict_thumbs(&keep, MAX_LOUPE_THUMBS);
+        app.renderer.evict_thumbs(&keep);
     }
     // their thumbnails first (a small embedded JPEG each, a few ms): something to show at once
     // even when a step outruns the full-size previews, and in full screen, where no filmstrip
