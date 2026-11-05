@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (`cargo xtask ci`: one integration-test binary per crate, doctests apart, one WASM check) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (plain `cargo test` runs at most 4 tests at once; `ci` still sizes its threads by RAM) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft is built today. The longer design document (`plan/architecture.md`) is local-only
 (`plan/` is gitignored); this page is the committed, current summary. Sizes are Rust lines counted
@@ -73,6 +73,23 @@ module per file (`cargo test -p <crate> --test it <module>::`); a test that chan
 whole process (a global allocator, closing the GPU) keeps a binary of its own in `tests/`. The WASM
 build is one `cargo check --target wasm32-unknown-unknown --keep-going` over the wasm-safe crates.
 
+`ci`'s resource caps (build jobs by available RAM, at most 4 test threads, line-table debuginfo) and
+its one-run-per-machine slot (`xtask/src/ci_lock.rs`) also cover `cargo xtask test [-p PKG]…
+[--keep-going] [--doc] [-- ARGS]` (`xtask/src/test.rs`), the way to run the tests alone: subcommands
+opt into the caps with `use_ci_caps`. It builds every workspace test target once, as `ci` does, and
+runs each test binary, or the `-p` packages' binaries, itself (`test::run_binary`, which `ci --quick`
+uses too); `--keep-going` runs every binary and names each that failed instead of stopping at the
+first.
+
+Outside `ci`, `.cargo/config.toml`'s `[env]` limits plain `cargo test` to 4 tests at once per test
+binary (`RUST_TEST_THREADS = { value = "4", force = false }`, so a value already in the environment
+wins), and `.config/nextest.toml` sets `test-threads = 4` for `cargo nextest run`. `cargo xtask` runs
+under that config too, so `[env]` also sets a marker, `LIGHTCRAFT_TEST_THREADS_DEFAULT`, to the same
+value: a `RUST_TEST_THREADS` equal to it counts as unset (`caller_sets` in `xtask/src/main.rs`) and the
+caps replace it with the RAM-aware value, while any other value is the caller's and wins as-is. An
+explicit `RUST_TEST_THREADS=4` can't be told apart from the default, so `ci` and `xtask test` may
+lower it to their RAM-aware value (never raise it).
+
 `ci` also probes the machine: OS, CPUs, RAM, the GPU adapters of each backend (from the ignored
 `gpu_probe` test of `lightcraft-gpu`, run after the workspace tests so it reuses their build; xtask
 has no wgpu), the corpus and `CRAFT_FONTS_DIR`. Tests
@@ -87,6 +104,8 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Quality gates: plain `cargo test` (and `cargo nextest run`) runs at most 4 tests at once; xtask tells that default from a caller's `RUST_TEST_THREADS` |
+| 2026-10-26 | minor | Quality gates: `cargo xtask test` runs the tests with `ci`'s caps and slot, and can keep going past a failing binary |
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |
