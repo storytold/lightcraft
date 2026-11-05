@@ -28,6 +28,11 @@ const FIELDS: &[(&str, usize)] = &[
     ("DEHAZE", 1),
     ("SHARPEN", 1),
     ("SHARPEN_MASK", 1),
+    ("SHARPEN_LIMIT", 1),
+    ("SHARPEN_GAIN", 1),
+    ("SHARPEN_V3", 1),
+    ("SHP_OFF", 1),
+    ("HAS_SHP", 1),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
     ("HAS_DARK", 1),
@@ -73,6 +78,13 @@ const FIELDS: &[(&str, usize)] = &[
     ("OUT_Y", 3),
     ("OUT_TRC", 1),
     ("OUT_GAMMA", 1),
+    // a LUT profile: its table in `aux` at LUT_OFF (size³ rgb, red fastest), amount and domain
+    ("LUT", 1),
+    ("LUT_OFF", 1),
+    ("LUT_N", 1),
+    ("LUT_AMT", 1),
+    ("LUT_MIN", 3),
+    ("LUT_MAX", 3),
     // soft proofing (matrix proofs; `ProofParams`): working → proof RGB, its luma, proof → output, warnings
     ("PROOF", 1),
     ("PROOF_M", 9),
@@ -140,6 +152,8 @@ impl Block {
 pub struct Present {
     pub clarity: bool,
     pub texture: bool,
+    /// The sharpening blur plane (after the texture plane in `tex` when both are present).
+    pub sharpen: bool,
     pub dark: bool,
     /// The blurred chromaticity follows the mask planes in the `masks` buffer.
     pub chroma: bool,
@@ -163,6 +177,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     for m in masks {
         aux.extend_from_slice(m);
     }
+    let lut_off = aux.len();
+    if let Some((l, _)) = &fp.lut {
+        aux.extend(l.data.iter().flatten());
+    }
 
     let mut p = Block::new();
     p.u("W", fp.w as u32);
@@ -184,6 +202,11 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("DEHAZE", fp.dehaze);
     p.f("SHARPEN", fp.sharpen);
     p.f("SHARPEN_MASK", fp.sharpen_mask);
+    p.f("SHARPEN_LIMIT", fp.sharpen_limit);
+    p.f("SHARPEN_GAIN", fp.sharpen_gain);
+    p.b("SHARPEN_V3", fp.pixel_sharpen);
+    p.u("SHP_OFF", if present.texture { (fp.w * fp.h) as u32 } else { 0 });
+    p.b("HAS_SHP", present.sharpen);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
     p.b("HAS_DARK", present.dark);
@@ -240,6 +263,14 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let (trc, gamma) = fp.out_trc.code();
     p.u("OUT_TRC", trc);
     p.f("OUT_GAMMA", gamma);
+    if let Some((l, amount)) = &fp.lut {
+        p.b("LUT", true);
+        p.u("LUT_OFF", lut_off as u32);
+        p.u("LUT_N", l.size as u32);
+        p.f("LUT_AMT", *amount);
+        p.fs("LUT_MIN", &l.domain_min);
+        p.fs("LUT_MAX", &l.domain_max);
+    }
     if let Some(pp) = fp.proof.as_ref().filter(|pp| pp.table.is_none()) {
         p.b("PROOF", true);
         p.fs("PROOF_M", pp.to_proof.as_flattened());
