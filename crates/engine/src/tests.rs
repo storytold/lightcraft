@@ -51,6 +51,8 @@ mod slide;
 mod slideshow_export;
 mod spots;
 mod sync;
+#[cfg(not(target_arch = "wasm32"))]
+mod timelapse;
 mod view_follow;
 pub(super) mod xmp;
 

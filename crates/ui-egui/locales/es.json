@@ -2409,5 +2409,14 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de herramientas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar el parpadeo de G-SYNC/FreeSync (se aplica al reiniciar)",
+  "Timelapse Video…": "Vídeo time-lapse…",
+  "Export Timelapse Video": "Exportar vídeo time-lapse",
+  "Timelapse Video": "Vídeo time-lapse",
+  "Choose File…": "Elegir archivo…",
+  "Frames per Photo": "Fotogramas por foto",
+  "Cross-Fade Frames": "Fotogramas de fundido",
+  "Fit (letterbox)": "Encajar (bandas)",
+  "Fill (crop)": "Rellenar (recortar)",
+  "Each photo with its own edits, in the order shown. No audio.": "Cada foto con sus propios ajustes, en el orden mostrado. Sin audio."
 }

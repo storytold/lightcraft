@@ -214,6 +214,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.print", "Print to PDF", None, ""),
     ("dialog.contactSheet", "Contact Sheet PDF…", None, "File"),
     ("app.contactSheet", "Export Contact Sheet PDF", None, ""),
+    // issue #497: {path?, …export.timelapse options}; asks for the file when `path` is missing
+    ("dialog.timelapse", "Timelapse Video…", None, "File"),
+    ("app.timelapse", "Export Timelapse Video", None, ""),
     ("photo.editInPhotoCraft", "Edit in PhotoCraft", Some("Cmd+Shift+E"), "Photo>Edit In"),
     ("photo.editInExternal", "Edit in Other Editor", Some("Cmd+Alt+E"), "Photo>Edit In"),
     // {ids?, app?}: the original files themselves (a raw stays a raw: no render, no copy), opened

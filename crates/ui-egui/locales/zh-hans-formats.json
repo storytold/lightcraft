@@ -320,5 +320,7 @@
   "Panel layout could not be restored: {error}": "无法恢复面板布局：{error}",
   "Panel move was not applied: {error}": "面板移动未应用：{error}",
   "{name} is installed": "{name} 已安装",
-  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启"
+  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
+  "{n} photos · {frames} frames · {secs} s": "{n} 张照片 · {frames} 帧 · {secs} 秒",
+  "Exported timelapse: {photos} photos, {frames} frames": "已导出延时视频：{photos} 张照片，{frames} 帧"
 }

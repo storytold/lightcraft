@@ -1,0 +1,28 @@
+[package]
+name = "lightcraft-video-encode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Silent movies from frames the caller makes (L1, native only): H.264 MP4 or ProRes 422 MOV via FilmCraft's encoders and muxer"
+
+[lints]
+workspace = true
+
+# Native only: the web build has no video output. Not `filmcraft-codecs` / `-media` / `-export`:
+# they pull symphonia (MPL-2.0).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lightcraft-raster = { workspace = true }
+filmcraft-color = { git = "https://github.com/storytold/filmcraft", rev = "156086dc87282026aeec33f8a220e4629bccbe31" }
+filmcraft-isobmff = { git = "https://github.com/storytold/filmcraft", rev = "156086dc87282026aeec33f8a220e4629bccbe31" }
+filmcraft-h264enc = { git = "https://github.com/storytold/filmcraft", rev = "156086dc87282026aeec33f8a220e4629bccbe31" }
+filmcraft-prores = { git = "https://github.com/storytold/filmcraft", rev = "156086dc87282026aeec33f8a220e4629bccbe31" }
+thiserror = { workspace = true }
+filmcraft-h264 = { git = "https://github.com/storytold/filmcraft", rev = "156086dc87282026aeec33f8a220e4629bccbe31", optional = true }
+
+[features]
+# `probe`: decode a written H.264 MP4's luma planes, for tests here and in dependent crates.
+test-util = ["dep:filmcraft-h264"]
+
+# Tests decode what was written to check frame counts and brightness.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+filmcraft-h264 = { git = "https://github.com/storytold/filmcraft", rev = "156086dc87282026aeec33f8a220e4629bccbe31" }

@@ -320,5 +320,7 @@
   "Panel layout could not be restored: {error}": "パネル配置を復元できませんでした：{error}",
   "Panel move was not applied: {error}": "パネルの移動は適用されませんでした：{error}",
   "{name} is installed": "{name} をインストールしました",
-  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです"
+  "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
+  "{n} photos · {frames} frames · {secs} s": "{n} 枚の写真 · {frames} フレーム · {secs} 秒",
+  "Exported timelapse: {photos} photos, {frames} frames": "タイムラプスを書き出しました：写真 {photos} 枚、{frames} フレーム"
 }

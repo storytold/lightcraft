@@ -320,5 +320,7 @@
   "Panel layout could not be restored: {error}": "Не удалось восстановить расположение панелей: {error}",
   "Panel move was not applied: {error}": "Перемещение панели не применено: {error}",
   "{name} is installed": "Модель {name} установлена",
-  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено"
+  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
+  "{n} photos · {frames} frames · {secs} s": "Фото: {n} · кадров: {frames} · {secs} с",
+  "Exported timelapse: {photos} photos, {frames} frames": "Таймлапс экспортирован: фото {photos}, кадров {frames}"
 }

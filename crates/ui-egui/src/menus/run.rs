@@ -1243,6 +1243,30 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             }
             crate::export_task::start_contact_sheet(app, &params)
         }
+        "dialog.timelapse" => {
+            app.ui.dialog = Some(crate::export_task::timelapse_dialog());
+            Ok(Value::Null)
+        }
+        "app.timelapse" => {
+            if app.export.is_some() {
+                return Some(Err("an export is already running".into()));
+            }
+            let mut params = p.clone();
+            if p.get("path").is_none() {
+                let prores = p.get("format").and_then(Value::as_str) == Some("prores");
+                let (filter, ext, name): (&str, &'static [&'static str], &str) =
+                    if prores { ("QuickTime", &["mov"], "Timelapse.mov") } else { ("MPEG-4", &["mp4"], "Timelapse.mp4") };
+                let req = PickRequest::save("Timelapse Video", filter, ext, name);
+                let paths = match crate::pick::ask(app, id, p, "path", req, |_| None) {
+                    Picked::Now(paths) => paths,
+                    Picked::Later => return Some(Ok(Value::Null)),
+                    Picked::Unavailable => return Some(Err("no save dialog on this platform; supply path".into())),
+                };
+                let Some(path) = paths.first() else { return Some(Ok(Value::Null)) };
+                params["path"] = json!(path);
+            }
+            crate::export_task::start_timelapse(app, &params)
+        }
         _ => return None,
     };
     Some(r)

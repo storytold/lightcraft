@@ -320,5 +320,7 @@
   "Panel layout could not be restored: {error}": "No se pudo restablecer la disposición de paneles: {error}",
   "Panel move was not applied: {error}": "No se aplicó el movimiento del panel: {error}",
   "{name} is installed": "{name} está instalado",
-  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado"
+  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado",
+  "{n} photos · {frames} frames · {secs} s": "{n} fotos · {frames} fotogramas · {secs} s",
+  "Exported timelapse: {photos} photos, {frames} frames": "Time-lapse exportado: {photos} fotos, {frames} fotogramas"
 }

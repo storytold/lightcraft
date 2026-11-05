@@ -2405,5 +2405,14 @@
   "Top bar": "Верхня панель",
   "Tool strip": "Панель інструментів",
   "Bottom bar": "Нижня панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)",
+  "Timelapse Video…": "Відео таймлапс…",
+  "Export Timelapse Video": "Експорт відео таймлапс",
+  "Timelapse Video": "Відео таймлапс",
+  "Choose File…": "Вибрати файл…",
+  "Frames per Photo": "Кадрів на фото",
+  "Cross-Fade Frames": "Кадрів переходу",
+  "Fit (letterbox)": "Вписати (поля)",
+  "Fill (crop)": "Заповнити (обрізати)",
+  "Each photo with its own edits, in the order shown. No audio.": "Кожне фото зі своїми правками, у показаному порядку. Без звуку."
 }

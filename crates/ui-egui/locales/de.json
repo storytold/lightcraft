@@ -3489,5 +3489,14 @@
   "Top bar": "Obere Leiste",
   "Tool strip": "Werkzeugleiste",
   "Bottom bar": "Untere Leiste",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC-/FreeSync-Flimmern verhindern (gilt ab dem nächsten Start)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC-/FreeSync-Flimmern verhindern (gilt ab dem nächsten Start)",
+  "Timelapse Video…": "Zeitraffervideo…",
+  "Export Timelapse Video": "Zeitraffervideo exportieren",
+  "Timelapse Video": "Zeitraffervideo",
+  "Choose File…": "Datei wählen…",
+  "Frames per Photo": "Bilder pro Foto",
+  "Cross-Fade Frames": "Überblendungsbilder",
+  "Fit (letterbox)": "Einpassen (Balken)",
+  "Fill (crop)": "Füllen (zuschneiden)",
+  "Each photo with its own edits, in the order shown. No audio.": "Jedes Foto mit seinen eigenen Bearbeitungen, in der angezeigten Reihenfolge. Kein Ton."
 }
