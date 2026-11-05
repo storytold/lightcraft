@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 
 use crate::query::{Sort, SortKey};
 use crate::{Aspects, Catalog, Photo, PhotoId};
@@ -63,9 +63,22 @@ struct Held {
     /// [`Catalog::order_for`]): asked again, they get one.
     missed: HashSet<SortKey>,
     /// The orders being made on another thread ([`Catalog::prebuild_order`]), by key. Each is filled by its worker
-    /// and read here: a catalog that is dropped, or [`Orders::forget`]s, drops them, so a result never reaches
-    /// another catalog (a library that was switched to) or an order that was forgotten.
-    pending: HashMap<SortKey, Arc<Mutex<Option<Built>>>>,
+    /// and read here (a view that needs one before it is there waits for it: [`Catalog::order_for`]): a catalog
+    /// that is dropped, or [`Orders::forget`]s, drops them, so a result never reaches another catalog (a library
+    /// that was switched to) or an order that was forgotten.
+    pending: HashMap<SortKey, Arc<Slot>>,
+}
+
+impl Held {
+    /// Takes in the order that another thread made for `key`, once that thread is done (also when it made none): it is
+    /// kept like any other, and brought up to date for the catalog as it is when it is used.
+    fn adopt(&mut self, key: SortKey) {
+        let Some(made) = self.pending.get(&key).and_then(|slot| slot.take_finished()) else { return };
+        self.pending.remove(&key);
+        if let Some(Built { revision, order }) = made {
+            self.kept.entry(key).or_insert(Kept { revision, order: Arc::new(order) });
+        }
+    }
 }
 
 /// An order made on a thread of its own, from the photos as they were at `revision`.
@@ -73,6 +86,100 @@ struct Held {
 struct Built {
     revision: u64,
     order: Order,
+}
+
+/// Where the thread making an order leaves it, and where a view that needs it waits.
+#[derive(Debug, Default)]
+struct Slot {
+    made: Mutex<Made>,
+    /// Told when the thread is done.
+    done: Condvar,
+    /// Tests: how many views went to wait for it.
+    #[cfg(test)]
+    waiting: AtomicUsize,
+}
+
+#[derive(Debug, Default)]
+struct Made {
+    /// The order, until it is taken in ([`Held::adopt`]).
+    order: Option<Built>,
+    /// The thread is done: with an order, or without one (it ended without making one: it panicked).
+    finished: bool,
+}
+
+impl Slot {
+    /// Says the thread is done, with the order it made if it made one.
+    fn finish(&self, order: Option<Built>) {
+        if let Ok(mut made) = self.made.lock() {
+            if order.is_some() {
+                made.order = order;
+            }
+            made.finished = true;
+        }
+        self.done.notify_all();
+    }
+
+    /// Whether the thread is done (a slot that can't be read has nothing coming).
+    fn finished(&self) -> bool {
+        match self.made.lock() {
+            Ok(made) => made.finished,
+            Err(_) => true,
+        }
+    }
+
+    /// What the thread made, once it is done: `None` while it is at work, then `Some` of the order (taken out, so
+    /// once) or of nothing.
+    fn take_finished(&self) -> Option<Option<Built>> {
+        let Ok(mut made) = self.made.lock() else { return Some(None) };
+        if made.finished { Some(made.order.take()) } else { None }
+    }
+
+    /// Blocks until the thread is done.
+    fn wait(&self) {
+        let Ok(mut made) = self.made.lock() else { return };
+        #[cfg(test)]
+        self.waiting.fetch_add(1, Ordering::SeqCst);
+        while !made.finished {
+            let Ok(next) = self.done.wait(made) else { return };
+            made = next;
+        }
+    }
+}
+
+/// What the thread making an order hands it over with. One that is dropped without having done that (the thread
+/// panicked) still says the thread is done, so that nobody waits for an order that is not coming.
+struct Maker(Weak<Slot>);
+
+impl Maker {
+    /// Hands `built` over: to nobody, once the catalog is gone.
+    fn hand_over(self, built: Built) {
+        self.finish(Some(built));
+    }
+
+    fn finish(&self, built: Option<Built>) {
+        if let Some(slot) = self.0.upgrade() {
+            slot.finish(built);
+        }
+    }
+}
+
+impl Drop for Maker {
+    fn drop(&mut self) {
+        // (after `hand_over` the thread is done already: this changes nothing)
+        self.finish(None);
+    }
+}
+
+/// The work that sorts `photos` (as they were at `revision`) by `sort` and hands the order over, and the slot it is
+/// handed over in.
+fn making(photos: Vec<Arc<Photo>>, sort: Sort, revision: u64) -> (Arc<Slot>, impl FnOnce() + Send + 'static) {
+    let slot = Arc::new(Slot::default());
+    let maker = Maker(Arc::downgrade(&slot));
+    let work = move || {
+        let order = Order::of(photos.iter().map(|p| p.as_ref()), &sort);
+        maker.hand_over(Built { revision, order });
+    };
+    (slot, work)
 }
 
 /// Below this many photos an order is sorted when first asked for (about 50 ms at most): a thread is not worth it.
@@ -101,6 +208,13 @@ impl Orders {
         self.0.lock().is_ok_and(|h| h.pending.contains_key(&key))
     }
 
+    /// How many views went to wait for the order being made for `key` (for a test).
+    #[cfg(test)]
+    pub(crate) fn waiting(&self, key: SortKey) -> usize {
+        let Ok(held) = self.0.lock() else { return 0 };
+        held.pending.get(&key).map_or(0, |slot| slot.waiting.load(Ordering::SeqCst))
+    }
+
     /// Waits until the order being made for `key` is there (for a test); panics after a minute.
     #[cfg(test)]
     pub(crate) fn wait_built(&self, key: SortKey) {
@@ -111,10 +225,11 @@ impl Orders {
         }
     }
 
-    /// Whether `key` has an order that is kept, or one that was made on another thread and is waiting to be used.
+    /// Whether `key` has an order that is kept, or one that was made on another thread and is waiting to be used; also
+    /// when none is being made, or none is coming (its thread ended without one).
     fn ready(&self, key: SortKey) -> bool {
         let Ok(held) = self.0.lock() else { return false };
-        held.kept.contains_key(&key) || held.pending.get(&key).is_none_or(|slot| slot.lock().is_ok_and(|b| b.is_some()))
+        held.kept.contains_key(&key) || held.pending.get(&key).is_none_or(|slot| slot.finished())
     }
 
     /// How many orders are kept.
@@ -181,37 +296,38 @@ impl Catalog {
     /// The order kept for `sort`'s key, brought up to date now; made when that pays: a query of `matching` of the
     /// `n` photos is better sorted alone while an order is not kept, as sorting every photo costs `n·log n` to its
     /// `m·log m`. Under 1/16 of that, never (a folder, a search); under 1/4, the second time the key is asked
-    /// (a view that comes back is worth it); beyond, at once. `None`: sort the matches alone.
+    /// (a view that comes back is worth it); beyond, at once. `None`: sort the matches alone. Where the order would
+    /// be made, one that another thread is making ([`Catalog::prebuild_order`]) is waited for instead: it is there
+    /// sooner than a second sort of every photo would be, which would also take processors from it.
     fn order_for(&self, sort: &Sort, n: usize, matching: usize) -> Option<Arc<Order>> {
         let sort = ascending(sort);
-        let mut held = self.index.orders.0.lock().ok()?;
         let share = sorting(matching) / sorting(n).max(1.0);
-        // (an order made on another thread, once it is there, is as one that was kept: brought up to date below)
-        let ready = if held.kept.contains_key(&sort.key) { None } else { held.pending.get(&sort.key).cloned() };
-        if let Some(slot) = ready
-            && let Ok(mut built) = slot.lock()
-            && let Some(Built { revision, order }) = built.take()
-        {
-            held.pending.remove(&sort.key);
-            held.kept.insert(sort.key, Kept { revision, order: Arc::new(order) });
-        }
-        if let Some(kept) = held.kept.get_mut(&sort.key) {
-            // what changed is no longer known: a small query is not worth making the whole order again
-            if share < 1.0 / 16.0 && kept.revision != self.revision && self.photos_changed_since(kept.revision, reads(sort.key)).is_none() {
-                held.kept.remove(&sort.key);
+        loop {
+            let mut held = self.index.orders.0.lock().ok()?;
+            // (an order made on another thread, once it is there, is as one that was kept: brought up to date below)
+            held.adopt(sort.key);
+            if let Some(kept) = held.kept.get_mut(&sort.key) {
+                // what changed is no longer known: a small query is not worth making the whole order again
+                if share < 1.0 / 16.0 && kept.revision != self.revision && self.photos_changed_since(kept.revision, reads(sort.key)).is_none() {
+                    held.kept.remove(&sort.key);
+                    return None;
+                }
+                self.catch_up(&sort, kept);
+                return Some(kept.order.clone());
+            }
+            if share < 1.0 / 16.0 || (share < 0.25 && held.missed.insert(sort.key)) {
                 return None;
             }
-            self.catch_up(&sort, kept);
-            return Some(kept.order.clone());
+            if let Some(slot) = held.pending.get(&sort.key).cloned() {
+                // (not holding the lock; what the thread made is taken in above, or if it made none the order is sorted here)
+                drop(held);
+                slot.wait();
+                continue;
+            }
+            let order = Arc::new(self.sorted_afresh(&sort));
+            held.kept.insert(sort.key, Kept { revision: self.revision, order: order.clone() });
+            return Some(order);
         }
-        if share < 1.0 / 16.0 || (share < 0.25 && held.missed.insert(sort.key)) {
-            return None;
-        }
-        // (an order being made on another thread is overtaken: its result is not wanted)
-        held.pending.remove(&sort.key);
-        let order = Arc::new(self.sorted_afresh(&sort));
-        held.kept.insert(sort.key, Kept { revision: self.revision, order: order.clone() });
-        Some(order)
     }
 
     /// How many times every photo was sorted from scratch for this catalog's orders (a diagnostic: what a kept order
@@ -233,8 +349,9 @@ impl Catalog {
     /// first big view in a sort after the library was opened) is then done by the time it is asked for. The thread
     /// gets the photos as they are now (they are shared, not copied; an edit after this copies the photo it edits)
     /// and its result is tagged with the revision they were at: asked for, it is brought up to date like any kept
-    /// order, so it is never wrong; asked for before it is ready, the query sorts as it did. Nothing is started
-    /// where a thread can't be (it only costs that sort).
+    /// order, so it is never wrong. A big view that asks for it before it is ready waits for it (that takes less than
+    /// a second sort of every photo would); a small one sorts its own photos as it did. Nothing
+    /// is started where a thread can't be (it only costs that sort).
     pub fn prebuild_order(&self, sort: &Sort) {
         self.prebuild_order_holding(sort, || ());
     }
@@ -252,25 +369,29 @@ impl Catalog {
             return;
         }
         let sort = ascending(sort);
-        let photos: Vec<Arc<Photo>> = self.photos().cloned().collect();
-        let revision = self.revision;
-        let slot = Arc::new(Mutex::new(None));
-        let theirs = Arc::downgrade(&slot);
+        let (slot, make) = making(self.photos().cloned().collect(), sort, self.revision);
         let holding = hold();
         let work = move || {
             let _holding = holding;
-            let order = Order::of(photos.iter().map(|p| p.as_ref()), &sort);
-            // (nobody to hand it to when the catalog is gone)
-            if let Some(slot) = theirs.upgrade()
-                && let Ok(mut s) = slot.lock()
-            {
-                *s = Some(Built { revision, order });
-            }
+            make();
         };
         // (a thread that can't start drops `work`, and with it what it holds)
         if std::thread::Builder::new().name("kept-order".into()).spawn(work).is_ok() {
             held.pending.insert(sort.key, slot);
         }
+    }
+
+    /// An order "being made" for `sort`'s key by the test's own hand, as [`Catalog::prebuild_order`] makes one: the work
+    /// that makes it and hands it over is returned, to be called when the test says (or dropped, for a thread that
+    /// ended without an order).
+    #[cfg(test)]
+    pub(crate) fn pend_order(&self, sort: &Sort) -> Box<dyn FnOnce() + Send> {
+        let sort = ascending(sort);
+        let (slot, work) = making(self.photos().cloned().collect(), sort, self.revision);
+        if let Ok(mut held) = self.index.orders.0.lock() {
+            held.pending.insert(sort.key, slot);
+        }
+        Box::new(work)
     }
 
     /// Brings `kept` up to date: the ops since its revision changed nothing it reads (it stays as it is, not

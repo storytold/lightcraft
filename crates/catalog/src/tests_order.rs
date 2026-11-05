@@ -421,18 +421,105 @@ fn an_order_made_on_another_thread_reaches_only_the_catalog_and_key_it_was_made_
     assert!(!c.index.orders.pending(SortKey::Random));
 }
 
-/// A big view that sorts for itself first leaves nothing of an order being made for it: the worker is overtaken and
-/// its result dropped, not held.
+/// Waits until `until` is true (for a test); panics after a minute.
+fn wait_until(what: &str, until: impl Fn() -> bool) {
+    let by = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !until() {
+        assert!(std::time::Instant::now() < by, "{what}");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// A view of every photo in `sort`, asked for on a thread of its own.
+fn ask_for_all(c: &Arc<Catalog>, sort: Sort) -> std::thread::JoinHandle<Option<Vec<PhotoId>>> {
+    let c = c.clone();
+    std::thread::spawn(move || c.kept_ids(&sort))
+}
+
+/// A big view asked for while the order it needs is being made on another thread waits for that order and uses it: it
+/// does not sort every photo a second time beside the thread that is doing it (the first big view after a library is
+/// opened, which stopped the window for seconds in a library of a million photos). The order is made by the test's own
+/// hand, so that the view is certainly asked for while it is being made.
 #[test]
-fn a_query_that_sorts_for_itself_drops_the_order_being_made() {
+fn a_big_view_asked_for_while_its_order_is_made_waits_for_it() {
+    let c = Arc::new(big());
+    let sort = sort_of(SortKey::CaptureDate);
+    let make = c.pend_order(&sort);
+    let view = ask_for_all(&c, sort);
+    // (handed over once the view waits for it; or once it has sorted every photo itself, which is what must not happen)
+    wait_until("the view neither waited nor sorted", || c.index.orders.waiting(sort.key) > 0 || c.full_sorts() > 0);
+    make();
+    wait_until("the view did not finish", || view.is_finished());
+    let got = view.join().unwrap();
+    assert_eq!(c.full_sorts(), 0, "the view sorted every photo beside the order being made");
+    assert!(!c.index.orders.pending(sort.key), "the order is still pending");
+    assert_eq!(c.index.orders.count(), 1);
+    assert_eq!(got, Some(c.sorted_from_scratch(&sort)));
+}
+
+/// The same with the order made by a thread of its own, asked for at once: the thread is not done, or if it is, its
+/// order is used; either way the view sorts nothing, and nothing is left pending.
+#[test]
+fn a_big_view_asked_for_at_once_uses_the_order_the_thread_is_making() {
     let c = big();
     let sort = sort_of(SortKey::CaptureDate);
     c.prebuild_order(&sort);
     assert!(c.index.orders.pending(sort.key));
-    // (asked at once: the worker is not done, or if it is, its result is used; either way nothing is left)
-    assert_eq!(c.kept_ids(&sort), Some(c.sorted_from_scratch(&sort)));
+    let got;
+    assert_eq!(fresh_sorts!(c, got = c.kept_ids(&sort)), 0, "the view sorted every photo beside the thread making the order");
+    assert_eq!(got, Some(c.sorted_from_scratch(&sort)));
     assert!(!c.index.orders.pending(sort.key), "an order is still being held");
     assert_eq!(c.index.orders.count(), 1);
+}
+
+/// A thread that ends without an order (it panicked) must not leave the view waiting for ever: the view sorts for
+/// itself, whether the thread ended before it was asked or while it waited.
+#[test]
+fn a_big_view_does_not_wait_for_an_order_that_is_not_coming() {
+    let c = Arc::new(big());
+    let before = sort_of(SortKey::Rating);
+    drop(c.pend_order(&before));
+    let got;
+    assert_eq!(fresh_sorts!(c, got = c.kept_ids(&before)), 1, "the order of a thread that ended was waited for or used");
+    assert_eq!(got, Some(c.sorted_from_scratch(&before)));
+    assert!(!c.index.orders.pending(before.key));
+
+    let sort = sort_of(SortKey::CaptureDate);
+    let make = c.pend_order(&sort);
+    let view = ask_for_all(&c, sort);
+    wait_until("the view did not wait for the order", || c.index.orders.waiting(sort.key) > 0);
+    let sorted = c.full_sorts();
+    drop(make);
+    wait_until("the view did not finish", || view.is_finished());
+    let got = view.join().unwrap();
+    assert_eq!(c.full_sorts(), sorted + 1, "the view did not sort for itself");
+    assert!(!c.index.orders.pending(sort.key));
+    assert_eq!(got, Some(c.sorted_from_scratch(&sort)));
+}
+
+/// A view of a few photos sorts them alone, as it did, while an order is being made: only a view that would make the
+/// order itself waits for it.
+#[test]
+fn a_small_view_does_not_wait_for_an_order_being_made() {
+    let c = Arc::new(big());
+    let sort = sort_of(SortKey::CaptureDate);
+    let make = c.pend_order(&sort);
+    let few = Filter { only: (1..=50).map(PhotoId).collect(), ..Filter::default() };
+    let view = {
+        let (c, few) = (c.clone(), few.clone());
+        std::thread::spawn(move || c.query(&few, &sort))
+    };
+    // (a view that waited is let go after ten seconds, to fail rather than hang)
+    let by = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !view.is_finished() && std::time::Instant::now() < by {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let waited = !view.is_finished();
+    make();
+    let got = view.join().unwrap();
+    assert!(!waited, "a view of a few photos waited for the order being made");
+    assert_eq!(c.full_sorts(), 0);
+    assert_eq!(got.len(), 50);
 }
 
 /// What the order's thread holds (the engine's activity row) is made on the calling thread, only when a thread is
