@@ -624,3 +624,20 @@ fn people_and_subject_use_person_mattes() {
     let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
     assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
 }
+
+/// An embedded person matte outranks the automatic grid for Subject, and Background stays its
+/// complement (not the inverse of the automatic grid).
+#[test]
+fn background_follows_the_embedded_matte_over_the_auto_grid() {
+    use crate::auto_mask::AutoMasks;
+    let (w, h) = (40, 20);
+    let img = Rgb32f::filled(w, h, [0.2; 3]);
+    let l = img.map(crate::local::log_lum);
+    let mut mattes = Mattes::default();
+    mattes.push(MatteKind::Person, Image::filled(w, h, 255));
+    mattes.auto = Some(std::sync::Arc::new(AutoMasks { sky: Plane::new(w, h), subject: Plane::new(w, h), water: Plane::new(w, h), vegetation: Plane::new(w, h) }));
+    let f = frame(w, h);
+    let eval = |shape: &MaskShape| shape_alpha(shape, &f, w, h, &img, &l, 0.0, Some(&mattes));
+    assert!(eval(&MaskShape::Subject).get(20, 10) > 0.99);
+    assert!(eval(&MaskShape::Background).get(20, 10) < 0.01);
+}
