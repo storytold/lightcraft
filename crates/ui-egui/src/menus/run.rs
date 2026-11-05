@@ -603,7 +603,7 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             if app.ui.right != RightPanel::None && crate::docking::exposed(app, crate::docking::Panel::Tools) {
                 hide_right_panel(app);
             } else if app.ui.right == RightPanel::None {
-                show_right_panel(app);
+                show_right_panel(app, true);
             }
             // A right panel that is open but not showing (minimized, or behind another tab)
             // keeps its mode; reveal_command brings it to the front.
@@ -634,14 +634,14 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                         app.ui.presets = was.presets;
                         app.ui.filmstrip = was.filmstrip;
                         if was.right != RightPanel::None {
-                            show_right_panel(app);
+                            show_right_panel(app, false);
                         }
                     }
                     _ => {
                         app.ui.left_panel = true;
                         app.ui.filmstrip = true;
                         if app.ui.right == RightPanel::None {
-                            show_right_panel(app);
+                            show_right_panel(app, false);
                         }
                     }
                 }
@@ -2277,14 +2277,15 @@ fn hide_right_panel(app: &mut LightcraftApp) {
     let _ = app.session.end_interaction();
 }
 
-/// Bring back the right panel F8 (or Hide All Panels) hid; Edit when none was.
-fn show_right_panel(app: &mut LightcraftApp) {
+/// Bring back the right panel F8 (or Hide All Panels) hid; Edit when none was. F8 opens an edit
+/// tool in the loupe (`to_detail`); Hide All Panels brings the panels back without changing the view.
+fn show_right_panel(app: &mut LightcraftApp, to_detail: bool) {
     let p = match std::mem::take(&mut app.ui.right_hidden) {
         RightPanel::None => RightPanel::Edit,
         p => p,
     };
     app.ui.right = p;
-    if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
+    if to_detail && p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
         app.ui.view = ViewMode::Detail;
     }
     if p == RightPanel::Remove && app.ui.tool.is_empty() {

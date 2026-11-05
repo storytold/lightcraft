@@ -394,7 +394,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // Shift+Tab is also egui's "focus the previous widget", decided when the pass began and without
     // consuming the key: with nothing focused it would put the keyboard in the last text field
     // that took part in focus traversal. Hiding the panels must not do that.
-    if aliased.iter().any(|(id, _)| *id == "view.allPanels") {
+    // (from the fixed key, or from a saved binding of the command)
+    if aliased.iter().any(|(id, _)| *id == "view.allPanels") || fire.iter().any(|f| f == "view.allPanels") {
         ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab));
         ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }

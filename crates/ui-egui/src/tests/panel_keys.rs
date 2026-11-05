@@ -228,3 +228,45 @@ fn a_saved_assignment_of_shift_tab_wins() {
     assert_eq!(shown(&h), (true, RightPanel::Edit, false, true), "and the panels were left alone");
     assert!(h.app.ui.hidden_panels.is_none());
 }
+
+/// Bringing the panels back keeps the view: an Edit panel shown over the grid comes back over the
+/// grid (F8 still opens an edit tool in the loupe).
+#[test]
+fn shift_tab_keeps_the_view_when_it_brings_the_panels_back() {
+    let mut h = loupe();
+    h.app.ui.view = crate::state::ViewMode::PhotoGrid;
+    arrange(&mut h, true, RightPanel::Edit, false, true);
+    key(&mut h, "Tab", true);
+    key(&mut h, "Tab", true);
+    assert_eq!(shown(&h), (true, RightPanel::Edit, false, true));
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid, "the grid stays");
+}
+
+/// A saved Shift+Tab binding of Hide All Panels itself leaves keyboard focus alone too.
+#[test]
+fn a_saved_shift_tab_for_hide_all_panels_leaves_focus_alone() {
+    let mut h = loupe();
+    arrange(&mut h, true, RightPanel::Edit, false, true);
+    h.app.ui.settings.keymap.insert("view.allPanels".into(), "Shift+Tab".into());
+    key(&mut h, "Tab", true);
+    assert_eq!(shown(&h), (false, RightPanel::None, false, false), "the binding hides the panels once");
+    assert_eq!(h.view.ctx.memory(|m| m.focused()), None, "and moves no focus");
+    key(&mut h, "Tab", true);
+    assert_eq!(shown(&h), (true, RightPanel::Edit, false, true));
+    assert_eq!(h.view.ctx.memory(|m| m.focused()), None);
+}
+
+/// Showing a panel and closing it again forgets what Hide All Panels hid: the next Shift+Tab shows
+/// the usual panels instead of the old arrangement.
+#[test]
+fn a_panel_shown_and_closed_again_forgets_the_hidden_arrangement() {
+    let mut h = loupe();
+    arrange(&mut h, false, RightPanel::Keywords, true, false);
+    key(&mut h, "Tab", true);
+    assert!(h.app.ui.all_panels_hidden());
+    run(&mut h, "view.leftPanel", json!({}));
+    run(&mut h, "view.leftPanel", json!({}));
+    assert!(h.app.ui.hidden_panels.is_none(), "the snapshot went when the sidebar showed");
+    key(&mut h, "Tab", true);
+    assert_eq!(shown(&h), (true, RightPanel::Keywords, false, true), "the usual panels, with the right panel F8 remembers");
+}
