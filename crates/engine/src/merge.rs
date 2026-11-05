@@ -108,16 +108,21 @@ fn err(e: impl std::fmt::Display) -> String {
 impl MergeJob {
     /// HDR keeps each decoded image at its logical size before reading the next source.
     fn run_hdr(&self, hdr: &HdrOptions, progress: &ProgressFn) -> std::result::Result<lightcraft_merge::HdrResult, String> {
-        let n = self.sources.len();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let n = self.sources.len().max(1);
+        let loaded = AtomicUsize::new(0);
         let frames = self.sources.iter().enumerate().map(|(i, (_, path))| {
-            if !progress(0.3 * i as f32 / n as f32, "Reading photos") {
-                return Err(lightcraft_merge::MergeError::Cancelled);
-            }
             let bytes = (self.read)(path).map_err(lightcraft_merge::MergeError::Decode)?;
-            lightcraft_merge::load_frame_with(&bytes, self.preview, false, &crate::camera_preview::starting_colour_tags)
-                .map_err(|e| lightcraft_merge::MergeError::Decode(format!("{path}: {e}")))
+            let frame = lightcraft_merge::load_frame_with(&bytes, self.preview, false, &crate::camera_preview::starting_colour_tags)
+                .map_err(|e| lightcraft_merge::MergeError::Decode(format!("{path}: {e}")))?;
+            loaded.store(i.saturating_add(1), Ordering::Relaxed);
+            Ok(frame)
         });
-        let p = |f: f32, stage: &str| progress(0.3 + 0.6 * f, stage);
+        let p = |f: f32, stage: &str| {
+            // Fraction zero checks the next input. Keep reads in 0..30%, then merge in 30..90%.
+            let f = if f == 0.0 { 0.3 * loaded.load(Ordering::Relaxed) as f32 / n as f32 } else { 0.3 + 0.6 * f };
+            progress(f, stage)
+        };
         lightcraft_merge::hdr::merge_hdr_iter(frames, hdr, &p).map_err(err)
     }
 

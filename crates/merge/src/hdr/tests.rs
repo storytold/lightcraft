@@ -111,6 +111,74 @@ fn streamed_saturation_keeps_the_exact_fold_and_edge_intervals() {
 }
 
 #[test]
+fn two_frame_merge_matches_the_frozen_f32_merge() {
+    for deghost in [Deghost::None, Deghost::Low, Deghost::Medium, Deghost::High] {
+        for align in [false, true] {
+            assert_identical(brackets(97, 129, 2), HdrOptions { align, deghost });
+        }
+    }
+}
+
+#[test]
+fn mixed_orientations_match_the_frozen_f32_merge() {
+    use lightcraft_geom::Orientation;
+    for (w, h, orientations) in [
+        (65, 97, [Orientation::Normal, Orientation::FlipH, Orientation::Rotate180]),
+        (65, 65, [Orientation::Normal, Orientation::Rotate90, Orientation::Transpose]),
+    ] {
+        let mut frames = brackets(w, h, 3);
+        for (frame, orientation) in frames.iter_mut().zip(orientations) {
+            frame.orientation = orientation;
+        }
+        for deghost in [Deghost::None, Deghost::High] {
+            for align in [false, true] {
+                assert_identical(frames.clone(), HdrOptions { align, deghost });
+            }
+        }
+    }
+}
+
+#[test]
+fn cancellation_before_loading_does_not_request_any_frames() {
+    let requested = std::cell::Cell::new(0);
+    let frames = (0..7).map(|i| {
+        requested.set(requested.get() + 1);
+        Ok(frame(Rgb32f::filled(3, 2, [0.2; 3]), f64::from(i)))
+    });
+    let result = merge_hdr_iter(frames, &HdrOptions::default(), &|_, _| false);
+    assert_eq!(result.err(), Some(MergeError::Cancelled));
+    assert_eq!(requested.get(), 0, "cancellation must precede the first lazy decode");
+}
+
+#[test]
+fn cancellation_during_loading_does_not_request_later_frames() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for stop_after in [1, 3, 6] {
+        let requested = AtomicUsize::new(0);
+        let frames = (0..7).map(|i| {
+            requested.fetch_add(1, Ordering::Relaxed);
+            Ok(frame(Rgb32f::filled(3, 2, [0.2; 3]), f64::from(i)))
+        });
+        let result = merge_hdr_iter(frames, &HdrOptions::default(), &|_, _| requested.load(Ordering::Relaxed) < stop_after);
+        assert_eq!(result.err(), Some(MergeError::Cancelled));
+        assert_eq!(requested.load(Ordering::Relaxed), stop_after, "a cancelled bracket must not advance its decoder again");
+    }
+}
+
+#[test]
+fn a_decode_error_after_successful_inputs_is_unchanged_and_stops_loading() {
+    let requested = std::cell::Cell::new(0);
+    let expected = MergeError::Decode("generated failure in the third photo".into());
+    let frames = (0..7).map(|i| {
+        requested.set(requested.get() + 1);
+        if i == 2 { Err(expected.clone()) } else { Ok(frame(Rgb32f::filled(3, 2, [0.2; 3]), f64::from(i))) }
+    });
+    let result = merge_hdr_iter(frames, &HdrOptions::default(), &crate::no_progress);
+    assert_eq!(result.err(), Some(expected));
+    assert_eq!(requested.get(), 3, "the decoder must not continue after an input error");
+}
+
+#[test]
 fn direct_stored_warp_matches_the_original_lanczos_kernel_bit_for_bit() {
     let image = brackets(129, 131, 3).remove(1).image;
     for h in [
@@ -139,12 +207,12 @@ fn iterator_storage_moves_pixels_and_packs_crop_capacity_before_loading_the_next
         source.image.data.reserve_exact(5000);
         Ok(source)
     });
-    let packed = input::collect(frames).unwrap();
+    let packed = input::collect(frames, &crate::no_progress).unwrap();
     assert_eq!(reads.get(), 3);
     assert!(packed.iter().all(|f| f.image.data.capacity() == 35));
     let source = frame(Rgb32f::filled(7, 5, [0.2; 3]), 0.0);
     let address = source.image.data.as_ptr();
-    let packed = input::collect([Ok(source)]).unwrap();
+    let packed = input::collect([Ok(source)], &crate::no_progress).unwrap();
     assert_eq!(packed[0].image.data.as_ptr(), address, "a compact decoded frame moves without a pixel copy");
 }
 

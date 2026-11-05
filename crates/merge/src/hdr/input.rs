@@ -1,6 +1,6 @@
 //! Validation and lossless storage of HDR inputs. No sample is quantised here.
 
-use crate::{Frame, MergeError, Result};
+use crate::{Frame, MergeError, Progress, Result, check};
 use lightcraft_geom::{Homography, Point};
 use lightcraft_raster::Rgb32f;
 use rayon::prelude::*;
@@ -45,13 +45,16 @@ pub(super) fn validate(frame: &Frame) -> Result<()> {
 /// Move the pixels into retained storage, trimming any capacity left by a raw's default crop.
 /// A full-capacity buffer moves without copying its samples. Each source is released before
 /// the iterator is advanced to decode the next photo.
-pub(super) fn collect(frames: impl IntoIterator<Item = Result<Frame>>) -> Result<Vec<Frame>> {
-    let frames = frames.into_iter();
+pub(super) fn collect(frames: impl IntoIterator<Item = Result<Frame>>, progress: &Progress) -> Result<Vec<Frame>> {
+    let mut frames = frames.into_iter();
     if frames.size_hint().0 > MAX_FRAMES {
         return Err(bad("at most 64 frames can be merged in one bracket"));
     }
     let mut stored = Vec::new();
-    for next in frames {
+    loop {
+        // Advancing a lazy iterator can decode a whole photo. Check before requesting it.
+        check(progress, 0.0, "Reading photos")?;
+        let Some(next) = frames.next() else { break };
         if stored.len() >= MAX_FRAMES {
             return Err(bad("at most 64 frames can be merged in one bracket"));
         }

@@ -128,8 +128,9 @@ pub fn merge_hdr(frames: Vec<Frame>, opts: &HdrOptions, progress: &Progress) -> 
 
 /// Decode and retain one frame at a time. Every frame is validated and moved into exact-capacity
 /// f32 storage before requesting the next; no sample is quantised. The Vec adapter uses this path too.
+/// Input requests check cancellation at fraction zero; merge analysis starts at fraction 0.02.
 pub fn merge_hdr_iter(frames: impl IntoIterator<Item = Result<Frame>>, opts: &HdrOptions, progress: &Progress) -> Result<HdrResult> {
-    let mut frames = input::collect(frames)?;
+    let mut frames = input::collect(frames, progress)?;
     let n = frames.len();
     if n < 2 {
         return Err(MergeError::TooFew(n, 2));
