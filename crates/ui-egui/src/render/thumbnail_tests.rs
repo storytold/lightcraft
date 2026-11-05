@@ -1887,6 +1887,7 @@ fn a_thumbnail_replacing_its_stand_in_is_not_counted_again() {
     assert!(app.renderer.textures.contains_key(&Slot::Thumb(id)), "the render replaced the stand-in");
     assert_eq!(app.renderer.thumbs_made, 1, "still one photo");
     // evicted and made again (scrolled away and back): the same photo (CodeRabbit on #3055)
+    app.renderer.poll(&ctx, &mut app.session); // (a frame that doesn't ask for it: the trim keeps what was asked in this frame or the last)
     app.renderer.evict_thumbs_within(&Default::default(), 0);
     assert!(!app.renderer.textures.contains_key(&Slot::Thumb(id)), "evicted");
     crate::panels::grid::request_thumb(&mut app, id, 384, 10);

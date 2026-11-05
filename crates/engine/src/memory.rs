@@ -18,13 +18,14 @@ use serde::Serialize;
 /// - a quarter for the working memory of decodes in flight ([`work_gate`]);
 /// - an eighth for the GPU renderer's pool of recycled buffers (trimmed when the app is idle).
 ///
-/// The rest is headroom for what isn't cached (renders in progress, the UI). The UI limits its own
-/// caches by shares of the budget too: a quarter for the idle per-view stage caches and a quarter
-/// for the grid's thumbnail textures (`ui.inspect` → `memory` reports both). The catalog is no
-/// cache: the budget doesn't limit it, and [`MemoryReport::catalog`] reports it beside them. An
-/// export batch may, in addition, hold up to twice the budget in photos rendering side by side
-/// ([`export_gate`]): transient memory, given back when the batch ends. Default:
-/// a quarter of the machine's RAM, at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
+/// The rest is headroom for what isn't cached (renders in progress, the UI's other memory). The
+/// UI's own caches take shares of the budget on top of those, which may add up to more than the
+/// budget: a quarter for the idle per-view stage caches and a quarter for the grid's thumbnail
+/// textures (`ui.inspect` → `memory` reports both). The catalog is no cache: the budget doesn't
+/// limit it, and [`MemoryReport::catalog`] reports it beside them. An export batch may, in
+/// addition, hold up to twice the budget in photos rendering side by side ([`export_gate`]):
+/// transient memory, given back when the batch ends. Default: a quarter of the machine's RAM, at
+/// most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
 pub fn default_budget() -> usize {
     if let Some(mb) = std::env::var("LIGHTCRAFT_MEMORY_MB").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|m| *m >= 64) {
         return mb << 20;
