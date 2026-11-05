@@ -51,6 +51,7 @@
   "Duplicate \"{label}\"": "„{label}“ duplizieren",
   "Example: {example}": "Beispiel: {example}",
   "Expand {name}": "{name} ausklappen",
+  "Export Group “{name}”": "Gruppe „{name}“ exportieren",
   "Exported {n} photo{}": "{n} Foto{} exportiert",
   "Exported {ok} of {total} photo{}": "{ok} von {total} Foto{} exportiert",
   "Exported {} point curve preset{}": "Exportierte Punktkurvenvorgaben: {}{:.0}",

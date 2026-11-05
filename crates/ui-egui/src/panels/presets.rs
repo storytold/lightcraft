@@ -113,8 +113,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
             register(ui, "presetMenu:thumbnails", r.rect);
             ui.separator();
-            if ui.button(crate::i18n::tr("Import Presets…")).clicked() {
-                let _ = app.run("file.importPresets", json!({}));
+            let import = ui.button(crate::i18n::tr_ctx(crate::i18n::DEVELOP_PRESETS_CONTEXT, "Import Presets…"));
+            register(ui, "presetMenu:import", import.rect);
+            if import.clicked() {
+                let _ = app.run("file.importPresets", json!({"from": "panel"}));
             }
             let any_user = app.session.presets.iter().any(|p| !p.builtin);
             if ui.add_enabled(any_user, egui::Button::new(crate::i18n::tr("Export User Presets…"))).clicked() {
@@ -276,7 +278,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             }
                         }
                         if ui.button(crate::i18n::tr("Rename…")).clicked() {
-                            crate::panels::dialogs::prompt(app, "Rename Preset", "Preset name", &name, "preset.rename", json!({"id": pid}), "name");
+                            // in the develop presets' own wording; a translated title or hint is no
+                            // catalog key, so the prompt's own `tr` leaves it as it is
+                            let ctx = crate::i18n::DEVELOP_PRESETS_CONTEXT;
+                            let (title, hint) = (crate::i18n::tr_ctx(ctx, "Rename Preset"), crate::i18n::tr_ctx(ctx, "Preset name"));
+                            crate::panels::dialogs::prompt(app, title, hint, &name, "preset.rename", json!({"id": pid}), "name");
                         }
                         crate::widgets::menu_button(ui, crate::i18n::tr("Move to Group"), |ui| {
                             for g in groups.iter().filter(|x| x.user && x.name != group).map(|x| &x.name) {

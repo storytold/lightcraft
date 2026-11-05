@@ -4,14 +4,16 @@
 //! catalog and the report could not name it. This reads the source for them: every `tr("…")` /
 //! `.tr("…")` call in `crates/ui-egui/src` and `apps/lightcraft/src` whose argument is one string
 //! literal (a trailing comma, as rustfmt leaves in a wrapped call, is fine), or an `if`/`match`
-//! whose branches are literals (`tr(if on { "On" } else { "Off" })`). Test code (`tests.rs` and
+//! whose branches are literals (`tr(if on { "On" } else { "Off" })`), and every `tr_ctx(context, "…")`
+//! call whose message is one string literal. Test code (`tests.rs` and
 //! `tests_*.rs` files, `tests/` folders and items under exactly `#[cfg(test)]`) is skipped. The scanner lexes
 //! the source (comments, strings, raw strings and chars) rather than grepping it, so a `tr(` in a
 //! comment or a string is not a use.
 //!
 //! A key that reaches `tr` through a variable (`tr(label)` over a table of labels,
 //! `tr(&format!(…))`) cannot be read from the source; the report takes those labels from its own
-//! tables. `tr_ctx` keys (`"<context>|<source>"`) are optional by design.
+//! tables. A `tr_ctx` call's message counts, not its catalog key (`"<context>|<source>"`): a
+//! contextual entry is optional by design.
 
 use std::{
     collections::BTreeSet,
@@ -266,7 +268,7 @@ fn skip_item(tokens: &[Tok], mut at: usize) -> usize {
     at
 }
 
-/// The literal keys of every non-test `tr(…)` call in one source file.
+/// The literal keys of every non-test `tr(…)` and `tr_ctx(…, "…")` call in one source file.
 fn scan_source(source: &str) -> Vec<Use> {
     let tokens = lex(source);
     let mut found = Vec::new();
@@ -304,6 +306,20 @@ fn scan_source(source: &str) -> Vec<Use> {
             }
             found.extend(keys.into_iter().filter(|(key, _)| !key.is_empty()).map(|(key, line)| Use { key, line }));
         }
+        let is_ctx_call = is_ident(tokens.get(at), "tr_ctx") && is_punct(tokens.get(at + 1), '(') && !(at > 0 && is_ident(tokens.get(at - 1), "fn"));
+        if is_ctx_call {
+            let close = matching(&tokens, at + 1);
+            let mut inner = &tokens[at + 2..close];
+            if let [rest @ .., Tok { kind: Kind::Punct(','), .. }] = inner {
+                inner = rest;
+            }
+            // `tr_ctx(CONTEXT, "…")`: the message is the last argument.
+            if let [_, .., Tok { kind: Kind::Punct(','), .. }, Tok { kind: Kind::Str(key), line }] = inner
+                && !key.is_empty()
+            {
+                found.push(Use { key: key.clone(), line: *line });
+            }
+        }
         at += 1;
     }
     found
@@ -326,7 +342,7 @@ fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The literal keys of the `tr(…)` calls in one source file.
+/// The literal keys of the `tr(…)` and `tr_ctx(…)` calls in one source file.
 pub(super) fn messages_in(source: &str) -> BTreeSet<String> {
     scan_source(source).into_iter().map(|used| used.key).collect()
 }
@@ -471,5 +487,26 @@ fn n() { tr("Not a test"); }
                 "Crlf line"
             ]
         );
+    }
+
+    #[test]
+    fn the_scanner_reads_the_message_of_a_contextual_call() {
+        let source = r#"
+fn f(ui: &mut Ui, label: &str) {
+    ui.label(crate::i18n::tr_ctx(crate::i18n::FILTER_BAR_CONTEXT, "Contextual"));
+    ui.label(tr_ctx(
+        CONTEXT,
+        "Wrapped contextual",
+    ));
+    ui.label(tr_ctx(CONTEXT, label));
+    ui.label(tr_ctx_in(language, CONTEXT, "Not tr_ctx"));
+}
+pub fn tr_ctx<'a>(context: &str, source: &'a str) -> &'a str { source }
+#[cfg(test)]
+fn t() { tr_ctx(CONTEXT, "In a test fn"); }
+"#;
+        let keys: Vec<(String, usize)> = scan_source(source).into_iter().map(|used| (used.key, used.line)).collect();
+        let keys: Vec<(&str, usize)> = keys.iter().map(|(key, line)| (key.as_str(), *line)).collect();
+        assert_eq!(keys, [("Contextual", 3), ("Wrapped contextual", 6)]);
     }
 }
