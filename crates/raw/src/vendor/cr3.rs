@@ -262,7 +262,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     // stated, 16383 real). Extend it to a saturation pile-up above it, so highlight data
     // between the stated level and the real clip point is not treated as clipped. No-op when
     // no such pile-up exists, and for header-only decodes (no samples).
-    image.lift_clipped_samples();
+    image.extend_cr3_white();
     image.validate_for(mode)?;
     Ok(image)
 }

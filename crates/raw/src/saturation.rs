@@ -27,6 +27,33 @@ const ABOVE_MARGIN: f32 = 0.01;
 /// How far below the plateau the "average value just below it" reaches.
 const NEIGHBOURHOOD: usize = 64;
 
+// CR3 gain-normalized saturation can occupy several nearby codes, rather than one exact value.
+const CR3_BINS: usize = 256;
+const CR3_PLATEAU_BINS: usize = 8;
+const CR3_MIN_SAMPLES: u64 = 64;
+
+/// The lower edge of a terminal pile-up, ignoring a few brighter outliers. A continuous
+/// highlight distribution has comparable density below it and therefore has no plateau.
+fn cr3_plateau(hist: &[[u64; 3]; CR3_BINS], first: &[[u16; 3]; CR3_BINS], colour: usize, from: usize, white: f32) -> Option<f32> {
+    let (start, end, count) = (from + 1..=CR3_BINS)
+        .map(|end| {
+            let start = end.saturating_sub(CR3_PLATEAU_BINS).max(from);
+            let count: u64 = hist[start..end].iter().map(|bin| bin[colour]).sum();
+            (start, end, count)
+        })
+        .max_by_key(|&(_, end, count)| (count, end))?;
+    let below_start = start.saturating_sub(CR3_PLATEAU_BINS);
+    let below: u64 = hist[below_start..start].iter().map(|bin| bin[colour]).sum();
+    let above: u64 = hist[end..].iter().map(|bin| bin[colour]).sum();
+    let density = count as f64 / (end - start) as f64;
+    let below_density = below as f64 / (start - below_start).max(1) as f64;
+    if count < CR3_MIN_SAMPLES || (below > 0 && density < MIN_SPIKE * below_density) || above as f64 > MAX_ABOVE * count as f64 {
+        return None;
+    }
+    let threshold = (density / MIN_SPIKE).max(MIN_SPIKE * below_density).max(1.0);
+    (start..end).find(|&bin| hist[bin][colour] as f64 >= threshold).map(|bin| first[bin][colour] as f32).filter(|&point| point > white)
+}
+
 impl RawImage {
     /// The value each colour's samples saturate at, when that is clearly below the stated white level
     /// (see the module docs). Only single-plane integer CFA data is examined.
@@ -46,15 +73,11 @@ impl RawImage {
             return none;
         }
         let lo = (black + 0.5 * (white - black)).ceil().max(0.0) as usize;
-        // the search runs past the stated white level: a sensor can saturate above it (Canon
-        // states 14558 where the EOS RP really saturates at 16383), and that pile-up is the
-        // real clip point; cap the search at the histogram length so it can never index past
-        // the allocated bins
-        let mut hist = vec![[0u32; 3]; 65536];
-        let hi = hist.len();
+        let hi = (white as usize).min(65535);
         if lo + NEIGHBOURHOOD >= hi {
             return none;
         }
+        let mut hist = vec![[0u32; 3]; 65536];
         let mut total = [0u64; 3];
         for y in 0..a.height {
             let row = &d[(a.y + y) * self.width + a.x..][..a.width];
@@ -68,23 +91,12 @@ impl RawImage {
         for c in 0..3 {
             // the most populated value of the upper half of the range
             let Some((v, n)) = (lo..hi).map(|v| (v, hist[v][c])).max_by_key(|&(v, n)| (n, v)) else { continue };
-            if (n as f64) < (total[c] as f64 * MIN_SHARE).max(100.0) {
-                continue;
-            }
-            // a plateau within 3% below the stated white is the white level itself: no lift needed
-            if v as f32 <= white && v as f32 >= white - NEAR_WHITE * (white - black) {
+            if (n as f64) < (total[c] as f64 * MIN_SHARE).max(100.0) || v as f32 >= white - NEAR_WHITE * (white - black) {
                 continue;
             }
             let below: u64 = (v.saturating_sub(NEIGHBOURHOOD)..v).map(|u| hist[u][c] as u64).sum();
-            // at the top of the histogram nothing can be brighter: a plateau there is a
-            // one-sided cliff, so there is no `above` neighbourhood to check (Canon's stated
-            // white can sit below the sensor's real saturation, e.g. 14558 vs 16383)
-            let above = if v + 1 >= hi {
-                0
-            } else {
-                let from = (v + ((ABOVE_MARGIN * (white - black)) as usize).max(1) + 1).min(hist.len());
-                hist[from..].iter().map(|h| h[c] as u64).sum()
-            };
+            let from = (v + ((ABOVE_MARGIN * (white - black)) as usize).max(1) + 1).min(hist.len());
+            let above: u64 = hist[from..].iter().map(|h| h[c] as u64).sum();
             if n as f64 >= MIN_SPIKE * (below as f64 / NEIGHBOURHOOD as f64).max(1.0) && above as f64 <= MAX_ABOVE * n as f64 {
                 out[c] = Some(v as u16);
             }
@@ -99,17 +111,6 @@ impl RawImage {
         let points = self.saturation_points();
         if points.iter().all(Option::is_none) {
             return 0;
-        }
-        // a saturation plateau above the stated white means the sensor really saturates higher
-        // than the file states (Canon states 14558, the EOS RP saturates at 16383): extend the
-        // white level to the plateau, so highlight reconstruction does not treat real highlight
-        // data between the two as clipped
-        for (level, point) in self.white.iter_mut().zip(points.iter()) {
-            if let Some(p) = point {
-                if *p as f32 > *level {
-                    *level = *p as f32;
-                }
-            }
         }
         let (a, w, white) = (self.active_area, self.width, self.white_at(0).round() as u16);
         let Some(cfa) = self.cfa.clone() else { return 0 };
@@ -129,6 +130,68 @@ impl RawImage {
             }
         }
         changed
+    }
+    /// Recover real CR3 samples beyond a conservatively stated common white level. Search
+    /// coarse bins so gain-spread saturation (e.g. R100) is found too. With enough above-white
+    /// data but no clear pile-up, the bit-depth ceiling keeps all that unclipped headroom.
+    /// One shared range and its compensating baseline EV preserve lower tones and colour ratios.
+    pub(crate) fn extend_cr3_white(&mut self) -> bool {
+        if self.format != crate::RawFormat::Cr3 || !self.color.baseline_exposure.is_finite() || !(1..=16).contains(&self.bits) {
+            return false;
+        }
+        let (RawData::U16(data), Some(cfa)) = (&self.data, &self.cfa) else { return false };
+        let (old, black) = (self.white_at(0), self.black.mean());
+        let ceiling = ((1u32 << self.bits) - 1) as f32;
+        if self.cpp != 1
+            || !cfa.valid()
+            || self.width.checked_mul(self.height) != Some(data.len())
+            || !black.is_finite()
+            || !old.is_finite()
+            || black < 0.0
+            || old <= black
+            || old >= ceiling
+            || self.white.is_empty()
+            || self.white.iter().any(|w| *w != old)
+        {
+            return false;
+        }
+        let a = self.active_area;
+        let fits = |start: usize, len: usize, max: usize| start.checked_add(len).is_some_and(|end| end <= max);
+        if a.width == 0 || a.height == 0 || !fits(a.x, a.width, self.width) || !fits(a.y, a.height, self.height) {
+            return false;
+        }
+        let step = ((ceiling - black) / CR3_BINS as f32).ceil().max(1.0);
+        let mut hist = [[0u64; 3]; CR3_BINS];
+        let mut first = [[u16::MAX; 3]; CR3_BINS];
+        let mut over = [0u64; 3];
+        for y in a.y..a.y + a.height {
+            for (x, &v) in data[y * self.width + a.x..][..a.width].iter().enumerate() {
+                if v as f32 > ceiling {
+                    return false;
+                }
+                let c = cfa.color_at(a.x + x, y).min(2) as usize;
+                let bin = (((v as f32 - black).max(0.0) / step) as usize).min(CR3_BINS - 1);
+                hist[bin][c] += 1;
+                first[bin][c] = first[bin][c].min(v);
+                over[c] += u64::from(v as f32 > old);
+            }
+        }
+        let above: u64 = over.iter().sum();
+        let pixels = a.width * a.height;
+        if above < CR3_MIN_SAMPLES || (above as f64) < pixels as f64 * 1e-5 {
+            return false;
+        }
+        let from = (((old - black) / step) as usize).min(CR3_BINS - 1);
+        let new = (0..3)
+            .map(|c| if over[c] < CR3_MIN_SAMPLES { ceiling } else { cr3_plateau(&hist, &first, c, from, old).unwrap_or(ceiling) })
+            .fold(ceiling, f32::min);
+        let ev = ((new - black) as f64 / (old - black) as f64).log2();
+        if new <= old || !ev.is_finite() {
+            return false;
+        }
+        self.white.fill(new);
+        self.color.baseline_exposure += ev;
+        true
     }
 }
 
@@ -309,8 +372,84 @@ mod tests {
                 *v = 16383;
             }
         }
-        assert_eq!(r.saturation_points(), [Some(16383); 3], "{:?}", r.saturation_points());
-        r.lift_clipped_samples();
+        r.format = RawFormat::Cr3;
+        r.bits = 14;
+        r.color.baseline_exposure = 0.5;
+        let original_gain = 2f64.powf(r.color.baseline_exposure) as f32;
+        let before = r.normalized().unwrap();
+        let samples = r.data.clone();
+        assert!(r.extend_cr3_white());
+        let after = r.normalized().unwrap();
+        let gain = 2f64.powf(r.color.baseline_exposure) as f32;
+        for (a, b) in before.data.iter().zip(&after.data) {
+            assert!((a * original_gain - b * gain).abs() < 2e-6, "unclipped exposure changed");
+        }
+        assert_eq!(r.data, samples);
+        let ev = r.color.baseline_exposure;
+        assert!(!r.extend_cr3_white(), "idempotent");
+        assert_eq!(r.color.baseline_exposure, ev);
+        assert_eq!(r.white_at(0), 16383.0);
+    }
+    #[test]
+    fn cr3_headroom_does_not_change_other_formats_or_unproven_plateaus() {
+        let mut r = raw_with(None, 14558.0);
+        if let RawData::U16(d) = &mut r.data {
+            d[..2048].fill(16383);
+        }
+        assert!(!r.extend_cr3_white());
+        assert_eq!(r.white_at(0), 14558.0);
+        r.format = RawFormat::Cr3;
+        r.white = vec![14558.0, 15000.0, 14558.0];
+        assert!(!r.extend_cr3_white());
+        assert_eq!(r.color.baseline_exposure, 0.0);
+    }
+    fn cr3(white: f32) -> RawImage {
+        let mut r = raw_with(None, white);
+        r.format = RawFormat::Cr3;
+        r.bits = 14;
+        r
+    }
+
+    #[test]
+    fn cr3_headroom_recognizes_a_spread_saturation_plateau() {
+        let mut r = cr3(10439.0);
+        if let RawData::U16(d) = &mut r.data {
+            for (i, v) in d.iter_mut().take(3072).enumerate() {
+                *v = 13300 + (i * 37 % 401) as u16;
+            }
+        }
+        let samples = r.data.clone();
+        assert!(r.extend_cr3_white(), "the R100-style plateau spans hundreds of codes");
+        assert!((13300.0..=13364.0).contains(&r.white_at(0)), "{}", r.white_at(0));
+        assert_eq!(r.data, samples);
+    }
+
+    #[test]
+    fn cr3_headroom_keeps_valid_values_when_nothing_is_saturated() {
+        let mut r = cr3(14558.0);
+        if let RawData::U16(d) = &mut r.data {
+            for (i, v) in d.iter_mut().enumerate() {
+                *v = 528 + (i * 37 % 15855) as u16;
+            }
+        }
+        let samples = r.data.clone();
+        assert!(r.extend_cr3_white(), "unclipped data past the stated white is still real light");
+        assert_eq!(r.white_at(0), 16383.0);
+        assert_eq!(r.data, samples);
+    }
+
+    #[test]
+    fn cr3_headroom_is_recovered_when_only_one_colour_reaches_it() {
+        let mut r = cr3(14558.0);
+        let cfa = r.cfa.clone().unwrap();
+        if let RawData::U16(d) = &mut r.data {
+            for (i, v) in d.iter_mut().enumerate() {
+                if cfa.color_at(i % 64, i / 64) == 0 {
+                    *v = 16383;
+                }
+            }
+        }
+        assert!(r.extend_cr3_white(), "a coloured highlight need not clip all three channels");
         assert_eq!(r.white_at(0), 16383.0);
     }
 }

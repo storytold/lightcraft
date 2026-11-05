@@ -853,7 +853,14 @@ proptest! {
         let image = decode(&file).unwrap();
         let RawData::U16(samples) = &image.data else { panic!("u16 sensor data expected") };
         assert!(samples.iter().all(|&value| value <= 16383), "adaptive dequantization must stay in the bit depth");
-        assert_eq!(probe_info(&file).unwrap(), image.info());
+        let mut header = probe_info(&file).unwrap();
+        let decoded = image.info();
+        // CR3 headroom is measured from decoded samples; a header-only probe cannot infer
+        // its exposure compensation. Every other metadata field must still agree.
+        assert!(decoded.color.baseline_exposure.is_finite());
+        assert!(decoded.color.baseline_exposure >= header.color.baseline_exposure);
+        header.color.baseline_exposure = decoded.color.baseline_exposure;
+        assert_eq!(header, decoded);
     }
 
     /// Property 4: randomly generated IAD1 fields either decode — with `active_area ⊆ sensor dims` and
