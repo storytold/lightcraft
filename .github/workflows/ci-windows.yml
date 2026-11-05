@@ -1,0 +1,78 @@
+name: CI (Windows)
+
+# The Windows leg of the gate: clippy and the tests of the crates with Windows-only code, on pull
+# requests and pushes to main that touch that code, and on pull requests labelled `full-ci`.
+# The Linux gate (ci.yml) still runs everything else on every pull request.
+#
+# Not the full `cargo xtask ci`: on a cold windows-latest runner that is well over an hour, and
+# its wasm, layers, assets and parity steps don't differ by platform. What does is the
+# `cfg(windows)` code (title bar theme, monitor profiles, file handling) and its tests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # `labeled`: adding `full-ci` starts it. Other labels skip (see concurrency and the scope job).
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Its own group, so the Windows leg never cancels the Linux gate. A newer push to a PR branch
+# cancels its older run; a label other than `full-ci` gets a group of its own, so it cancels nothing.
+concurrency:
+  group: ci-windows-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}${{ github.event.action == 'labeled' && github.event.label.name != 'full-ci' && format('-label-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-scope:
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    uses: storytold/craft-common-actions/.github/workflows/changed-paths.yml@main
+    with:
+      label: full-ci
+      # The crates and files with `cfg(windows)` code, and what decides how they build: their
+      # manifests and the lockfile (a dependency bump can break only Windows).
+      paths: |
+        .github/workflows/ci-windows.yml
+        apps/lightcraft/*
+        apps/lightcraft-cli/src/bench_cull.rs
+        apps/lightcraft-cli/tests/it/cli.rs
+        apps/lightcraft-cli/Cargo.toml
+        crates/wincolor/*
+        crates/ui-egui/src/theme.rs
+        crates/ui-egui/src/panels/left/local.rs
+        crates/ui-egui/src/menus/files.rs
+        crates/ui-egui/src/dialogs/settings/performance.rs
+        crates/catalog/src/safe_file.rs
+        crates/catalog/Cargo.toml
+        crates/engine/src/originals.rs
+        crates/engine/src/import/scan.rs
+        crates/engine/src/walk.rs
+        crates/engine/src/doc_path.rs
+        crates/engine/src/rename/*
+        crates/engine/src/cmd/geocode.rs
+        crates/engine/src/tests/sync.rs
+        crates/engine/src/tests/import.rs
+        crates/engine/Cargo.toml
+        crates/ui-egui/Cargo.toml
+        Cargo.toml
+        Cargo.lock
+        rust-toolchain.toml
+        .cargo/*
+
+  gate-windows:
+    needs: windows-scope
+    if: needs.windows-scope.outputs.matched == 'true'
+    # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      os: '["windows-latest"]'
+      # Same craft-fonts commit as ci.yml and release.yml.
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      targets: ""
+      tools: ""
+      timeout-minutes: 90
+      windows-command: |
+        pkgs=(-p lightcraft-wincolor -p lightcraft-catalog -p lightcraft-engine -p lightcraft-ui-egui -p lightcraft -p lightcraft-cli)
+        cargo clippy "${pkgs[@]}" --all-targets --keep-going -- -D warnings
+        cargo test "${pkgs[@]}" --lib --bins --tests --no-fail-fast
