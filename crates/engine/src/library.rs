@@ -258,6 +258,13 @@ impl Library {
     }
 }
 
+/// [`PrefsFile`]'s `prep`, read leniently (see there).
+fn lenient_prep<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<crate::prep::PrepSettings>, D::Error> {
+    use serde::Deserialize;
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct PrefsFile {
@@ -285,6 +292,8 @@ struct PrefsFile {
     label_sets: Vec<crate::cmd::manage::LabelSet>,
     /// Imported LUT profiles.
     lut_profiles: Vec<crate::cmd::lut_profiles::LutProfile>,
+    /// Imported camera profiles (`.dcp`).
+    dcp_profiles: Vec<crate::cmd::dcp_profiles::DcpEntry>,
     /// Keyword sets, the one in use, recent keywords.
     keyword_sets: Vec<crate::cmd::keywords::KeywordSet>,
     keyword_set: Option<String>,
@@ -293,6 +302,11 @@ struct PrefsFile {
     import: crate::import::ImportDefaults,
     /// Thumbnail disk cache budget (MB, 0 = default).
     cache_mb: u32,
+    /// This library's own background preparation settings (`None`: the app-wide ones). Read
+    /// leniently: a value a newer build wrote that this one doesn't know is `None`, and the rest of
+    /// the file is kept.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_prep")]
+    prep: Option<crate::prep::PrepSettings>,
     /// Folder for smart previews (default: `Smart Previews` in the library).
     smart_previews_dir: Option<String>,
     /// Days after which untouched Local records of unbrowsed folders are forgotten (missing =
@@ -576,11 +590,14 @@ impl Session {
         self.label_sets = prefs.label_sets;
         self.lut_profiles = prefs.lut_profiles;
         crate::cmd::lut_profiles::register_all(self);
+        self.dcp_profiles = prefs.dcp_profiles;
+        crate::cmd::dcp_profiles::register_all(self, on_disk.then(|| dir.join("Profiles")).as_deref());
         self.keyword_sets = prefs.keyword_sets;
         self.keyword_set = prefs.keyword_set;
         self.recent_keywords = prefs.recent_keywords;
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
+        self.prep.library = prefs.prep.map(crate::prep::PrepSettings::sanitized);
         self.slideshow = prefs.slideshow.sanitized();
         self.slide_layout = prefs.slide_layout.sanitized();
         self.slide_overlays = prefs.slide_overlays.sanitized();
@@ -603,7 +620,11 @@ impl Session {
                     self.presets.push(u);
                 }
             }
-            let known = |id: &String| crate::presets::profile(id).is_some() || self.lut_profiles.iter().any(|p| &p.id == id);
+            let known = |id: &String| {
+                crate::presets::profile(id).is_some()
+                    || self.lut_profiles.iter().any(|p| &p.id == id)
+                    || self.dcp_profiles.iter().any(|p| &p.id == id)
+            };
             self.profile_favorites = f.profile_favorites.into_iter().filter(known).collect();
             self.profile_recent = f.profile_recent.into_iter().filter(known).take(crate::presets::RECENT_PROFILES).collect();
         }
@@ -680,6 +701,9 @@ impl Session {
             crate::cmd::previews::refresh_stale_smart_previews(self);
         }
         self.library_identity = std::sync::Arc::new(());
+        // a library open is a new session for the low-disk alert: look at the drive now
+        self.disk_alert.reset();
+        self.check_disk_space(true);
         Ok(())
     }
 
@@ -886,11 +910,13 @@ impl Session {
             mask_tool_effects: self.mask_tool_effects.clone(),
             label_sets: self.label_sets.clone(),
             lut_profiles: self.lut_profiles.clone(),
+            dcp_profiles: self.dcp_profiles.clone(),
             keyword_sets: self.keyword_sets.clone(),
             keyword_set: self.keyword_set.clone(),
             recent_keywords: self.recent_keywords.clone(),
             import: self.import_defaults.clone(),
             cache_mb: self.cache_mb,
+            prep: self.prep.library,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
             forget_local_days: Some(self.forget_local_days),
             slideshow: self.slideshow.clone(),
@@ -918,9 +944,23 @@ impl Session {
         new
     }
 
-    /// The thumbnail disk cache budget in bytes ([`Session::cache_mb`], else the default).
+    /// The thumbnail disk cache budget in bytes ([`Session::cache_mb`], else the default, which
+    /// grows with the library: [`crate::media::default_disk_cache_bytes`]).
     pub fn cache_bytes(&self) -> u64 {
-        if self.cache_mb == 0 { crate::media::DISK_CACHE_BYTES } else { u64::from(self.cache_mb) << 20 }
+        if self.cache_mb == 0 { crate::media::default_disk_cache_bytes(self.catalog.len()) } else { u64::from(self.cache_mb) << 20 }
+    }
+
+    /// Bring the disk cache's budget up to date with the library (photos were added since it was
+    /// set): cheap, nothing is read or written. Called before previews are built, so it also
+    /// looks at the drive's free space when that is due ([`Session::check_disk_space`]).
+    pub fn fit_disk_cache(&mut self) {
+        let want = self.cache_bytes();
+        if let Some(d) = self.media.rendered.disk()
+            && d.budget() != want
+        {
+            d.set_budget(want);
+        }
+        self.check_disk_space(false);
     }
 
     /// Change the thumbnail disk cache budget (MB, 0 = default) in place: the cached thumbnails
@@ -981,6 +1021,16 @@ fn unlocked_warning(lock: Option<&LibraryLock>) -> Option<String> {
 #[cfg(test)]
 mod resolve_tests {
     use super::*;
+
+    /// A library's background preparation value this build doesn't know reads as none (the
+    /// app-wide settings apply) and keeps the rest of `prefs.json`.
+    #[test]
+    fn an_unknown_background_preparation_value_keeps_the_other_prefs() {
+        let v = serde_json::json!({"cacheMb": 77, "prep": {"culling": {"scope": "someday"}}});
+        let read: PrefsFile = serde_json::from_value(v).unwrap();
+        assert!(read.prep.is_none());
+        assert_eq!(read.cache_mb, 77);
+    }
 
     /// `--library <dir>/catalog.snap` failed with the OS's "File exists" (creating a folder over
     /// the file); it opens the library that file belongs to.

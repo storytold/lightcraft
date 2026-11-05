@@ -250,6 +250,53 @@ introduced. `half` 2.7.1 is a dev dependency with default features disabled,
 used to reproduce the rejected candidates. The HDR parity row stays partial
 and gap 29 remains open.
 
+## Final review follow-up
+
+`merge_hdr_iter` checks cancellation before every request to its input iterator,
+including the first. The engine maps those checks to the number of completed
+reads, keeping loading in 0..30% and merging in 30..90%. An input decode error
+propagates unchanged and stops all further requests.
+
+Generated regression tests cover cancellation before loading and after 1, 3
+or 6 successful inputs of a seven-frame bracket. Without the new check, both
+cancellation tests requested all seven frames and failed. With it, later
+frames are never requested. Additional frozen-oracle coverage includes two-frame
+merges and mixed orientations; another test fails the third decode after two
+successful inputs and requires the original error and exactly three requests.
+An engine test checks cancellation before reads and monotonic progress through
+the original loading and merge ranges.
+
+### Verification at the reviewed base
+
+The reviewed tree merges `origin/main` at
+`bf96a5fa79fb351bd328cac3614e6b5bb137e365`. All 64 merge tests passed
+(42 unit tests, 21 integration tests and the allocation harness), including the
+new cancellation and orientation coverage. The engine progress regression passed
+in isolation and in the workspace run. Doctests, parity, layers, assets and WASM
+passed separately; parity still reports the existing stale summary.
+
+Quick CI passed fmt, Clippy and HEIF, then stopped at two GPU equivalence tests.
+A complete workspace run with `--no-fail-fast` found seven failures. Each was
+reproduced on an unchanged, clean worktree at the merged base, with the same
+resolved `CARGO_TARGET_DIR` and workspace features:
+
+| Test | Failure on branch and base | Base verification |
+|---|---|---|
+| `equivalence::v3_luminance_cutoff_chroma_2` | uniform-image assertion at `crates/gpu/tests/it/equivalence.rs:56` | three exact runs |
+| `equivalence::v3_luminance_cutoff_chroma_4` | the same uniform-image assertion | three exact runs |
+| `masks_stay_on_the_content_under_every_geometry_change_on_the_gpu` | straighten mask centroid at `(73.44033722438391, 39.81999258847508)` instead of `(67.46466224131198, 35.23096446700507)` | three exact runs |
+| `tests_light::v1_and_v2_render_as_before_v3` | identical actual hashes `[5201756129139503724, 10832193741061795827]`, expected `[6624979530767351604, 9773754074516659789]` | three exact runs |
+| `dialog_role::settings_is_a_dialog_too` | missing Georgian glyph U+10E5 | three exact runs |
+| `wire::tests::wire_job_renders_like_the_engine` | identical pixel assertion arrays on branch and base | exact case passed three times; complete web binary failed three times |
+| `tests::denoise::model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_model` | three-second receive timeout at `crates/engine/src/tests/denoise.rs:107` | exact case passed three times; complete engine binary passed once and failed twice |
+
+The current-main GPU, pipeline, web, UI and denoiser failures were left unchanged.
+Their proof logs stay outside the disposable build directory.
+
+The final integration base is `272c255f298ae155028724d1bf4e2e3c685b091d`.
+It includes upstream GPU dither-test corrections. The pull request records
+full CI on the final commit and failure confirmations on that unchanged base.
+
 ## Stage 1 verification
 
 Quick CI passed fmt, Clippy, HEIF and all 59 merge tests (37 unit, 21 existing
@@ -359,5 +406,6 @@ frame storage has been shipped.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | patch | LR-MERGE-HDR: check cancellation before each lazy input request; regressions cover loading cancellation, decode errors, two-frame merges and mixed orientations; merge current main before PR |
 | 2026-11-05 | minor | LR-MERGE-HDR: Stage 1 exact reductions, frozen-oracle and cutoff diagnostics, large generated profiles and upper allocation budgets; half-float storage deferred |
 | 2026-11-05 | minor | LR-MERGE-HDR: checkpoint A generated heap harness and original baseline |

@@ -97,6 +97,7 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   2.672 GB (was 3.483 GB). These counts exclude raw decoding, DNG writing and app caches. They are not directly
   comparable to the older real-raw RSS measurements. Half-float storage is deferred because original threshold
   decisions must survive packing and alignment; naive packing changes a generated highlight by over 15%.
+  Lazy input requests check cancellation before decoding, and a decode error stops subsequent requests.
   Measurements, allocation budgets, precision gates and limits: [HDR memory](hdr-memory.md).
 - The browser build has no file access for merges yet.
 
@@ -104,4 +105,5 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | patch | LR-MERGE-HDR: cancellation before each lazy input request, unchanged decode errors and engine progress mapping; regressions for two frames and mixed orientations |
 | 2026-11-05 | minor | LR-MERGE-HDR: exact row saturation, sequential validated storage and input release before overlay; generated 24 MP and 67.28 MP memory measurements; half-float frames deferred, no parity gap closes |
