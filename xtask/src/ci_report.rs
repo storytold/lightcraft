@@ -203,6 +203,11 @@ pub const SOFTWARE_ADAPTER_SKIPS: &[(&str, &str)] = &[
     // crates/gpu/src/ctx.rs
     ("ctx::tests::a_really_lost_device_is_not_polled_again", "only a Metal device can be lost on purpose"),
     ("ctx::tests::running_out_of_device_memory_falls_back_without_stopping_the_gpu", "lavapipe's allocations never run out"),
+    // the window's device is never a software one: `adopt_window_device` declines it (the CPU
+    // pipeline is faster), with or without the opt-in
+    ("ctx::tests::the_limits_override_caps_an_adopted_device", "the window's device is never a software adapter"),
+    // crates/gpu/tests/display.rs
+    ("display_renders_match_readback_renders", "the window's device is never a software adapter"),
 ];
 
 /// The GPU skips in the `gpu-software` step's skip log (`text`, one JSON object per line) other
@@ -766,12 +771,27 @@ mod tests {
     #[test]
     fn the_software_adapter_skips_name_real_gpu_tests() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("xtask is in the workspace");
-        let ctx = std::fs::read_to_string(root.join("crates/gpu/src/ctx.rs")).unwrap();
+        let gpu = root.join("crates/gpu");
+        // a unit test of ctx.rs by its module path, or an integration test (crates/gpu/tests/*.rs,
+        // its own binary) by its bare name
+        let integration: Vec<String> = std::fs::read_dir(gpu.join("tests"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        let ctx = std::fs::read_to_string(gpu.join("src/ctx.rs")).unwrap();
         for (test, why) in SOFTWARE_ADAPTER_SKIPS {
             assert!(!why.is_empty(), "{test}: say why");
-            let name = test.strip_prefix("ctx::tests::").expect("a test of crates/gpu/src/ctx.rs");
-            let body = ctx.split(&format!("fn {name}()")).nth(1).unwrap_or_else(|| panic!("{test} is gone from ctx.rs"));
-            let body = body.split("\n    }\n").next().unwrap_or_default();
+            // (where the test's body ends: a method of `mod tests` is indented, a test file's fn isn't)
+            let (name, sources, end) = match test.strip_prefix("ctx::tests::") {
+                Some(name) => (name, std::slice::from_ref(&ctx), "\n    }\n"),
+                None => (*test, integration.as_slice(), "\n}\n"),
+            };
+            assert!(!name.contains("::"), "{test}: a ctx.rs test or a crates/gpu/tests/*.rs one");
+            let mut found = sources.iter().filter_map(|src| src.split(&format!("fn {name}()")).nth(1));
+            let body = found.next().unwrap_or_else(|| panic!("{test} is gone from lightcraft-gpu's tests"));
+            let body = body.split(end).next().unwrap_or_default();
             assert!(body.contains("skip!(Gpu"), "{test} no longer skips for a GPU");
         }
     }
