@@ -21,7 +21,7 @@ use crop::aspect_label;
 pub(crate) use crop::tool_overlay_options;
 use crop::{crop, red_eye, remove};
 #[cfg(test)]
-use history::{HistoryRow, history_row, short_time};
+use history::{HistoryRow, history_row, short_time, short_time_with};
 use history::{activity, versions};
 use info::info;
 #[cfg(test)]

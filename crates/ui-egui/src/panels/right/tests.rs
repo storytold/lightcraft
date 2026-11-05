@@ -30,3 +30,27 @@ fn short_times() {
     assert_eq!(super::short_time("2026-09-30T12:00:05"), "Sep 30, 2026, 12:00 PM");
     assert_eq!(super::short_time("2026-01-02"), "Jan 2, 2026");
 }
+
+/// Versions on the 24-hour clock (issue #3479): the same short date, minutes without AM/PM,
+/// wall-clock digits kept; a value it can't read is shown as it is, not cut up.
+#[test]
+fn short_times_on_a_24_hour_clock() {
+    let cases = [
+        ("2026-09-30T12:00:05", "Sep 30, 2026, 12:00"),
+        ("2026-09-30T00:05:00", "Sep 30, 2026, 00:05"),
+        ("2026-09-30T23:59:59Z", "Sep 30, 2026, 23:59"),
+        ("2026-09-30T23:59:59.75+02:00", "Sep 30, 2026, 23:59"),
+        ("2026-09-30T18:30+02:00", "Sep 30, 2026, 18:30"),
+        ("2026-09-30 18:30", "Sep 30, 2026, 18:30"),
+        ("2026-01-02", "Jan 2, 2026"),
+        ("2026-02-30 22:00", "2026-02-30 22:00"),
+        ("", ""),
+        ("über", "über"),
+    ];
+    for (iso, want) in cases {
+        assert_eq!(super::short_time_with(iso, true), want, "{iso:?}");
+    }
+    assert_eq!(super::short_time_with("2026-09-30T12:00:05", false), "Sep 30, 2026, 12:00 PM");
+    assert_eq!(super::short_time_with("2026-09-30T00:05:00", false), "Sep 30, 2026, 12:05 AM");
+    assert_eq!(super::short_time_with("2026-09-30T18:30:00", false), "Sep 30, 2026, 6:30 PM");
+}

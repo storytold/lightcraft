@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-11-05
+
+### English times on a 24-hour clock
+- With the interface in English, times were always on a 12-hour clock (`10:11:11 PM`). Setting
+  `settings.use24HourClock` to `true` in `ui.json` now shows the Captured field, the grid's date caption and the
+  Versions list on a 24-hour clock (`22:11:11`). It is off unless set; the other languages already showed 24-hour
+  times, and the photos' times themselves are unchanged (part of issue #3479).
+
 ## 2026-11-01
 
 ### Korean and Vietnamese text in exports draws whole
