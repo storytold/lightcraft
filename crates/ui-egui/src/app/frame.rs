@@ -1,6 +1,6 @@
 use super::{
-    LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, model_setup, monotonic_ms, panels, pick, recheck,
-    shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, monotonic_ms, panels, pick, recheck, shortcuts,
+    slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
 
 impl LightcraftApp {
@@ -44,7 +44,8 @@ impl LightcraftApp {
     /// monotonic app clock, so a hidden `run_logic` keeps it advancing and a second layout pass is
     /// a no-op rather than a duplicate.
     pub(super) fn logic_background(&mut self, ctx: &egui::Context) {
-        panels::notices::logic(self);
+        self.background_prep(ctx);
+        panels::notices::logic(self, ctx);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -70,6 +71,8 @@ impl LightcraftApp {
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
         tasks::poll(self, ctx);
+        // after the poll: a lookup that just finished is cleared, so photos queued meanwhile are looked up now
+        crate::lens_db::tick(self);
         updates_ui::tick(self, ctx);
         self.preview_build_status(ctx);
         self.save_status(ctx);
@@ -78,7 +81,6 @@ impl LightcraftApp {
         self.slideshow_tick(ctx, now);
         panels::denoise::pump_background(self, ctx, now);
         panels::faces::pump_background(self, ctx, now);
-        model_setup::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
@@ -304,7 +306,9 @@ impl LightcraftApp {
         if self.shown_library == Some(generation) {
             return;
         }
+        // (the first library shown takes the place of none: nothing was searching another one)
         if self.shown_library.is_some() {
+            crate::find_similar::library_changed(self);
             self.ui.unnamed_groups = None;
             self.ui.person_selection = Default::default();
         }
@@ -356,6 +360,8 @@ impl LightcraftApp {
         }
         self.widgets = std::mem::take(&mut self.next_widgets);
         self.widget_hits = std::mem::take(&mut self.next_widget_hits);
+        // a frame without the loupe (grid, Compare, Survey, slideshow…) ends the loupe's step timing
+        self.loupe_timing.end_frame(ctx.input(|i| i.time));
         panels::notices::finish_ui_pass(self, ctx);
         panels::library_problem::finish_ui_pass(self, ctx);
         self.ui_passes = self.ui_passes.wrapping_add(1);

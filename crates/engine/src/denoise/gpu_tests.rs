@@ -5,7 +5,8 @@ use lightcraft_denoise::manifest::{Domain, Gain};
 fn folder(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("lc-engine-gpu-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    // exclusive: a directory planted at this predictable name fails the test instead of receiving its files
+    std::fs::create_dir(&dir).unwrap();
     dir
 }
 
@@ -276,6 +277,26 @@ fn a_set_up_runs_beside_the_cpu_and_removes_its_marker() {
     assert_eq!(r, Err(GPU_CRASHED.to_string()));
     assert!(!touched.load(Ordering::Relaxed) && marker.exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_set_up_makes_the_folder_of_its_marker() {
+    let dir = folder("setup-folder").join("not").join("yet");
+    let marker = dir.join(GPU_SETUP_MARKER);
+    let (m, seen) = (marker.clone(), Arc::new(AtomicBool::new(false)));
+    let s = seen.clone();
+    let r = set_up_card(
+        &marker,
+        Duration::from_secs(10),
+        move || {
+            s.store(m.exists(), Ordering::Relaxed);
+            Ok(())
+        },
+        || (),
+    );
+    assert_eq!(r, Ok(((), ())));
+    assert!(seen.load(Ordering::Relaxed), "the crash guard is written even when the models folder was missing");
+    let _ = std::fs::remove_dir_all(dir.ancestors().nth(2).unwrap_or(&dir));
 }
 
 #[test]

@@ -755,25 +755,29 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     }
                     // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
-                    use lightcraft_catalog::keywords::{clean, same};
-                    let add = |m: &mut lightcraft_catalog::Meta, k: &str| {
+                    use lightcraft_catalog::keywords::clean;
+                    // (a set of the lower-cased keywords keeps this linear however many are supplied)
+                    let mut seen: std::collections::HashSet<String> = m.keywords.iter().map(|x| x.to_lowercase()).collect();
+                    let add = |m: &mut lightcraft_catalog::Meta, seen: &mut std::collections::HashSet<String>, k: &str| {
                         let k = clean(k);
-                        if !k.is_empty() && !m.keywords.iter().any(|x| same(x, &k)) {
+                        if !k.is_empty() && seen.insert(k.to_lowercase()) {
                             m.keywords.push(k);
                         }
                     };
                     if let Some(k) = strs("keywords") {
                         m.keywords.clear();
+                        seen.clear();
                         for k in k {
-                            add(&mut m, &k);
+                            add(&mut m, &mut seen, &k);
                         }
                     }
                     for k in strs("addKeywords").unwrap_or_default() {
-                        add(&mut m, &k);
+                        add(&mut m, &mut seen, &k);
                     }
-                    for k in strs("removeKeywords").unwrap_or_default() {
-                        let k = clean(&k);
-                        m.keywords.retain(|x| !same(&clean(x), &k));
+                    let removed: std::collections::HashSet<String> =
+                        strs("removeKeywords").unwrap_or_default().iter().map(|k| clean(k).to_lowercase()).collect();
+                    if !removed.is_empty() {
+                        m.keywords.retain(|x| !removed.contains(&clean(x).to_lowercase()));
                     }
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
@@ -1361,6 +1365,8 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         // ---- persistence
         cmd!(query "library.info", "Library Info", [], None, "{}", always, |s, _| {
+            // the answer of a free-space read that ran on a worker (lowDiskSpace below)
+            s.poll_disk_space();
             let photos = s.catalog.len();
             let albums = s.catalog.albums().count();
             let (rendered_n, rendered_bytes) = s.media.rendered.mem_usage();
@@ -1396,6 +1402,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 "lastError": lib.last_error,
                 // settings files that were unreadable or damaged at open (kept, defaults used)
                 "settingsWarnings": lib.settings_warnings,
+                // the drive holding the preview cache ran low this session (warned once)
+                "lowDiskSpace": s.disk_space_alert_raised(),
                 // changes applied in memory whose write failed (retried by every save)
                 "unsavedOps": s.unsaved().map_or(0, |u| u.0),
                 "unsavedError": s.unsaved().map(|u| u.1),
