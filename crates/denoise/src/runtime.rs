@@ -54,6 +54,11 @@ impl CpuRunner {
     pub fn self_test(&self) -> SelfTest {
         self_test(self, &self.manifest, self.load_ms)
     }
+    /// The largest absolute value of every tensor (the input first) of a run on `input`: how far the activations
+    /// reach, for a runner that computes in 16-bit floats ([`crate::coreml`]).
+    pub fn peaks(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+        self.runner.peaks(input).map_err(|e| Error::Runtime(e.to_string()))
+    }
 }
 impl TileRunner for CpuRunner {
     fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {

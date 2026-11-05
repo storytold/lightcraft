@@ -18,9 +18,9 @@
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use lightcraft_develop::SegMask;
@@ -156,6 +156,8 @@ pub struct Shared {
     pub loaded: AtomicBool,
     /// Loading the model or encoding a photo right now (the slow parts).
     pub encoding: AtomicBool,
+    /// The Neural Engine path of the model loaded last (Apple silicon), to say when it is being prepared.
+    pub neural_engine: Mutex<Option<Arc<lightcraft_segment::ane::NeuralEngine>>>,
 }
 
 /// Decrements a counter when dropped (also when unwinding).
@@ -365,10 +367,21 @@ fn model<'a>(state: &'a mut State, shared: &Shared, dir: &std::path::Path, place
             Placement::Cpu => Sam3::load_cpu(dir)?,
         };
         log::info!("SAM 3 loaded in {:?} ({})", t.elapsed(), if m.device().is_cpu() { "CPU" } else { "GPU" });
+        // the Neural Engine takes the photo's backbone once it is set up and checked (on its own thread: candle serves
+        // the photos meanwhile); where the graphics card is switched off or failed, the processor is wanted, so no
+        if placement == Placement::Gpu && neural_engine_wanted() {
+            m.start_neural_engine(&dir.join("neural-engine"));
+            *shared.neural_engine.lock().unwrap_or_else(PoisonError::into_inner) = Some(m.neural_engine_handle());
+        }
         state.model = Some((dir.to_path_buf(), m));
         shared.loaded.store(true, Ordering::SeqCst);
     }
     state.model.as_mut().map(|(_, m)| m).ok_or_else(|| "the model did not load".into())
+}
+
+/// Whether `LIGHTCRAFT_SAM3_NEURAL_ENGINE=0` (or off, false, no) keeps the Neural Engine out of AI masks.
+fn neural_engine_wanted() -> bool {
+    !std::env::var("LIGHTCRAFT_SAM3_NEURAL_ENGINE").is_ok_and(|v| matches!(v.trim(), "0" | "off" | "false" | "no"))
 }
 
 /// Render the model input.
