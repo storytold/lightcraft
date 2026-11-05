@@ -1341,18 +1341,8 @@ impl Renderer {
                 // (`tex` is never drawn while `native` is set)
                 let blank = egui::ColorImage::filled([1, 1], egui::Color32::BLACK);
                 let tex = ctx.load_texture(format!("{slot:?}"), blank, egui::TextureOptions::LINEAR);
-                let t = Tex {
-                    look,
-                    key: r.key,
-                    photo: r.photo,
-                    tex,
-                    size,
-                    histogram: Some(histogram),
-                    ms,
-                    quick: None,
-                    pixels: None,
-                    native: Some(id),
-                };
+                let t =
+                    Tex { look, key: r.key, photo: r.photo, tex, size, histogram: Some(histogram), ms, quick: None, pixels: None, native: Some(id) };
                 self.textures.insert(slot, t);
             }
         }
