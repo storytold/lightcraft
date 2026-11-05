@@ -120,6 +120,7 @@ impl Backend for Headless {
         self.progress = hook;
     }
 
+    /// Dispatch headless commands and exports, including their discoverable parameter guidance.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let p = if params.is_null() { json!({}) } else { params };
         match method {

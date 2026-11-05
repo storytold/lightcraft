@@ -363,8 +363,7 @@ mod tiff_lzw_note_tests {
         assert!(TIFF_LZW_NOTE_16.contains("16 bit") && TIFF_LZW_NOTE.contains("other software needs LZW"));
     }
 
-    // TEST-TIFF-ZIP: ZIP and LZW now take about as long, so no note calls LZW slower, and every
-    // language has both notes
+    /// TEST-TIFF-ZIP: all languages carry both notes without the obsolete claim that LZW is slower.
     #[test]
     fn lzw_notes_dont_call_it_slower_and_every_language_has_them() {
         for note in [TIFF_LZW_NOTE_16, TIFF_LZW_NOTE] {
