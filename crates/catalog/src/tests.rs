@@ -13,6 +13,17 @@ fn photo(c: &mut Catalog, name: &str, date: &str) -> PhotoId {
 }
 
 #[test]
+fn date_token_matches_time_part_case_insensitively() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-05-01T10:00:00");
+    let q = |c: &Catalog, text: &str| c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+    assert_eq!(q(&c, "date:2026-05-01T10"), vec![a]);
+    assert_eq!(q(&c, "date:2026-05-01t10"), vec![a]);
+    assert_eq!(q(&c, "date:2026-05"), vec![a]);
+    assert!(q(&c, "date:2026-05-01T11").is_empty());
+}
+
+#[test]
 fn apply_and_inverse_roundtrip() {
     let mut c = Catalog::new();
     let a = photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
@@ -625,7 +636,8 @@ fn set_embedded_lens_is_undoable_and_journaled() {
         photo: Box::new(Photo::new(a, Source::File { path: "/x.rw2".into() }, "x.rw2", "RW2", 4000, 3000, "2026-10-06T00:00:00")),
     })
     .unwrap();
-    let lens = lightcraft_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None, stages: Default::default() };
+    let lens =
+        lightcraft_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None, stages: Default::default(), source: Default::default() };
     let op = Op::SetEmbeddedLens { id: a, lens: Some(Box::new(lens)) };
     let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
     let inv = c.apply(op).unwrap();

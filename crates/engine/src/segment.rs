@@ -376,12 +376,23 @@ fn clicks_of(include: &[Point], exclude: &[Point]) -> Vec<Click> {
 }
 
 impl Session {
-    /// The key and settings of photo `id` as the model sees it: its look without masks, uncropped.
+    /// The key and settings of photo `id` as the model sees it: its look without masks, uncropped
+    /// and unflipped, and without lens corrections, Upright and Transform. Mask coordinates
+    /// (clicks, stored selections) live on the photo before those (`Mask::on_photo`), so a
+    /// selection stays on its content when they change, and changing them doesn't ask again.
     #[cfg_attr(not(feature = "sam"), allow(dead_code))]
-    fn segment_key(&self, id: PhotoId) -> Option<(u64, lightcraft_develop::DevelopSettings)> {
+    pub(crate) fn segment_key(&self, id: PhotoId) -> Option<(u64, lightcraft_develop::DevelopSettings)> {
         let p = self.catalog.photo(id)?;
         let mut d = (*p.develop).clone();
         d.masks.clear();
+        // (the crop doesn't show in the uncropped input: it doesn't ask again either)
+        d.crop = Default::default();
+        d.geometry = Default::default();
+        d.optics.lens_profile = false;
+        d.optics.distortion = 0.0;
+        d.optics.remove_ca = false;
+        d.optics.ca_red = 0.0;
+        d.optics.ca_blue = 0.0;
         let content = crate::media::content_key(p);
         let mut h = mix(0xcbf2_9ce4_8422_2325, d.hash64());
         h = mix(h, id.0);
@@ -410,6 +421,13 @@ impl Session {
         region: Option<[f64; 4]>,
     ) -> Result<worker::Job, String> {
         let dir = self.segmenter.model_dir()?;
+        // old masks go onto the photo first: the selection that comes back is in its coordinates
+        if let Some(cur) = self.develop_of(id).filter(|d| d.masks.iter().any(|m| !m.on_photo)) {
+            let mut on = (*cur).clone();
+            self.attach_masks(id, &cur, &mut on);
+            self.apply_silent(lightcraft_catalog::Op::SetDevelop { id, settings: std::sync::Arc::new(on), label: "Masks".into(), edited: None })
+                .map_err(|e| e.to_string())?;
+        }
         let (key, mut d) = self.segment_key(id).ok_or("no such photo")?;
         let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
         let missing = match &p.source {
