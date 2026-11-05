@@ -114,6 +114,13 @@ pub fn demosaic(n: &Normalized, method: Method) -> Rgb32f {
     }
 }
 
+/// Whether [`ahd_window`] demosaics a window of a `width` × `height` mosaic of `cpp` samples a pixel with `cfa` alone
+/// (a Bayer mosaic of one sample a pixel, at least 4 × 4): for anything else [`crate::RawImage::develop`] demosaics
+/// the whole active area. A merge plans its memory with it.
+pub fn ahd_windowable(cfa: Option<&Cfa>, cpp: usize, width: usize, height: usize) -> bool {
+    cpp == 1 && cfa.is_some_and(Cfa::is_bayer) && width >= 4 && height >= 4
+}
+
 /// [`demosaic`] with [`Method::Ahd`] of the window `r` alone, for Bayer mosaics (`None` for any other data, or a
 /// window not inside the mosaic): the same pixels as demosaicing it all and cropping that to `r`, without
 /// demosaicing the rest or copying the window out of it.
@@ -121,7 +128,7 @@ pub(crate) fn ahd_window(n: &Normalized, r: Rect) -> Option<Rgb32f> {
     let (w, h) = (n.width, n.height);
     let cfa = n.cfa.as_ref()?;
     let inside = r.x.checked_add(r.width).is_some_and(|e| e <= w) && r.y.checked_add(r.height).is_some_and(|e| e <= h);
-    if n.cpp != 1 || !cfa.is_bayer() || w < 4 || h < 4 || n.data.len() != w * h || r.width == 0 || r.height == 0 || !inside {
+    if !ahd_windowable(Some(cfa), n.cpp, w, h) || n.data.len() != w * h || r.width == 0 || r.height == 0 || !inside {
         return None;
     }
     let m = Mosaic { w, h, data: &n.data, cfa };
@@ -208,6 +215,21 @@ mod tests {
 
     /// A window demosaiced alone is the same, bit for bit, as that part of the whole picture: at the edges and
     /// corners (where the mosaic is reflected), in the middle, across tile seams, at every CFA phase.
+    /// `ahd_windowable` says exactly when `ahd_window` demosaics a window alone: a merge plans a raw's decode memory
+    /// with it (a narrow active area demosaics whole).
+    #[test]
+    fn ahd_windowable_says_when_a_window_is_demosaiced_alone() {
+        let bayer = Cfa::bayer("RGGB").unwrap();
+        for (w, h) in [(3, 20), (20, 3), (4, 4), (300, 270)] {
+            let n = mosaic_from_rgb(&Rgb32f::filled(w, h, [0.3, 0.55, 0.8]), &bayer);
+            assert_eq!(ahd_window(&n, Rect::new(0, 0, 1, 1)).is_some(), ahd_windowable(Some(&bayer), 1, w, h), "{w}×{h}");
+            assert_eq!(ahd_windowable(Some(&bayer), 1, w, h), w >= 4 && h >= 4);
+        }
+        let xtrans = mosaic_from_rgb(&Rgb32f::filled(30, 30, [0.3, 0.55, 0.8]), &Cfa::xtrans());
+        assert!(ahd_window(&xtrans, Rect::new(0, 0, 1, 1)).is_none() && !ahd_windowable(Some(&Cfa::xtrans()), 1, 30, 30));
+        assert!(!ahd_windowable(Some(&bayer), 3, 30, 30) && !ahd_windowable(None, 1, 30, 30));
+    }
+
     #[test]
     fn ahd_window_is_the_crop_of_the_whole() {
         let img = edgy_scene(300, 270);
