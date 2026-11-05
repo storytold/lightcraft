@@ -26,6 +26,11 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 - Changes to how a file is decoded or which camera colour it gets change the source, not how settings
   are interpreted; the process doesn't reach that stage today.
 
+**HDR edits' SDR rendition** rolls highlights off into SDR white instead of clipping them; it
+landed in place rather than as a process: the rendition used to clip the highlights the HDR edit
+keeps (thumbnails and SDR exports lost them), which is output broken where it should be correct.
+It changes nothing for SDR edits (HDR off), on any process.
+
 **Neutral display tone map** (JPEG, PNG and other display-referred sources with Contrast, Whites and
 Blacks at 0) is the identity up to white: the SDR shoulder no longer pulls 1.0 down to 0.9875 (8-bit
 255 to 254, issue #1945). It landed in place as a bug fix, since the tone map promised identity at

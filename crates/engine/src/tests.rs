@@ -2055,6 +2055,7 @@ fn auto_sync_hdr_enabled_preserves_per_photo_tuning() {
         sdr_shadows: -14.0,
         sdr_whites: 15.0,
         sdr_clarity: -16.0,
+        ..Hdr::default()
     };
     for (id, settings) in ids.iter().zip(&expected) {
         s.set_develop(*id, settings.clone(), "HDR tuning fixture").unwrap();
