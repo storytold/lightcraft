@@ -9,6 +9,10 @@ use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Sour
 pub(super) struct Plan {
     pub(super) slots: Vec<Slot>,
     pub(super) transfers: Vec<Transfer>,
+    /// The content hashes and name families of [`Plan::transfers`], so each new file is checked against them in
+    /// constant time rather than by scanning the pending transfers.
+    pub(super) pending_hashes: std::collections::HashSet<String>,
+    pub(super) pending_families: std::collections::HashSet<(String, String)>,
 }
 
 pub(super) enum Slot {
@@ -26,9 +30,6 @@ pub(super) struct Transfer {
     pub(super) how: How,
     /// Copy as DNG.
     pub(super) dng: bool,
-    /// The folder (lowercase) and [`name_family`]: transfers of one family can take each other's
-    /// names, so they never run at the same time.
-    pub(super) family: (String, String),
 }
 
 pub(super) enum How {
@@ -252,6 +253,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     }
                 }
                 let sidecar = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default());
+                // the photo is upright as the file's own orientation turns it, when the file states one
+                let sidecar = sidecar.map(|sc| crate::sidecar::SidecarData { orientation: info.orientation.or(sc.orientation), ..sc });
                 // a copy is catalogued under its new name
                 let name = Path::new(&stored).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
                 let mut p = Photo::new(id, Source::File { path: stored }, &name, &info.format, info.width, info.height, &now);
