@@ -15,7 +15,7 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
 | **Feature breadth**, checklist | **81.6%** of 532 in-scope rows (P0 98.0%, P1 95.2%, P2 50.0%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
 | **Feature breadth**, weighted by use | **~77%** | estimated: feature-area table below |
 | **Ready for real work** (full target) | **~62%** (range 57–67%) | estimated: weighted sum over the dimensions with written weights, see [below](#ready-for-real-work-mainstream-practitioner-and-essentials-user) |
-| **Mainstream practitioner** | **~52%** (range 47–57%) | estimated: weekly areas of a working photographer, depth 75.4% × 0.804 × colour 0.85 |
+| **Mainstream practitioner** | **~51%** (range 46–56%) | estimated: weekly areas of a working photographer, depth 75.3% × 0.804 × colour 0.85 |
 | **Essentials user** | **~65%** (range 60–70%) | estimated: core features at default settings, depth 78.4% × 0.830 |
 | Remaining to **beta** | **~340–600 h** | estimated; ~60% parallelizes |
 | Remaining to **full parity** | **~980–1,750 h** | estimated; ~70% parallelizes |
@@ -119,7 +119,7 @@ work. Each has its own hours to ~95%, calibrated as in [How hours are calibrated
 | Audience | Ready | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---:|---:|---|
 | Full target (ready for real work) | **~62%** | **980–1,750 h** (~70% parallelizes) | raw colour, lens and camera data; AI models; Classic output modules; localization; plug-in ecosystem |
-| Mainstream practitioner | **~52%** | **440–820 h** (~60% parallelizes) | camera colour and render fidelity; CR3 / ORF / HE NEF; lens database; subject / sky masks; Lightroom XMP exchange; stability |
+| Mainstream practitioner | **~51%** | **440–820 h** (~60% parallelizes) | camera colour and render fidelity; CR3 / ORF / HE NEF; lens database; subject / sky masks; Lightroom XMP exchange; stability |
 | Essentials user | **~65%** | **160–300 h** (~50% parallelizes) | default raw look for popular cameras; launch stability; basic-slider feel; opening CR3 / HEIC files people send |
 
 ### Full target (ready for real work): ~62%
@@ -162,7 +162,7 @@ essentials replaces its guessed 45% raw look with 84% × 0.75 (+1 point).
 | File exchange with Lightroom users (mainstream) / opening files people send (essentials) | ×0.92 | ×0.95 | Adobe XMP sidecars change colours (#290), XMP CameraProfile and Upright ignored (#204, #205), catalog import fails (#599), same Light values render differently (#523, #209), no write-back to `.lrcat`; for casual users: CR3 beyond verified bodies, compressed ORF, HE NEF open as previews (#473, #485, #556), HEIC trouble (#693) |
 | **Product** | **×0.804** | **×0.830** | |
 
-### Mainstream practitioner: ~52%
+### Mainstream practitioner: ~51%
 
 A working photographer (wedding, portrait, events, landscape) shooting raw on one current camera,
 weekly: import, cull, develop, a few masks, sync a look, export. Excluded: Classic output modules,
@@ -180,11 +180,11 @@ than the user's own.
 | Heal / remove (no generative), denoise | 5% | 40% |
 | Presets, copy / paste / sync | 5% | 85% |
 | Export | 4% | 75% |
-| **Weighted depth** | 100% | **75.4%** |
+| **Weighted depth** | 100% | **75.3%** |
 
 Colour fidelity is a written discount, **×0.85**: most raws start near the camera's own look (median
 ΔE ~5), about 10% far off (ΔE ~18), none calibrated to Adobe Standard, so a working photographer
-corrects colour by hand (33 open colour issues). 75.4% × 0.804 × 0.85 = **~52%** (range 47–57%).
+corrects colour by hand (33 open colour issues). 75.3% × 0.804 × 0.85 = **~51%** (range 46–56%).
 
 ### Essentials user: ~65%
 

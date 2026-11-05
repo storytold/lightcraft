@@ -158,7 +158,7 @@ checked (the per-model CC0 sweeps of October 2026).
 | RAF | uncompressed, lossless and lossy compressed; Bayer and X-Trans; GFX 14/16-bit | ✅ | 24 files from 13 bodies exact |
 | RAF | pre-X FinePix without a raw IFD | ⬜ | `raf.rs` refuses (26 Adobe models, estimated split) |
 | ORF | uncompressed 16-bit, 12-bit packed, two-field 12-bit, 12.8 bpp | ✅ | E-1, E-400, XZ-2 corpus; #651 |
-| ORF | **compressed** (every Olympus / OM body since ~2008) | 🟡 | `orf.rs` decodes; OM-D E-M1 (r=0.995) and E-M10 Mark III (r=0.929) verified; other bodies unverified |
+| ORF | **compressed** (every Olympus / OM body since ~2008) | 🟡 | `crates/raw/src/vendor/orfc.rs` decodes; OM-D E-M1 (r=0.995) and E-M10 Mark III (r=0.929) verified; other bodies unverified |
 | RW2 / RWL / RAW | formats 2, 4, 5, 6, 7, 8 and 16-bit words | ✅ | 118 bodies (#215) |
 | PEF | uncompressed, Huffman, packed 12-bit | ✅ | K10D, K-3, K-5 IIs; files without area tags lose their masked, empty and saturated border lines (#1271: KP, KF, K-3 Mark III, K-70, K-1, K-1 Mark II, K-S1, K-S2, 645Z) |
 | PEF / DNG | Pentax pixel shift | ⬜ | frames not combined |
