@@ -29,7 +29,8 @@ EXIF GPS degrees, minutes and seconds are validated before decimal conversion: e
 nonnegative, and minutes / seconds must be below 60. The writer rounds total coordinates to thousandths of a second
 before splitting DMS, carrying rounding across minute and degree boundaries. Malformed subdivisions do not create a
 typed location, while the source tags remain available in All Metadata. Original export with Remove Location Info
-still refuses a source whose parsed EXIF GPS IFD contains location-bearing tags, even when those coordinates are invalid.
+refuses files with location-bearing EXIF tags, a GPS IFD pointer whose child could not be read, or an embedded EXIF
+block that could not be parsed. Containers without a separate EXIF block retain the whole-file TIFF fallback.
 
 ## XMP namespaces
 

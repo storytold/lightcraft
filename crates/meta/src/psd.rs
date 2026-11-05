@@ -175,6 +175,18 @@ mod tests {
         }
     }
 
+    /// The Original-export guard treats an extracted but unparseable Exif block as location-bearing.
+    #[test]
+    fn original_guard_treats_unparseable_embedded_exif_as_location_bearing() {
+        let malformed = image(1, &[], &resource(1058, b"", b"not a TIFF stream"));
+        assert_eq!(embedded(&malformed).exif.as_deref(), Some(&b"not a TIFF stream"[..]));
+        assert!(crate::source_embeds_exif_gps_location(&malformed));
+
+        let no_exif = image(1, &[], &resource(4000, b"", b"unrelated resource"));
+        assert!(embedded(&no_exif).exif.is_none());
+        assert!(!crate::source_embeds_exif_gps_location(&no_exif), "containers without Exif keep the whole-file fallback");
+    }
+
     #[test]
     fn try_extract_accepts_unknown_exif_tags_in_psd() {
         let mut ifd0 = lightcraft_tiff::IfdBuilder::new();

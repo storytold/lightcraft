@@ -972,6 +972,28 @@ fn remove_location_refuses_a_psd_that_embeds_gps() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An unparseable embedded EXIF block cannot authorize a privacy-sensitive Original copy.
+#[test]
+fn remove_location_refuses_original_with_unparseable_embedded_exif() {
+    let dir = temp_dir("export-noloc-unparseable-exif");
+    let path = dir.join("UnreadableExif.png");
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let encoded = lightcraft_codecs::EncodeMeta { exif: Some(b"not a TIFF stream"), ..Default::default() };
+    let original = lightcraft_codecs::encode_png(&image, &encoded).unwrap();
+    assert!(lightcraft_meta::embedded(&original).exif.is_some());
+    assert!(lightcraft_meta::source_embeds_exif_gps_location(&original));
+    std::fs::write(&path, &original).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't remove the location"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), original, "the source is left byte-for-byte unchanged");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn remove_location_refuses_a_psd_with_unreadable_xmp() {
     let dir = temp_dir("export-noloc-psd-xmp");

@@ -42,19 +42,25 @@ pub fn exif_embeds_gps_location(bytes: &[u8]) -> bool {
     exif_gps_tag_presence(bytes).unwrap_or(false)
 }
 
-/// Whether a source file contains location-bearing EXIF tags. JPEG APP1 packets are all inspected;
-/// other containers use their parsed embedded EXIF block. Invalid EXIF packets are not treated as
-/// evidence of GPS by this helper.
+/// Whether a source file contains location-bearing EXIF tags or an embedded EXIF block that cannot
+/// be parsed. JPEG APP1 packets are all inspected; when a container has no separate EXIF block, the
+/// whole source is checked as a possible TIFF-structured EXIF stream.
 pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
     if bytes.starts_with(&[0xff, 0xd8]) {
         return crate::container::jpeg_embeds_exif_gps_location(bytes);
     }
-    crate::container::embedded(bytes).exif.as_deref().map(exif_embeds_gps_location).unwrap_or_else(|| exif_embeds_gps_location(bytes))
+    match crate::container::embedded(bytes).exif.as_deref() {
+        Some(exif) => exif_gps_tag_presence(exif).unwrap_or(true),
+        None => exif_embeds_gps_location(bytes),
+    }
 }
 
-/// Return tag presence separately from parse failure so container privacy checks can fail closed.
+/// Return tag presence separately from parse failure so Original-copy privacy checks can fail closed.
 pub(crate) fn exif_gps_tag_presence(bytes: &[u8]) -> Option<bool> {
     let tiff = Tiff::parse(strip_exif_header(bytes)).ok()?;
+    if tiff.all_ifds().into_iter().any(|ifd| ifd.contains(t::GPS_IFD)) {
+        return Some(true);
+    }
     Some(tiff.gps().is_some_and(|gps| {
         [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE].into_iter().any(|tag| gps.contains(tag))
     }))
@@ -607,6 +613,27 @@ pub(crate) mod tests {
             let bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
             assert!(exif_embeds_gps_location(&bytes), "destination tag {tag}");
         }
+    }
+
+    /// An unreadable GPS child still counts when its parent contains the GPS pointer tag.
+    #[test]
+    fn exif_gps_unreadable_child_is_location_bearing() {
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (0, 1), (0, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::GPS_IFD, gps);
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+
+        let tiff = Tiff::parse(&bytes).unwrap();
+        assert!(tiff.gps().is_some());
+        let pointer = usize::try_from(tiff.ifds.first().and_then(|ifd| ifd.get(t::GPS_IFD)).unwrap().offset).unwrap();
+        let pointer_end = pointer.checked_add(4).unwrap();
+        bytes.get_mut(pointer..pointer_end).unwrap().copy_from_slice(&u32::MAX.to_le_bytes());
+
+        let unreadable = Tiff::parse(&bytes).unwrap();
+        assert!(unreadable.gps().is_none(), "the out-of-range GPS child is not resolved");
+        assert!(unreadable.ifds.first().is_some_and(|ifd| ifd.contains(t::GPS_IFD)), "the parent GPS pointer remains parsed");
+        assert!(exif_embeds_gps_location(&bytes));
     }
 
     /// Invalid EXIF GPS subdivisions are rejected for latitude and longitude.

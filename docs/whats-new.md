@@ -1,9 +1,26 @@
 # What's new in LightCraft
 
-## 2026-11-05
+## Unreleased
 
-### EXIF GPS coordinates stay valid through read and write
-- GPS DMS subdivisions are validated before reading and rounded before serialization, with carries applied to degrees and minutes. Original export with Remove Location Info refuses files with GPS location or destination tags in any parsed EXIF APP1 packet.
+### EXIF GPS locations stay valid and are protected in Original exports
+- GPS DMS subdivisions are validated before reading and rounded before serialization, with carries applied to degrees and minutes. Original export with Remove Location Info refuses files with GPS location or destination tags, unreadable GPS IFD children, or unparseable embedded EXIF.
+
+### Remove Hot Pixels
+- Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
+  At high ISO single photosites read far brighter than all their neighbours and turn into small red, green or blue
+  dots that noise reduction only makes fainter. They are now replaced before the raw is developed. A point of light
+  spread over neighbouring photosites, such as a star, is kept; untick the box for star fields that need every
+  single-photosite point. Photos edited earlier keep their look: the box is off for them.
+- A raw that would have more than 0.2 % of its photosites replaced is left unchanged: such a photo doesn't look like
+  hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
+  loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
+
+## 2026-11-02
+
+### The Windows title bar is readable from the moment the window opens
+- When LightCraft's appearance differs from the one set in Windows (the dark default on a light Windows, for one), the
+  title bar kept the system's colour with the title in LightCraft's, so the title looked blank until focus moved to
+  another window. It now takes LightCraft's colours as soon as the window has focus.
 
 ## 2026-11-01
 
@@ -299,6 +316,24 @@
 
 ## 2026-10-24
 
+### AI Denoise follows the photo's real noise
+- The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
+  about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel
+  separately, ignores texture, and sets its strength from the noise it actually finds. On clean photos from a Canon EOS R and
+  an R6 Mark III with noise added at real ISO levels, the result at ISO 25600 is 2.2 to 2.7 dB closer to the original, and at
+  ISO 51200 about 5.5 dB closer; at ISO 6400 it is 0.6 to 1.0 dB closer, and quiet photos are no longer smoothed
+  needlessly. Photos denoised before are denoised again when they are next needed. See [AI Denoise](denoise.md).
+
+### Better built-in AI Denoise
+- The built-in denoiser now cleans with block-matching collaborative filtering: similar blocks of the picture are
+  grouped, transformed together and thresholded, so more fine detail survives at the same level of cleaning. On a
+  public raw with added noise it scores 0.25 to 0.6 dB higher than before at every noise level and keeps more
+  texture at medium to extreme noise (medium: 44 % of it against 42 %; extreme: 12 % against 9 %), a little less at
+  light noise (58 % against 62 %), with no colour blotches or isolated specks. It is as fast as the old filter on the processor, and when the computer has a graphics card that is faster
+  it runs there: on an RTX 4080 SUPER a photo's tiles go about 6 to 10 times faster, with the same picture (Settings ▸ AI
+  Denoise ▸ Run on chooses; Automatic times both). Photos
+  denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
+
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
@@ -379,6 +414,17 @@
   nothing and says nothing when none of them is left, and counts only the photos it changed.
 
 ## 2026-10-23
+
+### AI Denoise works out of the box
+- Turning on AI Denoise no longer asks for an ONNX model and a `denoise-model.json`: LightCraft's own built-in
+  denoiser runs automatically. Installing a model of your own is optional (Settings ▸ AI Denoise ▸ Your own model);
+  Stop using returns to the built-in one. The set-up prompt and its "resume after installing" flow are gone. See
+  [AI Denoise](denoise.md).
+- The built-in denoiser measures the photo's noise once, cleans the four colour planes together on variance-stabilised
+  data (so colour blotches go too), and cleans harder, with a second pass, the noisier the photo is. Colour noise gets
+  a wider pass of its own, and in heavy noise isolated specks are smoothed away. On a public raw with added noise it
+  scores 3.7 to 10.4 dB higher than the noisy picture, the most at heavy noise, and keeps more fine texture there
+  than before (heavy noise: 22 % of it against 20 %; extreme: 9 % against 7 %).
 
 ### Export subfolders stay inside the export folder
 - An export subfolder (typed in the Export dialog, saved in a preset or passed to `export`) can no longer lead
@@ -738,6 +784,16 @@
   Photos and export file names take them too.
 
 ## 2026-10-20
+
+### Windows: photos follow the monitor's colour profile
+- On Windows, photos are now shown through the colour profile Windows assigns to the monitor the window is on
+  (Settings ▸ System ▸ Display ▸ Color profile, Color Management, or a calibrator's profile), while no monitor profile
+  is chosen in Settings ▸ Display. Before, they were shown as sRGB, so a wide-gamut monitor showed them oversaturated
+  and a calibration was ignored unless you picked the profile by hand. Moving the window to another monitor, or
+  changing the profile in Windows, is followed within about a second.
+- While Windows manages colour itself (HDR on, or Auto Color Management on Windows 11), photos stay sRGB: Windows
+  converts them for the monitor then. Settings ▸ Display ▸ **Use Screen Profile** goes back to this after choosing a
+  profile by hand. See [display profiles](display-profiles.md).
 
 ### Smart albums check File Path rules faster
 - A smart album rule on File Path (contains, doesn't contain, is, isn't, starts with, ends with, is empty, isn't
@@ -1831,7 +1887,7 @@
 
 ### AI RAW denoise
 - Detail has a per-photo AI Denoise switch and Amount. Bayer RAW photos use a disposable cache, with matching previews and exports and pure-Rust CPU/GPU inference.
-- Models are installed separately after accepting their terms; no weights are bundled. See [setup and limitations](denoise.md).
+- Optional models are installed separately after accepting their terms; no weights are bundled. See [setup and limitations](denoise.md).
 
 ### Library keyboard culling
 - Colour labels tint thumbnail surrounds in Square Grid and the Detail filmstrip, and a translucent footer along the bottom of the photo in Photo Grid. Label confirmations use a matching pale colour.
