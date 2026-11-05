@@ -646,6 +646,9 @@ fn a_library_outside_the_roots_keeps_its_own_profiles() {
     s.media.camera_profiles.clear();
     confine(Some(&roots), || register_all(&mut s, Some(&profiles)));
     assert_eq!(s.media.camera_profiles.len(), 1);
+    let id = s.dcp_profiles[0].id.clone();
+    confine(Some(&roots), || s.execute("profile.deleteCamera", &json!({"id": id}))).unwrap();
+    assert!(!copy.exists());
 
     let secret = outside.join("secret.dcp");
     std::fs::write(&secret, &bytes).unwrap();
@@ -655,5 +658,35 @@ fn a_library_outside_the_roots_keeps_its_own_profiles() {
         vec![DcpEntry { id: "dcp:link".into(), name: "Link".into(), camera_model: String::new(), file: link.to_string_lossy().to_string() }];
     confine(Some(&roots), || register_all(&mut s, Some(&profiles)));
     assert!(s.media.camera_profiles.is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A `Profiles` folder that is a link out of the automation roots: deleting a profile leaves the file it leads to alone.
+#[cfg(unix)]
+#[test]
+fn a_delete_does_not_follow_a_profiles_folder_link_out_of_the_roots() {
+    use crate::cmd::dcp_profiles::DcpEntry;
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("profiles-folder-link");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    let lib = root.join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let secret = outside.join("secret.dcp");
+    std::fs::write(&secret, b"kept").unwrap();
+    std::os::unix::fs::symlink(&outside, lib.join("Profiles")).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.dcp_profiles.push(DcpEntry {
+        id: "dcp:secret".into(),
+        name: "Secret".into(),
+        camera_model: String::new(),
+        file: lib.join("Profiles").join("secret.dcp").to_string_lossy().to_string(),
+    });
+    assert!(confine(Some(&roots), || s.execute("profile.deleteCamera", &json!({"id": "dcp:secret"}))).is_err());
+    assert!(secret.exists());
+    assert_eq!(s.dcp_profiles.len(), 1, "a profile that can't be removed stays");
     let _ = std::fs::remove_dir_all(&base);
 }

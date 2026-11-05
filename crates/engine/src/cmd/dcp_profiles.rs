@@ -193,6 +193,10 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         && Path::new(&entry.file).starts_with(&d)
         && !Path::new(&entry.file).components().any(|c| c == std::path::Component::ParentDir)
     {
+        // (a `Profiles` folder that is a link isn't the library's own: it may lead out of the automation roots)
+        if !library_owned(Some(&d), Path::new(&entry.file)) {
+            crate::file_access::check_write(&entry.file).map_err(|e| bad(C, format!("{}: {e}", entry.file)))?;
+        }
         match std::fs::remove_file(&entry.file) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
