@@ -167,7 +167,19 @@ pub fn rotate(dir: &Path) -> std::io::Result<(PathBuf, File)> {
 /// One formatted log line: `<timestamp> <LEVEL> [<thread>] <target>: <message>\n`.
 pub fn format_line(ts: &str, level: log::Level, thread: &str, target: &str, message: &str) -> String {
     let message = message.strip_suffix('\n').unwrap_or(message);
-    format!("{ts} {level:<5} [{thread}] {target}: {message}\n")
+    // A message can carry text from files and peers (a file name, a rejected value): it must not be able to start a
+    // record of its own. Later lines of a multi-line message (a panic report) are indented, so none begins like a
+    // record; other control characters (a bare CR, an escape sequence) are shown escaped.
+    let mut safe = String::with_capacity(message.len());
+    for c in message.chars() {
+        match c {
+            '\n' => safe.push_str("\n    "),
+            '\t' => safe.push(c),
+            c if c.is_control() => safe.extend(c.escape_default()),
+            c => safe.push(c),
+        }
+    }
+    format!("{ts} {level:<5} [{thread}] {target}: {safe}\n")
 }
 
 /// Where formatted lines go besides standard error: kept in memory until a file is attached,

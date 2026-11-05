@@ -268,7 +268,15 @@ pub fn check_writable(dir: &Path) -> Result<(), String> {
         std::fs::create_dir(dir).map_err(|e| format!("can't create {}: {e}", dir.display()))?;
     }
     let probe = dir.join(format!(".lightcraft-write-test-{}", std::process::id()));
-    std::fs::write(&probe, b"x").map_err(|e| format!("{} is not writable (is the drive full or read-only?): {e}", dir.display()))?;
+    // the probe is a new entry of ours: an existing one (a link planted under the name would be
+    // written through) is removed first, never opened
+    let _ = std::fs::remove_file(&probe);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, b"x"))
+        .map_err(|e| format!("{} is not writable (is the drive full or read-only?): {e}", dir.display()))?;
     let _ = std::fs::remove_file(&probe);
     Ok(())
 }

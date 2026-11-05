@@ -757,25 +757,29 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     }
                     // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
-                    use lightcraft_catalog::keywords::{clean, same};
-                    let add = |m: &mut lightcraft_catalog::Meta, k: &str| {
+                    use lightcraft_catalog::keywords::clean;
+                    // (a set of the lower-cased keywords keeps this linear however many are supplied)
+                    let mut seen: std::collections::HashSet<String> = m.keywords.iter().map(|x| x.to_lowercase()).collect();
+                    let add = |m: &mut lightcraft_catalog::Meta, seen: &mut std::collections::HashSet<String>, k: &str| {
                         let k = clean(k);
-                        if !k.is_empty() && !m.keywords.iter().any(|x| same(x, &k)) {
+                        if !k.is_empty() && seen.insert(k.to_lowercase()) {
                             m.keywords.push(k);
                         }
                     };
                     if let Some(k) = strs("keywords") {
                         m.keywords.clear();
+                        seen.clear();
                         for k in k {
-                            add(&mut m, &k);
+                            add(&mut m, &mut seen, &k);
                         }
                     }
                     for k in strs("addKeywords").unwrap_or_default() {
-                        add(&mut m, &k);
+                        add(&mut m, &mut seen, &k);
                     }
-                    for k in strs("removeKeywords").unwrap_or_default() {
-                        let k = clean(&k);
-                        m.keywords.retain(|x| !same(&clean(x), &k));
+                    let removed: std::collections::HashSet<String> =
+                        strs("removeKeywords").unwrap_or_default().iter().map(|k| clean(k).to_lowercase()).collect();
+                    if !removed.is_empty() {
+                        m.keywords.retain(|x| !removed.contains(&clean(x).to_lowercase()));
                     }
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }

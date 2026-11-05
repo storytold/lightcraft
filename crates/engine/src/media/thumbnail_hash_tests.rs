@@ -88,6 +88,44 @@ fn source_from_before_content_reload_is_not_accepted() {
     s.accept(&old);
     assert_eq!(s.media.source_usage().0, 0);
 }
+/// A decode that started before the photo's database lens profile changed (a lens database arriving, looked up again
+/// by `cmd::lens_refresh`, which drops the photo's sources) never puts its source back in the cache: the source's
+/// colour was fitted through the old profile.
+#[test]
+fn source_from_before_a_lens_profile_change_is_not_accepted() {
+    let mut s = session();
+    s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
+    assert!(old.loaded.is_some());
+    let lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
+    s.catalog.apply(Op::SetEmbeddedLens { id: PhotoId(1), lens: Some(Box::new(lens)) }).unwrap();
+    s.media.forget(PhotoId(1));
+    s.accept(&old);
+    assert_eq!(s.media.source_usage().0, 0, "the old decode is dropped");
+    // a decode made with the new profile is kept
+    let new = s.thumb_job(PhotoId(1), 256).unwrap().run();
+    s.accept(&new);
+    assert_ne!(s.media.source_usage().0, 0);
+}
+/// The loupe's hover preview (a preset or profile under the pointer) is cached by its key, so a database lens
+/// profile looked up again gives it a new key and the hover renders afresh instead of showing the old correction.
+#[test]
+fn a_hover_preview_key_follows_the_lens_profile() {
+    let mut s = session();
+    let settings = s.catalog.photo(PhotoId(1)).unwrap().develop.clone();
+    let before = s.preview_job(PhotoId(1), 640, 480, true, &settings).unwrap().key;
+    let lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
+    s.catalog.apply(Op::SetEmbeddedLens { id: PhotoId(1), lens: Some(Box::new(lens)) }).unwrap();
+    let after = s.preview_job(PhotoId(1), 640, 480, true, &settings).unwrap().key;
+    assert_ne!(before, after);
+    // one database profile looked up again as another (a newer database): the key follows the profile's contents,
+    // not only whether there is one
+    let vignette = lightcraft_develop::EmbeddedVignette { k: [-0.3, 0.0, 0.0, 0.0, 0.0], radius: 1.0, ..Default::default() };
+    let other = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, vignette: Some(vignette), ..Default::default() };
+    s.catalog.apply(Op::SetEmbeddedLens { id: PhotoId(1), lens: Some(Box::new(other)) }).unwrap();
+    let again = s.preview_job(PhotoId(1), 640, 480, true, &settings).unwrap().key;
+    assert_ne!(after, again, "a different database profile");
+}
 /// A panic while rendering (here in the decoder) used to end the pool's worker thread without
 /// an answer, so the view that asked showed "Rendering…" forever. It is the job's failure now,
 /// for renders and for stand-ins, answering the request it came from.
