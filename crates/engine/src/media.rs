@@ -48,6 +48,38 @@ pub use source::{
     face_edge, thumb_bucket,
 };
 
+/// Cache version for the decoder of one source format: the pipeline version plus a
+/// per-format decoder version, so a decoder change only invalidates the renders of
+/// photos in that format. Unknown formats get the pipeline version alone.
+pub(crate) fn decoder_cache_version(format: &str) -> u64 {
+    let decoder: u64 = match format.to_ascii_uppercase().as_str() {
+        "ARW" => 1000,
+        "CR2" => 1001,
+        "CR3" => 1002,
+        "NEF" => 1003,
+        "NRW" => 1004,
+        "DNG" => 1005,
+        "RAF" => 1006,
+        "ORF" => 1007,
+        "RW2" => 1008,
+        "PEF" => 1009,
+        "IIQ" => 1010,
+        "MOS" => 1011,
+        "SRW" => 1012,
+        "X3F" => 1013,
+        "GPR" => 1014,
+        "PNG" => 2000,
+        "TIFF" | "TIF" => 2001,
+        "WEBP" => 2002,
+        "HEIC" | "HEIF" => 2003,
+        "GIF" => 2004,
+        "BMP" => 2005,
+        "AVIF" => 2006,
+        _ => 0,
+    };
+    RENDER_CACHE_VERSION.wrapping_add(decoder)
+}
+
 pub struct MediaCache {
     settings_hashes: SettingsHashes,
     /// Decoded thumbnail-level sources (LRU by bytes).
@@ -102,6 +134,8 @@ impl LoadedCameraProfile {
     pub fn parse(bytes: &[u8]) -> Result<Self, lightcraft_raw::dcp::DcpError> {
         let profile = lightcraft_raw::dcp::parse_dcp(bytes)?;
         Ok(LoadedCameraProfile { profile: Arc::new(profile), fingerprint: Hasher128::new().update(bytes).finish().0 as u64 | 1 })
+    }
+}
     }
 }
 
