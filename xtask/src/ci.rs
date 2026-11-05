@@ -92,19 +92,20 @@ fn nextest() -> bool {
 }
 
 /// A test run of `args` (packages, features, targets, filters): `cargo nextest run`, or `cargo
-/// test`. The command and how to print it.
+/// test`. The command and how to print it. `--no-fail-fast`: a failing test binary doesn't stop
+/// the others, so one CI run shows every failure, not just the first crate's.
 fn tests(args: &[&str]) -> (Command, String) {
     let mut c = cargo();
     let tool = if nextest() { "nextest run" } else { "test" };
-    c.args(tool.split(' ')).args(args);
-    (c, format!("cargo {tool} {}", args.join(" ")))
+    c.args(tool.split(' ')).arg("--no-fail-fast").args(args);
+    (c, format!("cargo {tool} --no-fail-fast {}", args.join(" ")))
 }
 
 /// The workspace's doctests.
 fn doctests() -> (Command, String) {
     let mut c = cargo();
-    c.args(["test", "--workspace", "--doc"]);
-    (c, "cargo test --workspace --doc".to_owned())
+    c.args(["test", "--no-fail-fast", "--workspace", "--doc"]);
+    (c, "cargo test --no-fail-fast --workspace --doc".to_owned())
 }
 
 /// `ci --quick`'s tests: build every workspace test target, then run only the test binaries of
