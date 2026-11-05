@@ -230,6 +230,52 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     return a + (b - a) * v;
 }
 
+// The 3×3 matrix at parameter `o` (row-major).
+fn mat_at(o: u32) -> array<vec3<f32>, 3> {
+    return array<vec3<f32>, 3>(
+        vec3<f32>(pf(o), pf(o + 1u), pf(o + 2u)),
+        vec3<f32>(pf(o + 3u), pf(o + 4u), pf(o + 5u)),
+        vec3<f32>(pf(o + 6u), pf(o + 7u), pf(o + 8u)),
+    );
+}
+
+// `finish::out_of_gamut`: needed real desaturation, and isn't a neutral clipping at white/black.
+fn out_of_gamut(r: vec3<f32>, t: f32) -> bool {
+    let lo = min(r.x, min(r.y, r.z));
+    let hi = max(r.x, max(r.y, r.z));
+    return t < GAMUT_WARN && (hi - lo) > 0.02 * max(abs(hi), 1e-3) && hi - lo > 1e-3 && (lo < -1e-3 || (hi > 1.0 && lo < 1.0));
+}
+
+// `Lut3d::apply` (trilinear) on the LUT profile's table in `aux` (red fastest).
+fn lut_at(r: u32, g: u32, b: u32) -> vec3<f32> {
+    let n = pu(F_LUT_N);
+    let o = pu(F_LUT_OFF) + 3u * (r + n * (g + n * b));
+    return vec3<f32>(aux[o], aux[o + 1u], aux[o + 2u]);
+}
+
+fn lut_apply(c: vec3<f32>) -> vec3<f32> {
+    let n = pu(F_LUT_N);
+    let s = f32(n - 1u);
+    var idx = vec3<u32>(0u);
+    var fr = vec3<f32>(0.0);
+    for (var k = 0u; k < 3u; k++) {
+        let lo = pf(F_LUT_MIN + k);
+        let span = max(pf(F_LUT_MAX + k) - lo, 1e-6);
+        let x = clamp((c[k] - lo) / span, 0.0, 1.0) * s;
+        let i = min(u32(floor(x)), n - 2u);
+        idx[k] = i;
+        fr[k] = x - f32(i);
+    }
+    let r = idx.x;
+    let g = idx.y;
+    let b = idx.z;
+    let c00 = mix(lut_at(r, g, b), lut_at(r + 1u, g, b), fr.x);
+    let c10 = mix(lut_at(r, g + 1u, b), lut_at(r + 1u, g + 1u, b), fr.x);
+    let c01 = mix(lut_at(r, g, b + 1u), lut_at(r + 1u, g, b + 1u), fr.x);
+    let c11 = mix(lut_at(r, g + 1u, b + 1u), lut_at(r + 1u, g + 1u, b + 1u), fr.x);
+    return mix(mix(c00, c10, fr.y), mix(c01, c11, fr.y), fr.z);
+}
+
 fn enc8(v: f32) -> u32 {
     return u32(clamp(v, 0.0, 1.0) * 255.0 + 0.5);
 }
@@ -254,15 +300,6 @@ fn out_encode(v: f32) -> f32 {
     return 1.099 * pow(l, 0.45) - 0.099;
 }
 
-// The 3×3 matrix stored row by row from field `o`.
-fn mat_at(o: u32) -> array<vec3<f32>, 3> {
-    return array<vec3<f32>, 3>(
-        vec3<f32>(pf(o), pf(o + 1u), pf(o + 2u)),
-        vec3<f32>(pf(o + 3u), pf(o + 4u), pf(o + 5u)),
-        vec3<f32>(pf(o + 6u), pf(o + 7u), pf(o + 8u)),
-    );
-}
-
 // `finish::gamut_map` (SDR): the chroma scale that brings `r` into 0..1 towards its luminance (1: in gamut) ...
 fn gamut_scale(r: vec3<f32>, luma: vec3<f32>) -> f32 {
     let yy = clamp(dot(luma, r), 0.0, 1.0);
@@ -285,13 +322,6 @@ fn gamut_apply(r: vec3<f32>, luma: vec3<f32>, tg: f32) -> vec3<f32> {
         return yy + (r - yy) * tg;
     }
     return r;
-}
-
-// `finish::out_of_gamut`: `r` needed desaturating by `t` to fit and isn't just a neutral beyond white or below black.
-fn out_of_gamut(r: vec3<f32>, t: f32) -> bool {
-    let lo = min(r.x, min(r.y, r.z));
-    let hi = max(r.x, max(r.y, r.z));
-    return t < 0.995 && (hi - lo) > 0.02 * max(abs(hi), 1e-3) && hi - lo > 1e-3 && (lo < -1e-3 || (hi > 1.0 && lo < 1.0));
 }
 
 @compute @workgroup_size(16, 16)
@@ -558,10 +588,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
         e = e + k;
     }
+    if (pu(F_LUT) != 0u) {
+        let m = lut_apply(clamp(e, vec3<f32>(0.0), vec3<f32>(1.0)));
+        e = e + (m - e) * pf(F_LUT_AMT);
+    }
     if (warn == 1u) {
-        e = vec3<f32>(1.0, 0.0, 0.0);
+        e = vec3<f32>(PROOF_DEST_R, PROOF_DEST_G, PROOF_DEST_B);
     } else if (warn == 2u) {
-        e = vec3<f32>(0.0, 0.25, 1.0);
+        e = vec3<f32>(PROOF_DISP_R, PROOF_DISP_G, PROOF_DISP_B);
     }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
     out[i] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);
