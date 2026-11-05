@@ -855,7 +855,12 @@ fn a_thumbnail_written_while_a_clear_removes_files_keeps_its_size() {
         disk.put(hash_bytes(&[i]), &gradient(32, 32, i));
     }
     assert!(disk.size() > 0);
-    DURING_CLEAR.lock().unwrap().push((dir.clone(), Arc::new(|disk: &DiskCache| disk.put(hash_bytes(b"during the clear"), &gradient(32, 32, 9)))));
+    DURING_CLEAR.lock().unwrap().push((
+        dir.clone(),
+        Arc::new(|disk: &DiskCache| {
+            disk.put(hash_bytes(b"during the clear"), &gradient(32, 32, 9));
+        }),
+    ));
     disk.clear();
     let on_disk: u64 = std::fs::read_dir(&dir)
         .unwrap()
