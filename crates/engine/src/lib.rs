@@ -1073,7 +1073,12 @@ impl Session {
         let prepared = crate::cmd::prepare_photo_for_wb_partial(&p.develop, &preset.settings, &info);
         let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
         let base = prepared.as_ref().unwrap_or(&p.develop);
-        let mut after = crate::upright_transfer::apply_preset(p, base, preset, amount);
+        // Amount is measured from the import look only when the photo has one (below 100 %);
+        // otherwise the current settings (on the partial's white balance scale) are its baseline
+        let imported = (p.import_look.is_some() && (amount - 1.0).abs() >= 1e-9).then(|| p.import_defaults());
+        let prepared_import = imported.map(|d| crate::cmd::prepare_photo_for_wb_partial(&d, &preset.settings, &info).unwrap_or(d));
+        let original = prepared_import.as_ref().unwrap_or(base);
+        let mut after = crate::upright_transfer::apply_preset_on(p, base, original, preset, amount);
         if on_kelvin_scale {
             lightcraft_pipeline::local::normalize_wb(&mut after, &info);
         }

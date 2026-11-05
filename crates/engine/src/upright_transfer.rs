@@ -160,7 +160,19 @@ pub fn transferred(p: &Photo, before: &DevelopSettings, patch: &Value, source: O
 /// `preset` at `amount` applied to settings `before` of photo `p`, as Apply Preset stores it: a
 /// preset carries no Upright correction ([`settle`] with no source photo). Previews use it too.
 pub fn apply_preset(p: &Photo, before: &DevelopSettings, preset: &lightcraft_develop::Preset, amount: f64) -> DevelopSettings {
-    let mut after = preset.apply(before, amount);
+    apply_preset_on(p, before, before, preset, amount)
+}
+
+/// [`apply_preset`] composed on `original` (the photo's import state; see
+/// [`lightcraft_develop::Preset::apply_on`]).
+pub fn apply_preset_on(
+    p: &Photo,
+    before: &DevelopSettings,
+    original: &DevelopSettings,
+    preset: &lightcraft_develop::Preset,
+    amount: f64,
+) -> DevelopSettings {
+    let mut after = preset.apply_on(before, original, amount);
     settle(p, before, &mut after, &preset.settings, None);
     after
 }
