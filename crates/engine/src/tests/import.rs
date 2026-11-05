@@ -3143,7 +3143,7 @@ fn gated_loader(f: &mut SmartFixture) -> (std::sync::Arc<(std::sync::Mutex<bool>
     let gate = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
     let (tx, rx) = std::sync::mpsc::channel();
     let (g, plain) = (gate.clone(), f.s.media.file_loader.clone().unwrap());
-    f.s.media.file_loader = Some(std::sync::Arc::new(move |p, e| {
+    f.s.media.file_loader = Some(std::sync::Arc::new(move |p, e, profile| {
         let _ = tx.send(());
         let (lock, cv) = &*g;
         let mut open = lock.lock().unwrap();
@@ -3151,7 +3151,7 @@ fn gated_loader(f: &mut SmartFixture) -> (std::sync::Arc<(std::sync::Mutex<bool>
             open = cv.wait(open).unwrap();
         }
         drop(open);
-        plain(p, e)
+        plain(p, e, profile)
     }));
     (gate, rx)
 }
@@ -3246,11 +3246,11 @@ fn interrupted_source_refresh_child() {
     let plain = s.media.file_loader.clone().unwrap();
     let reads = std::sync::atomic::AtomicUsize::new(0);
     // the opening refresh rebuilds the first raw's proxy, then the process ends while it reads the second's original
-    s.media.file_loader = Some(std::sync::Arc::new(move |p, e| {
+    s.media.file_loader = Some(std::sync::Arc::new(move |p, e, profile| {
         if reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1 {
             std::process::exit(SOURCE_REFRESH_EXIT);
         }
-        plain(p, e)
+        plain(p, e, profile)
     }));
     s.open_library(&lib, false).unwrap();
     std::thread::sleep(std::time::Duration::from_secs(60));

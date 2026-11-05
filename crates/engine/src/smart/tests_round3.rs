@@ -61,8 +61,8 @@ fn regression709_round3_reopen_conversion_invalidates_current_sources_and_thumbn
     let (release, blocked) = mpsc::channel();
     let blocked = Mutex::new(blocked);
     let original = s.media.file_loader.clone().unwrap();
-    s.media.file_loader = Some(Arc::new(move |p, n| {
-        let decoded = original(p, n)?;
+    s.media.file_loader = Some(Arc::new(move |p, n, profile| {
+        let decoded = original(p, n, profile)?;
         entered.send(()).unwrap();
         blocked.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
         Ok(decoded)

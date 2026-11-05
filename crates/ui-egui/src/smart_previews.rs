@@ -236,7 +236,7 @@ mod tests {
         let photo = Photo::new(PhotoId(1), Source::File { path: "second.tif".into() }, "second.tif", "TIFF", 8, 8, "");
         app.session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
         app.session.media.smart_dir = Some(folder.clone());
-        app.session.media.file_loader = Some(std::sync::Arc::new(|_, _| Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))));
+        app.session.media.file_loader = Some(std::sync::Arc::new(|_, _, _| Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))));
         let result = confirm(&mut app, &dialog);
         assert!(result.is_err(), "confirmation accepted photo 1 from another library: {result:?}");
         assert_eq!(lightcraft_engine::smart::stats(&folder).0, 0);
@@ -250,7 +250,7 @@ mod tests {
         let mut session = lightcraft_engine::Session::new();
         session.media.smart_dir = Some(dir.join("Smart Previews"));
         session.smart_previews_format = Format::Lossless;
-        session.media.file_loader = Some(std::sync::Arc::new(|_, _| Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))));
+        session.media.file_loader = Some(std::sync::Arc::new(|_, _, _| Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))));
         for id in 1..=2 {
             let p = Photo::new(PhotoId(id), Source::File { path: format!("fixture-{id}.tif") }, "fixture.tif", "TIFF", 8, 8, "2026-01-01");
             session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();

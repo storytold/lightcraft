@@ -66,7 +66,7 @@ fn fixture(tag: &str) -> (PathBuf, Session) {
     let id = photo.id;
     let dest = sharded_file_path(&root.join("destination"), photo);
     std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
-    let (decoded, info) = s.media.file_loader.as_ref().unwrap()(path.to_str().unwrap(), 2560).unwrap();
+    let (decoded, info) = s.media.file_loader.as_ref().unwrap()(path.to_str().unwrap(), 2560, None).unwrap();
     std::fs::write(dest, encode_format(&decoded, Some(&info), Format::Lossless).unwrap()).unwrap();
     std::fs::rename(&path, path.with_extension("offline")).unwrap();
     let job = s.thumb_job(id, 128).unwrap();
