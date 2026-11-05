@@ -912,6 +912,8 @@ fn ramp(depth: OutputDepth, space: OutputSpace) -> lightcraft_pipeline::Rendered
 fn distinct_levels(bytes: &[u8]) -> (usize, lightcraft_codecs::Decoded) {
     let d = lightcraft_codecs::decode(bytes, Default::default()).expect("decodes");
     let mut v: Vec<u32> = (0..d.image.width).map(|x| d.image.get(x, 1)[1].to_bits()).collect();
+    // sorted first: 8-bit output is dithered, so equal levels aren't all side by side
+    v.sort_unstable();
     v.dedup();
     (v.len(), d)
 }
