@@ -679,10 +679,7 @@ fn a_raws_decoder_orientation_turns_stored_frame_regions_on_import_and_reread() 
     let file = src.join("p.mef");
     // 16 × 6 CFA strip, orientation 6 on the raw IFD only (IFD0 has none) — same shape as `lightcraft_raw`'s MEF fixture.
     let px: Vec<u16> = (0..16 * 6).map(|i| (i * 41 % 4096) as u16).collect();
-    let strip: Vec<u8> = px
-        .chunks(2)
-        .flat_map(|p| [(p[0] >> 4) as u8, ((p[0] & 15) << 4) as u8 | (p[1] >> 8) as u8, p[1] as u8])
-        .collect();
+    let strip: Vec<u8> = px.chunks(2).flat_map(|p| [(p[0] >> 4) as u8, ((p[0] & 15) << 4) as u8 | (p[1] >> 8) as u8, p[1] as u8]).collect();
     {
         use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value, tags as t};
         let mut raw = IfdBuilder::new();
