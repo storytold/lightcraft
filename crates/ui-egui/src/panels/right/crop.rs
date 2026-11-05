@@ -136,12 +136,14 @@ fn aspect_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     {
                         app.toast_error(ui.ctx(), e);
                     }
-                    if i < last && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked()
+                    if i < last
+                        && text_button(ui, &format!("cropAspectDown-{i}"), "↓", false).clicked()
                         && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i + 1}))
                     {
                         app.toast_error(ui.ctx(), e);
                     }
-                    if i > 0 && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked()
+                    if i > 0
+                        && text_button(ui, &format!("cropAspectUp-{i}"), "↑", false).clicked()
                         && let Err(e) = app.run("crop.moveAspect", json!({"name": a.name, "to": i - 1}))
                     {
                         app.toast_error(ui.ctx(), e);
