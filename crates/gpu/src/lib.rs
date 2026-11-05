@@ -31,6 +31,8 @@ use lightcraft_raster::Rgb32f;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod backend;
+#[cfg(all(feature = "denoise", not(target_arch = "wasm32")))]
+pub mod bm3d;
 #[cfg(not(target_arch = "wasm32"))]
 mod ctx;
 #[cfg(not(target_arch = "wasm32"))]
@@ -606,7 +608,7 @@ pub fn adopt_window_device(device: wgpu::Device, queue: wgpu::Queue, info: wgpu:
 
 /// The pixels of a texture on `device` (a [`DisplayFrame`]'s, or any `Rgba8Unorm` texture with
 /// `COPY_SRC`): for a headless screenshot of a view drawn straight from the GPU, and for tests. The
-/// app never needs them to draw. Waits for the GPU (at most a few seconds); `Err` when the copy or
+/// app never needs them to draw. Waits for the GPU (at most a minute); `Err` when the copy or
 /// the wait fails.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_texture(

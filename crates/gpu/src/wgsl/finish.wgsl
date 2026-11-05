@@ -1,7 +1,7 @@
 // The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
 // Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
 // blurred chromaticity when HAS_CHROMA), aux
-// (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms), out (packed RGBA8).
+// (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms | light operator tables), out (packed RGBA8).
 
 fn tone_apply(y: f32) -> f32 {
     if (y <= 0.0) {
@@ -45,6 +45,56 @@ fn curve(ch: u32, x: f32) -> f32 {
     let i = min(u32(f), CURVE_N - 2u);
     let t = f - f32(i);
     return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+// Process V4's calibrated Contrast, Blacks (`lightcraft_pipeline::light_v3`): operator `k`'s
+// table (linear output over encoded v) at v (`Operator::eval`).
+fn light_eval(k: u32, v: f32) -> f32 {
+    let o = pu(F_LIGHT_OFF) + k * LIGHT_N;
+    let f = clamp(v, 0.0, 1.0) * f32(LIGHT_N - 1u);
+    let i = min(u32(f), LIGHT_N - 2u);
+    let t = f - f32(i);
+    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+}
+
+// `Operator::channel`: one linear value; above 1 unchanged, below 0 shifted by F(0).
+fn light_channel(k: u32, x: f32) -> f32 {
+    if (x > 1.0) {
+        return x;
+    }
+    if (x < 0.0) {
+        return aux[pu(F_LIGHT_OFF) + k * LIGHT_N] + x;
+    }
+    return light_eval(k, encode_srgb(x));
+}
+
+// `Operator::luminance`: scaled by F of the ProPhoto luminance over it.
+fn light_lum(k: u32, p: vec3<f32>) -> vec3<f32> {
+    let y = PRO_Y.x * p.x + PRO_Y.y * p.y + PRO_Y.z * p.z;
+    if (!(y > 1e-6) || y > 1.0) {
+        return p;
+    }
+    return p * (light_channel(k, y) / y);
+}
+
+// `LightOps::apply`: linear Rec.2020 → ProPhoto, the operators in order, back.
+fn light_ops(d: vec3<f32>) -> vec3<f32> {
+    var p = mul3(PRO_FROM_2020, d);
+    let n = min(pu(F_LIGHT_OPS), 2u);
+    for (var k = 0u; k < n; k++) {
+        let mode = pu(F_LIGHT_MODE + k);
+        if (mode == 0u) {
+            p = vec3<f32>(light_channel(k, p.x), light_channel(k, p.y), light_channel(k, p.z));
+        } else if (mode == 1u) {
+            p = light_lum(k, p);
+        } else {
+            let a = vec3<f32>(light_channel(k, p.x), light_channel(k, p.y), light_channel(k, p.z));
+            let b = light_lum(k, p);
+            let w = pf(F_LIGHT_W + k);
+            p = vec3<f32>(w * a.x + (1.0 - w) * b.x, w * a.y + (1.0 - w) * b.y, w * a.z + (1.0 - w) * b.z);
+        }
+    }
+    return mul3(PRO_TO_2020, p);
 }
 
 fn band_weights(h: f32) -> array<f32, 8> {
@@ -276,8 +326,23 @@ fn lut_apply(c: vec3<f32>) -> vec3<f32> {
     return mix(mix(c00, c10, fr.y), mix(c01, c11, fr.y), fr.z);
 }
 
-fn enc8(v: f32) -> u32 {
-    return u32(clamp(v, 0.0, 1.0) * 255.0 + 0.5);
+const BAYER_8X8 = array<f32, 64>(
+     0.0, 32.0,  8.0, 40.0,  2.0, 34.0, 10.0, 42.0,
+    48.0, 16.0, 56.0, 24.0, 50.0, 18.0, 58.0, 26.0,
+    12.0, 44.0,  4.0, 36.0, 14.0, 46.0,  6.0, 38.0,
+    60.0, 28.0, 52.0, 20.0, 62.0, 30.0, 54.0, 22.0,
+     3.0, 35.0, 11.0, 43.0,  1.0, 33.0,  9.0, 41.0,
+    51.0, 19.0, 59.0, 27.0, 49.0, 17.0, 57.0, 25.0,
+    15.0, 47.0,  7.0, 39.0, 13.0, 45.0,  5.0, 37.0,
+    63.0, 31.0, 55.0, 23.0, 61.0, 29.0, 53.0, 21.0,
+);
+
+fn enc8(v: f32, d: f32) -> u32 {
+    let y = clamp(v, 0.0, 1.0) * 255.0;
+    if (y >= 254.9) {
+        return 255u;
+    }
+    return u32(clamp(y + d, 0.0, 255.0));
 }
 
 // sRGB-curve-encoded value → the output space's own curve (`OutputTrc`: 0 sRGB, 1 gamma, 2 Rec.709).
@@ -507,6 +572,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         d = d + (o - d) * t;
     }
 
+    // --- process V4: calibrated Contrast, Blacks
+    if (pu(F_LIGHT_OPS) != 0u) {
+        d = light_ops(d);
+    }
+
     // --- colour
     d = color_ops(d, lt[11], lt[12]);
     if (tint_on) {
@@ -607,5 +677,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         e = vec3<f32>(PROOF_DISP_R, PROOF_DISP_G, PROOF_DISP_B);
     }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
-    out[i] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);
+    let abs_x = u32(pf(F_VIG_VIEW)) + x;
+    let abs_y = u32(pf(F_VIG_VIEW + 1u)) + y;
+    let dither = (BAYER_8X8[(abs_y & 7u) * 8u + (abs_x & 7u)] + 0.5) / 64.0;
+    out[i] = enc8(e.x, dither) | (enc8(e.y, dither) << 8u) | (enc8(e.z, dither) << 16u) | (255u << 24u);
 }
