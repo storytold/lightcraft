@@ -103,6 +103,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (files, mut failed) = cube_files(&paths);
     let mut imported = Vec::new();
+    // the ids taken and the next suffix per slug: a bundle of same-titled LUTs doesn't probe the
+    // whole list from 2 for each one
+    let mut taken: std::collections::HashSet<String> = s.lut_profiles.iter().map(|x| x.id.clone()).collect();
+    let mut next_suffix: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for (name, text, group) in files {
         let lut = match lightcraft_pipeline::lut::Lut3d::parse_cube(&text) {
             Ok(l) => l,
@@ -115,11 +119,12 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         let group = super::super::preset_import::group_from_dir(&group.unwrap_or_default()).unwrap_or_else(|| "Imported".into());
         let slug = crate::presets::slug(&format!("{group}-{display}"));
         let mut id = format!("lut:{slug}");
-        let mut n = 2;
-        while s.lut_profiles.iter().any(|x| x.id == id) {
+        let n = next_suffix.entry(slug.clone()).or_insert(2);
+        while taken.contains(&id) {
             id = format!("lut:{slug}-{n}");
-            n += 1;
+            *n += 1;
         }
+        taken.insert(id.clone());
         let file = match &dir {
             Some(d) => {
                 let f = d.join(format!("{}.cube", id.trim_start_matches("lut:")));
