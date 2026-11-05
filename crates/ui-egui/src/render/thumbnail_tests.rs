@@ -23,6 +23,129 @@ fn render_failure_paths_are_escaped_and_missing_sources_still_identified() {
     assert!(render_failure_message(Slot::Main, PhotoId(42), Some(&demo), "decode failed").contains("demo scene 7"));
 }
 
+/// Issue #2682: the log could not tell a file asked for 37 times from one asked once and failing
+/// inside. At debug level every request is a line naming its file, and so is how it ended when it
+/// drew nothing (a failure stays the warning it was).
+#[test]
+fn each_render_request_and_how_it_ended_is_a_debug_line_with_its_file() {
+    let ends =
+        |lines: &[String]| -> Vec<String> { lines.iter().map(|l| l.rsplit_once(": ").map_or(l.clone(), |(_, end)| end.to_string())).collect() };
+    let (mut app, work, ctx) = fixture();
+    let slot = Slot::Thumb(PhotoId(1));
+    let job = |app: &mut crate::LightcraftApp, edge| app.session.render_job(PhotoId(1), edge, edge, false, true).unwrap();
+    // asked once, drawn
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, j.run());
+    // asked twice: the first answer comes after the second request and is dropped
+    let (a, b) = (job(&mut app, 128), job(&mut app, 160));
+    app.renderer.request(slot, a, 10);
+    app.renderer.request(slot, b, 10);
+    let (_, b) = take_job(&work);
+    let (_, a) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, a.run());
+    finish(&mut app, &work, &ctx, slot, b.run());
+    // a stand-in that comes back after the thumbnail itself is not used
+    let quick = Slot::ThumbQuick(PhotoId(1));
+    let mut j = job(&mut app, 64);
+    j.request_id = lightcraft_preview::next_tick();
+    app.renderer.requests.insert(quick, Requested { look: None, id: j.request_id, source: Some(j.origin.clone()) });
+    finish(&mut app, &work, &ctx, quick, j.run());
+    // a render still running when everything is forgotten says so once, when it comes back
+    let j = job(&mut app, 200);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    app.renderer.forget_all();
+    finish(&mut app, &work, &ctx, slot, j.run());
+    assert_eq!(
+        ends(&app.renderer.decisions),
+        [
+            "requested",
+            "produced in 0 ms",
+            "requested",
+            "requested",
+            "abandoned, a newer request replaced it",
+            "produced in 0 ms",
+            "abandoned, the thumbnail itself came first",
+            "requested",
+            "abandoned, no longer wanted when it finished"
+        ]
+    );
+    let named = |app: &crate::LightcraftApp| {
+        assert!(
+            app.renderer.decisions.iter().all(|l| l.starts_with("render Thumb") && l.contains(", PhotoId(1), file \"audit.jpg\": ")),
+            "{:?}",
+            app.renderer.decisions
+        );
+    };
+    named(&app);
+
+    // a file that fails asks nothing while its failure stands, and says so when it is asked again
+    let (mut app, work, ctx) = fixture();
+    app.session.media.file_loader = Some(Arc::new(|_, _| Err("simulated decode failure".into())));
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, j.run());
+    assert_eq!(app.renderer.failure_messages.len(), 1, "the failure is the warning it was");
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    app.session.catalog.apply(Op::SetRating { id: PhotoId(1), rating: 3 }).unwrap();
+    app.renderer.poll(&ctx, &mut app.session);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    assert_eq!(ends(&app.renderer.decisions), ["requested", "requested again after a failure"]);
+    named(&app);
+
+    // requests that end before they run: the same render moved to another priority, a newer render
+    // in its place, scrolled out of view, everything forgotten
+    let (mut app, _, _) = fixture();
+    app.renderer.set_offload(Box::new(Blocked));
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 5);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let j = job(&mut app, 128);
+    app.renderer.request(slot, j, 10);
+    app.renderer.evict_thumbs(&Default::default(), 0);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 5);
+    app.renderer.forget_all();
+    assert_eq!(
+        ends(&app.renderer.decisions),
+        [
+            "requested",
+            "still waiting, moved to priority 10",
+            "abandoned, a newer request replaced it before it started",
+            "requested",
+            "abandoned, scrolled out of view before it started",
+            "requested",
+            "abandoned, the renderer started over (another library, or the previews were cleared)"
+        ]
+    );
+    named(&app);
+
+    // a stand-in still waiting that the grid moves up while it scrolls says so
+    let mut s = Session::new();
+    s.media.preview_loader = Some(Arc::new(|_, _| Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })));
+    let mut raw = (*photo()).clone();
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    raw.develop = Arc::new(raw.camera_defaults());
+    let (mut app, _, _) = fixture_with(s, raw);
+    app.renderer.pool = JobPool::new(0); // nothing starts until run_inline
+    crate::panels::grid::request_thumb(&mut app, PhotoId(1), 384, 5);
+    crate::panels::grid::request_thumb(&mut app, PhotoId(1), 384, 10);
+    assert_eq!(ends(&app.renderer.decisions), ["stand-in requested", "still waiting, moved to priority 11"]);
+    named(&app);
+    // a view shows whichever photo is open: its file names it
+    let main = Requested { look: None, id: 1, source: Some(Source::File { path: "trip/IMG_1.nef".into() }) };
+    assert_eq!(
+        abandoned_line(Slot::Main, Some(&main), "a newer request replaced it"),
+        "render Main, file \"trip/IMG_1.nef\": abandoned, a newer request replaced it"
+    );
+}
+
 struct Blocked;
 impl RenderOffload for Blocked {
     fn try_start(&mut self, _: Slot, job: RenderJob) -> Option<RenderJob> {
@@ -206,6 +329,7 @@ fn larger_texture_for_another_key_does_not_count_as_current() {
         ms: 0.0,
         quick: None,
         pixels: None,
+        native: None,
     };
     let mut r = Renderer::default();
     // A completed larger bucket: the remembered request is bucket 512, key 77.
@@ -342,6 +466,117 @@ fn finish(app: &mut crate::LightcraftApp, work: &std::rc::Rc<std::cell::RefCell<
 }
 fn request(app: &mut crate::LightcraftApp) {
     crate::panels::grid::request_thumb(app, PhotoId(1), 256, 10);
+}
+
+/// Draws GPU-resident renders under one fixed id, and reads them back from the test's device.
+#[cfg(not(target_arch = "wasm32"))]
+struct TestScreen(lightcraft_engine::gpu::wgpu::Device, lightcraft_engine::gpu::wgpu::Queue, std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>);
+#[cfg(not(target_arch = "wasm32"))]
+impl ScreenTextures for TestScreen {
+    fn show(&mut self, _: &lightcraft_engine::media::ScreenFrame, _: Option<egui::TextureId>) -> Option<egui::TextureId> {
+        Some(egui::TextureId::User(7))
+    }
+    fn free(&mut self, id: egui::TextureId) {
+        self.2.lock().unwrap().push(id);
+    }
+    fn read(&self, frame: &lightcraft_engine::media::ScreenFrame) -> Option<egui::ColorImage> {
+        let img = lightcraft_engine::gpu::read_texture(&self.0, &self.1, &frame.texture, frame.width, frame.height).ok()?;
+        Some(color_image(&img))
+    }
+}
+
+/// A headless screenshot (driven by the control channel: `keep_pixels`) of a view drawn straight
+/// from the GPU has its pixels. Before, a mid-drag `ui.screenshot {"headless": true}` showed the
+/// photo as a white rectangle: the GPU-resident draft left no CPU copy (review of PR #1065).
+/// The test fixture with a small GPU texture (5 × 3 known texels) and a [`TestScreen`] that
+/// records the ids it frees; `None` without a GPU adapter.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::type_complexity)]
+fn gpu_drawn_fixture(
+    freed: std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>,
+) -> Option<(crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context, lightcraft_engine::media::ScreenFrame)> {
+    use lightcraft_engine::gpu::wgpu;
+    let device = (|| {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = lightcraft_engine::gpu::backend::window_backends();
+        desc.backend_options = lightcraft_engine::gpu::backend::backend_options();
+        let instance = wgpu::Instance::new(desc);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { label: Some("test window"), ..Default::default() })).ok()
+    })();
+    let (device, queue) = device?;
+    let (w, h) = (5usize, 3usize);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let texels: Vec<u8> = (0..w * h).flat_map(|i| [i as u8 * 10, 100, 200, 255]).collect();
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        &texels,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 4), rows_per_image: Some(h as u32) },
+        wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+    );
+    let (mut app, work, ctx) = fixture();
+    app.renderer.set_screen_textures(Box::new(TestScreen(device, queue, freed)));
+    Some((app, work, ctx, lightcraft_engine::media::ScreenFrame { texture, width: w, height: h }))
+}
+
+/// A headless screenshot (driven by the control channel: `keep_pixels`) of a view drawn straight
+/// from the GPU has its pixels. Before, a mid-drag `ui.screenshot {"headless": true}` showed the
+/// photo as a white rectangle: the GPU-resident draft left no CPU copy (review of PR #1065).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_headless_screenshot_reads_back_a_view_drawn_from_the_gpu() {
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default()) else {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    };
+    let (w, h) = (frame.width, frame.height);
+    assert!(app.renderer.keep_pixels);
+    let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap().draft();
+    app.renderer.request(Slot::Main, job, 100);
+    let (slot, job) = take_job(&work);
+    let mut result = job.run();
+    result.frame = Some(frame);
+    finish(&mut app, &work, &ctx, slot, result);
+    let t = app.renderer.textures.get(&Slot::Main).unwrap();
+    assert_eq!(t.id(), egui::TextureId::User(7), "the draft is drawn from the GPU");
+    assert!(t.pixels.is_none());
+    let cpu = app.renderer.cpu_textures();
+    let shot = cpu.get(&egui::TextureId::User(7)).expect("the headless screenshot has the view's pixels");
+    assert_eq!(shot.image.size, [w, h]);
+    assert_eq!(shot.image.pixels[4], egui::Color32::from_rgb(40, 100, 200));
+}
+
+/// Releasing a slot (a zoomed loupe leaving its window, a Compare region) lets go of its
+/// GPU-resident texture too, which can be window-sized (review of PR #1065: it was kept until
+/// the slot was drawn from the GPU again).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn releasing_a_slot_frees_its_gpu_texture() {
+    let freed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(freed.clone()) else {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    };
+    let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap().draft();
+    app.renderer.request(Slot::Main, job, 100);
+    let (slot, job) = take_job(&work);
+    let mut result = job.run();
+    result.frame = Some(frame);
+    finish(&mut app, &work, &ctx, slot, result);
+    assert_eq!(app.renderer.textures.get(&Slot::Main).map(|t| t.id()), Some(egui::TextureId::User(7)));
+    assert!(freed.lock().unwrap().is_empty());
+    app.renderer.release(Slot::Main);
+    assert_eq!(*freed.lock().unwrap(), vec![egui::TextureId::User(7)], "the window's texture is freed");
+    assert!(app.renderer.natives.is_empty() && app.renderer.native_frames.is_empty());
 }
 
 fn relink_destination() -> std::path::PathBuf {
