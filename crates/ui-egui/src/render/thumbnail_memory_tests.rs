@@ -156,6 +156,24 @@ fn a_thumbnail_request_notes_the_photo_for_the_trim() {
     assert!(app.renderer.thumbs_asked.contains(&PhotoId(1)));
 }
 
+// Given a Print cell that stops asking once its picture has arrived, and the grid trimming behind
+// the dialog every frame with its own window elsewhere, the cell keeps its picture: it notes the
+// photo every frame it is drawn, or the picture would go two frames after the last ask, be asked
+// for again, and flicker.
+#[test]
+fn a_print_cell_keeps_its_thumbnail_through_the_grids_trims() {
+    let (mut app, ctx) = unreadable_library(3);
+    app.renderer.textures.insert(Slot::Thumb(PhotoId(2)), tex(&ctx, 2, [256, 256]));
+    app.renderer.thumb_asked(PhotoId(2)); // (the frame before, when the cell still asked for it)
+    for frame in 0..6 {
+        app.renderer.poll(&ctx, &mut app.session);
+        app.renderer.evict_thumbs_within(&on_screen([1]), 0);
+        let shown = crate::dialogs::print_view::cell_thumbnail(&mut app, PhotoId(2), 256);
+        assert!(shown.is_some(), "frame {frame}: the cell shows its picture");
+        assert_eq!(app.renderer.thumb_jobs_built, 0, "frame {frame}: and doesn't ask for it again");
+    }
+}
+
 // Given thumbnails over their share of the budget, or more remembered failures than are kept, the
 // loupe trims them while stepping through photos, as the grid does while scrolling.
 #[test]
