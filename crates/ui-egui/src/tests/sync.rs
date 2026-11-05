@@ -291,7 +291,9 @@ fn a_synchronize_whose_worker_cannot_start_scans_again_keeping_the_choices() {
     assert!(r.to_string().contains("could not start"), "{r}");
     assert!(h.app.sync_run.is_none());
     assert_eq!(in_library(&h), vec!["a.png", "b.png"]);
-    assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: None, .. })), "scanning again: {:?}", h.app.ui.dialog);
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { .. })), "{:?}", h.app.ui.dialog);
+    // (the refused start used up the scan; a small folder's new one can end within the request's frames)
+    assert!(h.app.sync.is_some() || h.app.session.folder_changes.is_some(), "scanning again");
     let rescanned = h.step_until(T, |h| matches!(&h.app.ui.dialog, Some(Dialog::SynchronizeFolder { counts: Some(_), .. })));
     assert!(rescanned, "and scans again");
     assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { remove_missing: true, .. })), "keeping what was ticked");
