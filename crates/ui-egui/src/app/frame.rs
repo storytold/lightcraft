@@ -1,6 +1,6 @@
 use super::{
-    LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, model_setup, monotonic_ms, panels, pick, recheck,
-    shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, monotonic_ms, panels, pick, recheck, shortcuts,
+    slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
 
 impl LightcraftApp {
@@ -44,7 +44,8 @@ impl LightcraftApp {
     /// monotonic app clock, so a hidden `run_logic` keeps it advancing and a second layout pass is
     /// a no-op rather than a duplicate.
     pub(super) fn logic_background(&mut self, ctx: &egui::Context) {
-        panels::notices::logic(self);
+        self.background_prep(ctx);
+        panels::notices::logic(self, ctx);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -80,7 +81,6 @@ impl LightcraftApp {
         self.slideshow_tick(ctx, now);
         panels::denoise::pump_background(self, ctx, now);
         panels::faces::pump_background(self, ctx, now);
-        model_setup::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
@@ -265,6 +265,7 @@ impl LightcraftApp {
             self.import_dropped_files(ctx);
         }
         self.check_external_editor(ctx);
+        theme::refresh_window_on_first_focus(ctx);
         // Alt (Option on macOS) while a slider is dragged shows its temporary preview
         self.ui.alt_held = ctx.input(|i| i.modifiers.alt);
         // Recent-library checks and launch-list keys read focus/time/keys: they belong to the UI
@@ -305,6 +306,10 @@ impl LightcraftApp {
         let generation = self.session.library_generation();
         if self.shown_library == Some(generation) {
             return;
+        }
+        // (the first library shown takes the place of none: nothing was searching another one)
+        if self.shown_library.is_some() {
+            crate::find_similar::library_changed(self);
         }
         self.shown_library = Some(generation);
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
@@ -354,6 +359,8 @@ impl LightcraftApp {
         }
         self.widgets = std::mem::take(&mut self.next_widgets);
         self.widget_hits = std::mem::take(&mut self.next_widget_hits);
+        // a frame without the loupe (grid, Compare, Survey, slideshow…) ends the loupe's step timing
+        self.loupe_timing.end_frame(ctx.input(|i| i.time));
         panels::notices::finish_ui_pass(self, ctx);
         panels::library_problem::finish_ui_pass(self, ctx);
         self.ui_passes = self.ui_passes.wrapping_add(1);
