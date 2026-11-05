@@ -30,7 +30,8 @@ nonnegative, and minutes / seconds must be below 60. The writer rounds total coo
 before splitting DMS, carrying rounding across minute and degree boundaries. Malformed subdivisions do not create a
 typed location, while the source tags remain available in All Metadata. Original export with Remove Location Info
 refuses files with location-bearing EXIF tags, a GPS IFD pointer whose child could not be read, or an embedded EXIF
-block that could not be parsed. Containers without a separate EXIF block retain the whole-file TIFF fallback.
+block that could not be parsed. PNG `eXIf` and WebP `EXIF` chunks are all checked, not just the one exposed by
+`embedded()`. Containers without a separate EXIF block retain the whole-file TIFF fallback.
 
 ## XMP namespaces
 

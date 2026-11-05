@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### EXIF GPS locations stay valid and are protected in Original exports
-- GPS DMS subdivisions are validated before reading and rounded before serialization, with carries applied to degrees and minutes. Original export with Remove Location Info refuses files with GPS location or destination tags, unreadable GPS IFD children, or unparseable embedded EXIF.
+- GPS DMS subdivisions are validated before reading and rounded before serialization, with carries applied to degrees and minutes. Original export with Remove Location Info refuses files with GPS location or destination tags, unreadable GPS IFD children, or unparseable embedded EXIF; every PNG `eXIf` and WebP `EXIF` chunk is checked.
 
 ### Remove Hot Pixels
 - Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).

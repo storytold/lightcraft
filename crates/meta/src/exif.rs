@@ -43,9 +43,12 @@ pub fn exif_embeds_gps_location(bytes: &[u8]) -> bool {
 }
 
 /// Whether a source file contains location-bearing EXIF tags or an embedded EXIF block that cannot
-/// be parsed. JPEG APP1 packets are all inspected; when a container has no separate EXIF block, the
-/// whole source is checked as a possible TIFF-structured EXIF stream.
+/// be parsed. JPEG APP1 packets and all PNG/WebP EXIF chunks are inspected; when a container has no
+/// separate EXIF block, the whole source is checked as a possible TIFF-structured EXIF stream.
 pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
+    if let Some(has_location) = crate::container::png_webp_embeds_exif_gps_location(bytes) {
+        return has_location;
+    }
     if bytes.starts_with(&[0xff, 0xd8]) {
         return crate::container::jpeg_embeds_exif_gps_location(bytes);
     }
