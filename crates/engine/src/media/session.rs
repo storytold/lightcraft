@@ -58,7 +58,8 @@ impl crate::Session {
         let content = Hasher128::new().str(&content_key).finish().0 as u64;
         let source_key = super::quick::source_identity(&p);
         // Temporary "before" settings must not replace the photo's cached develop hash.
-        let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
+        let settings_hash =
+            if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings);
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         let lens = super::quick::lens_key(&p);
@@ -131,6 +132,7 @@ impl crate::Session {
         // (the photo's database lens profile stays part of it: a profile looked up again renders afresh)
         let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
         job.key = settings.hash64()
+            ^ crate::files::hot_pixel_key(settings)
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
             ^ (apply_crop as u64)
@@ -144,7 +146,11 @@ impl crate::Session {
     /// `profile_salt`: [`MediaCache::camera_profile_salt`] of `settings`' profile.
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64) -> Hash128 {
         let mut k = Hasher128::new();
-        k.str(&content_key(p)).str("variant").u64(settings.hash64()).u64(edge as u64).u64(RENDER_CACHE_VERSION);
+        k.str(&content_key(p))
+            .str("variant")
+            .u64(settings.hash64() ^ crate::files::hot_pixel_key(settings))
+            .u64(edge as u64)
+            .u64(RENDER_CACHE_VERSION);
         with_process(&mut k, settings).u64(crate::camera_profiles::cache_key());
         if profile_salt != 0 {
             k.str("dcp").u64(profile_salt);
@@ -272,7 +278,11 @@ impl crate::Session {
         let salt = self.media.denoise_salt(p.id, &p.develop);
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let mut k = Hasher128::new();
-        k.str(&content_key(p)).str("view").u64(p.develop.hash64()).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION);
+        k.str(&content_key(p))
+            .str("view")
+            .u64(p.develop.hash64() ^ crate::files::hot_pixel_key(&p.develop))
+            .u64(apply_crop as u64)
+            .u64(RENDER_CACHE_VERSION);
         with_process(&mut k, &p.develop).u64(crate::camera_profiles::cache_key());
         if salt != 0 {
             k.u64(salt);
@@ -404,8 +414,14 @@ impl crate::Session {
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let cached = vec![(self.media.rendered.clone(), self.view_key(&p, apply_crop))];
         // (the photo too: a virtual copy shares the file and, unedited, the settings)
-        let h =
-            Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(id.0).u64(profile_salt).finish();
+        let h = Hasher128::new()
+            .str(&content_key(&p))
+            .str("quick")
+            .u64(p.develop.hash64() ^ crate::files::hot_pixel_key(&p.develop))
+            .u64(apply_crop as u64)
+            .u64(id.0)
+            .u64(profile_salt)
+            .finish();
         let key = h.0 as u64;
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {

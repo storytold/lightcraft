@@ -9,6 +9,7 @@
 //! of decoded source proxies. Rendering is done by [`RenderJob`]s that are `Send` so frontends can
 //! run them off the UI thread.
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // Model/cache types remain available without linking the optional inference crate.
 #[cfg(not(feature = "denoise"))]
@@ -1016,8 +1017,9 @@ impl Session {
             return Vec::new();
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
-        let mut old_json = old.to_json();
-        let mut new_json = new.to_json();
+        // (Remove Hot Pixels, omitted when off, is stated: switching it off is a change)
+        let mut old_json = old.to_json_for_merge();
+        let mut new_json = new.to_json_for_merge();
         // False is omitted from stored profile JSON. Keep it explicit for this comparison so
         // switching camera local tone mapping off is a change without copying untouched values.
         old_json["profile"]["camera_local_tone"] = Value::Bool(old.profile.camera_local_tone);
