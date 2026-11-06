@@ -1290,6 +1290,16 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
     let mut file = TiffWriter::default().write(&[ifd]).unwrap();
     assert_eq!(file.len(), offset);
     file.extend(jpeg);
+    // Standalone non-CR3 scope: a coherent profile must not alter Main's CR3 framing route.
+    let mut cr3 = raw.clone();
+    cr3.format = RawFormat::Cr3;
+    let baseline = proxies(&cr3, &file, &transform, PROXY, 0.0, None, None).unwrap();
+    let proposed = proxies(&cr3, &file, &transform, PROXY, 0.0, None, Some(&lens)).unwrap();
+    let bits = |image: &Rgb32f| image.data.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&baseline.0), bits(&proposed.0), "CR3 sensor keeps Main framing");
+    assert_eq!(bits(&baseline.1), bits(&proposed.1), "CR3 reference is unchanged");
+    assert_eq!(baseline.2, proposed.2, "CR3 clipping is unchanged");
+    assert_eq!(profile_pairs(&cr3, &file, None, None), profile_pairs(&cr3, &file, None, Some(&lens)), "CR3 pooled pairs keep Main");
     let (plain, reference, _) = proxies(&raw, &file, &transform, PROXY, 0.0, None, None).unwrap();
     let (mut aligned, _, _) = proxies(&raw, &file, &transform, PROXY, 0.0, None, Some(&lens)).unwrap();
     let mut plain_render = plain;
@@ -1337,6 +1347,32 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
     with_starting_colour(&mut raw, &file);
     assert_eq!(raw.color, expected, "standalone DNG colour agrees with opening the RAW");
     assert_eq!(raw.opcodes.list3, ops, "DNG retains its file corrections");
+
+    // A real configured profile with nonzero vignetting must still be available to Main's
+    // per-file CR3 path, while this proposal's new Pool/DNG lookup stays excluded.
+    let vignetted_db =
+        DB.replace("</calibration>", r#"<vignetting model="pa" focal="18" aperture="3.5" distance="1000" k1="-0.4" k2="0" k3="0" /></calibration>"#);
+    let path = std::path::PathBuf::from(std::env::var_os(crate::lens_profiles::ENV).unwrap()).join("synthetic.xml");
+    std::fs::write(path, vignetted_db).unwrap();
+    crate::lens_profiles::reload();
+    let resolved = crate::lens_profiles::for_raw(&cr3.info(), || lightcraft_meta::extract(&file)).unwrap();
+    assert!(resolved.warp.is_some() && resolved.vignette.is_some(), "fixture resolves both corrections");
+    let mut main_lens = resolved;
+    main_lens.warp = None;
+    let main_proxy = proxies(&cr3, &file, &transform, PROXY, 0.0, None, Some(&main_lens)).unwrap();
+    let actual_proxy = proxies(&cr3, &file, &transform, PROXY, 0.0, None, Some(&resolved)).unwrap();
+    assert_eq!(bits(&main_proxy.0), bits(&actual_proxy.0), "CR3 keeps Main's vignetting and framing, ignoring the new radial proposal");
+    assert_ne!(bits(&baseline.0), bits(&actual_proxy.0), "nonzero vignetting remains active for CR3");
+    assert_eq!(main_proxy.2, actual_proxy.2, "CR3 masks keep Main semantics");
+    assert_eq!(profile_pairs(&cr3, &file, None, Some(&main_lens)), profile_pairs(&cr3, &file, None, Some(&resolved)));
+    assert!(correspondence_correction(&cr3, &file).is_none(), "the actual shared Pool/DNG lookup excludes CR3");
+    let expected = super::colour::starting_colour_tags_with_correction(&mut cr3.clone(), &file, None);
+    assert_eq!(starting_colour_tags(&mut cr3.clone(), &file), expected, "public DNG lookup keeps Main's CR3 route");
+    assert_eq!(
+        super::colour::starting_colour_tags_with_correction(&mut cr3, &file, Some(&resolved)),
+        expected,
+        "injected CR3 correction cannot bypass DNG scope"
+    );
 }
 
 #[test]
@@ -1664,6 +1700,30 @@ fn assert_lowered(fitted: &CameraLook, fixed: &CameraLook, what: &str) {
         let x = 0.001 * 1.005f32.powi(i);
         assert!(fixed.tone.apply(x) <= fitted.tone.apply(x) + 1e-5, "{what} at {x}: {} > {}", fixed.tone.apply(x), fitted.tone.apply(x));
     }
+    // V5's shoulder stays below too whenever the lowered last segment's slope over its squared gap to
+    // white is at most the fitted one's (`dro_off` doesn't enforce it, so V1 to V4 keep their curve;
+    // issue #1632)
+    if v5_bounded(&fixed.tone, &fitted.tone) {
+        assert!(v5_below(&fixed.tone, &fitted.tone), "{what}: brighter than the fitted curve under V5");
+    }
+}
+
+/// Whether the last segment of `a`, over its squared gap to white, is at most `b`'s: then `a`'s V5
+/// shoulder ([`CameraTone::apply_rolloff`]) is nowhere above `b`'s (issue #1632).
+fn v5_bounded(a: &CameraTone, b: &CameraTone) -> bool {
+    let rate = |t: &CameraTone| {
+        let k = t.knots();
+        ((k[31][1] - k[30][1]) / (k[31][0] - k[30][0])).max(0.0) / (1.0 - k[31][1]).powi(2)
+    };
+    rate(a) <= rate(b)
+}
+
+/// Whether `a`'s V5 curve is nowhere brighter than `b`'s, from deep shadows to far past the last knot.
+fn v5_below(a: &CameraTone, b: &CameraTone) -> bool {
+    (0..=2400).all(|i| {
+        let x = 0.001 * 1.005f32.powi(i);
+        a.apply_rolloff(x) <= b.apply_rolloff(x) + 1e-5
+    })
 }
 
 /// Issue #244: Sony's Dynamic Range Optimizer lifts the camera JPEG's shadows, not the raw's. A
@@ -1802,6 +1862,8 @@ fn corpus_arw_with_dro_is_lowered_to_the_dro_off_tone() {
         let fitted = fit_look(&sensor, &reference, &clipped, colour).unwrap();
         if dro {
             assert_lowered(&fitted, &look, name);
+            // the Sony DRO samples' lowered curves stay below their fitted ones under V5 as well
+            assert!(v5_below(&look.tone, &fitted.tone), "{name}: brighter than the fitted curve under V5");
             for x in lowered {
                 assert!(look.tone.apply(x) < 0.95 * fitted.tone.apply(x), "{name} at {x}: {} vs {}", look.tone.apply(x), fitted.tone.apply(x));
             }

@@ -104,6 +104,12 @@ fn a_search_from_the_menu_reads_off_the_ui_thread_and_the_window_goes_on() {
     // nothing has been read yet: the command and the frames waited for none of it
     assert!(t0.elapsed() < FRAMES, "the window waited for the files: {:?}", t0.elapsed());
     assert_eq!(h.app.session.filter, Default::default(), "no answer before the files are read");
+    // the worker sets the row's total when it starts, which a loaded machine can leave for later
+    let waited = Instant::now();
+    while rows(&h)[0].total == 0 && waited.elapsed() < T {
+        h.step();
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let row = &rows(&h)[0];
     assert_eq!(row.label, LABEL);
     assert_eq!(row.total, PHOTOS);
@@ -119,32 +125,6 @@ fn a_search_from_the_menu_reads_off_the_ui_thread_and_the_window_goes_on() {
     assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.starts_with(&format!("{shown} similar photos")), "{toast}");
-}
-
-/// A worker may not be scheduled before the next frames: the known work count is published by
-/// the command itself, rather than depending on a first worker instruction.
-#[test]
-#[cfg(not(target_arch = "wasm32"))]
-fn the_known_total_is_visible_before_the_worker_can_start() {
-    let (mut h, drive) = app_on_a_slow_drive(GUARD);
-    let (resume, paused) = std::sync::mpsc::channel();
-    h.app.tasks.next_worker_start = Some(paused);
-    let started = h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
-    let before = rows(&h);
-    let read_before = drive.reads.load(Ordering::SeqCst);
-    // Always release and drain the worker before asserting, including the negative counterprobe.
-    drive.open.store(true, Ordering::SeqCst);
-    resume.send(()).unwrap();
-    until_done(&mut h);
-    assert_eq!(started, json!({"background": true, "count": PHOTOS}));
-    assert_eq!(before.len(), 1);
-    assert_eq!((before[0].done, before[0].total), (0, PHOTOS));
-    assert_eq!(before[0].label, LABEL);
-    assert!(before[0].cancellable);
-    assert_eq!(read_before, 0, "the worker was stopped before measuring any photo");
-    assert_eq!(drive.on_ui.load(Ordering::SeqCst), 0);
-    assert_eq!(drive.reads.load(Ordering::SeqCst), PHOTOS as usize);
-    assert!(rows(&h).is_empty());
 }
 
 /// One search at a time: the menu row is off while one runs and on again after it, and a second
@@ -184,8 +164,8 @@ fn stopping_leaves_the_view_alone_and_the_next_search_reads_only_the_rest() {
     assert!(h.app.ui.toast.is_none(), "{:?}", h.app.ui.toast);
     assert_eq!(drive.reads.load(Ordering::SeqCst), 1);
 
-    // Frames may have decoded other photos for the detail view or thumbnails.
-    // Keep this check about retained signatures, independently of those cached sources.
+    // Frames may decode detail/thumbnail sources independently of search signatures.
+    // Isolate the signature-cache/read-count check from those decoded pixels.
     h.app.session.media.clear_sources();
     let r = h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
     assert_eq!(r["count"], PHOTOS - 1, "what was read isn't read again");

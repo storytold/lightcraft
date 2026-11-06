@@ -1095,16 +1095,16 @@ mod smart_provenance_tests {
     use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
     use std::sync::Arc;
 
-    fn temp(tag: &str) -> std::path::PathBuf {
+    fn temp(tag: &str) -> std::io::Result<std::path::PathBuf> {
         let dir = std::env::temp_dir().join(format!("lc-smart-provenance-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
     }
 
     #[test]
     fn damaged_shard_never_relabels_cached_legacy_fallback_and_repairs_from_online_original() {
-        let dir = temp("legacy-fallback");
+        let dir = temp("legacy-fallback").unwrap();
         let mut photo = Photo::new(
             PhotoId(1),
             Source::File { path: dir.join("offline.arw").to_string_lossy().into_owned() },
@@ -1160,7 +1160,7 @@ mod smart_provenance_tests {
 
     #[test]
     fn missing_target_never_encodes_proxy_sources_but_keeps_valid_offline_proxies() {
-        let dir = temp("missing-target");
+        let dir = temp("missing-target").unwrap();
         let legacy = dir.join("legacy.lcsp");
         let image = lightcraft_raster::Rgb32f::new(48, 32);
         let bytes = crate::smart::encode(&image, Some(&Default::default())).unwrap();
@@ -1190,7 +1190,7 @@ mod smart_provenance_tests {
 
     #[test]
     fn smart_command_reads_original_instead_of_cached_pixels() {
-        let dir = temp("fresh-original");
+        let dir = temp("fresh-original").unwrap();
         let photo = Photo::new(
             PhotoId(1),
             Source::File { path: dir.join("original.arw").to_string_lossy().into_owned() },
@@ -1233,7 +1233,7 @@ mod smart_provenance_tests {
     #[test]
     fn fresh_smart_build_and_refresh_keep_the_photos_hot_pixel_decode() {
         for outliers in [false, true] {
-            let dir = temp(if outliers { "fresh-hot-on" } else { "fresh-hot-off" });
+            let dir = temp(if outliers { "fresh-hot-on" } else { "fresh-hot-off" }).unwrap();
             let mut photo = Photo::new(
                 PhotoId(1),
                 Source::File { path: dir.join("original.arw").to_string_lossy().into_owned() },
@@ -1311,7 +1311,7 @@ mod smart_provenance_tests {
             <cropfactor>1.5</cropfactor><calibration><distortion model="poly3" focal="18" k1="-0.03" />
             </calibration></lens></lensdatabase>"#;
         if std::env::var_os(CHILD).is_none() {
-            let dir = temp("runtime-reload-child");
+            let dir = temp("runtime-reload-child").unwrap();
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",

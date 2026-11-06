@@ -220,7 +220,7 @@ impl Pool {
         let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
         // colour only: geometric lens corrections would stop the sensor proxy from binning (the pairs still follow
         // the warp the camera applied to its JPEG)
-        let correction = crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(bytes));
+        let correction = crate::camera_preview::correspondence_correction(&raw, bytes);
         let lens = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };

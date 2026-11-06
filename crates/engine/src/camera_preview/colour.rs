@@ -125,6 +125,14 @@ pub(super) fn starting_colour_with(
     (xy, t, look.or_else(|| dark(raw, &t)))
 }
 
+/// Additional profile resolution for this proposal's pooled/DNG routes; CR3 keeps Main's route.
+pub(crate) fn correspondence_correction(raw: &RawImage, bytes: &[u8]) -> Option<lightcraft_develop::EmbeddedLens> {
+    if raw.format == RawFormat::Cr3 {
+        return None;
+    }
+    crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(bytes))
+}
+
 /// The colour a raw starts from ([`starting_colour`]) as DNG colour tags, for a DNG of the raw's camera RGB (Photo
 /// Merge, issue #965): without them a merge of CR2s, whose colour comes from a look fitted to their JPEG, rendered
 /// green and dark. `None` when the file has colour matrices of its own (a DNG keeps them).
@@ -132,7 +140,7 @@ pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<C
     if lightcraft_raw::color::has_matrix(&raw.color) {
         return None;
     }
-    let correction = crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(bytes));
+    let correction = correspondence_correction(raw, bytes);
     starting_colour_tags_with_correction(raw, bytes, correction.as_ref())
 }
 
@@ -141,6 +149,7 @@ pub(super) fn starting_colour_tags_with_correction(
     bytes: &[u8],
     correction: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> Option<ColorData> {
+    let correction = correction.filter(|_| raw.format != RawFormat::Cr3);
     // the white the source shows, decided before `starting_colour` may fill in measured matrices
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
