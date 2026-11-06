@@ -609,7 +609,7 @@ fn hidden_slideshow_pauses_and_keeps_its_remaining_time() {
         let tex = ctx.load_texture(format!("slide-{}", id.0), egui::ColorImage::filled([2, 2], egui::Color32::WHITE), Default::default());
         app.renderer.textures.insert(
             Slot::Slide(Item::Photo(id)),
-            Tex { look: None, key: 0, photo: id, tex, size: [2, 2], histogram: None, ms: 0.0, quick: None, pixels: None },
+            Tex { look: None, key: 0, photo: id, tex, native: None, size: [2, 2], histogram: None, ms: 0.0, quick: None, pixels: None },
         );
     }
     let first = app.ui.slideshow.as_ref().unwrap().play.current();
@@ -2029,6 +2029,9 @@ fn a_discarded_layout_does_not_publish_its_widget_registry() {
 fn a_gesture_replies_only_after_the_completed_pass_consumed_its_event() {
     let ctx = egui::Context::default();
     let mut app = app();
+    // a headless host never gains the first-run tour: its modal would sit over the passes this
+    // test drives (screenshot tests elsewhere in this file need the host not headless)
+    app.headless_host = true;
     frame(&ctx, raw(egui::vec2(1000.0, 700.0)), |ui| app.logic(ui.ctx()));
     app.logic(&ctx);
     assert!(app.fonts_ready);
@@ -2057,6 +2060,10 @@ fn a_gesture_replies_only_after_the_completed_pass_consumed_its_event() {
 fn a_delivered_gesture_may_change_the_state_it_acted_on() {
     let ctx = egui::Context::default();
     let mut app = app();
+    // a headless host never gains the first-run tour: its modal would take the dialog this
+    // delivered gesture opens (screenshot tests elsewhere in this file need the host not
+    // headless, so the flag is scoped to this test)
+    app.headless_host = true;
     frame(&ctx, raw(egui::vec2(1000.0, 700.0)), |ui| app.logic(ui.ctx()));
     app.logic(&ctx);
     assert!(app.fonts_ready);
@@ -2331,4 +2338,44 @@ fn synthetic_modifier_ownership_follows_host_changes_across_frames() {
     assert_eq!(input.events, vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
     assert_eq!(app.synthetic_mods, egui::Modifiers::NONE);
     assert!(!app.synthetic_mods_release);
+}
+
+/// Background preparation is advanced on every logic pass, the hidden ones too (CodeRabbit on
+/// #3077): a minimised window keeps preparing the view's previews, and a shown frame ticks it once.
+#[test]
+fn background_preparation_advances_while_the_window_is_hidden() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let hidden = viewport_raw(egui::vec2(800.0, 600.0), false);
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    assert_eq!(app.prep_ticks, 2, "each hidden pass advances it");
+    let visible = viewport_raw(egui::vec2(800.0, 600.0), true);
+    let _ = ctx.run_logic(&visible, |ctx| app.logic(ctx));
+    assert_eq!(app.prep_ticks, 3, "a shown pass advances it once");
+}
+/// CodeRabbit on #3077/#3080: a background build that couldn't start asks for a frame at its retry
+/// time, so the retry happens with no input and no other timed frame.
+#[test]
+fn a_build_waiting_to_retry_asks_for_a_frame_at_its_time() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = delays.clone();
+    ctx.set_request_repaint_callback(move |info| seen.lock().unwrap().push(info.delay));
+    let wait = std::time::Duration::from_secs(7);
+    let hidden = viewport_raw(egui::vec2(800.0, 600.0), false);
+    // (the first passes ask for frames at once, which would hide a later request)
+    for _ in 0..3 {
+        let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    }
+    delays.lock().unwrap().clear();
+    app.session.prep.retry_at = Some((0, std::time::Instant::now() + wait));
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    let got = delays.lock().unwrap().clone();
+    assert!(got.iter().any(|d| *d > std::time::Duration::from_secs(6) && *d <= wait), "a frame at the retry time: {got:?}");
+    app.session.prep.retry_at = None;
+    delays.lock().unwrap().clear();
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    assert!(!delays.lock().unwrap().iter().any(|d| *d > std::time::Duration::from_secs(6) && *d <= wait), "none without a retry waiting");
 }
