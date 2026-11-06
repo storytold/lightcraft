@@ -16,7 +16,7 @@
 //! lookups.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 
 use crate::query::{Sort, SortKey};
@@ -185,8 +185,10 @@ fn making(photos: Vec<Arc<Photo>>, sort: Sort, revision: u64) -> (Arc<Slot>, imp
 /// Below this many photos an order is sorted when first asked for (about 50 ms at most): a thread is not worth it.
 const PREBUILD_FROM: usize = 50_000;
 
+/// The orders of a catalog: what is kept and being made, how many times every photo was sorted, and whether the
+/// platform has no threads at all (wasm32 in the browser), which is not asked again.
 #[derive(Debug, Default)]
-pub(crate) struct Orders(Mutex<Held>, AtomicUsize);
+pub(crate) struct Orders(Mutex<Held>, AtomicUsize, AtomicBool);
 
 impl Orders {
     /// Forget every order (the catalog was changed other than by ops).
@@ -351,7 +353,8 @@ impl Catalog {
     /// and its result is tagged with the revision they were at: asked for, it is brought up to date like any kept
     /// order, so it is never wrong. A big view that asks for it before it is ready waits for it (that takes less than
     /// a second sort of every photo would); a small one sorts its own photos as it did. Nothing
-    /// is started where a thread can't be (it only costs that sort).
+    /// is started where a thread can't be (it only costs that sort); where the platform has none, the first try is the
+    /// last, so a view there does not collect every photo again after each edit.
     pub fn prebuild_order(&self, sort: &Sort) {
         self.prebuild_order_holding(sort, || ());
     }
@@ -361,7 +364,23 @@ impl Catalog {
     /// into the thread and dropped after the order is handed over. The engine passes an activity row, so a sort that
     /// takes seconds on a big library is listed for as long as it runs.
     pub fn prebuild_order_holding<H: Send + 'static>(&self, sort: &Sort, hold: impl FnOnce() -> H) {
-        if sort.key == SortKey::Random || self.len() < PREBUILD_FROM || u32::try_from(self.len()).is_err() {
+        self.prebuild_order_on(sort, hold, |work| std::thread::Builder::new().name("kept-order".into()).spawn(work).map(drop));
+    }
+
+    /// [`Self::prebuild_order_holding`] with the way a thread is started given: `spawn` runs the work on a thread (a test
+    /// starts none). A thread that cannot start for want of resources is tried again at the next call; one that the
+    /// platform does not have ([`std::io::ErrorKind::Unsupported`]) never is.
+    pub(crate) fn prebuild_order_on<H: Send + 'static>(
+        &self,
+        sort: &Sort,
+        hold: impl FnOnce() -> H,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+    ) {
+        if sort.key == SortKey::Random
+            || self.len() < PREBUILD_FROM
+            || u32::try_from(self.len()).is_err()
+            || self.index.orders.2.load(Ordering::Relaxed)
+        {
             return;
         }
         let Ok(mut held) = self.index.orders.0.lock() else { return };
@@ -376,8 +395,12 @@ impl Catalog {
             make();
         };
         // (a thread that can't start drops `work`, and with it what it holds)
-        if std::thread::Builder::new().name("kept-order".into()).spawn(work).is_ok() {
-            held.pending.insert(sort.key, slot);
+        match spawn(Box::new(work)) {
+            Ok(()) => {
+                held.pending.insert(sort.key, slot);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Unsupported => self.index.orders.2.store(true, Ordering::Relaxed),
+            Err(_) => {}
         }
     }
 

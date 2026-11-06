@@ -553,3 +553,44 @@ fn the_thread_making_an_order_holds_what_it_was_given_until_the_order_is_ready()
     assert!(c.order_ready(sort.key), "dropped before the order was handed over");
     assert!(rx.try_recv().is_err(), "a second row was made for an order already being made");
 }
+
+/// Starts no thread: says `error`, and counts how many times it was asked and how many rows were made for it.
+fn ask_twice_over(c: &Catalog, sort: &Sort, error: std::io::ErrorKind) -> (usize, usize) {
+    use std::cell::Cell;
+    let (asked, rows) = (Cell::new(0), Cell::new(0));
+    for _ in 0..3 {
+        c.prebuild_order_on(
+            sort,
+            || rows.set(rows.get() + 1),
+            |work| {
+                asked.set(asked.get() + 1);
+                drop(work);
+                Err(std::io::Error::from(error))
+            },
+        );
+    }
+    (asked.get(), rows.get())
+}
+
+/// Where the platform has no threads (wasm32 in the browser), asking again does not collect the photos and make the
+/// activity row again each time: a view in a big library asks after every edit. Nothing is pending, and a big view
+/// sorts for itself, as it always did there.
+#[test]
+fn a_catalog_whose_platform_has_no_threads_stops_trying() {
+    let c = big();
+    let sort = sort_of(SortKey::Rating);
+    assert_eq!(ask_twice_over(&c, &sort, std::io::ErrorKind::Unsupported), (1, 1), "asked again after the platform said it has no threads");
+    assert!(!c.index.orders.pending(sort.key));
+    let got;
+    assert_eq!(fresh_sorts!(c, got = c.kept_ids(&sort)), 1);
+    assert_eq!(got, Some(c.sorted_from_scratch(&sort)));
+}
+
+/// A thread that could not start for want of resources is tried again: it may start next time.
+#[test]
+fn a_thread_that_could_not_start_for_want_of_resources_is_tried_again() {
+    let c = big();
+    let sort = sort_of(SortKey::Rating);
+    assert_eq!(ask_twice_over(&c, &sort, std::io::ErrorKind::WouldBlock), (3, 3));
+    assert!(!c.index.orders.pending(sort.key));
+}
