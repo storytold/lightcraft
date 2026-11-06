@@ -312,7 +312,6 @@ fn compare_zoom_window_tracks_the_zoomed_pane() {
     let native = crate::panels::detail::output_px(&frame);
     let view = h.app.compare_windows[1].expect("a zoom window");
     assert_eq!(view.photo, lightcraft_catalog::PhotoId(candidate));
-    let whole = h.app.renderer.textures.get(&Slot::Compare(1)).expect("whole-frame texture");
     let tex = h.app.renderer.textures.get(&Slot::CompareRegion(1)).expect("window texture");
     assert_eq!(tex.photo, lightcraft_catalog::PhotoId(candidate));
     let tex_id = tex.tex.id();
@@ -365,6 +364,7 @@ fn compare_zoom_window_tracks_the_zoomed_pane() {
         "the tile {bounds:?} must sit in the zoomed pane's frame {expected:?}, not in the texture's rect {wrong:?}"
     );
 }
+
 /// Clicking a colour label (or stars) in the Info panel while culling labels the active photo
 /// only, as the label keys and the bottom bar's stars and flags do, and the label shows under that
 /// photo in Compare (#2398: "Can't assign color to photo when culling").
