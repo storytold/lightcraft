@@ -565,13 +565,34 @@ pub(crate) fn fit_with_floor(pano: &PanoOptions, frame_px: f64, floor: f64, room
     if fits.is_nan() || fits < floor {
         let need = (frame_px * FRAME_BYTES + floor * 1e6 * PANO_TILE_BYTES).max(floor * 1e6 * PANO_BLEND_BYTES);
         return Err(format!(
-            "not enough memory for this panorama: at {} MP, the smallest it is made, it needs about {:.0} MB, its photos included, and the merge may use {:.0} MB; merge fewer or smaller photos, ask for a smaller panorama, or close other apps",
+            "not enough memory for this panorama: at {} MP, the smallest it is made, it needs about {:.0} MB, its photos included, {}; {}",
             round_megapixels(floor),
             mb(need).ceil(),
-            mb(room.max(0.0)).floor()
+            merge_budget(mb(room.max(0.0)).floor()),
+            pano_remedy(pano.max_megapixels, floor, fits)
         ));
     }
     Ok(PanoOptions { max_megapixels: pano.max_megapixels.min(fits), ..pano.clone() })
+}
+
+/// How a refusal names the merge's memory (`mb`, [`merge_memory`]): a budget, not the memory free
+/// now, so closing other apps doesn't raise it.
+fn merge_budget(mb: f64) -> String {
+    format!("but the merge's budget is {mb:.0} MB (three quarters of this computer's memory, less the app's caches)")
+}
+
+/// What a panorama refused for its `floor` can change: fewer or smaller photos, and, when the floor
+/// is 40 MP or the size `asked` for (not the photos' own pixels) and a smaller size `fits`
+/// (megapixels), a `maxMegapixels` up to that (a command option: the desktop's Merge dialog has no
+/// size control).
+fn pano_remedy(asked: f64, floor: f64, fits: f64) -> String {
+    let cap = MIN_PANORAMA_MEGAPIXELS.min(asked).max(MIN_MEGAPIXELS);
+    let fits = (fits * 10.0).floor() / 10.0;
+    if floor >= cap && fits >= MIN_MEGAPIXELS && fits < floor {
+        format!("merge fewer or smaller photos, or set maxMegapixels to {fits} or less (command line or MCP)")
+    } else {
+        "merge fewer or smaller photos".to_owned()
+    }
 }
 
 /// [`fit_with_floor`] for decoded frames of `frame_px` pixels, the floor following the photos' own

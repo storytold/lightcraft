@@ -244,12 +244,20 @@ fn a_panorama_is_made_no_smaller_than_its_floor() {
     // 2 GB (a 4 GB computer, or a small memory limit): about 29 MP, under the floor: refused
     let e = mp(2e9).unwrap_err();
     assert!(e.starts_with("not enough memory for this panorama: at 40 MP, the smallest it is made,"), "{e}");
-    assert!(e.contains("needs about 2594 MB") && e.contains("may use 1907 MB"), "{e}");
+    assert!(e.contains("needs about 2594 MB") && e.contains("the merge's budget is 1907 MB (three quarters of this computer's memory"), "{e}");
+    assert!(
+        e.ends_with("merge fewer or smaller photos, or set maxMegapixels to 29.4 or less (command line or MCP)"),
+        "the largest size that fits: {e}"
+    );
+    assert!(!e.contains("close other apps"), "the budget doesn't grow when other apps close: {e}");
+    let asked = lightcraft_merge::PanoOptions { max_megapixels: 29.4, ..full.clone() };
+    assert_eq!(fit(&asked, photos, 2e9), Ok(29.4), "the size the refusal names fits");
     // three 1 MP photos: their own resolution is the floor
     assert_eq!(panorama_floor(full.max_megapixels, 3e6), 3.0);
     assert_eq!(fit(&full, 3e6, 3.5e6 * 68.0), Ok(3.5));
     let e = fit(&full, 3e6, 2e6 * 68.0).unwrap_err();
-    assert!(e.contains("at 3 MP") && e.contains("may use 129 MB"), "{e}");
+    assert!(e.contains("at 3 MP") && e.contains("budget is 129 MB"), "{e}");
+    assert!(e.ends_with("; merge fewer or smaller photos"), "a floor of the photos' own pixels: no smaller maxMegapixels to name: {e}");
     // a size asked for below 40 MP is the floor: room for 0.6 MP beside the photos holds 0.5 MP
     let room = photos * 12.0 + 0.6e6 * 36.0;
     let asked = lightcraft_merge::PanoOptions { max_megapixels: 0.5, ..full.clone() };
@@ -259,7 +267,8 @@ fn a_panorama_is_made_no_smaller_than_its_floor() {
     assert_eq!(panorama_floor(f64::NAN, 1e9), 40.0, "a NaN size asked for is ignored");
     assert_eq!(panorama_floor(0.01, 1e9), 0.1, "a size asked for under the stitch's least cap is held to it");
     for room in [0.0, -1.0, f64::NAN] {
-        assert!(mp(room).unwrap_err().contains("may use 0 MB"), "{room}");
+        let e = mp(room).unwrap_err();
+        assert!(e.contains("budget is 0 MB") && e.ends_with("; merge fewer or smaller photos"), "{room}: {e}");
     }
 }
 
