@@ -329,6 +329,6 @@
   "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。",
   "Show photos with {path}": "{path} の写真を表示",
   "Show photos with {path} (includes the keywords below it)": "{path} の写真を表示（下位のキーワードを含む）",
-  "Give {path} to the selected photos ({n})": "選択した写真に {path} を追加（{n}）",
+  "Add {path} to the selected photos ({n})": "選択した写真に {path} を追加（{n}）",
   "Take {path} off the selected photos ({n})": "選択した写真から {path} を削除（{n}）"
 }

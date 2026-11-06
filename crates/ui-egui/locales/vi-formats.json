@@ -325,6 +325,6 @@
   "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}",
   "Show photos with {path}": "Hiện ảnh có {path}",
   "Show photos with {path} (includes the keywords below it)": "Hiện ảnh có {path} (gồm cả các từ khóa bên dưới)",
-  "Give {path} to the selected photos ({n})": "Gán {path} cho các ảnh đã chọn ({n})",
+  "Add {path} to the selected photos ({n})": "Thêm {path} vào các ảnh đã chọn ({n})",
   "Take {path} off the selected photos ({n})": "Gỡ {path} khỏi các ảnh đã chọn ({n})"
 }

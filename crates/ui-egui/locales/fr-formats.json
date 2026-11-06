@@ -329,6 +329,6 @@
   "File › Export… · File › Print… ({keys}).": "Fichier › Exporter… · Fichier › Imprimer… ({keys}).",
   "Show photos with {path}": "Afficher les photos avec {path}",
   "Show photos with {path} (includes the keywords below it)": "Afficher les photos avec {path} (y compris les mots-clés en dessous)",
-  "Give {path} to the selected photos ({n})": "Attribuer {path} aux photos sélectionnées ({n})",
+  "Add {path} to the selected photos ({n})": "Ajouter {path} aux photos sélectionnées ({n})",
   "Take {path} off the selected photos ({n})": "Retirer {path} des photos sélectionnées ({n})"
 }

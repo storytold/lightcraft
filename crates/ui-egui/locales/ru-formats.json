@@ -329,6 +329,6 @@
   "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys}).",
   "Show photos with {path}": "Показать фото с ключевым словом {path}",
   "Show photos with {path} (includes the keywords below it)": "Показать фото с ключевым словом {path} (включая ключевые слова ниже)",
-  "Give {path} to the selected photos ({n})": "Добавить {path} к выбранным фото ({n})",
+  "Add {path} to the selected photos ({n})": "Добавить {path} к выбранным фото ({n})",
   "Take {path} off the selected photos ({n})": "Убрать {path} с выбранных фото ({n})"
 }
