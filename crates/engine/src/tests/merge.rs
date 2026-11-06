@@ -250,3 +250,29 @@ fn a_photo_named_twice_is_merged_once() {
     assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![a, b]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A collapsed stack contributes all its members to a merge, not just its visible top photo:
+/// naming the top of a collapsed bracket stack plans the merge of its members.
+#[test]
+fn collapsed_stack_top_expands_to_stack_members() {
+    let dir = temp_dir("collapsed-stack-top");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, &[-1.0, 0.0, 1.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    s.execute("stack.group", &json!({"ids": ids, "top": ids[0]})).unwrap();
+    let top = lightcraft_catalog::PhotoId(ids[0]);
+    let stack = s.catalog.stack_of(top).expect("the bracket stack").clone();
+    assert!(stack.collapsed);
+    assert_eq!(stack.top(), top);
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    let planned = s.plan_merge(kind, finish, &[top], true);
+    assert!(planned.is_ok(), "a collapsed stack top should expand to its members: {:?}", planned.err());
+    let job = planned.unwrap();
+    assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), stack.photos.iter().map(|p| p.0).collect::<Vec<_>>());
+    let _ = std::fs::remove_dir_all(&dir);
+}
