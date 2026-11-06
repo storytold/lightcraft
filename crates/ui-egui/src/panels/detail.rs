@@ -434,7 +434,8 @@ fn face_boxes(
     let people = if app.ui.name_edit.is_some() { app.caches.person_names(&app.session.catalog) } else { Default::default() };
     // while the name box is open and recognition is not set up, the box offers the next step
     let setup = if app.ui.name_edit.is_some() { super::faces::setup(app, ui.ctx()) } else { super::faces::Setup::Running };
-    let regions = RegionContext { photo, orient: d.orientation, hints: hints.as_deref(), people: &people, setup };
+    let movable = !matches!(app.ui.right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye);
+    let regions = RegionContext { photo, orient: d.orientation, hints: hints.as_deref(), people: &people, setup, movable };
     match region_overlay(ui, p, map, &regions, &mut app.ui.name_edit) {
         Some(RegionEdit::SetUp) => {
             app.ui.name_edit = None;
