@@ -67,13 +67,13 @@ impl MergeKind {
             && *bracket >= 2
             && (!photos.is_multiple_of(*bracket) || photos / *bracket < 2)
         {
-            return Err(format!("{photos} photos don't form brackets of {bracket} for at least two positions"));
+            return Err(uneven_brackets(photos, Some(*bracket)));
         }
         // a bracket left to EXIF is one of the sizes that divide the photos into at least two positions
         if let MergeKind::HdrPanorama { bracket: 0 | 1, .. } = self
             && !(2..=photos / 2).any(|b| photos.is_multiple_of(b))
         {
-            return Err(format!("{photos} photos don't form brackets of two or more for at least two positions"));
+            return Err(uneven_brackets(photos, None));
         }
         Ok(())
     }
@@ -306,25 +306,13 @@ impl MergeJob {
             }
             let Err(e) = holds(&self.kind, &sizes, room, load.edge, threads) else { return Ok(()) };
             let path = self.sources.get(i).map_or("a photo", |s| s.1.as_str());
-            let sensor = if now.samples > u64::from(now.width) * u64::from(now.height) {
-                format!(", {:.0} MP of raw samples", now.samples as f64 / 1e6)
+            // the cause the user can act on, apart: a file that changed since it was imported
+            let changed = if changed_since_import(was, now) {
+                ". It looks changed since it was imported: synchronize its folder, then merge again"
             } else {
-                String::new()
+                ""
             };
-            let changed = if !changed_since_import(was, now) {
-                String::new()
-            } else {
-                "; if it changed since it was imported, synchronize its folder and merge again".to_owned()
-            };
-            Err(format!(
-                "{path} needs more memory than the merge was planned with (planned as {}×{}, {:.0} MB; its file is {}×{}, {:.0} MB{sensor}): {e}{changed}",
-                was.width,
-                was.height,
-                mb(was.bytes as f64).ceil(),
-                now.width,
-                now.height,
-                mb(now.bytes as f64).ceil()
-            ))
+            Err(format!("{path} needs more memory to decode than expected: {e}{changed}"))
         };
         // the photos' own pixels beside each frame's, when the plan made them smaller
         let reduced = self.preview.is_none() && load.edge.is_some() && planned.len() == self.sources.len();
@@ -358,7 +346,7 @@ impl MergeJob {
                 let scale = areas(&frames, 1);
                 let (fit, floor) = fit_decoded(pano, pixels(&frames), &scale, memory, self.preview.is_some())?;
                 let r = lightcraft_merge::stitch(frames, &fit, &p).map_err(err)?;
-                reaches_floor(&r, floor, &scale, memory)?;
+                reaches_floor(&r, pano.max_megapixels, floor, &scale, memory)?;
                 let info = pano_info(&r, &self.sources, pano, &fit, &scale);
                 (
                     r.image,
@@ -377,7 +365,7 @@ impl MergeJob {
                 let b =
                     if *bracket >= 2 { *bracket } else { detect_bracket(&frames).ok_or("could not detect the bracket size from EXIF; set it")? };
                 if !frames.len().is_multiple_of(b) || frames.len() / b < 2 {
-                    return Err(format!("{} photos don't form brackets of {b} for at least two positions", frames.len()));
+                    return Err(uneven_brackets(frames.len(), Some(b)));
                 }
                 let groups = frames.len() / b;
                 let mut merged = Vec::new();
@@ -405,7 +393,7 @@ impl MergeJob {
                 let scale = areas(&merged, b);
                 let (fit, floor) = fit_decoded(pano, pixels(&merged), &scale, memory, self.preview.is_some())?;
                 let r = lightcraft_merge::stitch(merged, &fit, &p).map_err(err)?;
-                reaches_floor(&r, floor, &scale, memory)?;
+                reaches_floor(&r, pano.max_megapixels, floor, &scale, memory)?;
                 let mut info = pano_info(&r, &self.sources, pano, &fit, &scale);
                 info["bracket"] = json!(b);
                 (
@@ -501,15 +489,18 @@ fn shrunk(r: &lightcraft_merge::PanoResult, areas: &[(f64, f64)]) -> f64 {
 /// A panorama stitched from frames the plan made smaller must still reach its `floor`
 /// (megapixels), or its own resolution when that is less: the plan keeps enough of their pixels
 /// for it ([`plan_memory`]), but their overlap is known only once they are stitched, and a stitch
-/// makes no more pixels than its frames give. Refused when it doesn't (never on a guessed memory).
-fn reaches_floor(r: &lightcraft_merge::PanoResult, floor: f64, areas: &[(f64, f64)], memory: Memory) -> std::result::Result<(), String> {
+/// makes no more pixels than its frames give. Refused when it doesn't (never on a guessed memory),
+/// naming the panorama's size as the `maxMegapixels` that would have kept it, when one would
+/// (`asked`: the one asked for, [`pano_remedy`]).
+fn reaches_floor(r: &lightcraft_merge::PanoResult, asked: f64, floor: f64, areas: &[(f64, f64)], memory: Memory) -> std::result::Result<(), String> {
     let canvas = r.native_megapixels;
     if !memory.known || !below_floor(canvas, shrunk(r, areas), floor) {
         return Ok(());
     }
     Err(format!(
-        "not enough memory for this panorama: its photos had to be decoded smaller to fit the merge's memory, and the panorama of them has {canvas:.1} MP, under the {} MP it is made at the least; merge fewer or smaller photos, ask for a smaller panorama, or close other apps",
-        round_megapixels(floor)
+        "not enough memory for this panorama: its photos had to be decoded smaller to fit the merge's memory budget, and the panorama of them has {canvas:.1} MP, under the {} MP it is made at the least; {}",
+        round_megapixels(floor),
+        pano_remedy(asked, floor, canvas)
     ))
 }
 
@@ -630,6 +621,20 @@ pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, room: f64) -> std
 /// even under 0.1 MP: the stitch never scales photos up, so a floor above them couldn't be made.
 pub(crate) fn panorama_floor(asked: f64, frame_px: f64) -> f64 {
     MIN_PANORAMA_MEGAPIXELS.min(asked).max(MIN_MEGAPIXELS).min(frame_px / 1e6)
+}
+
+/// The refusal of an HDR panorama of `photos` that don't split into two or more brackets of
+/// `bracket` photos (`None`: left to EXIF, of any one size of two or more), in countable terms.
+fn uneven_brackets(photos: usize, bracket: Option<usize>) -> String {
+    match bracket {
+        Some(b) => format!(
+            "{photos} photos can't be split into brackets of {b}: an HDR panorama needs two or more brackets of the same size, so a multiple of {b} photos, at least {}",
+            b.saturating_mul(2)
+        ),
+        None => format!(
+            "{photos} photos can't be split into two or more brackets of the same size, two photos or more each: an HDR panorama needs 4, 6, 8, 9, 10 or another such number of photos"
+        ),
+    }
 }
 
 /// The refusal of a `maxMegapixels` of `v`, below [`MIN_MEGAPIXELS`] (the stitch would raise it).

@@ -365,11 +365,13 @@ fn a_panorama_is_planned_before_its_photos_are_decoded() {
     assert_eq!(plan_memory(&panorama(), &small, 1e9), Ok(None));
     let e = plan_memory(&panorama(), &small, 20e6).unwrap_err();
     assert!(
-        e.contains("even with the panorama 2.4 MP, the smallest it is made,") && e.contains("needs about 156 MB") && e.contains("may use 19 MB"),
+        e.contains("even with the panorama 2.4 MP, the smallest it is made,")
+            && e.contains("needs about 156 MB")
+            && e.contains("the merge's budget is 19 MB"),
         "{e}"
     );
     for room in [0.0, -1.0, f64::NAN] {
-        assert!(plan_memory(&panorama(), &photos, room).unwrap_err().contains("may use 0 MB"), "{room}");
+        assert!(plan_memory(&panorama(), &photos, room).unwrap_err().contains("budget is 0 MB"), "{room}");
     }
 }
 
@@ -415,7 +417,7 @@ fn an_hdr_is_planned_before_its_photos_are_decoded_and_never_made_smaller() {
     assert_eq!(plan_memory(&hdr(), &photos, 1.6e9), Ok(None));
     let e = plan_memory(&hdr(), &photos, 1.4e9).unwrap_err();
     assert!(e.starts_with("not enough memory for this HDR merge: with its 3 photos at full size,"), "{e}");
-    assert!(e.contains("needs about 1442 MB") && e.contains("may use 1335 MB"), "{e}");
+    assert!(e.contains("needs about 1442 MB") && e.contains("budget is 1335 MB"), "{e}");
     let deghost =
         crate::merge::MergeKind::Hdr { hdr: lightcraft_merge::HdrOptions { deghost: lightcraft_merge::Deghost::High, ..Default::default() } };
     assert!(plan_memory(&deghost, &photos, 1.6e9).is_err());
@@ -437,7 +439,7 @@ fn an_hdr_panorama_is_planned_before_its_photos_are_decoded() {
         assert_eq!(plan_memory(&hdr_panorama(bracket), &photos, 1e12), Ok(None), "{bracket}");
         let e = plan_memory(&hdr_panorama(bracket), &photos, 2.0e9).unwrap_err();
         assert!(
-            e.starts_with("not enough memory for this HDR panorama") && e.contains("the panorama 40 MP") && e.contains("may use 1907 MB"),
+            e.starts_with("not enough memory for this HDR panorama") && e.contains("the panorama 40 MP") && e.contains("budget is 1907 MB"),
             "{bracket}: {e}"
         );
     }
@@ -461,7 +463,7 @@ fn a_merge_preview_is_planned_before_its_photos_are_decoded() {
     assert_eq!(plan_preview(&panorama(), &photos, 2e9, 4), Ok(false), "one at a time");
     assert_eq!(plan_preview(&panorama(), &photos, 2e9, 1), Ok(true), "one thread is one at a time");
     let e = plan_preview(&panorama(), &photos, 1e9, 4).unwrap_err();
-    assert!(e.starts_with("not enough memory for this merge preview: even decoding one photo at a time,") && e.contains("may use 953 MB"), "{e}");
+    assert!(e.starts_with("not enough memory for this merge preview: even decoding one photo at a time,") && e.contains("budget is 953 MB"), "{e}");
 }
 
 /// A preview is planned through the merge after its decode too: twenty 1024 px photos decode one
@@ -570,7 +572,7 @@ fn options_that_cant_work_are_refused_before_any_photo_is_read() {
     let known = || photos_24mp(6).into_iter().map(Some).collect::<Vec<_>>();
     let (job, reads) = counted_job(hdr_panorama(4), known(), None, 1e12);
     let e = job.run(&|_, _| true).err().unwrap_or_default();
-    assert!(e.contains("don't form brackets of 4"), "{e}");
+    assert!(e.starts_with("6 photos can't be split into brackets of 4: an HDR panorama needs two or more brackets of the same size, so a multiple of 4 photos, at least 8"), "{e}");
     assert_eq!(reads.load(Ordering::SeqCst), 0, "no photo read");
     let tiny = lightcraft_merge::PanoOptions { max_megapixels: 0.05, ..Default::default() };
     for kind in [
@@ -586,7 +588,7 @@ fn options_that_cant_work_are_refused_before_any_photo_is_read() {
     let five = photos_24mp(5).into_iter().map(Some).collect::<Vec<_>>();
     let (job, reads) = counted_job(hdr_panorama(0), five, None, 1e12);
     let e = job.run(&|_, _| true).err().unwrap_or_default();
-    assert!(e.contains("5 photos don't form brackets of two or more"), "{e}");
+    assert!(e.starts_with("5 photos can't be split into two or more brackets of the same size"), "{e}");
     assert_eq!(reads.load(Ordering::SeqCst), 0, "no photo read");
     // brackets of 3 divide six photos into two positions: on to reading them (which can't here)
     let (job, _) = counted_job(hdr_panorama(3), known(), None, 1e12);
@@ -654,7 +656,7 @@ fn a_photo_of_unknown_size_is_sized_from_its_header() {
     // three 480 × 320 photos need several MB: refused with 4 MB after reading only the headers
     let (small, reads) = counted(&job, unknown.clone(), 4e6, false);
     let e = small.run(&|_, _| true).err().unwrap_or_default();
-    assert!(e.starts_with("not enough memory for this HDR merge: with its 3 photos") && e.contains("may use 3 MB"), "{e}");
+    assert!(e.starts_with("not enough memory for this HDR merge: with its 3 photos") && e.contains("budget is 3 MB"), "{e}");
     assert_eq!(reads.load(Ordering::SeqCst), 3, "headers only");
     // with the memory: headers, then the photos
     let (fits, reads) = counted(&job, unknown.clone(), 1e9, false);
@@ -678,8 +680,8 @@ fn a_photo_larger_than_the_catalog_says_is_planned_again_before_it_is_decoded() 
     let (small, reads) = counted(&job, stale.clone(), 4e6, false);
     let e = small.run(&|_, _| true).err().unwrap_or_default();
     assert!(
-        e.contains("IMG_0.dng needs more memory than the merge was planned with (planned as 48×32, 1 MB; its file is 480×320")
-            && e.contains("synchronize its folder"),
+        e.contains("IMG_0.dng needs more memory to decode than expected: not enough memory for this HDR merge")
+            && e.ends_with(". It looks changed since it was imported: synchronize its folder, then merge again"),
         "{e}"
     );
     assert!(e.contains("not enough memory for this HDR merge"), "{e}");

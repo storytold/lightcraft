@@ -98,7 +98,8 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   GB of RAM): the plan follows it but refuses nothing on it, and what it would refuse runs as it did before, one
   photo at a time: a full merge at full size, a preview at its 1024 px frames. Just before each photo is decoded its header is read again and the plan checked with it
   (the catalog doesn't keep a raw's sensor size, and a file can have changed since it was imported): when the plan no
-  longer holds the merge stops before decoding it, naming the file.
+  longer holds the merge stops before decoding it, naming the file (and, when its header differs from the catalog, saying it
+  looks changed since import, so its folder needs synchronizing).
 - A preview's photos are planned at full size too (a JPEG other than a lossless one may decode at a smaller DCT scale;
   the plan keeps the full size as a margin), and decoded several at once: one at a time when several don't fit, and the
   preview is refused when not even that, or the merge or stitch of its small frames after it, fits. A preview's
@@ -108,7 +109,7 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   4.8 / 6.3 GB for 3 / 4). Planned as 17 bytes a pixel of every frame and 12 of the largest, plus deghosting's 2048 px
   maps (20 bytes a pixel), or the frames and two saturation maps of each (20 bytes a pixel, measured for every frame
   at once) when that is more: 3.9 / 5.0 / 6.1 GB for those without deghosting, 3–10 % above the measurements. An HDR
-  keeps its photos' resolution: one that doesn't fit is refused with the memory it needs and has. Half-float frames
+  keeps its photos' resolution: one that doesn't fit is refused with the memory it needs and the merge's budget. Half-float frames
   would halve the per-frame share.
 - Panorama output keeps the photos' resolution, up to `maxMegapixels` (default and most 512: a larger one, or 0 or
   less, is taken as 512), a longest edge of 65,000 px, and what fits in the merge's memory: the blend peaks at ~68

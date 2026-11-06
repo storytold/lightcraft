@@ -10,7 +10,8 @@
 //! again and the plan checked with it ([`holds`]).
 
 use super::{
-    MIN_PREVIEW_MEGAPIXELS, MergeKind, PANO_BLEND_BYTES, PANO_TILE_BYTES, PREVIEW_EDGE, fit_with_floor, mb, panorama_floor, round_megapixels,
+    MIN_PREVIEW_MEGAPIXELS, MergeKind, PANO_BLEND_BYTES, PANO_TILE_BYTES, PREVIEW_EDGE, fit_with_floor, mb, merge_budget, panorama_floor,
+    round_megapixels,
 };
 
 /// Bytes per pixel of a decoded photo held as a frame (32-bit float RGB).
@@ -358,12 +359,13 @@ pub(crate) fn holds(kind: &MergeKind, sizes: &[PhotoSize], room: f64, edge: Opti
     Err(not_enough(what(kind, threads.is_some()), &how, least_need(n, floor), room))
 }
 
-/// "not enough memory for this `what`: `how` it needs about N MB, and the merge may use M MB; …"
+/// "not enough memory for this `what`: `how` it needs about N MB, but the merge's budget is M MB
+/// (…); merge fewer or smaller photos" ([`merge_budget`]).
 pub(crate) fn not_enough(what: &str, how: &str, need: f64, room: f64) -> String {
     format!(
-        "not enough memory for this {what}: {how} it needs about {:.0} MB, and the merge may use {:.0} MB; merge fewer or smaller photos, or close other apps",
+        "not enough memory for this {what}: {how} it needs about {:.0} MB, {}; merge fewer or smaller photos",
         mb(need).ceil(),
-        mb(room.max(0.0)).floor()
+        merge_budget(mb(room.max(0.0)).floor())
     )
 }
 
