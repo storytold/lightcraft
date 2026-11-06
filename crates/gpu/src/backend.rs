@@ -4,7 +4,7 @@
 //! wgpu loads the system driver of *every* backend in the instance's set while it enumerates
 //! adapters, even when it then picks another one: with Vulkan in the set, a broken Vulkan driver
 //! can crash the process (an access violation inside the driver DLL, which nothing can catch)
- //! although DX12 would have been used. So Windows defaults to DX12 alone. macOS uses Metal, Linux
+//! although DX12 would have been used. So Windows defaults to DX12 alone. macOS uses Metal, Linux
 //! uses GL alone for the window: a multi-backend set lets wgpu pick Vulkan (e.g. llvmpipe) and
 //! the GUI can fail to appear.
 //!
@@ -119,12 +119,16 @@ pub fn compute_backends() -> Option<Backends> {
 /// The backends for the desktop window's renderer (eframe/egui-wgpu). The window always needs
 /// one: `off` keeps the platform default.
 pub fn window_backends() -> Backends {
+    let compiled = wgpu::Instance::enabled_backend_features();
     let default = default_window_backends(std::env::consts::OS);
+    // A platform default this build does not contain (e.g. GL without `gles`) can select no
+    // adapter: fall back to a backend it does contain.
+    let default = if default.intersects(compiled) { default & compiled } else { compiled };
     let choice = match env_choice() {
         BackendChoice::Off => BackendChoice::Auto,
         c => c,
     };
-    resolve(choice, default, wgpu::Instance::enabled_backend_features()).unwrap_or(default)
+    resolve(choice, default, compiled).unwrap_or(default)
 }
 
 /// The DX12 shader compiler: FXC (`d3dcompiler_47.dll`, part of Windows) unless
@@ -519,7 +523,8 @@ pub fn window_renderer_order(
         }
     }
     if out.is_empty() {
-        out.push(WindowRenderer::Wgpu(default_window_backends(os) & compiled));
+        let fallback = default_window_backends(os) & compiled;
+        out.push(WindowRenderer::Wgpu(if fallback.is_empty() { compiled } else { fallback }));
     }
     out
 }
