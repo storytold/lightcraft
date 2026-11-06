@@ -206,3 +206,52 @@ fn import_photos_is_not_offered_where_nothing_can_pick_files() {
     let h = app(Session::with_demo(), Services { picker: Some(picker), ..Default::default() });
     assert!(has(&h, "source:folders:import") && has(&h, "icon:foldersImport"), "a background picker is a way to pick files");
 }
+
+/// Given an empty Folders section, when Import from Folder… is picked in the + menu, then the
+/// folder picker is asked and the folder it answers with opens the import review (the menu item
+/// runs `file.addFolder`, not just the row).
+#[test]
+fn the_plus_menus_import_from_folder_item_runs_file_add_folder() {
+    let dir = Scratch::new("menu-folder");
+    write_png(&dir.path("trip/a.png"));
+    let (pick_folder, asked) = folder_picker(Some(dir.path("trip")));
+    let (pick_files, files_asked) = file_picker(Vec::new());
+    let mut h = app(Session::with_demo().with_fs(), Services { pick_folder: Some(pick_folder), pick_files: Some(pick_files), ..Default::default() });
+    click(&mut h, "icon:foldersImport");
+    click(&mut h, "button:foldersImportFolder");
+    assert_eq!(asked.load(Ordering::SeqCst), 1);
+    assert_eq!(files_asked.load(Ordering::SeqCst), 0, "not the photos command");
+    assert!(h.step_until(T, import_review_open), "the review opens: {:?}", h.app.ui.dialog.is_some());
+}
+
+/// Given a Lightroom catalog import that is running, when Folders is empty, then Import from
+/// Folder… is not offered (as a row or in the + menu) while Import Photos… still is, and picking
+/// Import Photos… is refused with a toast that says why, with no file dialog and no import review.
+#[test]
+fn while_a_lightroom_import_runs_only_import_photos_is_offered_and_it_is_refused_with_a_toast() {
+    let (pick_folder, folder_asked) = folder_picker(None);
+    let (pick_files, files_asked) = file_picker(Vec::new());
+    let mut h = app(Session::with_demo(), Services { pick_folder: Some(pick_folder), pick_files: Some(pick_files), ..Default::default() });
+    assert!(has(&h, "source:folders:importFolder"), "offered before the Lightroom import starts");
+    let task = crate::lightroom_import::stall_import(&mut h.app);
+    h.step();
+    h.step();
+    assert!(!has(&h, "source:folders:importFolder"), "no folder row while a Lightroom import runs");
+    assert!(has(&h, "source:folders:import"));
+    click(&mut h, "icon:foldersImport");
+    assert!(has(&h, "button:foldersImportPhotos") && !has(&h, "button:foldersImportFolder"), "the + menu agrees");
+    click(&mut h, "button:foldersImportPhotos");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("Lightroom catalog import"), "the refusal is a toast: {toast:?}");
+    assert_eq!((files_asked.load(Ordering::SeqCst), folder_asked.load(Ordering::SeqCst)), (0, 0), "no dialog was asked");
+    assert!(!import_review_open(&h));
+    drop(task);
+}
+
+/// Only Local's header explains itself on hover: the other sections' titles say what they hold.
+#[test]
+fn only_locals_header_has_a_hover_line() {
+    use crate::sidebar::SidebarSection;
+    let with_hint: Vec<_> = SidebarSection::ALL.into_iter().filter(|s| s.header_hint().is_some()).collect();
+    assert_eq!(with_hint, [SidebarSection::Local]);
+}
