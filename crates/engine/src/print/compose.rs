@@ -115,9 +115,9 @@ pub fn rec2020_from_srgb8(c: [u8; 3]) -> [u16; 3] {
     lin.map(|v| (trc.encode(v) * 65535.0 + 0.5) as u16)
 }
 
-/// Whether a layout style prints the Page Options (page numbers, page info) or, for its
-/// packages, the cut guides around each cell: Lightroom offers the former for Single Image
-/// and Contact Sheet and the latter for its packages.
+/// Whether a layout style prints the Page Options (page numbers, page info, crop marks):
+/// Lightroom offers them for Single Image and Contact Sheet. Its packages have Cut Guides
+/// instead, which print whatever this says ([`PageStyle::crop_marks`]).
 pub fn has_page_options(style: Style) -> bool {
     !style.is_package()
 }

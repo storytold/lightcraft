@@ -295,6 +295,32 @@ fn image_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSet
     });
 }
 
+/// The Page panel: the background, and the Page Options or, on a package, Cut Guides.
+fn page_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSettings) {
+    let ctx = ui.ctx().clone();
+    heading(ui, t, "Page");
+    row(ui, t, "Background", |ui| {
+        if let Some(c) = colour(ui, "printBackground", st.page.background) {
+            patch(app, &ctx, json!({"page": {"background": c}}));
+        }
+    });
+    if compose::has_page_options(st.layout.style) {
+        ui.label(egui::RichText::new(crate::i18n::tr("Page Options")).color(t.text_label));
+        let p = &st.page;
+        for (id, label, on, key) in [
+            ("printPageNumbers", "Page Numbers", p.page_numbers, "pageNumbers"),
+            ("printPageInfo", "Page Info", p.page_info, "pageInfo"),
+            ("printCropMarks", "Crop Marks", p.crop_marks, "cropMarks"),
+        ] {
+            if let Some(v) = check(ui, id, label, on) {
+                patch(app, &ctx, json!({"page": {(key): v}}));
+            }
+        }
+    } else if let Some(v) = check(ui, "printCropMarks", "Cut Guides", st.page.crop_marks) {
+        patch(app, &ctx, json!({"page": {"cropMarks": v}}));
+    }
+}
+
 fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, photos: usize) {
     let ctx = ui.ctx().clone();
     let l = &st.layout;
@@ -470,27 +496,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         });
     }
 
-    heading(ui, t, "Page");
-    row(ui, t, "Background", |ui| {
-        if let Some(c) = colour(ui, "printBackground", st.page.background) {
-            patch(app, &ctx, json!({"page": {"background": c}}));
-        }
-    });
-    if compose::has_page_options(l.style) {
-        ui.label(egui::RichText::new(crate::i18n::tr("Page Options")).color(t.text_label));
-        let p = &st.page;
-        for (id, label, on, key) in [
-            ("printPageNumbers", "Page Numbers", p.page_numbers, "pageNumbers"),
-            ("printPageInfo", "Page Info", p.page_info, "pageInfo"),
-            ("printCropMarks", "Crop Marks", p.crop_marks, "cropMarks"),
-        ] {
-            if let Some(v) = check(ui, id, label, on) {
-                patch(app, &ctx, json!({"page": {(key): v}}));
-            }
-        }
-    } else if let Some(v) = check(ui, "printCropMarks", "Cut Guides", st.page.crop_marks) {
-        patch(app, &ctx, json!({"page": {"cropMarks": v}}));
-    }
+    page_section(app, ui, t, st);
 
     heading(ui, t, "Print Job");
     row(ui, t, "Resolution", |ui| {
@@ -731,10 +737,11 @@ fn package_cells(
     let ctx = ui.ctx().clone();
     let first = ids.first().copied();
     let cells: Vec<layout::Cell> = st.layout.cells_on_page(pu.page as u32).cloned().collect();
+    let mut shown = Vec::new();
     for c in &cells {
         let photo = if st.layout.style == Style::CustomPackage { c.photo.map(PhotoId).or(first) } else { first };
         let rect = sheet.rect(&c.rect);
-        paint_cell(app, painter, t, st, rect, photo, sheet, &c.rect);
+        shown.extend(paint_cell(app, painter, t, st, rect, photo, sheet, &c.rect));
         let resp = ui.interact(rect, egui::Id::unique(("print-cell", c.id)), Sense::click_and_drag());
         register(ui, format!("print:cell:{}", c.id), rect);
         if resp.clicked() || resp.drag_started() {
@@ -771,6 +778,7 @@ fn package_cells(
             }
         });
     }
+    page_options(painter, st, sheet, &shown, pu.page + 1);
     // the selected cell's outline and resize handle go over everything
     let Some(sel) = pu.selected.and_then(|s| cells.iter().find(|c| c.id == s)) else { return };
     let rect = sheet.rect(&sel.rect);
