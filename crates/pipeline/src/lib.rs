@@ -629,8 +629,8 @@ pub fn settings_for<'a>(s: &'a DevelopSettings, req: &RenderRequest) -> std::bor
 /// Long edge (pixels) of the small HDR render [`hdr_histogram`] measures.
 pub const HDR_HISTOGRAM_EDGE: usize = 384;
 
-/// Long edge of the render that gives a slider drag its live HDR histogram, run beside the drafts
-/// by the UI.
+/// Long edge of the render that gives a slider drag its live HDR histogram (drafts have none: a
+/// second render per tick would slow them down), run beside the drafts by the UI.
 pub const HDR_HISTOGRAM_DRAG_EDGE: usize = 192;
 
 /// The histogram of an HDR edit's HDR rendition for a preview request `req`: a small float HDR
@@ -640,11 +640,11 @@ pub const HDR_HISTOGRAM_DRAG_EDGE: usize = 192;
 /// an HDR edit shows its SDR rendition; this says how far its highlights go. `None` for SDR edits,
 /// high-bit-depth, windowed and proofed requests (their histogram stays the image's).
 pub fn hdr_histogram(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Option<Histogram> {
-    if !s.hdr.enabled || req.depth != OutputDepth::U8 || req.window.is_some() || req.proof.is_some() {
+    // a drag's drafts keep their own histogram: a second render per tick would slow them down
+    if !s.hdr.enabled || req.depth != OutputDepth::U8 || req.window.is_some() || req.proof.is_some() || req.quality == Quality::Draft {
         return None;
     }
-    let edge = if req.quality == Quality::Draft { HDR_HISTOGRAM_DRAG_EDGE } else { HDR_HISTOGRAM_EDGE };
-    let k = (edge as f64 / req.max_w.max(req.max_h).max(1) as f64).min(1.0);
+    let k = (HDR_HISTOGRAM_EDGE as f64 / req.max_w.max(req.max_h).max(1) as f64).min(1.0);
     let size = |v: usize| ((v as f64 * k).round() as usize).max(1);
     let hreq = RenderRequest {
         max_w: size(req.max_w),

@@ -504,12 +504,12 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
 }
 
 /// Whether the GPU renders requests of this kind at all (a given render can still fall back to
-/// the CPU): the kernel writes 8-bit output, so high-bit-depth exports render on the CPU, and so do
-/// soft proofs against an output-device profile (`device_proof`: its 3D table is CPU-side) and
-/// Visualize HDR, which needs the float HDR render. [`try_render`] follows it, and the loupe sizes
-/// its slider-drag drafts by it (issue #330), so the two can't drift apart. A float HDR render for
-/// HDR display (F32Hdr) is also handled: it carries values above SDR white the 8-bit kernel would
-/// clip, so HDR display renders stay on the GPU instead of falling back to the CPU.
+/// the CPU): the kernel writes 8-bit output and the float HDR render (`F32Hdr`, in
+/// [`Rendered::deep`](lightcraft_pipeline::Rendered::deep)); 16-bit and linear float exports render
+/// on the CPU, and so do soft proofs against an output-device profile (`device_proof`: its 3D table
+/// is CPU-side) and Visualize HDR, which draws the float render over the 8-bit one. [`try_render`]
+/// follows it, and the loupe sizes its slider-drag drafts by it (issue #330), so the two can't drift
+/// apart.
 pub fn handles(depth: lightcraft_pipeline::OutputDepth, device_proof: bool, overlay: lightcraft_pipeline::Overlay) -> bool {
     matches!(depth, lightcraft_pipeline::OutputDepth::U8 | lightcraft_pipeline::OutputDepth::F32Hdr)
         && !device_proof
@@ -752,24 +752,10 @@ mod tests {
     fn the_gpu_handles_8_bit_unproofed_renders_without_the_hdr_range() {
         assert!(super::handles(OutputDepth::U8, false, Overlay::None));
         assert!(super::handles(OutputDepth::U8, false, Overlay::Spots(50)));
+        assert!(super::handles(OutputDepth::F32Hdr, false, Overlay::None));
         assert!(!super::handles(OutputDepth::U16, false, Overlay::None));
+        assert!(!super::handles(OutputDepth::F32Linear, false, Overlay::None));
         assert!(!super::handles(OutputDepth::U8, true, Overlay::None));
         assert!(!super::handles(OutputDepth::U8, false, Overlay::HdrRange));
-    }
-
-    #[test]
-    fn gpu_handles_f32hdr_renders_for_hdr_display() {
-        use lightcraft_develop::DevelopSettings;
-        use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo, hdr_histogram};
-        use lightcraft_raster::Rgb32f;
-
-        assert!(super::handles(OutputDepth::F32Hdr, false, Overlay::None));
-
-        let image = Rgb32f::filled(8, 8, [1.5, 1.5, 1.5]);
-        let mut settings = DevelopSettings::default();
-        settings.hdr.enabled = true;
-        let raw = SourceInfo { raw: true, ..Default::default() };
-        let draft = RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(8, 8) };
-        assert!(hdr_histogram(&image, &raw, &settings, &draft).is_some());
     }
 }
