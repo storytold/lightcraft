@@ -408,9 +408,11 @@ const IMPORT_WAYS: [ImportWay; 2] = [
     ImportWay { command: "file.addFolder", label: "Import from Folder…", row: "folders:importFolder", item: "button:foldersImportFolder" },
 ];
 
-/// The ways in this build offers right now (the menu's own rule: a command that can't run is not offered).
-fn import_ways(app: &LightcraftApp) -> Vec<&'static ImportWay> {
-    IMPORT_WAYS.iter().filter(|w| crate::menus::ui_enabled(app, w.command)).collect()
+/// The ways in this build offers right now (the menu's own rule: a command that can't run is not
+/// offered), each with its [`IMPORT_WAYS`] entry. Decided up front, so the caller is free to use `app` as it draws them.
+fn import_ways(app: &LightcraftApp) -> impl Iterator<Item = &'static ImportWay> + use<> {
+    let offered = IMPORT_WAYS.each_ref().map(|w| crate::menus::ui_enabled(app, w.command));
+    IMPORT_WAYS.iter().zip(offered).filter_map(|(way, offered)| offered.then_some(way))
 }
 
 /// Run one of [`IMPORT_WAYS`] as its menu item does (it asks for the photos or the folder); a refusal is a toast.
