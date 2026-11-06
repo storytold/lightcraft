@@ -399,6 +399,62 @@ fn a_headless_run_lets_an_exports_photos_get_prepared_before_it_ends() {
     assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
 }
 
+/// The settings of the export before the one a test starts (what Export with Previous would use).
+fn previous_export() -> serde_json::Value {
+    json!({"format": "jpeg", "quality": 77, "dir": "/lc-previous-out"})
+}
+
+/// What Export with Previous and the Export dialog remember is the last export that got going: a background
+/// export's settings are kept once its photos are prepared and the worker starts, not when it is asked for.
+#[test]
+fn an_export_is_remembered_once_its_photos_are_prepared() {
+    let mut h = demo();
+    crate::export_task::set_prep_budget(Duration::ZERO);
+    let (write, _written) = recording_writer(1);
+    h.app.services.write_shared = Some(write);
+    h.app.session.last_export = Some(previous_export());
+    start_export(&mut h, 5);
+    assert!(preparing(&h));
+    assert_eq!(h.app.session.last_export, Some(previous_export()), "not yet: the photos are not prepared");
+    assert!(h.step_until(Duration::from_secs(60), |h| !preparing(h)), "the photos get prepared");
+    let last = h.app.session.last_export.clone().expect("remembered");
+    assert_eq!(last["dir"], "/lc-test-out", "{last}");
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
+    assert_eq!(h.app.session.last_export.as_ref().map(|l| &l["dir"]), Some(&json!("/lc-test-out")));
+}
+
+/// An export that ends before it gets going (a photo that can't be prepared, the ✕ while preparing) is not
+/// "the last export": Export with Previous keeps the one before.
+#[test]
+fn an_export_that_never_got_going_leaves_the_previous_one_alone() {
+    let kinds: [(&str, fn(&mut Headless)); 2] = [
+        ("a photo that can't be prepared", |h| {
+            let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
+            let params = json!({"ids": ids, "dir": "/lc-test-out", "format": "original", "background": true});
+            let r = h.request("engine.execute", json!({"command": "app.export", "params": params}), T);
+            assert_eq!(r["ok"], true, "{r}");
+        }),
+        ("the ✕ while preparing", |h| {
+            start_export(h, 5);
+            let seen = h.request("ui.inspect", json!({}), T)["result"].clone();
+            let id = seen["activity"][0]["id"].as_u64().unwrap();
+            assert_eq!(h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), T)["ok"], true);
+        }),
+        // (a library opened meanwhile loads its own last export: `switching_library_while_an_export_prepares_stops_it`)
+    ];
+    for (what, go) in kinds {
+        let mut h = demo();
+        crate::export_task::set_prep_budget(Duration::ZERO);
+        let (write, written) = recording_writer(1);
+        h.app.services.write_shared = Some(write);
+        h.app.session.last_export = Some(previous_export());
+        go(&mut h);
+        assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()), "{what}: the export ended");
+        assert!(written.lock().unwrap().is_empty(), "{what}: nothing written");
+        assert_eq!(h.app.session.last_export, Some(previous_export()), "{what}: the previous export is still the last");
+    }
+}
+
 /// A folder of `n` stand-in JPEGs and an app whose file probe takes 100 ms each (a slow drive).
 fn slow_import(tag: &str, n: usize) -> (Headless, std::path::PathBuf) {
     gated_import(tag, n, None)
