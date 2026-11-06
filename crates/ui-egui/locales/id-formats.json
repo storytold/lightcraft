@@ -325,5 +325,9 @@
   "View › Detail View ({keys}).": "Tampilan › Tampilan Detail ({keys}).",
   "File › Export… · File › Print… ({keys}).": "File › Ekspor… · File › Cetak… ({keys}).",
   "{n} folder{} could not be read": "Folder yang tidak bisa dibaca: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}",
+  "Show photos with {path}": "Tampilkan foto dengan {path}",
+  "Show photos with {path} (includes the keywords below it)": "Tampilkan foto dengan {path} (termasuk kata kunci di bawahnya)",
+  "Give {path} to the selected photos ({n})": "Berikan {path} ke foto yang dipilih ({n})",
+  "Take {path} off the selected photos ({n})": "Hapus {path} dari foto yang dipilih ({n})"
 }

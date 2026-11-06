@@ -326,5 +326,9 @@
   "{name} is installed and in use: face recognition is on": "{name} установлено й використовується: розпізнавання облич увімкнено",
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографії імпортуйте через Файл › Імпортувати фото… ({keys}).",
   "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys}).",
+  "Show photos with {path}": "Показати фото з ключовим словом {path}",
+  "Show photos with {path} (includes the keywords below it)": "Показати фото з ключовим словом {path} (разом із ключовими словами нижче)",
+  "Give {path} to the selected photos ({n})": "Додати {path} до вибраних фото ({n})",
+  "Take {path} off the selected photos ({n})": "Вилучити {path} з вибраних фото ({n})"
 }

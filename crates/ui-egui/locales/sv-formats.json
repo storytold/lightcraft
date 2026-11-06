@@ -325,5 +325,9 @@
   "View › Detail View ({keys}).": "Visa › Detaljvy ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fil › Exportera… · Fil › Skriv ut… ({keys}).",
   "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}",
+  "Show photos with {path}": "Visa foton med {path}",
+  "Show photos with {path} (includes the keywords below it)": "Visa foton med {path} (inklusive nyckelorden under)",
+  "Give {path} to the selected photos ({n})": "Ge {path} till de markerade fotona ({n})",
+  "Take {path} off the selected photos ({n})": "Ta bort {path} från de markerade fotona ({n})"
 }
