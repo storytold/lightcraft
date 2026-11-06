@@ -537,6 +537,34 @@ fn a_drag_whose_dialog_was_replaced_drops_nothing() {
     assert_eq!(shape(&h), "7 8 9");
 }
 
+/// A drag whose dialog is replaced by another one that holds the very same rules (an agent opens the
+/// smart album being edited again) drops nothing: the rules can't tell the two dialogs apart, so the
+/// drag belongs to the dialog it started in.
+#[test]
+fn a_drag_whose_dialog_was_replaced_by_one_with_the_same_rules_drops_nothing() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 1000.0], 1.0);
+    let rules = json!({"ruleSet": {"rules": [rule(1), rule(2), rule(3)]}});
+    let r = h.request("engine.execute", json!({"command": "album.createSmart", "params": {"name": "Same", "rules": rules}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let id = r["result"]["id"].as_u64().expect("an album id");
+    let open = |h: &mut Headless| {
+        let r = h.request("engine.execute", json!({"command": "dialog.smartAlbum", "params": {"id": id}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    open(&mut h);
+    assert_eq!(shape(&h), "1 2 3");
+    let from = grip(&h, "rules-0").center();
+    let to = below(grip(&h, "rules-2"));
+    hold(&mut h, from, to);
+    open(&mut h);
+    pointer(&mut h, to, None);
+    h.step();
+    release(&mut h, to);
+    assert_eq!(shape(&h), "1 2 3", "nothing moved in the dialog that replaced it");
+}
+
 /// A drag whose dialog is replaced in the very frame after the drag starts (before its rules are
 /// compared with the ones it started with) drops nothing in the other dialog either, whether the
 /// other dialog has other rules or the same kind of rules with other numbers.
@@ -561,7 +589,7 @@ fn a_drag_whose_dialog_was_replaced_in_its_first_frames_drops_nothing() {
         assert!(started, "the drag started");
         // the other dialog opens before the next frame is drawn
         let other: RuleSet = serde_json::from_value(json!({"rules": replacement})).unwrap();
-        h.app.ui.dialog = Some(crate::state::Dialog::SmartRules { id: None, name: "Other".into(), rules: other, parent: None });
+        h.app.ui.dialog = Some(crate::state::Dialog::smart_rules(None, "Other".into(), other, None));
         h.step();
         // over a place that is valid in the new dialog
         let to = below(grip(&h, "rules-1"));

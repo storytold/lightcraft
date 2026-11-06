@@ -86,9 +86,9 @@ struct Drag {
     from: Vec<usize>,
     /// What the dragged row says in the pill that follows the pointer.
     label: String,
-    /// The rules when the drag was first seen: a drag whose rules were replaced (another dialog) or
-    /// edited meanwhile (typing in a field that kept focus) is given up, its path would point into
-    /// other rules; the edit stays.
+    /// The rules when the drag was first seen: a drag whose rules were replaced (another dialog with other
+    /// rules; one with the same rules is told by [`bind`]) or edited meanwhile (typing in a field that kept
+    /// focus) is given up, its path would point into other rules; the edit stays.
     base: Option<RuleSet>,
     /// No more rounding is to be expected (no other widget had the focus when the drag started, or
     /// the one frame after the start has passed): the rules must be the ones the drag started with.
@@ -145,6 +145,8 @@ struct State {
     key_move: Option<(Vec<usize>, Dir)>,
     /// The grip to bring into view (it took the focus after a move).
     refocus: Option<Id>,
+    /// The smart album dialog ([`crate::state::Dialog::SmartRules`]'s `instance`) the state above belongs to.
+    instance: Option<u64>,
 }
 
 fn with_state<R>(ctx: &egui::Context, f: impl FnOnce(&mut State) -> R) -> R {
@@ -159,6 +161,18 @@ fn row_salt(root: &str, path: &[usize]) -> String {
 
 pub(crate) fn grip_id(salt: &str) -> Id {
     Id::unique(("ruleGrip", salt))
+}
+
+/// Says which dialog the editor about to be drawn is in (its `instance`): a drag that began in another one is
+/// given up, however alike the rules of the two are.
+pub fn bind(ctx: &egui::Context, instance: u64) {
+    with_state(ctx, |s| {
+        if s.instance != Some(instance) {
+            s.drag = None;
+            s.key_move = None;
+            s.instance = Some(instance);
+        }
+    });
 }
 
 /// Starts a frame of the editor (its top list): forgets last frame's rows.
