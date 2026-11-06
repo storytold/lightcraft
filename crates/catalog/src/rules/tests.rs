@@ -385,6 +385,27 @@ fn in_the_last_survives_hostile_counts() {
     set_now(None);
 }
 
+/// Flash, exposure bias and camera serial number can be tested by a rule, like the other
+/// camera info; an unrecorded one is empty (or zero bias is no bias).
+#[test]
+fn flash_exposure_bias_and_serial_rules() {
+    let cat = Catalog::new();
+    // the values arrive with the photo's metadata, as fields on its meta, as probed from a file
+    let mut v = serde_json::to_value(photo(1)).unwrap();
+    let meta = v.get_mut("meta").unwrap();
+    meta["flash"] = json!(true);
+    meta["exposure_bias"] = json!(-0.67);
+    meta["serial_number"] = json!("SN-X2");
+    let p: Photo = serde_json::from_value(v).unwrap();
+    let m = |field: &str, op: &str, value: serde_json::Value| rs(json!({"rules": [{"field": field, "op": op, "value": value}]})).matches(&p, &cat);
+    assert!(m("flash", "is", json!(true)) && !m("flash", "is", json!(false)));
+    assert!(m("exposureBias", "lt", json!(0)) && m("exposureBias", "between", json!([-1.0, -0.3])));
+    assert!(m("cameraSerial", "contains", json!("x2")));
+    assert_eq!(field_group("flash"), Some("Camera Info"));
+    assert_eq!(field_group("exposureBias"), Some("Camera Info"));
+    assert_eq!(field_group("cameraSerial"), Some("Camera Info"));
+}
+
 /// Every rule's value is checked against its field, so a rule that can't mean anything is
 /// reported instead of quietly matching nothing (or everything). Each problem says which rule
 /// it is about: "rule 2", or "rule 2.1" inside a group.

@@ -186,9 +186,19 @@ impl LightcraftApp {
         if self.synthetic.is_empty() {
             return;
         }
-        let n = match self.synthetic[0] {
-            egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. } => 1,
-            _ => self.synthetic.iter().position(|e| matches!(e, egui::Event::Key { pressed: false, .. })).map_or(self.synthetic.len(), |i| i + 1),
+        let pointer =
+            |e: &egui::Event| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. });
+        let n = if pointer(&self.synthetic[0]) {
+            1
+        } else {
+            // a key sequence up to its release; a key held down (no release yet) stops before the
+            // pointer events that follow, which then still come one per frame
+            let release = self.synthetic.iter().position(|e| matches!(e, egui::Event::Key { pressed: false, .. })).map(|i| i + 1);
+            let next_pointer = self.synthetic.iter().position(pointer);
+            match (release, next_pointer) {
+                (Some(r), Some(q)) => r.min(q),
+                (r, q) => r.or(q).unwrap_or(self.synthetic.len()),
+            }
         };
         // A press needs the pointer at its position before the button event; the move that is
         // itself the first event is delivered by the drain below, so it must not be sent twice.

@@ -35,8 +35,12 @@ mod hdr_display;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+#[cfg(any(target_os = "linux", windows))]
+mod profile_file;
 #[cfg(target_os = "macos")]
 mod screen_profile;
+#[cfg(windows)]
+mod win_screen_profile;
 mod window_gpu;
 
 use dialog_filter::FileDialogExt as _;
@@ -55,7 +59,10 @@ use gpu_crash::{gpu_crash_check, gpu_lost_check_at, gpu_lost_marker_path, gpu_lo
 use gpu_crash::{gpu_crash_check_at, gpu_crash_notice, window_wgpu_options};
 #[cfg(test)]
 use launch::launch_imports_in;
-use launch::{HELP, control_port_from, launch_imports, log_dir, panic_log_path_with, startup_failed, stopped_text, stopped_while_running};
+use launch::{
+    HELP, LaunchArgs, control_port_from, launch_imports, launch_library_choice, log_dir, panic_log_path_with, startup_failed, stopped_text,
+    stopped_while_running,
+};
 #[cfg(test)]
 use platform::{explorer_select_arg, explorer_select_command, windows_open_url_command};
 use prefs::{PrefsWriter, as_remembered, load_prefs, prefs_path};
@@ -76,12 +83,77 @@ fn app_icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
-struct App(LightcraftApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App(LightcraftApp, PrefsWriter, Option<WindowTextures>, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+
+/// Draws renders that stayed on the GPU: registers their textures with the window's egui-wgpu
+/// renderer (the GPU renderer runs on the window's device, see [`adopt_window_device`]).
+struct WindowTextures {
+    device: eframe::wgpu::Device,
+    queue: eframe::wgpu::Queue,
+    renderer: std::sync::Arc<egui::mutex::RwLock<eframe::egui_wgpu::Renderer>>,
+}
+
+impl lightcraft_ui_egui::render::ScreenTextures for WindowTextures {
+    fn show(&mut self, frame: &lightcraft_engine::media::ScreenFrame, id: Option<egui::TextureId>) -> Option<egui::TextureId> {
+        let view = frame.texture.create_view(&Default::default());
+        let mut r = self.renderer.write();
+        let filter = eframe::wgpu::FilterMode::Linear;
+        Some(match id {
+            Some(id) => {
+                r.update_egui_texture_from_wgpu_texture(&self.device, &view, filter, id);
+                id
+            }
+            None => r.register_native_texture(&self.device, &view, filter),
+        })
+    }
+
+    fn free(&mut self, id: egui::TextureId) {
+        self.renderer.write().free_texture(&id);
+    }
+
+    fn read(&self, frame: &lightcraft_engine::media::ScreenFrame) -> Option<egui::ColorImage> {
+        match lightcraft_engine::gpu::read_texture(&self.device, &self.queue, &frame.texture, frame.width, frame.height) {
+            Ok(img) => Some(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], img.data.as_flattened())),
+            Err(e) => {
+                log::warn!("gpu: a view can't be read back for the screenshot: {e}");
+                None
+            }
+        }
+    }
+}
+
+/// Render on the window's device (off the UI thread: building the kernels takes a moment), so the
+/// loupe's drafts are drawn straight from the GPU; the textures they leave are shown through
+/// [`WindowTextures`] once that worked. Otherwise the GPU renderer makes a device of its own, as
+/// before, and every render comes back as pixels.
+fn adopt_window_device(rs: &eframe::egui_wgpu::RenderState, ctx: &egui::Context) -> WindowTextures {
+    let (device, queue, info) = (rs.device.clone(), rs.queue.clone(), rs.adapter.get_info());
+    let ctx = ctx.clone();
+    // before the first frame's GPU warm-up can start a device of its own
+    lightcraft_engine::gpu::set_window_device_pending(true);
+    let spawned = std::thread::Builder::new().name("lc-gpu-window".into()).spawn(move || {
+        match lightcraft_engine::gpu::adopt_window_device(device, queue, info) {
+            Ok(()) => log::info!("gpu: rendering on the window's device"),
+            Err(e) => log::info!("gpu: renders come back as pixels: {e}"),
+        }
+        ctx.request_repaint();
+    });
+    if let Err(e) = spawned {
+        log::warn!("gpu: {e}");
+        lightcraft_engine::gpu::set_window_device_pending(false);
+    }
+    WindowTextures { device: rs.device.clone(), queue: rs.queue.clone(), renderer: rs.renderer.clone() }
+}
 
 impl eframe::App for App {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // The transparency-capable DirectComposition window is a presentation workaround;
+        // translucent UI layers (disabled panels, modal dimming) must not reveal the desktop.
+        egui::Color32::from_rgb(12, 12, 12).to_normalized_gamma_f32()
+    }
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        if let Some(m) = self.2.as_mut()
+        if let Some(m) = self.3.as_mut()
             && m.update(&mut self.0, ctx)
             && lightcraft_ui_egui::panels::notices::may_close(&mut self.0)
         {
@@ -101,6 +173,13 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.perf.host_frame_ms = frame.info().cpu_usage.map(|s| f64::from(s) * 1000.0);
+        // the GPU renderer adopted the window's device: its renders can be drawn as they are
+        if self.2.is_some()
+            && lightcraft_engine::gpu::on_window_device()
+            && let Some(t) = self.2.take()
+        {
+            self.0.renderer.set_screen_textures(Box::new(t));
+        }
         self.0.ui(ui);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -116,6 +195,12 @@ impl eframe::App for App {
         if !self.0.shutdown(EXIT_WAIT) {
             log::warn!("quit: background work was still running after {EXIT_WAIT:?}");
         }
+        // macOS only: the process ends below without running destructors, and only the lock's
+        // `Drop` removes `catalog.lock.owner` (the OS frees the lock, not the note), so let go of
+        // the library's lock here, saved or not (we leave either way). Elsewhere eframe drops the
+        // app after this and the session's last writes (face data) still go out under the lock.
+        #[cfg(target_os = "macos")]
+        self.0.session.release_library_lock();
         // macOS (#1331): end the process here, before eframe tears the window down, as Quit from
         // the menu bar already does (PR #444). AccessKit's macOS adapter subclasses the window's
         // content view and restores its class on teardown; AppKit's Touch Bar support observes
@@ -136,7 +221,7 @@ const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 fn main() -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
-    if let Some(result) = craft_update::self_update::finish(&craft_update::suite::LIGHTCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if let Some(result) = craft_update::self_update::finish(&lightcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
     // First, so every start-up record is kept for the log file (`logging`).
@@ -192,7 +277,11 @@ fn main() -> eframe::Result {
     }
     // what the arguments name, resolved now: an empty or relative argument never becomes a drive
     // root, and a whole drive or home folder is not walked (issue #374)
-    let (files, launch_notices) = launch_imports(&files);
+    let LaunchArgs { files, library: launch_library, notices: launch_notices } = launch_imports(&files);
+    // a library double-clicked (its catalog.snap or folder) is the one that opens, not the last one
+    // used; --library and LIGHTCRAFT_LIBRARY still win
+    let env_library: Option<std::path::PathBuf> = std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()).map(Into::into);
+    let (library_dir, opened_by_argument) = launch_library_choice(library_dir, env_library.as_ref(), launch_library);
     let (prefs, prefs_warning, keep_prefs_file) = load_prefs(in_memory);
     // the saved language from the start, so a failed start is reported in it too
     if let Some(ui) = &prefs {
@@ -203,7 +292,7 @@ fn main() -> eframe::Result {
     let launch = lightcraft_ui_egui::panels::library_problem::launch_plan(
         in_memory,
         library_dir,
-        std::env::var_os("LIGHTCRAFT_LIBRARY").filter(|p| !p.is_empty()).map(Into::into),
+        env_library,
         prefs.as_ref().map(|u| &u.settings),
         lightcraft_engine::library::default_dir(),
     );
@@ -214,8 +303,11 @@ fn main() -> eframe::Result {
     lightcraft_engine::gpu::set_enabled(gpu_on);
     // the window's renderer: probed (Windows) and with a fallback chain, so a driver that can't
     // build egui's pipeline never kills the start-up
+    let compose_window =
+        prefs.as_ref().map_or_else(|| lightcraft_ui_egui::state::AppSettings::default().compose_window, |ui| ui.settings.compose_window)
+            && std::env::var_os("WGPU_BACKEND").is_none();
     let win_files = std::sync::Arc::new(window_files(in_memory));
-    let window_gpu::Chosen { renderer, wgpu_options, which: window_renderer, notice: window_notice } = window_gpu::choose(&win_files);
+    let window_gpu::Chosen { renderer, wgpu_options, which: window_renderer, notice: window_notice } = window_gpu::choose(&win_files, compose_window);
     win_files.arm(window_renderer);
     let win_files_app = win_files.clone();
     // the window came up: a failure after this is LightCraft stopping, not a start that failed
@@ -228,6 +320,7 @@ fn main() -> eframe::Result {
         viewport: as_remembered(egui::ViewportBuilder::default().with_title("LightCraft"), opens_as)
             .with_min_inner_size(lightcraft_ui_egui::window_place::MIN_SIZE)
             .with_drag_and_drop(true)
+            .with_transparent(window_gpu::composes_window(compose_window, window_renderer))
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false)
@@ -282,6 +375,7 @@ fn main() -> eframe::Result {
                 app.notices.extend(launch_notices);
                 app.notices.extend(window_notice);
                 app.gpu_notice = true;
+                app.disk_space_notice = true;
                 // an empty library opens where Import is offered (a grid, with the sidebar); before
                 // the snapshot below, so this alone isn't written to the settings file
                 if problem.is_none() && files.is_empty() {
@@ -295,6 +389,20 @@ fn main() -> eframe::Result {
                     keep_file: keep_prefs_file,
                     ..Default::default()
                 };
+                // a library opened from its catalog file is the one in use from now on, as Open Library makes it
+                // (after the snapshot above, so the writer saves it)
+                if opened_by_argument
+                    && problem.is_none()
+                    && let Some(dir) = app.session.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy().into_owned())
+                {
+                    let settings = &mut app.ui.settings;
+                    if settings.library_path != dir && !settings.library_path.is_empty() {
+                        let previous = settings.library_path.clone();
+                        lightcraft_ui_egui::panels::settings::remember_library(&mut settings.recent_libraries, &previous);
+                    }
+                    lightcraft_ui_egui::panels::settings::remember_library(&mut settings.recent_libraries, &dir);
+                    settings.library_path = dir;
+                }
                 // after the snapshot above, so the writer saves the switched-off preference
                 if let Some(notice) = gpu_crash {
                     app.ui.settings.gpu = false;
@@ -322,9 +430,16 @@ fn main() -> eframe::Result {
                 #[cfg(target_os = "macos")]
                 let menu =
                     (std::env::var_os("LIGHTCRAFT_NO_NATIVE_MENU").is_none()).then(|| native_menu::NativeMenu::install(&mut app, &cc.egui_ctx));
+                // the GPU renderer on the window's device, when GPU rendering is on
+                // (LIGHTCRAFT_GPU_WINDOW=0: a device of its own, renders read back - for comparison or a driver
+                // that misbehaves with compute and drawing on one device)
+                let window_device = std::env::var_os("LIGHTCRAFT_GPU_WINDOW").is_none_or(|v| v != "0");
+                let window_textures =
+                    cc.wgpu_render_state.as_ref().filter(|_| gpu_on && window_device).map(|rs| adopt_window_device(rs, &cc.egui_ctx));
                 Ok(Box::new(App(
                     app,
                     writer,
+                    window_textures,
                     #[cfg(target_os = "macos")]
                     menu,
                 )))

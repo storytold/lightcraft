@@ -40,7 +40,7 @@ impl Segment {
     pub fn is_empty(&self) -> bool {
         self.len() == 0.0
     }
-    fn mid(&self) -> Point {
+    pub(crate) fn mid(&self) -> Point {
         self.a.lerp(self.b, 0.5)
     }
     /// Homogeneous line through the endpoints, normalized so (a, b) is a unit normal.
@@ -50,7 +50,7 @@ impl Segment {
         [l[0] / n, l[1] / n, l[2] / n]
     }
     /// Angle from vertical in degrees (0 = vertical), folded to 0..90.
-    fn tilt_from_vertical(&self) -> f64 {
+    pub(crate) fn tilt_from_vertical(&self) -> f64 {
         let (dx, dy) = (self.b.x - self.a.x, self.b.y - self.a.y);
         dx.abs().atan2(dy.abs()).to_degrees()
     }
@@ -200,7 +200,7 @@ pub fn detect_segments(lum: &Plane) -> Vec<Segment> {
 // ------------------------------------------------------------------------------------------ vanishing points
 
 /// Angular error (radians) between a segment and the direction from its midpoint to the (homogeneous) point `v`.
-fn vp_error(s: &Segment, v: [f64; 3]) -> f64 {
+pub(crate) fn vp_error(s: &Segment, v: [f64; 3]) -> f64 {
     let m = s.mid();
     let (dx, dy) = (v[0] - m.x * v[2], v[1] - m.y * v[2]);
     let (sx, sy) = (s.b.x - s.a.x, s.b.y - s.a.y);
@@ -380,7 +380,7 @@ fn level_angle(vert: &[Segment], horiz: &[Segment]) -> Option<f64> {
 
 /// [`level_angle`] that only answers for at most `max` degrees, backed by at least `min_lines`
 /// agreeing segments.
-fn level_angle_within(vert: &[Segment], horiz: &[Segment], max: f64, min_lines: usize) -> Option<f64> {
+pub(crate) fn level_angle_within(vert: &[Segment], horiz: &[Segment], max: f64, min_lines: usize) -> Option<f64> {
     let dev = |s: &Segment, vertical: bool| {
         let (dx, dy) = (s.b.x - s.a.x, s.b.y - s.a.y);
         // signed deviation in degrees of the segment from the axis
@@ -547,26 +547,13 @@ const ANALYSIS_LONG: usize = 1024;
 /// segment detection and vanishing points. Cached per source + optics settings.
 pub fn analyze_source(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Analysis {
     static CACHE: Mutex<Vec<(u64, Analysis)>> = Mutex::new(Vec::new());
-    let mut base = s.clone();
-    base.geometry = Geometry::default();
-    base.crop = Crop::default();
-    let key = crate::optics::fingerprint(src)
-        ^ lightcraft_develop::DevelopSettings { optics: s.optics, orientation: s.orientation, ..Default::default() }.hash64().rotate_left(17);
+    let key = analysis_key(src, info, s);
     if let Ok(c) = CACHE.lock()
         && let Some((_, a)) = c.iter().find(|(k, _)| *k == key)
     {
         return a.clone();
     }
-    let frame = crate::frame_for(src, info, &base, false);
-    let (w, h) = frame.fit(ANALYSIS_LONG, ANALYSIS_LONG);
-    let img = frame.sample(src, w, h);
-    // perceptual lightness, normalized to the image's bright end
-    let lum = img.luminance();
-    let mut v: Vec<f32> = lum.data.iter().copied().filter(|x| x.is_finite()).collect();
-    v.sort_by(f32::total_cmp);
-    let white = v.get(v.len() * 99 / 100).copied().unwrap_or(1.0).max(1e-4);
-    let lum = lum.map(|x| (x.max(0.0) / white).min(1.5).powf(1.0 / 2.4));
-    let a = analyze(&detect_segments(&lum));
+    let a = analyze(&detect_segments(&analysis_plane(src, info, s)));
     if let Ok(mut c) = CACHE.lock() {
         c.push((key, a.clone()));
         if c.len() > 8 {
@@ -576,27 +563,41 @@ pub fn analyze_source(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> A
     a
 }
 
-/// The most Auto straighten turns a photo (degrees). Measured on 68 photos straightened by hand
-/// in Lightroom Classic and 300 left as shot: none was turned by more than 6°, while a larger
-/// "level" came from texture (wooden planks, a branch, a bird's wing) and turned photos that were
-/// straight.
-pub const STRAIGHTEN_MAX_DEGREES: f64 = 10.0;
-
-/// The fewest agreeing lines Auto straighten acts on: one line (the frame's edge, a branch) said
-/// nothing about the horizon in that measurement.
-pub const STRAIGHTEN_MIN_LINES: usize = 3;
-
-/// The rotation (degrees, clockwise +) that levels `src`'s dominant horizon/plumb lines, if they agree
-/// (the consensus rule of Upright Level), within [`STRAIGHTEN_MAX_DEGREES`] and backed by at least
-/// [`STRAIGHTEN_MIN_LINES`] lines. Used by the crop panel's Auto straighten.
-pub fn level_degrees(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Option<f64> {
-    let a = analyze_source(src, info, s);
-    straighten_angle(&a)
+/// What an analysis depends on: the source (by its sampled fingerprint), the optics and
+/// orientation settings, whether the optics section is on, and the lens the frame is corrected for
+/// (`info.lens`, which [`analysis_plane`] reads through the frame).
+pub(crate) fn analysis_key(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut more = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}", info.lens).hash(&mut more);
+    s.section_enabled("optics").hash(&mut more);
+    crate::optics::fingerprint(src)
+        ^ lightcraft_develop::DevelopSettings { optics: s.optics, orientation: s.orientation, ..Default::default() }.hash64().rotate_left(17)
+        ^ more.finish().rotate_left(29)
 }
 
-/// [`level_degrees`] of an analysis.
-pub fn straighten_angle(a: &Analysis) -> Option<f64> {
-    level_angle_within(&a.vertical, &a.horizontal, STRAIGHTEN_MAX_DEGREES, STRAIGHTEN_MIN_LINES)
+/// The image an analysis reads: the lens-corrected source (optics applied, no perspective or crop)
+/// at [`ANALYSIS_LONG`] px, as perceptual lightness normalized to its bright end.
+pub(crate) fn analysis_plane(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Plane {
+    let mut base = s.clone();
+    base.geometry = Geometry::default();
+    base.crop = Crop::default();
+    let frame = crate::frame_for(src, info, &base, false);
+    let (w, h) = frame.fit(ANALYSIS_LONG, ANALYSIS_LONG);
+    let img = frame.sample(src, w, h);
+    let lum = img.luminance();
+    let mut v: Vec<f32> = lum.data.iter().copied().filter(|x| x.is_finite()).collect();
+    v.sort_by(f32::total_cmp);
+    let white = v.get(v.len() * 99 / 100).copied().unwrap_or(1.0).max(1e-4);
+    lum.map(|x| (x.max(0.0) / white).min(1.5).powf(1.0 / 2.4))
+}
+
+/// The crop angle (degrees, clockwise +) Auto straighten levels `src` by, if it finds a horizon or
+/// plumb lines it can trust ([`crate::straighten`]). Used by the crop panel's Auto straighten. It
+/// reads the horizon and the segments from the same analysis image, built here (not through
+/// [`analyze_source`]'s cache: it runs once per click).
+pub fn level_degrees(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Option<f64> {
+    crate::straighten::level_plane(&analysis_plane(src, info, s))
 }
 
 /// The automatic Upright correction for `mode` on `src` (identity for Off and Guided).
