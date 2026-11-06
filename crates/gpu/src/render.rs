@@ -1264,6 +1264,7 @@ fn color_nr_joint(
 }
 
 /// The filtered chroma pairs of rows `b0 .. b0 + bh` of the image, treated as an image of their own.
+#[allow(clippy::too_many_arguments)]
 fn joint_band(
     cx: &mut Cx<'_>,
     img: &Buf,
