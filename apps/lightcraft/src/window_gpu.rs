@@ -79,7 +79,7 @@ impl Files {
     /// touched. A marker without a lock holder (a crash, an older version's) is a failed start.
     pub fn take_failed(&self) -> Option<WindowRenderer> {
         let m = self.marker()?;
-        // a marker that can't be written is still read (and, failing an empty, deleted by `clear`)
+        // a marker that can't be written is still read (and `clear` deletes it if it can't be emptied)
         let mut f = OpenOptions::new().read(true).write(true).open(&m).or_else(|_| File::open(&m)).ok()?;
         match f.try_lock() {
             Ok(()) => {}
