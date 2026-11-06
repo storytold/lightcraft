@@ -452,8 +452,15 @@ fn no_catalog_dialog_is_an_error_not_silence() {
     assert!(crate::menus::ui_enabled(&app, "file.importLightroom"));
     // a host with only the background picker asks through it, so the item is on there too
     app.services.pick_lightroom_catalog = None;
-    app.services.picker = Some(Box::new(|_| Ok(std::sync::mpsc::channel().1)));
+    let (answer, rx) = std::sync::mpsc::channel();
+    let rx = std::sync::Mutex::new(Some(rx));
+    app.services.picker = Some(Box::new(move |_| rx.lock().unwrap().take().ok_or_else(|| "asked twice".to_string())));
     assert!(crate::menus::ui_enabled(&app, "file.importLightroom"));
+    // and running it there asks through that picker: no error, the answer comes later
+    assert_eq!(app.run("file.importLightroom", json!({})).unwrap(), Value::Null);
+    assert!(app.pending_picks.iter().any(|p| p.command == "file.importLightroom"), "the pick waits for the dialog");
+    drop(answer);
+    app.pending_picks.clear();
     app.services.picker = None;
     app.services.pick_lightroom_catalog = Some(Box::new(|| None));
     assert_eq!(app.run("file.importLightroom", json!({})).unwrap(), Value::Null);
