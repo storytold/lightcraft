@@ -3,6 +3,8 @@
 use crate::{DateTime, Flash, Gps, Metadata, Orientation};
 use lightcraft_tiff::{Ifd, ParseOptions, Tiff, TiffError, tags as t};
 
+pub(crate) const MAX_GPS_NESTING: usize = 4;
+
 /// Strip an `Exif\0\0` (or `Exif\0\xff`) prefix as found in JPEG APP1 and some WebP `EXIF` chunks.
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
     if b.len() >= 6 && &b[..4] == b"Exif" && b[4] == 0 { &b[6..] } else { b }
@@ -46,6 +48,12 @@ pub fn exif_embeds_gps_location(bytes: &[u8]) -> bool {
 /// be parsed. JPEG APP1 packets, raw CR3 CMT4 GPS data, and all PNG/WebP EXIF chunks are inspected;
 /// when a container has no separate EXIF block, the whole source is checked as a possible TIFF-structured EXIF stream.
 pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
+    if bytes.starts_with(b"FUJIFILMCCD-RAW") {
+        let Some(jpeg) = crate::container::raf_embedded_jpeg(bytes) else { return true };
+        if crate::container::jpeg_embeds_exif_gps_location(jpeg) {
+            return true;
+        }
+    }
     if let Some(has_location) = crate::container::png_webp_embeds_exif_gps_location(bytes) {
         return has_location;
     }
@@ -78,13 +86,48 @@ fn cr3_cmt4_embeds_gps_location(bytes: &[u8]) -> Option<bool> {
 
 /// Return tag presence separately from parse failure so Original-copy privacy checks can fail closed.
 pub(crate) fn exif_gps_tag_presence(bytes: &[u8]) -> Option<bool> {
-    let tiff = Tiff::parse(strip_exif_header(bytes)).ok()?;
+    exif_gps_tag_presence_at_depth(bytes, 0)
+}
+
+/// Inspect EXIF and bounded embedded JPEG thumbnails for location-bearing tags.
+pub(crate) fn exif_gps_tag_presence_at_depth(bytes: &[u8], depth: usize) -> Option<bool> {
+    if depth >= MAX_GPS_NESTING {
+        return None;
+    }
+    let data = strip_exif_header(bytes);
+    let tiff = Tiff::parse(data).ok()?;
     if tiff.all_ifds().into_iter().any(|ifd| ifd.contains(t::GPS_IFD)) {
         return Some(true);
     }
-    Some(tiff.gps().is_some_and(|gps| {
+    if tiff.gps().is_some_and(|gps| {
         [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE].into_iter().any(|tag| gps.contains(tag))
-    }))
+    }) {
+        return Some(true);
+    }
+    for ifd in tiff.all_ifds() {
+        let has_offset = ifd.contains(t::JPEG_INTERCHANGE_FORMAT);
+        let has_length = ifd.contains(t::JPEG_INTERCHANGE_FORMAT_LENGTH);
+        if !has_offset && !has_length {
+            continue;
+        }
+        if !has_offset || !has_length {
+            return None;
+        }
+        let offset = usize::try_from(ifd.u64(t::JPEG_INTERCHANGE_FORMAT)?).ok()?;
+        let length = usize::try_from(ifd.u64(t::JPEG_INTERCHANGE_FORMAT_LENGTH)?).ok()?;
+        if offset == 0 || length == 0 {
+            return None;
+        }
+        let end = offset.checked_add(length)?;
+        let thumbnail = data.get(offset..end)?;
+        if !thumbnail.starts_with(&[0xff, 0xd8]) {
+            return None;
+        }
+        if crate::container::jpeg_embeds_exif_gps_location_at_depth(thumbnail, depth.saturating_add(1)) {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 fn text(ifd: Option<&Ifd>, tag: u16) -> Option<String> {
@@ -632,6 +675,95 @@ pub(crate) mod tests {
         gps_from_components_with_refs(lat, lon, "N", "E")
     }
 
+    /// Destination coordinates count as location data even without the primary position tags.
+    #[test]
+    fn exif_gps_destination_tags_are_location_bearing() {
+        for tag in [t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE] {
+            let mut gps = IfdBuilder::new();
+            gps.set(tag, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set_child(t::GPS_IFD, gps);
+            let bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+            assert!(exif_embeds_gps_location(&bytes), "destination tag {tag}");
+        }
+    }
+
+    /// An unreadable GPS child still counts when its parent contains the GPS pointer tag.
+    #[test]
+    fn exif_gps_unreadable_child_is_location_bearing() {
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (0, 1), (0, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::GPS_IFD, gps);
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+
+        let tiff = Tiff::parse(&bytes).unwrap();
+        assert!(tiff.gps().is_some());
+        let pointer = usize::try_from(tiff.ifds.first().and_then(|ifd| ifd.get(t::GPS_IFD)).unwrap().offset).unwrap();
+        let pointer_end = pointer.checked_add(4).unwrap();
+        bytes.get_mut(pointer..pointer_end).unwrap().copy_from_slice(&u32::MAX.to_le_bytes());
+
+        let unreadable = Tiff::parse(&bytes).unwrap();
+        assert!(unreadable.gps().is_none(), "the out-of-range GPS child is not resolved");
+        assert!(unreadable.ifds.first().is_some_and(|ifd| ifd.contains(t::GPS_IFD)), "the parent GPS pointer remains parsed");
+        assert!(exif_embeds_gps_location(&bytes));
+    }
+
+    /// TIFF JPEG thumbnails are checked for embedded GPS and fail closed when their range is unreadable.
+    #[test]
+    fn exif_gps_guard_checks_jpeg_thumbnail_metadata() {
+        let exif_with_gps = {
+            let mut gps = IfdBuilder::new();
+            gps.set(t::GPS_LATITUDE_REF, Value::Ascii("N".into()));
+            gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+            gps.set(t::GPS_LONGITUDE_REF, Value::Ascii("E".into()));
+            gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(10, 1), (30, 1), (0, 1)]));
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set_child(t::GPS_IFD, gps);
+            TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+        };
+        let exif_without_gps = {
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set(t::MAKE, Value::Ascii("Procedural camera".into()));
+            TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+        };
+        let tiff_with_thumbnail = |thumbnail_exif: &[u8]| {
+            let mut jpeg = vec![0xff, 0xd8];
+            let mut payload = b"Exif\0\0".to_vec();
+            payload.extend_from_slice(thumbnail_exif);
+            let length = u16::try_from(payload.len().saturating_add(2)).unwrap();
+            jpeg.extend_from_slice(&[0xff, 0xe1]);
+            jpeg.extend_from_slice(&length.to_be_bytes());
+            jpeg.extend_from_slice(&payload);
+            jpeg.extend_from_slice(&[0xff, 0xda, 0, 2, 0x11, 0xff, 0xd9]);
+
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set(t::MAKE, Value::Ascii("Outer camera".into()));
+            let mut ifd1 = IfdBuilder::new();
+            ifd1.set(t::JPEG_INTERCHANGE_FORMAT, Value::Long(vec![0]));
+            ifd1.set(t::JPEG_INTERCHANGE_FORMAT_LENGTH, Value::Long(vec![u32::try_from(jpeg.len()).unwrap()]));
+            let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0, ifd1]).unwrap();
+            let parsed = Tiff::parse(&bytes).unwrap();
+            let value_at = usize::try_from(parsed.ifds.get(1).unwrap().get(t::JPEG_INTERCHANGE_FORMAT).unwrap().offset).unwrap();
+            let thumbnail_at = u32::try_from(bytes.len()).unwrap();
+            bytes.extend_from_slice(&jpeg);
+            bytes.get_mut(value_at..value_at + 4).unwrap().copy_from_slice(&thumbnail_at.to_le_bytes());
+            bytes
+        };
+
+        let with_gps = tiff_with_thumbnail(&exif_with_gps);
+        let without_gps = tiff_with_thumbnail(&exif_without_gps);
+        assert!(exif_embeds_gps_location(&with_gps), "GPS in the thumbnail must count as location-bearing");
+        assert!(!exif_embeds_gps_location(&without_gps), "GPS-free thumbnails remain eligible");
+
+        let mut unreadable_thumbnail = with_gps;
+        let parsed = Tiff::parse(&unreadable_thumbnail).unwrap();
+        let value_at = usize::try_from(parsed.ifds.get(1).unwrap().get(t::JPEG_INTERCHANGE_FORMAT).unwrap().offset).unwrap();
+        unreadable_thumbnail.get_mut(value_at..value_at + 4).unwrap().copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(source_embeds_exif_gps_location(&unreadable_thumbnail), "an unreadable thumbnail cannot authorize Original export");
+    }
+
+    /// Invalid EXIF GPS subdivisions are rejected for latitude and longitude.
     #[test]
     fn exif_gps_rejects_invalid_subdivisions() {
         let valid_axis = vec![(10, 1), (0, 1), (0, 1)];
