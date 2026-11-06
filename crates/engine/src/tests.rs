@@ -552,13 +552,15 @@ fn auto_on_named_photos_needs_no_selection() {
     for id in &ids {
         assert!(dev(&s, *id).is_unedited(), "photo {id} is untouched by the refused calls");
     }
-    // a selected photo is not a target when the call names its photos
+    // named photos need no selection
+    s.execute("develop.auto", &json!({"ids": ids.clone()})).unwrap();
+    for id in &ids {
+        assert_eq!(dev(&s, *id).color.vibrance, 30.0, "photo {id} got Auto with nothing selected");
+    }
+    // and a selected photo is not a target when the call names its photos
     s.selection.active = Some(PhotoId(bystander));
     let untouched = dev(&s, bystander);
     s.execute("develop.auto", &json!({"ids": ids.clone()})).unwrap();
-    for id in &ids {
-        assert_eq!(dev(&s, *id).color.vibrance, 30.0, "photo {id} got Auto");
-    }
     assert_eq!(dev(&s, bystander), untouched, "the selected photo is not a target of a call that names its photos");
     s.execute("develop.auto", &json!({"id": single})).unwrap();
     assert_eq!(dev(&s, single).color.vibrance, 30.0, "the photo named by `id` got Auto");
