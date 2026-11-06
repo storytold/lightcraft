@@ -51,6 +51,16 @@ fn scroll_to_end(h: &mut Headless) {
     }
 }
 
+/// Scroll the open Settings page back to its top (the scroll offset of the page before stays when a tab is shown,
+/// and Performance is tall enough for it to hide the rows at the top).
+fn scroll_to_start(h: &mut Headless) {
+    assert_eq!(h.request("ui.hoverWidget", json!({"id": "settings:pageRoom"}), T)["ok"], true);
+    h.request("ui.scroll", json!({"dy": 3000.0}), T);
+    for _ in 0..4 {
+        h.step();
+    }
+}
+
 fn rect(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
@@ -214,6 +224,7 @@ fn the_lines_that_say_where_a_control_is_stand_out_in_every_theme() {
         // `widgets::text_button`, not by egui's button: the top edge of one that is not chosen
         for (what, id) in [("a tab", "button:settingsTab-general"), ("a choice", "button:settingsPreview-1")] {
             show(&mut h, "performance");
+            scroll_to_start(&mut h);
             let image = h.paint();
             let button = rect(&h, id);
             let edge = egui::Rect::from_min_max(
