@@ -45,6 +45,12 @@ exports. Existing AI masks become 1–2 px tighter at a subject's edges, on ever
 inside, their outside and edges without contrast in the photo are unchanged. It landed in place as
 a bug fix: the outline is output that isn't in the photo nor in the edit, not a look anyone chose.
 
+**A mask whose first component is Intersect** starts from that component, on the CPU and the GPU
+(issue #1889). It used to start from nothing, so alone it selected nothing, with a later Add it gave
+only what was added, and with the mask's Invert it gave the whole photo. Such masks now include the
+first component, on every process. It landed in place as a bug fix: intersecting with nothing is not
+a look anyone chose.
+
 ## Adding a process
 
 1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in

@@ -1785,7 +1785,7 @@ fn masks(
         let mut first = true;
         for comp in &m.components {
             let op = match comp.op {
-                _ if first && comp.op != MaskOp::Intersect => 0u32,
+                _ if first => 0u32,
                 MaskOp::Add => 1,
                 MaskOp::Subtract => 2,
                 MaskOp::Intersect => 3,

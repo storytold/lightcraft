@@ -383,7 +383,7 @@ fn evaluate_one_with_refinement(
         if comp.invert {
             map_rows(&mut c, |v| *v = 1.0 - *v);
         }
-        if first && comp.op != MaskOp::Intersect {
+        if first {
             alpha = c;
             first = false;
             continue;
