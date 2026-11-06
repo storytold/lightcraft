@@ -839,6 +839,7 @@ impl Session {
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         let before = lib.journal.seq();
         let saved = unlogged == 0 && persisted.is_ok();
+        let mut flushed = true;
         if saved {
             // a compaction that is under way (the save above may have started it) finishes first:
             // it empties the log, and the catalog isn't written a second time below
@@ -846,12 +847,15 @@ impl Session {
                 log::error!("library: compaction: {e}");
             }
             // and what the log's thread was handed is written first: a write it can't make leaves
-            // the records held, which only a snapshot saves (it decides below)
+            // the records held, which only a snapshot saves (it decides below). A flush that fails
+            // without naming a held record (it timed out, or the thread is gone) leaves the same
+            // doubt: the snapshot is written then too.
             if let Err(e) = lib.journal.flush() {
                 log::error!("library: the log's records aren't all written: {e}");
+                flushed = false;
             }
         }
-        let snapshot = if !saved || lib.journal.wants_snapshot_on_close() {
+        let snapshot = if !saved || !flushed || lib.journal.wants_snapshot_on_close() {
             lib.journal.snapshot_with_unlogged(&self.catalog, unlogged)
         } else {
             // everything is in the log, which is short: the next open replays it

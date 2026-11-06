@@ -326,7 +326,19 @@ fn a_quit_snapshots_a_large_catalog_when_the_log_thread_holds_changes() {
     let all = ids(&s);
     s.library.as_mut().unwrap().journal_mut().policy.close_bytes = 0;
     let fail = Arc::new(AtomicBool::new(false));
-    slow_drive(&dir, Duration::from_millis(5), fail.clone());
+    // (the write fails only after a while, so the log's thread reports it after `close_library` has started: the
+    // flush before the decision is what makes the quit see it)
+    let failing = fail.clone();
+    fault::install(
+        &dir,
+        Arc::new(move |_step| {
+            if failing.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(300));
+                return Err(std::io::Error::other("the drive is gone (test)"));
+            }
+            Ok(())
+        }),
+    );
     fail.store(true, Ordering::SeqCst);
     s.execute("photo.flag", &json!({"flag": "reject", "ids": [all[0].0]})).unwrap();
     let _ = s.close_library();

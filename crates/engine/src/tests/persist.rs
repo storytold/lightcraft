@@ -19,6 +19,8 @@ struct Flaky {
     snapshots_only: bool,
     /// Only appends fail (a dead log handle; fresh files can still be written).
     appends_only: bool,
+    /// `flush` times out, with nothing held that `unwritten` could name.
+    flush_times_out: Arc<AtomicBool>,
 }
 
 impl Flaky {
@@ -54,6 +56,12 @@ impl Store for Flaky {
     }
     fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
         self.files.truncate(name, len)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.flush_times_out.load(Ordering::SeqCst) {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the log was not flushed (test)"));
+        }
+        Ok(())
     }
     fn describe(&self) -> String {
         "flaky".into()
@@ -253,4 +261,18 @@ fn close_rewrites_a_large_snapshot_only_when_the_log_is_long() {
     let s2 = open(&store, true);
     assert_eq!(s2.catalog.to_snapshot(), expect);
     assert_eq!(s2.catalog.photo(id).unwrap().rating, 5);
+}
+
+/// A quit whose flush of the log fails without the log's thread holding anything it can name (it timed out, or the
+/// thread is gone) still writes the closing snapshot of a large catalog: the quit comes after `flush_log` failed, and
+/// the snapshot is what saves the records the log may not have.
+#[test]
+fn a_quit_snapshots_a_large_catalog_when_the_log_cannot_be_flushed() {
+    let store = Flaky::default();
+    let mut s = open(&store, true);
+    s.library.as_mut().unwrap().journal_mut().policy.close_bytes = 0;
+    s.execute("photo.rate", &json!({"rating": 3})).unwrap();
+    store.flush_times_out.store(true, Ordering::SeqCst);
+    s.close_library().unwrap();
+    assert!(s.snapshot_holds_everything());
 }
