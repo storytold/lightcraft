@@ -110,15 +110,16 @@ pub fn check_pixels(w: usize, h: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Peak live CPU image storage, excluding the caller's source and existing caches.
-/// Two RGB images use 24 bytes/pixel. Luminance NR adds five scalar planes (20),
-/// colour NR adds two RGB buffers (24), and dark-channel blur adds two planes (8).
-/// These stages run sequentially. Cropping copies the retained 28-byte or
-/// 16-byte preparation. Row scratch is bounded separately.
 /// Bytes a pixel the joint colour NR keeps alive at its peak: its pilot planes (Y, U, V: 12 bytes)
 /// and four chroma pair images (filtered, scratch, paths and links: 8 bytes each).
 pub(crate) const JOINT_NR_SCRATCH: u64 = 44;
 
+/// Peak live CPU image storage, excluding the caller's source and existing caches.
+/// Two RGB images use 24 bytes/pixel. Luminance NR adds five scalar planes (20),
+/// colour NR adds two RGB buffers (24), or the joint colour NR its `JOINT_NR_SCRATCH` (44),
+/// and dark-channel blur adds two planes (8).
+/// These stages run sequentially. Cropping copies the retained 28-byte or
+/// 16-byte preparation. Row scratch is bounded separately.
 pub fn prepare_bytes(full: &Plan<'_>, work: Option<&Plan<'_>>, gpu: bool) -> u64 {
     let n = (full.w as u64).saturating_mul(full.h as u64);
     let (lum, col) = local::nr_params(&full.settings, full.detail_scale);
