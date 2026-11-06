@@ -47,10 +47,12 @@ impl Camera {
     }
 }
 
-/// `(make, model as sold, table model)`: bodies sharing a table camera's sensor that rawtoaces-data's alias list
+/// `(make, model as sold, table model)`: bodies using a table camera's data that rawtoaces-data's alias list
 /// doesn't name, kept here because the table is generated. Fujifilm's 26.1 MP X-Trans CMOS 4 bodies use the X-T3's
 /// or X-T4's sensor (X-T30 issue: a black-and-white Acros camera JPEG gives no colour to fit, and without matrices the photo
 /// opened in the muted neutral fallback).
+/// The GFX100S II has no measured data of its own: it borrows the GFX 100's matrices as the nearest medium-format
+/// body in the table, which is closer than the neutral camera-RGB-approximately-sRGB fallback but not its own sensor.
 const SAME_SENSOR: &[(&str, &str, &str)] = &[
     ("Fujifilm", "X-T30", "X-T3"),
     ("Fujifilm", "X-T30 II", "X-T3"),
@@ -60,6 +62,7 @@ const SAME_SENSOR: &[(&str, &str, &str)] = &[
     ("Fujifilm", "X-E4", "X-T3"),
     ("Fujifilm", "X-S20", "X-T4"),
     ("Fujifilm", "X-M5", "X-T3"),
+    ("Fujifilm", "GFX100S II", "GFX 100"),
 ];
 
 /// Model names compared without case, the brand, a leading `EOS` or a trailing `DIGITAL`
@@ -176,6 +179,13 @@ mod tests {
         ] {
             assert_eq!(find(Some(make), model).map(|c| c.model), Some(row), "{make} {model}");
         }
+    }
+
+    #[test]
+    fn gfx100s_ii_uses_gfx_100_matrices() {
+        // GFX100S II is not in the table, so its raws never get step 4's measured matrices
+        // and fall back to step 5's neutral camera-RGB-approximately-sRGB.
+        assert_eq!(find(Some("FUJIFILM"), "GFX100S II").map(|c| c.model), Some("GFX 100"),);
     }
 
     #[test]

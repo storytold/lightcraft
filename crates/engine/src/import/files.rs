@@ -24,6 +24,11 @@ pub fn is_supported(path: &Path) -> bool {
     path.extension().is_some_and(|e| EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()))
 }
 
+/// An XMP sidecar (`.xmp`, any letter case): read with its photo on import, never a photo itself.
+fn is_xmp_sidecar(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xmp"))
+}
+
 /// The web file picker's accept list, derived from [`EXTENSIONS`]. Each extension
 /// is listed in both cases: browsers' `accept` matching is case-insensitive per
 /// spec, but some implementations (e.g. Windows/Edge) match case-sensitively and
@@ -78,19 +83,57 @@ pub(crate) fn expand_noting(
     paths: &[String],
     skip: Option<&Path>,
     limits: crate::walk::Limits,
-    mut note: Option<crate::walk::NoteFolder>,
+    note: Option<crate::walk::NoteFolder>,
 ) -> (Vec<String>, bool) {
-    let mut out = Vec::new();
-    let mut truncated = false;
+    let e = expand_report_noting(paths, skip, limits, note);
+    (e.files, e.truncated)
+}
+
+/// What expanding import sources found, and what the walks left out ([`expand_report`]), so a
+/// review can say that it did not see everything.
+#[derive(Clone, Debug, Default)]
+pub struct Expansion {
+    /// Supported files, folders walked recursively and deduplicated by path, in walk order.
+    pub files: Vec<String>,
+    /// A walk stopped at a depth or entry bound: there may be more files.
+    pub truncated: bool,
+    /// Folders whose contents couldn't be listed (permissions, a folder that vanished or went offline).
+    pub unreadable: usize,
+    /// Files found inside the folders walked that are not a supported type (see [`is_supported`]),
+    /// not counting XMP sidecars, which the import reads with their photos. A file named directly
+    /// is attempted whatever its extension and is never counted here. Both counts add up over the
+    /// sources, so a folder named twice (or inside another source) counts twice.
+    pub unsupported: usize,
+}
+
+/// [`expand_within`] keeping the walks' diagnostics. A walk that stops at a bound is logged here
+/// (once per folder), as it always was.
+pub fn expand_report(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits) -> Expansion {
+    expand_report_noting(paths, skip, limits, None)
+}
+
+/// ([`expand_report`], handing the listing of every folder that is walked to `note`, as
+/// [`expand_noting`] does.)
+fn expand_report_noting(paths: &[String], skip: Option<&Path>, limits: crate::walk::Limits, mut note: Option<crate::walk::NoteFolder>) -> Expansion {
+    let mut out = Expansion::default();
     for p in paths {
         let p = Path::new(p);
         if skip.is_some_and(|s| p == s) {
             continue;
         }
         if p.is_dir() {
+            // XMP sidecars are read with their photos, not skipped: they are left out of the count
+            let mut sidecars = 0usize;
+            let keep = |f: &Path| {
+                let keep = is_supported(f);
+                if !keep && is_xmp_sidecar(f) {
+                    sidecars = sidecars.saturating_add(1);
+                }
+                keep
+            };
             let w = match note.as_mut() {
-                Some(note) => crate::walk::files_in_noting(p, skip, limits, is_supported, &mut **note),
-                None => crate::walk::files_in(p, skip, limits, is_supported),
+                Some(note) => crate::walk::files_in_noting(p, skip, limits, keep, &mut **note),
+                None => crate::walk::files_in(p, skip, limits, keep),
             };
             if w.truncated {
                 log::warn!(
@@ -101,16 +144,18 @@ pub(crate) fn expand_noting(
                     limits.max_depth
                 );
             }
-            truncated |= w.truncated;
-            out.extend(w.files.into_iter().map(|f| f.to_string_lossy().to_string()));
+            out.truncated |= w.truncated;
+            out.unreadable = out.unreadable.saturating_add(w.unreadable);
+            out.unsupported = out.unsupported.saturating_add(w.skipped.saturating_sub(sidecars));
+            out.files.extend(w.files.into_iter().map(|f| f.to_string_lossy().to_string()));
         } else {
             // explicitly named files are attempted even with an unknown extension (sniffed)
-            out.push(p.to_string_lossy().to_string());
+            out.files.push(p.to_string_lossy().to_string());
         }
     }
     let mut seen = std::collections::HashSet::new();
-    out.retain(|p| seen.insert(p.clone()));
-    (out, truncated)
+    out.files.retain(|p| seen.insert(p.clone()));
+    out
 }
 
 /// What a path given on the command line at launch becomes ([`launch_path`]).
