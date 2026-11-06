@@ -1363,7 +1363,8 @@ fn context_menu_rate(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     });
     register(ui, "button:contextSetFlag", flag.response.rect);
-    crate::widgets::menu_button(ui, crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));
+    let label = crate::widgets::menu_button(ui, crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));
+    register(ui, "button:contextSetLabel", label.response.rect);
     // the keyword shortcut (Set Keyword Shortcut…), given to the selected photos
     let keywords = app.session.catalog.keyword_shortcut();
     if !keywords.is_empty() {

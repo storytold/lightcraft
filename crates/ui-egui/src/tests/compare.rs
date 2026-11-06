@@ -479,9 +479,10 @@ fn context_choice_on(h: &mut Headless, name: &str, submenu: &str, item: &str) {
     }
 }
 
-/// Give every selected photo no stars and no flag, so a change to any of them shows.
+/// Give every selected photo no stars, no flag and no color label, so a change to any of them shows.
 fn blank_selection(h: &mut Headless) {
-    for (command, params) in [("photo.rate", json!({"rating": 0})), ("photo.flag", json!({"flag": "none"}))] {
+    let blank = [("photo.rate", json!({"rating": 0})), ("photo.flag", json!({"flag": "none"})), ("photo.label", json!({"label": "none"}))];
+    for (command, params) in blank {
         let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
         assert_eq!(r["ok"], true, "{r}");
     }
@@ -614,4 +615,105 @@ fn right_click_on_another_compare_photo_drops_the_active_mask_and_spot() {
     context_choice(&mut h, a, "button:contextSetRating", "button:contextRate:1");
     assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(a));
     assert_eq!((h.app.session.active_mask, h.app.session.active_spot), (None, None), "another photo's mask and spot are gone");
+}
+
+fn label_of(h: &Headless, id: u64) -> Option<lightcraft_catalog::ColorLabel> {
+    h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).and_then(|p| p.label)
+}
+
+/// Set Color Label in the menu of a Compare tile labels the right-clicked photo only, and with Auto Advance on the
+/// view moves on once, as after a rating or flag row (the label row used to skip the advance).
+#[test]
+fn compare_context_menu_labels_only_the_right_clicked_photo() {
+    use lightcraft_catalog::ColorLabel::{Green, Red};
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    let (a, b, c) = (vis[0], vis[1], vis[2]);
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [a, b, c]}}), T);
+    blank_selection(&mut h);
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [a, b], "active": a}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let selection =
+        |h: &Headless| (h.app.session.selection.active.map(|p| p.0), h.app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<u64>>());
+    // the candidate (b) is active; right-click the select (a) instead
+    assert_eq!(selection(&h).0, Some(b));
+    context_choice(&mut h, a, "button:contextSetLabel", "photoLabel:red");
+    assert_eq!([label_of(&h, a), label_of(&h, b), label_of(&h, c)], [Some(Red), None, None], "only the right-clicked photo is labeled");
+    assert_eq!(selection(&h), (Some(a), vec![a, b]), "it became active, both stay selected, no advance without Auto Advance");
+    // Auto Advance: the next candidate takes the place of the one just labeled, once
+    h.app.ui.auto_advance = true;
+    context_choice(&mut h, b, "button:contextSetLabel", "photoLabel:green");
+    assert_eq!([label_of(&h, a), label_of(&h, b), label_of(&h, c)], [Some(Red), Some(Green), None], "only photo b is labeled");
+    assert_eq!(selection(&h), (Some(c), vec![a, c]), "the next candidate is active, once");
+}
+
+/// The same in Survey, where every tile can be right-clicked.
+#[test]
+fn survey_context_menu_labels_only_the_right_clicked_photo() {
+    use lightcraft_catalog::ColorLabel::{Blue, Yellow};
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1], vis[2]]}}), T);
+    blank_selection(&mut h);
+    let [a, b, c] = survey_of_three(&mut h);
+    let all = |h: &Headless| [label_of(h, a), label_of(h, b), label_of(h, c)];
+    context_choice(&mut h, c, "button:contextSetLabel", "photoLabel:blue");
+    assert_eq!(all(&h), [None, None, Some(Blue)], "only the right-clicked photo is labeled");
+    assert_eq!(h.app.session.selection.ids.len(), 3, "all three stay in the survey");
+    assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(c), "it became active");
+    // Auto Advance: the next tile of the survey, once
+    h.app.ui.auto_advance = true;
+    context_choice(&mut h, a, "button:contextSetLabel", "photoLabel:yellow");
+    assert_eq!(all(&h), [Some(Yellow), None, Some(Blue)], "only photo a is labeled");
+    assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(b), "the next tile is active, once");
+}
+
+/// Move the pointer to `pos`, then press or release `button` there, one frame each, as a person does.
+fn press(h: &mut Headless, pos: egui::Pos2, button: egui::PointerButton, pressed: bool) {
+    h.app.synthetic.push(egui::Event::PointerMoved(pos));
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE });
+    h.step();
+}
+
+/// While photos are carried (dragged from the filmstrip, the primary button held) a right-click on a Compare tile
+/// opens no menu and makes no photo active; once they are dropped the same right-click does both.
+#[test]
+fn right_click_on_a_compare_tile_while_carrying_photos_activates_nothing() {
+    use egui::PointerButton::{Primary, Secondary};
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    let (a, b) = (vis[0], vis[1]);
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [a, b], "active": a}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let active = |h: &Headless| h.app.session.selection.active.map(|p| p.0);
+    assert_eq!(active(&h), Some(b), "the candidate is active");
+    let centre = |h: &Headless, name: String| h.app.widgets.iter().find(|(w, _)| *w == name).map(|(_, r)| r.center()).expect("laid out");
+    let (from, over) = (centre(&h, format!("film:{a}")), centre(&h, format!("cull:{a}")));
+    // carry the selection from the filmstrip over the select's tile
+    press(&mut h, from, Primary, true);
+    for i in 1..=8 {
+        h.app.synthetic.push(egui::Event::PointerMoved(from + (over - from) * (i as f32 / 8.0)));
+        h.step();
+    }
+    h.step();
+    assert_eq!(h.app.ui.dragging_photos, Some(vec![a, b]), "carrying the selection");
+    press(&mut h, over, Secondary, true);
+    press(&mut h, over, Secondary, false);
+    h.step();
+    assert!(!egui::Popup::is_any_open(&h.view.ctx), "no menu opens while photos are carried");
+    assert_eq!(active(&h), Some(b), "the right-clicked photo did not become active");
+    // drop them: the same right-click now opens the menu on the photo, which is the active one
+    press(&mut h, over, Primary, false);
+    h.step();
+    assert_eq!(h.app.ui.dragging_photos, None, "dropped");
+    press(&mut h, over, Secondary, true);
+    press(&mut h, over, Secondary, false);
+    h.step();
+    assert!(egui::Popup::is_any_open(&h.view.ctx), "the menu opens");
+    assert_eq!(active(&h), Some(a), "and the right-clicked photo is active");
 }
