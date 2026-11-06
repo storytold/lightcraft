@@ -106,7 +106,7 @@ pub(super) fn short_time_with(iso: &str, clock_24: bool) -> String {
         return crate::i18n::display_time_with(iso, clock_24);
     }
     // what doesn't parse is shown as it is, not cut up as if it were a date
-    if clock_24 && lightcraft_catalog::dates::normalize_iso(iso).is_none() {
+    if clock_24 && lightcraft_catalog::dates::shift_iso(iso, 0).is_none() {
         return iso.to_string();
     }
     let long = crate::i18n::display_time_with(iso, clock_24);

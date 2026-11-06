@@ -44,6 +44,8 @@ fn short_times_on_a_24_hour_clock() {
         ("2026-09-30 18:30", "Sep 30, 2026, 18:30"),
         ("2026-01-02", "Jan 2, 2026"),
         ("2026-02-30 22:00", "2026-02-30 22:00"),
+        ("2026-09-30T22", "2026-09-30T22"),
+        ("2026-09-30+01:00", "2026-09-30+01:00"),
         ("", ""),
         ("über", "über"),
     ];
@@ -53,4 +55,14 @@ fn short_times_on_a_24_hour_clock() {
     assert_eq!(super::short_time_with("2026-09-30T12:00:05", false), "Sep 30, 2026, 12:00 PM");
     assert_eq!(super::short_time_with("2026-09-30T00:05:00", false), "Sep 30, 2026, 12:05 AM");
     assert_eq!(super::short_time_with("2026-09-30T18:30:00", false), "Sep 30, 2026, 6:30 PM");
+}
+
+/// …and the Versions list reads the setting (`i18n::set_24_hour_clock`, as each frame applies it).
+#[test]
+fn short_time_follows_the_24_hour_clock_setting() {
+    crate::i18n::set_language(crate::i18n::Locale::En);
+    crate::i18n::set_24_hour_clock(true);
+    assert_eq!(super::short_time("2026-09-30T18:30:00"), "Sep 30, 2026, 18:30");
+    crate::i18n::set_24_hour_clock(false);
+    assert_eq!(super::short_time("2026-09-30T18:30:00"), "Sep 30, 2026, 6:30 PM");
 }

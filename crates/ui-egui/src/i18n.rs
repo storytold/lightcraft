@@ -459,11 +459,15 @@ pub fn display_time(iso: &str) -> String {
 }
 
 /// [`display_time`] on the clock given: `clock_24` puts English on a 24-hour clock ("March 30, 2022
-/// at 22:11:11": the wall-clock digits, fraction and zone left out, missing seconds :00); the other
+/// at 22:11:11": the wall-clock digits, fraction and zone left out, missing seconds :00; a time it
+/// can't read, such as an hour alone or a zone right after the date, as written); the other
 /// languages already show the time as written.
 pub fn display_time_with(iso: &str, clock_24: bool) -> String {
     if language() == Locale::En && clock_24 {
-        let Some(normal) = lightcraft_catalog::dates::normalize_iso(iso) else { return iso.to_string() };
+        // `shift_iso` reads only whole times; `normalize_iso` alone would also take `2022-07-04T22`
+        // as midnight and `2022-07-04+01:00` as 01:00
+        let normal = lightcraft_catalog::dates::shift_iso(iso, 0).and_then(|_| lightcraft_catalog::dates::normalize_iso(iso));
+        let Some(normal) = normal else { return iso.to_string() };
         let date = lightcraft_catalog::dates::display_time(normal.get(..10).unwrap_or(&normal));
         // `normalize_iso` gives a date alone midnight: only a written time is shown
         return match normal.get(11..19).filter(|_| iso.trim().len() >= 16) {

@@ -136,6 +136,33 @@ fn catalogs_agree_on_placeholders() {
     }
 }
 
+/// The tour's text (its pages, and its window and button labels) is in every catalog: a language
+/// missing one of these keys would show that line in English on the first launch. The pages that
+/// name a shortcut carry the live chord through a format message (`menubar::shortcut_text` paints
+/// it), so their `{keys}` forms are pinned in every `*-formats.json` too.
+#[test]
+fn the_welcome_tour_is_translated_in_every_catalog() {
+    use crate::dialogs::{WELCOME_NEXT, WELCOME_PAGES, WELCOME_START, WELCOME_TITLE};
+    let keys: Vec<&str> = WELCOME_PAGES
+        .iter()
+        .flat_map(|(title, text, opening)| [*title, *text, *opening])
+        .chain([WELCOME_TITLE, WELCOME_NEXT, WELCOME_START])
+        .collect();
+    let format_keys = [
+        "Bring photos in with File \u{203a} Import Photos\u{2026} ({keys}).",
+        "View \u{203a} Detail View ({keys}).",
+        "File \u{203a} Export\u{2026} \u{b7} File \u{203a} Print\u{2026} ({keys}).",
+    ];
+    for language in Locale::ALL.iter().copied().filter(|language| *language != Locale::En) {
+        let catalog = language.catalog();
+        let missing: Vec<&str> = keys.iter().copied().filter(|key| !catalog.contains_key(*key)).collect();
+        assert!(missing.is_empty(), "{}: no translation for {missing:?}", language.code());
+        let own_formats = formats_catalog(language.code());
+        let missing_formats: Vec<&str> = format_keys.iter().copied().filter(|key| !own_formats.contains_key(*key)).collect();
+        assert!(missing_formats.is_empty(), "{}: no translation for {missing_formats:?}", language.code());
+    }
+}
+
 /// Locale tags are matched leniently, so a system locale reaches a shipped language.
 /// The message box for a desktop start that failed (issue #260) names the error and the log
 /// file, in the UI language.
@@ -388,9 +415,33 @@ fn preferences_round_trip_and_old_settings_remain_readable() {
     assert_eq!(restored.language, Locale::ZhHans);
 }
 
-/// Smart-album choice values read as words in every language (English "Public Domain"), never as
-/// rule ids like `publicDomain`; an id the field doesn't know shows as written. A yes/no value
-/// reads Yes / No, or the language's contextual entry for it where it has one.
+#[test]
+fn catalogs_contain_core_workflows() {
+    for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+        for key in ["Import Photos…", "Export…", "Exposure", "White Balance", "Settings", "Language"] {
+            let value = language.tr(key);
+            assert!(!value.is_empty() && value != key, "{language:?}: {key}");
+        }
+    }
+}
+
+/// The built-in export presets' names show translated in the Export dialog (`builtin_label`), so
+/// every catalog carries them. A translation may keep the English text, so this checks that an
+/// entry exists: the catalog comparison only reports gaps, and a gap would show English silently.
+#[test]
+fn export_preset_names_are_translated_in_every_catalog() {
+    for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+        for key in ["Instagram Feed", "Instagram Story / Reel", "Web / Portfolio", "Full Resolution Master"] {
+            assert!(language.catalog().contains_key(key), "{language:?} has no translation for {key:?}");
+        }
+    }
+}
+
+/// Smart-album choice values read as words in every language (English "Public Domain", German
+/// "Gemeinfrei"), never as rule ids like `publicDomain`; an id the field doesn't know shows as
+/// written. Unlike other labels these must be translated: an untranslated one would be English
+/// in the middle of a translated rule. A yes/no value reads Yes / No, or the language's
+/// contextual entry for it where it has one.
 #[test]
 fn choice_values_read_as_words_in_every_language() {
     use lightcraft_catalog::rules::{FIELDS, Kind, bool_label};
@@ -655,6 +706,9 @@ fn german_ukrainian_italian_and_finnish_buttons_fit_the_bottom_bar_and_export_di
         let ctx = fonts_ctx(&[]);
         let services = crate::Services { pick_folder: Some(Box::new(|| None)), ..Default::default() };
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        // a headless host never gains the first-run tour: this harness drives `ui` directly and
+        // measures the export dialog's own layout
+        app.headless_host = true;
         app.ui.language = language;
         let mut bounds = Vec::new();
         for export in [false, true] {
@@ -714,6 +768,7 @@ fn painted_text(ctx: &egui::Context, app: &mut crate::LightcraftApp, language: L
             _ => {}
         }
     }
+    app.headless_host = true;
     app.ui.language = language;
     let mut text = String::new();
     for frame in 0..4 {
@@ -803,6 +858,8 @@ fn the_ui_works_without_craft_fonts() {
         }
     });
     let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    // a headless host never gains the first-run tour: this pass just warms every language up
+    app.headless_host = true;
     for language in Locale::ALL {
         app.ui.language = *language;
         for frame in 0..3 {
@@ -1260,7 +1317,11 @@ fn english_capture_times_on_a_24_hour_clock() {
         ("2022-03-30T22:11+02:00", "March 30, 2022 at 22:11:00"),
         ("2022-03-30T22:11-05:00", "March 30, 2022 at 22:11:00"),
         ("2022-07-04", "July 4, 2022"),
-        ("2022-07-04T22", "July 4, 2022"),
+        // a time it can't read is shown as written, not as a date alone or another time
+        ("2022-07-04T22", "2022-07-04T22"),
+        ("2022-07-04+01:00", "2022-07-04+01:00"),
+        ("2022-03-30T22:11:x5", "2022-03-30T22:11:x5"),
+        ("2022-03-30T22:11:05 local", "2022-03-30T22:11:05 local"),
         ("", ""),
         ("someday", "someday"),
         ("2026-02-30T22:00:00", "2026-02-30T22:00:00"),
@@ -1299,6 +1360,8 @@ fn the_24_hour_clock_is_independent_of_the_language() {
 fn the_24_hour_clock_setting_round_trips_and_reads_leniently() {
     let old: crate::state::UiState = serde_json::from_str(r#"{"settings": {"startupView": "detail"}}"#).unwrap();
     assert!(!old.settings.use_24_hour_clock);
+    let off: crate::state::UiState = serde_json::from_str(r#"{"settings": {"use24HourClock": false}}"#).unwrap();
+    assert!(!off.settings.use_24_hour_clock);
     for odd in [r#""yes""#, "1", "null", "{}", r#""真""#] {
         let json = format!(r#"{{"settings": {{"use24HourClock": {odd}, "startupView": "detail"}}}}"#);
         let ui: crate::state::UiState = serde_json::from_str(&json).unwrap();
@@ -1346,12 +1409,20 @@ fn the_24_hour_clock_applies_through_ui_set_and_each_frame() {
     assert!(!uses_24_hour_clock());
     assert_eq!(display_time(&captured), lightcraft_catalog::dates::display_time(&captured));
     assert_eq!(app.session.catalog.photo(id).and_then(|p| p.captured.clone()), Some(captured), "the metadata is unchanged");
-    // the frame's own sync: the state wins over whatever the thread had
+    // the logic pass's own sync: the state wins over whatever the thread had
     app.ui.settings.use_24_hour_clock = true;
     app.logic(&ctx);
     assert!(uses_24_hour_clock());
     app.ui.settings.use_24_hour_clock = false;
     app.logic(&ctx);
     assert!(!uses_24_hour_clock());
+    // …and the UI pass's, in a frame without a logic pass
+    for on in [true, false] {
+        app.ui.settings.use_24_hour_clock = on;
+        set_24_hour_clock(!on);
+        let input = crate::headless::HeadlessView::raw_input(egui::vec2(800.0, 600.0), 1.0, 0.0, vec![]);
+        ctx.run_ui(input, |ui| app.ui(ui)).textures_delta.clear();
+        assert_eq!(uses_24_hour_clock(), on, "the UI pass applies {on}");
+    }
     set_24_hour_clock(false);
 }
