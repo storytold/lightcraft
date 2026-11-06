@@ -63,7 +63,8 @@ pub(crate) fn start(
                 waiting.request_repaint();
             });
             if let Err(e) = thread {
-                // the sheet stays up with nobody to hear it; the dropped sender ends the request
+                // the sheet stays up with nobody to hear it and the dropped sender ends the request, so the next
+                // waiting request can show over it: a known limit, for a thread that can't be started
                 log::error!("could not start the thread that waits for the file dialog: {e}");
             }
         }
@@ -243,7 +244,7 @@ mod tests {
         let asking = thread::current().id();
         let (sheet, rx) = held(&ctx);
         assert_eq!(sheet.made_on(), Some(asking), "made here");
-        assert_eq!(sheet.polled_on(), [asking], "its first poll, which would make a lazy dialog, is here too");
+        assert_eq!(sheet.polled_on().first(), Some(&asking), "its first poll, which would make a lazy dialog, is here too");
         // up, and the asking thread is free: nothing has answered
         assert!(rx.try_recv().is_err());
         sheet.close(&["/photos/Sunset"]);

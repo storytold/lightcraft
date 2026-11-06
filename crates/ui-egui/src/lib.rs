@@ -247,7 +247,7 @@ pub struct LightcraftApp {
     drop_pending: Vec<String>,
     /// The text the UI last put on the clipboard (`ui.inspect` → `copied`).
     pub copied: Option<String>,
-    /// Native file dialogs up for commands (`pick`): each command runs again when its closes.
+    /// Native file dialogs for commands, up or waiting for their turn (`pick`): each command runs again when it closes.
     pub(crate) pending_picks: Vec<pick::Pending>,
     /// `library.missing` requests from the control channel and the check that answers them on a
     /// worker thread ([`missing_sweep`]).
