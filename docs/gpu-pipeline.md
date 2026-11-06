@@ -189,9 +189,13 @@ walks the drive.
   `aux` buffer, trilinear like `Lut3d::apply`, after grain), masks with Refine Edges (the cross
   guided filter of Auto Mask, blended by √refine before the mask's invert and amount) and soft
   proofs into a colour space (proof-space gamut mapping and both gamut warnings, into an output
-  space or a display). These render on the CPU: high-bit-depth exports and Visualize HDR (both
-  need float output), soft proofs to an output device's profile (a printer or paper profile), and
-  photos with a content-aware Fill spot (no GPU kernel for it).
+  space or a display). The float HDR render (`OutputDepth::F32Hdr`) takes the GPU path too: the
+  `finish` kernel keeps values up to the edit's peak, encodes with the exact sRGB curve and writes
+  three linear floats per pixel into `out` (within 1 step of 8 on the sRGB curve of the CPU's float
+  render, 0.02 on average: `hdr_float_render_matches`). These render on the CPU: 16-bit and linear float exports,
+  Visualize HDR (it draws the float render over the 8-bit one), soft proofs to an output device's
+  profile (a printer or paper profile), and photos with a content-aware Fill spot (no GPU kernel
+  for it).
 - Anything the GPU path cannot do returns `None` and the CPU renders instead: no adapter (CI
   machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole
   process; see [Backends](#backends-environment-variables-and-troubleshooting-issue-136)), the `app.gpu {enabled}`
