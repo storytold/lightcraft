@@ -123,12 +123,21 @@ fn prepare_guarded(
         let label = p.file_name.clone();
         let meta = export_metadata(p, &session.catalog, o);
         let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
-        let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
+        let mut job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
+        job.request.exact_size = true;
+        job.key ^= 0x86e2_fadc_0917_b435;
         let weight = render_weight(full_px, long, job.level, w.saturating_mul(h));
         if let Some(why) = too_big_for_memory((w, h), native_px, weight, crate::memory::total_ram()) {
             return Err(format!("{label}: {why}"));
         }
-        let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
+        let hdr_job = if gain_map {
+            let mut hdr = session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?;
+            hdr.request.exact_size = true;
+            hdr.key ^= 0x86e2_fadc_0917_b435;
+            Some(hdr)
+        } else {
+            None
+        };
         (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone() })), weight)
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
@@ -247,7 +256,7 @@ impl PreparedExport {
                                 .any(|value| !value.trim().is_empty());
                         if metadata.gps.is_some() || original_embeds_exif_gps(&bytes) || embeds_place_name {
                             return Err(format!(
-                                "{label}: can't remove the location from an original file that embeds GPS or place names; export as JPEG or TIFF, or as DNG for a raw photo"
+                                "{label}: can't remove the location from this original because it may contain GPS or place names, or its location data could not be verified; export as JPEG or TIFF, or as DNG for a raw photo"
                             ));
                         }
                     }

@@ -53,7 +53,8 @@ fn check_v3_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     let cpu = render(&src, &info, &s, &req).image;
     let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
     for image in [&cpu, &gpu] {
-        assert!(image.data.iter().all(|p| *p == image.data[0]));
+        // (8-bit output is dithered: a flat source varies by a level)
+        assert!(image.data.iter().all(|p| p.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1)));
         for (actual, expected) in image.data[0].into_iter().zip(expected) {
             assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {:?}, expected {expected}", image.data[0]);
         }
@@ -91,6 +92,12 @@ fn camera_tone_and_relative_wb() {
     s.wb.mode = WbMode::Custom;
     s.wb.temp = 8000.0;
     check("camera tone edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // each process's shoulder past the last knot, with highlights lifted into it (issue #1632)
+    for p in Process::ALL {
+        let mut lifted = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
+        lifted.light.exposure = 2.0;
+        check(&format!("camera tone {p:?} exposure +2"), &src, &info, &lifted, &RenderRequest::fit(320, 240));
+    }
     // a camera chroma curve: richer shadows, highlights bleached toward white
     let curve = curve.with_chroma([1.4, 1.3, 1.1, 1.0, 0.7, 0.4, 0.25, 0.2]).unwrap();
     let info = SourceInfo { camera_tone: Some(curve), ..info };
@@ -708,8 +715,7 @@ fn light_v3_operators_match() {
     let req = RenderRequest::fit(720, 720);
     for id in ["light.contrast", "light.whites", "light.blacks"] {
         for v in [-100.0, -50.0, 50.0, 100.0] {
-            let mut s = DevelopSettings::default();
-            assert_eq!(s.process.process(), Process::V4);
+            let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
             lightcraft_develop::controls::set(&mut s, id, v);
             check(&format!("V4 {id} {v}"), &src, &info, &s, &req);
             if id == "light.whites" {
@@ -722,7 +728,7 @@ fn light_v3_operators_match() {
             }
         }
     }
-    let mut s = DevelopSettings::default();
+    let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
     typical(&mut s);
     s.light.contrast = 35.0;
     s.light.whites = 40.0;

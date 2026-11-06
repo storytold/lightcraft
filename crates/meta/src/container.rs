@@ -265,8 +265,8 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
     out
 }
 
-/// Check every JPEG Exif APP1 packet for location tags. Truncated or unparseable Exif packets
-/// fail closed because an Original copy cannot establish that location data is absent.
+/// Check JPEG Exif APP1 packets for location tags. MPF multi-picture JPEGs and truncated or
+/// unparseable Exif packets fail closed because an Original copy cannot establish that location data is absent.
 pub(crate) fn jpeg_embeds_exif_gps_location(bytes: &[u8]) -> bool {
     if !bytes.starts_with(&[0xff, 0xd8]) {
         return false;
@@ -304,6 +304,11 @@ pub(crate) fn jpeg_embeds_exif_gps_location(bytes: &[u8]) -> bool {
             return true;
         }
         let Some(payload) = bytes.get(payload_start..segment_end) else { return true };
+        if marker == 0xe2 && payload.starts_with(b"MPF\0") {
+            // Secondary JPEG images follow the primary image and need their own metadata scans.
+            // Until those offsets are parsed, refuse an Original copy rather than miss GPS there.
+            return true;
+        }
         if marker == 0xe1 && payload.starts_with(b"Exif\0") {
             let Some(exif) = payload.get(6..) else { return true };
             if crate::exif::exif_gps_tag_presence(exif) != Some(false) {
@@ -488,6 +493,82 @@ mod tests {
         assert!(crate::source_embeds_exif_gps_location(&jpeg(&[empty, destination])));
     }
 
+    /// MPF JPEGs fail closed because the metadata scan does not inspect secondary images.
+    #[test]
+    fn jpeg_gps_guard_fails_closed_for_mpf_secondary_images() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::GPS_IFD, gps);
+        let exif = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+
+        let mut secondary = vec![0xff, 0xd8];
+        let mut exif_payload = b"Exif\0\0".to_vec();
+        exif_payload.extend_from_slice(&exif);
+        secondary.extend(seg(0xe1, &exif_payload));
+        secondary.extend_from_slice(&[0xff, 0xda, 0, 2, 0x11, 0xff, 0xd9]);
+
+        let scan = [0xff, 0xda, 0, 2, 0x11, 0xff, 0xd9];
+        let mpf_payload = |primary_size: u32, secondary_offset: u32| {
+            let mut payload = b"MPF\0II*\0\x08\0\0\0".to_vec();
+            payload.extend_from_slice(&3u16.to_le_bytes());
+            payload.extend_from_slice(&0xb000u16.to_le_bytes());
+            payload.extend_from_slice(&7u16.to_le_bytes());
+            payload.extend_from_slice(&4u32.to_le_bytes());
+            payload.extend_from_slice(b"0100");
+            payload.extend_from_slice(&0xb001u16.to_le_bytes());
+            payload.extend_from_slice(&4u16.to_le_bytes());
+            payload.extend_from_slice(&1u32.to_le_bytes());
+            payload.extend_from_slice(&2u32.to_le_bytes());
+            payload.extend_from_slice(&0xb002u16.to_le_bytes());
+            payload.extend_from_slice(&7u16.to_le_bytes());
+            payload.extend_from_slice(&32u32.to_le_bytes());
+            payload.extend_from_slice(&50u32.to_le_bytes());
+            payload.extend_from_slice(&0u32.to_le_bytes());
+            for (attributes, size, offset) in
+                [(0x2000_0000u32, primary_size, 0u32), (0u32, u32::try_from(secondary.len()).unwrap(), secondary_offset)]
+            {
+                payload.extend_from_slice(&attributes.to_le_bytes());
+                payload.extend_from_slice(&size.to_le_bytes());
+                payload.extend_from_slice(&offset.to_le_bytes());
+                payload.extend_from_slice(&0u16.to_le_bytes());
+                payload.extend_from_slice(&0u16.to_le_bytes());
+            }
+            payload
+        };
+        let mpf = seg(0xe2, &mpf_payload(0, 0));
+        let primary_size = 2 + mpf.len() + scan.len();
+        let secondary_offset = primary_size - 10;
+        let mpf = seg(0xe2, &mpf_payload(u32::try_from(primary_size).unwrap(), u32::try_from(secondary_offset).unwrap()));
+
+        let mut mpo = vec![0xff, 0xd8];
+        mpo.extend(mpf);
+        mpo.extend_from_slice(&scan);
+        mpo.extend_from_slice(&secondary);
+        assert!(crate::source_embeds_exif_gps_location(&mpo), "GPS in the secondary image must block an Original copy");
+
+        let gps_free_jpeg = [0xff, 0xd8, 0xff, 0xda, 0, 2, 0x11, 0xff, 0xd9];
+        assert!(!crate::source_embeds_exif_gps_location(&gps_free_jpeg), "ordinary GPS-free JPEGs remain eligible");
+    }
+
+    /// Malformed JPEG headers fail closed, while scan and end markers stop the metadata scan.
+    #[test]
+    fn jpeg_gps_guard_fails_closed_for_malformed_segments() {
+        let cases = [
+            ("truncated segment", vec![0xff, 0xd8, 0xff, 0xe1, 0, 6, b'E', b'x']),
+            ("invalid segment length", vec![0xff, 0xd8, 0xff, 0xe0, 0, 1]),
+            ("missing marker", vec![0xff, 0xd8, 0x01]),
+        ];
+        for (label, bytes) in cases {
+            assert!(crate::source_embeds_exif_gps_location(&bytes), "{label} must fail closed");
+        }
+        for bytes in [vec![0xff, 0xd8, 0xff, 0xda, 0, 2], vec![0xff, 0xd8, 0xff, 0xd9]] {
+            assert!(!crate::source_embeds_exif_gps_location(&bytes), "SOS and EOI terminate a valid metadata scan");
+        }
+    }
+
     /// Invalid EXIF GPS coordinates leave XMP fallback available and valid EXIF remains preferred.
     #[test]
     fn jpeg_gps_falls_back_from_invalid_exif_and_keeps_valid_exif() {
@@ -645,6 +726,65 @@ mod tests {
         assert!(!crate::source_embeds_exif_gps_location(&webp(&no_gps)));
     }
 
+    /// Malformed PNG and WebP structure cannot authorize a privacy-sensitive Original copy.
+    #[test]
+    fn malformed_png_and_webp_gps_guards_fail_closed() {
+        let png = |chunks: &[(&[u8], &[u8])]| {
+            let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+            for (kind, data) in chunks {
+                bytes.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_be_bytes());
+                bytes.extend_from_slice(kind);
+                bytes.extend_from_slice(data);
+                bytes.extend_from_slice(&[0; 4]);
+            }
+            bytes
+        };
+        let truncated_chunk = {
+            let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+            bytes.extend_from_slice(&8u32.to_be_bytes());
+            bytes.extend_from_slice(b"eXIf");
+            bytes.extend_from_slice(&[1, 2]);
+            bytes
+        };
+        let missing_iend = png(&[(&b"tEXt"[..], &[][..])]);
+        let invalid_iend = png(&[(&b"IEND"[..], &[0][..])]);
+        let trailing_after_iend = {
+            let mut bytes = png(&[(&b"IEND"[..], &[][..])]);
+            bytes.push(0);
+            bytes
+        };
+        for (label, bytes) in [
+            ("truncated PNG chunk", truncated_chunk),
+            ("missing PNG IEND", missing_iend),
+            ("invalid PNG IEND", invalid_iend),
+            ("bytes after PNG IEND", trailing_after_iend),
+        ] {
+            assert!(crate::source_embeds_exif_gps_location(&bytes), "{label} must fail closed");
+        }
+        assert!(!crate::source_embeds_exif_gps_location(&png(&[(&b"IEND"[..], &[][..])])));
+
+        let webp = |chunks: &[(&[u8], &[u8], bool)]| {
+            let mut bytes = b"RIFF\0\0\0\0WEBP".to_vec();
+            for (kind, data, pad) in chunks {
+                bytes.extend_from_slice(kind);
+                bytes.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_le_bytes());
+                bytes.extend_from_slice(data);
+                if *pad && data.len() % 2 == 1 {
+                    bytes.push(0);
+                }
+            }
+            let riff_size = u32::try_from(bytes.len().saturating_sub(8)).unwrap_or(u32::MAX);
+            bytes[4..8].copy_from_slice(&riff_size.to_le_bytes());
+            bytes
+        };
+        let mut wrong_riff_size = webp(&[]);
+        wrong_riff_size[4..8].copy_from_slice(&5u32.to_le_bytes());
+        assert!(crate::source_embeds_exif_gps_location(&wrong_riff_size), "RIFF size mismatch must fail closed");
+        let odd_chunk_without_padding = webp(&[(&b"VP8 "[..], &[1][..], false)]);
+        assert!(crate::source_embeds_exif_gps_location(&odd_chunk_without_padding), "missing odd-size padding must fail closed");
+        assert!(!crate::source_embeds_exif_gps_location(&webp(&[])));
+    }
+
     #[test]
     fn png_and_webp() {
         let exif = sample_exif(ByteOrder::Little);
@@ -685,8 +825,15 @@ mod tests {
 
     #[test]
     fn tiff_file_is_its_own_exif() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
         let t = sample_exif(ByteOrder::Big);
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("No GPS camera".into()));
+        let without_gps = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
         assert_eq!(crate::extract(&t).model.as_deref(), Some("Model X"));
+        assert!(crate::source_embeds_exif_gps_location(&t), "whole-file TIFF with GPS must be location-bearing");
+        assert!(!crate::source_embeds_exif_gps_location(&without_gps), "whole-file TIFF without GPS is safe");
         assert_eq!(embedded(b"not an image"), Embedded::default());
     }
 

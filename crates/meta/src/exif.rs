@@ -97,6 +97,14 @@ fn pos(v: Option<f64>) -> Option<f64> {
     v.filter(|x| x.is_finite() && *x > 0.0)
 }
 
+/// The orientation the Exif's own first IFD states. [`from_tiff`] also reports one that only the XMP packet in
+/// the Exif's tag 700 states; LightCraft displays a photo by the Exif's alone, so that one can't tell how a photo
+/// is stored.
+pub(crate) fn ifd0_orientation(bytes: &[u8]) -> Option<Orientation> {
+    let tiff = Tiff::parse_with(strip_exif_header(bytes), &ParseOptions::default()).ok()?;
+    tiff.ifds.first().and_then(|i| i.u16(t::ORIENTATION)).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif)
+}
+
 /// Build [`Metadata`] from a parsed TIFF stream (IFD0 + Exif + GPS; DNG tags as fallbacks).
 pub fn from_tiff(tiff: &Tiff) -> Metadata {
     let ifd0 = tiff.ifds.first();
@@ -180,8 +188,11 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     if let Some(x) = ifd0.and_then(|i| i.bytes(t::XMP)).map(String::from_utf8_lossy)
         && let Ok(x) = crate::parse_xmp(&x)
     {
+        // (the size stays the one Exif states: `extract` turns regions by it, and a size only the XMP states may be the upright one)
+        let size = (m.width, m.height);
         m.overlay_user_fields(&x.metadata);
         m.fill_missing(&x.metadata);
+        (m.width, m.height) = size;
     }
     m
 }
@@ -857,14 +868,24 @@ mod write_tests {
     /// Coordinates rounding at a DMS boundary remain readable after the writer carries units.
     #[test]
     fn gps_writer_rounding_carries_before_splitting_dms() {
-        for (latitude, longitude) in [(1.2, -45.99999999), (-89.99999999, 179.99999999)] {
+        let cases = [
+            (1.2, -45.99999999, (1.0, 12.0, 0.0), (46.0, 0.0, 0.0)),
+            (-89.99999999, 179.99999999, (90.0, 0.0, 0.0), (180.0, 0.0, 0.0)),
+            (12.0 + (34.0 * 60.0 + 59.9996) / 3600.0, 0.0, (12.0, 35.0, 0.0), (0.0, 0.0, 0.0)),
+        ];
+        for (latitude, longitude, expected_latitude, expected_longitude) in cases {
             let metadata = Metadata { gps: Some(Gps { latitude, longitude, altitude: None }), ..Default::default() };
             let written = write_exif(&metadata);
             let tiff = Tiff::parse(&written).unwrap();
             let gps = tiff.gps().unwrap();
-            for tag in [t::GPS_LATITUDE, t::GPS_LONGITUDE] {
-                let seconds = gps.value(tag).and_then(|value| value.get_f64(2)).expect("written DMS has seconds");
+            for (tag, expected) in [(t::GPS_LATITUDE, expected_latitude), (t::GPS_LONGITUDE, expected_longitude)] {
+                let value = gps.value(tag).expect("written DMS is present");
+                let degrees = value.get_f64(0).expect("written DMS has degrees");
+                let minutes = value.get_f64(1).expect("written DMS has minutes");
+                let seconds = value.get_f64(2).expect("written DMS has seconds");
+                assert!((0.0..60.0).contains(&minutes), "{tag} emitted {minutes} minutes");
                 assert!((0.0..60.0).contains(&seconds), "{tag} emitted {seconds} seconds");
+                assert_eq!((degrees, minutes, seconds), expected, "{tag} DMS components");
             }
             let read = read_exif(&written).gps.expect("the rounded position remains readable");
             let expected_latitude = if latitude < 0.0 { -latitude.abs() } else { latitude.abs() };

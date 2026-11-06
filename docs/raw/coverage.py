@@ -81,9 +81,7 @@ def classify(maker, camera, ext_field):
         if e == "PEF":
             return "unverified", "PEF", "PEF decoder (uncompressed, Huffman, packed 12-bit)"
         if e == "ORF":
-            if ORF_DECODED.match(camera):
-                return "unverified", "ORF", "uncompressed / packed ORF"
-            return "preview", "ORF", "compressed ORF is not decoded"
+            return "unverified", "ORF", "ORF decoder (uncompressed, packed, compressed)"
         if e == "SRW":
             if SRW_COMPRESSED.search(camera):
                 return "preview", "SRW", "compressed SRW is not decoded"

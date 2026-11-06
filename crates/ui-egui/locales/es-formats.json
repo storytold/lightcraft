@@ -23,6 +23,7 @@
   "Added {n} photo{} to My Photos": "{n} foto{0} añadida{0} a Mis fotos",
   "Added {n} photo{} to “{}”": "{n} foto{0} añadida{0} a “{1}”",
   "Added {what} to {name}": "{what} añadido a {name}",
+  "Adjustments: {n}": "Ajustes: {n}",
   "Adding photos… {} of {}": "Añadiendo fotos… {} de {}",
   "All {n} selected photos move by the same amount.": "Las {n} fotos seleccionadas se desplazan la misma cantidad.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "Ya en la biblioteca, en Eliminadas recientemente: {0} foto{1} seleccionada{1} · clic derecho → Restaurar, o Eliminar definitivamente para importar de nuevo",
@@ -161,6 +162,8 @@
   "{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.": "Cambios que no se pudieron escribir en el disco: {n}{0:.0}: {e}\nSi se sale ahora, se perderán.{1:.0}",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "Cambios guardados en memoria, pero no escritos en el disco: {n}{0:.0}: {e}\nLightCraft vuelve a intentarlo automáticamente; si se sale ahora, se perderán.{1:.0}",
   "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry": "Cambios guardados solo en memoria: {n}{:.0}: {e}; LightCraft volverá a intentarlo",
+  "{n} file{} skipped (not a supported photo type)": "Archivos omitidos (no son de un tipo de foto compatible): {n}{:.0}",
+  "{n} folder{} could not be read": "Carpetas que no se pudieron leer: {n}{:.0}",
   "{n} found · {sel} selected": "{n} encontradas · {sel} seleccionadas",
   "{n} photos": "{n} fotos",
   "{n} photos in {} are hidden by the filters above": "Los filtros de arriba ocultan {n} fotos en {}",
@@ -320,5 +323,8 @@
   "Panel layout could not be restored: {error}": "No se pudo restablecer la disposición de paneles: {error}",
   "Panel move was not applied: {error}": "No se aplicó el movimiento del panel: {error}",
   "{name} is installed": "{name} está instalado",
-  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado"
+  "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado",
+  "Bring photos in with File › Import Photos… ({keys}).": "Importa fotos con Archivo › Importar fotos… ({keys}).",
+  "View › Detail View ({keys}).": "Vista › Vista de detalle ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Archivo › Exportar… · Archivo › Imprimir… ({keys})."
 }
