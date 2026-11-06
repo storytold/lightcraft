@@ -29,7 +29,10 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
         tree_toggle(ui, &resp, indent, k, open, format!("keywordToggle:{}", n.path), &n.name);
     }
     let shown = n.path.replace('|', " › ");
-    let resp = resp.on_hover_text(if n.children.is_empty() {
+    let resp = resp.on_hover_text(if sel {
+        // the row is the filter now and a click clears it (below)
+        crate::i18n::tr_format!("Stop showing only photos with {path}", path = shown)
+    } else if n.children.is_empty() {
         crate::i18n::tr_format!("Show photos with {path}", path = shown)
     } else {
         crate::i18n::tr_format!("Show photos with {path} (includes the keywords below it)", path = shown)

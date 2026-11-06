@@ -329,5 +329,6 @@
   "Show photos with {path}": "Visa foton med {path}",
   "Show photos with {path} (includes the keywords below it)": "Visa foton med {path} (inklusive nyckelorden under)",
   "Add {path} to the selected photos ({n})": "Lägg till {path} i de markerade fotona ({n})",
-  "Take {path} off the selected photos ({n})": "Ta bort {path} från de markerade fotona ({n})"
+  "Take {path} off the selected photos ({n})": "Ta bort {path} från de markerade fotona ({n})",
+  "Stop showing only photos with {path}": "Sluta visa bara foton med {path}"
 }

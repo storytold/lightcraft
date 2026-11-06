@@ -207,11 +207,14 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let state = ticks.tick(&r.path);
     let inside = ticks.inside(&r.path);
     let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(13.0, 13.0));
-    let on = !selection.is_empty();
+    // the photos a click reaches: each once, those the library has (a stale id in the selection,
+    // such as an undone virtual copy, is not one)
+    let reached = ticks.photos();
+    let on = reached > 0;
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
     let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
     let tb = ui.interact(boxr.expand(3.0), egui::Id::unique(("keyword-list-tick", r.path.to_lowercase())), sense);
-    crate::widgets::announce(&tb, tick_name(state, &r.path, selection.len()));
+    crate::widgets::announce(&tb, tick_name(state, &r.path, reached));
     register(ui, format!("keywordCheck:{}", r.path), boxr);
     let edge = if on { t.text_label } else { t.text_dim.gamma_multiply(0.5) };
     match state {
@@ -236,7 +239,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
             }
         }
     }
-    let tb = tick_hover(tb, state, &r.path, selection.len(), inside);
+    let tb = tick_hover(tb, state, &r.path, reached, inside);
     if tb.clicked() {
         let key = if state == Tick::All { "removeKeywords" } else { "addKeywords" };
         let _ = app.run("photo.setMeta", json!({key: [r.path]}));
@@ -591,6 +594,11 @@ impl Ticks {
     /// keywords below it, at any depth. Empty for a keyword with nothing applied inside.
     pub(crate) fn inside(&self, path: &str) -> &[String] {
         self.inside.get(&lightcraft_catalog::keywords::clean(path).to_lowercase()).map_or(&[], Vec::as_slice)
+    }
+
+    /// How many photos the selection reaches: each once, those the library has.
+    pub(crate) fn photos(&self) -> usize {
+        self.photos
     }
 
     /// The tick box of `path`: a photo counts when it has the keyword itself (any case); one with

@@ -332,5 +332,6 @@
   "Show photos with {path}": "{path} მქონე ფოტოების ჩვენება",
   "Show photos with {path} (includes the keywords below it)": "{path} მქონე ფოტოების ჩვენება (მის ქვეშ არსებული საკვანძო სიტყვების ჩათვლით)",
   "Add {path} to the selected photos ({n})": "{path}-ის დამატება მონიშნულ ფოტოებზე ({n})",
-  "Take {path} off the selected photos ({n})": "{path}-ის ამოშლა მონიშნული ფოტოებიდან ({n})"
+  "Take {path} off the selected photos ({n})": "{path}-ის ამოშლა მონიშნული ფოტოებიდან ({n})",
+  "Stop showing only photos with {path}": "{path} მქონე ფოტოების მხოლოდ ჩვენების შეწყვეტა"
 }

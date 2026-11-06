@@ -95,6 +95,23 @@ fn a_left_keyword_row_says_it_shows_the_photos() {
     assert!(hover_says(&mut h, "source:keyword:Keyword 00000|Child", "Show photos with Keyword 00000 › Child"), "{:?}", h.painted_text());
 }
 
+/// Given the keyword that is already the filter, when the pointer rests on its row, then the
+/// tooltip says a click stops showing only its photos (the click clears the filter), not "Show
+/// photos with", which would be the opposite of what happens.
+#[test]
+fn a_chosen_left_keyword_row_says_it_clears_the_filter() {
+    let mut h = app(12, 6);
+    let r = h.request("ui.clickWidget", json!({"id": "source:keyword:Keyword 00001"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.filter.keyword.as_deref(), Some("Keyword 00001"));
+    assert!(hover_says(&mut h, "source:keyword:Keyword 00001", "Stop showing only photos with Keyword 00001"), "{:?}", h.painted_text());
+    let r = h.request("ui.clickWidget", json!({"id": "source:keyword:Keyword 00001"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.filter.keyword, None, "the click clears it");
+}
+
 /// Timings on a library the size of the report's (58,000 photos): `cargo test --release -p
 /// lightcraft-ui-egui --lib probe_keyword_sidebar_cost -- --ignored --nocapture`.
 #[test]
