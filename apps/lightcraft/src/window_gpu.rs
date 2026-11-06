@@ -79,7 +79,8 @@ impl Files {
     /// touched. A marker without a lock holder (a crash, an older version's) is a failed start.
     pub fn take_failed(&self) -> Option<WindowRenderer> {
         let m = self.marker()?;
-        let mut f = OpenOptions::new().read(true).write(true).open(&m).ok()?;
+        // a marker that can't be written is still read (and, failing an empty, deleted by `clear`)
+        let mut f = OpenOptions::new().read(true).write(true).open(&m).or_else(|_| File::open(&m)).ok()?;
         match f.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => return None,
@@ -436,6 +437,31 @@ mod tests {
         parent.release_for_relaunch();
         assert!(!parent.armed());
         assert_eq!(Files::new(Some(d.clone())).take_failed(), Some(dx));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A marker that can be read but not written (its permissions changed, a settings folder
+    /// copied from another account) still names the failed start: the next start does not retry
+    /// the renderer that died.
+    #[test]
+    fn a_read_only_marker_still_names_the_failed_start() {
+        let d = dir("read-only-marker");
+        let first = Files::new(Some(d.clone()));
+        let metal = WindowRenderer::Wgpu(Backends::METAL);
+        first.arm(metal);
+        first.release_for_relaunch();
+        drop(first);
+        let path = d.join("window-init.marker");
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&path, perms).unwrap();
+        assert_eq!(Files::new(Some(d.clone())).take_failed(), Some(metal));
+        if let Ok(m) = std::fs::metadata(&path) {
+            let mut perms = m.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 
