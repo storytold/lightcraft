@@ -65,7 +65,7 @@ GB below means 1,000,000,000 bytes.
 | 5 | 2 | 2,741,400,023 | 114.225001 | 0.548 GB | 3,554,803,712 |
 
 The retained RGB payload is exactly **12 bytes per pixel per frame**:
-288,000,000 bytes per 24 MP frame (804,000,000 bytes per 67 MP frame).
+288,000,000 bytes per 24-MP frame (807,376,896 bytes per 67.28-MP frame).
 Peak heap divided by frame count includes output and scratch shared by the
 merge; it must not be described as the RGB payload alone.
 
@@ -157,7 +157,7 @@ Profiled wall times were 3.227 to 3.521 s, 5.900 to 6.164 s, 8.533 to
 9.051 s, and 8.011 to 8.015 s. These include generation and allocation
 profiling, so they are not decoder or export benchmarks.
 
-A final 24 MP, five-frame run through the `Vec<Frame>` adapter peaked at
+A final 24-MP, five-frame run through the `Vec<Frame>` adapter peaked at
 1,952,283,376 bytes, below its 2,100,000,000-byte budget. The streaming and
 adapter paths share the same storage and merge code; callers of the adapter
 have already allocated all inputs before the call.
