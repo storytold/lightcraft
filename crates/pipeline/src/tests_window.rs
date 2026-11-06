@@ -422,6 +422,46 @@ fn auto_mask_strokes_match_the_whole_render() {
     check_noisy("auto mask", &s, PixelWindow { x: 400, y: 300, w: 300, h: 250 }, 2, 0.1);
 }
 
+// Given the joint colour NR, a window is filtered with the whole frame's noise model: a quiet part of
+// the frame does not make a window of its noisy part (or the other way round) smooth differently
+#[test]
+fn joint_colour_nr_measures_the_noise_of_the_whole_frame() {
+    let mut s = DevelopSettings::default();
+    s.detail.nr_color = 25.0;
+    s.detail.nr_color_smoothness = 0.0;
+    // a frame that is one noise tile, and one of many tiles (`nrc_joint::tiles`)
+    for (w, h, win) in [(768, 128, PixelWindow { x: 640, y: 32, w: 64, h: 64 }), (1664, 1536, PixelWindow { x: 1400, y: 700, w: 128, h: 128 })] {
+        let src = crate::tests::colour_noise_scene(w, h, w * 2 / 3);
+        let req = RenderRequest::fit(w, h);
+        let f = render(&src, &SourceInfo::default(), &s, &req).image;
+        let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..req }).image;
+        let (max, mean) = compare_inset(&f, &part, win, win.w / 4);
+        assert!(max <= 2 && mean <= 0.1, "{w}×{h}: max {max}, mean {mean:.3}");
+    }
+}
+
+// Given a 16-bit or float render of a window with the joint colour NR, then its edges are the whole
+// render's too: the window is grown by the filter's reach and cut back
+#[test]
+fn a_deep_window_with_colour_noise_reduction_matches_the_whole_render() {
+    use crate::OutputDepth;
+    let (w, h, win) = (768, 128, PixelWindow { x: 600, y: 32, w: 96, h: 64 });
+    let src = crate::tests::colour_noise_scene(w, h, w * 2 / 3);
+    let mut s = DevelopSettings::default();
+    s.detail.nr_color = 25.0;
+    s.detail.nr_color_smoothness = 0.0;
+    for depth in [OutputDepth::U16, OutputDepth::F32Linear] {
+        let req = RenderRequest { depth, ..RenderRequest::fit(w, h) };
+        let deep = |req: &RenderRequest| render(&src, &SourceInfo::default(), &s, req).deep.map(|d| d.to_rgba8());
+        let (Some(f), Some(part)) = (deep(&req), deep(&RenderRequest { window: Some(win), ..req })) else {
+            panic!("{depth:?}: no deep image");
+        };
+        assert_eq!((part.width, part.height), (win.w, win.h), "{depth:?}: the window's own size");
+        let (max, mean) = compare_inset(&f, &part, win, 0);
+        assert!(max <= 1 && mean <= 0.01, "{depth:?}: max {max}, mean {mean:.3}");
+    }
+}
+
 /// The margin the loupe's windows carry around what they show at this size (`region::margin_for`:
 /// 4.5 % of the long edge).
 const OVERLAY_INSET: usize = W * 45 / 1000;
@@ -732,10 +772,12 @@ fn the_crop_tools_vignette_has_the_exports_shape_for_crops_below_a_pixel() {
 // Given crops far below a pixel, whose vignette frame the f32 kernels can't evaluate (a size
 // that rounds to 0 in f32; coefficients that fit f32 but overflow at the far edge, turned or not;
 // positions that fit but overflow when raised to the vignette's power, also only at Roundness
-// −100's power of 8), the crop tool shows the whole-photo vignette instead of none
+// −100's power of 8; positions f32 can't place within the frame, as where a tiny crop's
+// translation cancels its pixels' products), the crop tool shows the whole-photo vignette
+// instead of none or of one f32 has misplaced
 #[test]
 fn the_crop_tools_vignette_falls_back_to_the_whole_photo_where_f32_cant_hold_its_frame() {
-    let cases: [(&str, Rect, f64, f64); 7] = [
+    let cases: [(&str, Rect, f64, f64); 9] = [
         ("1e-50 square", Rect { x0: 0.0, y0: 0.0, x1: 1e-50, y1: 1e-50 }, 0.0, 0.0),
         ("1e-50 wide", Rect { x0: 0.0, y0: 0.2, x1: 1e-50, y1: 0.8 }, 0.0, 0.0),
         ("1e-39: the far edge overflows", Rect { x0: 0.0, y0: 0.0, x1: 1e-39, y1: 1e-39 }, 0.0, 0.0),
@@ -743,6 +785,8 @@ fn the_crop_tools_vignette_falls_back_to_the_whole_photo_where_f32_cant_hold_its
         ("1e-22: the square overflows", Rect { x0: 0.0, y0: 0.0, x1: 1e-22, y1: 1e-22 }, 0.0, 0.0),
         ("1e-22 at Roundness -100", Rect { x0: 0.0, y0: 0.0, x1: 1e-22, y1: 1e-22 }, 0.0, -100.0),
         ("1e-6 at Roundness -100: the 8th power overflows", Rect { x0: 0.0, y0: 0.0, x1: 1e-6, y1: 1e-6 }, 0.0, -100.0),
+        ("1e-6: the far edge is 2^20 frames away", Rect { x0: 0.0, y0: 0.0, x1: 1e-6, y1: 1e-6 }, 0.0, 0.0),
+        ("1e-8 at 0.405: f32 can't place the crop's centre", Rect { x0: 0.405, y0: 0.405, x1: 0.405 + 1e-8, y1: 0.405 + 1e-8 }, 0.0, 0.0),
     ];
     for (name, rect, angle, roundness) in cases {
         let mut s = crop_tool_vignette();
@@ -760,13 +804,27 @@ fn the_crop_tools_vignette_falls_back_to_the_whole_photo_where_f32_cant_hold_its
         let shown = uncropped(&s, None);
         assert!(shown.data == expected.data, "{name}: the crop tool doesn't show the whole-photo vignette");
     }
-    // …while a crop of 1e-6 at the default Roundness (power 2) holds in f32: its vignette stays on
-    // the crop, so the photo's middle, far from it, is as dark as its corners
+    // …while a crop of half a pixel holds in f32: its vignette stays on the crop, so the photo's
+    // middle, far from it, is as dark as its corners
     let mut s = crop_tool_vignette();
-    s.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: 0.0, y0: 0.0, x1: 1e-6, y1: 1e-6 }, angle: 0.0 };
+    s.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: 0.0, y0: 0.0, x1: 1e-3, y1: 1e-3 }, angle: 0.0 };
     let shown = uncropped(&s, None);
     let (mid, far) = (shown.get(shown.width / 2, shown.height / 2)[1], shown.get(shown.width - 3, shown.height - 3)[1]);
-    assert!(mid.abs_diff(far) <= 2, "the 1e-6 crop's vignette is not on the crop: middle {mid}, far corner {far}");
+    assert!(mid.abs_diff(far) <= 2, "the 1e-3 crop's vignette is not on the crop: middle {mid}, far corner {far}");
+}
+
+// Given a crop whose frame f32 can hold over a window around it but not over the whole view (here
+// its 8th power overflows at the far edge), the window shows the whole view's vignette, not its own
+#[test]
+fn a_window_falls_back_like_the_whole_view_it_is_part_of() {
+    let mut s = crop_tool_vignette();
+    s.vignette.roundness = -100.0;
+    s.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: 0.4, y0: 0.4, x1: 0.4 + 1e-6, y1: 0.4 + 1e-6 }, angle: 0.0 };
+    let whole = uncropped(&s, None);
+    let (x, y) = (whole.width * 2 / 5, whole.height * 2 / 5);
+    let at = PixelWindow { x: x - 2, y: y - 2, w: 4, h: 4 };
+    let (max, _) = compare_inset(&whole, &uncropped(&s, Some(at)), at, 0);
+    assert!(max <= 1, "the window differs from the whole view by {max}");
 }
 
 // Given vignette frames whose f32 evaluation overflows only at some stage (an affine product, the
@@ -777,26 +835,35 @@ fn the_vignette_frame_guard_bounds_every_stage_of_the_kernels() {
     use crate::finish::vig_frame_fits_f32 as fits;
     let id = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
     assert!(fits(id, [960.0, 640.0], (960, 640), 8.0), "the whole output");
-    // the products overflow, though the coefficients and the frame's size fit
-    assert!(!fits([1e38, 0.0, -1e38, 1.0, 0.0, 0.0], [1.0, 1.0], (480, 320), 2.0));
-    // …also where the division by a large frame would bring the position back into range
-    assert!(!fits([1e38, 0.0, 0.0, 1.0, 0.0, 0.0], [1e30, 1e30], (480, 320), 2.0));
-    // …and where they cancel at the far corner, but not at the others
-    assert!(!fits([1e30, 0.0, -1e30, 1.0, 0.0, 0.0], [1.0, 1.0], (480, 480), 2.0));
-    // a square within 16× of f32::MAX: the kernels' rounding could still overflow it
-    assert!(fits([1e18, 0.0, 0.0, 1.0, 0.0, 0.0], [1.0, 1.0], (1, 1), 2.0));
-    assert!(!fits([1e19, 0.0, 0.0, 1.0, 0.0, 0.0], [1.0, 1.0], (1, 1), 2.0));
-    // the positions fit, and their squares, but not their 8th powers
-    let big = [1e4, 0.0, 0.0, 1e4, 0.0, 0.0];
-    assert!(fits(big, [1.0, 1.0], (960, 640), 2.0));
-    assert!(!fits(big, [1.0, 1.0], (960, 640), 8.0));
-    // an extreme aspect overflows the scaling
-    assert!(!fits(id, [1e38, 1e-3], (960, 640), 2.0));
+    // the products overflow, though the coefficients and the frame's size fit, and the division
+    // by that large frame would bring the positions back into range (f32 would place them)
+    assert!(!fits([1e38, 0.0, 0.0, 1.0, 0.0, 0.0], [1e38, 1e38], (480, 320), 2.0));
+    // …also where they cancel at the far corner, but not at the others
+    assert!(!fits([1e38, 0.0, -1e38, 1.0, 0.0, 0.0], [1e38, 1e38], (480, 480), 2.0));
+    assert!(fits([1e34, 0.0, -1e34, 1.0, 0.0, 0.0], [1e38, 1e38], (480, 480), 2.0));
+    // the positions fit, and their squares, but not their 8th powers (16× below f32::MAX: the
+    // kernels' rounding could still overflow them)
+    assert!(fits(id, [1.0, 1.0], (65536, 65536), 2.0));
+    assert!(!fits(id, [1.0, 1.0], (65536, 65536), 8.0));
+    assert!(fits(id, [1.0, 1.0], (9000, 9000), 8.0));
+    // f32 places the pixels to within 1/16 of the frame while they are at most 2^16 frames away
+    assert!(fits(id, [1.0, 1.0], (65536, 1), 2.0));
+    assert!(!fits(id, [1.0, 1.0], (65538, 1), 2.0));
+    assert!(!fits(id, [1.0, 1.0], (1, 65538), 2.0));
+    // an extreme aspect overflows the scaling (one pixel: f32 would place it)
+    assert!(!fits(id, [1e38, 1e-3], (1, 1), 2.0));
+    assert!(fits(id, [1e30, 1e-3], (1, 1), 2.0));
     for size in [[0.0, 640.0], [-960.0, 640.0], [960.0, f32::NAN], [f32::INFINITY, 640.0]] {
         assert!(!fits(id, size, (960, 640), 2.0), "{size:?}");
     }
     assert!(!fits([f32::INFINITY, 0.0, 0.0, 1.0, 0.0, 0.0], [960.0, 640.0], (960, 640), 2.0));
     assert!(!fits(id, [960.0, 640.0], (960, 640), f32::NAN));
+    // a frame of 1 px around x = y = 40.5, 1e6 render pixels across: the products and the
+    // translation (-4.05e7) cancel, where f32 is 4 px, 4 frames, apart
+    assert!(!fits([1e6, 0.0, 0.0, 1e6, -4.05e7, -4.05e7], [1.0, 1.0], (100, 100), 2.0));
+    // …while 2 px crops at the far corner of the largest photo place to within 1/16 of a frame
+    assert!(fits([1.0, 0.0, 0.0, 1.0, -65533.0, -65533.0], [2.0, 2.0], (65535, 65535), 2.0));
+    assert!(!fits([1.0, 0.0, 0.0, 1.0, -65533.0, -65533.0], [1.0, 1.0], (65535, 65535), 2.0));
 }
 
 // Given a crop of at least a pixel on each side, the crop tool's vignette frame is exactly the one
@@ -845,7 +912,19 @@ fn ordinary_crops_keep_their_vignette_frame() {
         };
         let (cw, ch) = frame.export_crop(&s).native_size();
         assert!(cw >= 1.0 && ch >= 1.0, "{name}: {cw} × {ch}");
-        assert_eq!(frame.vignette_frame(&s, w, h), before(&frame, &s, w, h), "{name}");
+        let (aff, (vw, vh)) = before(&frame, &s, w, h);
+        assert_eq!(frame.vignette_frame(&s, w, h), (aff, (vw, vh)), "{name}");
+        // …and the kernels get it: f32 holds it
+        let fp = crate::finish::FinishParams::new(crate::finish::FinishParamsInput {
+            settings: &s,
+            frame: &frame,
+            info: &info,
+            image_size: (w, h),
+            px_per_long: fw.max(fh) as f64,
+            air_pre: 1.0,
+            space: crate::OutputSpace::Srgb,
+        });
+        assert_eq!((fp.vig_aff, fp.vig_size), (aff.0.map(|v| v as f32), [vw as f32, vh as f32]), "{name}");
     }
 }
 
@@ -884,6 +963,19 @@ fn dithering_keeps_the_output_origin_when_the_vignette_uses_a_crop() {
         assert_eq!(fp.view, [7.0, 12.0, 480.0, 320.0]);
         if amount != 0.0 {
             assert_ne!(&fp.vig_aff[4..6], &fp.view[..2], "the crop vignette has a different origin");
+        }
+    }
+    // …and renders keep it: with the crop's vignette on, a window inside the crop, where the
+    // vignette leaves the pixels as they are, has the whole render's pixels exactly
+    s.vignette.amount = -80.0;
+    s.vignette.midpoint = 100.0;
+    let full = render(&src, &info, &s, &req).image;
+    assert!(full.get(2, 2)[1] + 20 < full.get(173, 144)[1], "the vignette darkens outside the crop");
+    let at = PixelWindow { x: 157, y: 129, w: 32, h: 32 };
+    let part = render(&src, &info, &s, &RenderRequest { window: Some(at), ..req }).image;
+    for y in 0..at.h {
+        for x in 0..at.w {
+            assert_eq!(part.get(x, y), full.get(at.x + x, at.y + y), "Bayer phase under the vignette at {x},{y}");
         }
     }
 }

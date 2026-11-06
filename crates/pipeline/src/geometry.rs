@@ -146,27 +146,33 @@ impl Frame {
     /// crop the edit exports (#3484).
     pub fn vignette_frame(&self, s: &DevelopSettings, w: usize, h: usize) -> (Affine, (f64, f64)) {
         let whole = self.output_vignette_frame(w, h);
-        if !self.uncropped {
+        let Some((to_crop, size)) = self.crop_vignette_frame(s, whole.1) else { return whole };
+        let a = to_crop * whole.0;
+        if a.0.iter().any(|v| !v.is_finite()) {
             return whole;
         }
-        let (offset, (fw, fh)) = whole;
+        (a, size)
+    }
+
+    /// The crop tool's [`Frame::vignette_frame`] for the whole `fw × fh` output, not a window of it:
+    /// `None` outside the crop tool, or where the crop has no frame.
+    pub(crate) fn crop_vignette_frame(&self, s: &DevelopSettings, (fw, fh): (f64, f64)) -> Option<(Affine, (f64, f64))> {
+        if !self.uncropped {
+            return None;
+        }
         let cropped = self.export_crop(s);
         let (cw, ch) = cropped.native_size();
         // a crop with nothing in it has no frame: the vignette stays on the whole photo
         if !(cw > 0.0 && ch > 0.0 && cw.is_finite() && ch.is_finite()) {
-            return whole;
+            return None;
         }
         // the export counts each side of a crop below a pixel as one (`Frame::aspect`, `fit`):
         // so does its vignette's frame, which keeps the export's shape on the same crop
         let size = (cw.max(1.0), ch.max(1.0));
         // the whole uncropped output → oriented pixels (flips included) → the crop's own pixels
         let to_oriented = Frame { crop: CropGeometry::default(), ..cropped.clone() }.out_to_oriented(fw as usize, fh as usize);
-        let Some(to_crop) = cropped.crop.output_to_source(self.ow, self.oh, size.0, size.1).inverse() else { return whole };
-        let a = to_crop * to_oriented * offset;
-        if a.0.iter().any(|v| !v.is_finite()) {
-            return whole;
-        }
-        (a, size)
+        let a = cropped.crop.output_to_source(self.ow, self.oh, size.0, size.1).inverse()? * to_oriented;
+        a.0.iter().all(|v| v.is_finite()).then_some((a, size))
     }
 
     /// [`Frame::vignette_frame`] of the whole output, of which a windowed `w × h` render is a part.
@@ -267,7 +273,7 @@ impl Frame {
         let a = self.aspect();
         let (mw, mh) = (max_w.max(1) as f64, max_h.max(1) as f64);
         // a box that is already this aspect up to rounding (an export size) is the size: fitting
-        // into it again rounds twice and can lose a pixel of the edge that was asked for
+        // into it again rounds twice and can lose a pixel of the edge that was asked for.
         if (mw - 0.5) / a <= mh + 0.5 && (mw + 0.5) / a >= mh - 0.5 {
             return (max_w.max(1), max_h.max(1));
         }
@@ -393,6 +399,43 @@ impl Frame {
             Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)),
             None => std::borrow::Cow::Borrowed(o),
         };
+        self.sample_base(base, plan, w, h)
+    }
+
+    /// [`Frame::sample`] of each of `windows` of this frame at its `full_w × full_h` output size: the
+    /// same pixels, with the source oriented and prefiltered once for all of them rather than per window.
+    pub fn sample_windows(&self, src: &Rgb32f, full_w: usize, full_h: usize, windows: &[crate::PixelWindow]) -> Vec<Rgb32f> {
+        let oriented = if self.orient == Orientation::Normal { None } else { Some(src.oriented(self.orient)) };
+        let o = oriented.as_ref().unwrap_or(src);
+        let plans: Vec<(Frame, SamplePlan)> = windows
+            .iter()
+            .map(|t| {
+                let frame = if (t.w, t.h) == (full_w, full_h) { self.clone() } else { self.window(full_w, full_h, *t) };
+                let plan = frame.sample_plan(src.width, src.height, t.w, t.h);
+                (frame, plan)
+            })
+            .collect();
+        let mut bases: Vec<((usize, usize), Rgb32f)> = Vec::new();
+        for dims in plans.iter().filter_map(|p| p.1.prefilter) {
+            if !bases.iter().any(|b| b.0 == dims) {
+                bases.push((dims, resize(o, dims.0, dims.1, Filter::Mitchell)));
+            }
+        }
+        plans
+            .into_iter()
+            .zip(windows)
+            .map(|((frame, plan), t)| {
+                let base = match plan.prefilter.and_then(|dims| bases.iter().find(|b| b.0 == dims)) {
+                    Some(b) => std::borrow::Cow::Borrowed(&b.1),
+                    None => std::borrow::Cow::Borrowed(o),
+                };
+                frame.sample_base(base, plan, t.w, t.h)
+            })
+            .collect()
+    }
+
+    /// The sampling of [`Frame::sample`] from the oriented, prefiltered source `base`.
+    fn sample_base(&self, base: std::borrow::Cow<'_, Rgb32f>, plan: SamplePlan, w: usize, h: usize) -> Rgb32f {
         let affine = |xf: Affine| {
             let mut out = Rgb32f::new(w, h);
             par_rows(&mut out.data, w, |y, row| {

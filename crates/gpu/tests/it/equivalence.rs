@@ -92,6 +92,12 @@ fn camera_tone_and_relative_wb() {
     s.wb.mode = WbMode::Custom;
     s.wb.temp = 8000.0;
     check("camera tone edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // each process's shoulder past the last knot, with highlights lifted into it (issue #1632)
+    for p in Process::ALL {
+        let mut lifted = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
+        lifted.light.exposure = 2.0;
+        check(&format!("camera tone {p:?} exposure +2"), &src, &info, &lifted, &RenderRequest::fit(320, 240));
+    }
     // a camera chroma curve: richer shadows, highlights bleached toward white
     let curve = curve.with_chroma([1.4, 1.3, 1.1, 1.0, 0.7, 0.4, 0.25, 0.2]).unwrap();
     let info = SourceInfo { camera_tone: Some(curve), ..info };
@@ -709,8 +715,7 @@ fn light_v3_operators_match() {
     let req = RenderRequest::fit(720, 720);
     for id in ["light.contrast", "light.whites", "light.blacks"] {
         for v in [-100.0, -50.0, 50.0, 100.0] {
-            let mut s = DevelopSettings::default();
-            assert_eq!(s.process.process(), Process::V4);
+            let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
             lightcraft_develop::controls::set(&mut s, id, v);
             check(&format!("V4 {id} {v}"), &src, &info, &s, &req);
             if id == "light.whites" {
@@ -723,7 +728,7 @@ fn light_v3_operators_match() {
             }
         }
     }
-    let mut s = DevelopSettings::default();
+    let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
     typical(&mut s);
     s.light.contrast = 35.0;
     s.light.whites = 40.0;
@@ -1296,12 +1301,19 @@ fn crop_tool_vignette_matches() {
     );
 
     // crops f32 can't frame (a size that rounds to 0, an edge that overflows, a power that
-    // overflows): both renderers show the whole-photo vignette, the one of a crop with nothing in it
+    // overflows, a centre f32 can't place): both renderers show the whole-photo vignette, the one
+    // of a crop with nothing in it
     s.vignette.feather = 50.0;
     let mut empty = s.clone();
     empty.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: 0.3, y0: 0.3, x1: 0.3, y1: 0.3 }, angle: 0.0 };
-    for (name, side, roundness) in [("1e-50", 1e-50, 0.0), ("1e-39", 1e-39, 0.0), ("1e-22", 1e-22, 0.0), ("1e-6 at power 8", 1e-6, -100.0)] {
-        s.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: 0.0, y0: 0.0, x1: side, y1: side }, angle: 0.0 };
+    for (name, at, side, roundness) in [
+        ("1e-50", 0.0, 1e-50, 0.0),
+        ("1e-39", 0.0, 1e-39, 0.0),
+        ("1e-22", 0.0, 1e-22, 0.0),
+        ("1e-6 at power 8", 0.0, 1e-6, -100.0),
+        ("1e-8 at 0.405", 0.405, 1e-8, 0.0),
+    ] {
+        s.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: at, y0: at, x1: at + side, y1: at + side }, angle: 0.0 };
         s.vignette.roundness = roundness;
         empty.vignette.roundness = roundness;
         check(&format!("crop tool vignette, {name}"), &flat, &info, &s, &req);
@@ -1312,6 +1324,22 @@ fn crop_tool_vignette_matches() {
         let cpu_fallback = render(&flat, &info, &empty, &req).image;
         let (mid, corner) = (cpu_fallback.get(cpu_fallback.width / 2, cpu_fallback.height / 2)[1], cpu_fallback.get(2, 2)[1]);
         assert!(mid as i32 - corner as i32 > 20, "{name}: no whole-photo vignette to fall back to");
+    }
+
+    // the dithering keeps the output's origin under the crop's vignette: a window inside the crop,
+    // where the vignette leaves the pixels as they are, has the GPU's whole render's pixels exactly
+    s.crop.geometry = lightcraft_geom::CropGeometry { rect: Rect { x0: 0.12, y0: 0.15, x1: 0.6, y1: 0.75 }, angle: 5.0 };
+    s.vignette.roundness = 0.0;
+    s.vignette.midpoint = 100.0;
+    let flat = Arc::new(Rgb32f { width: 480, height: 320, data: vec![[0.123456; 3]; 480 * 320] });
+    let full = lightcraft_gpu::render(&flat, &info, &s, &req, None).expect("gpu render").image;
+    assert!(full.get(2, 2)[1] + 20 < full.get(173, 144)[1], "the vignette darkens outside the crop");
+    let at = lightcraft_pipeline::PixelWindow { x: 157, y: 129, w: 32, h: 32 };
+    let part = lightcraft_gpu::render(&flat, &info, &s, &RenderRequest { window: Some(at), ..req }, None).expect("gpu render").image;
+    for y in 0..at.h {
+        for x in 0..at.w {
+            assert_eq!(part.get(x, y), full.get(at.x + x, at.y + y), "Bayer phase under the vignette at {x},{y}");
+        }
     }
 }
 
