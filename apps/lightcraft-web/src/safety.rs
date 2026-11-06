@@ -13,7 +13,7 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::backend::Backend;
 use crate::backup::{
-    ACTIVE_LIBRARY, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_key, restored_dir_name, tail_len,
+    ACTIVE_LIBRARY, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_plan, restored_dir_name, tail_len,
     valid_hash, verify, verify_original,
 };
 use crate::files::{Files, LIBRARY_FILES};
@@ -149,10 +149,14 @@ pub fn download_blob(name: &str, blob: &web_sys::Blob) -> Result<(), String> {
     Ok(())
 }
 
+/// Where a finished backup goes: the browser's downloads ([`download_blob`]), or the page framing
+/// LightCraft (`?host=parent`). Awaited, so the backup counts as done only once it is handed over.
+pub type Deliver = Box<dyn FnOnce(String, web_sys::Blob) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>>;
+
 /// File ▸ Back Up Library…: a zip of the library files (as the app has them, saved or not) and
 /// every original in storage, built entry by entry into the browser's memory (outside the wasm
-/// heap) and downloaded. `names`: content hash → the photo's file name.
-pub async fn backup(files: Files, backend: Backend, names: HashMap<String, String>) -> Result<(usize, f64), String> {
+/// heap) and handed to `deliver`. `names`: content hash → the photo's file name.
+pub async fn backup(files: Files, backend: Backend, names: HashMap<String, String>, deliver: Deliver) -> Result<(usize, f64), String> {
     let parts = js_sys::Array::new();
     let mut zip = ZipWriter::default();
     let mut bytes = 0f64;
@@ -190,7 +194,7 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
     opts.set_type("application/zip");
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(|e| format!("{e:?}"))?;
     let day: String = String::from(js_sys::Date::new_0().to_iso_string()).chars().take(10).collect();
-    download_blob(&format!("lightcraft-library-backup-{day}.zip"), &blob)?;
+    deliver(format!("lightcraft-library-backup-{day}.zip"), blob).await?;
     Ok((originals, bytes + tail.len() as f64))
 }
 
@@ -214,8 +218,7 @@ pub async fn restore(file: web_sys::File, backend: Backend) -> Result<String, St
     }
     let dir = restored_dir_name(js_sys::Date::now());
     let mut written = 0usize;
-    for e in &entries {
-        let Some(key) = restore_key(&e.name, &dir) else { continue };
+    for (key, e) in restore_plan(&entries, &dir, len)? {
         // originals are named by their content: one already stored is the same file
         if key.starts_with("originals/") && backend.exists(&key).await? {
             continue;

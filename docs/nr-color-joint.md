@@ -1,6 +1,6 @@
 # Colour NR: joint guide
 
-From process V3 (`docs/process-versions.md`) colour noise reduction uses this method on the CPU
+From process V6 (`docs/process-versions.md`) colour noise reduction uses this method on the CPU
 (`crates/pipeline/src/nrc_joint.rs`) and the GPU (`crates/gpu/src/wgsl/nrcj.wgsl`, in bands of rows
 whose halo covers the filter's reach). Edits on V1 and V2 keep the blurred chromaticity. The history
 of the method, including the square-root and per-channel variants it replaced, is in

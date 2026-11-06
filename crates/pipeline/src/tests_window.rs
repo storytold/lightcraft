@@ -156,6 +156,18 @@ fn windows_outside_or_degenerate_are_clamped() {
     }
 }
 
+/// A model's segmentation on a `side²` grid: an ellipse in the middle of the photo.
+fn middle_seg(side: usize) -> lightcraft_develop::SegMask {
+    let logits: Vec<f32> = (0..side * side)
+        .map(|i| {
+            let (x, y) = (((i % side) as f32 + 0.5) / side as f32, ((i / side) as f32 + 0.5) / side as f32);
+            let r = (((x - 0.5) / 0.3).powi(2) + ((y - 0.5) / 0.25).powi(2)).sqrt();
+            (12.0 * (1.0 - r) * 4.0).clamp(-12.0, 12.0)
+        })
+        .collect();
+    lightcraft_develop::SegMask::from_logits(side, &logits)
+}
+
 /// A textured, noisy source: what noise reduction and edge refinement act on.
 fn noisy_scene() -> Rgb32f {
     let base = scene();
@@ -216,6 +228,8 @@ fn a_mask_overlay_window_matches_the_whole_render() {
         ("radial", MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.15, angle: 20.0, feather: 50.0, invert: false }, 0.0),
         ("linear refined", MaskShape::Linear { start: Point::new(0.45, 0.5), end: Point::new(0.55, 0.5) }, 100.0),
         ("sky", MaskShape::Sky, 0.0),
+        // a model's grid, enlarged along the photo's edges (issue #3272)
+        ("prompt", MaskShape::Prompt { text: "middle".into(), seg: Some(middle_seg(32)), detail: vec![], edge: 0.0 }, 0.0),
     ];
     for (name, shape, refine) in shapes {
         let mut s = DevelopSettings::default();
