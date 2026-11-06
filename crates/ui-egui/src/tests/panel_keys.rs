@@ -161,8 +161,12 @@ fn the_panel_commands_work_without_the_keys() {
     let r = run(&mut h, "view.allPanels", json!({}));
     assert_eq!(r["result"]["hidden"], true, "{r}");
     assert_eq!(shown(&h), (false, RightPanel::None, false, false));
-    run(&mut h, "view.allPanels", json!({"hide": true}));
+    let r = run(&mut h, "view.allPanels", json!({"hide": true}));
+    assert_eq!(r["result"]["hidden"], true, "forced hide says the panels are hidden: {r}");
     assert_eq!(shown(&h), (false, RightPanel::None, false, false), "hiding hidden panels keeps what was remembered");
+    let e = h.request("ui.menu.invoke", json!({"id": "view.allPanels", "params": {"hide": "yes"}}), T);
+    assert_eq!(e["ok"], false, "a `hide` that isn't true or false is refused: {e}");
+    assert_eq!(shown(&h), (false, RightPanel::None, false, false), "and changes nothing");
     let r = run(&mut h, "view.allPanels", json!({}));
     assert_eq!(r["result"]["hidden"], false, "{r}");
     assert_eq!(shown(&h), (true, RightPanel::Keywords, false, true));
@@ -171,18 +175,19 @@ fn the_panel_commands_work_without_the_keys() {
 #[test]
 fn hiding_the_panels_ends_the_tool_in_use() {
     let mut h = loupe();
-    run(&mut h, "panel.crop", json!({}));
-    assert_eq!(h.app.ui.right, RightPanel::Crop);
+    run(&mut h, "panel.remove", json!({}));
+    assert_eq!(h.app.ui.right, RightPanel::Remove);
+    assert!(!h.app.ui.tool.is_empty(), "Remove's tool is in use");
     key(&mut h, "F8", false);
     assert_eq!(h.app.ui.right, RightPanel::None);
-    assert!(h.app.ui.tool.is_empty());
-    run(&mut h, "panel.masking", json!({}));
-    assert!(!h.app.ui.tool.is_empty() || h.app.ui.right == RightPanel::Masking);
+    assert!(h.app.ui.tool.is_empty(), "F8 ends the tool");
+    run(&mut h, "panel.remove", json!({}));
+    assert!(!h.app.ui.tool.is_empty(), "Remove's tool is in use again");
     run(&mut h, "view.allPanels", json!({}));
     assert_eq!(h.app.ui.right, RightPanel::None);
     assert!(h.app.ui.tool.is_empty(), "hiding the panels ends the tool");
     run(&mut h, "view.allPanels", json!({}));
-    assert_eq!(h.app.ui.right, RightPanel::Masking, "the panel comes back, as with F8");
+    assert_eq!(h.app.ui.right, RightPanel::Remove, "the panel comes back, as with F8");
 }
 
 #[test]

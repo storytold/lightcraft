@@ -616,8 +616,13 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             // Classic's Shift+Tab: hide the side panels, the Presets column and the filmstrip,
             // remembering what was shown; again, bring back exactly that. With nothing shown and
             // nothing remembered it shows the usual panels. {hide?: bool} forces the direction.
+            let forced = match p.get("hide") {
+                None | Some(Value::Null) => None,
+                Some(Value::Bool(b)) => Some(*b),
+                Some(other) => return Some(Err(format!("view.allPanels: `hide` must be true or false, not {other}"))),
+            };
             let u = &app.ui;
-            let hide = p.get("hide").and_then(Value::as_bool).unwrap_or(!u.all_panels_hidden() && !(u.no_panel_shown() && u.hidden_panels.is_none()));
+            let hide = forced.unwrap_or(!u.all_panels_hidden() && !(u.no_panel_shown() && u.hidden_panels.is_none()));
             if hide {
                 if !app.ui.no_panel_shown() {
                     let u = &mut app.ui;
@@ -649,7 +654,8 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     }
                 }
             }
-            Ok(json!({"hidden": app.ui.all_panels_hidden()}))
+            // whether every panel is hidden now (also when they already were, with nothing to bring back)
+            Ok(json!({"hidden": app.ui.no_panel_shown()}))
         }
         "view.beforeAfter" => {
             app.ui.before_after = if app.ui.before_after == BeforeAfter::SideBySide { BeforeAfter::Off } else { BeforeAfter::SideBySide };
