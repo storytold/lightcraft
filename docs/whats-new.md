@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Undo takes back the whole of a large Synchronize Folder
+- Edit ▸ Undo after a Synchronize Folder that made more than 1,000 steps (each step adds 8 to 16 photos, so a folder of
+  some 8,000 to 16,000 new photos or more) used to take back only the last 1,000 steps and leave the photos of the
+  first ones imported. It now takes back the whole synchronize, as it always did for a smaller folder, and Redo does it
+  all again. An edit or an Undo made between the synchronize's own steps still keeps it from being one step, as before.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
