@@ -66,6 +66,43 @@ pub(super) fn region_overlay(
         // white with a black keyline just outside it, so the box shows on any background
         p.rect_stroke(rect.expand(1.0), 0.0, Stroke::new(1.0, Color32::from_black_alpha(190)), StrokeKind::Outside);
         p.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Outside);
+        // The body itself moves the box. It is laid out before the handles and the × so they
+        // win an overlapping press, and it avoids the handle strip, the × and the name label.
+        // The press point and the shown box at press time are remembered, so the moved box
+        // follows the pointer from where it was grabbed instead of jumping to it.
+        let body_key = egui::Id::unique(("region-body", index));
+        let body_resp = ui.interact(rect, body_key, Sense::drag());
+        if body_resp.drag_started() {
+            let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(body_resp.interact_pointer_pos().unwrap_or(rect.center()));
+            let start = map.norm(press);
+            ui.data_mut(|d| d.insert_temp(body_key, (start, norm)));
+        }
+        if body_resp.dragged() || body_resp.drag_stopped() {
+            // egui pre-computes the released frame's drag flags against the previous frame's
+            // widget rects, and a PointerMoved after release is not a drag: the frame after
+            // `drag_stopped()` reports a removal with no move, so recomputing on every
+            // dragged frame is harmless. The release frame still reports `dragged()`
+            // alongside `drag_stopped()`, and its press/release event still produces
+            // interact pos, so the final position is captured here before the stop is handled.
+            let pp = body_resp.interact_pointer_pos();
+            let shown = ui.data(|d| d.get_temp::<(Point, lightcraft_geom::Rect)>(body_key));
+            if let (Some(pp), Some((start, shown))) = (pp, shown) {
+                let now = map.norm(pp);
+                let (w, h) = (shown.x1 - shown.x0, shown.y1 - shown.y0);
+                let (x0, y0) =
+                    ((shown.x0 + now.x - start.x).clamp(0.0, (1.0 - w).max(0.0)), (shown.y0 + now.y - start.y).clamp(0.0, (1.0 - h).max(0.0)));
+                let moved = lightcraft_geom::Rect { x0, y0, x1: x0 + w, y1: y0 + h };
+                ui.data_mut(|d| d.insert_temp(drag_key, (index, orient.inverse().map_norm_rect(moved))));
+                ui.ctx().request_repaint();
+            }
+        }
+        if body_resp.drag_stopped() {
+            if let Some((i, new)) = ui.data(|d| d.get_temp::<(usize, lightcraft_geom::Rect)>(drag_key)) {
+                edit = Some(RegionEdit::Resize(i, new));
+            }
+            ui.data_mut(|d| d.remove_temp::<(usize, lightcraft_geom::Rect)>(drag_key));
+            ui.data_mut(|d| d.remove_temp::<(Point, lightcraft_geom::Rect)>(body_key));
+        }
         if dragging.is_some() || (live.is_none() && pointer.is_some_and(|h| rect.expand(8.0).contains(h))) {
             for (h, (fx, fy, cursor)) in REGION_HANDLES.iter().enumerate() {
                 let c = pos2(rect.left() + fx * rect.width(), rect.top() + fy * rect.height());
@@ -903,5 +940,71 @@ mod pen_tests {
         assert_eq!(pen_force(&i), Some(0.3), "the latest usable force");
         i.events = vec![touch(Some(4.0))];
         assert_eq!(pen_force(&i), Some(1.0));
+    }
+}
+
+#[cfg(test)]
+mod region_drag_tests {
+    use super::*;
+
+    /// Dragging the body of a face box (not a handle) moves the whole box by the drag, keeps its
+    /// size, and stays inside the photo; the move is reported once, on release.
+    #[test]
+    fn a_moved_face_box_keeps_its_size_and_stays_inside_the_photo() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx);
+        let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0));
+        let frame = lightcraft_pipeline::geometry::Frame::new(100, 100, &DevelopSettings::default(), true);
+        let map = CanvasMap::new(&frame, canvas);
+        let mut photo = lightcraft_catalog::Photo::new(
+            lightcraft_catalog::PhotoId(1),
+            lightcraft_catalog::Source::Demo { scene: 0 },
+            "a.jpg",
+            "JPEG",
+            100,
+            100,
+            "2026-10-01T00:00:00",
+        );
+        photo.meta.regions = vec![lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: 0.2, y0: 0.2, x1: 0.4, y1: 0.4 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: Some("Jane".to_string()),
+            description: None,
+        }];
+        let mut editing = None;
+        let mut run_frame = |events: &[egui::Event]| -> Option<RegionEdit> {
+            let mut edit = None;
+            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(canvas), events: events.to_vec(), ..Default::default() }, |ui| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                    let p = ui.painter_at(canvas);
+                    let regions = RegionContext {
+                        photo: &photo,
+                        orient: lightcraft_geom::Orientation::Normal,
+                        hints: None,
+                        people: &[],
+                        setup: crate::panels::faces::Setup::Running,
+                    };
+                    edit = region_overlay(ui, &p, &map, &regions, &mut editing);
+                });
+            });
+            output.textures_delta.clear();
+            edit
+        };
+        // the box is at 80..160 px on screen; drag its centre (120, 120) by 40 x 20 px
+        let press =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        run_frame(&[egui::Event::PointerMoved(pos2(120.0, 120.0))]);
+        run_frame(&[press(pos2(120.0, 120.0), true)]);
+        run_frame(&[egui::Event::PointerMoved(pos2(140.0, 130.0))]);
+        run_frame(&[egui::Event::PointerMoved(pos2(160.0, 140.0))]);
+        let edit = run_frame(&[press(pos2(160.0, 140.0), false)]);
+        assert!(matches!(edit, Some(RegionEdit::Resize(0, _))), "dragging the face box body reports the moved box");
+        let Some(RegionEdit::Resize(index, moved)) = edit else { return };
+        assert_eq!(index, 0);
+        assert!(((moved.x1 - moved.x0) - 0.2).abs() < 0.02, "width kept: {moved:?}");
+        assert!(((moved.y1 - moved.y0) - 0.2).abs() < 0.02, "height kept: {moved:?}");
+        assert!((moved.x0 - 0.3).abs() < 0.02 && (moved.y0 - 0.25).abs() < 0.02, "moved by the drag: {moved:?}");
+        assert!(moved.x0 >= 0.0 && moved.y0 >= 0.0 && moved.x1 <= 1.0 && moved.y1 <= 1.0, "inside the photo: {moved:?}");
     }
 }
