@@ -629,3 +629,12 @@ fn people_and_subject_use_person_mattes() {
     let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
     assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
 }
+
+#[test]
+fn the_evaluated_mask_count_is_bounded_by_the_alpha_plane_memory() {
+    // a 24 MP render keeps a few dozen planes, a 100 MP one fewer, but never fewer than MIN_MASKS
+    assert!(max_masks(6000, 4000) * 6000 * 4000 * 4 <= MAX_ALPHA_BYTES);
+    assert_eq!(max_masks(20_000, 20_000), MIN_MASKS);
+    assert!(max_masks(1, 1) >= 1000);
+    assert!(max_masks(0, 0) >= MIN_MASKS);
+}
