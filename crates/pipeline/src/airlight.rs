@@ -115,15 +115,17 @@ pub fn check_pixels(w: usize, h: usize) -> Result<(), String> {
 /// colour NR adds two RGB buffers (24), and dark-channel blur adds two planes (8).
 /// These stages run sequentially. Cropping copies the retained 28-byte or
 /// 16-byte preparation. Row scratch is bounded separately.
+/// Bytes a pixel the joint colour NR keeps alive at its peak: its pilot planes (Y, U, V: 12 bytes)
+/// and four chroma pair images (filtered, scratch, paths and links: 8 bytes each).
+pub(crate) const JOINT_NR_SCRATCH: u64 = 44;
+
 pub fn prepare_bytes(full: &Plan<'_>, work: Option<&Plan<'_>>, gpu: bool) -> u64 {
     let n = (full.w as u64).saturating_mul(full.h as u64);
     let (lum, col) = local::nr_params(&full.settings, full.detail_scale);
     // GPU luminance NR peaks while writing RGB output with its input, log
     // luminance, coefficients and filtered luminance still alive (28 bytes).
-    // The joint colour NR peaks with its pilot planes (Y, U, V: 12 bytes) and four chroma pair
-    // images alive (filtered, scratch, paths and links: 8 bytes each), 44 bytes.
     let scratch = if col.is_some() && local::joint_colour_nr(&full.settings) {
-        44
+        JOINT_NR_SCRATCH
     } else if gpu && lum.is_some() {
         28
     } else if col.is_some() {
@@ -482,7 +484,10 @@ mod frame_budget_tests {
         let info = SourceInfo::default();
         let mut s = lightcraft_develop::DevelopSettings::default();
         let req = crate::RenderRequest::fit(6000, 4000);
-        for (lum, col, cpu, gpu) in [(0., 0., 32, 32), (30., 0., 44, 52), (0., 25., 48, 48), (30., 25., 48, 52)] {
+        // with Color the latest process runs the joint colour NR, the largest scratch in the estimate
+        assert!(crate::local::joint_colour_nr(&s));
+        let joint = 24 + JOINT_NR_SCRATCH;
+        for (lum, col, cpu, gpu) in [(0., 0., 32, 32), (30., 0., 44, 52), (0., 25., joint, joint), (30., 25., joint, joint)] {
             s.detail.nr_luminance = lum;
             s.detail.nr_color = col;
             let p = crate::plan(&src, &info, &s, &req);
