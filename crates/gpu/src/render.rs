@@ -1639,7 +1639,6 @@ fn frame_airlight(
     Ok((air, Some(AirlightFrame { geo: full.geo, w, sampled, lin, dark: Arc::new(dark), air })))
 }
 
-/// The spatial planes (`local::prepare`), reusing those in `planes`.
 /// The finish kernel's parameters for `plan`, with `air` the dehaze airlight. A `deep` (float)
 /// render keeps the output space's samples, so it skips the display transform.
 fn finish_params(s: &DevelopSettings, plan: &Plan<'_>, info: &SourceInfo, req: &RenderRequest, air: f32, deep: bool) -> FinishParams {
@@ -1675,6 +1674,7 @@ fn texture_binding(cx: &mut Cx<'_>, prep: &Prep, n: usize) -> Option<Arc<Buf>> {
     }
 }
 
+/// The spatial planes (`local::prepare`), reusing those in `planes`.
 fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, planes: &mut Planes) -> Prep {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
