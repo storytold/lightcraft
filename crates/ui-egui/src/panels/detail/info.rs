@@ -563,6 +563,15 @@ mod info_overlay_tests {
         let (texts, _) = paint_overlay(&app, &photo);
         let bottom = texts.iter().map(|t| t.pos.y + t.galley.size().y).fold(0.0, f32::max);
         assert!(extent >= bottom, "the extent follows the overlay down: {extent} < {bottom}");
+        // with badges under the text, a label below the overlay clears them too
+        let mut rated = photo.clone();
+        rated.rating = 3;
+        let (_, rects) = paint_overlay(&app, &rated);
+        let badges = rects.into_iter().find(|(id, _)| id == "canvas:infoOverlayBadges").map(|(_, r)| r).expect("three stars");
+        let mut extent = 0.0;
+        let raw = crate::headless::HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        ctx.run_ui(raw, |ui| extent = info_overlay_extent(&app, ui.painter(), &rated)).textures_delta.clear();
+        assert!(extent >= badges.bottom(), "the extent clears the moved badges: {extent} < {badges:?}");
         app.ui.fullscreen = true;
         assert_eq!(name_top(&app, &photo), INFO_OVERLAY_TOP, "the full-screen preview has no pill");
     }
