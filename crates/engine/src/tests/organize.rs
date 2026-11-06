@@ -4,7 +4,7 @@
 use lightcraft_catalog::Flag;
 use serde_json::json;
 
-use crate::{LibrarySource, Session};
+use crate::{EngineError, LibrarySource, Session};
 
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-organize-{tag}-{}", std::process::id()));
@@ -16,6 +16,13 @@ fn open(dir: &std::path::Path) -> Session {
     let mut s = Session::new();
     s.open_library(dir, true).unwrap();
     s
+}
+
+fn leave_redo_entry(s: &mut Session, id: lightcraft_catalog::PhotoId) {
+    let rating = if s.catalog.photo(id).unwrap().rating == 5 { 4 } else { 5 };
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": rating})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(!s.redo.is_empty());
 }
 
 #[test]
@@ -139,6 +146,119 @@ fn virtual_copies_are_independent_and_persist() {
     let s2 = open(&dir);
     assert_eq!(s2.catalog.to_snapshot(), expect);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn virtual_copy_explicit_name_bypasses_exhausted_counter() {
+    let mut s = Session::with_demo();
+    let visible = s.visible_cloned();
+    let src = visible[0];
+    s.execute("photo.virtualCopy", &json!({"ids": [src.0], "name": "Copy 4294967295"})).unwrap();
+
+    let result = s.execute("photo.virtualCopy", &json!({"ids": [src.0], "name": "Proof copy"}));
+    assert!(result.is_ok(), "an explicit name does not need a numeric suffix: {result:?}");
+    let id = lightcraft_catalog::PhotoId(result.unwrap()["ids"][0].as_u64().unwrap());
+    let copy = s.catalog.photo(id).unwrap();
+    assert_eq!(copy.copy_of, Some(src));
+    assert_eq!(copy.copy_name.as_deref(), Some("Proof copy"));
+}
+
+#[test]
+fn virtual_copy_exhausted_counter_returns_bad_params() {
+    let mut s = Session::with_demo();
+    let visible = s.visible_cloned();
+    let src = visible[0];
+    s.execute("photo.virtualCopy", &json!({"ids": [src.0], "name": "Copy 4294967295"})).unwrap();
+    leave_redo_entry(&mut s, visible[1]);
+
+    let before = s.catalog.to_snapshot();
+    let revision = s.catalog.revision;
+    let selection = (s.selection.ids.clone(), s.selection.active);
+    let commits = s.commits();
+    let undo = s.undo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
+    let redo = s.redo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
+
+    let result = s.execute("photo.virtualCopy", &json!({"ids": [src.0]}));
+    let actionable =
+        matches!(&result, Err(EngineError::BadParams { cmd, msg }) if cmd == "photo.virtualCopy" && msg.contains("provide an explicit name"));
+    assert_eq!(s.catalog.to_snapshot(), before, "exhaustion must not allocate IDs or mutate the catalog");
+    assert_eq!(s.catalog.revision, revision);
+    assert_eq!((s.selection.ids.clone(), s.selection.active), selection);
+    assert_eq!(s.commits(), commits);
+    assert_eq!(s.undo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>(), undo);
+    assert_eq!(s.redo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>(), redo);
+    assert!(actionable, "expected actionable parameter error, got {result:?}");
+}
+
+#[test]
+fn virtual_copy_numbering_failure_does_not_partially_change_batch() {
+    let mut s = Session::with_demo();
+    let visible = s.visible_cloned();
+    let (first, second) = (visible[0], visible[1]);
+    s.execute("photo.virtualCopy", &json!({"ids": [second.0], "name": "Copy 4294967295"})).unwrap();
+    leave_redo_entry(&mut s, visible[2]);
+    s.execute("library.select", &json!({"ids": [first.0, second.0], "active": first.0})).unwrap();
+
+    let before = s.catalog.to_snapshot();
+    let revision = s.catalog.revision;
+    let selection = (s.selection.ids.clone(), s.selection.active);
+    let commits = s.commits();
+    let undo = s.undo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
+    let redo = s.redo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
+
+    let result = s.execute("photo.virtualCopy", &json!({"ids": [first.0, second.0]}));
+    let bad_params = matches!(&result, Err(EngineError::BadParams { cmd, .. }) if cmd == "photo.virtualCopy");
+    assert_eq!(s.catalog.to_snapshot(), before, "a later exhausted master must not leave earlier copies behind");
+    assert_eq!(s.catalog.revision, revision);
+    assert_eq!((s.selection.ids.clone(), s.selection.active), selection);
+    assert_eq!(s.commits(), commits);
+    assert_eq!(s.undo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>(), undo);
+    assert_eq!(s.redo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>(), redo);
+    assert!(bad_params, "expected batch preflight error, got {result:?}");
+}
+
+#[test]
+fn virtual_copy_batch_reserves_numbers_for_the_same_master() {
+    let mut s = Session::with_demo();
+    let visible = s.visible_cloned();
+    let src = visible[0];
+    let near_limit = lightcraft_catalog::PhotoId(
+        s.execute("photo.virtualCopy", &json!({"ids": [src.0], "name": "Copy 4294967294"})).unwrap()["ids"][0].as_u64().unwrap(),
+    );
+    leave_redo_entry(&mut s, visible[1]);
+    s.execute("library.select", &json!({"ids": [src.0, near_limit.0], "active": src.0})).unwrap();
+
+    let before = s.catalog.to_snapshot();
+    let revision = s.catalog.revision;
+    let selection = (s.selection.ids.clone(), s.selection.active);
+    let commits = s.commits();
+    let undo = s.undo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
+    let redo = s.redo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>();
+
+    let result = s.execute("photo.virtualCopy", &json!({"ids": [src.0, near_limit.0]}));
+    let bad_params = matches!(&result, Err(EngineError::BadParams { cmd, .. }) if cmd == "photo.virtualCopy");
+    assert_eq!(s.catalog.to_snapshot(), before, "same-master reservations must be checked before either copy is added");
+    assert_eq!(s.catalog.revision, revision);
+    assert_eq!((s.selection.ids.clone(), s.selection.active), selection);
+    assert_eq!(s.commits(), commits);
+    assert_eq!(s.undo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>(), undo);
+    assert_eq!(s.redo.iter().map(|entry| entry.label.clone()).collect::<Vec<_>>(), redo);
+    assert!(bad_params, "a shared master has only one number left: {result:?}");
+}
+
+#[test]
+fn virtual_copy_last_valid_number_can_be_created_and_undone() {
+    let mut s = Session::with_demo();
+    let src = s.visible_cloned()[0];
+    s.execute("photo.virtualCopy", &json!({"ids": [src.0], "name": "Copy 4294967294"})).unwrap();
+
+    let result = s.execute("photo.virtualCopy", &json!({"ids": [src.0]})).unwrap();
+    let id = lightcraft_catalog::PhotoId(result["ids"][0].as_u64().unwrap());
+    assert_eq!(s.catalog.photo(id).unwrap().copy_name.as_deref(), Some("Copy 4294967295"));
+    assert_eq!(s.catalog.photo(id).unwrap().copy_of, Some(src));
+
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photo(id).is_none(), "one undo removes the last valid copy");
 }
 
 /// Issue #1493: soft-delete must drop the copy from the stack so `1/2` does not linger, and

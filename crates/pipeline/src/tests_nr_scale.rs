@@ -70,14 +70,14 @@ fn rms_chroma(a: &Rgb32f, b: &Rgb32f) -> f32 {
 fn preview_error(s: &DevelopSettings, scales: &[f32], metric: fn(&Rgb32f, &Rgb32f) -> f32) -> Vec<(f32, f32, f32)> {
     let src = noisy_scene(0.15);
     let mut full = src.clone();
-    denoise(&mut full, s, 1.0);
+    denoise(&mut full, s, 1.0, None);
     scales
         .iter()
         .map(|&k| {
             let reference = scaled(&full, k);
             let plain = scaled(&src, k);
             let mut preview = plain.clone();
-            denoise(&mut preview, s, k);
+            denoise(&mut preview, s, k, None);
             (k, metric(&preview, &reference), metric(&plain, &reference))
         })
         .collect()
