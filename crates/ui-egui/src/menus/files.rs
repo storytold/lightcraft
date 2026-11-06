@@ -3,9 +3,13 @@ use super::{Dialog, LightcraftApp, Value, json};
 /// The Delete key in an album: a normal album loses the selected photos (`album.removePhotos`),
 /// which stay in the library and their folder; a smart album keeps them (its rules decide) and
 /// says so. True when the key was handled here, false outside albums (then it deletes the photos
-/// from the library). Photo ▸ Delete Photo still deletes from the library everywhere.
+/// from the library). Photo ▸ Delete Photo still deletes from the library everywhere. With several
+/// albums shown there is no telling which one is meant, so the key is the photos' there too.
 pub fn delete_in_album(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     let lightcraft_engine::LibrarySource::Album(aid) = app.session.source else { return false };
+    if !app.session.also_albums.is_empty() {
+        return false;
+    }
     let Some(album) = app.session.catalog.album(aid) else { return false };
     if album.is_smart() {
         app.toast(ctx, crate::i18n::tr("Smart albums update automatically: change their rules, or use Photo ▸ Delete Photo"));

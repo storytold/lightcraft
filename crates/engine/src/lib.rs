@@ -9,6 +9,7 @@
 //! of decoded source proxies. Rendering is done by [`RenderJob`]s that are `Send` so frontends can
 //! run them off the UI thread.
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // Model/cache types remain available without linking the optional inference crate.
 #[cfg(not(feature = "denoise"))]
@@ -28,6 +29,7 @@ pub mod crs_masks;
 pub mod demo;
 pub mod denoise;
 pub mod devices;
+pub mod disk_space;
 pub mod display;
 pub mod doc_path;
 mod errors;
@@ -46,6 +48,7 @@ pub mod guard;
 pub mod import;
 mod import_move;
 pub mod lens_profiles;
+pub mod lensfun_download;
 pub mod library;
 mod lightroom_archive;
 pub mod lightroom_catalog;
@@ -60,6 +63,7 @@ mod model_download;
 pub mod open_path;
 pub mod originals;
 mod pdf;
+pub mod prep;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
@@ -79,6 +83,7 @@ pub mod slideshow;
 pub mod slideshow_export;
 pub mod smart;
 pub mod sync;
+mod sync_same;
 pub mod text;
 mod view;
 pub mod walk;
@@ -88,7 +93,7 @@ use std::sync::Arc;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
 pub use errors::{AiModel, ErrorKind};
 pub use fonts::{CRAFT_FONTS, CraftFont};
-use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
+use lightcraft_catalog::{AlbumId, Catalog, Filter, Op, PhotoId, Sort};
 use lightcraft_develop::DevelopSettings;
 pub use media::{RenderJob, SourceLevel};
 use serde_json::Value;
@@ -244,6 +249,9 @@ pub struct Session {
     visible_clock_minute: Option<String>,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`): an edit that makes a photo stop
     /// matching a smart album's rules, Picks or the filter bar leaves it where it is. Off: the photo goes at once.
+    /// Several albums shown hold a photo only while one of them has it (the view looks in the albums shown, a smart
+    /// album among them asked live): a photo that stops matching that smart album's rules goes at once, unless another
+    /// album shown has it.
     pub hold_view: bool,
     /// The view last worked out, the catalog's revision then, and the photos in it before stacks are arranged.
     /// A small edit is followed from it: only the photos the edit touched are asked about again and put at their
@@ -284,6 +292,11 @@ pub struct Session {
     pub face_models_dir: Option<std::path::PathBuf>,
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
     pub face_downloads: face_download::Downloads,
+    /// The lens database download ([`lensfun_download`]).
+    pub lensfun: lensfun_download::Download,
+    /// The host may offer the lens database at its start, and fetch it after the user's yes
+    /// ([`Session::with_lens_auto_download`]; when: [`lensfun_download::fetch_on_start`]).
+    pub lens_auto_download: bool,
     /// Reverse geocoding: the parsed place names and their download (`metadata.*PlaceNames`).
     pub place_names: cmd::geocode::PlaceNames,
     /// The user's own list of models to download (`catalog.json` in the models folder), as last read.
@@ -301,6 +314,13 @@ pub struct Session {
     /// The folder the [`LibrarySource::LibraryFolder`] view shows: the library's photos imported
     /// from it and from the folders inside it.
     pub library_folder: Option<String>,
+    /// The other albums shown beside the [`LibrarySource::Album`] source (several chosen in the
+    /// sidebar), in the order chosen: the grid shows the photos of any of them. Never the source's
+    /// own album; see [`Session::source_albums`].
+    pub also_albums: Vec<AlbumId>,
+    /// The other folders shown beside [`Session::library_folder`], likewise; see
+    /// [`Session::source_library_folders`].
+    pub also_library_folders: Vec<String>,
     /// Copied metadata (`photo.copyMetadata`): photo.setMeta params.
     pub meta_clipboard: Option<Value>,
     /// The photo that was active before the current one (Paste Settings from Previous).
@@ -353,6 +373,8 @@ pub struct Session {
     /// The user's point-curve presets (`curve.*`; built-ins: [`cmd::curves::builtin_presets`]),
     /// persisted in prefs.json.
     pub curve_presets: Vec<cmd::curves::CurvePreset>,
+    /// Imported camera profiles (`.dcp`).
+    pub dcp_profiles: Vec<cmd::dcp_profiles::DcpEntry>,
     /// Mask effect presets (the Masking panel's Effect menu).
     pub mask_effects: Vec<cmd::mask_effects::MaskEffect>,
     /// The effect a new mask of each kind (`brush`, `linear`…) starts with: the one last applied
@@ -389,10 +411,18 @@ pub struct Session {
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// Preparing photos in the background: settings (app-wide and this library's) and the build
+    /// it runs ([`prep`]).
+    pub prep: prep::PrepState,
+    /// The long edge (px) the loupe renders at on this screen, as the frontend last said
+    /// (0: not known). Standard previews are built at least this big, so the loupe can use them.
+    pub loupe_edge: usize,
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
     pub cache_mb: u32,
+    /// The once-per-session alert for a drive running low under the preview cache ([`disk_space`]).
+    pub(crate) disk_alert: disk_space::DiskAlertState,
     /// Slideshow playback settings (`slideshow.playback`; persisted in prefs.json).
     pub slideshow: slideshow::PlaybackSettings,
     /// Slideshow slide layout: Layout, Options and Backdrop (`slideshow.layout`; persisted in
@@ -476,6 +506,8 @@ impl Session {
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
+            lensfun: Default::default(),
+            lens_auto_download: false,
             place_names: Default::default(),
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -486,6 +518,8 @@ impl Session {
             meta_clipboard: None,
             browse: None,
             library_folder: None,
+            also_albums: Vec::new(),
+            also_library_folders: Vec::new(),
             previous_active: None,
             copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
             presets: presets::PresetList::new(presets::builtin()),
@@ -510,6 +544,7 @@ impl Session {
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
             curve_presets: Vec::new(),
+            dcp_profiles: Vec::new(),
             mask_effects: Vec::new(),
             mask_tool_effects: Default::default(),
             label_sets: Vec::new(),
@@ -525,9 +560,12 @@ impl Session {
             folder_changes: None,
             activity: Default::default(),
             preview_build: None,
+            prep: Default::default(),
+            loupe_edge: 0,
             slideshow_export: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
+            disk_alert: Default::default(),
             slideshow: slideshow::PlaybackSettings::default(),
             slide_layout: slide::SlideSettings::default(),
             slide_overlays: slide_overlay::OverlaySettings::default(),
@@ -606,7 +644,8 @@ impl Session {
             }
         }
         if self.depth == 0 && self.library.is_some() {
-            // Make the command durable before reporting success. When the command's own records
+            // Make the command durable before reporting success (natively: handed to the catalog
+            // log's own thread, which syncs it right after and holds it until it can). When the command's own records
             // can't be appended, it fails with `NotSaved`: the change stays applied in memory and
             // queued, and the next save (any later command, or the frame loop) retries it. Other
             // persistence trouble (a failed compaction, an older queued change still unwritten by
@@ -938,8 +977,9 @@ impl Session {
             i.crop_edited |= crop_edited;
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
+        let own_auto = self.own_auto_wb(id, &requested, label);
         let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &requested, label));
+        ops.extend(self.auto_sync_ops(id, &requested, label, &own_auto));
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
     }
@@ -980,18 +1020,18 @@ impl Session {
     /// never spot removal or red eye (they belong to one photo's pixels), nor the rendering process
     /// (Sync doesn't carry it either), nor history / snapshot restores. Constrain Crop then fits each
     /// photo's own crop: the active photo's fitted crop is never copied over another's.
-    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str) -> Vec<Op> {
-        if !self.auto_sync
-            || self.active() != Some(id)
-            || self.selection.ids.len() < 2
-            || label.starts_with("History:")
-            || label.starts_with("Restore ")
-        {
+    ///
+    /// White balance goes on each photo as the active photo's mode or value on the photo's own
+    /// scale ([`sync_same`]): As Shot its own camera white, Auto its own (`own_auto`, worked out on
+    /// its pixels), a Temp or Tint the same number, only the slider that moved.
+    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str, own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>) -> Vec<Op> {
+        if !self.auto_sync_applies(id, label) {
             return Vec::new();
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
-        let mut old_json = old.to_json();
-        let mut new_json = new.to_json();
+        // (Remove Hot Pixels, omitted when off, is stated: switching it off is a change)
+        let mut old_json = old.to_json_for_merge();
+        let mut new_json = new.to_json_for_merge();
         // False is omitted from stored profile JSON. Keep it explicit for this comparison so
         // switching camera local tone mapping off is a change without copying untouched values.
         old_json["profile"]["camera_local_tone"] = Value::Bool(old.profile.camera_local_tone);
@@ -1008,21 +1048,62 @@ impl Session {
                 return Vec::new();
             }
         }
+        let ainfo = self.source_info(id);
+        let wb_changed = old.wb != new.wb;
         self.selection
             .ids
             .iter()
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let synced = self.fit_constrained_crop(x, lightcraft_develop::apply_partial(&d, &delta, 1.0));
+                let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                if wb_changed {
+                    sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
+                }
+                let synced = self.fit_constrained_crop(x, synced);
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
     }
 
+    /// Auto Sync carries an edit of photo `id` labelled `label` to the other selected photos: it is
+    /// on, `id` is the active photo of a selection of two or more, and the edit is not a History or
+    /// snapshot restore.
+    fn auto_sync_applies(&self, id: PhotoId, label: &str) -> bool {
+        self.auto_sync
+            && self.active() == Some(id)
+            && self.selection.ids.len() >= 2
+            && !label.starts_with("History:")
+            && !label.starts_with("Restore ")
+    }
+
     /// The op that sets a photo's develop settings and appends a History entry (for batches).
     pub fn develop_op(&self, id: PhotoId, settings: DevelopSettings, label: &str) -> Option<Op> {
         self.catalog.photo(id)?;
+        let mut settings = settings;
+        // old masks (on the corrected frame) go onto the photo, from the frame they were drawn on:
+        // masks this edit kept, under the photo's settings before it (a geometry edit then moves
+        // the photo, not them); masks it brought in (paste, sync, a preset, a history step, a
+        // sidecar), under the settings they came with, where they render now. Kept masks also
+        // turn with an orientation change the edit makes (a sync or paste of the Crop group).
+        let before = match &self.interaction {
+            Some(i) if i.photo == id => Some(i.original.clone()),
+            _ => self.develop_of(id),
+        };
+        let turn = before.as_ref().and_then(|b| orientation_change(b.orientation, settings.orientation));
+        if settings.masks.iter().any(|m| !m.on_photo) || turn.is_some() {
+            let kept_frame = before.as_ref().and_then(|b| self.mask_frame(id, b));
+            let new_frame = self.mask_frame(id, &settings);
+            for m in &mut settings.masks {
+                let kept = before.as_ref().is_some_and(|b| b.masks.contains(m));
+                if let Some(f) = if kept { kept_frame.as_ref() } else { new_frame.as_ref() } {
+                    lightcraft_pipeline::mask_space::attach(m, f);
+                }
+                if let (true, Some(t)) = (kept, turn) {
+                    lightcraft_pipeline::mask_space::turn(m, t);
+                }
+            }
+        }
         let settings = Arc::new(settings);
         let step = lightcraft_catalog::HistoryStep { label: label.into(), settings: settings.clone() };
         Some(Op::Batch {
@@ -1030,11 +1111,45 @@ impl Session {
         })
     }
 
+    /// Put the old masks of `d` (on the corrected frame, `Mask::on_photo` false) on photo `id`
+    /// before the warp, from the frame of `drawn` (the settings they were drawn under): they
+    /// render where they did and from then on stay on their content when lens corrections,
+    /// Upright or Transform change.
+    pub fn attach_masks(&self, id: PhotoId, drawn: &DevelopSettings, d: &mut DevelopSettings) {
+        if d.masks.iter().all(|m| m.on_photo) {
+            return;
+        }
+        let Some(frame) = self.mask_frame(id, drawn) else { return };
+        for m in &mut d.masks {
+            lightcraft_pipeline::mask_space::attach(m, &frame);
+        }
+    }
+
+    /// The uncropped frame of photo `id` under settings `d`, with its lens: where mask
+    /// coordinates go through its warp ([`lightcraft_pipeline::geometry::Frame::for_mask`]).
+    pub(crate) fn mask_frame(&self, id: PhotoId, d: &DevelopSettings) -> Option<lightcraft_pipeline::geometry::Frame> {
+        let p = self.catalog.photo(id)?;
+        Some(lightcraft_pipeline::geometry::Frame::with_lens(
+            p.width.max(1) as usize,
+            p.height.max(1) as usize,
+            &d.effective(),
+            false,
+            p.embedded_lens.as_ref(),
+        ))
+    }
+
     pub fn begin_interaction(&mut self, label: &str) -> Result<()> {
         if self.interaction.is_some() {
             self.end_interaction()?;
         }
         let id = self.active().ok_or_else(|| EngineError::Other("no active photo".into()))?;
+        // old masks go onto the photo before a drag moves the frame under them (they then stay on
+        // their content while it does, not only once it ends)
+        if let Some(d) = self.develop_of(id).filter(|d| d.masks.iter().any(|m| !m.on_photo)) {
+            let mut on = (*d).clone();
+            self.attach_masks(id, &d, &mut on);
+            self.apply_silent(Op::SetDevelop { id, settings: Arc::new(on), label: label.into(), edited: None })?;
+        }
         let original = self.develop_of(id).unwrap_or_default();
         self.interaction = Some(Interaction { label: label.into(), photo: id, original, crop_edited: false });
         Ok(())
@@ -1074,8 +1189,14 @@ impl Session {
 
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
-        let mut key =
-            (self.catalog.revision, format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filter, self.sort, self.browse, self.library_folder));
+        self.reconcile_sources();
+        let mut key = (
+            self.catalog.revision,
+            format!(
+                "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+                self.source, self.filter, self.sort, self.browse, self.library_folder, self.also_albums, self.also_library_folders
+            ),
+        );
         // What a held view is told apart by: what is shown and how, and for a smart album its rules (rules that were
         // changed ask something else). Not the checks of Missing Photos below: they fill the view in, they are
         // no other view.
@@ -1101,6 +1222,10 @@ impl Session {
             // Use this same value to evaluate relative rules and stamp the result.
             let now = current_now.unwrap_or_else(|| (self.clock)());
             lightcraft_catalog::rules::set_now(Some(now.clone()));
+            if self.source == LibrarySource::LibraryFolder && !self.also_library_folders.is_empty() && self.drop_empty_folders() {
+                // one of several folders shown lost its last photo: the others stay
+                return self.visible();
+            }
             let f = self.view_filter(self.source, &self.filter);
             // A held view keeps the photos it shows that stopped matching what is asked of them (a smart album's
             // rules, a flag, the filter bar), as long as they are still where the view looks: in the library for
@@ -1110,7 +1235,7 @@ impl Session {
             // cost for the hold)
             let holds = self.hold_view && (asks || self.filter != Filter::default());
             let within = holds.then(|| {
-                if asks {
+                if asks && self.also_albums.is_empty() {
                     self.view_filter(LibrarySource::All, &Filter::default())
                 } else if self.source == LibrarySource::RecentlyAdded {
                     // (how far back it reaches was worked out for `f`: not a second pass over the library)
@@ -1123,6 +1248,7 @@ impl Session {
             // its own order, Recently Added (how far back it reaches moves with every import), Missing Photos.
             let own_order = matches!(self.source, LibrarySource::Album(a) if self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && self.filter == Filter::default()
+                && self.also_albums.is_empty()
                 && self.catalog.album(a).is_some_and(|al| !al.is_smart()));
             let whole = own_order || matches!(self.source, LibrarySource::RecentlyAdded | LibrarySource::Missing);
             // A view that asks about "the last N days" (itself, or through a smart album it looks into) changes
@@ -1157,9 +1283,15 @@ impl Session {
                 // an empty grid under the name of a folder that is gone from the sidebar
                 self.source = LibrarySource::All;
                 self.library_folder = None;
+                self.also_library_folders.clear();
+                // folders of the filter were ignored while the folder was shown: they would narrow All Photos now
+                self.filter.library_folder = None;
+                self.filter.library_folders.clear();
                 return self.visible();
             }
             if matches!(self.source, LibrarySource::Album(_))
+                // several albums have no order of their own between them
+                && self.also_albums.is_empty()
                 && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
                 && let LibrarySource::Album(a) = self.source
                 && let Some(al) = self.catalog.album(a)
@@ -1206,22 +1338,6 @@ impl Session {
         &self.visible
     }
 
-    /// `source` as a filter over `base` (the filter bar's, or none), with the folder it shows.
-    fn view_filter(&self, source: LibrarySource, base: &Filter) -> Filter {
-        let mut f = source.to_filter(base, &self.catalog);
-        if source == LibrarySource::Folder {
-            // no folder chosen: nothing (an empty path matches nothing)
-            let b = self.browse.clone().unwrap_or_default();
-            f.folder = Some(b.path);
-            f.subfolders = b.subfolders;
-        }
-        if source == LibrarySource::LibraryFolder {
-            // no folder chosen: nothing (`.` names no folder)
-            f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
-        }
-        f
-    }
-
     /// Let go of what a held view kept: the view shows what matches now ([`Session::hold_view`]).
     pub fn refresh_view(&mut self) {
         self.base = None;
@@ -1254,8 +1370,103 @@ impl Session {
     /// Whether the library still holds a photo imported from the folder a `LibraryFolder` source
     /// shows.
     fn folder_holds_photos(&self) -> bool {
-        let f = Filter { library_folder: self.library_folder.clone(), ..Default::default() };
+        let f = Filter { library_folder: self.library_folder.clone(), library_folders: self.also_library_folders.clone(), ..Default::default() };
         self.library_folder.is_some() && !self.catalog.query(&f, &Sort::default()).is_empty()
+    }
+
+    /// `source` as a filter over `base` (the filter bar's, or none): what [`LibrarySource::to_filter`] gives,
+    /// with the folder a `Folder` or `LibraryFolder` source shows and the other albums and folders shown
+    /// beside the source's own.
+    fn view_filter(&self, source: LibrarySource, base: &Filter) -> Filter {
+        let mut f = source.to_filter(base, &self.catalog);
+        match source {
+            LibrarySource::Folder => {
+                // no folder chosen: nothing (an empty path matches nothing)
+                let b = self.browse.clone().unwrap_or_default();
+                f.folder = Some(b.path);
+                f.subfolders = b.subfolders;
+            }
+            LibrarySource::LibraryFolder => {
+                // no folder chosen: nothing (`.` names no folder)
+                f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
+                f.library_folders = self.also_library_folders.clone();
+            }
+            // the source's albums, whatever albums the filter named
+            LibrarySource::Album(_) => f.albums = self.also_albums.clone(),
+            _ => {}
+        }
+        f
+    }
+
+    /// What the source is called: an album's name, a folder's last two names, "3 albums" or
+    /// "2 folders" for several, else the source's own label.
+    pub fn source_label(&self) -> String {
+        match (self.source, self.library_folder.as_deref()) {
+            (LibrarySource::Album(_), _) if !self.also_albums.is_empty() => format!("{} albums", self.source_albums().len()),
+            (LibrarySource::LibraryFolder, Some(_)) if !self.also_library_folders.is_empty() => {
+                format!("{} folders", self.source_library_folders().len())
+            }
+            (LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
+            _ => self.source.label(&self.catalog),
+        }
+    }
+
+    /// The albums the grid shows the photos of: the [`LibrarySource::Album`] source's and the
+    /// others chosen with it, in the order chosen (the source's own last: it is the one a
+    /// single-album action takes). Empty for any other source.
+    pub fn source_albums(&self) -> Vec<AlbumId> {
+        match self.source {
+            LibrarySource::Album(a) => self.also_albums.iter().copied().filter(|x| *x != a).chain([a]).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The folders a [`LibrarySource::LibraryFolder`] source shows: [`Session::library_folder`]
+    /// (last) and the others chosen with it. Empty for any other source.
+    pub fn source_library_folders(&self) -> Vec<String> {
+        match (self.source, &self.library_folder) {
+            (LibrarySource::LibraryFolder, Some(f)) => self.also_library_folders.iter().cloned().chain([f.clone()]).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Keep "the other albums and folders shown" true to the source: none without an album or a
+    /// folder source, never the source's own, and no album that is gone. When the source's own
+    /// album is gone and others are shown, the last of them takes its place; when none is left,
+    /// the view goes back to All Photos (not an empty grid).
+    fn reconcile_sources(&mut self) {
+        if self.source != LibrarySource::LibraryFolder && !self.also_library_folders.is_empty() {
+            self.also_library_folders.clear();
+        }
+        let LibrarySource::Album(a) = self.source else {
+            if !self.also_albums.is_empty() {
+                self.also_albums.clear();
+            }
+            return;
+        };
+        let cat = &self.catalog;
+        if !self.also_albums.is_empty() {
+            self.also_albums.retain(|x| *x != a && cat.album(*x).is_some());
+        }
+        if cat.album(a).is_none() {
+            self.source = self.also_albums.pop().map_or(LibrarySource::All, LibrarySource::Album);
+        }
+    }
+
+    /// Of several folders shown, let go of those the library holds no photo of any more; the
+    /// last one left that does becomes [`Session::library_folder`]. Returns whether any went.
+    /// (All of them empty: left as it is, for the caller to go back to All Photos.)
+    fn drop_empty_folders(&mut self) -> bool {
+        let all = self.source_library_folders();
+        let holds = self.catalog.folders_holding(&all);
+        let mut kept: Vec<String> = all.iter().zip(&holds).filter(|(_, h)| **h).map(|(f, _)| f.clone()).collect();
+        if kept.len() == all.len() {
+            return false;
+        }
+        let Some(last) = kept.pop() else { return false };
+        self.library_folder = Some(last);
+        self.also_library_folders = kept;
+        true
     }
 
     /// Photos in the current source (folder, album, …) before the filter bar and search narrow
@@ -1264,6 +1475,7 @@ impl Session {
         if self.source == LibrarySource::Missing {
             return None;
         }
+        self.reconcile_sources();
         if self.filter == Filter::default() && !self.hold_view {
             // nothing narrows the source: what the view lists is all of it, and is counted already (not a view
             // that holds photos that stopped matching: those are not of the source any more)
@@ -1274,7 +1486,10 @@ impl Session {
                 return Some(ids.len());
             }
         }
-        let key = (self.catalog.revision, format!("{:?}|{:?}|{:?}", self.source, self.browse, self.library_folder));
+        let key = (
+            self.catalog.revision,
+            format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.browse, self.library_folder, self.also_albums, self.also_library_folders),
+        );
         let key_changed = self.total.as_ref().map(|total| &total.0) != Some(&key);
         let cached_minute = self.total.as_ref().and_then(|total| total.2.as_deref());
         let current_now = cached_minute.map(|_| (self.clock)());
@@ -1284,15 +1499,7 @@ impl Session {
             // The source count can be requested before `visible`; bind it to the session's clock itself.
             let now = current_now.unwrap_or_else(|| (self.clock)());
             lightcraft_catalog::rules::set_now(Some(now.clone()));
-            let mut f = self.source.to_filter(&Filter::default(), &self.catalog);
-            if self.source == LibrarySource::Folder {
-                let b = self.browse.clone().unwrap_or_default();
-                f.folder = Some(b.path);
-                f.subfolders = b.subfolders;
-            }
-            if self.source == LibrarySource::LibraryFolder {
-                f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
-            }
+            let f = self.view_filter(self.source, &Filter::default());
             // (how many, not which: nothing to put in order)
             let n = self.catalog.count(&f);
             let clocked = filter_depends_on_clock(&f, &self.catalog);
@@ -1373,3 +1580,22 @@ mod tests;
 use tests::face_recognize as tests_face_recognize;
 #[cfg(test)]
 use tests::xmp as tests_xmp;
+
+/// The turn or flip that takes orientation `from` to `to` (`None` when they are the same): what the
+/// masks, on the oriented photo, must follow ([`lightcraft_pipeline::mask_space::turn`]).
+pub(crate) fn orientation_change(from: lightcraft_geom::Orientation, to: lightcraft_geom::Orientation) -> Option<lightcraft_geom::Orientation> {
+    use lightcraft_geom::Orientation;
+    if from == to {
+        return None;
+    }
+    let inv = from.inverse();
+    let probes = [(0.2, 0.3), (0.7, 0.1), (0.4, 0.9)];
+    let close = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9;
+    (0..8u8).map(|k| Orientation::from_parts(k >= 4, k % 4)).find(|t| {
+        probes.iter().all(|&(x, y)| {
+            let (rx, ry) = inv.map(x, y, 1.0, 1.0);
+            let (tx, ty) = from.map(rx, ry, 1.0, 1.0);
+            close(t.map(tx, ty, 1.0, 1.0), to.map(rx, ry, 1.0, 1.0))
+        })
+    })
+}

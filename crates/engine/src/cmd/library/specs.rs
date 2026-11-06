@@ -1,4 +1,4 @@
-use super::filters::{covers_other_disks, merge_rules, view_rules};
+use super::filters::{covers_other_disks, drop_emptied_shelf, merge_rules, several_smart_refused, view_rules};
 use super::gps::parse_gps;
 use super::import::{import_batch_done, import_params, list_auto_import_folder};
 use super::selection::{
@@ -114,6 +114,39 @@ fn folder_paths(v: &Value, c: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// `library.source`'s `ids`: album ids, each once (named twice, the last naming counts).
+fn source_album_ids(v: &Value) -> Result<Vec<AlbumId>> {
+    album_ids(v, "library.source")
+}
+
+/// `library.source`'s `paths`: folder paths, each folder once (named twice, the last counts).
+fn source_folder_paths(v: &Value) -> Result<Vec<String>> {
+    folder_paths(v, "library.source")
+}
+
+/// Whether `path` can be shown as a `libraryFolder` source: a folder (not the whole startup
+/// disk, nor a way to several disks) the library holds photos of.
+/// (One pass over the library for all of `paths`, however many.)
+fn source_folders_check(s: &Session, paths: &[String]) -> Result<()> {
+    const C: &str = "library.source";
+    for path in paths {
+        if path.trim().is_empty() || lightcraft_catalog::query::folder_key(path).is_empty() {
+            return Err(bad(C, "libraryFolder needs the `path` of a folder from library.folders"));
+        }
+        if lightcraft_catalog::folders::is_startup_disk(path) {
+            return Err(bad(C, "the startup disk's path covers every disk: choose a folder in it"));
+        }
+    }
+    for (path, found) in paths.iter().zip(s.catalog.folders_scan(paths)) {
+        if !found.holds {
+            return Err(bad(C, format!("{path}: no photo in the library was imported from it")));
+        }
+        if found.other_disks {
+            return Err(bad(C, format!("{path} holds other disks as well: choose a disk or a folder on one")));
+        }
+    }
+    Ok(())
+}
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // ---- view source / filter / sort
@@ -122,47 +155,53 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Source",
             [],
             None,
-            "{kind: all|recentlyAdded|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
+            "{kind: all|recentlyAdded|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder), ids?: [albumId] or paths?: [path] to show several albums or several folders at once (the photos of any of them, each once; the last one named is the one single-album and single-folder actions take)}",
             always,
             |s, p| {
+                const C: &str = "library.source";
                 let kind = str_param(p, "kind").unwrap_or("all");
-                s.source = match kind {
-                    "all" => LibrarySource::All,
-                    "recentlyAdded" => LibrarySource::RecentlyAdded,
-                    "recentlyDeleted" => LibrarySource::RecentlyDeleted,
-                    "picks" => LibrarySource::Picks,
-                    "missing" => LibrarySource::Missing,
+                // everything is checked before anything changes: a refused call leaves the view
+                let (source, albums, folders) = match kind {
+                    "all" => (LibrarySource::All, Vec::new(), Vec::new()),
+                    "recentlyAdded" => (LibrarySource::RecentlyAdded, Vec::new(), Vec::new()),
+                    "recentlyDeleted" => (LibrarySource::RecentlyDeleted, Vec::new(), Vec::new()),
+                    "picks" => (LibrarySource::Picks, Vec::new(), Vec::new()),
+                    "missing" => (LibrarySource::Missing, Vec::new(), Vec::new()),
                     "album" => {
-                        let a = album_param(p, "id", "library.source")?;
-                        if s.catalog.album(a).is_none_or(|a| a.folder) {
-                            return Err(bad("library.source", "no such album"));
+                        let mut albums = match p.get("ids") {
+                            None | Some(Value::Null) => vec![album_param(p, "id", C)?],
+                            Some(v) => source_album_ids(v)?,
+                        };
+                        if let Some(gone) = albums.iter().find(|a| s.catalog.album(**a).is_none_or(|a| a.folder)) {
+                            let several = p.get("ids").is_some_and(|v| !v.is_null());
+                            return Err(bad(C, if several { format!("no such album {}", gone.0) } else { "no such album".into() }));
                         }
-                        // one album at a time: `to_filter` makes the album shown replace the filter's, and the
-                        // filter bar has no album chip, so a left-over one would narrow the next source unseen
+                        // the last one named is the one a single-album action takes
+                        let Some(own) = albums.pop() else { return Err(bad(C, "`ids` names no album")) };
+                        // the albums of the source: the filter bar has no album chip, so albums left over in the
+                        // filter would narrow the next source unseen (or be ignored)
+                        s.filter.albums.clear();
                         s.filter.album = None;
-                        LibrarySource::Album(a)
+                        (LibrarySource::Album(own), albums, Vec::new())
                     }
                     "libraryFolder" => {
-                        let path = str_param(p, "path").filter(|d| !d.trim().is_empty() && !lightcraft_catalog::query::folder_key(d).is_empty());
-                        let path = path.ok_or_else(|| bad("library.source", "libraryFolder needs the `path` of a folder from library.folders"))?;
-                        if lightcraft_catalog::folders::is_startup_disk(path) {
-                            return Err(bad("library.source", "the startup disk's path covers every disk: choose a folder in it"));
-                        }
-                        let f = Filter { library_folder: Some(path.to_string()), ..Default::default() };
-                        let ids = s.catalog.query(&f, &Sort::default());
-                        if ids.is_empty() {
-                            return Err(bad("library.source", format!("{path}: no photo in the library was imported from it")));
-                        }
-                        if covers_other_disks(s, path, &ids) {
-                            return Err(bad("library.source", format!("{path} holds other disks as well: choose a disk or a folder on one")));
-                        }
-                        s.library_folder = Some(path.to_string());
-                        // one folder at a time: a folder filter left over would be ignored
+                        let mut folders = match p.get("paths") {
+                            None | Some(Value::Null) => vec![str_param(p, "path").unwrap_or_default().to_string()],
+                            Some(v) => source_folder_paths(v)?,
+                        };
+                        source_folders_check(s, &folders)?;
+                        let Some(own) = folders.pop() else { return Err(bad(C, "`paths` names no folder")) };
+                        s.library_folder = Some(own);
+                        // the folders of the source: a folder filter left over would be ignored
                         s.filter.library_folder = None;
-                        LibrarySource::LibraryFolder
+                        s.filter.library_folders.clear();
+                        (LibrarySource::LibraryFolder, Vec::new(), folders)
                     }
-                    other => return Err(bad("library.source", format!("unknown source `{other}`"))),
+                    other => return Err(bad(C, format!("unknown source `{other}`"))),
                 };
+                s.source = source;
+                s.also_albums = albums;
+                s.also_library_folders = folders;
                 s.keep_active_in_view();
                 Ok(json!({"count": s.visible().len()}))
             }
@@ -172,7 +211,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, flags?: [pick|reject|none] (any of them; [] = no constraint), label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?}",
+            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, flags?: [pick|reject|none] (any of them; [] = no constraint), label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, keywords?: [keyword] / dates?: [date] / libraryFolders?: [path] / albums?: [albumId] (more of each beside the single one: a photo matching any of them is shown; [] clears)}",
             always,
             |s, p| {
                 let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
@@ -181,7 +220,29 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut f = f;
                 // a blank folder is no folder: no hidden "filters active" state
                 f.library_folder = f.library_folder.filter(|d| !d.trim().is_empty());
-                if f.library_folder.is_some() && s.source == LibrarySource::LibraryFolder {
+                f.library_folders.retain(|d| !d.trim().is_empty());
+                f.keywords.retain(|k| !k.trim().is_empty());
+                f.dates.retain(|d| !d.trim().is_empty());
+                if let Some(n) = [f.albums.len(), f.library_folders.len(), f.keywords.len(), f.dates.len()].into_iter().find(|n| *n > MAX_SOURCES) {
+                    return Err(bad(
+                        "library.filter",
+                        format!("{n} albums, folders, keywords or dates in one filter: at most {MAX_SOURCES} of each"),
+                    ));
+                }
+                // (the source's albums are what is shown: albums in the filter would be ignored,
+                // the single `album` too; null clears it and is fine)
+                let sets_albums =
+                    p.get("albums").and_then(Value::as_array).is_some_and(|a| !a.is_empty()) || p.get("album").is_some_and(|a| !a.is_null());
+                if sets_albums && matches!(s.source, LibrarySource::Album(_)) {
+                    return Err(bad("library.filter", "albums are already shown (library.source): show another source first"));
+                }
+                // an album this call names is there: an id nothing has is an error, not an empty grid, as in
+                // `library.source` (one left in the filter from before, an undone Create Album, is not this call's)
+                let mut named = f.albums.iter().copied().filter(|_| p.get("albums").is_some()).chain(f.album.filter(|_| p.get("album").is_some()));
+                if let Some(gone) = named.find(|a| s.catalog.album(*a).is_none()) {
+                    return Err(bad("library.filter", format!("no such album {}", gone.0)));
+                }
+                if (f.library_folder.is_some() || !f.library_folders.is_empty()) && s.source == LibrarySource::LibraryFolder {
                     return Err(bad("library.filter", "a folder is already shown (library.source): show another source first"));
                 }
                 // checked like a smart album's rules when this call sets them: an unknown field or a value
@@ -256,19 +317,22 @@ pub fn specs() -> Vec<CommandSpec> {
                 if s.filter.library_folder.as_deref().is_some_and(within) {
                     s.filter.library_folder = None;
                 }
+                s.filter.library_folders.retain(|c| !within(c));
+                // of several folders shown, the others stay
+                s.also_library_folders.retain(|c| !within(c));
                 // a filter put aside by Enable Filters must not bring the removed folder back
-                if let Some(f) = s.shelved_filter.as_mut()
-                    && f.library_folder.as_deref().is_some_and(within)
-                {
-                    f.library_folder = None;
+                let shelved_before = s.shelved_filter.clone();
+                if let Some(f) = s.shelved_filter.as_mut() {
+                    if f.library_folder.as_deref().is_some_and(within) {
+                        f.library_folder = None;
+                    }
+                    f.library_folders.retain(|c| !within(c));
                 }
-                if s.shelved_filter.as_ref() == Some(&Filter::default()) {
-                    s.shelved_filter = None;
-                }
+                drop_emptied_shelf(s, shelved_before.as_ref());
                 // the folder being shown is gone: back to everything, as for a deleted album
                 if s.library_folder.as_deref().is_some_and(within) {
-                    s.library_folder = None;
-                    if s.source == LibrarySource::LibraryFolder {
+                    s.library_folder = s.also_library_folders.pop();
+                    if s.source == LibrarySource::LibraryFolder && s.library_folder.is_none() {
                         s.source = LibrarySource::All;
                     }
                 }
@@ -344,6 +408,12 @@ pub fn specs() -> Vec<CommandSpec> {
                     // one folder at a time: the folder shown now wins over the one the filter had
                     if s.source == LibrarySource::LibraryFolder {
                         f.library_folder = None;
+                        f.library_folders.clear();
+                    }
+                    // the album(s) shown are what the grid shows: albums in the filter would be ignored
+                    if matches!(s.source, LibrarySource::Album(_)) {
+                        f.albums.clear();
+                        f.album = None;
                     }
                     s.filter = f;
                 }
@@ -393,7 +463,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Hold View Until Refreshed",
             ["View"],
             None,
-            "{on?: bool (toggles when omitted)} → {hold} — when on, an edit that makes a photo stop matching the view (a keyword given in a smart album of photos without keywords, a flag taken off in Picks, a rating under the filter bar's) keeps it in the view until `library.refresh`, Reshuffle, or another source, filter or sort; photos that start matching still appear at once, and deleting a photo or taking it out of the album or folder shown still takes it out of the view. Changing a smart album's rules is another view too. Off (the default): the view follows every edit. Kept with the library's preferences; asking for the state it already has changes nothing",
+            "{on?: bool (toggles when omitted)} → {hold} — when on, an edit that makes a photo stop matching the view (a keyword given in a smart album of photos without keywords, a flag taken off in Picks, a rating under the filter bar's) keeps it in the view until `library.refresh`, Reshuffle, or another source, filter or sort; photos that start matching still appear at once, and deleting a photo or taking it out of the album or folder shown still takes it out of the view. Of several albums shown, a photo stays only while one of them still has it: one that stops matching the rules of a smart album among them goes at once unless another album shown has it. Changing a smart album's rules is another view too. Off (the default): the view follows every edit. Kept with the library's preferences; asking for the state it already has changes nothing",
             always,
             |s, p| {
                 let on = match p.get("on") {
@@ -879,25 +949,29 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     }
                     // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
-                    use lightcraft_catalog::keywords::{clean, same};
-                    let add = |m: &mut lightcraft_catalog::Meta, k: &str| {
+                    use lightcraft_catalog::keywords::clean;
+                    // (a set of the lower-cased keywords keeps this linear however many are supplied)
+                    let mut seen: std::collections::HashSet<String> = m.keywords.iter().map(|x| x.to_lowercase()).collect();
+                    let add = |m: &mut lightcraft_catalog::Meta, seen: &mut std::collections::HashSet<String>, k: &str| {
                         let k = clean(k);
-                        if !k.is_empty() && !m.keywords.iter().any(|x| same(x, &k)) {
+                        if !k.is_empty() && seen.insert(k.to_lowercase()) {
                             m.keywords.push(k);
                         }
                     };
                     if let Some(k) = strs("keywords") {
                         m.keywords.clear();
+                        seen.clear();
                         for k in k {
-                            add(&mut m, &k);
+                            add(&mut m, &mut seen, &k);
                         }
                     }
                     for k in strs("addKeywords").unwrap_or_default() {
-                        add(&mut m, &k);
+                        add(&mut m, &mut seen, &k);
                     }
-                    for k in strs("removeKeywords").unwrap_or_default() {
-                        let k = clean(&k);
-                        m.keywords.retain(|x| !same(&clean(x), &k));
+                    let removed: std::collections::HashSet<String> =
+                        strs("removeKeywords").unwrap_or_default().iter().map(|k| clean(k).to_lowercase()).collect();
+                    if !removed.is_empty() {
+                        m.keywords.retain(|x| !removed.contains(&clean(x).to_lowercase()));
                     }
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
@@ -950,7 +1024,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let rules = match p.get("rules") {
                     Some(r) => merge_rules(&lightcraft_catalog::Filter::default(), r, "album.createSmart", &s.catalog, None)?,
-                    None => view_rules(s),
+                    None => {
+                        several_smart_refused(s, "album.createSmart")?;
+                        view_rules(s)
+                    }
                 };
                 let parent = p.get("parent").and_then(Value::as_u64).map(AlbumId);
                 let id = s.catalog.alloc_album_id();
@@ -987,7 +1064,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Smart Album",
             [],
             None,
-            "{id, rules?: partial Filter merged onto the current rules (null clears a field), replace?: bool, fromView?: bool (use the current view), name?: also rename it (blank keeps the name) — one undo step, both or neither}",
+            "{id, rules?: partial Filter merged onto the current rules (null clears a single-value field; [] clears keywords/dates/libraryFolders/albums), replace?: bool, fromView?: bool (use the current view), name?: also rename it (blank keeps the name) — one undo step, both or neither}",
             always,
             |s, p| {
                 let id = album_param(p, "id", "album.setRules")?;
@@ -995,6 +1072,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let rules = if bool_or(p, "fromView", false) {
                     // the view is saved as it is, but never as a loop (showing A, which tests this
                     // album, and saving that view here would make it test itself)
+                    several_smart_refused(s, "album.setRules")?;
                     let view = view_rules(s);
                     let loops: Vec<String> = view
                         .rule_set
@@ -1013,6 +1091,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 } else {
                     let replace = bool_or(p, "replace", false);
                     let (folder, album) = (cur.library_folder.clone(), cur.album);
+                    let (folders, albums) = (cur.library_folders.clone(), cur.albums.clone());
                     let base = if replace { Default::default() } else { cur };
                     let mut r = merge_rules(&base, p.get("rules").unwrap_or(&Value::Null), "album.setRules", &s.catalog, Some(id))?;
                     // the rules dialog has no folder field: replacing its rules keeps the folder
@@ -1024,6 +1103,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     // (`album: null` drops it)
                     if replace && p.get("rules").and_then(|r| r.get("album")).is_none() {
                         r.album = album;
+                    }
+                    // …nor for the other folders and albums of a view of several, saved
+                    // (`libraryFolders: []`, `albums: []` drop them)
+                    if replace && p.get("rules").and_then(|r| r.get("libraryFolders")).is_none() {
+                        r.library_folders = folders;
+                    }
+                    if replace && p.get("rules").and_then(|r| r.get("albums")).is_none() {
+                        r.albums = albums;
                     }
                     r
                 };
@@ -1105,8 +1192,25 @@ pub fn specs() -> Vec<CommandSpec> {
                     (n, _) => format!("Delete {n} Albums"),
                 };
                 s.commit(&label, Op::Batch { ops })?;
+                // an album chip of the filter, or of one put aside by Enable Filters, must not name a deleted album
+                s.filter.album = s.filter.album.filter(|a| !removed.contains(a));
+                s.filter.albums.retain(|a| !removed.contains(a));
+                let shelved_before = s.shelved_filter.clone();
+                if let Some(f) = s.shelved_filter.as_mut() {
+                    f.album = f.album.filter(|a| !removed.contains(a));
+                    f.albums.retain(|a| !removed.contains(a));
+                }
+                drop_emptied_shelf(s, shelved_before.as_ref());
+                // of several albums shown, the others stay
+                let was_shown = s.source_albums().iter().any(|a| removed.contains(a));
+                s.also_albums.retain(|a| !removed.contains(a));
                 if matches!(s.source, LibrarySource::Album(current) if removed.contains(&current)) {
-                    s.source = LibrarySource::All;
+                    s.source = s.also_albums.pop().map_or(LibrarySource::All, LibrarySource::Album);
+                }
+                // the photo looked at may have been in a shown album that went only, so not in the grid now: as when
+                // another source is shown (an album the grid does not show leaves the selection alone)
+                if was_shown && s.selection.active.is_some() {
+                    s.keep_active_in_view();
                 }
                 if several { Ok(json!({"deleted": ids.len()})) } else { ok() }
             }
@@ -1483,16 +1587,22 @@ pub fn specs() -> Vec<CommandSpec> {
             "Review Import",
             [],
             None,
-            "{paths: [file or folder (recursive)]} → {candidates: [{path, name, format, kind, width, height, fileSize, captured, duplicate?: path|content, existing?, error?, previewOnly?: why a raw can only be shown from its embedded preview}], duplicates, scanned} — nothing is added",
+            "{paths: [file or folder (recursive)]} → {candidates: [{path, name, format, kind, width, height, fileSize, captured, duplicate?: path|content, existing?, error?, previewOnly?: why a raw can only be shown from its embedded preview}], duplicates, scanned, scanLimited: bool (the folder walk stopped at its scan limit: there may be more photos), skipped: {unreadable (folders that could not be listed), unsupported (files in the folders that are not a supported photo type, XMP sidecars not counted; a file named in paths is always tried)}} — nothing is added",
             always,
             |s, p| {
                 let paths = strs(p, "paths");
                 if paths.is_empty() {
                     return Err(bad("library.importPreview", "no paths"));
                 }
-                let c = crate::import::scan(s, &paths);
-                let dups = c.iter().filter(|c| c.duplicate.is_some()).count();
-                Ok(json!({"scanned": c.len(), "duplicates": dups, "candidates": c}))
+                let out = crate::import::scan_report(s, &paths);
+                let dups = out.candidates.iter().filter(|c| c.duplicate.is_some()).count();
+                Ok(json!({
+                    "scanned": out.candidates.len(),
+                    "duplicates": dups,
+                    "candidates": out.candidates,
+                    "scanLimited": out.truncated,
+                    "skipped": {"unreadable": out.unreadable, "unsupported": out.unsupported},
+                }))
             }
         ),
         cmd!(
@@ -1500,7 +1610,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Photos",
             ["File"],
             Some("Cmd+Shift+I"),
-            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source — only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`) — dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each; blank = keep names), renameStart?: 1 (must fit this platform; later files are reported failed if the sequence runs out), metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, keywords?: [..], onDeleted?: restore|skip|fresh (a file that is in Recently Deleted: restore (default) = bring the photo back with its edits — relinked to the file when its own is gone, skip = leave it there and say so, fresh = delete the trashed record and import the file as new)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, warnings?: [{path, code: cameraProfile|uprightGeometry|unmappedXmp, profile?, mode?: off|auto|level|vertical|full|guided|unknown, fields?}], moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
+            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source — only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`) — dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each; blank = keep names), renameStart?: 1 (must fit this platform; later files are reported failed if the sequence runs out), metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, recipe?: [{id: a plain develop control (develop.controls; no white balance, geometry or crop), value}] (a batch-edit recipe: each control is set to its value, clamped to the control's range, on every photo this import adds, after its sidecar, camera default and preset, as one extra History step named Import adjustments; a photo the library already has — a duplicate, one restored from Recently Deleted, one joined from a browsed folder — is not changed; a control a recipe may not name is refused before anything is imported; preset.saveRecipe keeps a recipe for reuse), keywords?: [..], onDeleted?: restore|skip|fresh (a file that is in Recently Deleted: restore (default) = bring the photo back with its edits — relinked to the file when its own is gone, skip = leave it there and say so, fresh = delete the trashed record and import the file as new)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, warnings?: [{path, code: cameraProfile|uprightGeometry|unmappedXmp, profile?, mode?: off|auto|level|vertical|full|guided|unknown, fields?}], moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
             always,
             |s, p| {
                 let req = import_params(s, p)?;
@@ -1525,6 +1635,8 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         // ---- persistence
         cmd!(query "library.info", "Library Info", [], None, "{}", always, |s, _| {
+            // the answer of a free-space read that ran on a worker (lowDiskSpace below)
+            s.poll_disk_space();
             let photos = s.catalog.len();
             let albums = s.catalog.albums().count();
             let (rendered_n, rendered_bytes) = s.media.rendered.mem_usage();
@@ -1560,6 +1672,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 "lastError": lib.last_error,
                 // settings files that were unreadable or damaged at open (kept, defaults used)
                 "settingsWarnings": lib.settings_warnings,
+                // the drive holding the preview cache ran low this session (warned once)
+                "lowDiskSpace": s.disk_space_alert_raised(),
                 // changes applied in memory whose write failed (retried by every save)
                 "unsavedOps": s.unsaved().map_or(0, |u| u.0),
                 "unsavedError": s.unsaved().map(|u| u.1),

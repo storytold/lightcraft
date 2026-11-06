@@ -15,6 +15,7 @@ mod specs;
 
 pub(crate) use filters::covers_other_disks;
 pub use import::{ImportRequest, import_batch_done, import_params, list_auto_import_folder};
+pub(crate) use specs::MAX_SOURCES;
 pub use specs::specs;
 
 #[cfg(test)]

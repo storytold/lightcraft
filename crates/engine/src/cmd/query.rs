@@ -106,14 +106,13 @@ pub fn specs() -> Vec<CommandSpec> {
             }))
         }),
         cmd!(query "library.state", "Library State", [], None, "{}", always, |s, _| {
-            let label = match (s.source, s.library_folder.as_deref()) {
-                (LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
-                _ => s.source.label(&s.catalog),
-            };
             let n = s.visible().len();
+            let label = s.source_label();
             Ok(json!({
                 "source": s.source,
+                "albums": s.source_albums().iter().map(|a| a.0).collect::<Vec<_>>(),
                 "libraryFolder": s.library_folder.as_ref().filter(|_| s.source == LibrarySource::LibraryFolder),
+                "libraryFolders": s.source_library_folders(),
                 "sourceLabel": label,
                 "filter": s.filter,
                 "sort": s.sort,
@@ -272,6 +271,21 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.set_memory_budget((mb * 1048576.0) as usize);
             }
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
+        }),
+        cmd!(query "app.hotPixelLimit", "Hot Pixel Limit", [], None, "{percent?: number} — Remove Hot Pixels leaves a raw alone when more than this share of its photosites would be replaced (0.001..100 %, default 0.2 %; real light it keeps doesn't count); returns {percent, default}", always, |s, p| {
+            if let Some(v) = p.get("percent").filter(|v| !v.is_null()) {
+                let Some(percent) = v.as_f64().filter(|x| (0.001..=100.0).contains(x)) else {
+                    return Err(bad("app.hotPixelLimit", "percent must be a number in 0.001..100"));
+                };
+                // (the default as an `f32` from the app's settings, 0.2000000029…, is the default: its keys stay)
+                let default = lightcraft_raw::HOT_PIXEL_MAX_SHARE;
+                let share = if (percent / 100.0 / default - 1.0).abs() < 1e-6 { default } else { percent / 100.0 };
+                if crate::files::set_hot_pixel_limit(share) {
+                    // decoded with the old limit, and their render keys change
+                    s.media.clear_sources();
+                }
+            }
+            Ok(json!({"percent": crate::files::hot_pixel_limit() * 100.0, "default": lightcraft_raw::HOT_PIXEL_MAX_SHARE * 100.0}))
         }),
         cmd!(query "journal.list", "Command Journal", [], None, "{limit?}", always, |s, p| {
             let lim = p.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;

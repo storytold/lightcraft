@@ -24,16 +24,19 @@ pub mod dialogs;
 pub mod docking;
 mod drop_overlay;
 pub mod export_task;
+mod find_similar;
 mod focus_scan;
 mod frame_rate;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+pub mod lens_db;
 pub mod lightroom_import;
 pub mod links;
+pub mod loupe_timing;
 pub mod menus;
 mod missing_sweep;
-mod model_setup;
+pub mod multi_select;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -44,6 +47,7 @@ pub mod shortcuts;
 pub mod sidebar;
 pub mod softpaint;
 pub mod space_hand;
+pub mod startup;
 pub mod state;
 pub mod sync;
 pub mod tasks;
@@ -85,6 +89,7 @@ pub use widgets::rating;
 pub use widgets::text_field;
 
 mod app;
+mod auto_settings;
 mod caches;
 mod clock;
 mod services;
@@ -104,6 +109,69 @@ pub use services::{
 use state::{GestureFrame, InjectedPress};
 
 const TOAST_SECONDS: f64 = 1.4;
+/// How long a toast saying why a command was refused stays: a sentence to read, as
+/// [`LightcraftApp::toast_error`]'s.
+const REFUSAL_SECONDS: f64 = 6.0;
+
+/// A command that didn't run: the whole error (for agents, the log and the status) and what it
+/// says to the person who asked (the reason, without the command's id).
+pub(crate) struct Refusal {
+    error: String,
+    why: String,
+    /// What kind of error it is, for code that decides on it ([`LightcraftApp::run_typed`]).
+    kind: ErrorKind,
+}
+
+impl Refusal {
+    /// An error that is already text (the interface's own commands). Mostly words for a person
+    /// as they are; a command that wraps an engine command hands on the engine's error already
+    /// turned into text, and of that only the reason is for the person. `error` stays whole.
+    fn plain(error: String) -> Refusal {
+        let why = engine_reason(&error).map(sentence).unwrap_or_else(|| error.clone());
+        Refusal { why, error, kind: ErrorKind::Other }
+    }
+}
+
+/// A sentence starts with a capital, whatever the command wrote. Only when it starts with a word:
+/// a file name or a path ("img_0012.jpg is a virtual copy", "photos/a.jpg: …") is someone's
+/// spelling and stays as it is, and so does a letter whose capital is not one letter (ß).
+fn sentence(why: &str) -> String {
+    let first_word = why.split_whitespace().next().unwrap_or_default().trim_end_matches([',', ':', ';']);
+    let mut letters = why.chars();
+    match letters.next() {
+        Some(first) if first_word.chars().all(char::is_alphabetic) && first.to_uppercase().count() == 1 => {
+            first.to_uppercase().chain(letters).collect()
+        }
+        _ => why.to_string(),
+    }
+}
+
+/// The reason in an [`EngineError`](lightcraft_engine::EngineError) that is already text: what
+/// follows ``command `id` is not available right now: `` or ``invalid parameters for `id`: ``
+/// (its `Disabled` and `BadParams` formats). `None` for anything else, including text that only
+/// begins like one: the id must be a command's (letters, digits, `.`, `_`, `-`) between the
+/// backticks, so the reason is cut at the first separator and may hold colons and backticks.
+fn engine_reason(error: &str) -> Option<&str> {
+    const SHAPES: [(&str, &str); 2] = [("command `", "` is not available right now: "), ("invalid parameters for `", "`: ")];
+    SHAPES.iter().find_map(|(before, after)| {
+        let (id, reason) = error.strip_prefix(before)?.split_once(after)?;
+        let is_id = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        (is_id && !reason.trim().is_empty()).then_some(reason)
+    })
+}
+
+impl From<lightcraft_engine::EngineError> for Refusal {
+    fn from(e: lightcraft_engine::EngineError) -> Refusal {
+        use lightcraft_engine::EngineError;
+        let why = match &e {
+            EngineError::Disabled(_, why) => why.clone(),
+            EngineError::BadParams { msg, .. } => msg.clone(),
+            other => other.to_string(),
+        };
+        Refusal { error: e.to_string(), why: sentence(&why), kind: e.kind() }
+    }
+}
+
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 
@@ -143,7 +211,6 @@ impl QuitPrompt {
 }
 
 pub struct LightcraftApp {
-    pub(crate) model_setup: model_setup::Pending,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
     pub caches: Caches,
@@ -221,6 +288,9 @@ pub struct LightcraftApp {
     /// effects (which the global shortcut guard also hides).
     #[cfg(test)]
     pub(crate) library_passes: Vec<panels::library_problem::LibraryPass>,
+    /// Test-only: how many times background preparation was advanced (once per logic pass).
+    #[cfg(test)]
+    pub(crate) prep_ticks: u32,
     /// Test-only: a delay for the sidebar's Missing Photos count worker (a slow disk). Kept here,
     /// not in `ui`, because `ui.set` rebuilds `ui` and would drop it.
     #[cfg(test)]
@@ -287,6 +357,14 @@ pub struct LightcraftApp {
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
     /// "thumb", "none").
     pub loupe_shown: Option<(lightcraft_catalog::PhotoId, &'static str)>,
+    /// When each photo stepped to in the loupe first showed (`ui.inspect` → `perf.loupeSteps`).
+    pub loupe_timing: loupe_timing::LoupeTiming,
+    /// The app-wide background preparation settings were handed from the saved app settings to
+    /// the session ([`Self::background_prep`]).
+    prep_synced: bool,
+    /// The loupe's look-ahead: the photo it was made for, the direction of travel (+1 / -1), the
+    /// catalog revision and the edge, so it is worked out again only when one of them changes.
+    pub(crate) look_ahead: panels::detail::LookAhead,
     /// The window render the loupe asked for last, by job key (see [`region`]); kept for the few
     /// windows whose textures can be on screen, and for the inspector.
     pub region_view: Option<region::RegionView>,
@@ -312,6 +390,9 @@ pub struct LightcraftApp {
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
     pub scan: Option<import::ScanTask>,
+    /// Scans stopped without waiting for their workers: each channel is kept until its worker ends, so
+    /// the probes it took from the session come back.
+    pub(crate) scans_stopping: import::StoppingScans,
     /// Files that waited for a library and wait for the running import or Synchronize Folder too.
     pub waiting_import: panels::library_problem::WaitingImport,
     /// A Synchronize Folder scan in progress (feeds its dialog).
@@ -348,8 +429,18 @@ pub struct LightcraftApp {
     /// Say once, when the GPU device has been tried, that no graphics processor was found
     /// ([`panels::notices::gpu_notice`]). The desktop app sets it; headless sessions and tests don't.
     pub gpu_notice: bool,
+    /// Tell the user once per session when the drive holding the preview cache runs low
+    /// ([`panels::notices::disk_space_notice`]). The desktop app sets it; headless sessions and tests
+    /// don't (their drive is whatever the machine has).
+    pub disk_space_notice: bool,
+    /// The low-disk notice's text while it is queued in [`LightcraftApp::notices`]: it is shown with a
+    /// button to Settings ▸ Performance. With the library it was raised for
+    /// ([`lightcraft_engine::Session::library_generation`]): another library open drops it.
+    pub(crate) disk_notice: Option<(u64, String)>,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
+    /// The hot pixel limit last applied (percent).
+    hot_pixels_applied: Option<f32>,
     /// The display profile setting last applied (`app.displayProfile`).
     pub(crate) display_applied: Option<String>,
     /// Why the display profile setting could not be applied (shown in Settings ▸ Display).
@@ -545,7 +636,7 @@ pub fn is_model_file(path: &str) -> bool {
 /// Files dropped on the window that are presets rather than photos.
 pub fn is_preset_file(path: &str) -> bool {
     let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    ["lcpreset", "lrtemplate", "xmp", "zip", "cube", "lmp", "mplumpack", "lceffect"].contains(&ext.as_str())
+    ["lcpreset", "lrtemplate", "xmp", "zip", "cube", "dcp", "lmp", "mplumpack", "lceffect"].contains(&ext.as_str())
 }
 
 /// Splits dropped files into presets and everything else. An `.xmp` dropped next to a photo with the same

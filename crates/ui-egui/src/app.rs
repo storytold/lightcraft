@@ -3,10 +3,10 @@ use super::services::Services;
 use super::state::{GestureFrame, InjectedDrop, InjectedPress};
 use super::{
     AiModel, Caches, CommandError, ControlRequest, ControlResponse, ErrorKind, GESTURE_TIMEOUT_MS, LightcraftApp, MAX_PENDING_GESTURES,
-    MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, Receiver, SCREEN_PROFILE,
-    SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session, ShotGeometry,
-    TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import, lightroom_import, menus,
-    merge, model_setup, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    MAX_PENDING_SHOTS, MAX_SHOT_BYTES, MAX_SHOT_TOTAL_BYTES, MAX_TEXTURE_SIDE, PendingGesture, PendingShot, Perf, REFUSAL_SECONDS, Receiver, Refusal,
+    SCREEN_PROFILE, SCREENSHOT_FALLBACK_MS, SCREENSHOT_SETTLE_MS, SHOT_FORCE_BUSY_MS, SHOT_SETTLE_FRAMES, SHOT_SETTLE_MS, Sender, Session,
+    ShotGeometry, TOAST_SECONDS, UiState, Value, docking, drop_overlay, export_task, focus_scan, frame_rate, headless, i18n, import,
+    lightroom_import, menus, merge, panels, pick, recheck, render, shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
 
 mod control;
@@ -65,6 +65,8 @@ impl LightcraftApp {
             #[cfg(test)]
             library_passes: vec![],
             #[cfg(test)]
+            prep_ticks: 0,
+            #[cfg(test)]
             missing_count_test_delay: None,
             shadow: None,
             synthetic: vec![],
@@ -94,6 +96,9 @@ impl LightcraftApp {
             space_hand: None,
             brush_live: None,
             loupe_shown: None,
+            loupe_timing: Default::default(),
+            prep_synced: false,
+            look_ahead: Default::default(),
             region_view: None,
             region_before_view: None,
             size_hold: Default::default(),
@@ -106,6 +111,7 @@ impl LightcraftApp {
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
+            scans_stopping: Default::default(),
             waiting_import: Default::default(),
             sync: None,
             sync_owns_changes: false,
@@ -123,7 +129,10 @@ impl LightcraftApp {
             window_is_fullscreen: false,
             gpu_applied: None,
             gpu_notice: false,
+            disk_space_notice: false,
+            disk_notice: None,
             memory_applied: None,
+            hot_pixels_applied: None,
             display_applied: None,
             display_error: None,
             screen_profile: None,
@@ -133,7 +142,6 @@ impl LightcraftApp {
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
-            model_setup: Default::default(),
         }
     }
 
@@ -186,22 +194,40 @@ impl LightcraftApp {
         }
     }
 
-    /// Run a UI or engine command by id. The single entry point for every frontend path.
+    /// Run a UI or engine command by id. The single entry point for every frontend path: the
+    /// error comes back in full and nothing is shown, for agents (the control channel) and for
+    /// code that deals with the answer itself. A widget acting for the person uses [`Self::act`].
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        self.run_typed(id, params).map_err(|e| e.message)
+        self.run_told(id, params).map_err(|refusal| refusal.error)
     }
 
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
-        if let Some(result) = model_setup::intercept(self, id, &params) {
-            return result.map_err(CommandError::from);
+        self.run_told(id, params).map_err(|refusal| CommandError { message: refusal.error, kind: refusal.kind })
+    }
+
+    /// Run a command for the person at the interface (a click, a drop, a key): when it is
+    /// refused, a toast says why, so no widget has to pass that on by hand (or forget to).
+    /// `None` when it was refused: say a success of your own only on `Some`, or it writes over
+    /// the reason. A widget says which of `act` and [`Self::run`] it means: `run` shows nothing.
+    pub fn act(&mut self, id: &str, params: Value) -> Option<Value> {
+        match self.run_told(id, params) {
+            Ok(v) => Some(v),
+            Err(refusal) => {
+                self.ui.toast = Some((refusal.why, self.tick_now() + REFUSAL_SECONDS, None));
+                None
+            }
         }
+    }
+
+    /// [`Self::run`], keeping what a refusal says to a person apart from the whole error.
+    fn run_told(&mut self, id: &str, params: Value) -> Result<Value, Refusal> {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             if r.is_ok() {
-                docking::reveal_command(self, id)?;
+                docking::reveal_command(self, id).map_err(Refusal::plain)?;
             }
-            return r.map_err(CommandError::from);
+            return r.map_err(Refusal::plain);
         }
         let params = if id == "crop.aspect"
             && params.get("aspect").and_then(Value::as_str) == Some("toggle")
@@ -212,7 +238,7 @@ impl LightcraftApp {
         } else {
             params
         };
-        let r = self.session.execute(id, &params).map_err(CommandError::from);
+        let r = self.session.execute(id, &params).map_err(Refusal::from);
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
@@ -275,11 +301,11 @@ impl LightcraftApp {
             self.ui.toast = Some((text, now + TOAST_SECONDS, label));
         }
         match &r {
-            Err(e) => {
-                log::warn!("{id}: {e}");
-                self.ui.status = e.message.clone();
+            Err(refusal) => {
+                log::warn!("{id}: {}", refusal.error);
+                self.ui.status = refusal.error.clone();
                 // no detector yet: offer it (its terms first) instead of only saying so
-                if id == "faces.detect" && e.kind == ErrorKind::ModelMissing(AiModel::FaceDetector) {
+                if id == "faces.detect" && refusal.kind == ErrorKind::ModelMissing(AiModel::FaceDetector) {
                     panels::faces::offer_detector(self);
                 }
             }
@@ -488,6 +514,41 @@ impl LightcraftApp {
         }
     }
 
+    /// The app-wide background preparation settings live with the app settings (`ui.json`): taken
+    /// into the session once, then a change made through `prefs.setBackgroundPrep` is saved with
+    /// them. Run at the start of every logic pass, before any command of that pass (also before
+    /// the fonts are ready and the window is drawn).
+    fn sync_prep_settings(&mut self) {
+        if !self.prep_synced {
+            self.session.prep.app = self.ui.settings.background_prep.sanitized();
+            self.prep_synced = true;
+        } else if self.session.prep.app != self.ui.settings.background_prep {
+            self.ui.settings.background_prep = self.session.prep.app;
+        }
+    }
+
+    /// Preparing photos in the background ([`lightcraft_engine::prep`]): the whole view's previews
+    /// once the user is culling in the loupe, built from the photo on screen in the direction of travel.
+    /// Advanced on every logic pass, the hidden ones too (a minimised window keeps preparing).
+    fn background_prep(&mut self, ctx: &egui::Context) {
+        #[cfg(test)]
+        {
+            self.prep_ticks += 1;
+        }
+        let mode = panels::detail::prep_mode(self);
+        let loupe = self.ui.fullscreen || self.ui.view == state::ViewMode::Detail;
+        let at = if loupe { self.session.active() } else { None };
+        let backward = self.look_ahead.backward();
+        self.session.prep_tick(mode, at, backward);
+        if self.session.preview_build.as_ref().is_some_and(|b| b.running()) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        // a build that couldn't start tries again at its time, also when nothing else draws a frame
+        if let Some(wait) = self.session.prep_retry_in() {
+            ctx.request_repaint_after(wait);
+        }
+    }
+
     /// AI masks: apply finished background requests (clicks, descriptions, detail passes) and
     /// show their errors; start a zoomed-in detail pass once the clicking stops
     /// (`ui.detail_due`); watch the model download. Never waits for the model.
@@ -584,6 +645,7 @@ impl LightcraftApp {
     /// hidden, from `Context::run_logic`. It may read the refreshed viewport fields only: never
     /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.sync_prep_settings();
         i18n::set_language(self.ui.language);
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
         // Compare against the cached string: `Context::language()` allocates on every call, and
