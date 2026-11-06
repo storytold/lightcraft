@@ -13,7 +13,7 @@
 //! waits for the answer. A sheet is the window's own, so the UI shows one at a time
 //! (`Services::picker_one_at_a_time`).
 
-use lightcraft_ui_egui::pick::PickRequest;
+use lightcraft_ui_egui::pick::{PickKind, PickRequest};
 use std::pin::Pin;
 use std::sync::mpsc::{Receiver, channel};
 use std::task::{Context, Poll, Waker};
@@ -38,14 +38,39 @@ enum Shown {
 /// first poll here as well, which is the call that would make a dialog that waited for one.
 /// Nothing but Rust frames lies between `present` and this function, so a panic while the panel
 /// is made (a nil `NSOpenPanel` from AppKit, #1996) unwinds to here and ends as a canceled dialog
-/// and a logged error, not an abort. `Err` is `present` refusing: showing the dialog some other
-/// way is the caller's.
+/// and a logged error, not an abort. `Err` is the dialog not being shown: `present` refusing, or
+/// no thread to wait for its answer (found out first, before a sheet is up that nobody would
+/// hear). Showing the dialog some other way is the caller's.
 pub(crate) fn start(
     repaint: &egui::Context,
     request: PickRequest,
     present: impl FnOnce(&PickRequest) -> Result<Answer, String>,
 ) -> Result<Receiver<Vec<String>>, String> {
+    start_with(repaint, request, present, |wait| std::thread::Builder::new().name("file-dialog".into()).spawn(wait).map(drop))
+}
+
+/// [`start`], with the thread that waits for the answer started by `spawn`.
+fn start_with(
+    repaint: &egui::Context,
+    request: PickRequest,
+    present: impl FnOnce(&PickRequest) -> Result<Answer, String>,
+    spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+) -> Result<Receiver<Vec<String>>, String> {
     let (tx, rx) = channel();
+    // The thread that waits comes first and is handed the dialog once that is made: one that can't
+    // be started is then a refusal while no sheet is up, not a sheet nobody hears (its answer lost,
+    // and the next request shown over it).
+    let (hand_over, handed) = channel::<Answer>();
+    let (answers, waiting) = (tx.clone(), repaint.clone());
+    spawn(Box::new(move || {
+        // nothing handed over: the dialog was refused, or answered when it was made
+        let Ok(answer) = handed.recv() else { return };
+        let paths = pollster::block_on(answer);
+        // the app may have quit meanwhile: nobody to tell
+        let _ = answers.send(paths);
+        waiting.request_repaint();
+    }))
+    .map_err(|e| format!("could not start the thread that waits for the file dialog: {e}"))?;
     let shown = lightcraft_engine::guard::catch("the file dialog", || -> Result<Shown, String> {
         let mut answer = present(&request)?;
         Ok(match answer.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
@@ -55,17 +80,8 @@ pub(crate) fn start(
     });
     match shown {
         Ok(Ok(Shown::Up(answer))) => {
-            let waiting = repaint.clone();
-            let thread = std::thread::Builder::new().name("file-dialog".into()).spawn(move || {
-                let paths = pollster::block_on(answer);
-                // the app may have quit meanwhile: nobody to tell
-                let _ = tx.send(paths);
-                waiting.request_repaint();
-            });
-            if let Err(e) = thread {
-                // the sheet stays up with nobody to hear it and the dropped sender ends the request, so the next
-                // waiting request can show over it: a known limit, for a thread that can't be started
-                log::error!("could not start the thread that waits for the file dialog: {e}");
+            if hand_over.send(answer).is_err() {
+                log::error!("the thread that waits for the file dialog ended: its answer is lost");
             }
         }
         Ok(Ok(Shown::Done(paths))) => {
@@ -80,6 +96,30 @@ pub(crate) fn start(
         }
     }
     Ok(rx)
+}
+
+/// The calls that make a sheet of rfd's dialog, as a trait so that a test can see which are made
+/// (rfd's builder keeps what it is given to itself).
+trait SheetBuilder: Sized {
+    fn title(self, title: &str) -> Self;
+    fn filter(self, name: &str, extensions: &[&str]) -> Self;
+    fn file_name(self, name: &str) -> Self;
+    /// The dialog `kind` asks for, shown: the future of its answer.
+    fn show(self, kind: PickKind) -> Answer;
+}
+
+/// The sheet for `request` on `builder`: what the request sets, then the dialog of its kind.
+fn build(mut builder: impl SheetBuilder, request: &PickRequest) -> Answer {
+    if let Some(title) = &request.title {
+        builder = builder.title(title);
+    }
+    if let Some((name, extensions)) = &request.filter {
+        builder = builder.filter(name, extensions);
+    }
+    if let Some(name) = &request.file_name {
+        builder = builder.file_name(name);
+    }
+    builder.show(request.kind)
 }
 
 /// The dialogs as rfd's sheets of one window.
@@ -106,41 +146,48 @@ impl Sheets {
     /// main one rfd would hand its work to the main queue with the blocking dispatch that hangs
     /// on macOS 26.6, so this refuses.
     fn present(&self, request: &PickRequest) -> Result<Answer, String> {
-        use crate::dialog_filter::FileDialogExt as _;
-        use lightcraft_ui_egui::pick::PickKind;
         if objc2::MainThreadMarker::new().is_none() {
             return Err("a file dialog can only be shown from the main thread".into());
         }
-        let mut dialog = self.window.clone();
-        if let Some(title) = &request.title {
-            dialog = dialog.set_title(title);
-        }
-        if let Some((name, extensions)) = &request.filter {
-            dialog = dialog.add_filter_nocase(name.clone(), extensions);
-        }
-        if let Some(name) = &request.file_name {
-            dialog = dialog.set_file_name(name);
-        }
+        Ok(build(self.window.clone(), request))
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl SheetBuilder for rfd::AsyncFileDialog {
+    fn title(self, title: &str) -> Self {
+        self.set_title(title)
+    }
+
+    fn filter(self, name: &str, extensions: &[&str]) -> Self {
+        use crate::dialog_filter::FileDialogExt as _;
+        self.add_filter_nocase(name, extensions)
+    }
+
+    fn file_name(self, name: &str) -> Self {
+        self.set_file_name(name)
+    }
+
+    fn show(self, kind: PickKind) -> Answer {
         let text = |file: &rfd::FileHandle| file.path().to_string_lossy().to_string();
-        let answer: Answer = match request.kind {
+        match kind {
             PickKind::Files => {
-                let sheet = dialog.pick_files();
+                let sheet = self.pick_files();
                 Box::pin(async move { sheet.await.unwrap_or_default().iter().map(text).collect::<Vec<String>>() })
             }
             PickKind::File => {
-                let sheet = dialog.pick_file();
+                let sheet = self.pick_file();
                 Box::pin(async move { sheet.await.iter().map(text).collect::<Vec<String>>() })
             }
             PickKind::Folder => {
-                let sheet = dialog.pick_folder();
+                let sheet = self.pick_folder();
                 Box::pin(async move { sheet.await.iter().map(text).collect::<Vec<String>>() })
             }
             PickKind::Save => {
-                let sheet = dialog.save_file();
+                let sheet = self.save_file();
                 Box::pin(async move { sheet.await.iter().map(text).collect::<Vec<String>>() })
             }
-        };
-        Ok(answer)
+        }
     }
 }
 
@@ -311,6 +358,76 @@ mod tests {
         sheet.close(&["/photos"]);
         // the waiting thread got as far as telling the UI, so sending to nobody did not stop it
         assert!(told_to_repaint(&repaints));
+    }
+
+    #[test]
+    fn a_waiting_thread_that_cannot_be_started_is_a_refusal_before_any_sheet_is_up() {
+        let (ctx, repaints) = counting();
+        let made = Arc::new(AtomicUsize::new(0));
+        let seen = made.clone();
+        let refused = start_with(
+            &ctx,
+            PickRequest::folder("Open Library"),
+            move |_| {
+                seen.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::pin(Answering(Arc::new(Sheet::default()))))
+            },
+            |_wait| Err(std::io::Error::other("out of threads")),
+        );
+        assert!(refused.err().is_some_and(|why| why.contains("out of threads")), "the caller is told, and can ask another way");
+        assert_eq!(made.load(Ordering::SeqCst), 0, "no sheet is up for nobody to hear: its answer would be lost");
+        assert_eq!(repaints.load(Ordering::SeqCst), 0);
+    }
+
+    /// A builder that notes what it is asked to make.
+    struct Noted(Arc<Mutex<Vec<String>>>);
+
+    impl Noted {
+        fn note(self, what: String) -> Self {
+            self.0.lock().unwrap().push(what);
+            self
+        }
+    }
+
+    impl SheetBuilder for Noted {
+        fn title(self, title: &str) -> Self {
+            self.note(format!("title {title}"))
+        }
+
+        fn filter(self, name: &str, extensions: &[&str]) -> Self {
+            self.note(format!("filter {name} {}", extensions.join(" ")))
+        }
+
+        fn file_name(self, name: &str) -> Self {
+            self.note(format!("file name {name}"))
+        }
+
+        fn show(self, kind: PickKind) -> Answer {
+            self.note(format!("show {kind:?}"));
+            Box::pin(std::future::ready(Vec::new()))
+        }
+    }
+
+    /// What `build` asks of a builder for `request`, in order.
+    fn built(request: PickRequest) -> Vec<String> {
+        let notes = Arc::new(Mutex::new(Vec::new()));
+        let _ = build(Noted(notes.clone()), &request);
+        let asked = notes.lock().unwrap();
+        asked.clone()
+    }
+
+    #[test]
+    fn a_request_is_made_with_what_it_sets_and_the_dialog_of_its_kind() {
+        assert_eq!(
+            built(PickRequest::save("Export Presets", "LightCraft Preset", &["lcpreset"], "Mine.lcpreset")),
+            ["title Export Presets", "filter LightCraft Preset lcpreset", "file name Mine.lcpreset", "show Save"]
+        );
+        assert_eq!(built(PickRequest::files(None, "Photos", &["nef", "jpg"])), ["filter Photos nef jpg", "show Files"], "no title: rfd's own");
+        assert_eq!(
+            built(PickRequest::file("Locate Missing File…", "Photos", &["nef"])),
+            ["title Locate Missing File…", "filter Photos nef", "show File"]
+        );
+        assert_eq!(built(PickRequest::folder("Open Library")), ["title Open Library", "show Folder"], "no filter, no name");
     }
 
     /// A test thread is not the main thread: rfd would send its panel to the main queue with a
