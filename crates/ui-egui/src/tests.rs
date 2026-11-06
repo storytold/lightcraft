@@ -72,6 +72,7 @@ pub(super) mod panels;
 mod preset_favorites;
 mod preset_groups;
 mod preset_import;
+mod preset_selection;
 mod preview_limit;
 mod print;
 mod profile_menu;

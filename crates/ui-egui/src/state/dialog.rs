@@ -310,6 +310,11 @@ pub enum Dialog {
     DeleteEffects {
         names: Vec<String>,
     },
+    /// Confirm deleting the selected presets. `builtin`: how many of `ids` are built-in and stay.
+    DeletePresets {
+        ids: Vec<String>,
+        builtin: usize,
+    },
     /// Confirm deleting a preset group and the `count` user presets in it.
     DeletePresetGroup {
         name: String,

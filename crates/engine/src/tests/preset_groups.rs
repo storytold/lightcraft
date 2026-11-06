@@ -1,5 +1,5 @@
-//! Preset groups made by name stay while empty and across reopening, and can be renamed, starred
-//! and deleted; a group holding built-in presets can only be starred.
+//! Preset groups made by name stay while empty and across reopening; many presets are deleted,
+//! moved or copied in one command, and built-in presets are never deleted or moved.
 
 use std::path::PathBuf;
 
@@ -28,6 +28,10 @@ fn with_user_presets() -> (Session, Vec<String>) {
     });
     let ids = s.add_presets(presets.to_vec());
     (s, ids)
+}
+
+fn builtin_id(s: &Session) -> String {
+    s.presets.iter().find(|p| p.builtin).map(|p| p.id.clone()).unwrap()
 }
 
 fn group_of(s: &Session, id: &str) -> String {
@@ -261,11 +265,59 @@ fn group_names_belong_to_their_library() {
 fn a_created_group_stays_after_its_last_preset_leaves() {
     let (mut s, ids) = with_user_presets();
     s.execute("preset.createGroup", &json!({"name": "Holding"})).unwrap();
-    for group in ["Holding", "Elsewhere"] {
-        for id in &ids {
-            s.execute("preset.move", &json!({"id": id, "group": group})).unwrap();
-        }
-    }
+    s.execute("preset.moveMany", &json!({"ids": ids, "group": "Holding"})).unwrap();
+    s.execute("preset.moveMany", &json!({"ids": ids, "group": "Elsewhere"})).unwrap();
     assert!(s.presets.created_groups().contains("Holding"));
     assert!(!s.presets.iter().any(|p| p.group == "Holding"));
+}
+
+#[test]
+fn delete_many_removes_user_presets_and_keeps_built_in_ones() {
+    let (mut s, ids) = with_user_presets();
+    let builtin = builtin_id(&s);
+    let chosen = [ids[0].as_str(), ids[1].as_str(), builtin.as_str(), "no.such.preset"];
+    let r = s.execute("preset.deleteMany", &json!({"ids": chosen})).unwrap();
+    assert_eq!((&r["deleted"], &r["keptBuiltin"]), (&json!(2), &json!(1)), "{r}");
+    assert!(s.presets.iter().any(|p| p.id == builtin));
+    assert!(s.presets.iter().any(|p| p.id == ids[2]), "the one left out stays");
+    assert!(s.execute("preset.deleteMany", &json!({"ids": []})).is_err());
+    assert!(s.execute("preset.deleteMany", &json!({})).is_err());
+}
+
+#[test]
+fn move_many_moves_user_presets_only() {
+    let (mut s, ids) = with_user_presets();
+    let builtin = builtin_id(&s);
+    let builtin_group = group_of(&s, &builtin);
+    let chosen = [ids[0].as_str(), ids[1].as_str(), builtin.as_str()];
+    let r = s.execute("preset.moveMany", &json!({"ids": chosen, "group": " Other "})).unwrap();
+    assert_eq!((&r["moved"], &r["keptBuiltin"]), (&json!(2), &json!(1)), "{r}");
+    assert_eq!(group_of(&s, &ids[0]), "Other");
+    assert_eq!(group_of(&s, &ids[2]), "Mine");
+    assert_eq!(group_of(&s, &builtin), builtin_group);
+    assert!(s.execute("preset.moveMany", &json!({"ids": chosen})).is_err(), "no group");
+}
+
+#[test]
+fn copy_makes_unstarred_user_presets_with_new_ids_and_leaves_the_originals() {
+    let (mut s, ids) = with_user_presets();
+    let builtin = builtin_id(&s);
+    s.execute("preset.favorite", &json!({"id": ids[0]})).unwrap();
+    let original = s.presets.iter().find(|p| p.id == builtin).cloned().unwrap();
+    let r = s.execute("preset.copy", &json!({"ids": [ids[0], builtin], "group": "Copies"})).unwrap();
+    let new: Vec<String> = r["ids"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert_eq!((new.len(), &r["skipped"]), (2, &json!(0)), "{r}");
+    for id in &new {
+        let copy = s.presets.iter().find(|p| &p.id == id).unwrap();
+        assert_eq!(copy.group, "Copies");
+        assert!(!copy.builtin && !copy.favorite, "{copy:?}");
+        assert!(!ids.contains(id) && id != &builtin);
+    }
+    assert!(s.presets.iter().any(|p| p.group == "Copies" && p.name == original.name && p.settings == original.settings));
+    assert_eq!(group_of(&s, &ids[0]), "Mine", "the original stays");
+    assert_eq!(group_of(&s, &builtin), original.group);
+    // the same copy again adds nothing
+    let again = s.execute("preset.copy", &json!({"ids": [ids[0], builtin], "group": "Copies"})).unwrap();
+    assert_eq!((&again["ids"], &again["skipped"]), (&json!([]), &json!(2)), "{again}");
+    assert!(s.execute("preset.copy", &json!({"ids": ["no.such.preset"], "group": "Copies"})).is_err());
 }

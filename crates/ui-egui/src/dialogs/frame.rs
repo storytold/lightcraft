@@ -192,6 +192,7 @@ pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
         Dialog::ConfirmDelete { .. }
         | Dialog::DeleteKeyword { .. }
         | Dialog::DeleteEffects { .. }
+        | Dialog::DeletePresets { .. }
         | Dialog::DeletePresetGroup { .. }
         | Dialog::RemoveFolder { .. } => ConfirmStyle::Plain,
         _ if only_shows(dlg) => ConfirmStyle::Plain,

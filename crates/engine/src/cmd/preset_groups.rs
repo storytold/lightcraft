@@ -1,10 +1,24 @@
-//! Preset groups made by name: they may stay empty, and can be renamed, starred and deleted.
+//! Preset groups made by name (they may stay empty) and the commands acting on many presets at once.
 
+use std::collections::HashSet;
+
+use lightcraft_develop::Preset;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
 use crate::presets::MAX_GROUP_NAME;
 use crate::{Result, Session};
+
+/// The preset ids in `ids`, as a set: a whole collection is 10 000+ presets, and each is checked
+/// against them.
+fn ids_param(p: &Value, c: &str) -> Result<HashSet<String>> {
+    let ids: HashSet<String> =
+        p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+    if ids.is_empty() {
+        return Err(bad(c, "no ids"));
+    }
+    Ok(ids)
+}
 
 /// The group name in `key`, trimmed.
 fn group_param(p: &Value, key: &str, c: &str) -> Result<String> {
@@ -112,6 +126,57 @@ fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": held}))
 }
 
+fn delete_many(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = ids_param(p, "preset.deleteMany")?;
+    let kept_builtin = s.presets.iter().filter(|x| x.builtin && ids.contains(&x.id)).count();
+    let before = s.presets.len();
+    s.presets.retain(|x| x.builtin || !ids.contains(&x.id));
+    Ok(json!({"deleted": before.saturating_sub(s.presets.len()), "keptBuiltin": kept_builtin}))
+}
+
+fn move_many(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "preset.moveMany";
+    let group = group_param(p, "group", C)?;
+    let ids = ids_param(p, C)?;
+    let (mut moved, mut kept_builtin) = (0usize, 0usize);
+    for x in s.presets.iter_mut().filter(|x| ids.contains(&x.id)) {
+        if x.builtin {
+            kept_builtin += 1;
+        } else if x.group != group {
+            x.group.clone_from(&group);
+            moved += 1;
+        }
+    }
+    Ok(json!({"moved": moved, "keptBuiltin": kept_builtin}))
+}
+
+fn copy(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "preset.copy";
+    let group = group_param(p, "group", C)?;
+    let ids = ids_param(p, C)?;
+    let copies: Vec<Preset> = s
+        .presets
+        .iter()
+        .filter(|x| ids.contains(&x.id))
+        // a fresh id, and no star: the copy would be listed in Favorites next to the original
+        .map(|x| Preset {
+            id: String::new(),
+            name: x.name.clone(),
+            group: group.clone(),
+            settings: x.settings.clone(),
+            favorite: false,
+            builtin: false,
+        })
+        .collect();
+    if copies.is_empty() {
+        return Err(bad(C, "none of these presets exist"));
+    }
+    let asked = copies.len();
+    let added = s.add_presets(copies);
+    let skipped = asked.saturating_sub(added.len());
+    Ok(json!({"ids": added, "skipped": skipped}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -149,6 +214,33 @@ pub fn specs() -> Vec<CommandSpec> {
             "{name, expect?: how many presets it should hold} → {deleted} — the group and the user presets in it; refused for a group holding built-in presets, and when `expect` is given and wrong",
             always,
             delete_group
+        ),
+        cmd!(
+            "preset.deleteMany",
+            "Delete Presets",
+            [],
+            None,
+            "{ids: [presetId]} → {deleted, keptBuiltin} — built-in presets stay; unknown ids are ignored",
+            always,
+            delete_many
+        ),
+        cmd!(
+            "preset.moveMany",
+            "Move Presets to Group",
+            [],
+            None,
+            "{ids: [presetId], group} → {moved, keptBuiltin} — built-in presets stay where they are (copy them instead); unknown ids are ignored",
+            always,
+            move_many
+        ),
+        cmd!(
+            "preset.copy",
+            "Copy Presets to Group",
+            [],
+            None,
+            "{ids: [presetId], group} → {ids: [new presetId], skipped} — user presets with the same settings under a new id, built-in presets included, unstarred; a preset identical to one already in the group is skipped",
+            always,
+            copy
         ),
     ]
 }
