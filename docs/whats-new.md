@@ -329,6 +329,8 @@
   in any other review that adds in place.
   When keywords or a preset are set, the review notes that they apply to new files only, not to those photos.
 - Both are grayed out while another scan or import is running.
+- A Folders row that holds other disks as well (such as a Volumes folder with a disk mounted below it) has no Import to
+  This Folder…, as photos dropped on it are refused too.
 
 
 ## 2026-10-25

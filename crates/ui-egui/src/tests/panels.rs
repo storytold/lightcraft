@@ -1836,6 +1836,21 @@ fn a_folder_that_holds_other_disks_offers_no_move_selected_photos_here() {
     assert!(has(&h, "folderMovePhotosHere"), "a folder inside a disk is a place to move photos to");
 }
 
+/// Import to This Folder… copies photos into the row's folder, so a row that holds other disks, which a drop
+/// refuses, doesn't offer it either; a folder inside a disk does.
+#[test]
+fn a_folder_that_holds_other_disks_offers_no_import_to_this_folder() {
+    let mut h = folders_app_with_services(&["/Volumes/1.jpg", "/Volumes/tokyo/p/x.jpg"], [1400.0, 900.0], reveal_and_pick_services(Ok(())));
+    right_click(&mut h, "source:libfolder:/Volumes");
+    assert!(has(&h, "folderSynchronize"), "the rest of its menu is there");
+    assert!(!has(&h, "folderImportHere"), "the drop on this row is refused, so the menu can't copy photos into it");
+    h.request("ui.key", json!({"key": "escape"}), T);
+    h.step();
+    h.step();
+    right_click(&mut h, "source:libfolder:/Volumes/tokyo/p");
+    assert!(has(&h, "folderImportHere"), "a folder inside a disk is a place to import to");
+}
+
 /// Whatever sets the chosen folder (a click, an agent, a rename, undo), its row is on screen.
 #[test]
 fn the_chosen_folder_is_always_in_view() {
