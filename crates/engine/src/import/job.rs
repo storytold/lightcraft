@@ -272,7 +272,7 @@ impl ImportJob {
         // browsed files replaced since: probed again with `todo`, their records brought up to date as they join the library
         let mut changed: HashMap<String, PhotoId> = HashMap::new();
         // the sizes of the browsed files this import would promote, looked at together before they are decided one by one
-        // (a file promoted earlier, here or in a previous batch, isn't asked about again)
+        // (a file promoted in an earlier batch isn't asked about again; one path twice in a batch is, and its second answer is unused)
         let is_browsed = |f: &String| !opts.local && matches!(self.by_path.get(f.as_str()), Some((_, true, _)));
         let browsed: Vec<(&str, u64)> =
             files.iter().filter(|f| is_browsed(f)).map(|f| (f.as_str(), self.local_sizes.get(f.as_str()).copied().unwrap_or(0))).collect();
