@@ -70,6 +70,13 @@ nor a name with a maker in it ("Samyang 85mm f/1.4" for "85mm f/1.4") is taken; 
 files names its profile that way, e.g. a lensfun entry with an extra `<model>24-70mm f/2.8</model>` for the one
 24-70 f/2.8 the photographer owns. lensfun's own database has no such names, so it doesn't correct these files.
 
+A compact camera's file may name no lens either, and some record no specification (a Canon PowerShot G7 X CR2). Its
+lens can't be changed, and lensfun files the lens's profile under the camera's own mount (`canonG7X`), so such a file
+gets its camera's built-in lens. Only cameras with a fixed lens do: lensfun starts their mount names with a
+lower-case letter, and a body's with a capital (`Canon EF`), where any lens of the mount could have been on it. When
+the mount has several profiles (the lens alone, the lens with a converter), the specification's focal range picks
+one, and without a specification none is applied.
+
 | Correction | Models | Interpolated over |
 |---|---|---|
 | Distortion | `poly3`, `poly5`, `ptlens` | focal length |
