@@ -158,6 +158,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         // the frames are read in the background (a raw's decode takes a second or more)
         return crate::negative_roll::command(app, p);
     }
+    if id == "develop.auto" {
+        return Some(crate::auto_settings::command(app, p));
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);

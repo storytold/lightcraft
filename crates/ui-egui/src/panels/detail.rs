@@ -344,7 +344,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // the line of a wipe over both
     draw_wipe_line(app.ui.before_after, &p, img_rect, line);
     let map = CanvasMap::new(&frame, img_rect);
-    let over = OverPhoto { photo: &photo, d: &d, map: &map, canvas, img_rect, fullscreen, crop_tool, clipping: !show_before };
+    let over = OverPhoto { photo: &photo, d: &d, map: &map, canvas, img_rect, fullscreen, crop_tool };
     photo_overlays(app, ui, &p, &over);
     // Cursor selection must also run on gesture frames, when tool input is suppressed.
     if !matches!(right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
@@ -1064,17 +1064,12 @@ struct OverPhoto<'a> {
     img_rect: Rect,
     fullscreen: bool,
     crop_tool: bool,
-    /// the clipping overlay may show (not in the Before view)
-    clipping: bool,
 }
 
-/// The overlays over the photo: clipping, layout image, info, filter pill, faces, focus point and
+/// The overlays over the photo: layout image, info, filter pill, faces, focus point and
 /// the transform grid.
 fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter, o: &OverPhoto) {
     let (canvas, img_rect) = (o.canvas, o.img_rect);
-    if app.ui.show_clipping && o.clipping && !o.fullscreen {
-        clipping_overlay(app, p, img_rect);
-    }
     // View ▸ Loupe Overlay ▸ Layout Image, over the photo (the After view in a before/after)
     super::layout_overlay::draw(app, p, img_rect);
     register(ui, "canvas:image", img_rect);
@@ -1154,7 +1149,7 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
 }
 
 /// The diagnostic overlay the loupe shows (an Alt-drag preview, the selected mask, Point Color's
-/// visualized range, Visualize Spots).
+/// visualized range, Visualize Spots, the clipping warnings).
 pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcraft_pipeline::Overlay {
     use lightcraft_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
@@ -1198,20 +1193,11 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
     if edit && app.ui.hdr_visualize && d.hdr.enabled {
         return Overlay::HdrRange;
     }
-    Overlay::None
-}
-
-fn clipping_overlay(app: &LightcraftApp, p: &egui::Painter, r: Rect) {
-    // Highlight clipped regions using the histogram's extremes isn't spatial; show a subtle frame hint.
-    if let Some(h) = app.renderer.textures.get(&Slot::Main).and_then(|t| t.histogram.as_ref()) {
-        let (lo, hi) = h.clipping();
-        if hi > 0.003 {
-            p.rect_stroke(r, 0.0, Stroke::new(2.0, Color32::from_rgb(255, 60, 60)), StrokeKind::Outside);
-        }
-        if lo > 0.003 {
-            p.rect_stroke(r.expand(3.0), 0.0, Stroke::new(2.0, Color32::from_rgb(60, 120, 255)), StrokeKind::Outside);
-        }
+    // Clipping warnings (J): clipped highlights red, clipped shadows blue, on the photo itself
+    if app.ui.show_clipping {
+        return Overlay::ClipWarnings;
     }
+    Overlay::None
 }
 
 fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img: Rect, canvas: Rect) {

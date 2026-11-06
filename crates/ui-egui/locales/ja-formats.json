@@ -96,6 +96,8 @@
   "{name} On": "{name}を有効にする",
   "{name} — double-click to reset it": "{name}：ダブルクリックでリセット",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "{n}件の変更{:.0}をディスクに保存できません：{e}\n自動で再試行します。終了すると変更が失われます{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "スキップしたファイル（非対応の写真形式）：{n}個{:.0}",
+  "{n} folder{} could not be read": "読み取れなかったフォルダー：{n}個{:.0}",
   "{n} found · {sel} selected": "{n}枚検出・{sel}枚選択",
   "{n} photos": "{n}枚",
   "{n} photos in {} are hidden by the filters above": "{}の{n}枚は上のフィルターで非表示になっています",
@@ -157,6 +159,7 @@
   "; {outside} outside its time range": "。{outside}枚は記録時間の範囲外",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}：PR {}件、コミット {}件、+{} / −{} 行（Δ {}）、バイナリアセット +{} / −{}、{} – {}",
   "Added {what} to {name}": "{what}を{name}に追加しました",
+  "Adjustments: {n}": "調整：{n}",
   "Auto Import: added {} photo{}": "自動読み込み：{}枚の写真を追加しました{:.0}",
   "Building previews for {} photos…": "{}枚のプレビューを作成中…",
   "Couldn't open the editor: {e}": "エディターを開けませんでした：{e}",
@@ -325,5 +328,8 @@
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "「ロールを同期」は未変換のコマ（{n} 枚選択）を変換し、ネガに対して行った編集をリセットします: {list}。",
   "Roll synced: {n} frames share one film base and range": "ロールを同期しました: {n} コマでフィルムベースと範囲を共有",
   "Roll synced: {n} frames ({m} could not be read)": "ロールを同期しました: {n} コマ（{m} 枚は読み込めませんでした）",
-  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "ロールを同期しました: {n} コマ（{m} 枚は読み込めませんでした。同期中に編集された {c} 枚はそのままです）"
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "ロールを同期しました: {n} コマ（{m} 枚は読み込めませんでした。同期中に編集された {c} 枚はそのままです）",
+  "Bring photos in with File › Import Photos… ({keys}).": "ファイル › 写真を読み込む… ({keys}) で写真を読み込みます。",
+  "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
+  "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。"
 }

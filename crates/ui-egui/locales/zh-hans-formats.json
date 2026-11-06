@@ -96,6 +96,8 @@
   "{name} On": "已开启 {name}",
   "{name} — double-click to reset it": "{name} — 双击可重置",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "{n} 项更改已保存在内存中，但尚未写入磁盘：{e}\nLightCraft 会自动重试；现在退出将丢失这些更改。{0:.0}{1:.0}",
+  "{n} file{} skipped (not a supported photo type)": "已跳过的文件（不是支持的照片类型）：{n} 个{:.0}",
+  "{n} folder{} could not be read": "无法读取的文件夹：{n} 个{:.0}",
   "{n} found · {sel} selected": "找到 {n} 张 · 已选 {sel} 张",
   "{n} photos": "{n} 张照片",
   "{n} photos in {} are hidden by the filters above": "{0} 中的 {n} 张照片被上方的过滤器隐藏",
@@ -157,6 +159,7 @@
   "; {outside} outside its time range": "；{outside} 张不在其时间范围内",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}：{} 个 PR，{} 次提交，+{} / −{} 行（Δ {}），+{} / −{} 个二进制资源，{} – {}",
   "Added {what} to {name}": "已将{what}添加到 {name}",
+  "Adjustments: {n}": "调整：{n}",
   "Auto Import: added {} photo{}": "自动导入：已添加 {0} 张照片{1:.0}",
   "Building previews for {} photos…": "正在为 {0} 张照片生成预览…",
   "Couldn't open the editor: {e}": "无法打开编辑器：{e}",
@@ -325,5 +328,8 @@
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "“同步胶卷”会转换尚未转换的帧（已选择 {n} 帧），并重置它们在负片上所做的编辑：{list}。",
   "Roll synced: {n} frames share one film base and range": "胶卷已同步：{n} 帧共用同一片基和范围",
   "Roll synced: {n} frames ({m} could not be read)": "胶卷已同步：{n} 帧（{m} 帧无法读取）",
-  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "胶卷已同步：{n} 帧（{m} 帧无法读取；同步期间被编辑的 {c} 帧保持原样）"
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "胶卷已同步：{n} 帧（{m} 帧无法读取；同步期间被编辑的 {c} 帧保持原样）",
+  "Bring photos in with File › Import Photos… ({keys}).": "通过 文件 › 导入照片… ({keys}) 导入照片。",
+  "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
+  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。"
 }

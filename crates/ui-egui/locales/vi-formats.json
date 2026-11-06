@@ -322,5 +322,10 @@
   "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "Đồng bộ cuộn phim sẽ chuyển đổi các khung hình chưa được chuyển đổi ({n} đã chọn) và đặt lại các chỉnh sửa đã thực hiện trên âm bản của chúng: {list}.",
   "Roll synced: {n} frames share one film base and range": "Đã đồng bộ cuộn phim: {n} khung hình dùng chung một nền phim và dải",
   "Roll synced: {n} frames ({m} could not be read)": "Đã đồng bộ cuộn phim: {n} khung hình ({m} không đọc được)",
-  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Đã đồng bộ cuộn phim: {n} khung hình ({m} không đọc được; {c} được chỉnh sửa trong khi đồng bộ được giữ nguyên)"
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Đã đồng bộ cuộn phim: {n} khung hình ({m} không đọc được; {c} được chỉnh sửa trong khi đồng bộ được giữ nguyên)",
+  "Bring photos in with File › Import Photos… ({keys}).": "Đưa ảnh vào bằng Tệp › Nhập ảnh… ({keys}).",
+  "View › Detail View ({keys}).": "Xem › Chế độ xem chi tiết ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Tệp › Xuất… · Tệp › In… ({keys}).",
+  "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}"
 }
