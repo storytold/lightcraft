@@ -52,6 +52,51 @@ pub fn host_dir() -> Option<PathBuf> {
     HOST_DIR.read().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
+/// Tests that change the lens database folder in use ([`use_dir`]) take turns through
+/// [`DirGuard`]: the folder is one for the whole test process and tests run at the same
+/// time, so one test's switch would otherwise land under another's assertions (round 2
+/// on #3867).
+#[cfg(test)]
+static CHANGING_DIR: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Held while a test changes the lens database folder in use: the other tests that change
+/// it wait, and the folder is put back as it was found when the guard drops — also when
+/// the test fails, so a panicked test cannot leave the whole process reading its folder.
+#[cfg(test)]
+pub(crate) struct DirGuard {
+    // fields drop in order: the folder is put back and the scratch folder removed
+    // before the next test may take its turn
+    _restore: RestoreDir,
+    _turn: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl DirGuard {
+    /// Wait for the other tests that change the folder, then remember the folder as it
+    /// is now. `root` is the test's scratch folder, removed when the guard drops.
+    pub(crate) fn hold(root: PathBuf) -> DirGuard {
+        // poisoned: a test failed holding it, and its guard put the folder back on unwind
+        let turn = CHANGING_DIR.lock().unwrap_or_else(PoisonError::into_inner);
+        DirGuard { _restore: RestoreDir { before: host_dir(), root }, _turn: turn }
+    }
+}
+
+/// Puts the lens database folder back to what it was when made, and removes the test's
+/// scratch folder.
+#[cfg(test)]
+struct RestoreDir {
+    before: Option<PathBuf>,
+    root: PathBuf,
+}
+
+#[cfg(test)]
+impl Drop for RestoreDir {
+    fn drop(&mut self) {
+        use_dir(self.before.clone());
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// Read the database again (after a download or an update): the next lookup sees the new data.
 pub fn reload() {
     // under the cache lock, so a load of the old files that finishes meanwhile can't be published ([`database`])
@@ -282,6 +327,9 @@ mod tests {
             return;
         }
         let root = std::env::temp_dir().join(format!("lc-stamp-cache-{}", std::process::id()));
+        // this test switches the process-wide lens folder: take the turn, and let the
+        // guard put the folder back and remove the scratch folder, also on panic
+        let _dir = DirGuard::hold(root.clone());
         let _ = std::fs::remove_dir_all(&root);
         let (d1, d2) = (root.join("one"), root.join("two"));
         for (d, xml) in [(&d1, DB.to_string()), (&d2, DB.replace("k1=\"-0.03\"", "k1=\"-0.04\""))] {
@@ -289,7 +337,6 @@ mod tests {
             std::fs::write(d.join("lenses.xml"), xml).unwrap();
             std::fs::write(d.join(crate::lensfun_download::MARKER), "whole").unwrap();
         }
-        let before = host_dir();
         use_dir(Some(d1.clone()));
         let db1 = database().unwrap();
         let s1 = stamp(&db1);
@@ -299,8 +346,7 @@ mod tests {
         assert_ne!(s1, s2, "different databases, different stamps");
         assert_eq!(stamp(&db1), s1, "retained and no longer in use: its own fingerprint");
         assert_eq!(stamp(&db2), s2, "the one in use: its own fingerprint");
-        use_dir(before);
-        let _ = std::fs::remove_dir_all(&root);
+        // the guard puts the folder back and removes `root` when it drops
     }
 
     #[test]

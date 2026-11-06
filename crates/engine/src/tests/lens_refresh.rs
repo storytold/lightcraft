@@ -459,10 +459,13 @@ fn the_downloaded_database_is_selected_and_read_only_when_whole() {
     }
     let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let root = std::env::temp_dir().join(format!("lc-lens-select-{}-{unique}", std::process::id()));
+    // selecting the download folder switches the process-wide lens folder: take the
+    // turn, and let the guard put the folder back and remove the scratch folder,
+    // also on panic
+    let _dir = lens_profiles::DirGuard::hold(root.clone());
     let dir = root.join("lensfun");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("lenses.xml"), DB).unwrap();
-    let before = lens_profiles::host_dir();
     let mut s = Session::new();
     // nothing listens on port 1: the download fails at once, without the network
     crate::cmd::lens_refresh::start_download(&mut s, &dir, vec!["http://127.0.0.1:1/db".into()], lensfun_download::FILES).unwrap();
@@ -475,6 +478,5 @@ fn the_downloaded_database_is_selected_and_read_only_when_whole() {
     while s.lensfun.running() && t0.elapsed() < std::time::Duration::from_secs(60) {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    lens_profiles::use_dir(before);
-    let _ = std::fs::remove_dir_all(&root);
+    // the guard puts the folder back and removes `root` when it drops
 }
