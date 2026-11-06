@@ -173,7 +173,12 @@ pub fn base_options() -> WgpuConfiguration {
 }
 
 /// The first renderer of `order` that probes cleanly (glow is taken without a probe).
-fn pick_probed(files: &Files, order: &[WindowRenderer], problems: &mut Vec<String>, compose_window: bool) -> Option<(WindowRenderer, Option<WgpuSetupExisting>)> {
+fn pick_probed(
+    files: &Files,
+    order: &[WindowRenderer],
+    problems: &mut Vec<String>,
+    compose_window: bool,
+) -> Option<(WindowRenderer, Option<WgpuSetupExisting>)> {
     for &r in order {
         match r {
             WindowRenderer::Glow => return Some((r, None)),
@@ -416,7 +421,8 @@ mod tests {
     #[test]
     fn the_window_marker_is_written_while_the_renderer_is_probed() {
         // glow is taken without a probe, so a forced glow arms nothing here
-        let forced = backend::forced_window_renderer(std::env::var("LIGHTCRAFT_GPU_BACKEND").ok().as_deref(), std::env::var("WGPU_BACKEND").ok().as_deref());
+        let forced =
+            backend::forced_window_renderer(std::env::var("LIGHTCRAFT_GPU_BACKEND").ok().as_deref(), std::env::var("WGPU_BACKEND").ok().as_deref());
         if forced == Some(WindowRenderer::Glow) {
             return;
         }
