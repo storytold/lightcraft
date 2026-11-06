@@ -205,7 +205,12 @@ fn ai_shapes_without_a_segmentation_select_nothing() {
     for shape in [
         MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
         MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0 },
-        MaskShape::Prompt { text: "sky".into(), seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None }), detail: vec![], edge: 0.0 },
+        MaskShape::Prompt {
+            text: "sky".into(),
+            seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None, grid: None }),
+            detail: vec![],
+            edge: 0.0,
+        },
     ] {
         assert!(shape_alpha(&shape, &f, 30, 30, &img, &l, 0.0, None).data.iter().all(|v| *v == 0.0));
     }
@@ -623,4 +628,15 @@ fn people_and_subject_use_person_mattes() {
     assert!(hair.get(190, 50) > 0.99 && hair.get(10, 50) < 0.01);
     let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
     assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
+}
+
+#[test]
+fn intersect_first_component_selects_its_shape() {
+    let f = frame(100, 100);
+    let img = Rgb32f::new(100, 100);
+    let l = Plane::new(100, 100);
+    let shape = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.2, angle: 0.0, feather: 20.0, invert: false };
+    let m = Mask { components: vec![MaskComponent { name: None, op: MaskOp::Intersect, invert: false, shape }], ..Default::default() };
+    let a = evaluate_one(&m, &f, 100, 100, &img, &l, 0.0, None);
+    assert!(a.get(50, 50) > 0.99 && a.get(5, 5) < 0.01, "intersect first: {} {}", a.get(50, 50), a.get(5, 5));
 }

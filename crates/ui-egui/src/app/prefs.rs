@@ -48,6 +48,12 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
+        let limit = self.ui.settings.hot_pixel_limit;
+        if self.hot_pixels_applied != Some(limit) {
+            self.hot_pixels_applied = Some(limit);
+            // (a value the engine refuses, from a hand-edited file, leaves its limit as it was)
+            let _ = self.session.execute("app.hotPixelLimit", &serde_json::json!({"percent": limit}));
+        }
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();
@@ -84,9 +90,14 @@ impl LightcraftApp {
     /// While no display profile is chosen, show previews through the profile of the screen the
     /// window is on (`services.screen_profile`), read about once a second so moving the window to
     /// another screen is followed. Without the service (or a profile) the display is sRGB.
-    fn follow_screen_profile(&mut self, _ctx: &egui::Context) {
+    fn follow_screen_profile(&mut self, ctx: &egui::Context) {
+        if self.services.screen_profile.is_none() {
+            return;
+        }
+        // an idle window draws no frames: wake up to read again, so a profile changed in Windows is followed
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
         let now = self.tick_now();
-        if self.services.screen_profile.is_none() || self.screen_profile_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
+        if self.screen_profile_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
             return;
         }
         self.screen_profile_read = Some(now);
