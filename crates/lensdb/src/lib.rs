@@ -512,7 +512,7 @@ fn by_focal<T: Copy>(points: &[(f64, T)], focal: f64, eval: impl Fn(&T) -> f64) 
 /// The warp `planes` (R, G, B, DNG `WarpRectilinear` with radius 1 at the half diagonal of the `w × h` image) zoomed
 /// in so the corrected picture fills the frame, as the camera's own corrections do: without it, a distortion that
 /// stretches the frame (pincushion, or a wave that turns outward toward the corners) reads past the image's edges
-/// and leaves an empty border (issue #3547). The zoom is the one [`lightcraft_geom::fill_zoom`] finds for the green
+/// and leaves an empty border (issue #3547). The zoom is the one [`lightcraft_geom::fill_zoom_in`] finds for the green
 /// plane, the one without TCA; every plane becomes `f(r / z) / z`, so red and blue keep their scale to green, and
 /// the vignetting, which is evaluated at the source position, is unchanged. Only a zoom in is applied: a
 /// distortion whose border already reads inside the image (barrel) is left as converted, and so is one no zoom up to
@@ -524,7 +524,7 @@ fn fill_frame(planes: [[f64; 6]; 3], w: f64, h: f64) -> [[f64; 6]; 3] {
         r * (k0 + r2 * (k1 + r2 * (k2 + r2 * k3)))
     };
     let d = w.hypot(h);
-    match lightcraft_geom::fill_zoom(&source, w / d, h / d) {
+    match lightcraft_geom::fill_zoom_in(&source, w / d, h / d) {
         Some(z) if z > 1.0 => planes.map(|p| {
             let mut s = 1.0 / z;
             let mut out = p;

@@ -85,8 +85,8 @@ half diagonal, or that would fold the image, is not applied.
 A distortion that stretches the frame past its edges (pincushion, or a wave that turns outward toward the corners)
 is zoomed in until the corrected photo fills the frame again, as the cameras' own corrections are, instead of
 leaving an empty border for the crop to cut off (#3547). The zoom is the frame-filling zoom of the Sony in-file
-correction (`lightcraft_geom::fill_zoom`), found for the green plane: red and blue keep their TCA scale to it, and
-vignetting is unchanged. A distortion whose frame already reads inside the photo (barrel) is not zoomed, and the
+correction, zoom in only (`lightcraft_geom::fill_zoom_in`), found for the green plane: red and blue keep their TCA
+scale to it, and vignetting is unchanged. A distortion whose frame already reads inside the photo (barrel) is not zoomed, and the
 Distortion amount scales the zoom with the rest of the warp. A photo keeps the profile stored when it was looked up:
 one looked up before this change keeps its border until Reload from Disk (or `library.refreshLensProfiles` with
 `all: true`) looks it up again.
