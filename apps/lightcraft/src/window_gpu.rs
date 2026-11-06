@@ -219,7 +219,8 @@ fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, 
     let base = if adapter.get_info().backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { adapter.limits() };
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("egui wgpu device"),
-        required_limits: base,
+        // (GL takes the conservative defaults for everything else, whose 2048 is too small for a window)
+        required_limits: wgpu::Limits { max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d, ..base },
         ..Default::default()
     }))
     .map_err(|e| format!("{}: no device: {e}", adapter.get_info().name))?;
