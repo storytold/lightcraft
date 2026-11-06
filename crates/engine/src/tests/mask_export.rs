@@ -11,7 +11,7 @@ fn path(tag: &str) -> std::path::PathBuf {
 #[test]
 fn a_matte_is_a_grey_png_of_the_mask() {
     let mut s = Session::with_demo();
-    s.execute("mask.add", &json!({"kind": "radial", "center": [0.25, 0.5], "rx": 0.2, "ry": 0.2, "feather": 0})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial", "center": [0.25, 0.5], "rx": 0.1, "ry": 0.1, "feather": 0})).unwrap();
     let file = path("radial");
     let v = s.execute("mask.export", &json!({"path": file, "longEdge": 256})).unwrap();
 
