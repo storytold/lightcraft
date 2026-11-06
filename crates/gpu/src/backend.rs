@@ -4,8 +4,8 @@
 //! wgpu loads the system driver of *every* backend in the instance's set while it enumerates
 //! adapters, even when it then picks another one: with Vulkan in the set, a broken Vulkan driver
 //! can crash the process (an access violation inside the driver DLL, which nothing can catch)
-//! although DX12 would have been used. So Windows defaults to DX12 alone. macOS uses Metal, Linux
-//! Vulkan (plus GL for the window when the build has it).
+//! although DX12 would have been used. So Windows defaults to DX12 alone. macOS uses Metal,
+//! Linux GL for the window (eframe's default); compute may still use Vulkan.
 //!
 //! Overrides, read once per process:
 //! - `LIGHTCRAFT_GPU_BACKEND` = `dx12` | `vulkan` | `metal` | `gl` (comma lists allowed), `auto`
@@ -83,7 +83,7 @@ pub fn default_window_backends(os: &str) -> Backends {
         "windows" => Backends::DX12,
         "macos" | "ios" => Backends::METAL,
         // eframe's default (GL only when the build has it)
-        _ => Backends::PRIMARY | Backends::GL,
+        _ => Backends::GL,
     }
 }
 
@@ -476,10 +476,10 @@ pub fn forced_window_renderer(app: Option<&str>, wgpu: Option<&str>) -> Option<W
 
 /// The order in which the window's renderers are tried on `os`: the forced one (environment)
 /// first, then the one remembered from the last good start, then the platform chain — on Windows
-/// DX12, GL, then glow. On Windows Vulkan is used only when the environment asks for it: with
-/// Vulkan loaded, a broken Vulkan driver can crash the process uncatchably (issue #136), so it is
-/// never in the automatic chain, and the renderer remembered from the last run cannot put it
-/// first either.
+/// DX12, GL, then glow; on Linux GL, then glow. On Windows and Linux Vulkan is used only when the
+/// environment asks for it: with Vulkan loaded, a broken Vulkan driver can crash the process
+/// uncatchably (issue #136), so it is never in the automatic chain, and the renderer remembered
+/// from the last run cannot put it first either.
 /// `failed` (the renderer the last start died in) goes last, as a last resort only. Backends not
 /// in `compiled`, and glow without `glow`, are left out; the list is never empty.
 pub fn window_renderer_order(
@@ -494,7 +494,7 @@ pub fn window_renderer_order(
         // no Vulkan on Windows: its driver can crash the process uncatchably (issue #136)
         "windows" => vec![Backends::DX12, Backends::GL],
         "macos" | "ios" => vec![Backends::METAL],
-        _ => vec![Backends::VULKAN, Backends::GL],
+        _ => vec![Backends::GL],
     };
     let chain = platform.into_iter().map(WindowRenderer::Wgpu).chain([WindowRenderer::Glow]);
     let usable = |r: &WindowRenderer| match r {
@@ -574,7 +574,8 @@ mod tests {
         assert!(!default_window_backends("windows").contains(Backends::VULKAN));
         assert_eq!(default_compute_backends("macos"), Backends::METAL);
         assert!(default_compute_backends("linux").contains(Backends::VULKAN));
-        assert!(default_window_backends("linux").contains(Backends::VULKAN | Backends::GL));
+        assert!(!default_window_backends("linux").contains(Backends::VULKAN));
+        assert!(default_window_backends("linux").contains(Backends::GL));
     }
 
     /// Issue #471: DX12 shaders compile with FXC, never a `dxcompiler.dll` found on the search path,
@@ -778,6 +779,21 @@ mod tests {
         assert_eq!(remembered.first(), Some(&dx));
         // asked for explicitly (the environment), Vulkan is used
         assert_eq!(window_renderer_order(Some(vk), None, None, "windows", all, true).first(), Some(&vk));
+    }
+
+    /// On Linux the window defaults to GL, like eframe: Vulkan must not be loaded by
+    /// default, and the automatic renderer chain must not try it first.
+    #[test]
+    fn linux_window_backends_exclude_vulkan_by_default() {
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        let gl = WindowRenderer::Wgpu(Backends::GL);
+        let default = default_window_backends("linux");
+        assert!(!default.contains(Backends::VULKAN), "the default Linux window backends must not contain Vulkan: {default:?}");
+        assert!(default.contains(Backends::GL), "the default Linux window backends must contain GL: {default:?}");
+        let automatic = window_renderer_order(None, None, None, "linux", all, true);
+        assert!(!automatic.contains(&vk), "the automatic Linux chain must not contain Vulkan: {automatic:?}");
+        assert_eq!(automatic.first(), Some(&gl));
     }
 
     #[test]
