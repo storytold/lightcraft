@@ -299,6 +299,11 @@ fn an_arranged_or_new_sidebar_is_not_moved() {
     let saved = json!({"sidebar": old_usual_sidebar(), "sidebarOrderVersion": crate::sidebar::ORDER_VERSION});
     let ui = serde_json::from_value::<crate::UiState>(saved).unwrap().sanitized();
     assert_eq!(order_of(&ui), ["albums", "local", "byDate", "folders", "keywords"]);
+    // a newer build's generation is kept, not lowered, and moves nothing either
+    let saved = json!({"sidebar": old_usual_sidebar(), "sidebarOrderVersion": crate::sidebar::ORDER_VERSION + 6});
+    let ui = serde_json::from_value::<crate::UiState>(saved).unwrap().sanitized();
+    assert_eq!(order_of(&ui), ["albums", "local", "byDate", "folders", "keywords"]);
+    assert_eq!(ui.sidebar_order_version, crate::sidebar::ORDER_VERSION + 6);
 }
 
 /// Given a settings file whose order version or sidebar list is corrupt or partial, when it is

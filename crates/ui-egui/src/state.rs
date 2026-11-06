@@ -122,16 +122,16 @@ pub struct UiState {
     pub face_boxes: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
+    /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
+    /// so they stay folded ([`UiState::sanitized`] moves them over), never written.
+    #[serde(skip_serializing)]
+    pub collapsed_sidebar: Vec<String>,
     /// The order generation `sidebar` was saved in ([`crate::sidebar::ORDER_VERSION`]). Settings
     /// without it hold generation 0; [`UiState::sanitized`] moves Folders above Local once in a
     /// layout still in generation 0's usual order, then records the current one, so a person who
     /// later drags Folders back keeps that order.
     #[serde(default, deserialize_with = "lenient_generation")]
     pub sidebar_order_version: u32,
-    /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
-    /// so they stay folded ([`UiState::sanitized`] moves them over), never written.
-    #[serde(skip_serializing)]
-    pub collapsed_sidebar: Vec<String>,
     /// A face's name being typed in the loupe.
     #[serde(skip)]
     pub name_edit: Option<NameEdit>,
@@ -442,8 +442,8 @@ impl Default for UiState {
             show_counts: true,
             face_boxes: true,
             sidebar: Default::default(),
-            sidebar_order_version: crate::sidebar::ORDER_VERSION,
             collapsed_sidebar: Vec::new(),
+            sidebar_order_version: crate::sidebar::ORDER_VERSION,
             name_edit: None,
             person_page: None,
             person_from: None,
