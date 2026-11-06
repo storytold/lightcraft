@@ -232,6 +232,16 @@ fn delete_group_refuses_when_the_group_changed_since_asking() {
     assert_eq!(s.execute("preset.deleteGroup", &json!({"name": "Mine", "expect": 3})).unwrap()["deleted"], 3);
 }
 
+/// A count that can't be read refuses the deletion rather than skipping the check.
+#[test]
+fn delete_group_refuses_an_expect_that_is_not_a_whole_number() {
+    let (mut s, ids) = with_user_presets();
+    for expect in [json!(-3), json!(3.5), json!(3.0), json!("3"), json!(null), json!(true)] {
+        assert!(s.execute("preset.deleteGroup", &json!({"name": "Mine", "expect": expect})).is_err(), "{expect}");
+        assert!(ids.iter().all(|id| group_of(&s, id) == "Mine"), "{expect}");
+    }
+}
+
 /// Another library has its own groups and stars, and a star for a group it doesn't have is dropped.
 #[test]
 fn group_names_belong_to_their_library() {

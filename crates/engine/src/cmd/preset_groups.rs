@@ -97,10 +97,12 @@ fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("unknown group “{name}”")));
     }
     // what the person was asked about: presets moved in since then aren't deleted unseen
-    if let Some(expected) = p.get("expect").and_then(Value::as_u64)
-        && expected != held as u64
-    {
-        return Err(bad(C, format!("the group now holds {held} presets, not {expected}")));
+    if let Some(expect) = p.get("expect") {
+        // a count that can't be read must not turn the check off
+        let expected = expect.as_u64().ok_or_else(|| bad(C, "expect must be a whole number"))?;
+        if expected != held as u64 {
+            return Err(bad(C, format!("the group now holds {held} presets, not {expected}")));
+        }
     }
     if held > 0 {
         s.presets.retain(|x| x.group != name);
