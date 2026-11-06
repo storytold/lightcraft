@@ -279,7 +279,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.id(), display, uv, Color32::WHITE);
         if let Some(i) = window {
-            draw_window(&p, app, i, id, photo.develop.hash64(), display);
+            draw_window(&p, app, i, id, photo.develop.hash64(), img);
         }
     } else if let Some(tex) = app.renderer.textures.get(&Slot::Thumb(id)) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
@@ -369,7 +369,10 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         register(ui, format!("cull:{}:label", id.0), lr);
     }
     register(ui, format!("cull:{}", id.0), display);
-    (display, resp)
+    // Return the frame rect the window was requested in (`img`), not the texture's rect
+    // (`display`): they differ when the texture's aspect differs from the frame's, and
+    // the pane's frame is the window's reference.
+    (img, resp)
 }
 
 /// Panes that get window renders: Compare's Select and Candidate, Reference's two sides.

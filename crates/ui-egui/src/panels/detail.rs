@@ -182,7 +182,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         img_rect = target_rect;
     }
     let before_img = in_pane(areas[0], img_rect);
-    let before_target = in_pane(areas[0], target_rect);
     app.image_rect = Some(img_rect);
     // request renders: the loupe at display resolution (drafts during drags)
     let interacting = app.session.interaction.is_some();
