@@ -1107,7 +1107,7 @@ fn assert_incomplete_catalog_refused(original: &[u8], label: &str) {
             "unsupported entry" => bytes[infe + 4] = 4,
             "unknown entry" => bytes[infe..infe + 4].copy_from_slice(b"free"),
             "truncated catalog" => bytes[iinf - 4..iinf].copy_from_slice(&u32::MAX.to_be_bytes()),
-            _ => unreachable!(),
+            other => panic!("unknown damage {other}"),
         }
         assert_eq!(&bytes[idat..], &original[idat..], "GPS bytes retained");
         std::fs::write(&path, &bytes).unwrap();
