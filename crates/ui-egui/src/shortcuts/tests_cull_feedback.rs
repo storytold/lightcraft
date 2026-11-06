@@ -276,3 +276,67 @@ fn the_count_is_of_distinct_photos_when_a_call_names_one_twice() {
     app.run("photo.label", json!({"label": "red", "ids": [3, 3, 3]})).unwrap();
     assert_eq!(toast(&mut app).as_deref(), Some("Red Label"));
 }
+
+#[test]
+fn a_refused_command_on_photos_that_exist_confirms_nothing_and_changes_nothing() {
+    // The empty-library test above never reaches the confirmation (there is no photo to name); these calls name
+    // real photos, so only a refusal stops the toast. `label` missing or not a color must not read as a clear.
+    let mut app = app_with([2, 0, 0, 0]);
+    for (id, params) in [
+        ("photo.rate", json!({"rating": 9})),
+        ("photo.rate", json!({"rating": 3, "ids": [1, 999]})),
+        ("photo.flag", json!({"flag": "bogus"})),
+        ("photo.flag", json!({"flag": "pick", "ids": [1, 999]})),
+        ("photo.label", json!({})),
+        ("photo.label", json!({"label": "chartreuse"})),
+        ("photo.label", json!({"label": 7})),
+        ("photo.label", json!({"label": "red", "ids": [1, 999]})),
+    ] {
+        app.ui.status.clear();
+        let refusal = app.run_typed(id, params.clone());
+        assert!(refusal.is_err(), "{id} {params} was meant to be refused");
+        assert!(toast(&mut app).is_none(), "{id} {params} confirmed a change it refused");
+        assert!(!app.ui.status.is_empty(), "{id} {params} lost the reason it was refused");
+    }
+    // a refusal changes none of the photos it named (the call is all or nothing)
+    assert_eq!((rating_of(&app, 1), flag_of(&app, 1)), (2, Flag::None));
+    assert_eq!(app.session.catalog.photo(PhotoId(1)).unwrap().label, None);
+}
+
+#[test]
+fn a_call_that_names_no_photo_confirms_nothing() {
+    // `ids: []` changes nothing; a label is the one confirmation that doesn't read the photos back, so it must
+    // not say "Red Label" for it
+    let mut app = fresh();
+    for (id, params) in [
+        ("photo.label", json!({"label": "red", "ids": []})),
+        ("photo.clearLabel", json!({"ids": []})),
+        ("photo.rate", json!({"rating": 3, "ids": []})),
+        ("photo.flag", json!({"flag": "pick", "ids": []})),
+    ] {
+        app.run(id, params.clone()).unwrap();
+        assert!(toast(&mut app).is_none(), "{id} {params}");
+    }
+}
+
+#[test]
+fn a_label_toast_says_set_or_cleared_and_carries_the_color() {
+    let mut app = fresh();
+    let tint = |app: &mut LightcraftApp| app.ui.toast.take().map(|(text, _, color)| (text, color));
+    app.run("photo.label", json!({"label": "red"})).unwrap();
+    assert_eq!(tint(&mut app), Some(("Red Label".into(), Some(lightcraft_catalog::ColorLabel::Red))));
+    // `none` and an explicit null clear, as `photo.clearLabel` does
+    for (id, params) in [
+        ("photo.label", json!({"label": "none"})),
+        ("photo.label", json!({"label": null})),
+        ("photo.clearLabel", json!({})),
+        // Clear Color Label takes no color: a stray `label` doesn't make it a set
+        ("photo.clearLabel", json!({"label": "green"})),
+    ] {
+        app.run("photo.label", json!({"label": "blue"})).unwrap();
+        app.ui.toast = None;
+        app.run(id, params.clone()).unwrap();
+        assert_eq!(tint(&mut app), Some(("Color label cleared".into(), None)), "{id} {params}");
+        assert_eq!(app.session.catalog.photo(PhotoId(1)).unwrap().label, None, "{id} {params}");
+    }
+}
