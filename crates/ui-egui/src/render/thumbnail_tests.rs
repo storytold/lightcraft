@@ -146,7 +146,7 @@ fn each_render_request_and_how_it_ended_is_a_debug_line_with_its_file() {
     );
 }
 
-struct Blocked;
+pub(super) struct Blocked;
 impl RenderOffload for Blocked {
     fn try_start(&mut self, _: Slot, job: RenderJob) -> Option<RenderJob> {
         Some(job)
