@@ -741,7 +741,8 @@ fn package_cells(
     for c in &cells {
         let photo = if st.layout.style == Style::CustomPackage { c.photo.map(PhotoId).or(first) } else { first };
         let rect = sheet.rect(&c.rect);
-        shown.extend(paint_cell(app, painter, t, st, rect, photo, sheet, &c.rect));
+        paint_cell(app, painter, t, st, rect, photo, sheet, &c.rect);
+        shown.push(rect);
         let resp = ui.interact(rect, egui::Id::unique(("print-cell", c.id)), Sense::click_and_drag());
         register(ui, format!("print:cell:{}", c.id), rect);
         if resp.clicked() || resp.drag_started() {
@@ -944,7 +945,8 @@ fn paint_cell(
 
 /// The Page Options as the print draws them ([`compose`]): crop marks at the corners of each
 /// photo, the page number at the bottom right and the print settings at the bottom left.
-/// Packages draw only the crop marks, as their Cut Guides ([`compose::has_page_options`]).
+/// Packages draw only the crop marks, as their Cut Guides at each cell's corners
+/// ([`compose::has_page_options`]).
 fn page_options(painter: &egui::Painter, st: &PrintSettings, sheet: &Sheet, photos: &[Rect], number: usize) {
     let p = &st.page;
     let ink = compose::mark_ink(p.background);
