@@ -53,10 +53,15 @@ pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
 pub struct Services {
     /// Local's built-in places as (label, path). None uses the host's home folder.
     pub local_places: Option<Vec<(String, String)>>,
-    /// Native file dialogs for commands, shown off the UI thread and answered later
-    /// (`pick`; #191). With it, the synchronous pickers below serve only the buttons inside
-    /// dialogs; without it (the web, tests) they answer the commands too.
+    /// Native file dialogs for commands, shown without blocking the UI and answered later
+    /// (`pick`; #191): on a thread of their own, on macOS as a sheet of the window. With it, the
+    /// synchronous pickers below serve only the buttons inside dialogs; without it (the web,
+    /// tests) they answer the commands too.
     pub picker: Option<pick::Picker>,
+    /// Set where [`Services::picker`]'s dialogs are sheets of the window (macOS): a request made
+    /// while a dialog is up waits until it has closed, instead of a second dialog being shown
+    /// over the first (`pick`; #3735).
+    pub picker_one_at_a_time: bool,
     /// Show an open dialog for photos; returns paths.
     pub pick_files: Option<PickFiles>,
     /// Local ONNX model; a manifest must accompany it.

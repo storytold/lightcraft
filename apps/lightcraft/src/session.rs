@@ -12,8 +12,13 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
     let _ = DIALOG_PARENT.set(rfd::FileDialog::new().set_parent(cc));
     Services {
         local_places: None,
-        // Commands' file dialogs run on their own thread (#191): a dialog on the UI thread
+        // On macOS the commands' file dialogs are sheets of the window, made on this thread:
+        // rfd's dialog from another thread hangs the window on macOS 26.6 (#3735; `file_sheet`).
+        #[cfg(target_os = "macos")]
+        picker: Some(file_sheet::Sheets::new(rfd::AsyncFileDialog::new().set_parent(cc)).picker(ctx)),
+        // Elsewhere they run on their own thread (#191): a dialog on the UI thread
         // stopped the window answering the compositor, which then reported the app as hung.
+        #[cfg(not(target_os = "macos"))]
         picker: Some(Box::new(move |req: lightcraft_ui_egui::pick::PickRequest| {
             use lightcraft_ui_egui::pick::PickKind;
             let (tx, rx) = std::sync::mpsc::channel();
@@ -45,6 +50,7 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
                 .map_err(|e| format!("could not start the file dialog: {e}"))?;
             Ok(rx)
         })),
+        picker_one_at_a_time: cfg!(target_os = "macos"),
         log_file: log_file.map(|p| p.display().to_string()),
         pick_lightroom_catalog: Some(Box::new(|| {
             file_dialog()

@@ -62,6 +62,13 @@ impl FileDialogExt for FileDialog {
     }
 }
 
+/// The sheets of macOS (`file_sheet`) are rfd's async dialogs.
+impl FileDialogExt for rfd::AsyncFileDialog {
+    fn add_filter_nocase(self, name: impl Into<String>, exts: &[&str]) -> Self {
+        self.add_filter(name, &dialog_extensions(exts))
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
