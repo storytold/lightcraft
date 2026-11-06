@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (Canon CRW decoded clean-room, 6 bodies verified, 557 models verified; gap 9: CI runs the tests on Linux x64 since #2667; macOS, Windows and the GPU equivalence tests still don't; the lens profile database priority links its tracking issue #329; Print: Japanese photo and postcard paper sizes — L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺; Minolta MRW decoded, 6 bodies verified; RAW: 85% of Adobe's models decode, 39% verified after the camera-coverage sweep #1327; German catalog 91% → 97%: interface strings and What's New lines translated) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 · **Changes:** [revision history](#revision-history)
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -14,25 +14,25 @@ from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are 
 |---|---:|---|
 | **Feature breadth** (checklist) | **81.6%** of 532 rows (P0 98.0%, P1 95.2%, P2 50.0%) | measured: [parity-checklist.md](docs/parity-checklist.md) recount |
 | **Feature breadth** (weighted by use) | **~77%** | estimated |
-| **Ready for real work** (full target) | **~61%** (56–66%) | estimated: weighted sum over the dimensions |
+| **Ready for real work** (full target) | **~62%** (57–67%) | estimated: weighted sum over the dimensions |
 | **Mainstream practitioner** | **~51%** (46–56%) | estimated |
 | **Essentials user** | **~65%** (60–70%) | estimated |
 | Remaining to **beta** | **~340–600 h** (Opus 5.5 agent hours, ~60% parallel) | estimated |
-| Remaining to **full parity** | **~1,000–1,800 h** (~70% parallel) | estimated |
+| Remaining to **full parity** | **~980–1,750 h** (~70% parallel) | estimated |
 
 Each audience with its own hours (Opus 5.5 agent wall-clock hours to ~95%):
 
 | Audience | Ready | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---:|---:|---|
-| Full target (ready for real work) | **~61%** | **1,000–1,800 h** (~70% parallelizes) | raw colour, lens and camera data; AI models; Classic output modules; localization; plug-in ecosystem |
-| Mainstream practitioner | **~51%** | **450–840 h** (~60% parallelizes) | camera colour and render fidelity; CR3 / ORF / HE NEF; lens database; subject / sky masks; Lightroom XMP exchange; stability |
+| Full target (ready for real work) | **~62%** | **980–1,750 h** (~70% parallelizes) | raw colour, lens and camera data; AI models; Classic output modules; localization; plug-in ecosystem |
+| Mainstream practitioner | **~51%** | **440–820 h** (~60% parallelizes) | camera colour and render fidelity; CR3 / ORF / HE NEF; lens database; subject / sky masks; Lightroom XMP exchange; stability |
 | Essentials user | **~65%** | **160–300 h** (~50% parallelizes) | default raw look for popular cameras; launch stability; basic-slider feel; opening CR3 / HEIC files people send |
 
 The gap between breadth and readiness is quality and coverage, not missing buttons: camera colour is
-estimated rather than measured, CR3 decodes on 26 verified Canon bodies (rarer CRX variants still open as previews), compressed ORF and HE NEF
-open as previews, rendering is tuned by eye, AI masks are heuristics, there is no lens database, and
+estimated rather than measured, CR3 decodes on 26 verified Canon bodies (rarer CRX variants still open as previews), HE NEF opens
+as preview (compressed ORF now decodes on 58 more bodies (2 verified)), rendering is tuned by eye, AI masks are heuristics, there is no lens database, and
 tests run in CI on Linux x64 (every pull request and push to `main`) and FreeBSD (nightly), not on macOS or Windows. **Why alpha:** core workflows run end to end, but readiness is below
-the ~75% beta bar (it is above the ~40% alpha bar) and Lightroom's main inputs, raw files, still have blocking gaps (compressed ORF and HE NEF open as previews; Canon,
+the ~75% beta bar (it is above the ~40% alpha bar) and Lightroom's main inputs, raw files, still have gaps (Nikon HE NEF opens as preview; Canon,
 ~30% of raw users, decodes CR3 on 26 verified bodies). It passes the alpha gate: all six core workflows
 (import, cull, develop, save and reopen, batch looks, export) work end to end on macOS
 ([docs/roadmap.md](docs/roadmap.md#alpha-gate)). The three readiness numbers and their weights and discounts are in
@@ -107,13 +107,14 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 3. Render-fidelity suite against Lightroom, then tuning (30–60 h)
 4. ~~Full-resolution zoom~~ (done 2026-10-12)
 5. AI masks: Subject / Sky / People (40–70 h + model decision)
-6. Compressed ORF and HE NEF (28–55 h)
+6. ~~Compressed ORF~~ (done 2026-11-04) and HE NEF (20–40 h)
 7. Lens profile database of our own (40–80 h, #329)
 8. Tests in CI on macOS and Windows, and the GPU tests in CI (6–12 h)
 9. Per-model raw verification (20–35 h)
 
 ## Progress log
 
+- 2026-11-04: Olympus / OM System compressed ORF decodes from sensor data: clean-room pure-Rust bitstream decoder (`crates/raw/src/vendor/orfc.rs`) derived strictly from Olympus patents US7333035B2/US7715639B2, maker notes and CC0 samples without third-party decoder code (see `docs/orf-compression.md`), verified on OM-D E-M1 (r=0.995) and E-M10 Mark III (r=0.929) CC0 samples; 58 bodies newly unlocked (78 total across Olympus and OM; OM/Olympus 6% → 81% fully working, overall weighted camera coverage 94% → 97%).
 - 2026-10-22: Print page setup and PDF output gain the Japanese photo and postcard papers — L判
   (89 × 127 mm), 2L判 (127 × 178), KG判 (102 × 152), はがき (100 × 148), 往復はがき (148 × 200),
   六切 (203 × 254), 四切 (254 × 305) and 名刺 (55 × 91) — at their exact metric sizes. The Print dialog
