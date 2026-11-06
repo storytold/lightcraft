@@ -16,7 +16,7 @@ use lightcraft_raster::resample::Filter;
 use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
 
 use crate::ctx::{Buf, FailKind, Gpu, fail, groups1, groups2};
-use crate::params::{Present, finish_block};
+use crate::params::{DEEP_WRITTEN, Present, finish_block};
 
 /// Device-resident stages of one view, kept next to the CPU [`lightcraft_pipeline::StageCache`]
 /// (as its extension). Holds the last two output sizes, like the CPU cache.
@@ -928,7 +928,9 @@ pub fn render(
     });
     // soft proofing as the CPU's `finish` sets it up (an output-device table never gets here: see `render`)
     fp.proof = req.proof.map(|pr| pr.params(req.space));
-    if let Some(d) = &req.display {
+    // a float render is `finish_deep`: its samples are the output space's, whatever the display
+    let deep = req.depth != lightcraft_pipeline::OutputDepth::U8;
+    if let Some(d) = req.display.as_ref().filter(|_| !deep) {
         fp.for_display(d, req.proof);
     }
     let present = Present {
@@ -943,13 +945,13 @@ pub fn render(
     let crop = plan.keep.filter(|_| finish_keep.is_none());
     let output = finish_keep.unwrap_or(PixelWindow { x: 0, y: 0, w, h });
     let out_n = output.w * output.h;
-    let (p, aux) = finish_block(&fp, &terms, &present, output);
+    let (p, aux) = finish_block(&fp, &terms, &present, output, deep);
     if crate::ctx::failed() {
         return None; // a malformed parameter block failed the render: the CPU fallback redoes it
     }
     let aux = gpu.upload(&aux);
     // cleared, so that work which never ran cannot pass for an image (see the check below)
-    let out = cx.zeroed(out_n);
+    let out = cx.zeroed(if deep { 3 * out_n } else { out_n });
     if fault == Some(crate::Fault::Validation) {
         // a dispatch the device rejects (too many workgroups)
         cx.run("box_h", &[0; 5], &[Some(&aux), Some(&out)], [gpu.device.limits().max_compute_workgroups_per_dimension + 1, 1, 1]);
@@ -976,6 +978,11 @@ pub fn render(
             ],
             groups2(output.w, rows.min(output.h - y0), [16, 16]),
         );
+    }
+    if deep {
+        let rendered = read_deep(&mut cx, &out, (output, crop), req);
+        lap("finish + readback (deep)", &mut t, &mut cx);
+        return rendered.map(Output::Image);
     }
     if display && can_display(gpu, &plan, req) {
         return to_texture(&mut cx, &out, w, h).map(|(frame, histogram)| Output::Display { frame, histogram });
@@ -1057,6 +1064,38 @@ pub fn render(
         image = image.crop(k.x, k.y, k.w, k.h);
     }
     Some(Output::Image(Rendered { image, histogram, deep: None }))
+}
+
+/// The finished float output `out` (three words per pixel of `output`, the window the kernel
+/// wrote) read back as the CPU's float render returns it, with the same checks as an 8-bit
+/// readback: every pixel written, not entirely black. `crop`: the requested window, when the
+/// kernel finished the whole work image.
+fn read_deep(cx: &mut Cx<'_>, out: &Buf, (output, crop): (PixelWindow, Option<PixelWindow>), req: &RenderRequest) -> Option<Rendered> {
+    use lightcraft_pipeline::{DeepImage, DeepSamples};
+    let (w, h) = (output.w, output.h);
+    let n = w * h;
+    let words: Vec<u32> = cx.read(out, 3 * n);
+    if crate::ctx::failed() {
+        return None;
+    }
+    let unwritten = words.as_chunks::<3>().0.iter().filter(|p| p.iter().any(|v| v & DEEP_WRITTEN == 0)).count();
+    if unwritten > 0 {
+        fail(FailKind::Fatal, format!("the GPU returned an incomplete image ({unwritten} of {n} pixels unwritten)"));
+        return None;
+    }
+    let samples = words.into_iter().map(|v| f32::from_bits(v & !DEEP_WRITTEN)).collect();
+    let deep = DeepImage { width: w, height: h, space: req.space, samples: DeepSamples::F32(samples) };
+    let deep = match crop {
+        Some(k) => deep.crop(k.x, k.y, k.w, k.h),
+        None => deep,
+    };
+    let image = deep.to_rgba8();
+    let histogram = Histogram::of_srgb8(&image);
+    if n >= 4096 && [&histogram.r, &histogram.g, &histogram.b].iter().all(|c| c.first() == Some(&histogram.total)) {
+        fail(FailKind::Blank, "the GPU result is entirely black; rendering it on the CPU to be sure".into());
+        return None;
+    }
+    Some(Rendered { image, histogram, deep: Some(deep) })
 }
 
 /// The finished output `out` (`w × h` packed RGBA8) as a texture on the device, with its
