@@ -264,14 +264,14 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "library.memory", "Memory Usage", [], None, "{} — bytes held by each cache (decoded sources, rendered previews, GPU buffers; heap when instrumented)", always, |s, _| {
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
         }),
-        cmd!(query "app.memoryBudget", "Memory Budget", [], None, "{mb?: number} — set the memory budget shared by the caches (0: automatic, a quarter of RAM or of the cgroup limit, at most 1536 MB); returns the report", always, |s, p| {
+        cmd!(query "app.memoryBudget", "Memory Budget", [], None, "{mb?: number} — the process's memory budget shared by the caches, in MB; returns the memory report. Missing: report only. 0: automatic, a quarter of RAM or of the cgroup memory limit, at most 1536 MB (under a small limit it can be below 64 MB). 64..1048576: that many MB", always, |s, p| {
             if let Some(mb) = p.get("mb").and_then(Value::as_f64) {
                 if mb == 0.0 {
                     s.reset_memory_budget();
                 } else if (64.0..=1_048_576.0).contains(&mb) {
                     s.set_memory_budget((mb * 1048576.0) as usize);
                 } else {
-                    return Err(bad("app.memoryBudget", "mb must be 0 (automatic) or 64..1048576"));
+                    return Err(bad("app.memoryBudget", "mb must be 0 for the automatic budget (which can be below 64 MB), or a number of megabytes from 64 to 1048576"));
                 }
             }
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
