@@ -1,5 +1,6 @@
 //! Composes print pages: places each cell's photo (fit or Zoom to Fill, optionally Rotate to Fit),
-//! draws Photo Border and Inner Stroke, fills the page background and returns [`PageRaster`]s.
+//! draws Photo Border and Inner Stroke, fills the page background, adds the Page Options (crop
+//! marks, page number, page info) and returns [`PageRaster`]s.
 //!
 //! Work is split like an export: [`prepare`] reads the session (which photos go in which cell, one
 //! render job per cell) and [`Prepared::run`] does the heavy part without it, so it can run on a
@@ -28,6 +29,13 @@ pub const MAX_BORDER_IN: f64 = 2.0;
 pub const MAX_STROKE_PT: f64 = 36.0;
 /// Renders kept for cells that print the same photo at the same size.
 const RENDER_CACHE: usize = 4;
+/// A crop mark's length and its gap from the photo's corner, inches.
+pub const CROP_MARK_IN: f64 = 0.25;
+pub const CROP_MARK_GAP_IN: f64 = 0.0625;
+/// A crop mark's weight, points.
+pub const CROP_MARK_PT: f64 = 0.5;
+/// Size of the page number and page info text, points.
+pub const PAGE_TEXT_PT: f64 = 9.0;
 
 /// Lightroom's Image Settings panel.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -85,11 +93,18 @@ impl ImageSettings {
 pub struct PageStyle {
     /// Page background colour, sRGB.
     pub background: [u8; 3],
+    /// Page Options (Single Image and Contact Sheet, as in Lightroom; the packages ignore them):
+    /// the page number at the bottom right of each page.
+    pub page_numbers: bool,
+    /// The print settings (sharpening, profile, resolution) at the bottom left of each page.
+    pub page_info: bool,
+    /// Marks at the corners of each photo to cut along.
+    pub crop_marks: bool,
 }
 
 impl Default for PageStyle {
     fn default() -> Self {
-        Self { background: [255; 3] }
+        Self { background: [255; 3], page_numbers: false, page_info: false, crop_marks: false }
     }
 }
 
@@ -98,6 +113,41 @@ pub fn rec2020_from_srgb8(c: [u8; 3]) -> [u16; 3] {
     let lin = SRGB.to_space(&REC2020).apply_f32(c.map(|v| srgb_to_linear(f32::from(v) / 255.0)));
     let trc = OutputSpace::Rec2020.trc();
     lin.map(|v| (trc.encode(v) * 65535.0 + 0.5) as u16)
+}
+
+/// Whether a layout style prints the Page Options (page numbers, page info, crop marks):
+/// Lightroom offers them for Single Image and Contact Sheet; its packages have Cut Guides instead.
+pub fn has_page_options(style: Style) -> bool {
+    !style.is_package()
+}
+
+/// The colour of crop marks and page text on `background`: black, or white on a dark page.
+pub fn mark_ink(background: [u8; 3]) -> [u8; 3] {
+    let [r, g, b] = background.map(f64::from);
+    if 0.2126 * r + 0.7152 * g + 0.0722 * b < 128.0 { [255; 3] } else { [0; 3] }
+}
+
+/// The Page Info line: print sharpening, profile and resolution (Lightroom names the printer
+/// where the resolution is; this print goes to a PDF).
+pub fn page_info_text(settings: &PrintSettings) -> String {
+    use crate::print_color::{ManagedSpace, PrintMedia, PrintProfile, PrintSharpen};
+    let c = &settings.job.color;
+    let media = match c.media {
+        PrintMedia::Matte => "Matte",
+        PrintMedia::Glossy => "Glossy",
+    };
+    let sharpen = match c.sharpen {
+        PrintSharpen::Off => "Off".to_string(),
+        PrintSharpen::Low => format!("Low ({media})"),
+        PrintSharpen::Standard => format!("Standard ({media})"),
+        PrintSharpen::High => format!("High ({media})"),
+    };
+    let profile = match &c.profile {
+        PrintProfile::Managed { space: ManagedSpace::Srgb } => "Managed by Printer (sRGB)".to_string(),
+        PrintProfile::Managed { space: ManagedSpace::AdobeRgb } => "Managed by Printer (Adobe RGB)".to_string(),
+        PrintProfile::Icc { path } => path.file_stem().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned()),
+    };
+    format!("Print Sharpening: {sharpen} · Profile: {profile} · {:.0} ppi", settings.job.effective_ppi())
 }
 
 // ---- placement ------------------------------------------------------------------------------
@@ -205,6 +255,15 @@ pub struct Image16 {
     pub rgb: Vec<u16>,
 }
 
+/// A rectangular image region used as a source or destination for `Image16::blit`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlitRect {
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
 impl Image16 {
     pub fn filled(w: usize, h: usize, c: [u16; 3]) -> Result<Self, String> {
         let n = w.checked_mul(h).and_then(|n| n.checked_mul(3)).ok_or("image too large")?;
@@ -234,9 +293,11 @@ impl Image16 {
     }
 
     /// Copies the `w` x `h` block of `src` at (`sx`, `sy`) to (`dx`, `dy`), clipped to both images.
-    pub fn blit(&mut self, src: &Image16, sx: usize, sy: usize, dx: usize, dy: usize, w: usize, h: usize) {
-        let w = w.min(src.w.saturating_sub(sx)).min(self.w.saturating_sub(dx));
-        let h = h.min(src.h.saturating_sub(sy)).min(self.h.saturating_sub(dy));
+    pub fn blit(&mut self, src: &Image16, source: BlitRect, destination: BlitRect) {
+        let BlitRect { x: sx, y: sy, .. } = source;
+        let BlitRect { x: dx, y: dy, .. } = destination;
+        let w = source.w.min(destination.w).min(src.w.saturating_sub(sx)).min(self.w.saturating_sub(dx));
+        let h = source.h.min(destination.h).min(src.h.saturating_sub(sy)).min(self.h.saturating_sub(dy));
         for row in 0..h {
             let from = src.rgb.get(((sy + row) * src.w + sx) * 3..((sy + row) * src.w + sx + w) * 3);
             let to = self.rgb.get_mut(((dy + row) * self.w + dx) * 3..((dy + row) * self.w + dx + w) * 3);
@@ -355,8 +416,8 @@ impl CellStyle {
 }
 
 /// Draws `photo` into `cell` of `page`: border frame, the photo fitted or filled (and turned when
-/// asked), then the inner stroke on top of it.
-pub fn draw_cell(page: &mut Image16, photo: &Image16, cell: PxRect, style: &CellStyle) -> Result<(), String> {
+/// asked), then the inner stroke on top of it. Returns where the photo landed.
+pub fn draw_cell(page: &mut Image16, photo: &Image16, cell: PxRect, style: &CellStyle) -> Result<PxRect, String> {
     // The border may not eat the cell: at least one pixel of photo area stays.
     let border = style.border_px.min(cell.w.min(cell.h).saturating_sub(1) / 2);
     let (ax, ay) = (cell.x + border, cell.y + border);
@@ -374,7 +435,7 @@ pub fn draw_cell(page: &mut Image16, photo: &Image16, cell: PxRect, style: &Cell
     if border > 0 {
         page.fill_rect(dx - border, dy - border, w + 2 * border, h + 2 * border, style.border);
     }
-    page.blit(&img, sx, sy, dx, dy, w, h);
+    page.blit(&img, BlitRect { x: sx, y: sy, w, h }, BlitRect { x: dx, y: dy, w, h });
     let s = style.stroke_px.min(w.min(h) / 2);
     if s > 0 {
         page.fill_rect(dx, dy, w, s, style.stroke);
@@ -382,7 +443,105 @@ pub fn draw_cell(page: &mut Image16, photo: &Image16, cell: PxRect, style: &Cell
         page.fill_rect(dx, dy + s, s, h - 2 * s, style.stroke);
         page.fill_rect(dx + w - s, dy + s, s, h - 2 * s, style.stroke);
     }
-    Ok(())
+    Ok(PxRect { x: dx, y: dy, w, h })
+}
+
+/// What the Page Options draw on every page, in page pixels.
+struct Marks {
+    /// Crop mark length, gap from the corner and weight.
+    crop: Option<(usize, usize, usize)>,
+    numbers: bool,
+    info: Option<String>,
+    ink: [u16; 3],
+    text_px: f32,
+    /// The printable area: the text sits in the margin below it, aligned with its sides.
+    area: Option<PxRect>,
+}
+
+impl Marks {
+    fn of(settings: &PrintSettings, ppi: f64, pw: usize, ph: usize) -> Self {
+        let on = has_page_options(settings.layout.style);
+        let page = &settings.page;
+        let px = |inches: f64| (inches * ppi).round() as usize;
+        Marks {
+            crop: (on && page.crop_marks).then(|| (px(CROP_MARK_IN), px(CROP_MARK_GAP_IN), px(CROP_MARK_PT / 72.0).max(1))),
+            numbers: on && page.page_numbers,
+            info: (on && page.page_info).then(|| page_info_text(settings)),
+            ink: rec2020_from_srgb8(mark_ink(page.background)),
+            text_px: (PAGE_TEXT_PT / 72.0 * ppi) as f32,
+            area: settings.layout.printable().ok().and_then(|a| px_rect(&a, ppi, pw, ph)),
+        }
+    }
+
+    /// Draws the marks of page `number` (one-based) around `photos`, the photos on it.
+    fn draw(&self, page: &mut Image16, photos: &[PxRect], number: usize) {
+        if let Some((len, gap, weight)) = self.crop {
+            for r in photos {
+                crop_marks(page, r, len, gap, weight, photos, self.ink);
+            }
+        }
+        let area = self.area.unwrap_or(PxRect { x: 0, y: 0, w: page.w, h: page.h });
+        let (area_bottom, page_h) = ((area.y + area.h) as f32, page.h as f32);
+        // centred in the bottom margin, and on the paper when the margin is thinner than the text
+        let top = |h: f32| (area_bottom + (page_h - area_bottom - h) / 2.0).clamp(0.0, (page_h - h).max(0.0));
+        if self.numbers
+            && let Some(t) = crate::text::TextLayout::new(&number.to_string(), self.text_px, false, crate::fonts::CRAFT_FONTS)
+        {
+            let x = ((area.x + area.w) as f32 - t.width).max(0.0);
+            draw_text(page, &t, x, top(t.height), self.ink);
+        }
+        if let Some(info) = &self.info
+            && let Some(t) = crate::text::TextLayout::new(info, self.text_px, false, crate::fonts::CRAFT_FONTS)
+        {
+            draw_text(page, &t, area.x as f32, top(t.height), self.ink);
+        }
+    }
+}
+
+/// Crop marks for the photo at `r`: at each corner, a line along each of its edges that starts
+/// `gap` past the corner and runs `len` outward, `weight` thick. Marks never cover a photo.
+fn crop_marks(page: &mut Image16, r: &PxRect, len: usize, gap: usize, weight: usize, photos: &[PxRect], ink: [u16; 3]) {
+    let (x0, y0, x1, y1) = (r.x as i64, r.y as i64, (r.x + r.w) as i64, (r.y + r.h) as i64);
+    let (l, g, t) = (len as i64, gap as i64, weight.min(r.w).min(r.h) as i64);
+    let segments = [
+        (x0 - g - l, y0, l, t),
+        (x1 + g, y0, l, t),
+        (x0 - g - l, y1 - t, l, t),
+        (x1 + g, y1 - t, l, t),
+        (x0, y0 - g - l, t, l),
+        (x0, y1 + g, t, l),
+        (x1 - t, y0 - g - l, t, l),
+        (x1 - t, y1 + g, t, l),
+    ];
+    let on_photo = |x: usize, y: usize| photos.iter().any(|p| x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h);
+    for (sx, sy, sw, sh) in segments {
+        for y in sy.max(0)..(sy + sh).min(page.h as i64) {
+            for x in sx.max(0)..(sx + sw).min(page.w as i64) {
+                let (x, y) = (x as usize, y as usize);
+                if !on_photo(x, y) {
+                    page.fill_rect(x, y, 1, 1, ink);
+                }
+            }
+        }
+    }
+}
+
+/// Blends text in `ink` into `page` with its top-left corner at (`x`, `y`).
+fn draw_text(page: &mut Image16, text: &crate::text::TextLayout, x: f32, y: f32, ink: [u16; 3]) {
+    let (w, h) = (page.w, page.h);
+    text.draw_in(x, y, w as f32, h as f32, |gx, gy, cov| {
+        let (Ok(gx), Ok(gy)) = (usize::try_from(gx), usize::try_from(gy)) else { return };
+        if gx >= w || gy >= h {
+            return;
+        }
+        let i = (gy * w + gx) * 3;
+        if let Some(px) = page.rgb.get_mut(i..i + 3) {
+            let k = cov.clamp(0.0, 1.0);
+            for (p, c) in px.iter_mut().zip(ink) {
+                *p = (f32::from(*p) + (f32::from(c) - f32::from(*p)) * k).round().clamp(0.0, 65535.0) as u16;
+            }
+        }
+    });
 }
 
 // ---- the job ---------------------------------------------------------------------------------
@@ -402,6 +561,7 @@ pub struct Prepared {
     ppi: f32,
     background: [u16; 3],
     style: CellStyle,
+    marks: Marks,
     /// Print sharpening, applied to each photo once it's rendered at its print size.
     color: crate::print_color::PrintColorSettings,
 }
@@ -430,6 +590,7 @@ impl Prepared {
         let mut out = Vec::with_capacity(self.pages.len());
         for (index, &(w, h)) in self.pages.iter().enumerate() {
             let mut page = Image16::filled(w, h, self.background)?;
+            let mut placed = Vec::new();
             while let Some(item) = items.next_if(|i| i.page == index) {
                 if !progress(done, &item.name) {
                     return Err("Print cancelled".into());
@@ -448,8 +609,9 @@ impl Prepared {
                     }
                 };
                 let photo = &cache.get(at).ok_or("render cache lost an entry")?.1;
-                draw_cell(&mut page, photo, item.cell, &self.style).map_err(|e| format!("{}: {e}", item.name))?;
+                placed.push(draw_cell(&mut page, photo, item.cell, &self.style).map_err(|e| format!("{}: {e}", item.name))?);
             }
+            self.marks.draw(&mut page, &placed, index + 1);
             out.push(PageRaster { width: w as u32, height: h as u32, ppi: self.ppi, rgb: page.rgb });
         }
         if !progress(done, "") {
@@ -508,349 +670,10 @@ pub fn prepare(session: &mut Session, settings: &PrintSettings, photos: &[PhotoI
         ppi: ppi as f32,
         background: rec2020_from_srgb8(settings.page.background),
         style,
+        marks: Marks::of(&settings, ppi, pw, ph),
         color: settings.job.color.clone(),
     })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::print::layout::{GridSpec, Margins};
-
-    const RED: [u16; 3] = [60000, 1000, 1000];
-    const BLUE: [u16; 3] = [1000, 1000, 60000];
-    const WHITE: [u16; 3] = [65535; 3];
-
-    /// A `w` x `h` image whose left half is red and right half blue, with a green top row.
-    fn halves(w: usize, h: usize) -> Image16 {
-        let mut img = Image16::filled(w, h, RED).unwrap();
-        img.fill_rect(w / 2, 0, w - w / 2, h, BLUE);
-        img.fill_rect(0, 0, w, 1, [1000, 60000, 1000]);
-        img
-    }
-
-    fn style() -> CellStyle {
-        CellStyle { fill: false, rotate: false, border_px: 0, border: [0; 3], stroke_px: 0, stroke: [0; 3] }
-    }
-
-    fn at(img: &Image16, x: usize, y: usize) -> [u16; 3] {
-        img.px(x, y).unwrap()
-    }
-
-    fn page() -> Image16 {
-        Image16::filled(100, 100, WHITE).unwrap()
-    }
-
-    #[test]
-    fn placement_fit_fill_and_rotation() {
-        // 4:3 photo into a 2:1 area.
-        let fit = place(400.0, 300.0, 200, 100, false, false).unwrap();
-        assert_eq!((fit.w, fit.h, fit.rotated), (133, 100, false));
-        let fill = place(400.0, 300.0, 200, 100, true, false).unwrap();
-        assert_eq!((fill.w, fill.h), (200, 150));
-        // A portrait photo in a landscape area: turning prints it larger.
-        assert_eq!(place(300.0, 400.0, 400, 300, false, false).unwrap(), Placement { rotated: false, w: 225, h: 300 });
-        let turned = place(300.0, 400.0, 400, 300, false, true).unwrap();
-        assert_eq!((turned.rotated, turned.w, turned.h), (true, 400, 300));
-        assert_eq!(turned.unturned(), (300, 400));
-        // Filling a landscape cell with a portrait photo crops less when turned.
-        let f = place(300.0, 400.0, 400, 300, true, true).unwrap();
-        assert!(f.rotated && f.w >= 400 && f.h >= 300);
-        // Matching orientation never turns.
-        assert!(!place(400.0, 300.0, 400, 300, false, true).unwrap().rotated);
-        assert!(!place(300.0, 300.0, 100, 100, false, true).unwrap().rotated);
-        // Hostile input.
-        for bad in [f64::NAN, f64::INFINITY, 0.0, -5.0] {
-            assert!(place(bad, 10.0, 10, 10, false, false).is_none());
-            assert!(place(10.0, bad, 10, 10, true, true).is_none());
-        }
-        assert!(place(10.0, 10.0, 0, 10, false, false).is_none());
-    }
-
-    #[test]
-    fn fit_centres_the_photo() {
-        let mut p = page();
-        draw_cell(&mut p, &halves(40, 20), PxRect { x: 10, y: 10, w: 80, h: 80 }, &style()).unwrap();
-        // 40x20 scaled to 80x40, centred vertically at y 30..70.
-        assert_eq!(at(&p, 10, 50), RED);
-        assert_eq!(at(&p, 89, 50), BLUE);
-        assert_eq!(at(&p, 50, 20), WHITE, "above the photo");
-        assert_eq!(at(&p, 50, 75), WHITE, "below the photo");
-        assert_eq!(at(&p, 5, 50), WHITE, "outside the cell");
-    }
-
-    #[test]
-    fn zoom_to_fill_crops_the_centre() {
-        let mut p = page();
-        let s = CellStyle { fill: true, ..style() };
-        draw_cell(&mut p, &halves(40, 20), PxRect { x: 10, y: 10, w: 80, h: 80 }, &s).unwrap();
-        // The photo scales to 160x80 and the centre 80 columns remain: the colour edge is mid-cell.
-        for y in [10, 50, 89] {
-            assert_ne!(at(&p, 10, y), WHITE);
-            assert_ne!(at(&p, 89, y), WHITE);
-        }
-        assert_eq!(at(&p, 20, 50), RED);
-        assert_eq!(at(&p, 80, 50), BLUE);
-        // Nothing leaks outside the cell.
-        assert_eq!(at(&p, 9, 50), WHITE);
-        assert_eq!(at(&p, 90, 50), WHITE);
-        assert_eq!(at(&p, 50, 9), WHITE);
-        assert_eq!(at(&p, 50, 90), WHITE);
-    }
-
-    #[test]
-    fn rotate_to_fit_turns_clockwise() {
-        // A portrait 20x40 photo (red left, blue right) in a landscape 80x40 cell.
-        let mut p = page();
-        let cell = PxRect { x: 10, y: 10, w: 80, h: 40 };
-        draw_cell(&mut p, &halves(20, 40), cell, &style()).unwrap();
-        assert_eq!(at(&p, 20, 30), WHITE, "unturned the photo is a narrow strip in the middle");
-        assert_eq!(at(&p, 45, 30), RED);
-        let mut q = page();
-        draw_cell(&mut q, &halves(20, 40), cell, &CellStyle { rotate: true, ..style() }).unwrap();
-        // Turned clockwise the left half (red) becomes the top half and the photo spans the cell.
-        assert_eq!(at(&q, 12, 12), RED, "{:?}", at(&q, 12, 12));
-        assert_eq!(at(&q, 12, 48), BLUE);
-        assert_eq!(at(&q, 50, 20), RED);
-        assert_eq!(at(&q, 50, 40), BLUE);
-        assert_eq!(at(&q, 11, 30), at(&q, 11, 30));
-    }
-
-    #[test]
-    fn border_frames_the_photo_inside_the_cell() {
-        let mut p = page();
-        let green = [100, 60000, 100];
-        let s = CellStyle { border_px: 5, border: green, fill: true, ..style() };
-        draw_cell(&mut p, &halves(60, 60), PxRect { x: 10, y: 10, w: 60, h: 60 }, &s).unwrap();
-        assert_eq!(at(&p, 10, 40), green);
-        assert_eq!(at(&p, 14, 40), green);
-        assert_eq!(at(&p, 15, 40), RED);
-        assert_eq!(at(&p, 69, 40), green);
-        assert_eq!(at(&p, 64, 40), BLUE);
-        assert_eq!(at(&p, 40, 10), green);
-        assert_eq!(at(&p, 40, 69), green);
-        // A fitted photo gets the border hugging it, not the whole cell.
-        let mut q = page();
-        let s = CellStyle { border_px: 5, border: green, ..style() };
-        draw_cell(&mut q, &halves(60, 30), PxRect { x: 0, y: 0, w: 100, h: 100 }, &s).unwrap();
-        // The 90x90 area fits a 90x45 photo at y 27..72 inside a frame 5 px thick.
-        assert_eq!(at(&q, 50, 23), green);
-        assert_eq!(at(&q, 50, 22), green);
-        assert_eq!(at(&q, 50, 21), WHITE);
-        // A border wider than the cell leaves the photo visible.
-        let mut r = page();
-        let s = CellStyle { border_px: 500, border: green, ..style() };
-        draw_cell(&mut r, &halves(10, 10), PxRect { x: 10, y: 10, w: 20, h: 20 }, &s).unwrap();
-        assert_ne!(at(&r, 20, 20), WHITE);
-    }
-
-    #[test]
-    fn stroke_is_drawn_inside_the_photo_edge() {
-        let mut p = page();
-        let black = [0, 0, 0];
-        let s = CellStyle { stroke_px: 3, stroke: black, fill: true, ..style() };
-        draw_cell(&mut p, &halves(60, 60), PxRect { x: 20, y: 20, w: 60, h: 60 }, &s).unwrap();
-        for (x, y) in [(20, 40), (22, 40), (77, 40), (79, 40), (40, 20), (40, 22), (40, 77), (40, 79)] {
-            assert_eq!(at(&p, x, y), black, "({x}, {y})");
-        }
-        assert_eq!(at(&p, 23, 40), RED);
-        assert_eq!(at(&p, 76, 40), BLUE);
-        assert_eq!(at(&p, 19, 40), WHITE, "the stroke does not grow the photo");
-        // Corners are covered exactly once and a huge stroke stays within the photo.
-        let mut q = page();
-        let s = CellStyle { stroke_px: 1000, stroke: black, ..style() };
-        draw_cell(&mut q, &halves(10, 10), PxRect { x: 20, y: 20, w: 40, h: 40 }, &s).unwrap();
-        assert_eq!(at(&q, 40, 40), black);
-        assert_eq!(at(&q, 19, 40), WHITE);
-        assert_eq!(at(&q, 60, 40), WHITE);
-    }
-
-    #[test]
-    fn colours_are_rec2020_encoded() {
-        assert_eq!(rec2020_from_srgb8([255; 3]), [65535; 3]);
-        assert_eq!(rec2020_from_srgb8([0; 3]), [0; 3]);
-        let grey = rec2020_from_srgb8([128; 3]);
-        assert!(grey[0].abs_diff(grey[1]) < 3 && grey[1].abs_diff(grey[2]) < 3);
-        // sRGB red sits inside the Rec. 2020 gamut: its green and blue are not zero.
-        let red = rec2020_from_srgb8([255, 0, 0]);
-        assert!(red[0] < 65535 && red[1] > 0);
-    }
-
-    #[test]
-    fn resize_preserves_flat_colour_and_edges() {
-        let img = halves(64, 32);
-        for (w, h) in [(32, 16), (128, 64), (50, 70), (1, 1), (64, 31)] {
-            let r = img.resized(w, h).unwrap();
-            assert_eq!((r.w, r.h), (w, h));
-            assert_eq!(r.rgb.len(), w * h * 3);
-        }
-        let flat = Image16::filled(40, 30, [1234, 5678, 9999]).unwrap().resized(17, 61).unwrap();
-        assert!(flat.rgb.chunks(3).all(|p| p == [1234, 5678, 9999]));
-        assert!(img.resized(0, 5).is_err());
-        let r = img.resized(32, 16).unwrap();
-        assert_eq!(at(&r, 4, 8), RED);
-        assert_eq!(at(&r, 28, 8), BLUE);
-    }
-
-    #[test]
-    fn rotate_and_blit_are_clipped() {
-        let img = halves(3, 2);
-        let r = img.rotated_cw().unwrap();
-        assert_eq!((r.w, r.h), (2, 3));
-        let mut p = page();
-        p.blit(&img, 0, 0, 99, 99, 10, 10);
-        assert_eq!(at(&p, 99, 99), at(&img, 0, 0));
-        p.blit(&img, 5, 5, 0, 0, 3, 3);
-        p.fill_rect(95, 95, 50, 50, RED);
-        assert_eq!(at(&p, 99, 99), RED);
-        p.fill_rect(usize::MAX, usize::MAX, usize::MAX, usize::MAX, RED);
-    }
-
-    fn settings(style: Style) -> PrintSettings {
-        let mut s = PrintSettings::default();
-        s.layout.style = style;
-        s.layout.page.paper = "4x6".into();
-        s.layout.page.margins = Margins::uniform(0.5);
-        s.job.ppi = 100.0;
-        s
-    }
-
-    #[test]
-    fn plans_follow_the_layout_style() {
-        let ids: Vec<PhotoId> = (1..=5).map(PhotoId).collect();
-        let mut s = settings(Style::ContactSheet);
-        s.layout.grid = GridSpec { columns: 2, rows: 2, ..Default::default() };
-        let plan = plan_cells(&s.layout, &ids).unwrap();
-        assert_eq!(plan.iter().map(Vec::len).collect::<Vec<_>>(), vec![4, 1]);
-        assert_eq!(plan[1][0].1, PhotoId(5));
-        let one = plan_cells(&settings(Style::SingleImage).layout, &ids).unwrap();
-        assert_eq!(one.len(), 5);
-        assert!(plan_cells(&s.layout, &[]).is_err());
-        assert!(plan_cells(&s.layout, &vec![PhotoId(1); MAX_PHOTOS + 1]).is_err());
-
-        let mut pkg = settings(Style::PicturePackage);
-        assert!(plan_cells(&pkg.layout, &ids).is_err(), "no cells yet");
-        pkg.layout.add_cell(1.0, 1.0).unwrap();
-        pkg.layout.add_cell(2.0, 2.0).unwrap();
-        let plan = plan_cells(&pkg.layout, &ids).unwrap();
-        assert_eq!(plan.len(), 1);
-        assert!(plan[0].iter().all(|(_, p)| *p == PhotoId(1)), "picture package repeats the first photo");
-
-        let mut custom = settings(Style::CustomPackage);
-        let a = custom.layout.add_cell(1.0, 1.0).unwrap();
-        custom.layout.add_cell(1.0, 1.0).unwrap();
-        custom.layout.set_cell_photo(a, Some(3)).unwrap();
-        let plan = plan_cells(&custom.layout, &ids).unwrap();
-        assert_eq!((plan[0][0].1, plan[0][1].1), (PhotoId(3), PhotoId(1)));
-        let blank_page = {
-            custom.layout.new_page().unwrap();
-            plan_cells(&custom.layout, &ids).unwrap()
-        };
-        assert_eq!(blank_page.iter().map(Vec::len).collect::<Vec<_>>(), vec![2, 0]);
-    }
-
-    fn first_ids(s: &Session, n: usize) -> Vec<PhotoId> {
-        s.catalog.photos().take(n).map(|p| p.id).collect()
-    }
-
-    #[test]
-    fn composes_pages_from_real_photos() {
-        let mut s = Session::with_demo();
-        let ids = first_ids(&s, 3);
-        let mut set = settings(Style::ContactSheet);
-        set.layout.grid = GridSpec { columns: 1, rows: 2, spacing_x: 0.0, spacing_y: 0.0, keep_square: false };
-        set.page.background = [200, 30, 30];
-        set.image.zoom_to_fill = true;
-        set.image.stroke_enabled = true;
-        set.image.stroke_width_pt = 2.0;
-        set.image.stroke_color = [0, 0, 0];
-        let work = prepare(&mut s, &set, &ids).unwrap();
-        assert_eq!((work.len(), work.pages()), (3, 2));
-        let mut steps = Vec::new();
-        let pages = work
-            .run(&mut |i, name| {
-                steps.push((i, name.to_string()));
-                true
-            })
-            .unwrap();
-        assert_eq!(steps.iter().map(|s| s.0).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
-        assert_eq!(pages.len(), 2);
-        let first = &pages[0];
-        assert_eq!((first.width, first.height, first.ppi), (400, 600, 100.0));
-        assert_eq!(first.rgb.len(), 400 * 600 * 3);
-        let bg = rec2020_from_srgb8([200, 30, 30]);
-        let px = |p: &PageRaster, x: usize, y: usize| {
-            let i = (y * p.width as usize + x) * 3;
-            [p.rgb[i], p.rgb[i + 1], p.rgb[i + 2]]
-        };
-        assert_eq!(px(first, 5, 5), bg, "margin shows the page background");
-        assert_eq!(px(first, 395, 595), bg);
-        // Zoom to fill: the top-left photo pixel (inside the 2 pt = 3 px stroke) is the stroke colour.
-        assert_eq!(px(first, 50, 50), [0, 0, 0]);
-        let centre = px(first, 200, 150);
-        assert_ne!(centre, bg);
-        assert_ne!(centre, [0, 0, 0]);
-        // The second page holds the third photo in the first cell only: the second cell is bare.
-        let second = &pages[1];
-        assert_ne!(px(second, 200, 150), bg);
-        assert_eq!(px(second, 200, 450), bg);
-        // Cancelling gives no pages.
-        let work = prepare(&mut s, &set, &ids).unwrap();
-        assert!(work.run(&mut |i, _| i < 1).is_err());
-    }
-
-    #[test]
-    fn package_renders_each_size_and_border() {
-        let mut s = Session::with_demo();
-        let ids = first_ids(&s, 1);
-        let mut set = settings(Style::PicturePackage);
-        set.layout.add_cell(1.5, 1.0).unwrap();
-        set.layout.add_cell(1.5, 1.0).unwrap();
-        set.image.border_enabled = true;
-        set.image.border_width = 0.1;
-        set.image.border_color = [10, 200, 10];
-        let pages = prepare(&mut s, &set, &ids).unwrap().run(&mut |_, _| true).unwrap();
-        assert_eq!(pages.len(), 1);
-        let green = rec2020_from_srgb8([10, 200, 10]);
-        let cell = set.layout.cells[0].rect;
-        let (x0, y0) = ((cell.x * 100.0).round() as usize, (cell.y * 100.0).round() as usize);
-        let at = |x: usize, y: usize| {
-            let i = (y * 400 + x) * 3;
-            pages[0].rgb[i..i + 3].to_vec()
-        };
-        // The frame touches the cell edge on the photo's limiting axis: 10 px (0.1 in) of border all round.
-        let mid = (x0 + 75, y0 + 50);
-        assert_ne!(at(mid.0, mid.1), green.to_vec(), "the photo, not the border, is in the middle");
-        let green_px = (y0..y0 + 100).flat_map(|y| (x0..x0 + 150).map(move |x| (x, y))).filter(|&(x, y)| at(x, y) == green.to_vec()).count();
-        assert!(green_px > 1000, "the border frames the photo inside its cell: {green_px} border pixels");
-    }
-
-    #[test]
-    fn caps_and_hostile_settings_are_refused() {
-        let mut s = Session::with_demo();
-        let ids = first_ids(&s, 1);
-        let mut set = settings(Style::SingleImage);
-        set.layout.page.paper = "custom".into();
-        set.layout.page.custom_width = 60.0;
-        set.layout.page.custom_height = 60.0;
-        set.job.ppi = 720.0;
-        assert!(prepare(&mut s, &set, &ids).is_err(), "a 60 in page at 720 ppi is far beyond the page cap");
-        let mut set = settings(Style::SingleImage);
-        set.job.ppi = f32::NAN;
-        assert!(prepare(&mut s, &set, &ids).is_err());
-        let mut set = settings(Style::SingleImage);
-        set.image.border_width = f64::NAN;
-        assert!(prepare(&mut s, &set, &ids).is_err());
-        set.image.border_width = 0.1;
-        set.image.stroke_width_pt = -1.0;
-        assert!(prepare(&mut s, &set, &ids).is_err());
-        assert!(prepare(&mut s, &settings(Style::SingleImage), &[PhotoId(999_999)]).is_err());
-        assert!(prepare(&mut s, &settings(Style::SingleImage), &[]).is_err());
-        let set = settings(Style::SingleImage);
-        assert!(prepare(&mut s, &set, &vec![ids[0]; 101]).is_err(), "more than 100 pages");
-        // 100 pages of 4x6 at 100 ppi is 24 Mpx: allowed; at 720 ppi it would be over the job cap.
-        let mut big = settings(Style::SingleImage);
-        big.job.ppi = 720.0;
-        assert!(prepare(&mut s, &big, &vec![ids[0]; 60]).is_err());
-    }
-}
+mod tests;

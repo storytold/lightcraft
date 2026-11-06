@@ -6,7 +6,10 @@
 //!   rename).
 //! - `catalog.log` — JSON lines, one per op applied after the snapshot:
 //!   `{"seq":N,"crc":C,"op":{…}}` where `C` is the CRC-32 of the op's JSON text. Appends are
-//!   fsynced before [`Journal::append`] returns.
+//!   fsynced before [`Journal::append`] returns, except natively: [`crate::FsStore`] hands them to
+//!   a thread of its own that writes and syncs them in order right after (so a flag never waits
+//!   for the drive), holds and retries whatever fails ([`Journal::unwritten`]) and refuses later
+//!   appends meanwhile, so the log never has a gap and nothing handed over is dropped.
 //!
 //! Loading = snapshot + replay of the records with `seq > snapshot seq`. Recovery rules:
 //! - a **torn final record** (crash mid-append: truncated line or bad CRC at the end) is dropped
@@ -21,6 +24,12 @@
 //!   the log) are skipped;
 //! - a bad record **followed by good ones** is real damage: replay stops there, the log is kept
 //!   as `catalog.log.damaged-<seq>`, and a fresh snapshot is written so the library stays usable.
+//!
+//! Segmentation grids are shared within a snapshot (issue #2154): each distinct grid is written
+//! once into `Catalog.grids` and the masks of the photo's develop settings, versions, history
+//! steps and import look refer to it by index, so an unchanged mask no longer repeats with every
+//! history step. The table lives only in the snapshot file; log records keep the full grids
+//! inline.
 //!
 //! **Background compaction** ([`Journal::snapshot_in_background`], when the store offers a
 //! [`Store::background_writer`]): a worker thread writes the snapshot of a copy of the catalog at
@@ -52,6 +61,9 @@
 //! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
 //! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
 //! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
+//! | 10 | masks stay on the photo under lens corrections, Upright and Transform | `Mask.on_photo` (develop settings) |
+//! | 11 | lens database profiles named in the Optics panel | `EmbeddedLens.source` |
+//! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -76,7 +88,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 12;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -193,6 +205,10 @@ pub struct Journal {
     /// A failed append may have left part of its records after `log_bytes`, and cutting them off
     /// failed too: the next append cuts the log back to `log_bytes` first.
     tail_dirty: bool,
+    /// An append failed (natively that can be the store's own log thread failing to write records
+    /// handed over before, which it holds and retries): the next chance writes a snapshot, a fresh
+    /// file holding everything, in case only the log's file is broken.
+    snapshot_due: bool,
 }
 
 /// A background snapshot in flight.
@@ -263,23 +279,89 @@ fn newer(what: String) -> CatalogError {
     CatalogError::Newer(format!("{what}; this version reads catalog format v{VERSION} and older"))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Start markers that `resync` decoded on this thread (test builds only; see the cost test).
+    pub(crate) static RESYNC_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Total bytes of candidate suffixes `resync` may decode per damaged line: every attempt reads
+/// the rest of the line, so trying every candidate of a crafted line would make
+/// [`Journal::open`] quadratic in the line length (CWE-407). The budget is far above any
+/// fragment-plus-retry a failed append can leave, but caps the stall; past it the line reads as
+/// damage, which is handled safely.
+pub(crate) const MAX_SCAN: usize = 64 << 20;
+
 /// A line that doesn't decode but ends with a whole record: a fragment of a failed append followed
 /// by the record that retried it (the retry re-encodes the same ops with the same `seq`s). Returns
 /// the fragment's length and the record, if that record continues the log (`seq <= last + 1`).
 /// The record's CRC must match, so damage is never mistaken for it.
 fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
     const START: &[u8] = b"{\"seq\":";
-    (1..line.len().saturating_sub(START.len() - 1)).filter(|&i| line[i..].starts_with(START)).find_map(|i| {
-        let rec = std::str::from_utf8(&line[i..]).ok().map(|l| l.trim_end_matches('\r')).and_then(decode_record)?;
-        (rec.0 <= last + 1).then_some((i, rec))
-    })
+    // The retry record starts with the `{"seq":` marker, but that marker can also occur inside
+    // the op body (a smart-album rule value such as `{"seq":1}`); then the last occurrence is
+    // nested, not the record start, and decoding it rejects a valid retry. Scan every marker
+    // once, left to right, then try them from the end. A candidate must match the record header
+    // shape — `{"seq":<digits>,"crc":<digits>,"op":`, what `encode_record` writes — so a marker
+    // nested inside the op body (followed by `}` or `,`) or plain junk never reaches
+    // `decode_record`; only a real record start does. This imposes no fixed limit on how many
+    // nested markers a valid record may contain. Each attempt then decodes the rest of the line,
+    // so the scan budget bounds the total when a hostile line still holds many header-shaped
+    // markers, keeping the work near-linear instead of quadratic. The fragment that precedes the
+    // record stays to its left (`i > 0`).
+    let digits = |b: &[u8]| b.iter().take_while(|x| x.is_ascii_digit()).count();
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut from = 0;
+    while let Some(i) = line[from..].windows(START.len()).position(|w| w == START) {
+        let pos = from + i;
+        let Some(after) = line.get(pos + START.len()..) else { break };
+        let seq_digits = digits(after);
+        let crc_field = after.get(seq_digits..).and_then(|rest| rest.strip_prefix(b",\"crc\":"));
+        let crc_digits = crc_field.map(digits).unwrap_or(0);
+        let op_field = crc_field.and_then(|rest| rest.get(crc_digits..)).and_then(|rest| rest.strip_prefix(b",\"op\":"));
+        if seq_digits > 0 && crc_digits > 0 && op_field.is_some() {
+            candidates.push(pos);
+        }
+        from = pos + START.len();
+    }
+    let mut scanned = 0usize;
+    for &i in candidates.iter().rev() {
+        if i == 0 {
+            break; // the record must follow a fragment
+        }
+        let Some(suffix) = line.get(i..) else { continue };
+        scanned = match scanned.checked_add(suffix.len()) {
+            Some(total) if total <= MAX_SCAN => total,
+            _ => break, // the budget is spent: stop trying further candidates
+        };
+        let Ok(text) = std::str::from_utf8(suffix) else { continue };
+        #[cfg(test)]
+        RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
+        if let Some((seq, op)) = decode_record(text.trim_end_matches('\u{0D}'))
+            && seq <= last.saturating_add(1)
+        {
+            return Some((i, (seq, op)));
+        }
+    }
+    None
 }
 
 /// Write `catalog.snap` for the state after op `seq`, streaming the JSON into the store (no
 /// whole-file string). The bytes are exactly
 /// `{"format":"lightcraft-catalog","version":1,"seq":N,"catalog":<serde_json of the catalog>}\n`,
-/// as before streaming. Fills in the serialise / write+sync times and the size.
+/// as before streaming. Each distinct segmentation grid of the photos' settings holders (see
+/// `Photo::settings_holders`) is written once (`Catalog.grids`), with the masks referring to it
+/// by index, so an unchanged mask does not repeat with every history step (issue #2154). Fills
+/// in the serialise / write+sync times and the size.
 fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io::Result<SnapshotTiming> {
+    write_snapshot_owned(store, seq, catalog.clone())
+}
+
+/// The same write, taking the catalog by value: the background path hands over the copy it
+/// already made, so a snapshot in flight holds one catalog, not two ([`Catalog::clone`] copies
+/// the photo pointers and the small tables, and the derived indexes start empty — real work on a
+/// large library).
+fn write_snapshot_owned(store: &mut dyn Store, seq: u64, mut snapshot: Catalog) -> std::io::Result<SnapshotTiming> {
     let t0 = web_time::Instant::now();
     let mut serialize_ms = 0.0;
     let bytes = store.write_atomic_with(SNAPSHOT, &mut |w| {
@@ -289,7 +371,35 @@ fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io
         // 1 MiB chunks go through the store's `dyn Write`
         let mut b = std::io::BufWriter::with_capacity(1 << 20, w);
         write!(b, "{{\"format\":\"{FORMAT}\",\"version\":{VERSION},\"seq\":{seq},\"catalog\":")?;
-        serde_json::to_writer(&mut b, catalog).map_err(std::io::Error::other)?;
+        // The shared grids, in first-appearance order. The pool is a serialization detail:
+        // `snapshot` itself is never modified (log records, presets and XMP stay inline).
+        let mut pool: Vec<String> = Vec::new();
+        let mut index: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        {
+            let mut see = |s: &lightcraft_develop::DevelopSettings| {
+                s.visit_seg_masks(&mut |m| {
+                    // borrowed lookup: a grid every history step shares is not cloned just to
+                    // find it already indexed (only a new grid is copied, into pool and table)
+                    if !m.data.is_empty() && !index.contains_key(m.data.as_str()) {
+                        index.insert(m.data.clone(), pool.len() as u32);
+                        pool.push(m.data.clone());
+                    }
+                });
+            };
+            for p in snapshot.photos.values() {
+                for settings in p.settings_holders() {
+                    see(settings);
+                }
+            }
+        }
+        snapshot.grids = pool;
+        match lightcraft_develop::with_grid_interner(index, || serde_json::to_writer(&mut b, &snapshot)) {
+            // no interner can be active here (snapshot writes don't nest), so `None` is a bug:
+            // fail the write rather than store a truncated or reference-less snapshot
+            Some(Ok(())) => {}
+            Some(Err(e)) => return Err(std::io::Error::other(e)),
+            None => return Err(std::io::Error::other("nested grid interner while writing a snapshot")),
+        }
         b.write_all(b"}\n")?;
         b.flush()?;
         serialize_ms = ms_since(t);
@@ -297,6 +407,9 @@ fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io
     })?;
     Ok(SnapshotTiming { serialize_ms, write_sync_ms: (ms_since(t0) - serialize_ms).max(0.0), bytes, ..Default::default() })
 }
+
+/// The highest `seq` a snapshot may hold; beyond it the counter is treated as corrupt, far from overflow.
+const MAX_SEQ: u64 = u64::MAX / 2;
 
 /// Just the identification of `catalog.snap` (read before the catalog itself).
 #[derive(serde::Deserialize)]
@@ -331,6 +444,10 @@ impl Journal {
                     return Err(newer(format!("{SNAPSHOT} is catalog format v{}", h.version)));
                 }
                 let s: SnapFile = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
+                // a seq this high can't come from real use; the next record's seq would wrap
+                if s.seq > MAX_SEQ {
+                    return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: seq {} is out of range", s.seq)));
+                }
                 let mut catalog = s.catalog;
                 report.repaired = catalog.repair();
                 for r in &report.repaired {
@@ -352,6 +469,7 @@ impl Journal {
             pending: None,
             retry_at_records: 0,
             tail_dirty: false,
+            snapshot_due: false,
         };
         let log = log.unwrap_or_default();
 
@@ -392,7 +510,7 @@ impl Journal {
                     let _ = op;
                     report.stale += 1;
                 }
-                Some((seq, op)) if seq == j.seq + 1 => {
+                Some((seq, op)) if j.seq.checked_add(1) == Some(seq) => {
                     if catalog.apply(op).is_err() {
                         report.failed += 1;
                     } else {
@@ -476,7 +594,7 @@ impl Journal {
         let mut buf = String::new();
         let mut seq = self.seq;
         for op in ops {
-            seq += 1;
+            seq = seq.checked_add(1).ok_or_else(|| CatalogError::Corrupt(format!("{LOG}: op counter overflow")))?;
             buf.push_str(&encode_record(seq, op));
             buf.push('\n');
         }
@@ -485,6 +603,7 @@ impl Journal {
             self.tail_dirty = false;
         }
         if let Err(e) = self.store.append(LOG, buf.as_bytes()) {
+            self.snapshot_due = true;
             // Part of the batch may be in the file. Cut it back to the last whole record, so the
             // retry (same seqs) starts on a clean line instead of after a fragment that would
             // read back as damage.
@@ -527,7 +646,7 @@ impl Journal {
             log::warn!("catalog: background snapshot failed ({e}); writing one now");
         }
         let t0 = web_time::Instant::now();
-        let seq = self.seq + unlogged;
+        let seq = self.seq.checked_add(unlogged).ok_or_else(|| CatalogError::Corrupt(format!("{SNAPSHOT}: op counter overflow")))?;
         let mut timing = match write_snapshot(self.store.as_mut(), seq, catalog) {
             Ok(t) => t,
             Err(e) => {
@@ -567,7 +686,7 @@ impl Journal {
         let Some(mut writer) = self.store.background_writer() else { return self.snapshot(catalog) };
         let copy = catalog.clone();
         let seq = self.seq;
-        let spawned = std::thread::Builder::new().name("catalog-snapshot".into()).spawn(move || write_snapshot(writer.as_mut(), seq, &copy));
+        let spawned = std::thread::Builder::new().name("catalog-snapshot".into()).spawn(move || write_snapshot_owned(writer.as_mut(), seq, copy));
         let worker = match spawned {
             Ok(w) => w,
             Err(e) => {
@@ -647,6 +766,7 @@ impl Journal {
     }
 
     fn record_snapshot(&mut self, t: SnapshotTiming) {
+        self.snapshot_due = false;
         self.stats.snapshots += 1;
         self.stats.last_snapshot = t;
         self.stats.max_snapshot_ms = self.stats.max_snapshot_ms.max(t.total_ms);
@@ -666,6 +786,23 @@ impl Journal {
         }
     }
 
+    /// Wait until every appended record is in the file and synced (natively the store writes the
+    /// log on a thread of its own, [`crate::FsStore`]): before the files are read or copied from
+    /// outside. An error says why some aren't yet: they are held and retried, never dropped.
+    pub fn flush(&mut self) -> Result<()> {
+        self.store.flush().map_err(io)
+    }
+
+    /// Appended records the store holds because writing them failed (retried), and why; `None`
+    /// when nothing is held back. Never waits for the drive.
+    pub fn unwritten(&self) -> Option<(usize, String)> {
+        // a snapshot that holds every op holds whatever the log's thread still holds
+        if self.snapshot_seq >= self.seq && self.pending.is_none() {
+            return None;
+        }
+        self.store.unwritten()
+    }
+
     /// Where persistence time went so far.
     pub fn stats(&self) -> PersistStats {
         PersistStats { snapshot_running: self.pending.is_some(), ..self.stats }
@@ -675,7 +812,10 @@ impl Journal {
     pub fn wants_snapshot(&self) -> bool {
         self.pending.is_none()
             && self.log_records >= self.retry_at_records
-            && (self.log_records >= self.policy.max_records || self.log_bytes >= self.policy.max_bytes)
+            && (self.snapshot_due
+                || self.unwritten().is_some()
+                || self.log_records >= self.policy.max_records
+                || self.log_bytes >= self.policy.max_bytes)
     }
 
     pub fn seq(&self) -> u64 {
@@ -705,5 +845,55 @@ impl Drop for Journal {
         {
             log::error!("catalog: background snapshot failed: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_resync {
+    use super::*;
+
+    /// A torn first line may end at any byte and a failed append's retried records may follow its
+    /// own start `{"seq":` more than once: `resync` finds the CRC-valid record after a fragment of
+    /// many record starts. UTF-8 is validated once for a valid line, and for a line that isn't
+    /// wholly valid only up to the budget instead of the suffix length per candidate (CWE-407).
+    #[test]
+    fn resync_finds_the_retried_record_after_a_fragment_of_many_starts() {
+        let op = Op::Batch { ops: vec![] };
+        let record = encode_record(5, &op);
+        let mut line = Vec::from(b"\xf2" as &[u8]); // an invalid byte, so the whole line is not UTF-8
+        for i in 0..1024 {
+            line.extend_from_slice(format!("{{\"seq\":{},\"crc\":{{", i).as_bytes());
+        }
+        let fragment = line.len();
+        line.extend_from_slice(record.as_bytes());
+        assert_eq!(resync(&line, 4).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
+        // a retry is still recognised past `last`: the fragment logs nothing valid, but the CRC
+        // matches, so the double `Some` is only reached with `last >= 4`
+        assert_eq!(resync(&line, 100).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
+    }
+
+    /// A retry record whose op body holds more than eight nested `{"seq":` markers (a
+    /// `SetAlbumRules` with nine rule values of `{"seq":1}`) exhausts `resync`'s fixed
+    /// `MAX_DECODES = 8` decode budget on the nested markers, so the outer record's real
+    /// start is never decoded and the valid operation is truncated as damage.
+    #[test]
+    fn resync_recovers_retry_beyond_eight_nested_markers() {
+        let mut c = Catalog::new();
+        let album_id = c.alloc_album_id();
+        let mut rules = Vec::new();
+        for _ in 0..9 {
+            rules.push(crate::Rule::Field { field: "title".into(), op: "isEmpty".into(), value: serde_json::json!({ "seq": 1 }) });
+        }
+        let retry_op = Op::SetAlbumRules {
+            id: album_id,
+            rules: Box::new(crate::Filter { rule_set: Some(crate::RuleSet { mode: crate::Match::All, rules }), ..Default::default() }),
+        };
+        let body = serde_json::to_string(&retry_op).unwrap();
+        let crc = crc32fast::hash(body.as_bytes());
+        let record = format!("{{\"seq\":5,\"crc\":{crc},\"op\":{body}}}");
+        let mut line = Vec::from(b"torn fragment" as &[u8]);
+        let fragment = line.len();
+        line.extend_from_slice(record.as_bytes());
+        assert_eq!(resync(&line, 4).map(|(at, (seq, _))| (at, seq)), Some((fragment, 5)));
     }
 }
