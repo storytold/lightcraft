@@ -901,6 +901,7 @@ fn f2_renames_the_row_under_the_cursor() {
     let (album, album_name) = albums.iter().find(|a| !a.2 && a.3).map(|a| (a.0, a.1.clone())).expect("a demo album");
     let (folder, folder_name) = albums.iter().find(|a| a.2 && a.3).map(|a| (a.0, a.1.clone())).expect("a demo album folder");
     let local = std::env::temp_dir().join("Day#2").to_string_lossy().to_string();
+    let place = std::env::temp_dir().join("Place").to_string_lossy().to_string();
     let rows = vec![
         row("all", "All Photos"),
         row(&format!("album:{album}"), &album_name),
@@ -911,8 +912,10 @@ fn f2_renames_the_row_under_the_cursor() {
         row(&format!("local:{local}"), "Day #2"),
         row(&format!("local:{local}"), "Day #2"),
         row("local:relative", "relative"),
+        row(&format!("local:{place}"), "Pictures"),
     ];
     let mut s = Sidebar::new(rows);
+    s.app.services.local_places = Some(vec![("Pictures".to_string(), place.clone())]);
     s.enter();
     s.press(Key::F2);
     assert_eq!(s.app.ui.dialog, None, "All Photos has no name to change");
@@ -955,6 +958,10 @@ fn f2_renames_the_row_under_the_cursor() {
     s.press(Key::ArrowDown);
     assert_eq!(s.at(), Some("local:relative"), "and Down goes on past them");
     assert_eq!(s.open_rename_of("local:relative"), None, "a Local row that is no folder has no name to change");
+    // a built-in place (here one the host lists) is offered no Rename by its menu either
+    s.app.ui.toast = None;
+    assert_eq!(s.open_rename_of(&format!("local:{place}")), None, "a built-in Local place is not renamed");
+    assert!(s.said().contains("no name"), "{:?}", s.said());
 }
 
 /// A cursor whose row is gone starts again at the shown row; the rows of another library are forgotten

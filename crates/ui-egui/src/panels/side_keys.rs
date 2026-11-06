@@ -420,8 +420,9 @@ fn ask(ctx: &egui::Context, row: &NavRow, what: Ask) {
     with(ctx, |n| n.ask = Some((row.id.clone(), what)));
 }
 
-/// F2 on a row that has a name of its own: the dialog its menu's Rename opens (a Local place is offered under its
-/// folder's own name, where the menu offers the name the row shows, which may be translated).
+/// F2 on a row that has a name of its own: the dialog its menu's Rename opens (a Local folder is offered under its
+/// folder's own name, where the menu offers the name the row shows, which may be translated; a built-in place, which
+/// the menu offers no Rename for, has none).
 fn rename(app: &mut LightcraftApp, ctx: &egui::Context, id: &str) {
     use crate::state::Dialog;
     // (a second row of one Local folder carries its number after `TWIN`: the same folder)
@@ -443,7 +444,9 @@ fn rename(app: &mut LightcraftApp, ctx: &egui::Context, id: &str) {
         Some(Dialog::RenameKeyword { from: path.to_string(), to: path.to_string() })
     } else if let Some(path) = id.strip_prefix("libfolder:").filter(|p| !lightcraft_catalog::folders::is_disk_root(p)) {
         Some(folder(path, lightcraft_catalog::folders::folder_label(path)))
-    } else if let Some(path) = id.strip_prefix("local:").filter(|p| std::path::Path::new(p).is_absolute()) {
+    } else if let Some(path) =
+        id.strip_prefix("local:").filter(|p| std::path::Path::new(p).is_absolute() && !crate::panels::left::is_builtin_place(app, p))
+    {
         let name = std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().to_string());
         name.map(|name| folder(path, name))
     } else {
