@@ -42,7 +42,7 @@ fn detail_offers_ai_denoise_for_raw_photos_without_any_set_up() {
     assert_eq!(h.app.session.execute("denoise.status", &json!({})).unwrap()["model"]["id"], "builtin");
     // Settings still offers installing a model of one's own.
     h.app.ui.dialog = Some(Dialog::Settings { tab: "denoise".into() });
-    h.settled(SETTLE, "the denoise settings tab");
+    h.settled(SETTLE, "after setting ui.dialog");
     let listed = h.app.session.execute("denoise.models.list", &json!({})).unwrap();
     assert_eq!(listed["models"].as_array().unwrap().len(), lightcraft_denoise::known::all().len(), "{listed}");
     assert!(widgets(&mut h).contains("\"denoise:installFile\""));
@@ -3495,7 +3495,7 @@ fn browsing_from_the_ui_records_the_folder() {
     assert!(h.app.session.catalog.last_browsed(&day_s).is_none());
     let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": root, "subfolders": true}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.browse");
     assert_eq!(h.app.session.visible_cloned().len(), 1);
     assert!(h.app.session.catalog.last_browsed(&day_s).is_some(), "a folder of known photos only");
     let _ = std::fs::remove_dir_all(&dir);
@@ -5154,7 +5154,7 @@ fn the_loupe_shows_built_previews_without_rendering_again() {
         t,
     );
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let edge = h.app.session.loupe_edge;
     assert!(edge > 100, "the loupe said its size: {edge}");
     let ids = h.app.session.visible_cloned();
@@ -5185,7 +5185,7 @@ fn editing_renders_the_loupe_from_its_source_not_a_built_preview() {
         t,
     );
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let edge = h.app.session.loupe_edge;
     let ids = h.app.session.visible_cloned();
     let all: Vec<u64> = ids.iter().map(|i| i.0).collect();
@@ -5250,11 +5250,11 @@ fn the_loupe_prepares_the_photos_ahead_the_settings_ask_for() {
     assert!(n >= 4, "the demo has photos to step through");
     h.request("engine.execute", json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"ahead": 3}}}}), t);
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     for _ in 0..40 {
         h.step();
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     // the first photo: three ahead (no photo behind it)
     assert_eq!(h.app.renderer.prefetch_slots_asked(), 3.min(n - 1));
     h.app.renderer.forget_all();
@@ -5262,7 +5262,7 @@ fn the_loupe_prepares_the_photos_ahead_the_settings_ask_for() {
     for _ in 0..40 {
         h.step();
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after prefs.setBackgroundPrep");
     assert_eq!(h.app.renderer.prefetch_slots_asked(), 0, "off: nothing prepared ahead");
 }
 

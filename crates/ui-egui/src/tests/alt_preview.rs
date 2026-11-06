@@ -86,21 +86,21 @@ fn j_paints_clipped_highlights_red_and_clipped_shadows_blue() {
     let set = |h: &mut Headless, ev: f64| {
         let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": ev}}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after develop.set");
     };
     set(&mut h, 5.0);
     let (red, blue) = ([255, 0, 0], [0, 0, 255]);
     assert!(share_of(&h, red) < 0.1, "without J the blown photo is not painted red: {}", share_of(&h, red));
     let r = h.request("ui.key", json!({"key": "J"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.key");
     assert!(h.app.ui.show_clipping);
     assert!(share_of(&h, red) > 0.5, "blown highlights shown in red: {}", share_of(&h, red));
     set(&mut h, -5.0);
     // the demo photo's shadows don't reach black on Exposure alone: Blacks crushes them
     let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.blacks", "value": -100.0}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after develop.set");
     assert!(share_of(&h, blue) > 0.01, "crushed shadows shown in blue: {}", share_of(&h, blue));
     assert!(share_of(&h, red) < 0.01, "nothing blown at -5 EV: {}", share_of(&h, red));
 }

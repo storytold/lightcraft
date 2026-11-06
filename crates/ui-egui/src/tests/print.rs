@@ -471,7 +471,7 @@ fn picture_package_and_custom_package_pages_can_print_cut_guide() {
         // so scrolling keeps working even after combo:printPaper is out of view.
         for _ in 0..4 {
             h.request("ui.scroll", json!({"dy": dy}), T);
-            h.settle(T);
+            h.settled(T, "after ui.scroll");
         }
     };
     // picture package (style 2) and custom package (style 3) both offer Cut Guides, not the
