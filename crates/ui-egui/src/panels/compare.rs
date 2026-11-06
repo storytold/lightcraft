@@ -223,7 +223,7 @@ fn photo_tile(
     let ppp = ui.ctx().pixels_per_point();
     let resp = ui.interact(area, egui::Id::unique(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
     crate::widgets::announce(&resp, app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default());
-    let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, resp) };
+    let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, area, resp) };
     let caption_h = 26.0;
     let img_area = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - caption_h));
     let frame = lightcraft_pipeline::geometry::Frame::with_lens(
