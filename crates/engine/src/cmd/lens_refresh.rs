@@ -113,8 +113,10 @@ pub fn apply(s: &mut Session, results: Vec<(Missing, std::result::Result<ProbeIn
                 meta.lens = named.to_string();
                 ops.push(Op::SetMeta { id, meta: Box::new(meta) });
             }
-            // read against this database: remembered when it gave nothing, so the next start doesn't read it again
-            let checked = if info.embedded_lens.is_none() { item.checked.as_str() } else { "" };
+            // read against this database: remembered when it gave nothing, so the next start doesn't read it again.
+            // A preview-only read ran no lookup (the raw couldn't be decoded, so nothing was looked up in the
+            // database): it stamps nothing, so the file is read again once it can be decoded.
+            let checked = if info.embedded_lens.is_none() && info.preview_only.is_none() { item.checked.as_str() } else { "" };
             if p.lens_checked != checked {
                 ops.push(Op::SetLensChecked { id, checked: checked.to_string() });
             }

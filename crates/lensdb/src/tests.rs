@@ -88,6 +88,15 @@ fn parses_cameras_lenses_and_skips_invalid_entries() {
 
 /// The fingerprint is the same for the same data read twice, and changes with any calibrated value or name (#3767:
 /// a lookup that found nothing is remembered against it).
+/// The fingerprint of this database, pinned: the encoding is versioned on purpose (see
+/// `LensDb::fingerprint`), and changing this value means every lookup remembered against the old
+/// fingerprint is read once more — that must be a deliberate change, never an accident of editing
+/// the encoder or of a Rust upgrade changing a formatting implementation.
+#[test]
+fn the_fingerprint_is_pinned_to_the_versioned_encoding() {
+    assert_eq!(db().fingerprint(), 0x6d92_e2cf_eedf_c496);
+}
+
 #[test]
 fn the_fingerprint_follows_the_data() {
     assert_eq!(db().fingerprint(), db().fingerprint(), "the same files, read again");

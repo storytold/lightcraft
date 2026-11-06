@@ -295,16 +295,23 @@ pub(crate) fn reload_ops(
     // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
     // nothing already set is overwritten
     let meta_ops = fill_missing_meta(id, ph, info);
+    let content = content_op(id, ph, info.clone());
+    // the file's content changed: a lens lookup remembered against the old file
+    // ([`lightcraft_catalog::Photo::lens_checked`]) says nothing about the new one, so the stamp
+    // goes and a later sweep reads the file again (this read may itself have run while no lens
+    // database was there to look the new file up in)
+    let stamp = (content.is_some() && !ph.lens_checked.is_empty()).then(|| Op::SetLensChecked { id, checked: String::new() });
     let mut mine: Vec<Op> =
-        content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, info)).chain(as_shot_wb_op(id, ph, info)).collect();
+        content.into_iter().chain(meta_ops).chain(lens_ops(id, ph, info)).chain(as_shot_wb_op(id, ph, info)).chain(stamp).collect();
     if !mine.is_empty() {
         ops.append(&mut mine);
         changed.push(id);
     }
     // virtual copies share the file
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        let content = content_op(c.id, c, info.clone());
+        let stamp = (content.is_some() && !c.lens_checked.is_empty()).then(|| Op::SetLensChecked { id: c.id, checked: String::new() });
+        let theirs: Vec<Op> = content.into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).chain(stamp).collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);

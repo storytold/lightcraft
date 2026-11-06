@@ -161,22 +161,33 @@ pub fn stamp(db: &LensDb) -> String {
     format!("{LOOKUP_RULES}:{:016x}", cached_fingerprint(db))
 }
 
-/// [`LensDb::fingerprint`] of `db`, computed once per database read ([`database`] hands out the same `Arc` until a
-/// [`reload`]): the cache holds a `Weak` of the last one, so an address is only trusted while that database lives.
+/// [`LensDb::fingerprint`] of `db`, remembered per database object: the cache holds a `Weak` of every
+/// database it has hashed that a caller may still hold (the one in use, and one replaced since that a
+/// caller kept), so repeated calls for a retained database — not only the latest one — reuse its
+/// fingerprint. An address is only trusted while that database lives (a dead entry is dropped, never
+/// matched by a new database that reuses the address). A database no `Arc` in hand can name (a test's
+/// own, never loaded by [`database`]) is hashed each time; they are small.
 fn cached_fingerprint(db: &LensDb) -> u64 {
-    static LAST: RwLock<Option<(std::sync::Weak<LensDb>, u64)>> = RwLock::new(None);
-    if let Some((weak, f)) = LAST.read().unwrap_or_else(PoisonError::into_inner).as_ref()
-        && weak.strong_count() > 0
-        && std::ptr::eq(weak.as_ptr(), db)
+    static CACHE: RwLock<Vec<(std::sync::Weak<LensDb>, u64)>> = RwLock::new(Vec::new());
+    if let Some((_, f)) =
+        CACHE.read().unwrap_or_else(PoisonError::into_inner).iter().find(|(weak, _)| weak.strong_count() > 0 && std::ptr::eq(weak.as_ptr(), db))
     {
         return *f;
     }
     let f = db.fingerprint();
-    // only the database in use is remembered (a test's own database is hashed each time; they are small)
     if let Some(current) = LOADED.read().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(|(_, d)| d.clone())
         && std::ptr::eq(Arc::as_ptr(&current), db)
     {
-        *LAST.write().unwrap_or_else(PoisonError::into_inner) = Some((Arc::downgrade(&current), f));
+        let mut cache = CACHE.write().unwrap_or_else(PoisonError::into_inner);
+        cache.retain(|(weak, _)| weak.strong_count() > 0);
+        cache.push((Arc::downgrade(&current), f));
+        // (a handful of databases are ever alive at once; the cap only guards a caller that loads
+        // folder after folder, whose oldest entries are the least likely to be asked for again)
+        const KEEP: usize = 8;
+        if cache.len() > KEEP {
+            let excess = cache.len() - KEEP;
+            cache.drain(..excess);
+        }
     }
     f
 }
@@ -258,6 +269,38 @@ mod tests {
         let (level, line) = summary(dir, "downloaded", &LensDb::parse("<lensdatabase></lensdatabase>").unwrap());
         assert_eq!(level, log::Level::Warn);
         assert!(line.contains("no lenses") && line.contains("downloaded") && line.contains("lenses 0, cameras"), "{line}");
+    }
+
+    /// The fingerprint cache remembers every database a caller may still hold, not only the latest
+    /// one loaded: a retained database that is no longer the one in use still stamps with its own
+    /// fingerprint (round 1 on #3867 — the single-entry cache rehashed it on every call, and a
+    /// cache that mixed databases up would stamp photos against the wrong one).
+    #[test]
+    fn a_retained_database_keeps_its_own_stamp() {
+        if std::env::var_os(ENV).is_some_and(|v| !v.is_empty()) {
+            lightcraft_testkit::skip!(Input, "LIGHTCRAFT_LENSFUN_DIR names the folder in use");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("lc-stamp-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (d1, d2) = (root.join("one"), root.join("two"));
+        for (d, xml) in [(&d1, DB.to_string()), (&d2, DB.replace("k1=\"-0.03\"", "k1=\"-0.04\""))] {
+            std::fs::create_dir_all(d).unwrap();
+            std::fs::write(d.join("lenses.xml"), xml).unwrap();
+            std::fs::write(d.join(crate::lensfun_download::MARKER), "whole").unwrap();
+        }
+        let before = host_dir();
+        use_dir(Some(d1.clone()));
+        let db1 = database().unwrap();
+        let s1 = stamp(&db1);
+        use_dir(Some(d2.clone()));
+        let db2 = database().unwrap();
+        let s2 = stamp(&db2);
+        assert_ne!(s1, s2, "different databases, different stamps");
+        assert_eq!(stamp(&db1), s1, "retained and no longer in use: its own fingerprint");
+        assert_eq!(stamp(&db2), s2, "the one in use: its own fingerprint");
+        use_dir(before);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
