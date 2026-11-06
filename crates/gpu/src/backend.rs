@@ -83,7 +83,8 @@ pub fn default_window_backends(os: &str) -> Backends {
         "windows" => Backends::DX12,
         "macos" | "ios" => Backends::METAL,
         // eframe's default (GL only when the build has it)
-        _ => Backends::GL,
+        "linux" => Backends::GL,
+        _ => Backends::PRIMARY | Backends::GL,
     }
 }
 
@@ -502,10 +503,10 @@ pub fn window_renderer_order(
         WindowRenderer::Wgpu(b) => !b.is_empty() && compiled.contains(*b),
     };
     let not_failed = |r: &WindowRenderer| Some(*r) != failed;
-    // On Windows the Vulkan driver is loaded only when the environment asks for it (the forced
+    // On Windows and Linux the Vulkan driver is loaded only when the environment asks for it (the forced
     // renderer): a broken one crashes the process uncatchably (issue #136). So neither the
     // renderer remembered from the last run nor the one the last start died in can bring it back.
-    let no_vulkan = |r: &WindowRenderer| os != "windows" || !matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN));
+    let no_vulkan = |r: &WindowRenderer| !matches!(os, "windows" | "linux") || !matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN));
     let candidates = forced
         .into_iter()
         .chain(remembered.filter(|r| not_failed(r) && no_vulkan(r)))
@@ -794,6 +795,24 @@ mod tests {
         let automatic = window_renderer_order(None, None, None, "linux", all, true);
         assert!(!automatic.contains(&vk), "the automatic Linux chain must not contain Vulkan: {automatic:?}");
         assert_eq!(automatic.first(), Some(&gl));
+    }
+
+    /// FreeBSD keeps the previous PRIMARY|GL window default (not Linux's GL-only), and on
+    /// Linux a remembered or failed Vulkan renderer is not tried automatically, while a
+    /// forced one still is.
+    #[test]
+    fn freebsd_window_backends_keep_vulkan_default() {
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        let gl = WindowRenderer::Wgpu(Backends::GL);
+        assert_eq!(default_window_backends("linux"), Backends::GL);
+        assert_eq!(default_window_backends("freebsd"), Backends::PRIMARY | Backends::GL);
+        let remembered = window_renderer_order(None, Some(vk), None, "linux", all, true);
+        assert!(!remembered.contains(&vk), "a remembered Vulkan must not be tried on Linux: {remembered:?}");
+        assert_eq!(remembered.first(), Some(&gl));
+        let failed = window_renderer_order(None, None, Some(vk), "linux", all, true);
+        assert!(!failed.contains(&vk), "a failed Vulkan must not be tried on Linux: {failed:?}");
+        assert_eq!(window_renderer_order(Some(vk), None, None, "linux", all, true).first(), Some(&vk));
     }
 
     #[test]
