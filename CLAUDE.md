@@ -57,7 +57,9 @@ of it.
   (`lib.rs`, each binary's `main.rs`) carries `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic,
   clippy::unimplemented, clippy::todo, clippy::unreachable)]`. Every new workspace crate must include
   `[lints] workspace = true` in `Cargo.toml` to inherit `[workspace.lints]`, and new production crate roots include
-  the attribute before modules or other crate items; crate-level `//!` documentation may precede it.
+  the attribute before modules or other crate items; crate-level `//!` documentation may precede it. `cargo xtask roots`
+  (part of `ci` and `ci --quick`) machine-checks that every root, including binary-only crates and the `cdylib`/`rlib`
+  web build, carries both this and the `#![forbid(unsafe_code)]` above (`crates/sysmem` is the one forbid exception).
 
 ## Non-negotiables
 - **Clean-room.** Never read/disassemble anything inside Adobe app bundles (names/listings only). Never copy Adobe icons, presets, profiles (DCP), lens profiles (LCP), camera matrices, fonts. Observation of the installed Lightroom is read-only (it syncs the user's personal library: never import/edit/rate/delete there). Never copy GPL/LGPL/AGPL code (darktable, RawTherapee, ART, LibRaw, rawspeed, rawloader, rawler, lensfun, dcraw-derived GPL code…).
@@ -71,7 +73,7 @@ of it.
 - **Resolution independence:** settings use normalized image coordinates and relative radii; previews and exports must match.
 - **Time goes through `chrono`** (workspace dependency). Never hand-roll UTC/calendar conversion (days-to-date algorithms, leap-year math); a crate owns only its output format string. The one exception is range extension: past the years chrono can represent, shift the date by whole 400-year Gregorian cycles (146,097 days, after which the calendar repeats), let chrono compute the month and day, and add the cycles back to the year (splitting seconds into hours, minutes and seconds is plain arithmetic).
 - **Quality gates** before every commit: `cargo xtask ci --quick` (fmt, clippy -D warnings, the changed packages'
-  tests, layers, assets, and heif / parity / wasm when touched). GitHub runs the full `cargo xtask ci` on every PR
+  tests, layers, assets, roots, and heif / parity / wasm when touched). GitHub runs the full `cargo xtask ci` on every PR
   (`.github/workflows/ci.yml`); run the full one locally before merging branches (below) or when `--quick` can't see
   the risk. One `ci` runs at a time per machine; others wait their turn (`xtask/src/ci_lock.rs`).
 - **Commits:** one task id per commit (`M2.3: local Laplacian highlights/shadows`). Only green states. End messages with the attribution line required by the environment.
@@ -160,4 +162,5 @@ evaluates it (`.github/workflows/nix.yml`), so the build may lag behind the work
 ## CI workflows
 - Workflows in `.github/workflows/` call the shared workflows in [`storytold/craft-common-actions`](https://github.com/storytold/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
 - Don't add or change CI in a feature or fix PR. If the existing workflows can't build or test a change, link an existing craft-common-actions issue or PR, or open a new issue, or a PR only for a small fix that is safe for every app and does not increase CI time.
+- `ci.yml` is the Linux gate, on every pull request. `ci-windows.yml` adds a Windows leg (clippy and tests of the crates with `cfg(windows)` code) when a pull request changes the paths it lists; add the `full-ci` label to run it on any other pull request. When you add `cfg(windows)` code in a new file, add the file to its `paths` in a CI PR.
 - Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.
