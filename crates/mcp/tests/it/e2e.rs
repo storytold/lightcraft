@@ -412,3 +412,48 @@ fn export_without_token_finishes_after_eof() {
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A batch-edit recipe is reachable over MCP without a tool of its own: `run_command` takes
+/// `library.import` with a `recipe`, the generated `cmd_preset_saveRecipe` tool saves one as a
+/// preset, `list_commands` documents both, and a recipe naming white balance is a tool error that
+/// imports nothing.
+#[test]
+fn a_batch_edit_recipe_is_reachable_over_mcp() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-mcp-recipe-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let img = lightcraft_raster::Rgba8::from_fn(96, 64, |x, y| [(x * 2) as u8, (y * 3) as u8, 128, 255]);
+    lightcraft_mcp::write_image(&dir.join("gradient.png"), &img, 90).unwrap();
+    let paths = json!([dir.to_string_lossy()]);
+    let mut server = Server::new(Box::new(Headless::default()));
+    let replies = session(
+        &mut server,
+        &[
+            call(1, "list_commands", json!({"filter": "recipe"})),
+            call(2, "run_command", json!({"command": "library.import", "params": {"paths": paths, "recipe": [{"id": "wb.temp", "value": 5000}]}})),
+            call(3, "query_photos", json!({"limit": 5})),
+            call(
+                4,
+                "run_command",
+                json!({"command": "library.import", "params": {"paths": paths, "recipe": [{"id": "light.exposure", "value": 0.5}, {"id": "color.vibrance", "value": 20}]}}),
+            ),
+            call(5, "get_develop", json!({})),
+            call(6, "cmd_preset_saveRecipe", json!({"name": "Warm", "recipe": [{"id": "light.exposure", "value": 0.5}]})),
+            call(7, "list_commands", json!({"filter": "library.import"})),
+        ],
+    );
+    let listed = |r: &Value| -> Vec<Value> { serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap() };
+    let save = listed(&replies[0]).into_iter().find(|c| c["id"] == "preset.saveRecipe").expect("preset.saveRecipe is listed");
+    assert!(save["params"].as_str().unwrap().contains("recipe: [{id:"), "{save}");
+    assert_eq!(replies[1]["result"]["isError"], true, "{}", replies[1]);
+    assert!(replies[1]["result"]["content"][0]["text"].as_str().unwrap().contains("white balance"), "{}", replies[1]);
+    assert!(replies[2]["result"]["structuredContent"]["photos"].as_array().unwrap().is_empty(), "the refused import added nothing");
+    assert_eq!(replies[3]["result"]["isError"], false, "{}", replies[3]);
+    assert_eq!(replies[3]["result"]["structuredContent"]["imported"].as_array().unwrap().len(), 1);
+    assert_eq!(replies[4]["result"]["structuredContent"]["light"]["exposure"], 0.5, "{}", replies[4]);
+    assert_eq!(replies[4]["result"]["structuredContent"]["color"]["vibrance"], 20.0, "{}", replies[4]);
+    assert_eq!(replies[5]["result"]["isError"], false, "{}", replies[5]);
+    assert_eq!(replies[5]["result"]["structuredContent"]["name"], "Warm");
+    let import = listed(&replies[6]).into_iter().find(|c| c["id"] == "library.import").expect("library.import is listed");
+    assert!(import["params"].as_str().unwrap().contains("recipe?: [{id:"), "{import}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
