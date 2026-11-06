@@ -564,7 +564,7 @@ mod tests {
         // so exact serialization parity must use the engine's CPU reference (#3778), regardless
         // of test order. The window test above separately checks native CPU/GPU equivalence.
         let source = job.source.load_source().unwrap();
-        let b = lightcraft_engine::pipeline::render(&source.image, &source.info_or(job.info), &job.settings, &job.request);
+        let b = lightcraft_engine::pipeline::render(&source.image, &source.info_or(job.info), &job.settings, &job.request).unwrap();
         assert_eq!((a.image.width, a.image.height), (b.image.width, b.image.height));
         assert_eq!(a.image.data, b.image.data);
         assert_eq!(a.histogram, b.histogram);

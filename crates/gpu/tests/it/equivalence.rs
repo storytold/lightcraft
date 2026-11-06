@@ -1234,7 +1234,7 @@ fn check_hdr(name: &str, src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettin
     use lightcraft_color::transfer::linear_to_srgb;
     use lightcraft_pipeline::{DeepSamples, OutputDepth};
     let req = RenderRequest { depth: OutputDepth::F32Hdr, ..*req };
-    let cpu = render(src, info, s, &req);
+    let cpu = render(src, info, s, &req).unwrap();
     let gpu = lightcraft_gpu::try_render(src, info, s, &req, None).expect("a float render on the GPU, without the CPU fallback");
     let (cd, gd) = (cpu.deep.expect("CPU float samples"), gpu.deep.expect("GPU float samples"));
     assert_eq!((cd.width, cd.height, cd.space), (gd.width, gd.height, gd.space), "{name}");
