@@ -762,7 +762,7 @@ mod tests {
         assert!(polled.changed);
         let d = s.develop_of(photo).unwrap();
         assert_eq!(d.masks[0].name, "Sky");
-        assert!(matches!(&d.masks[0].components[0].shape, MaskShape::Prompt { text, seg: Some(_), .. } if text == "sky"));
+        assert!(matches!(&d.masks[0].components[0].shape, MaskShape::Prompt { text, seg: Some(stored), .. } if text == "sky" && stored == &seg));
         for op in ["add", "subtract", "intersect"] {
             s.apply_outcome(
                 worker::Outcome { tag: tag(Some(1), op, true), result: Ok(Some(seg.clone())), superseded: false, notice: None },

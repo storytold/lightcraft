@@ -2186,6 +2186,49 @@ fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
 }
 
 #[test]
+fn legacy_sky_says_so_once_per_session() {
+    let mut h = detail("panel.masking");
+    if h.app.session.segmenter.remote_endpoint().is_some() || !lightcraft_engine::segment::Segmenter::AVAILABLE {
+        lightcraft_testkit::skip!(Feature, "Sky only falls back with a notice in a SAM build with no remote worker");
+        return;
+    }
+    h.app.session.segmenter.dir = Some(std::env::temp_dir().join(format!("lc-sky-notice-{}", std::process::id())));
+    let toast = |h: &Headless| h.app.ui.toast.as_ref().map(|t| t.0.clone());
+    // a stored SAM sky mask used no fallback, and doesn't use up the notice
+    let seg = lightcraft_develop::SegMask::from_logits(4, &[8.0; 16]);
+    h.app.ui.toast = None; // opening the Masking panel says so
+    exec(&mut h, "mask.add", json!({"kind": "sky", "seg": seg}));
+    assert_eq!(toast(&h), None);
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    assert!(toast(&h).is_some_and(|t| t.contains("SAM 3")), "{:?}", toast(&h));
+    h.app.ui.toast = None;
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    exec(&mut h, "mask.addComponent", json!({"kind": "sky", "op": "add"}));
+    assert_eq!(toast(&h), None, "said once per session");
+    assert_eq!(develop(&h).masks.last().unwrap().components[1].shape, MaskShape::Sky);
+    // a new session says it again
+    h.app.ui.legacy_sky_noticed = false;
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    assert!(toast(&h).is_some());
+}
+
+#[test]
+fn the_sky_button_shows_the_legacy_notice_long_enough_to_read() {
+    let mut h = detail("panel.masking");
+    if h.app.session.segmenter.remote_endpoint().is_some() || !lightcraft_engine::segment::Segmenter::AVAILABLE {
+        lightcraft_testkit::skip!(Feature, "Sky only falls back with a notice in a SAM build with no remote worker");
+        return;
+    }
+    h.app.session.segmenter.dir = Some(std::env::temp_dir().join(format!("lc-sky-button-{}", std::process::id())));
+    h.app.ui.toast = None;
+    click(&mut h, "maskNew:sky");
+    h.step();
+    let (text, until, _) = h.app.ui.toast.clone().expect("the click left a notice");
+    assert!(text.contains("SAM 3"), "{text}");
+    assert!(until - h.app.tick_now() > 4.0, "{}", until - h.app.tick_now());
+}
+
+#[test]
 fn sam_sky_component_rows_read_sky_like_legacy_ones() {
     use crate::panels::masking::component_label;
     use lightcraft_develop::{MaskComponent, MaskOp};

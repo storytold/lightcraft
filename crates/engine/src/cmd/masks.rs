@@ -78,6 +78,15 @@ fn new_shape(s: &Session, kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
     Ok(shape)
 }
 
+/// Tell the caller a Sky selection used legacy detection, so it can say so: the mask itself is
+/// not marked, and redoing it once SAM 3 is available can give a different selection.
+fn with_legacy_sky(mut out: Value, legacy: bool) -> Value {
+    if let (true, Some(o)) = (legacy, out.as_object_mut()) {
+        o.insert("legacySky".into(), json!(true));
+    }
+    out
+}
+
 /// `[[x, y], …]` normalized points under `key`.
 fn points(p: &Value, key: &str) -> Vec<Point> {
     p.get(key)
@@ -260,11 +269,12 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; sky/object/prompt: seg? a stored segmentation, no model needed), name?} — sky uses SAM 3 when installed or configured remotely, otherwise legacy sky detection; object/prompt need the model; in the app a text selection returns {pending} and the mask appears when found",
+            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; sky/object/prompt: seg? a stored segmentation, no model needed), name?} — sky uses SAM 3 when installed or configured remotely, otherwise legacy sky detection and the result has legacySky: true; object/prompt need the model; in the app a text selection returns {pending} and the mask appears when found",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
                 let mut shape = new_shape(s, &kind, p, "mask.add")?;
+                let legacy_sky = matches!(shape, MaskShape::Sky);
                 let later = resolve_ai(s, &mut shape, "mask.add")?;
                 let name = str_param(p, "name").map(str::to_string);
                 if let Later::Text(text) = &later {
@@ -290,7 +300,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     *active = Some(next);
                     Ok(())
                 })?;
-                queue_later(s, later, next, 0, out)
+                queue_later(s, later, next, 0, out).map(|out| with_legacy_sky(out, legacy_sky))
             }
         ),
         cmd!(
@@ -311,6 +321,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("mask.addComponent", format!("no mask {mid}")));
                 }
                 let mut shape = new_shape(s, &kind, p, "mask.addComponent")?;
+                let legacy_sky = matches!(shape, MaskShape::Sky);
                 let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
                 if let Later::Text(text) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
@@ -324,7 +335,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     comp = masks[i].components.len() - 1;
                     Ok(())
                 })?;
-                queue_later(s, later, mid, comp, out)
+                queue_later(s, later, mid, comp, out).map(|out| with_legacy_sky(out, legacy_sky))
             }
         ),
         cmd!(

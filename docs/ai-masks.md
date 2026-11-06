@@ -18,7 +18,8 @@ In the Masking panel (M):
   edge controls and detail refinement as Describe. If no sky is found, no mask is created.
   Without the model (including builds without SAM support), Sky automatically uses the legacy
   detector: an embedded DNG sky matte when present, otherwise the sky heuristic. It does not
-  open model setup or start a download. A configured remote SAM worker takes precedence over
+  open model setup or start a download: `mask.add` / `mask.addComponent` report `legacySky: true`,
+  and in a build with SAM support the app says so in a toast once per session. A configured remote SAM worker takes precedence over
   that fallback; errors from an installed model or remote worker remain visible.
   Existing saved Sky shapes keep their original DNG semantic matte / heuristic rendering;
   create a new Sky mask to replace one with SAM 3.

@@ -25,9 +25,11 @@ fn sky_uses_legacy_detection_without_sam() {
             let id = s.active().unwrap();
             let r = s.execute("mask.add", &json!({"kind": "sky", "name": "Sky"})).unwrap();
             assert_ne!(r["pending"], true);
+            assert_eq!(r["legacySky"], true);
             assert_eq!(s.develop_of(id).unwrap().masks[0].components[0].shape, MaskShape::Sky);
             for (op, expected) in [("add", MaskOp::Add), ("subtract", MaskOp::Subtract), ("intersect", MaskOp::Intersect)] {
-                s.execute("mask.addComponent", &json!({"kind": "sky", "op": op, "invert": true})).unwrap();
+                let r = s.execute("mask.addComponent", &json!({"kind": "sky", "op": op, "invert": true})).unwrap();
+                assert_eq!(r["legacySky"], true);
                 let d = s.develop_of(id).unwrap();
                 let c = d.masks[0].components.last().unwrap();
                 assert_eq!(c.shape, MaskShape::Sky);
@@ -71,7 +73,8 @@ fn sky_stores_a_prompt_mask_that_replays_without_the_model() {
         s.segmenter.background = background;
         let id = s.active().unwrap();
         let seg = SegMask::from_logits(4, &[8.0; 16]);
-        s.execute("mask.add", &json!({"kind": "sky", "name": "Evening sky", "seg": seg})).unwrap();
+        let r = s.execute("mask.add", &json!({"kind": "sky", "name": "Evening sky", "seg": seg})).unwrap();
+        assert!(r.get("legacySky").is_none(), "a stored SAM sky mask used no fallback");
         let d = s.develop_of(id).unwrap();
         assert_eq!(d.masks[0].name, "Evening sky");
         assert!(matches!(&d.masks[0].components[0].shape, MaskShape::Prompt { text, seg: Some(stored), .. } if text == "sky" && stored == &seg));
