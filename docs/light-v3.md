@@ -1,6 +1,6 @@
 # Calibrated Contrast and Blacks
 
-> **Last updated:** 2026-10-13 · **Change:** minor (preserve exact evaluation for luminance mixes)
+> **Changes:** [revision history](#revision-history)
 
 Process V4 calibrates global Contrast and Blacks on the camera-look path: a raw with
 `SourceInfo::camera_tone`. Contrast acts per channel. Blacks blends a per-channel result with
