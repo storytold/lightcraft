@@ -278,20 +278,41 @@ fn a_scan_gone_stale_in_the_dialog_is_made_again_in_the_background() {
     assert_eq!(in_library(&h), vec!["a.png", "c.png"], "c came in, the missing b went");
 }
 
-#[test]
-fn a_cancelled_synchronize_stays_at_most_one_step_and_never_says_up_to_date() {
-    let dir = Scratch::new("stop");
-    let mut h = changed_folder(&dir);
-    open_and_scan(&mut h, &dir.path("trip"));
-    let steps = h.app.session.undo.len();
+/// Scan the changed folder and confirm the synchronize with its worker held where it reads the new
+/// file (it grew after the scan, so the work reads it again): the worker can't get past that until
+/// the returned gate is opened, so a Cancel made first is always seen before the file is done.
+/// (The gate gives up after 30 s so a failing test can't hang.)
+fn confirm_with_worker_held_at_its_file(h: &mut Headless, dir: &Scratch) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    use std::sync::atomic::Ordering::Relaxed;
+    open_and_scan(h, &dir.path("trip"));
+    let mut file = std::fs::OpenOptions::new().append(true).open(dir.path("trip/c.png")).unwrap();
+    std::io::Write::write_all(&mut file, b"\0").unwrap();
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let held = gate.clone();
+    h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
+        let end = std::time::Instant::now() + Duration::from_secs(30);
+        while !held.load(Relaxed) && std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
+    }));
     let dlg = h.app.ui.dialog.take().expect("the dialog is open");
     assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_ok());
-    // Cancel (what the row's ✕ does), before any frame committed anything
+    gate
+}
+
+#[test]
+fn a_cancelled_synchronize_says_it_was_stopped_and_stays_at_most_one_step() {
+    let dir = Scratch::new("stop");
+    let mut h = changed_folder(&dir);
+    let steps = h.app.session.undo.len();
+    let gate = confirm_with_worker_held_at_its_file(&mut h, &dir);
+    // Cancel (what the row's ✕ does) while the worker is still reading the new file
     h.app.sync_run.as_mut().expect("running").cancel();
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(h.step_until(T, |h| h.app.sync_run.is_none()), "it ends");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    // (the worker may have finished the one new file before the Cancel was seen: then it says what was imported)
-    assert!(toast.contains("Stopped") || toast.contains("Imported 1"), "never 'up to date': {toast:?}");
+    assert!(toast.contains("Stopped"), "never 'up to date': {toast:?}");
     assert!(h.app.session.undo.len() <= steps + 1, "what was done by then is at most one step");
 }
 
@@ -360,20 +381,18 @@ fn a_synchronize_and_an_import_never_run_at_once() {
 fn a_synchronize_shows_a_row_and_its_cross_stops_it() {
     let dir = Scratch::new("row");
     let mut h = changed_folder(&dir);
-    open_and_scan(&mut h, &dir.path("trip"));
-    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
-    assert!(crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).is_ok());
+    let gate = confirm_with_worker_held_at_its_file(&mut h, &dir);
     let rows = h.app.session.activity.list();
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!((rows[0].kind, rows[0].label.as_str()), ("sync", "Synchronizing folder"));
     assert!(rows[0].detail.ends_with("trip"), "the folder as the dialog named it: {:?}", rows[0].detail);
     assert!(rows[0].cancellable);
-    // the row's ✕ (as `activity.cancel`): what was done stays, and the end says how it ended
+    // the row's ✕ (as `activity.cancel`) while the worker is still reading the new file: what was done stays, and the end says it was stopped
     h.app.session.activity.cancel(rows[0].id).unwrap();
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(h.step_until(T, |h| h.app.sync_run.is_none()), "it ends");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    // (the worker may have finished the one new file before the ✕ was seen: then it says what was imported)
-    assert!(toast.contains("Stopped") || toast.contains("Imported 1"), "{toast:?}");
+    assert!(toast.contains("Stopped"), "{toast:?}");
     assert!(h.app.session.activity.list().is_empty(), "the row goes with the run");
 }
 
