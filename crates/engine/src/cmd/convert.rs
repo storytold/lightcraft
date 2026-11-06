@@ -53,16 +53,28 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
         return Err(format!("{path}: the DNG written for it doesn't hold the same raw data; the raw is kept"));
     }
     drop((raw, back));
-    let dir = Path::new(path).parent().unwrap_or(Path::new(""));
-    crate::file_access::check_write(dir)?;
+    crate::file_access::check_write(crate::merge::output_dir(path))?;
     let out = lightcraft_catalog::safe_file::write_new_unique(&mut dng_names(path), &dng)
         .map_err(|e| format!("{path}: could not write its DNG ({e}); the raw is kept"))?;
     Ok(out.to_string_lossy().to_string())
 }
 
+/// May each photo's file be read, and a new file be written next to it? Asked of them all before
+/// any work starts, so a refusal leaves nothing behind for the photos before it.
+fn check_beside_originals(s: &Session, ids: &[lightcraft_catalog::PhotoId], c: &str) -> Result<()> {
+    for id in ids {
+        if let Some(Source::File { path }) = s.catalog.photo(*id).map(|ph| &ph.source) {
+            crate::file_access::check_read(path).map_err(|e| bad(c, e))?;
+            crate::file_access::check_write(crate::merge::output_dir(path)).map_err(|e| bad(c, e))?;
+        }
+    }
+    Ok(())
+}
+
 fn convert(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.convertToDng";
     let ids = s.targets(p)?;
+    check_beside_originals(s, &ids, C)?;
     let mut ops = Vec::new();
     let mut converted = Vec::new();
     let mut skipped = Vec::new();
@@ -72,9 +84,6 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
             skipped.push(json!([id.0, "not a file"]));
             continue;
         };
-        crate::file_access::check_read(path).map_err(|e| bad(C, e))?;
-        let dir = Path::new(path).parent().unwrap_or(Path::new(""));
-        crate::file_access::check_write(dir).map_err(|e| bad(C, e))?;
         if ph.kind != MediaKind::Raw || ph.format.eq_ignore_ascii_case("DNG") || ph.copy_of.is_some() {
             skipped.push(json!([
                 id.0,
@@ -163,6 +172,7 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
         conflict: crate::export::Conflict::Unique,
         ..Default::default()
     };
+    check_beside_originals(s, &ids, C)?;
     let mut copies = Vec::new();
     for id in ids {
         copies.push(edit_copy(s, p, id, &opts)?);
@@ -334,15 +344,16 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
 /// same settings, metadata, rating, flag, label and albums. → {ids}
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.duplicate";
+    let ids = s.targets(p)?;
+    check_beside_originals(s, &ids, C)?;
     let mut made = Vec::new();
-    for id in s.targets(p)? {
+    for id in ids {
         let Some(ph) = s.catalog.photo(id).map(|p| (**p).clone()) else { continue };
         let Source::File { path } = &ph.source else { return Err(bad(C, "a generated demo photo has no file to duplicate")) };
         let src = Path::new(path);
         let stem = src.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "photo".into());
         let ext = src.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
         let dir = src.parent().unwrap_or(Path::new(""));
-        crate::file_access::check_read(src).map_err(|e| bad(C, e))?;
         let mut dst = dir.join(format!("{stem}-copy{ext}"));
         let mut n = 2;
         while dst.exists() {

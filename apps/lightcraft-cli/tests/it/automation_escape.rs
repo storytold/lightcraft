@@ -45,6 +45,32 @@ fn snapshot(dir: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) {
     }
 }
 
+/// `--library` is the operator's choice, so roots elsewhere don't stop it, and don't blind the guard
+/// that keeps a library out of a Lightroom catalog's folder.
+#[test]
+fn library_outside_the_roots_opens_unless_it_is_a_lightroom_folder() {
+    let base = std::env::temp_dir().join(format!("lc-cli-library-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    for d in ["in", "out", "lib", "lightroom"] {
+        std::fs::create_dir_all(base.join(d)).unwrap();
+    }
+    std::fs::write(base.join("lightroom/Cat.lrcat"), b"not opened").unwrap();
+    let open = |library: &str| {
+        let mut cmd = Command::new(binary());
+        cmd.arg("mcp").arg("--library").arg(base.join(library));
+        cmd.arg("--automation-read-root").arg(base.join("in")).arg("--automation-write-root").arg(base.join("out"));
+        cmd.stdin(Stdio::null()).output().unwrap()
+    };
+    let opened = open("lib");
+    assert!(opened.status.success(), "{}", String::from_utf8_lossy(&opened.stderr));
+    let refused = open("lightroom");
+    let why = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success() && why.contains("library.importLightroom"), "{why}");
+    let names: Vec<_> = std::fs::read_dir(base.join("lightroom")).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert_eq!(names, ["Cat.lrcat"], "nothing is added to the catalog's folder");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 struct Mcp {
     child: Child,
     stdin: ChildStdin,

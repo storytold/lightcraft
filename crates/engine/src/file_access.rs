@@ -140,10 +140,10 @@ thread_local! {
 /// The roots in force in every thread outside [`confine`] and [`unconfined`].
 static PROCESS: OnceLock<Arc<AutomationRoots>> = OnceLock::new();
 
-/// Put `roots` in force in the whole process, for good. `false` when roots were in force already
-/// (they stay as they were).
+/// Put `roots` in force in the whole process, for good. `false` when other roots were in force
+/// already (they stay as they were).
 pub fn confine_process(roots: Arc<AutomationRoots>) -> bool {
-    PROCESS.set(roots).is_ok()
+    PROCESS.set(roots.clone()).is_ok() || PROCESS.get().is_some_and(|r| Arc::ptr_eq(r, &roots))
 }
 
 /// Puts the scope it replaced back when dropped (also when `f` panics).
@@ -191,7 +191,10 @@ fn plain(path: PathBuf) -> PathBuf {
     if !cfg!(windows) {
         return path;
     }
-    let text = path.to_string_lossy();
+    // (a name that isn't Unicode is shown with its prefix: replacing characters would show another name)
+    let Some(text) = path.to_str() else {
+        return path;
+    };
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
         return PathBuf::from(format!(r"\\{rest}"));
     }
@@ -533,6 +536,16 @@ mod tests {
         assert_eq!(check_read(&outside), Ok(()), "restored after a panic");
         assert_eq!(confine(None, || check_read(&outside)), Ok(()));
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A name that isn't Unicode is shown as it is.
+    #[cfg(windows)]
+    #[test]
+    fn a_name_that_is_not_unicode_keeps_its_prefix() {
+        use std::os::windows::ffi::OsStringExt;
+        let wide: Vec<u16> = r"\\?\C:\root\".encode_utf16().chain([0xD800]).collect();
+        let path = PathBuf::from(std::ffi::OsString::from_wide(&wide));
+        assert_eq!(plain(path.clone()), path);
     }
 
     /// Device names.

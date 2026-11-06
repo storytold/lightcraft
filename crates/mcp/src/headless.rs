@@ -17,7 +17,7 @@ use std::sync::Arc;
 pub struct Headless {
     pub session: Session,
     progress: Option<ProgressHook>,
-    pub roots: Option<Arc<AutomationRoots>>,
+    roots: Option<Arc<AutomationRoots>>,
 }
 
 impl Drop for Headless {
@@ -45,10 +45,23 @@ impl Headless {
         Self { session, progress: None, roots: None }
     }
 
-    /// The automation roots of this backend's calls, on the calling thread only: worker threads
-    /// see the process's roots, so a server that hosts agents also needs
-    /// [`confine_process`](lightcraft_engine::file_access::confine_process), as `lightcraft-cli mcp` does.
-    pub fn with_automation_roots(mut self, roots: impl Into<Option<Arc<AutomationRoots>>>) -> Self {
+    /// Confine this backend to `roots`, in the whole process, because worker threads have to obey
+    /// them too. A process has one set of roots for good: other roots than those in force are an error.
+    pub fn with_automation_roots(self, roots: impl Into<Option<Arc<AutomationRoots>>>) -> Result<Self, String> {
+        let roots = roots.into();
+        if let Some(r) = &roots
+            && !lightcraft_engine::file_access::confine_process(r.clone())
+        {
+            return Err("this process is already confined to other automation roots".into());
+        }
+        Ok(self.with_scoped_automation_roots(roots))
+    }
+
+    /// The roots of this backend's calls on the calling thread only, leaving worker threads as they
+    /// are. For tests that try several sets of roots in one process; anything that hosts agents
+    /// uses [`with_automation_roots`](Self::with_automation_roots).
+    #[doc(hidden)]
+    pub fn with_scoped_automation_roots(mut self, roots: impl Into<Option<Arc<AutomationRoots>>>) -> Self {
         self.roots = roots.into();
         self
     }

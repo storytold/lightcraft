@@ -44,7 +44,7 @@ fn confined(tag: &str, read: bool, write: bool) -> (Server, PathBuf) {
     let (in_dir, out_dir) = (base.join("in"), base.join("out"));
     let roots = AutomationRoots::new(read.then_some(in_dir.as_path()), write.then_some(out_dir.as_path())).unwrap();
     let session = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models();
-    let headless = Headless::new(session.with_default_sam3_model().with_default_slide_templates()).with_automation_roots(roots);
+    let headless = Headless::new(session.with_default_sam3_model().with_default_slide_templates()).with_scoped_automation_roots(roots);
     let server = Server::new(Box::new(headless));
     (server, base)
 }
@@ -484,7 +484,7 @@ fn confined_with_library(tag: &str, read: bool, write: bool) -> (Server, PathBuf
     let roots = AutomationRoots::new(read.then_some(in_dir.as_path()), write.then_some(out_dir.as_path())).unwrap();
     let mut session = Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models();
     session.open_library(base.join("lib"), false).unwrap();
-    let headless = Headless::new(session.with_default_sam3_model().with_default_slide_templates()).with_automation_roots(roots);
+    let headless = Headless::new(session.with_default_sam3_model().with_default_slide_templates()).with_scoped_automation_roots(roots);
     let server = Server::new(Box::new(headless));
     (server, base)
 }

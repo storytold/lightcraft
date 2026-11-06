@@ -351,6 +351,7 @@ const NO_PATHS: &[&str] = &[
     "preset.favorite",
     "preset.move",
     "preset.rename",
+    "preset.saveRecipe",
     "preset.update",
     "presets.list",
     "print.cell.add",
@@ -458,17 +459,19 @@ pub fn check_command(id: &str, params: &Value) -> Result<(), String> {
 }
 
 /// Check every string in `value`. Commands trim some of their paths, so the path a command would
-/// open is checked as well as the text it was given. An empty string means "none" to the commands.
+/// open is checked as well as the text it was given. An empty string means "none" to the commands;
+/// all blanks is a file name to those that don't trim, so only an empty string goes unchecked.
 fn check_value(value: &Value, access: Access, depth: usize) -> Result<(), String> {
     match value {
-        Value::String(path) if path.trim().is_empty() => Ok(()),
+        Value::String(path) if path.is_empty() => Ok(()),
         Value::String(path) => {
             let check = |p: &str| match access {
                 Read => check_read(p),
                 Write => check_write(p),
             };
             check(path)?;
-            if path.trim() != path { check(path.trim()) } else { Ok(()) }
+            let trimmed = path.trim();
+            if trimmed != path && !trimmed.is_empty() { check(trimmed) } else { Ok(()) }
         }
         Value::Array(_) if depth == 0 => Err("automation command refused: a path parameter nests too deep".into()),
         Value::Array(items) => items.iter().try_for_each(|v| check_value(v, access, depth - 1)),
@@ -576,6 +579,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// All blanks names a file in the working folder, so it is checked; only an empty string means none.
+    #[test]
+    fn a_blank_path_is_checked_and_an_empty_one_is_not() {
+        let (base, roots) = roots("blank");
+        confine(Some(&roots), || {
+            for blank in ["   ", "\t", " \n "] {
+                let refused = check_command("library.inspectLightroom", &json!({"path": blank})).unwrap_err();
+                assert!(refused.contains("automation"), "{blank:?}: {refused}");
+            }
+            assert!(check_command("library.inspectLightroom", &json!({"path": ""})).is_ok());
+        });
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// Too deep a list is refused not skipped.
     #[test]
     fn too_deep_a_list_is_refused_not_skipped() {
@@ -607,6 +624,7 @@ mod tests {
         "guard.rs",
         "import/commit.rs",
         "import/files.rs",
+        "lens_profiles.rs",
         "lensfun_download.rs",
         "library.rs",
         "lightroom_archive.rs",
