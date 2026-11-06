@@ -326,9 +326,15 @@ impl Seen {
     /// Whether the file is as it was when `info` was probed: still a file, the same size and the
     /// same modification time (to the second, as the probe records it). A file edited in place
     /// keeps its size when only a few bytes change, such as an embedded XMP packet rewritten at the
-    /// same length, so the size alone can't tell.
+    /// same length, so the size alone can't tell. For the same reason a file whose modification
+    /// time isn't known, now or when it was probed, counts as changed.
     pub(crate) fn unchanged_since(&self, info: &ProbeInfo) -> bool {
-        matches!(self, Seen::At { is_file: true, len, modified } if *len == info.file_size && modified.map(crate::import::civil) == info.file_modified)
+        match self {
+            Seen::At { is_file: true, len, modified: Some(secs) } => {
+                *len == info.file_size && info.file_modified.as_deref() == Some(crate::import::civil(*secs).as_str())
+            }
+            _ => false,
+        }
     }
 }
 
@@ -711,6 +717,21 @@ mod prepared_tests {
         assert_eq!(job.read_total.load(Relaxed), 4);
         assert_eq!(prepared.items.len(), 5);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A probe is reused only when the file's modification time is known, now and when it was
+    /// probed, and the same: with no time on either side, only the size would be left to compare.
+    #[test]
+    fn a_probe_is_reused_only_when_both_modification_times_are_known_and_equal() {
+        let probed = |modified: Option<String>| ProbeInfo { file_size: 10, file_modified: modified, ..ProbeInfo::default() };
+        let at = |modified: Option<i64>| Seen::At { is_file: true, len: 10, modified };
+        let secs = 1_700_000_000;
+        let then = Some(crate::import::civil(secs));
+        assert!(at(Some(secs)).unchanged_since(&probed(then.clone())));
+        assert!(!at(Some(secs + 60)).unchanged_since(&probed(then.clone())), "written again since");
+        assert!(!at(None).unchanged_since(&probed(None)), "no time now or then");
+        assert!(!at(None).unchanged_since(&probed(then)), "no time now");
+        assert!(!at(Some(secs)).unchanged_since(&probed(None)), "no time when probed");
     }
 
     /// Given photos on a network share, when an import looks for their sidecars, then it asks about
