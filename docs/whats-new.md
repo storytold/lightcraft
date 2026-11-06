@@ -1,6 +1,92 @@
 # What's new in LightCraft
 
+## Unreleased
+
+### Colour noise reduction (process V6)
+- Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
+  colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
+  R−Y and B−Y, leaving brightness exactly as it was, along edges found in a denoised guide, and takes isolated
+  coloured specks out. New photos get it; photos edited before keep their look until Update to Current Process. A zoomed
+  view is smoothed like the same part of the whole photo and the export.
+
+### The web build can be embedded
+- A page framing LightCraft in an iframe can open it with `?host=parent` and speak to it over `postMessage`, the
+  protocol PdfCraft, GridCraft and DeckCraft share: it hands photos in, receives exports and backups instead of
+  downloads, runs commands and hears whether closing would lose unsaved changes (issue #2270; `docs/web.md`).
+  A parent on another origin, or a page with an opaque origin, keeps the normal downloads.
+- A page can also run LightCraft in its own document, with no iframe: `data-host="page"` on the canvas carries the same
+  messages as `CustomEvent`s on the canvas instead of `postMessage` (issue #2270; `docs/web.md`). `?host=parent` wins
+  when a page asks for both.
+
+### Remove Hot Pixels
+- Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
+  At high ISO single photosites read far brighter than all their neighbours and turn into small red, green or blue
+  dots that noise reduction only makes fainter. They are now replaced before the raw is developed. A point of light
+  spread over neighbouring photosites, such as a star, is kept; untick the box for star fields that need every
+  single-photosite point. Photos edited earlier keep their look: the box is off for them.
+- A raw that would have more than 0.2 % of its photosites replaced is left unchanged: such a photo doesn't look like
+  hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
+  loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
+
+### Raising Exposure keeps raw highlights (process 5)
+- Raising Exposure on a raw no longer turns the brightest tones the sensor recorded white (issue #1632). The tone
+  curve now eases into white a stop at a time instead of reaching it within about a stop of the sensor's white: at
+  Exposure +1 and +2 a sky, a lit wall or a face keeps its detail where it used to go flat white. At Exposure 0 the
+  brightest tones render a few codes darker (on average 1 code or less on the photos measured), and fully clipped
+  areas such as a blown sky stay slightly below pure white until Exposure lifts them further. A DNG whose own tone
+  curve already reaches white at the sensor's white renders as before. This is rendering
+  process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
+  to Current Process. See [process versions](process-versions.md).
+
+## 2026-11-02
+
+### The Windows title bar is readable from the moment the window opens
+- When LightCraft's appearance differs from the one set in Windows (the dark default on a light Windows, for one), the
+  title bar kept the system's colour with the title in LightCraft's, so the title looked blank until focus moved to
+  another window. It now takes LightCraft's colours as soon as the window has focus.
+
+## 2026-11-01
+
+### Korean and Vietnamese text in exports draws whole
+- macOS often stores Korean file names decomposed (NFD), each syllable as its jamo. Contact-sheet captions, export
+  watermarks, slideshow overlays and print page text drew those as loose jamo (`ㅈㅔㅈㅜㄷㅗ` for `제주도`), and
+  decomposed Vietnamese letters lost their stacked marks. Text is now composed before it is laid out, so both draw as
+  they do in the app (issue #3480, #3277).
+
+## 2026-10-31
+
+### Find Similar Photos no longer freezes the window
+- The first search reads every photo in the library, and it did that on the thread that draws the window, so in a large
+  library the app stopped responding and Windows offered to close it (issue #3468). The photos are now read in the
+  background: a "Find Similar Photos" row in the activity stack counts them, you can keep working meanwhile, and its ✕
+  stops the search. A stopped search leaves the view as it was, and the next one goes on from what was read. The menu
+  item is off while a search runs, and opening another library stops it. When a search ends the grid shows the photos it
+  found, also from the Photo menu, and a message says how many. `library.findSimilar` from the control channel and
+  `mcp --connect` still gets `{photos}`, now when the search ends; a caller that stops waiting (the control server
+  gives a request 60 s) can ask again once that search has ended (while it runs, a new request is refused as already
+  running), and what was read isn't read again.
+
 ## 2026-10-30
+
+### Lightroom catalogs with a print inside a collection import their collections
+- Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
+  LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an
+  existing folder" and brought over no collections, and photos whose originals were offline were lost with them
+  (issues #2165, #2532). Such a collection now joins the nearest collection set above it, or the top level, and the
+  import result names it under warnings; so does one whose parent is system-only or gone from the catalog.
+
+### Lens distortion correction for the Sony A7 III
+- Raws from the Sony A7 III (ILCE-7M3) now get the camera's own distortion correction, read from the file, like
+  the A7R IVA's: straight lines stay straight at wide angles (the FE 16–35 F4 ZA at 16 mm shifts detail near the
+  corners by up to about 40 px on a 24 MP photo) and at long ones (the FE 28–70 at 70 mm). Measured against the
+  camera's JPEG, the median error is well under a pixel (up to about 1.5 px in the 16 mm corners). Optics ▸ Enable Lens Corrections turns it off and Profile Distortion scales
+  it; photos imported before this pick it up with Photo ▸ Reload from Disk. Vignetting and chromatic aberration
+  from Sony files are not applied yet.
+
+### Lens corrections without grey corners
+- Lens profiles, the camera's own distortion correction, manual Distortion and Chromatic Aberration now crop just
+  inside the corrected photo, as in Lightroom, so no grey corners or edge marks show. Perspective corrections still
+  need Constrain Crop to do the same.
 
 ### The Flatpak may talk to the accessibility bus
 - The Flatpak package now has access to the accessibility bus (`org.a11y.Bus`) and no other new permission; its network, Pictures folder and GPU access are unchanged. Without it the sandbox hid the bus, which AccessKit needs to reach a screen reader such as Orca; this has not been tried with Orca yet. The Flatpak build is the only one affected.
@@ -260,6 +346,24 @@
 
 ## 2026-10-24
 
+### AI Denoise follows the photo's real noise
+- The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
+  about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel
+  separately, ignores texture, and sets its strength from the noise it actually finds. On clean photos from a Canon EOS R and
+  an R6 Mark III with noise added at real ISO levels, the result at ISO 25600 is 2.2 to 2.7 dB closer to the original, and at
+  ISO 51200 about 5.5 dB closer; at ISO 6400 it is 0.6 to 1.0 dB closer, and quiet photos are no longer smoothed
+  needlessly. Photos denoised before are denoised again when they are next needed. See [AI Denoise](denoise.md).
+
+### Better built-in AI Denoise
+- The built-in denoiser now cleans with block-matching collaborative filtering: similar blocks of the picture are
+  grouped, transformed together and thresholded, so more fine detail survives at the same level of cleaning. On a
+  public raw with added noise it scores 0.25 to 0.6 dB higher than before at every noise level and keeps more
+  texture at medium to extreme noise (medium: 44 % of it against 42 %; extreme: 12 % against 9 %), a little less at
+  light noise (58 % against 62 %), with no colour blotches or isolated specks. It is as fast as the old filter on the processor, and when the computer has a graphics card that is faster
+  it runs there: on an RTX 4080 SUPER a photo's tiles go about 6 to 10 times faster, with the same picture (Settings ▸ AI
+  Denoise ▸ Run on chooses; Automatic times both). Photos
+  denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
+
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
@@ -341,6 +445,29 @@
 
 ## 2026-10-23
 
+### AI Denoise works out of the box
+- Turning on AI Denoise no longer asks for an ONNX model and a `denoise-model.json`: LightCraft's own built-in
+  denoiser runs automatically. Installing a model of your own is optional (Settings ▸ AI Denoise ▸ Your own model);
+  Stop using returns to the built-in one. The set-up prompt and its "resume after installing" flow are gone. See
+  [AI Denoise](denoise.md).
+- The built-in denoiser measures the photo's noise once, cleans the four colour planes together on variance-stabilised
+  data (so colour blotches go too), and cleans harder, with a second pass, the noisier the photo is. Colour noise gets
+  a wider pass of its own, and in heavy noise isolated specks are smoothed away. On a public raw with added noise it
+  scores 3.7 to 10.4 dB higher than the noisy picture, the most at heavy noise, and keeps more fine texture there
+  than before (heavy noise: 22 % of it against 20 %; extreme: 9 % against 7 %).
+
+### Export subfolders stay inside the export folder
+- An export subfolder (typed in the Export dialog, saved in a preset or passed to `export`) can no longer lead
+  outside the chosen folder (issue #2571). `..` and `.` parts and a leading `/` are dropped, and `\` and `:` become
+  `_`, so a shared preset with `../..` in its subfolder writes inside your folder instead of elsewhere on disk.
+  Nested subfolders such as `Client/Jobs` still work.
+
+### Place names always download into the settings folder
+- Download Place Names (for Fill Location from GPS) always saves the GeoNames files in the settings folder (issue
+  #2575). An agent or script driving LightCraft could name another folder and another server, and have that
+  server's files written there; it is now refused. Each file is saved complete or not at all, and replaces whatever
+  is in its place instead of writing through a link to somewhere else.
+
 ### Videos in the grid are no longer sent to the image decoders
 - A video in the library (an MP4 or MOV brought in from a Lightroom catalog) no longer asks the image decoders for a
   grid thumbnail (issue #2682). They can't read one, so each video failed with "unrecognised image format", showed a
@@ -411,6 +538,13 @@
 ### Foreign XMP metadata survives namespace-prefix collisions
 - Saving a sidecar keeps another application's properties even when its namespace uses prefixes such as `lc`
   or `xmp`. Those foreign properties no longer become LightCraft settings or ratings when imported.
+
+### The log can show every thumbnail and preview LightCraft asks for
+- With `RUST_LOG=warn,lightcraft*=info,lightcraft_ui_egui::render=debug` (or `LIGHTCRAFT_LOG=debug`), the log has a
+  line for each picture LightCraft asks for, with its file, and one for how it ended: drawn, or dropped and why.
+  Before, only failures were logged, so the log couldn't tell a file asked for 37 times from one asked for once and
+  failing inside (issue #2682).
+  The usual log is unchanged. See [Get help with a problem](user/troubleshooting/get-help.md).
 
 ### Find Missing Photos finds the files of a library made on Windows
 - A library made on Windows records its originals with Windows paths. Opened on macOS or Linux, its photos are
@@ -680,6 +814,16 @@
   Photos and export file names take them too.
 
 ## 2026-10-20
+
+### Windows: photos follow the monitor's colour profile
+- On Windows, photos are now shown through the colour profile Windows assigns to the monitor the window is on
+  (Settings ▸ System ▸ Display ▸ Color profile, Color Management, or a calibrator's profile), while no monitor profile
+  is chosen in Settings ▸ Display. Before, they were shown as sRGB, so a wide-gamut monitor showed them oversaturated
+  and a calibration was ignored unless you picked the profile by hand. Moving the window to another monitor, or
+  changing the profile in Windows, is followed within about a second.
+- While Windows manages colour itself (HDR on, or Auto Color Management on Windows 11), photos stay sRGB: Windows
+  converts them for the monitor then. Settings ▸ Display ▸ **Use Screen Profile** goes back to this after choosing a
+  profile by hand. See [display profiles](display-profiles.md).
 
 ### Smart albums check File Path rules faster
 - A smart album rule on File Path (contains, doesn't contain, is, isn't, starts with, ends with, is empty, isn't
@@ -1422,6 +1566,15 @@
   file name, then id, instead of import order. Recently Added keeps a batch in file name order, and Auto-Stack orders a
   burst by file name, so the first file is the cover.
 
+### More of the rendering on the GPU
+- LUT profiles, masks with Refine Edges and soft proofing into a colour space render on the GPU (they used to send the
+  whole render to the CPU; soft proofing to a printer or paper profile still renders on the CPU), and so do spot removal, defringe and the histogram (they used to bounce the image through the CPU mid-render).
+  Results match the CPU within 3 levels in 8 bits (mean under half a level; `docs/gpu-pipeline.md`).
+- Grid, filmstrip, preset and profile thumbnails render on the GPU once it is ready (about a quarter faster on an RTX
+  5070, and the CPU stays free for decoding raws).
+- While a slider is dragged, the loupe is drawn straight from the GPU: rendering and drawing share the window's
+  graphics device, so drafts are never copied to memory and back (`LIGHTCRAFT_GPU_WINDOW=0` turns this off).
+
 ### Large preset collections
 - A library holding thousands of presets (a Lightroom collection imported whole: 11 000 presets, a 42 MB
   presets.json) stays responsive. Every command used to re-serialize the whole list to see whether it had changed
@@ -1764,7 +1917,7 @@
 
 ### AI RAW denoise
 - Detail has a per-photo AI Denoise switch and Amount. Bayer RAW photos use a disposable cache, with matching previews and exports and pure-Rust CPU/GPU inference.
-- Models are installed separately after accepting their terms; no weights are bundled. See [setup and limitations](denoise.md).
+- Optional models are installed separately after accepting their terms; no weights are bundled. See [setup and limitations](denoise.md).
 
 ### Library keyboard culling
 - Colour labels tint thumbnail surrounds in Square Grid and the Detail filmstrip, and a translucent footer along the bottom of the photo in Photo Grid. Label confirmations use a matching pale colour.
