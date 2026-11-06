@@ -67,6 +67,8 @@ struct Preparing {
     after: AfterExport,
     write: crate::SharedWrite,
     tx: Sender<Result<(Vec<Value>, Option<Value>, bool), String>>,
+    /// The settings Export with Previous is to repeat, kept once the worker has started.
+    remember: Option<Value>,
 }
 
 impl ExportTask {
@@ -87,8 +89,16 @@ impl ExportTask {
 /// Photos). The row in the activity stack is there at once; the photos are set up over the frames
 /// that follow (see [`prepare`]) and then rendered, encoded and written on a worker. Errors per photo
 /// are collected, not fatal; one that can't be set up at all (a photo gone, a demo photo's
-/// original…) ends the export with that error, in a toast.
-pub fn start(app: &mut LightcraftApp, ids: Vec<PhotoId>, opts: ExportOptions, to: Destination, after: AfterExport) -> Result<Value, String> {
+/// original…) ends the export with that error, in a toast. `remember` is what Export with Previous is to
+/// repeat: kept once the photos are prepared and the worker starts, not for an export that ends before.
+pub fn start(
+    app: &mut LightcraftApp,
+    ids: Vec<PhotoId>,
+    opts: ExportOptions,
+    to: Destination,
+    after: AfterExport,
+    remember: Value,
+) -> Result<Value, String> {
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
@@ -101,7 +111,7 @@ pub fn start(app: &mut LightcraftApp, ids: Vec<PhotoId>, opts: ExportOptions, to
     guard.progress(0, total as u64);
     guard.detail(crate::i18n::tr("Preparing photos…"));
     let library = app.session.library_generation();
-    let preparing = Some(Preparing { library, batch: BatchPrep::new(ids), opts, to, after, write, tx });
+    let preparing = Some(Preparing { library, batch: BatchPrep::new(ids), opts, to, after, write, tx, remember: Some(remember) });
     app.export = Some(ExportTask { total, progress, cancel, rx, guard, preparing });
     Ok(json!({"background": true, "total": total}))
 }
@@ -168,9 +178,19 @@ pub fn prepare(app: &mut LightcraftApp, ctx: &egui::Context) {
             ctx.request_repaint();
         }
         Ok(true) => {
-            if let Err(e) = launch(task, prep, stopped) {
-                app.export = None;
-                app.toast(ctx, e);
+            let remember = prep.remember.take();
+            match launch(task, prep, stopped) {
+                // (an export stopped before it got going, by ✕ or by another library, is not the last one)
+                Ok(()) if !stopped => {
+                    if let Some(last) = remember {
+                        crate::control::remember_export(&mut app.session, last);
+                    }
+                }
+                Ok(()) => {}
+                Err(e) => {
+                    app.export = None;
+                    app.toast(ctx, e);
+                }
             }
         }
         // (the row goes with the task, and `after` is dropped unrun: Photos is free again)

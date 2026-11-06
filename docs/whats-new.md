@@ -161,7 +161,9 @@
   responding however big the batch is; ✕ stops the export during that time too. Each photo is read as it is when its
   turn comes, so an edit made in those moments counts. A photo that can't be exported at all (for example a demo
   photo with no original file when exporting the original, or one purged meanwhile) ends the export with its error in
-  a toast, and nothing is written; opening another library meanwhile stops the export as ✕ does.
+  a toast, and nothing is written; opening another library meanwhile stops the export as ✕ does. Export with
+  Previous (and the Export dialog's starting settings) keep the last export that got going: one that ends while its
+  photos are being set up doesn't replace them.
 - Agents: `app.export {background: true}` still answers at once with `{background: true, total}`; `ui.inspect` →
   `export.running.preparing` is true until the photos are set up. See [Control protocol](control-protocol.md).
 
