@@ -264,17 +264,32 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "library.memory", "Memory Usage", [], None, "{} — bytes held by each cache (decoded sources, rendered previews, GPU buffers; heap when instrumented)", always, |s, _| {
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
         }),
-        cmd!(query "app.memoryBudget", "Memory Budget", [], None, "{mb?: number} — set the memory budget shared by the caches (0: automatic: LIGHTCRAFT_MEMORY_MB when set to 64 or more, else a quarter of the lower of RAM and the cgroup or Windows job memory limit, at most 1536 MB); returns the report", always, |s, p| {
+        cmd!(query "app.memoryBudget", "Memory Budget", [], None, "{mb?: number} — the process's memory budget shared by the caches, in MB; returns the memory report. Missing: report only. 0: automatic, which is LIGHTCRAFT_MEMORY_MB when that is set to 64 or more, else a quarter of the lower of RAM and the cgroup or Windows job memory limit, at most 1536 MB (under a small limit it can be below 64 MB). 64..1048576: that many MB", always, |s, p| {
             if let Some(mb) = p.get("mb").and_then(Value::as_f64) {
                 if mb == 0.0 {
                     s.reset_memory_budget();
                 } else if (64.0..=1_048_576.0).contains(&mb) {
                     s.set_memory_budget((mb * 1048576.0) as usize);
                 } else {
-                    return Err(bad("app.memoryBudget", "mb must be 0 (automatic) or 64..1048576"));
+                    return Err(bad("app.memoryBudget", "mb must be 0 for the automatic budget (which can be below 64 MB), or a number of megabytes from 64 to 1048576"));
                 }
             }
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
+        }),
+        cmd!(query "app.hotPixelLimit", "Hot Pixel Limit", [], None, "{percent?: number} — Remove Hot Pixels leaves a raw alone when more than this share of its photosites would be replaced (0.001..100 %, default 0.2 %; real light it keeps doesn't count); returns {percent, default}", always, |s, p| {
+            if let Some(v) = p.get("percent").filter(|v| !v.is_null()) {
+                let Some(percent) = v.as_f64().filter(|x| (0.001..=100.0).contains(x)) else {
+                    return Err(bad("app.hotPixelLimit", "percent must be a number in 0.001..100"));
+                };
+                // (the default as an `f32` from the app's settings, 0.2000000029…, is the default: its keys stay)
+                let default = lightcraft_raw::HOT_PIXEL_MAX_SHARE;
+                let share = if (percent / 100.0 / default - 1.0).abs() < 1e-6 { default } else { percent / 100.0 };
+                if crate::files::set_hot_pixel_limit(share) {
+                    // decoded with the old limit, and their render keys change
+                    s.media.clear_sources();
+                }
+            }
+            Ok(json!({"percent": crate::files::hot_pixel_limit() * 100.0, "default": lightcraft_raw::HOT_PIXEL_MAX_SHARE * 100.0}))
         }),
         cmd!(query "journal.list", "Command Journal", [], None, "{limit?}", always, |s, p| {
             let lim = p.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;
