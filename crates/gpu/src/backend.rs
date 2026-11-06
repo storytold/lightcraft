@@ -4,8 +4,9 @@
 //! wgpu loads the system driver of *every* backend in the instance's set while it enumerates
 //! adapters, even when it then picks another one: with Vulkan in the set, a broken Vulkan driver
 //! can crash the process (an access violation inside the driver DLL, which nothing can catch)
-//! although DX12 would have been used. So Windows defaults to DX12 alone. macOS uses Metal, Linux
-//! Vulkan (plus GL for the window when the build has it).
+ //! although DX12 would have been used. So Windows defaults to DX12 alone. macOS uses Metal, Linux
+//! uses GL alone for the window: a multi-backend set lets wgpu pick Vulkan (e.g. llvmpipe) and
+//! the GUI can fail to appear.
 //!
 //! Overrides, read once per process:
 //! - `LIGHTCRAFT_GPU_BACKEND` = `dx12` | `vulkan` | `metal` | `gl` (comma lists allowed), `auto`
@@ -82,8 +83,8 @@ pub fn default_window_backends(os: &str) -> Backends {
     match os {
         "windows" => Backends::DX12,
         "macos" | "ios" => Backends::METAL,
-        // eframe's default (GL only when the build has it)
-        _ => Backends::PRIMARY | Backends::GL,
+        // GL only: a multi-backend set lets wgpu pick Vulkan (e.g. llvmpipe) and the GUI can fail to appear
+        _ => Backends::GL,
     }
 }
 
@@ -574,7 +575,7 @@ mod tests {
         assert!(!default_window_backends("windows").contains(Backends::VULKAN));
         assert_eq!(default_compute_backends("macos"), Backends::METAL);
         assert!(default_compute_backends("linux").contains(Backends::VULKAN));
-        assert!(default_window_backends("linux").contains(Backends::VULKAN | Backends::GL));
+        assert_eq!(default_window_backends("linux"), Backends::GL);
     }
 
     /// Issue #471: DX12 shaders compile with FXC, never a `dxcompiler.dll` found on the search path,
@@ -791,6 +792,17 @@ mod tests {
         let automatic = window_renderer_order(None, None, None, "linux", all, true);
         assert_eq!(automatic, [gl, vk, WindowRenderer::Glow]);
         assert_eq!(automatic.first(), Some(&gl));
+    }
+
+    /// On Linux the window must use GL only: `window_renderer_order` puts GL first, but a
+    /// multi-backend set lets wgpu pick Vulkan (e.g. llvmpipe) and the GUI can fail to appear.
+    #[test]
+    fn linux_window_backends_are_gl_only() {
+        assert_eq!(default_window_backends("linux"), Backends::GL);
+        assert!(!default_window_backends("linux").contains(Backends::VULKAN));
+        if cfg!(target_os = "linux") {
+            assert_eq!(window_backends(), Backends::GL);
+        }
     }
 
     #[test]
