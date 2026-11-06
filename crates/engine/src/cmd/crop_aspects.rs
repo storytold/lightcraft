@@ -25,7 +25,8 @@ pub const BUILTIN_ASPECTS: [(&str, &str); 10] = [
 /// The longest name a saved ratio may have, in characters.
 pub const MAX_NAME_CHARS: usize = 64;
 
-/// A ratio the user saved under a name (`[width, height]`, any positive numbers).
+/// A ratio the user saved under a name (`[width, height]`): it passes [`valid_ratio`], as `crop.saveAspect` and
+/// [`CropAspects::sanitized`] check (finite, positive, 1:20 to 20:1, neither side rounding to zero hundredths).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CustomAspect {
