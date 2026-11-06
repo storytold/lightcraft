@@ -710,9 +710,14 @@ mod independent_round2 {
     fn library_generation_identifies_an_opening_not_a_folder_name() {
         let (dir, _, mut app) = fixture("identity");
         let initial = app.session.library_generation();
-        std::fs::rename(dir.join("A"), dir.join("renamed")).unwrap();
-        assert_eq!(initial, app.session.library_generation());
-        std::fs::rename(dir.join("renamed"), dir.join("A")).unwrap();
+        // Windows refuses to rename a folder with open files in it (the open library's catalog),
+        // so the name change is tested where the system allows it; the reopen everywhere.
+        #[cfg(not(windows))]
+        {
+            std::fs::rename(dir.join("A"), dir.join("renamed")).unwrap();
+            assert_eq!(initial, app.session.library_generation());
+            std::fs::rename(dir.join("renamed"), dir.join("A")).unwrap();
+        }
         app.session.open_library(dir.join("A"), false).unwrap();
         assert_ne!(initial, app.session.library_generation());
         drop(app);
