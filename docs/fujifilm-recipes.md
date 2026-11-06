@@ -40,7 +40,7 @@ synchronous Find Missing search retains a recipe only after verifying the curren
 file hash. A submitted/background search plan invalidates it so whole-file hash
 reads do not block the UI; Info can then read it again on a worker.
 
-This feature upgrades opened libraries to catalog format 10. Older builds refuse
+This feature upgrades opened libraries to catalog format 13. Older builds refuse
 that format. It does not change image pixels, apply film-simulation rendering,
 reproduce the camera JPEG or recover a custom recipe name. Search and smart-album
 integration are proposed separately in [#3330](https://github.com/storytold/lightcraft/pull/3330).
