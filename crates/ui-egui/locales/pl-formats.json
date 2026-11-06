@@ -351,6 +351,9 @@
     "many": "Folder podglądów inteligentnych został zmieniony. Nieusunięte pliki źródłowe: {count}.",
     "other": "Folder podglądów inteligentnych został zmieniony. Nieusunięte pliki źródłowe: {count}."
   },
+  "Bring photos in with File › Import Photos… ({keys}).": "Zdjęcia importujesz przez Plik › Importuj zdjęcia… ({keys}).",
+  "View › Detail View ({keys}).": "Widok › Widok szczegółów ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Plik › Eksportuj… · Plik › Drukuj… ({keys}).",
   "{n} folder{} could not be read": "Nie udało się odczytać folderów: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}"
 }
