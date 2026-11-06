@@ -63,11 +63,12 @@ LightCraft is a clean-room, open-source, pure-Rust photo library + non-destructi
    verification, render fidelity against Lightroom, AI models, HDR / video / Classic modules (raw detail:
    [`docs/raw-parity.md`](docs/raw-parity.md)). A ✅ row is not proof of parity — if you find a ✅ feature that is
    wrong or incomplete, downgrade it to 🟡 with a note.
-4. **Pick work** from [`docs/gaps.md`](docs/gaps.md) (ranked by user impact; `B` marks beta blockers). The row-by-row
+2. **Pick work** from [`docs/gaps.md`](docs/gaps.md) (ranked by user impact; `B` marks beta blockers). The row-by-row
    tracker is [`docs/parity-checklist.md`](docs/parity-checklist.md) (one row per feature, menu item and shortcut).
    When you land a feature, update its row(s) and the gap entry in the same commit, and the numbers in `ROADMAP.md` /
    `docs/target-app-parity.md` when a listed gap closes (add a row to each doc's revision history; the header line keeps only `Last reviewed`, `Target` and the `Changes` link, never a `Last updated` date or a change note, which every PR would edit and conflict on); `cargo xtask parity` (part of `ci`) checks that every `cmd:`/`ctl:` id and
-   path the tracker cites still exists, and `cargo xtask parity --write` refreshes its summary.
+   path the tracker cites still exists and that `docs/gaps.md` lists each gap once, and `cargo xtask parity --write`
+   refreshes its summary.
 `plan/` stays optional. Do not stop to ask except for the house-rule list.
 
 **Merging agent branches:** merge one branch, run `cargo xtask ci`, fix, commit — then the next. Two individually green
@@ -102,10 +103,10 @@ of it.
 - **Prove it:** every crash fix lands with a small synthetic regression test that panicked before the fix.
 - Enforced by clippy: root `clippy.toml` keeps unwrap/expect/panic allowances scoped to tests; indexing is not denied. The workspace
   denies `cognitive_complexity`, `too_many_arguments` and `wildcard_imports`; members inherit them with
-  `[lints] workspace = true`, and `sysmem` repeats those denies in its local lint table. Every production crate root
+  `workspace = true` under a `[lints]` table, and `sysmem` repeats those denies in its local lint table. Every production crate root
   (`lib.rs`, each binary's `main.rs`) carries `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic,
   clippy::unimplemented, clippy::todo, clippy::unreachable)]`. Every new workspace crate must include
-  `[lints] workspace = true` in `Cargo.toml` to inherit `[workspace.lints]`, and new production crate roots include
+  `workspace = true` under a `[lints]` table in `Cargo.toml` to inherit `[workspace.lints]`, and new production crate roots include
   the attribute before modules or other crate items; crate-level `//!` documentation may precede it. `cargo xtask roots`
   (part of `ci` and `ci --quick`) machine-checks that every root, including binary-only crates and the `cdylib`/`rlib`
   web build, carries both this and the `#![forbid(unsafe_code)]` above (`crates/sysmem` is the one forbid exception).
@@ -113,10 +114,17 @@ of it.
 ## Non-negotiables
 - **Clean-room.** Never read/disassemble anything inside Adobe app bundles (names/listings only). Never copy Adobe icons, presets, profiles (DCP), lens profiles (LCP), camera matrices, fonts. Observation of the installed Lightroom is read-only (it syncs the user's personal library: never import/edit/rate/delete there). Never copy GPL/LGPL/AGPL code (darktable, RawTherapee, ART, LibRaw, rawspeed, rawloader, rawler, lensfun, dcraw-derived GPL code…).
 - **Pure Rust** in the product. No C/C++ dependencies.
-- **Layering** (`plan/architecture.md` §3, enforced by `cargo xtask layers`): nothing below L5 depends on egui/eframe/winit/rfd.
+- **Layering** (enforced by `cargo xtask layers`; `plan/architecture.md` §3 is optional background): nothing below L5 depends on egui/eframe/winit/rfd.
 - **Everything is a command** (`crates/engine`): id, label, menu path, shortcut, params, enabled(), run(). UI, CLI, control channel and MCP all dispatch by id. Every slider is a `develop` control spec.
+- **Long-running work shows in the activity stack** ([`docs/background-tasks.md`](docs/background-tasks.md)): anything
+  that runs off the UI thread and can take more than a moment holds a `TaskGuard` from `session.activity.start(kind,
+  label, cancel)` for its whole run. It adopts the cancel flag the job already checks (`Cancel::Flag`), or uses
+  `Cancel::No` when the job can't stop. No progress window, panel or progress toast of its own; its tests assert the row.
 - **Resolution independence:** settings use normalized image coordinates and relative radii; previews and exports must match.
 - **Quality gates** before every commit: `cargo xtask ci` (fmt, clippy -D warnings, tests, layers, assets, roots, wasm).
+  For iteration, `cargo xtask ci --quick` runs fmt, clippy, changed packages' tests, layers, assets, roots,
+  and heif / parity / wasm when touched; it does not replace the full gate before merging branches.
+  One `ci` runs at a time per machine; others wait their turn (`xtask/src/ci_lock.rs`).
 - **Commits:** one task id per commit (`M2.3: local Laplacian highlights/shadows`). Only green states.
 
 ## Assets: icons, images, fonts (ABSOLUTE RULE — never violate)
@@ -136,7 +144,7 @@ of it.
   then `CRAFT_FONTS_DIR=../craft-fonts cargo run -p lightcraft` (or any cargo/xtask command). `crates/engine/build.rs`
   embeds the manifest's fonts as `lightcraft_engine::CRAFT_FONTS` (wasm32: BIZ UDPGothic Regular only); `cargo xtask web`
   ships Noto Sans CJK SC Regular as a separate asset loaded by the UI before startup. The UI
-  (`theme::font_definitions`) and the export watermark renderer use CJK faces (picked by script) as fallbacks after Inter. Unset,
+  (`theme::font_definitions`) and the export watermark renderer use CJK faces (picked by script) as fallbacks after Inter; the UI also falls back on the faces of other scripts (Thai, Arabic, …). Unset,
   `CRAFT_FONTS` is empty: everything builds, tests and runs, but Chinese and Japanese text lack glyphs. Releases always build
   with it (`release.yml`, `CRAFT_FONTS_REQUIRED=1`) and ship the fonts' OFL licences. Tests that need these fonts skip
   without it; the FreeBSD CI job runs them with it.
@@ -153,7 +161,9 @@ of it.
 - **Never send OS-level synthetic input** (osascript/System Events keystrokes or clicks, `cliclick`, accessibility
   automation): it goes to whatever window is frontmost — the user's terminal or other apps. Drive LightCraft only
   through its control channel (`ui.key`, `ui.pointer`, `ui.clickWidget`, `ui.menu.invoke`) or headless snapshots.
-- For UI work, **look at the result**: drive via the control channel and take `ui.screenshot`, compare with `plan/lightroom/screenshots/`.
+- For UI work, **look at the result**: drive via the control channel and take `ui.screenshot`. Compare with
+  `plan/lightroom/screenshots/` when available. Without that optional notebook, verify the result against the
+  task's requirements, committed documentation and regression tests; do not request the notebook or block work.
 - **Unattended (display asleep/locked, CI, nightly runs): prefer headless snapshots** — no window needed:
   `lightcraft-cli snapshot --demo --script tour.jsonl -o out.png --size 1600x1000` (control-protocol requests,
   one per line; see `docs/control-protocol.md` → Headless rendering). In a running app use
@@ -162,7 +172,9 @@ of it.
   the running app). See `docs/mcp.md`. Quick non-UI checks: `lightcraft-cli render in.jpg -o out.jpg --set light.exposure=1`.
 - Export goes through `lightcraft_engine::export` (one encoder for app, CLI, MCP and web); UI-only commands live in
   `crates/ui-egui/src/menus.rs`.
-- Shell gotcha: `mv`/`cp` are aliased interactive here — use `/bin/mv -f` / `/bin/cp -f`.
+- Text boxes use `crates/ui-egui/src/widgets/text_field.rs` (`TextField`), not `egui::TextEdit`: it gives every field the
+  Cut / Copy / Paste / Select All menu, Esc restoring the text, and reports how an edit ended. Give each a widget id
+  that is unique on screen. Older fields still on `TextEdit` move over as they are touched.
 - Parallel agents: separate git worktrees and `CARGO_TARGET_DIR=target/agent-<name>`; each agent uses its **own control port** (pick one in 18000–19999, never the default 7980) and its own scratch subfolder (`<scratch>/<agent-name>/`) — never `rm -rf` shared paths; delete your target dir when done (disk is shared); keep every `Cargo.toml` valid at all times (the `crates/*` glob means one broken manifest breaks everyone).
 - Test corpora: `cargo xtask corpus --download` into `corpus/` (gitignored, CC0 only). Never commit media.
 - Shared real-file test corpora (Photoshop-authored PSDs, etc.) live in [`storytold/photocraft-corpus`](https://github.com/storytold/photocraft-corpus). Never commit large binary fixtures to this repo; fetch them pinned by commit and sha256-verified, as PhotoCraft does with `cargo xtask corpus`.
