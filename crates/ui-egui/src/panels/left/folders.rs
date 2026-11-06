@@ -654,13 +654,16 @@ fn disk_folder_menu(app: &mut LightcraftApp, resp: &egui::Response, row: FolderR
     });
 }
 
-/// Whether `item` is drawn at all: what this host can't do, or a row that needs a Folders node
-/// when it has none, is left out.
+/// Whether `item` is drawn at all: what this host can't do, a row that needs a Folders node when it
+/// has none, and Move Selected Photos Here on a row that holds other disks, are left out.
 fn folder_item_available(app: &LightcraftApp, row: FolderRow, item: FolderItem, path: &str, node: Option<&FolderNode>) -> bool {
     match item {
         // a built-in place is one of the computer's own folders under a translated label (Home is
         // the user's whole home): Local offers no Rename or Move for it (the other items stay)
         FolderItem::Rename | FolderItem::Move if matches!(row, FolderRow::Local { top: true, .. }) && is_builtin_place(app, path) => false,
+        // a row that holds other disks is no place to move photos to: dropping them on it is refused
+        // (`folder_drop_target`), so the menu doesn't offer it either
+        FolderItem::MovePhotosHere if node.is_some_and(|n| !n.selectable) => false,
         FolderItem::Move => app.services.pick_folder.is_some() || app.services.picker.is_some(),
         FolderItem::Reveal => app.services.reveal.is_some(),
         FolderItem::LocateMissing | FolderItem::ColorLabel | FolderItem::RemoveFromLibrary | FolderItem::RemoveDisk => node.is_some(),

@@ -314,6 +314,8 @@
 - An item that can't apply right now is grayed out, and its tooltip says why, instead of disappearing: Move Selected
   Photos Here until photos are selected, Synchronize Folder… in Local for a folder with no library photo, Keep in
   Local on a place already kept, Remove from Local for a folder inside a place.
+- A folder row that holds other disks as well (such as a Volumes folder with a disk mounted below it) has no Move
+  Selected Photos Here at all, as dropping photos on it is refused too.
 - Show in Finder on a folder, and Keep in Local, now say why when they fail.
 - Rename Folder… in Local starts from the folder's own name on disk, as in Folders.
 

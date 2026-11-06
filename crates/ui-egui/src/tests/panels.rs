@@ -1817,6 +1817,25 @@ fn a_folder_that_holds_other_disks_only_opens() {
     assert_eq!(h.app.session.visible().len(), 1, "a disk's own row does choose");
 }
 
+/// Dropping photos on a folder row that holds other disks is refused (it would put them in a folder that
+/// covers several disks), so its menu doesn't offer Move Selected Photos Here either; the rest of its menu
+/// and the same item on a folder inside a disk stay.
+#[test]
+fn a_folder_that_holds_other_disks_offers_no_move_selected_photos_here() {
+    let mut h = folders_app(&["/Volumes/1.jpg", "/Volumes/tokyo/p/x.jpg"]);
+    let photo = h.app.session.catalog.photos().next().map(|p| p.id.0).unwrap();
+    h.app.run("library.select", json!({"ids": [photo], "active": photo})).unwrap();
+    h.step();
+    right_click(&mut h, "source:libfolder:/Volumes");
+    assert!(has(&h, "folderSynchronize"), "the rest of its menu is there");
+    assert!(!has(&h, "folderMovePhotosHere"), "the drop on this row is refused, so the menu can't move photos into it");
+    h.request("ui.key", json!({"key": "escape"}), T);
+    h.step();
+    h.step();
+    right_click(&mut h, "source:libfolder:/Volumes/tokyo/p");
+    assert!(has(&h, "folderMovePhotosHere"), "a folder inside a disk is a place to move photos to");
+}
+
 /// Whatever sets the chosen folder (a click, an agent, a rename, undo), its row is on screen.
 #[test]
 fn the_chosen_folder_is_always_in_view() {
