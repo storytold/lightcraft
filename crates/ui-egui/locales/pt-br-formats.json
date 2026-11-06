@@ -328,7 +328,7 @@
   "View › Detail View ({keys}).": "Exibir › Exibição de detalhe ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys}).",
   "Show photos with {path}": "Mostrar fotos com {path}",
-  "Show photos with {path} (includes the keywords below it)": "Mostrar fotos com {path} (inclui as palavras-chave abaixo dele)",
+  "Show photos with {path} (includes the keywords below it)": "Mostrar fotos com {path} (inclui as palavras-chave abaixo dela)",
   "Give {path} to the selected photos ({n})": "Atribuir {path} às fotos selecionadas ({n})",
   "Take {path} off the selected photos ({n})": "Remover {path} das fotos selecionadas ({n})"
 }
