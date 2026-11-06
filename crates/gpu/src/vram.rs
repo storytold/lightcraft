@@ -22,8 +22,18 @@ static CACHE: Cache = Cache::new(TTL);
 
 /// Free device memory of the adapter `info` describes, in bytes, or `None` when it cannot be asked.
 pub fn free_bytes(info: &wgpu::AdapterInfo) -> Option<u64> {
+    // an AMD APU's sysfs counts only its carve-out (often 512 MB to 2 GB), not the system memory it
+    // also allocates from: the caller's fixed budget fits it better
+    if shares_system_memory(info.device_type) {
+        return None;
+    }
     let adapter = Adapter { vendor: info.vendor, device: info.device, bus: pci_address(&info.device_pci_bus_id) };
     CACHE.get(&adapter, query)
+}
+
+/// Whether a device of this type allocates from system memory, where free device memory says little.
+fn shares_system_memory(t: wgpu::DeviceType) -> bool {
+    matches!(t, wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu)
 }
 
 /// Which card: vendor and device id, and the PCI address where the backend reports it.
@@ -331,6 +341,14 @@ mod tests {
         let (a1, a2) = (CACHE.get(&one, ask), CACHE.get(&two, ask));
         assert!(a1.is_some_and(|v| v / 1000 == 1) && a2.is_some_and(|v| v / 1000 == 2), "{a1:?} {a2:?}");
         assert_eq!(ASKED.load(Ordering::SeqCst), asked, "fresh answers are not asked for again");
+    }
+
+    /// An integrated GPU (an AMD APU reports its small carve-out in sysfs) keeps the fixed budget.
+    #[test]
+    fn integrated_gpus_are_not_asked() {
+        assert!(shares_system_memory(wgpu::DeviceType::IntegratedGpu));
+        assert!(shares_system_memory(wgpu::DeviceType::Cpu));
+        assert!(!shares_system_memory(wgpu::DeviceType::DiscreteGpu));
     }
 
     #[test]
