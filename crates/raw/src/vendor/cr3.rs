@@ -237,7 +237,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     }
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
-    let image = RawImage {
+    let mut image = RawImage {
         format: RawFormat::Cr3,
         width,
         height,
@@ -258,6 +258,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         metadata,
         lens_metadata: Default::default(),
     };
+    // Canon's stated white level can sit below the sensor's true saturation (EOS RP: 14558
+    // stated, 16383 real). Extend it to a saturation pile-up above it, so highlight data
+    // between the stated level and the real clip point is not treated as clipped. No-op when
+    // no such pile-up exists, and for header-only decodes (no samples).
+    image.extend_cr3_white();
     image.validate_for(mode)?;
     Ok(image)
 }

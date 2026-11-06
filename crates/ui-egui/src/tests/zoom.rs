@@ -70,7 +70,18 @@ fn a_pending_crop_or_rotation_does_not_reuse_the_old_textures_aspect() {
     let tex = h.view.ctx.load_texture("old loupe", egui::ColorImage::filled([4, 3], egui::Color32::BLACK), Default::default());
     h.app.renderer.textures.insert(
         Slot::Main,
-        Tex { look: Some((old_look, true)), key: 0, photo: id, tex, size: [64, 48], histogram: None, ms: 0.0, quick: None, pixels: None },
+        Tex {
+            look: Some((old_look, true)),
+            key: 0,
+            photo: id,
+            tex,
+            native: None,
+            size: [64, 48],
+            histogram: None,
+            ms: 0.0,
+            quick: None,
+            pixels: None,
+        },
     );
     edit(&mut h, |d| d.crop.geometry.rect = lightcraft_geom::Rect::new(0.25, 0.2, 0.75, 0.2 + 1.0 / 3.0));
     for (rotate, expected) in [(false, egui::vec2(32.0, 16.0)), (true, egui::vec2(16.0, 32.0))] {
