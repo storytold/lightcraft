@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Lens database profiles fill the frame
+- A lens database profile whose distortion correction stretches the frame past its edges (for example a zoom at its
+  long end) now zooms the corrected photo in to fill the frame, as the cameras' own corrections do. It used to leave
+  a curved empty border along the edges (issue #3547). Barrel corrections are unchanged. A photo whose profile was
+  looked up earlier gets the new correction after Photo ▸ Reload from Disk.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

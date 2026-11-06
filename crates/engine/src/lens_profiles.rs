@@ -379,6 +379,33 @@ mod tests {
         let _ = database();
     }
 
+    /// A profile that stretches the corners past the frame (made-up PTLens coefficients shaped like the
+    /// Tamron 17-70 B070 profile of issue #3547, on a portrait raw) is zoomed in to fill the frame: the photo
+    /// reaches every edge pixel without the crop shrinking, at a preview's size as at the original's.
+    #[test]
+    fn a_stretching_profile_fills_the_frame_without_a_crop() {
+        const STRETCH: &str = r#"<lensdatabase>
+          <camera><maker>Testcam</maker><model>TC-1</model><mount>T</mount><cropfactor>1.5</cropfactor></camera>
+          <lens><maker>Testcam</maker><model>Testcam 17-70mm f/2.8</model><mount>T</mount><cropfactor>1.5</cropfactor>
+            <calibration><distortion model="ptlens" focal="70" a="0.005" b="0.003" c="0.003" /></calibration>
+          </lens></lensdatabase>"#;
+        let db = LensDb::parse(STRETCH).unwrap();
+        let m = lightcraft_meta::Metadata { lens_model: Some("17-70mm F2.8".into()), focal_length: Some(70.0), ..meta() };
+        let mut s = lightcraft_develop::DevelopSettings::default();
+        s.optics.lens_profile = true;
+        for (w, h) in [(6000usize, 4000usize), (600, 400)] {
+            // the profile is expressed for the unrotated sensor image, then turned upright
+            let lens = lookup(&db, &m, w as f64, h as f64, Orientation::Rotate90).unwrap();
+            let (ow, oh) = (h, w);
+            let framed = lightcraft_pipeline::geometry::Frame::with_lens(ow, oh, &s, true, Some(&lens));
+            assert_eq!(framed.crop.rect, lightcraft_geom::Rect::UNIT, "{w}×{h}: the crop had to shrink to hide a blank border");
+            let warp = framed.warp.unwrap();
+            let edge = (0..ow).flat_map(|x| [(x, 0), (x, oh - 1)]).chain((0..oh).flat_map(|y| [(0, y), (ow - 1, y)]));
+            let blank = edge.filter(|&(x, y)| !warp.covers(&lightcraft_geom::Affine::IDENTITY, x, y)).count();
+            assert_eq!(blank, 0, "{w}×{h}: {blank} edge pixels show no photo");
+        }
+    }
+
     /// A synthetic grid recorded through the profile's barrel distortion comes out of the pipeline's geometry
     /// stage with straight lines.
     #[test]
