@@ -168,14 +168,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
     let height = (screen.height() - 190.0).clamp(280.0, 780.0);
     let mut pu = std::mem::take(&mut app.ui.print);
     let st = app.session.print.clone();
-    // The settings column's scroll position is kept by egui across frames, but the content above
-    // the Page panel changes with the layout style (the package cells alone take several rows).
-    // When it grows, the paper selector slides out of the scroll area and a scroll request can no
-    // longer place the pointer on it, so the panel below is unreachable. Giving wider styles the
-    // height of their content keeps the selector in the area already shown.
-    // Each style also needs its own scroll area: a scroll offset saved while one style was showing
-    // would carry into another and hide its paper selector. And the taller column must not outrun
-    // the dialog on a short window.
+    // Each layout style has its own scroll position: what is above the Page panel differs between them
     let scroll_id = ("print-settings", st.layout.style as u8);
     // (no `id`/`ids` given: the selection, which never fails to parse)
     let ids = app.session.targets(&json!({})).unwrap_or_default();
