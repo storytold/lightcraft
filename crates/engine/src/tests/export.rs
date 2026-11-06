@@ -281,6 +281,60 @@ fn a_subfolder_never_leaves_the_destination_folder() {
 }
 
 #[test]
+fn subfolder_variables_expansion_and_presets() {
+    use crate::export::{Destination, clean_album_name, expand_subfolder, export_batch};
+
+    // Album name cleaning
+    assert_eq!(clean_album_name("Summer 2026"), "Summer 2026");
+    assert_eq!(clean_album_name("Trip: Tokyo / Kyoto * 2026?"), "Trip_ Tokyo _ Kyoto _ 2026_");
+    assert_eq!(clean_album_name("..hidden.."), "hidden");
+    assert_eq!(clean_album_name("..."), "");
+    assert_eq!(clean_album_name("   "), "");
+
+    // Expand variables with fixed date/time: 2026-11-05 14:30
+    let fixed_time = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap().and_hms_opt(14, 30, 0);
+    assert_eq!(expand_subfolder("{album}", Some("Vacation"), fixed_time), "Vacation");
+    assert_eq!(expand_subfolder("{album}", None, fixed_time), "");
+    assert_eq!(expand_subfolder("{date}", None, fixed_time), "20261105");
+    assert_eq!(expand_subfolder("{hour}", None, fixed_time), "1430");
+    assert_eq!(expand_subfolder("{album}/{date}_{hour}", Some("Portraits / 2026"), fixed_time), "Portraits _ 2026/20261105_1430");
+    assert_eq!(expand_subfolder("Exports/{album}/{date}", None, fixed_time), "Exports/20261105");
+
+    // Presets save and restore subfolder with variables intact
+    let mut s = Session::with_demo();
+    s.execute(
+        "export.savePreset",
+        &json!({
+            "name": "Date & Album",
+            "params": {
+                "format": "jpeg",
+                "subfolder": "{album}/{date}_{hour}"
+            }
+        }),
+    )
+    .unwrap();
+    let loaded = s.export_params(&json!({"preset": "Date & Album"})).unwrap();
+    assert_eq!(loaded["subfolder"], "{album}/{date}_{hour}");
+    let opts = ExportOptions::from_json(&loaded);
+    assert_eq!(opts.subfolder, "{album}/{date}_{hour}");
+
+    // Export batch with active album view
+    let id = s.active().unwrap();
+    let album_id = s.execute("album.create", &json!({"name": "Holiday: Spain", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+    s.source = crate::LibrarySource::Album(lightcraft_catalog::AlbumId(album_id));
+
+    let to = Destination { dir: "out".into(), exact: None };
+    let mut written = Vec::new();
+    let mut write = |p: &str, _: &[u8]| {
+        written.push(p.to_string());
+        Ok(())
+    };
+    export_batch(&mut s, &[id], &opts, &to, &mut write, &|_| false).unwrap();
+    assert_eq!(written.len(), 1);
+    assert!(written[0].starts_with("out/Holiday_ Spain/"), "actual: {}", written[0]);
+}
+
+#[test]
 fn prepared_exports_run_on_another_thread() {
     fn send<T: Send>(_: &T) {}
     let mut s = Session::with_demo();

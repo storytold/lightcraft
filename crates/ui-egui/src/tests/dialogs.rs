@@ -151,6 +151,18 @@ fn a_click_outside_an_open_dropdown_keeps_the_dialog() {
 }
 
 #[test]
+fn export_subfolder_variable_dropdown() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    h.app.run("dialog.export", json!({})).unwrap();
+    h.step();
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "combo:exportSubfolderTags"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(egui::Popup::is_any_open(&h.view.ctx), "the subfolder tags dropdown is open");
+}
+
+#[test]
 fn modal_dialogs_close_background_menus() {
     let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
     let r = h.request("ui.clickWidget", json!({"id": "menu:Photo"}), T);

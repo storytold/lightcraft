@@ -1763,11 +1763,36 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
             });
         });
     }
+    let subfolder_id = egui::Id::unique("export-subfolder");
     field(ui, "Subfolder", |ui| {
-        crate::widgets::named(
-            ui.add(egui::TextEdit::singleline(&mut opts.subfolder).hint_text(crate::i18n::tr("none")).desired_width(f32::INFINITY)),
-            crate::i18n::tr("Subfolder"),
-        )
+        trailing_button_row(ui, |ui| {
+            let mut chosen = None;
+            let c = crate::widgets::combo_box("exportSubfolderTags").width(90.0).selected_text(crate::i18n::tr("Insert…")).show_ui(ui, |ui| {
+                if ui.selectable_label(false, "{album}").on_hover_text(crate::i18n::tr("Album name")).clicked() {
+                    chosen = Some("{album}");
+                }
+                if ui.selectable_label(false, "{date}").on_hover_text(crate::i18n::tr("Date (YYYYMMDD)")).clicked() {
+                    chosen = Some("{date}");
+                }
+                if ui.selectable_label(false, "{hour}").on_hover_text(crate::i18n::tr("Hour (hhmm)")).clicked() {
+                    chosen = Some("{hour}");
+                }
+            });
+            crate::widgets::name_combo(&c.response, crate::i18n::tr("Insert variable"));
+            crate::widgets::register(ui, "combo:exportSubfolderTags", c.response.rect);
+            if let Some(tag) = chosen {
+                crate::import::insert_at_cursor(ui.ctx(), subfolder_id, &mut opts.subfolder, tag);
+            }
+            crate::widgets::named(
+                ui.add(
+                    egui::TextEdit::singleline(&mut opts.subfolder)
+                        .id(subfolder_id)
+                        .hint_text(crate::i18n::tr("none"))
+                        .desired_width(ui.available_width()),
+                ),
+                crate::i18n::tr("Subfolder"),
+            );
+        });
     });
     use lightcraft_engine::export::Conflict as K;
     choices(ui, "If file exists", "exportConflict", &[(K::Unique, "Add number"), (K::Overwrite, "Overwrite"), (K::Skip, "Skip")], &mut opts.conflict);
