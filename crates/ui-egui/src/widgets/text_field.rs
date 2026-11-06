@@ -298,10 +298,12 @@ impl<'a> TextField<'a> {
         let menu_was_open = memo.menu_open;
         // a click on a greyed-out item does nothing, as in a native menu: only a choice or a click
         // outside closes it (not the right-click that moves the menu within the field, #1877)
-        memo.menu_open = egui::Popup::context_menu(&response)
-            .close_behavior(crate::widgets::context_menu_close(&response, egui::PopupCloseBehavior::CloseOnClickOutside))
-            .show(|ui| menu(ui, self.widget, id, self.text, &mut memo.action))
-            .is_some();
+        // (while photos are carried a right-click opens no menu: that is not what the person is doing)
+        memo.menu_open = !(response.secondary_clicked() && crate::widgets::carrying(ui.ctx()))
+            && egui::Popup::context_menu(&response)
+                .close_behavior(crate::widgets::context_menu_close(&response, egui::PopupCloseBehavior::CloseOnClickOutside))
+                .show(|ui| menu(ui, self.widget, id, self.text, &mut memo.action))
+                .is_some();
 
         let mut ending = None;
         let close_menu = |ui: &Ui| egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(&response));
