@@ -477,7 +477,8 @@ pub fn forced_window_renderer(app: Option<&str>, wgpu: Option<&str>) -> Option<W
 
 /// The order in which the window's renderers are tried on `os`: the forced one (environment)
 /// first, then the one remembered from the last good start, then the platform chain — on Windows
-/// DX12, GL, then glow; on Linux GL, then glow. On Windows and Linux Vulkan is used only when the
+/// DX12, GL, then glow; on Linux GL, then glow; on other platforms (e.g. FreeBSD) Vulkan, GL,
+/// then glow. On Windows and Linux Vulkan is used only when the
 /// environment asks for it: with Vulkan loaded, a broken Vulkan driver can crash the process
 /// uncatchably (issue #136), so it is never in the automatic chain, and the renderer remembered
 /// from the last run cannot put it first either.
@@ -495,7 +496,11 @@ pub fn window_renderer_order(
         // no Vulkan on Windows: its driver can crash the process uncatchably (issue #136)
         "windows" => vec![Backends::DX12, Backends::GL],
         "macos" | "ios" => vec![Backends::METAL],
-        _ => vec![Backends::GL],
+        // Linux only: eframe's default (GL only when the build has it); other platforms
+        // keep the previous Vulkan, GL chain (e.g. FreeBSD, whose window default is
+        // PRIMARY | GL in `default_window_backends`)
+        "linux" => vec![Backends::GL],
+        _ => vec![Backends::VULKAN, Backends::GL],
     };
     let chain = platform.into_iter().map(WindowRenderer::Wgpu).chain([WindowRenderer::Glow]);
     let usable = |r: &WindowRenderer| match r {
@@ -522,6 +527,34 @@ pub fn window_renderer_order(
         out.push(WindowRenderer::Wgpu(default_window_backends(os) & compiled));
     }
     out
+}
+
+/// Whether the window should start directly with glow when no startup marker can be written
+/// (`--memory` / `LIGHTCRAFT_NO_PREFS`: the window files have no directory). Without a marker
+/// a failed wgpu start cannot be relaunched with the next renderer, so on Linux — where the
+/// wgpu window backend is GL — starting with glow avoids a wgpu-GL initialisation failure that
+/// would otherwise leave no fallback. A forced renderer still wins; with a marker available the
+/// existing marker-based retry is unchanged.
+pub fn glow_without_marker(forced: Option<WindowRenderer>, marker_available: bool, os: &str, glow: bool) -> bool {
+    !marker_available && glow && os == "linux" && forced.is_none()
+}
+
+/// The window renderer to start with, without depending on writing a startup marker: the forced
+/// renderer when there is one, glow on Linux when no marker can be written
+/// ([`glow_without_marker`]), otherwise the first renderer of [`window_renderer_order`] with no
+/// remembered or failed renderer. With a marker available this is the existing order, so the
+/// marker-based retry is preserved.
+pub fn initial_window_renderer(
+    forced: Option<WindowRenderer>,
+    marker_available: bool,
+    os: &str,
+    compiled: Backends,
+    glow: bool,
+) -> WindowRenderer {
+    if glow_without_marker(forced, marker_available, os, glow) {
+        return WindowRenderer::Glow;
+    }
+    window_renderer_order(forced, None, None, os, compiled, glow).first().copied().unwrap_or(WindowRenderer::Glow)
 }
 
 #[cfg(test)]
@@ -813,6 +846,49 @@ mod tests {
         let failed = window_renderer_order(None, None, Some(vk), "linux", all, true);
         assert!(!failed.contains(&vk), "a failed Vulkan must not be tried on Linux: {failed:?}");
         assert_eq!(window_renderer_order(Some(vk), None, None, "linux", all, true).first(), Some(&vk));
+    }
+
+    /// FreeBSD (and other non-Linux platforms) keep Vulkan in the automatic window renderer
+    /// chain, matching `default_window_backends`' PRIMARY|GL default: a system with Vulkan but
+    /// no GL must still try Vulkan without an explicit override.
+    #[test]
+    fn freebsd_window_renderer_order_contains_vulkan() {
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        let gl = WindowRenderer::Wgpu(Backends::GL);
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let order = window_renderer_order(None, None, None, "freebsd", all, true);
+        assert!(order.contains(&vk), "FreeBSD order must contain Vulkan: {order:?}");
+        assert_eq!(order.first(), Some(&vk));
+        // Vulkan usable, GL not compiled in: Vulkan is still tried automatically
+        let order = window_renderer_order(None, None, None, "freebsd", Backends::VULKAN, true);
+        assert_eq!(order.first(), Some(&vk));
+        assert!(!order.contains(&gl));
+        // Linux stays GL-only in the automatic chain
+        let linux = window_renderer_order(None, None, None, "linux", all, true);
+        assert!(!linux.contains(&vk));
+        assert_eq!(linux.first(), Some(&gl));
+    }
+
+    /// Without a startup marker (`--memory` / no prefs directory) a failed wgpu-GL start cannot
+    /// be relaunched with the next renderer, so Linux starts with glow directly; with a marker
+    /// the existing order (GL first, glow last) is kept, and a forced renderer still wins.
+    #[test]
+    fn linux_without_a_marker_starts_with_glow() {
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let gl = WindowRenderer::Wgpu(Backends::GL);
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        assert!(glow_without_marker(None, false, "linux", true));
+        assert!(!glow_without_marker(None, true, "linux", true));
+        assert!(!glow_without_marker(Some(vk), false, "linux", true));
+        assert!(!glow_without_marker(None, false, "linux", false));
+        assert!(!glow_without_marker(None, false, "windows", true));
+        assert_eq!(initial_window_renderer(None, false, "linux", all, true), WindowRenderer::Glow);
+        assert_eq!(initial_window_renderer(None, true, "linux", all, true), gl);
+        assert_eq!(initial_window_renderer(Some(vk), false, "linux", all, true), vk);
+        assert_eq!(initial_window_renderer(None, false, "linux", all, false), gl);
+        // the marker-less order still carries glow as its fallback when glow is available
+        let order = window_renderer_order(None, None, None, "linux", all, true);
+        assert_eq!(order.last(), Some(&WindowRenderer::Glow));
     }
 
     #[test]
