@@ -274,6 +274,34 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     compare_files(a, b, false).unwrap_or(false)
 }
 
+/// How many directory entries name the file `path` opens.
+///
+/// Symbolic links are followed, so the count is the file a read would open, not the link itself.
+/// On Unix this is `nlink`. On Windows it is the link count from `GetFileInformationByHandle`
+/// through `winapi-util` (already used here for file identity; this crate has no `unsafe`).
+/// Anywhere else the count cannot be read and this returns [`io::ErrorKind::Unsupported`].
+///
+/// A directory's count is not a hard-link count: on Unix it includes `.`, `..` and each child
+/// directory. Callers that mean "does this file have another name" skip directories.
+pub fn link_count(path: &Path) -> io::Result<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(fs::metadata(path)?.nlink())
+    }
+    #[cfg(windows)]
+    {
+        use winapi_util::{Handle, file::information};
+        let handle = Handle::from_path_any(path)?;
+        Ok(information(&handle)?.number_of_links())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Err(io::Error::new(io::ErrorKind::Unsupported, "the number of names of a file cannot be read on this system"))
+    }
+}
+
 /// [`same_file`] for a check that must not let an unknown identity pass: `Err` when the metadata
 /// of either path cannot be read for a reason other than the path not existing (for example a
 /// folder it cannot enter), or when both paths exist with the same length but the file identity
@@ -464,6 +492,9 @@ mod tests {
             }
         }
         fs::write(d.join("copy.png"), b"original").unwrap();
+        assert_eq!(link_count(&p).unwrap(), 2, "the original and the link are two names");
+        assert_eq!(link_count(&linked).unwrap(), 2);
+        assert_eq!(link_count(&d.join("copy.png")).unwrap(), 1, "a copy is one name");
         assert!(same_file(&p, &linked), "a hard link is the same file");
         assert!(same_file(&linked, &p));
         assert!(!same_file(&p, &d.join("copy.png")), "a copy with the same content and length is another file");

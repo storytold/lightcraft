@@ -72,11 +72,14 @@ the mounted volumes).
 Not confined, on purpose:
 
 - What the operator chose at startup: the `--library` folder with its catalog, previews and archives.
+  A smart preview is written there from a photo the roots can read. A photo the catalog names outside
+  the roots counts as missing and is not read, including as the source of a smart preview.
 - The app's own folders: settings, user presets and templates, the denoise and face models and the lens and place-name
   data it downloads. No path an agent gives reaches them, but a shared server should give each client its own `HOME`.
-- Other programs. A path is checked and then opened, so a process that swaps in a link in between can still win. A hard
-  link looks like an ordinary file, so a root must not hold hard links to what it should not reach. The roots keep an
-  agent to the files it was given; they don't replace an operating-system sandbox.
+- Other programs. A path is checked and then opened, so a process that swaps in a link in between can still win. A file
+  with more than one name is refused, because another name may lie outside the roots; a name count that cannot be read
+  is refused too. A file with one name is an ordinary file. The roots keep an agent to the files it was given; they
+  don't replace an operating-system sandbox.
 
 Where the file-touching commands are checked, besides the check of their parameters:
 
