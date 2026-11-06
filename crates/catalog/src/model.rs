@@ -171,7 +171,13 @@ pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
 #[serde(default)]
 pub struct Meta {
     pub camera: String,
+    /// The camera's maker, from Exif `Make` (`camera` is maker and model together).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub make: String,
     pub lens: String,
+    /// The lens's maker, from Exif `LensMake`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub lens_make: String,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,
     pub shutter: String,
