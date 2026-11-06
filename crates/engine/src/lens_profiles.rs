@@ -150,6 +150,37 @@ pub fn profile_name(db: &LensDb, camera: &str, lens: &str) -> Option<String> {
     Some(if model.to_lowercase().starts_with(&p.maker.to_lowercase()) || p.maker.is_empty() { model.clone() } else { format!("{} {model}", p.maker) })
 }
 
+/// Bump when [`lookup`] (or the readers that feed it) would find a profile for a file it found none for before, so
+/// photos remembered as "nothing found" ([`stamp`]) are read again once. A different database does that by itself.
+const LOOKUP_RULES: u32 = 1;
+
+/// What a photo whose file a lookup read against `db` and found no profile for is stamped with
+/// ([`lightcraft_catalog::Photo::lens_checked`]): the database's fingerprint and [`LOOKUP_RULES`]. Remembered for the
+/// database last asked about (hashing a whole lensfun database takes a moment; the app asks once per lookup).
+pub fn stamp(db: &LensDb) -> String {
+    format!("{LOOKUP_RULES}:{:016x}", cached_fingerprint(db))
+}
+
+/// [`LensDb::fingerprint`] of `db`, computed once per database read ([`database`] hands out the same `Arc` until a
+/// [`reload`]): the cache holds a `Weak` of the last one, so an address is only trusted while that database lives.
+fn cached_fingerprint(db: &LensDb) -> u64 {
+    static LAST: RwLock<Option<(std::sync::Weak<LensDb>, u64)>> = RwLock::new(None);
+    if let Some((weak, f)) = LAST.read().unwrap_or_else(PoisonError::into_inner).as_ref()
+        && weak.strong_count() > 0
+        && std::ptr::eq(weak.as_ptr(), db)
+    {
+        return *f;
+    }
+    let f = db.fingerprint();
+    // only the database in use is remembered (a test's own database is hashed each time; they are small)
+    if let Some(current) = LOADED.read().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(|(_, d)| d.clone())
+        && std::ptr::eq(Arc::as_ptr(&current), db)
+    {
+        *LAST.write().unwrap_or_else(PoisonError::into_inner) = Some((Arc::downgrade(&current), f));
+    }
+    f
+}
+
 /// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,
 /// re-expressed after `orientation`. `None` without a database, lens name, focal length or matching profile.
 pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orientation: lightcraft_geom::Orientation) -> Option<EmbeddedLens> {

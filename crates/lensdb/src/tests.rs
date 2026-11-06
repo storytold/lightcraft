@@ -86,6 +86,19 @@ fn parses_cameras_lenses_and_skips_invalid_entries() {
     assert!(!db.lenses[2].rectilinear);
 }
 
+/// The fingerprint is the same for the same data read twice, and changes with any calibrated value or name (#3767:
+/// a lookup that found nothing is remembered against it).
+#[test]
+fn the_fingerprint_follows_the_data() {
+    assert_eq!(db().fingerprint(), db().fingerprint(), "the same files, read again");
+    assert_eq!(LensDb::default().fingerprint(), LensDb::default().fingerprint());
+    assert_ne!(db().fingerprint(), LensDb::default().fingerprint());
+    let recalibrated = LensDb::parse(&DB.replace(r#"k1="-0.02""#, r#"k1="-0.021""#)).unwrap();
+    assert_ne!(db().fingerprint(), recalibrated.fingerprint(), "a calibrated value");
+    let aliased = DB.replace("<model>Testcam 50mm f/1.8</model>", "<model>Testcam 50mm f/1.8</model><model>50mm f/1.8</model>");
+    assert_ne!(db().fingerprint(), LensDb::parse(&aliased).unwrap().fingerprint(), "a lens's names");
+}
+
 #[test]
 fn rejects_mismatched_xml_closing_tags() {
     assert!(LensDb::parse("<lensdatabase><lens><maker>X</lensdatabase><model>L</model></lens>").is_err());

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Lens profiles are no longer looked up again at every start
+- Opening a library ran "Looking up lens profiles" over the same raws every time, reading every file again (minutes
+  on a large library on a network share), for photos it had already looked up (issue #3767). The quick check that
+  picks the photos only asks whether the lens database knows the lens by name, while the lookup itself is stricter:
+  a Nikon DSLR raw names only its lens's range ("50.0 mm f/1.8"), which matches some maker's profile by name, but its
+  file gets only a profile named exactly by that range. Such a photo found nothing and was picked again at the next
+  start. A lookup that found nothing is now remembered with the database it used, so the photo is read again only
+  when the database changes (a download or update), when Enable Lens Corrections is ticked on it, or when an agent
+  asks for every photo (`library.refreshLensProfiles` with `all`).
+- The catalog format is now version 12 (`Photo.lens_checked`, `Op::SetLensChecked`). Once this version has opened a
+  library, older versions refuse it, as with every format change.
+
 ### Remove Hot Pixels
 - Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
   At high ISO single photosites read far brighter than all their neighbours and turn into small red, green or blue

@@ -236,10 +236,12 @@ fn op_variants_are_versioned() {
             Op::SetFolderRecord { .. } => 6,
             Op::SetAsShotWb { .. } => 7,
             Op::SetHistoryCursor { .. } => 8,
+            Op::SetLensChecked { .. } => 12,
         }
     }
-    /// v11: `EmbeddedLens.source` (v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 11;
-    let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
+    /// v12: `Photo.lens_checked` (v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9: `Photo.preview_checked` and
+    /// `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 12;
+    let newest = since(&Op::SetLensChecked { id: PhotoId(1), checked: String::new() });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

@@ -82,7 +82,7 @@ fn each_result_reaches_its_photos_virtual_copies_and_no_others() {
         s.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
     }
     let probed = [1, 2].map(|id| {
-        let m = crate::cmd::lens_refresh::Missing { id: PhotoId(id), path: format!("/photos/{id}.cr3") };
+        let m = crate::cmd::lens_refresh::Missing { id: PhotoId(id), path: format!("/photos/{id}.cr3"), checked: String::new() };
         (m, Ok(crate::media::ProbeInfo { embedded_lens: Some(lens(-0.01)), ..Default::default() }))
     });
     let mut found = crate::cmd::lens_refresh::apply(&mut s, probed.into()).unwrap();
@@ -146,14 +146,80 @@ fn photos_get_their_profile_when_the_database_arrives() {
     let mut copy = raw(5, "300mm F4", false);
     copy.copy_of = Some(PhotoId(3));
     s.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
-    let stale = crate::cmd::lens_refresh::Missing { id: PhotoId(3), path: "/elsewhere/3.cr3".into() };
+    let stale = crate::cmd::lens_refresh::Missing { id: PhotoId(3), path: "/elsewhere/3.cr3".into(), checked: "stale".into() };
     let ok = crate::media::ProbeInfo { embedded_lens: Some(lens(-0.01)), ..Default::default() };
     assert!(crate::cmd::lens_refresh::apply(&mut s, vec![(stale, Ok(ok))]).unwrap().is_empty());
     assert!(s.catalog.photo(PhotoId(3)).unwrap().embedded_lens.is_none(), "a stale probe changes nothing");
     assert!(s.catalog.photo(PhotoId(5)).unwrap().embedded_lens.is_none(), "nor the copies");
+    assert!(s.catalog.photo(PhotoId(3)).unwrap().lens_checked.is_empty(), "nor is it remembered as looked up");
     // without file access the command says so instead of clearing anything
     assert!(s.execute("library.refreshLensProfiles", &json!({})).is_err());
     assert!(s.execute("library.refreshLensProfiles", &json!({"ids": "x"})).is_err());
+}
+
+/// Issue #3767: a Nikon DSLR raw names no lens, only its specification, which the catalog keeps as "50.0 mm f/1.8".
+/// The database knows that by name (any maker's 50 mm f/1.8 scores), so the library-wide lookup lists the photo; but
+/// the file's own lookup takes only a profile named exactly by the specification and finds none. That outcome is
+/// remembered: the next start (same database) doesn't read the file again, while a changed database, Enable Lens
+/// Corrections (the photo asked for by id) and an agent's `all` still do.
+#[test]
+fn a_lookup_that_found_nothing_is_not_repeated_until_the_database_changes() {
+    use lightcraft_geom::Orientation;
+    let spec = [50.0, 50.0, 1.8, 1.8];
+    let name = lightcraft_meta::lens_spec_name(spec).unwrap();
+    let mut s = Session::new();
+    let mut copy = raw(2, &name, false);
+    copy.copy_of = Some(PhotoId(1));
+    for p in [raw(1, &name, false), copy] {
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let db = lightcraft_lensdb::LensDb::parse(DB).unwrap();
+    // the two sides disagree about this photo
+    assert!(crate::lens_profiles::profile_name(&db, "Testcam TC-1", &name).is_some(), "known by name: listed");
+    let file = lightcraft_meta::Metadata {
+        make: Some("Testcam".into()),
+        model: Some("TC-1".into()),
+        lens_spec: Some(spec),
+        focal_length: Some(50.0),
+        f_number: Some(1.8),
+        ..Default::default()
+    };
+    let found = crate::lens_profiles::lookup(&db, &file, 600.0, 400.0, Orientation::Normal);
+    assert!(found.is_none(), "the file's lookup finds no profile named \"50mm f/1.8\"");
+    let ids = |v: &[crate::cmd::lens_refresh::Missing]| v.iter().map(|m| m.id.0).collect::<Vec<_>>();
+    let missing = |s: &Session, db: &lightcraft_lensdb::LensDb, only: Option<&[PhotoId]>, again: bool| {
+        crate::cmd::lens_refresh::missing(&s.catalog, db, only, again)
+    };
+    // the first lookup reads it, and finds nothing
+    let listed = missing(&s, &db, None, false);
+    assert_eq!(ids(&listed), [1]);
+    let results = listed.into_iter().map(|m| (m, Ok(crate::media::ProbeInfo { embedded_lens: found, ..Default::default() }))).collect();
+    assert!(crate::cmd::lens_refresh::apply(&mut s, results).unwrap().is_empty());
+    assert!(s.undo.is_empty(), "bookkeeping, not an undo step");
+    // the next start, same database (read again from the same files): not read again
+    let same = lightcraft_lensdb::LensDb::parse(DB).unwrap();
+    assert!(missing(&s, &same, None, false).is_empty(), "a completed lookup is not repeated");
+    // asked for by id (Enable Lens Corrections ticked, on it or its virtual copy), or every photo (`all`): read again
+    assert_eq!(ids(&missing(&s, &same, Some(&[PhotoId(1)]), false)), [1]);
+    assert_eq!(ids(&missing(&s, &same, Some(&[PhotoId(2)]), false)), [1]);
+    assert_eq!(ids(&missing(&s, &same, None, true)), [1]);
+    // a replaced database (a recalibrated profile, or the alias that names the specification): listed once more
+    let aliased = DB.replace("<model>Testcam 50mm f/1.8</model>", "<model>Testcam 50mm f/1.8</model><model>50mm f/1.8</model>");
+    let replaced = lightcraft_lensdb::LensDb::parse(&aliased).unwrap();
+    let listed = missing(&s, &replaced, None, false);
+    assert_eq!(ids(&listed), [1], "the new database may give a profile");
+    let found = crate::lens_profiles::lookup(&replaced, &file, 600.0, 400.0, Orientation::Normal);
+    assert!(found.is_some(), "the alias names the specification");
+    let results = listed.into_iter().map(|m| (m, Ok(crate::media::ProbeInfo { embedded_lens: found, ..Default::default() }))).collect();
+    assert_eq!(crate::cmd::lens_refresh::apply(&mut s, results).unwrap(), [PhotoId(1), PhotoId(2)]);
+    assert!(s.catalog.photo(PhotoId(1)).unwrap().lens_checked.is_empty(), "found: nothing to remember");
+    // a file that couldn't be read is tried again next time
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw(3, &name, false)) }).unwrap();
+    let listed = missing(&s, &db, None, false);
+    assert_eq!(ids(&listed), [3]);
+    let failed = listed.into_iter().map(|m| (m, Err("the share went away".to_string()))).collect();
+    assert!(crate::cmd::lens_refresh::apply(&mut s, failed).unwrap().is_empty());
+    assert_eq!(ids(&missing(&s, &db, None, false)), [3], "an unread file is not remembered as looked up");
 }
 
 fn with_lens(mut p: Photo, l: Option<EmbeddedLens>, on: bool) -> Photo {

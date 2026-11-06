@@ -164,6 +164,26 @@ impl LensDb {
         self.cameras.is_empty() && self.lenses.is_empty()
     }
 
+    /// A hash of everything the database holds (64-bit FNV-1a of its `Debug` text, streamed): the same for
+    /// databases with the same cameras and profiles in the same order, whichever run read them, and different once
+    /// any name, mount or calibrated value changes. A build that reads more of the XML (a new field) gives a new
+    /// one too. Not a security hash: it tells databases apart, it doesn't defend against forged ones.
+    pub fn fingerprint(&self) -> u64 {
+        struct Fnv(u64);
+        impl std::fmt::Write for Fnv {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                for b in s.bytes() {
+                    self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+                }
+                Ok(())
+            }
+        }
+        let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+        // (writing into the hasher can't fail; if it ever did, the partial hash still tells most databases apart)
+        let _ = std::fmt::Write::write_fmt(&mut h, format_args!("{self:?}"));
+        h.0
+    }
+
     /// The camera with this EXIF make and model.
     pub fn find_camera(&self, make: &str, model: &str) -> Option<&Camera> {
         let mk = tokens(make);
