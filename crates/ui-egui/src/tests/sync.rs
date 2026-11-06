@@ -312,7 +312,7 @@ fn a_cancelled_synchronize_says_it_was_stopped_and_stays_at_most_one_step() {
     gate.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(h.step_until(T, |h| h.app.sync_run.is_none()), "it ends");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert!(toast.contains("Stopped"), "never 'up to date': {toast:?}");
+    assert!(toast.contains("Stopped") && !toast.contains("by an error"), "stopped by the Cancel, not by a crashed worker: {toast:?}");
     assert!(h.app.session.undo.len() <= steps + 1, "what was done by then is at most one step");
 }
 
@@ -392,7 +392,7 @@ fn a_synchronize_shows_a_row_and_its_cross_stops_it() {
     gate.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(h.step_until(T, |h| h.app.sync_run.is_none()), "it ends");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert!(toast.contains("Stopped"), "{toast:?}");
+    assert!(toast.contains("Stopped") && !toast.contains("by an error"), "stopped by the Cancel, not by a crashed worker: {toast:?}");
     assert!(h.app.session.activity.list().is_empty(), "the row goes with the run");
 }
 
