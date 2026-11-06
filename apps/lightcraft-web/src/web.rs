@@ -108,7 +108,7 @@ impl Options {
 }
 
 /// Store a picked/dropped file (bytes into browser storage, then queue its import).
-async fn store_file(originals: Originals, backend: Option<Backend>, name: &str, blob: Option<&web_sys::Blob>, bytes: Vec<u8>, ctx: egui::Context) {
+async fn store_file(originals: Originals, backend: Option<Backend>, name: String, blob: Option<&web_sys::Blob>, bytes: Vec<u8>, ctx: egui::Context) {
     if let Err(e) = check_original_size(bytes.len() as f64) {
         notice(format!("{name} was not added: {e}"));
         return;
@@ -125,7 +125,7 @@ async fn store_file(originals: Originals, backend: Option<Backend>, name: &str, 
             return;
         }
     }
-    if let Err(e) = originals.added(name, &hash, Arc::new(bytes)) {
+    if let Err(e) = originals.added(&name, &hash, Arc::new(bytes)) {
         notice(format!("{name} was not added: {e}"));
     }
     ctx.request_repaint();
@@ -156,7 +156,7 @@ async fn read_file(originals: Originals, backend: Option<Backend>, file: web_sys
     let read = async { wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.map_err(|e| format!("can't read the file ({e:?})")) };
     match bounded(read, file.size()).await {
         Ok(buf) => match crate::store::copy_browser_bytes(&js_sys::Uint8Array::new(&buf)) {
-            Ok(bytes) => store_file(originals, backend, &file.name(), Some(&**file), bytes, ctx).await,
+            Ok(bytes) => store_file(originals, backend, file.name(), Some(&*file), bytes, ctx).await,
             Err(e) => notice(format!("{} was not added: {e}", file.name())),
         },
         Err(e) => notice(format!("{} was not added: {e}", file.name())),
@@ -891,7 +891,7 @@ impl WebApp {
         for m in bridge.take_incoming() {
             match m {
                 Incoming::Open { name, bytes } => {
-                    wasm_bindgen_futures::spawn_local(store_file(self.originals.clone(), self.backend.clone(), &name, None, bytes, ctx.clone()));
+                    wasm_bindgen_futures::spawn_local(store_file(self.originals.clone(), self.backend.clone(), name, None, bytes, ctx.clone()));
                 }
                 Incoming::Refused(error) => {
                     if !bridge.post(&Outgoing::Failed(error)) {
