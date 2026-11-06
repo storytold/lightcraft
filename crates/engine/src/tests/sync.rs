@@ -19,7 +19,7 @@ use std::time::{Duration, SystemTime};
 
 use serde_json::{Value, json};
 
-use crate::Session;
+use crate::{Session, UNDO_STEPS};
 
 /// A scratch folder that goes away with the test, however it ends.
 struct Scratch(PathBuf);
@@ -703,7 +703,15 @@ fn with_extra_photos(s: &mut Session, n: usize) -> Vec<lightcraft_catalog::Photo
         .map(|i| {
             let id = s.catalog.alloc_photo_id();
             let name = format!("extra-{i}.png");
-            let p = lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path: format!("/gone/{name}") }, &name, "X", 6, 4, "2026-01-01");
+            let p = lightcraft_catalog::Photo::new(
+                id,
+                lightcraft_catalog::Source::File { path: format!("/gone/{name}") },
+                &name,
+                "X",
+                6,
+                4,
+                "2026-01-01",
+            );
             s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
             id
         })
@@ -736,24 +744,60 @@ fn undoing_a_synchronize_of_more_than_a_thousand_steps_takes_back_all_of_it() {
 
 /// What the person did before the run still counts toward the bound: the oldest go, as ever.
 #[test]
-fn a_synchronize_keeps_the_history_bounded_and_drops_the_oldest_earlier_steps() {
+fn a_synchronize_keeps_the_history_bounded_and_drops_the_oldest_earlier_step() {
     let dir = Scratch::new("big-bound");
     let mut s = library(&dir);
     let ids = with_extra_photos(&mut s, 1_100);
     let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
-    for rating in [1, 2, 3] {
-        s.execute("photo.rate", &json!({"ids": [a.0], "rating": rating})).unwrap();
+    // a full history: the import's step and 999 ratings
+    for i in 0..UNDO_STEPS - 1 {
+        s.execute("photo.rate", &json!({"ids": [a.0], "rating": i % 5 + 1})).unwrap();
     }
-    let steps_before = s.undo.len();
+    assert_eq!(s.undo.len(), UNDO_STEPS);
+    let second = s.undo[1].label.clone();
     let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
     let (_work, mut commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
     for id in &ids {
         commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
     }
+    assert!(s.undo.len() > UNDO_STEPS, "the run's steps are all held until it ends: {}", s.undo.len());
     commit.finish(&mut s);
-    assert!(steps_before >= 4, "{steps_before}");
-    assert!(s.undo.len() <= 1000, "{}", s.undo.len());
+    assert_eq!(s.undo.len(), UNDO_STEPS);
     assert_eq!(s.undo.last().map(|e| e.label.as_str()), Some("Synchronize Folder"));
+    assert_eq!(s.undo.first().map(|e| e.label.as_str()), Some(second.as_str()), "only the oldest earlier step went");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photos().filter(|p| p.file_name.starts_with("extra-")).all(|p| p.in_library()), "still the whole run");
+}
+
+/// Runs that overlap (a control-channel synchronize while the app's own run is going) share
+/// the hold: the history is cut only once the last of them is done.
+#[test]
+fn overlapping_runs_hold_the_history_until_the_last_lets_go() {
+    let dir = Scratch::new("big-overlap");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let first = s.hold_undo();
+    let second = s.hold_undo();
+    drop(second);
+    for id in &ids {
+        s.commit("Remove", lightcraft_catalog::Op::SetDeleted { id: *id, deleted: true }).unwrap();
+    }
+    assert!(s.undo.len() > UNDO_STEPS, "the first run still holds: {}", s.undo.len());
+    drop(first);
+    s.trim_undo();
+    assert_eq!(s.undo.len(), UNDO_STEPS);
+}
+
+/// Opening another library clears its history, and a run of the old one no longer holds it.
+#[test]
+fn opening_another_library_ends_the_hold_of_a_run_of_the_old_one() {
+    let dir = Scratch::new("big-open");
+    let mut s = library(&dir);
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work, _commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    assert!(s.undo_hold.upgrade().is_some(), "the run holds the history");
+    s.open_library(dir.path("other"), false).unwrap();
+    assert!(s.undo_hold.upgrade().is_none(), "the new library's history is its own");
 }
 
 /// A run nobody finishes (its task dropped) doesn't leave the history growing without bound.
@@ -789,6 +833,7 @@ fn an_edit_between_the_steps_of_a_big_synchronize_keeps_the_history_bounded() {
             s.execute("photo.rate", &json!({"ids": [a.0], "rating": 4})).unwrap();
         }
     }
+    assert!(s.undo.len() <= UNDO_STEPS, "released at the edit, so bounded before the run ends: {}", s.undo.len());
     commit.finish(&mut s);
     assert!(s.undo.len() <= 1000, "{}", s.undo.len());
     assert_ne!(s.undo.last().map(|e| e.label.as_str()), Some("Synchronize Folder"), "not folded around the edit");

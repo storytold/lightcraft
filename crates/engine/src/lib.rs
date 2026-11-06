@@ -669,17 +669,19 @@ impl Session {
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
-        if self.undo_hold.strong_count() == 0 {
-            self.trim_undo();
-        }
+        self.trim_undo();
         for mut dropped in self.redo.drain(..) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
         }
         Ok(())
     }
 
-    /// Drop the oldest undo steps past [`UNDO_STEPS`], keeping the sidecar repairs they owed.
+    /// Drop the oldest undo steps past [`UNDO_STEPS`], keeping the sidecar repairs they owed;
+    /// nothing while a run holds the history ([`Session::hold_undo`]).
     pub(crate) fn trim_undo(&mut self) {
+        if self.undo_hold.strong_count() > 0 {
+            return;
+        }
         let excess = self.undo.len().saturating_sub(UNDO_STEPS);
         for mut dropped in self.undo.drain(..excess) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
@@ -690,9 +692,12 @@ impl Session {
     /// returned token lives, the history is not cut to [`UNDO_STEPS`], so the run's first steps
     /// are still there when it merges them ([`Session::merge_undo`]) and one Undo takes back the
     /// whole run. The run drops the token when it is done (or abandoned) and calls
-    /// [`Session::trim_undo`]; a commit after the token died does it too. One run holds at a time:
-    /// a second call takes over.
+    /// [`Session::trim_undo`]; a commit after the token died does it too. Runs that overlap
+    /// share one token: the history is cut once the last of them lets go.
     pub(crate) fn hold_undo(&mut self) -> std::sync::Arc<()> {
+        if let Some(token) = self.undo_hold.upgrade() {
+            return token;
+        }
         let token = std::sync::Arc::new(());
         self.undo_hold = std::sync::Arc::downgrade(&token);
         token
