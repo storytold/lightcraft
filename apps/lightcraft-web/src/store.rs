@@ -471,7 +471,7 @@ mod tests {
             "the profile changes a raw's colour where it is applied"
         );
         let store = Originals::default();
-        store.insert("h1", Arc::from(dng));
+        store.insert("h1", Arc::from(dng)).unwrap();
         let (loader, _) = store.hooks();
         let with = loader("web/h1/a.dng", 64, lightcraft_engine::media::RawDecode { dcp: Some(&profile), outliers: false }).unwrap();
         let without = loader("web/h1/a.dng", 64, Default::default()).unwrap();

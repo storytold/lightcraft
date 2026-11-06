@@ -308,6 +308,7 @@ fn probe_video_file(f: &mut std::fs::File, path: &str, file_len: u64, sniffed: l
         as_shot_wb: None,
         content_hash,
         xmp: lightcraft_meta::embedded(&meta_bytes).xmp,
+        orientation: v.orientation,
         preview_only: None,
         duration: v.duration,
         embedded_lens: None,

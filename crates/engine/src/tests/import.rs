@@ -3552,7 +3552,6 @@ fn a_broken_link_before_dotdot_is_an_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-fn write_test_box(out: &mut Vec<u8>, fourcc: &[u8; 4], body: &[u8])
 /// Helper to append a 4-byte-typed box with big-endian size to a byte buffer.
 pub(super) fn write_test_box(out: &mut Vec<u8>, fourcc: &[u8; 4], body: &[u8]) {
     let size = (body.len() + 8) as u32;
@@ -3697,6 +3696,11 @@ fn video_files_support_copy_and_date_organization() {
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
 
+    let r = s
+        .execute(
+            "library.import",
+            &json!({
+                "paths": [src.to_string_lossy()],
                 "mode": "copy",
                 "organize": "byDay",
             }),
