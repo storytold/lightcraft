@@ -20,7 +20,7 @@ fn tour(page: usize) -> Headless {
     // fonts land on the second frame, and the dialog window settles its place a frame or two later;
     // clicks must aim at the settled layout
     h.step();
-    h.settle(Duration::from_secs(5));
+    h.settled(Duration::from_secs(5), "the new session");
     h
 }
 

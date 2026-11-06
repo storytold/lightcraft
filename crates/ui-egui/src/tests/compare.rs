@@ -298,7 +298,7 @@ fn compare_zoom_window_tracks_the_zoomed_pane() {
     let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.app.ui.zoom = Zoom::Percent(100.0);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.zoom");
     let candidate = vis[1];
     let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(candidate)).cloned().expect("photo");
     let frame = lightcraft_pipeline::geometry::Frame::with_lens(
@@ -591,11 +591,12 @@ fn survey_tiles_keep_their_renders_when_a_photo_leaves() {
 }
 
 /// Hover photo `id`'s survey tile, as a person does, so its × appears; then click the × in its corner.
+#[track_caller]
 fn click_x(h: &mut Headless, id: u64) {
     let name = format!("cull:{id}");
     let tile = h.app.widgets.iter().find(|(w, _)| *w == name).map(|(_, r)| *r).expect("the tile is laid out");
     h.app.synthetic.push(egui::Event::PointerMoved(tile.center()));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the injected input");
     click_with(h, egui::pos2(tile.right() - 16.0, tile.top() + 16.0), egui::Modifiers::NONE);
 }
 
