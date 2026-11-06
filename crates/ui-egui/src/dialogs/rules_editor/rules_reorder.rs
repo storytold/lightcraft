@@ -169,7 +169,6 @@ pub fn bind(ctx: &egui::Context, instance: u64) {
     with_state(ctx, |s| {
         if s.instance != Some(instance) {
             s.drag = None;
-            s.key_move = None;
             s.instance = Some(instance);
         }
     });
