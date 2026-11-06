@@ -917,22 +917,9 @@ pub fn render(
     }
 
     // 5. per-pixel stage
-    let mut fp = FinishParams::new(FinishParamsInput {
-        settings: s,
-        frame: &plan.frame,
-        info,
-        image_size: (w, h),
-        px_per_long: plan.px_per_long,
-        air_pre: prep.air,
-        space: req.space,
-    });
-    // soft proofing as the CPU's `finish` sets it up (an output-device table never gets here: see `render`)
-    fp.proof = req.proof.map(|pr| pr.params(req.space));
     // a float render is `finish_deep`: its samples are the output space's, whatever the display
     let deep = req.depth != lightcraft_pipeline::OutputDepth::U8;
-    if let Some(d) = req.display.as_ref().filter(|_| !deep) {
-        fp.for_display(d, req.proof);
-    }
+    let fp = finish_params(s, &plan, info, req, prep.air, deep);
     let present = Present {
         clarity: prep.clarity.is_some(),
         texture: prep.texture.is_some(),
@@ -1653,6 +1640,26 @@ fn frame_airlight(
 }
 
 /// The spatial planes (`local::prepare`), reusing those in `planes`.
+/// The finish kernel's parameters for `plan`, with `air` the dehaze airlight. A `deep` (float)
+/// render keeps the output space's samples, so it skips the display transform.
+fn finish_params(s: &DevelopSettings, plan: &Plan<'_>, info: &SourceInfo, req: &RenderRequest, air: f32, deep: bool) -> FinishParams {
+    let mut fp = FinishParams::new(FinishParamsInput {
+        settings: s,
+        frame: &plan.frame,
+        info,
+        image_size: (plan.w, plan.h),
+        px_per_long: plan.px_per_long,
+        air_pre: air,
+        space: req.space,
+    });
+    // soft proofing as the CPU's `finish` sets it up (an output-device table never gets here: see `render`)
+    fp.proof = req.proof.map(|pr| pr.params(req.space));
+    if let Some(d) = req.display.as_ref().filter(|_| !deep) {
+        fp.for_display(d, req.proof);
+    }
+    fp
+}
+
 /// The finish kernel's `tex` binding: the texture plane, then the sharpening plane (one binding
 /// for both keeps the kernel within the storage-buffer count every supported device has).
 fn texture_binding(cx: &mut Cx<'_>, prep: &Prep, n: usize) -> Option<Arc<Buf>> {
