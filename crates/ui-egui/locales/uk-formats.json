@@ -23,6 +23,7 @@
   "Added {n} photo{} to My Photos": "До моїх фото додано: {n}{:.0}",
   "Added {n} photo{} to “{}”": "До «{1}» додано фото: {n}{0:.0}",
   "Added {what} to {name}": "{what}: додано до {name}",
+  "Adjustments: {n}": "Коригування: {n}",
   "Adding photos… {} of {}": "Додавання фото… {} з {}",
   "All {n} selected photos move by the same amount.": "Усі вибрані фото ({n}) зміщуються на однакове значення.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "Уже в бібліотеці, у нещодавно видалених: вибрано фото: {}{:.0} · права кнопка → Відновити або Видалити назавжди, щоб імпортувати заново",
@@ -324,5 +325,8 @@
   "{name} is installed": "{name} установлено",
   "{name} is installed and in use: face recognition is on": "{name} установлено й використовується: розпізнавання облич увімкнено",
   "{n} files you opened haven't been imported yet. Quitting discards these requests.": "Ще не імпортовано відкритих вами файлів: {n}. Якщо вийти, ці запити буде скасовано.",
-  "File {n} in the open request is not a file URL.": "Файл {n} у запиті на відкриття не є URL файлу."
+  "File {n} in the open request is not a file URL.": "Файл {n} у запиті на відкриття не є URL файлу.",
+  "Bring photos in with File › Import Photos… ({keys}).": "Фотографії імпортуйте через Файл › Імпортувати фото… ({keys}).",
+  "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys})."
 }

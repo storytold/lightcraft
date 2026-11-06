@@ -326,6 +326,9 @@
   "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია",
   "{n} files you opened haven't been imported yet. Quitting discards these requests.": "თქვენ მიერ გახსნილი ფაილები ჯერ არ შემოტანილა: {n}. გასვლისას ეს მოთხოვნები გაუქმდება.",
   "File {n} in the open request is not a file URL.": "გახსნის მოთხოვნაში ფაილი {n} ფაილის URL არ არის.",
+  "Bring photos in with File › Import Photos… ({keys}).": "ფოტოების შემოსატანად გამოიყენეთ ფაილი › ფოტოების იმპორტი… ({keys}).",
+  "View › Detail View ({keys}).": "ხედი › დეტალური ხედი ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "ფაილი › ექსპორტი… · ფაილი › დაბეჭდვა… ({keys}).",
   "{n} folder{} could not be read": "საქაღალდეები, რომლებიც ვერ წაიკითხა: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}"
 }

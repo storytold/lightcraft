@@ -323,6 +323,9 @@
   "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo",
   "{n} files you opened haven't been imported yet. Quitting discards these requests.": "File aperti non ancora importati: {n}. Uscendo, queste richieste verranno scartate.",
   "File {n} in the open request is not a file URL.": "Il file {n} nella richiesta di apertura non è un URL di file.",
+  "Bring photos in with File › Import Photos… ({keys}).": "Importa le foto con File › Importa foto… ({keys}).",
+  "View › Detail View ({keys}).": "Visualizza › Vista dettaglio ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
   "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
 }

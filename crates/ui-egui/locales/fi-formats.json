@@ -320,6 +320,9 @@
   "{name} is installed and in use: face recognition is on": "{name} on asennettu ja käytössä: kasvojentunnistus on päällä",
   "{n} files you opened haven't been imported yet. Quitting discards these requests.": "Avaamiasi tiedostoja on vielä tuomatta: {n}. Lopettaminen hylkää nämä pyynnöt.",
   "File {n} in the open request is not a file URL.": "Avauspyynnön tiedosto {n} ei ole tiedoston URL-osoite.",
+  "Bring photos in with File › Import Photos… ({keys}).": "Tuo kuvia valitsemalla Tiedosto › Tuo kuvia… ({keys}).",
+  "View › Detail View ({keys}).": "Näytä › Tarkastelunäkymä ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Tiedosto › Vie… · Tiedosto › Tulosta… ({keys}).",
   "{n} folder{} could not be read": "Kansiot, joita ei voitu lukea: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "Ohitetut tiedostot (ei tuettu valokuvatyyppi): {n}{:.0}"
 }

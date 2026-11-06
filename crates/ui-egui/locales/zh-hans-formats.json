@@ -159,6 +159,7 @@
   "; {outside} outside its time range": "；{outside} 张不在其时间范围内",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}：{} 个 PR，{} 次提交，+{} / −{} 行（Δ {}），+{} / −{} 个二进制资源，{} – {}",
   "Added {what} to {name}": "已将{what}添加到 {name}",
+  "Adjustments: {n}": "调整：{n}",
   "Auto Import: added {} photo{}": "自动导入：已添加 {0} 张照片{1:.0}",
   "Building previews for {} photos…": "正在为 {0} 张照片生成预览…",
   "Couldn't open the editor: {e}": "无法打开编辑器：{e}",
@@ -324,5 +325,8 @@
   "{name} is installed": "{name} 已安装",
   "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
   "{n} files you opened haven't been imported yet. Quitting discards these requests.": "您打开的 {n} 个文件尚未导入。退出将取消这些导入请求。",
-  "File {n} in the open request is not a file URL.": "打开请求中的文件 {n} 不是文件 URL。"
+  "File {n} in the open request is not a file URL.": "打开请求中的文件 {n} 不是文件 URL。",
+  "Bring photos in with File › Import Photos… ({keys}).": "通过 文件 › 导入照片… ({keys}) 导入照片。",
+  "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
+  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。"
 }
