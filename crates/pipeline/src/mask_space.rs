@@ -356,8 +356,8 @@ mod tests {
         m.components.push(comp(MaskShape::Object {
             hint: vec![Point::new(1e300, -1e300)],
             exclude: Vec::new(),
-            seg: Some(SegMask { side: 1024, data: "not base64".into(), rect: Some([f64::NAN, 0.0, 2.0, -1.0]) }),
-            detail: vec![SegMask { side: 0, data: String::new(), rect: None }],
+            seg: Some(SegMask { side: 1024, data: "not base64".into(), rect: Some([f64::NAN, 0.0, 2.0, -1.0]), grid: None }),
+            detail: vec![SegMask { side: 0, data: String::new(), rect: None, grid: None }],
             edge: 0.0,
         }));
         m.on_photo = false;

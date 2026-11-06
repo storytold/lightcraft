@@ -25,6 +25,7 @@
   "Added {n} photo{} to My Photos": "В «Мои фото» добавлено фото: {n}{:.0}",
   "Added {n} photo{} to “{}”": "В «{1}» добавлено фото: {n}{0:.0}",
   "Added {what} to {name}": "{what}: добавлено в {name}",
+  "Adjustments: {n}": "Корректировки: {n}",
   "Adding photos… {} of {}": "Добавление фото… {} из {}",
   "All {n} selected photos move by the same amount.": "Все выбранные фото ({n}) сдвигаются на одно и то же значение.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "Уже в библиотеке, в «Недавно удалённых»: выбрано фото: {}{:.0} · щёлкните правой кнопкой → Восстановить или Удалить навсегда, чтобы импортировать заново",
@@ -166,6 +167,8 @@
   "{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.": "Изменений не удалось записать на диск: {n}{0:.0}: {e}\nЕсли выйти сейчас, они будут потеряны.{1:.0}",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "Не записано на диск, хранится только в памяти (изменений: {n}): {e}\nLightCraft повторяет попытку автоматически; при выходе сейчас они будут потеряны.{:.0}{:.0}",
   "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry": "Изменений сохранено в памяти, но не записано на диск: {n}{:.0}: {e} — LightCraft повторит попытку",
+  "{n} file{} skipped (not a supported photo type)": "Пропущено файлов (неподдерживаемый тип фото): {n}{:.0}",
+  "{n} folder{} could not be read": "Папок, которые не удалось прочитать: {n}{:.0}",
   "{n} found · {sel} selected": "Найдено: {n} · выбрано: {sel}",
   "{n} photos": "Фото: {n}",
   "{n} photos in {} are hidden by the filters above": "Фильтры выше скрывают фото в разделе «{}»: {n}",
@@ -320,5 +323,8 @@
   "Panel layout could not be restored: {error}": "Не удалось восстановить расположение панелей: {error}",
   "Panel move was not applied: {error}": "Перемещение панели не применено: {error}",
   "{name} is installed": "Модель {name} установлена",
-  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено"
+  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
+  "Bring photos in with File › Import Photos… ({keys}).": "Фотографии добавляются через Файл › Импорт фото… ({keys}).",
+  "View › Detail View ({keys}).": "Вид › Режим детализации ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys})."
 }

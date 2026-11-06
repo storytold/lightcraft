@@ -23,6 +23,7 @@
   "Added {n} photo{} to My Photos": "До моїх фото додано: {n}{:.0}",
   "Added {n} photo{} to “{}”": "До «{1}» додано фото: {n}{0:.0}",
   "Added {what} to {name}": "{what}: додано до {name}",
+  "Adjustments: {n}": "Коригування: {n}",
   "Adding photos… {} of {}": "Додавання фото… {} з {}",
   "All {n} selected photos move by the same amount.": "Усі вибрані фото ({n}) зміщуються на однакове значення.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "Уже в бібліотеці, у нещодавно видалених: вибрано фото: {}{:.0} · права кнопка → Відновити або Видалити назавжди, щоб імпортувати заново",
@@ -161,6 +162,8 @@
   "{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.": "Змін не вдалося записати на диск: {n}{0:.0}: {e}\nЯкщо вийти зараз, їх буде втрачено.{1:.0}",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "Змін збережено в пам’яті, але не записано на диск: {n}{:.0}: {e}\nLightCraft повторює спроби автоматично; вихід зараз призведе до їхньої втрати.{:.0}",
   "{n} change{} saved in memory but not written to disk: {e} — LightCraft will retry": "Змін збережено в пам’яті, але не записано на диск: {n}{:.0}: {e} — LightCraft повторить спробу",
+  "{n} file{} skipped (not a supported photo type)": "Пропущено файлів (непідтримуваний тип фото): {n}{:.0}",
+  "{n} folder{} could not be read": "Папок, які не вдалося прочитати: {n}{:.0}",
   "{n} found · {sel} selected": "Знайдено: {n} · вибрано: {sel}",
   "{n} photos": "Фото: {n}",
   "{n} photos in {} are hidden by the filters above": "Фільтри вище приховують фото в «{}»: {n}",
@@ -320,5 +323,8 @@
   "Panel layout could not be restored: {error}": "Не вдалося відновити розташування панелей: {error}",
   "Panel move was not applied: {error}": "Переміщення панелі не застосовано: {error}",
   "{name} is installed": "{name} установлено",
-  "{name} is installed and in use: face recognition is on": "{name} установлено й використовується: розпізнавання облич увімкнено"
+  "{name} is installed and in use: face recognition is on": "{name} установлено й використовується: розпізнавання облич увімкнено",
+  "Bring photos in with File › Import Photos… ({keys}).": "Фотографії імпортуйте через Файл › Імпортувати фото… ({keys}).",
+  "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys})."
 }

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Colour noise reduction (process V6)
+- Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
+  colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
+  R−Y and B−Y, leaving brightness exactly as it was, along edges found in a denoised guide, and takes isolated
+  coloured specks out. New photos get it; photos edited before keep their look until Update to Current Process. A zoomed
+  view is smoothed like the same part of the whole photo and the export.
+
+### The web build can be embedded
+- A page framing LightCraft in an iframe can open it with `?host=parent` and speak to it over `postMessage`, the
+  protocol PdfCraft, GridCraft and DeckCraft share: it hands photos in, receives exports and backups instead of
+  downloads, runs commands and hears whether closing would lose unsaved changes (issue #2270; `docs/web.md`).
+  A parent on another origin, or a page with an opaque origin, keeps the normal downloads.
+- A page can also run LightCraft in its own document, with no iframe: `data-host="page"` on the canvas carries the same
+  messages as `CustomEvent`s on the canvas instead of `postMessage` (issue #2270; `docs/web.md`). `?host=parent` wins
+  when a page asks for both.
+
 ### Remove Hot Pixels
 - Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
   At high ISO single photosites read far brighter than all their neighbours and turn into small red, green or blue
@@ -11,6 +27,16 @@
 - A raw that would have more than 0.2 % of its photosites replaced is left unchanged: such a photo doesn't look like
   hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
   loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
+
+### Raising Exposure keeps raw highlights (process 5)
+- Raising Exposure on a raw no longer turns the brightest tones the sensor recorded white (issue #1632). The tone
+  curve now eases into white a stop at a time instead of reaching it within about a stop of the sensor's white: at
+  Exposure +1 and +2 a sky, a lit wall or a face keeps its detail where it used to go flat white. At Exposure 0 the
+  brightest tones render a few codes darker (on average 1 code or less on the photos measured), and fully clipped
+  areas such as a blown sky stay slightly below pure white until Exposure lifts them further. A DNG whose own tone
+  curve already reaches white at the sensor's white renders as before. This is rendering
+  process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
+  to Current Process. See [process versions](process-versions.md).
 
 ## 2026-11-02
 
@@ -41,6 +67,13 @@
   running), and what was read isn't read again.
 
 ## 2026-10-30
+
+### Lightroom catalogs with a print inside a collection import their collections
+- Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
+  LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an
+  existing folder" and brought over no collections, and photos whose originals were offline were lost with them
+  (issues #2165, #2532). Such a collection now joins the nearest collection set above it, or the top level, and the
+  import result names it under warnings; so does one whose parent is system-only or gone from the catalog.
 
 ### Lens distortion correction for the Sony A7 III
 - Raws from the Sony A7 III (ILCE-7M3) now get the camera's own distortion correction, read from the file, like
