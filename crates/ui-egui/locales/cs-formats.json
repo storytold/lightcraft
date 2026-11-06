@@ -328,6 +328,6 @@
   "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}",
   "Show photos with {path}": "Zobrazit fotografie s klíčovým slovem {path}",
   "Show photos with {path} (includes the keywords below it)": "Zobrazit fotografie s klíčovým slovem {path} (včetně klíčových slov pod ním)",
-  "Give {path} to the selected photos ({n})": "Přidat {path} vybraným fotografiím ({n})",
+  "Add {path} to the selected photos ({n})": "Přidat {path} vybraným fotografiím ({n})",
   "Take {path} off the selected photos ({n})": "Odebrat {path} vybraným fotografiím ({n})"
 }

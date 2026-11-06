@@ -329,6 +329,6 @@
   "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。",
   "Show photos with {path}": "顯示含有 {path} 的照片",
   "Show photos with {path} (includes the keywords below it)": "顯示含有 {path} 的照片（包含其下的關鍵字）",
-  "Give {path} to the selected photos ({n})": "將 {path} 加入選取的照片（{n}）",
+  "Add {path} to the selected photos ({n})": "將 {path} 加入選取的照片（{n}）",
   "Take {path} off the selected photos ({n})": "將 {path} 從選取的照片移除（{n}）"
 }

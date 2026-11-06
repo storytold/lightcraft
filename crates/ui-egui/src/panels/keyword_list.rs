@@ -309,7 +309,7 @@ fn tick_action(state: Tick, path: &str, selected: usize) -> Option<String> {
     match (selected, state) {
         (0, _) => None,
         (n, Tick::All) => Some(crate::i18n::tr_format!("Take {path} off the selected photos ({n})", path = shown, n = n)),
-        (n, _) => Some(crate::i18n::tr_format!("Give {path} to the selected photos ({n})", path = shown, n = n)),
+        (n, _) => Some(crate::i18n::tr_format!("Add {path} to the selected photos ({n})", path = shown, n = n)),
     }
 }
 

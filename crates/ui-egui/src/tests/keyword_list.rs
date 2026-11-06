@@ -118,7 +118,7 @@ fn the_tick_box_says_what_it_does_to_the_selection() {
     run(&mut h, "keyword.create", json!({"name": "Weddings"}));
     ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordFilter"}));
     ask(&mut h, "ui.text", json!({"text": "wedd"}));
-    assert!(hover_says(&mut h, "keywordCheck:Weddings", "Give Weddings to the selected photos (2)"), "{:?}", h.painted_text());
+    assert!(hover_says(&mut h, "keywordCheck:Weddings", "Add Weddings to the selected photos (2)"), "{:?}", h.painted_text());
     ask(&mut h, "ui.clickWidget", json!({"id": "keywordCheck:Weddings"}));
     assert!(hover_says(&mut h, "keywordCheck:Weddings", "Take Weddings off the selected photos (2)"), "{:?}", h.painted_text());
     run(&mut h, "library.select", json!({"ids": []}));
