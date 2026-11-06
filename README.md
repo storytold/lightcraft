@@ -433,8 +433,8 @@ which runs one test per CPU in every test binary (on a 16-core machine the UI te
 memory) and takes no CI slot. It has `ci`'s caps and waits for its slot, builds every test target
 once (the same build as `ci`'s, so neither rebuilds the other) and runs each test binary, or those
 of the `-p PKG` packages, with whatever follows `--` (`cargo xtask test -p lightcraft-ui-egui --
-i18n::`). It stops at the first failing binary, as `ci` does; `--keep-going` runs them all and
-names each that failed. `--doc` adds the doctests; `LIGHTCRAFT_NEXTEST=1` applies here too, where
+i18n::`). It stops at the first failing binary; `--keep-going` runs them all and names each that
+failed, as `ci`'s test step does. `--doc` adds the doctests; `LIGHTCRAFT_NEXTEST=1` applies here too, where
 `--test-threads N` and `--nocapture` become nextest's own options and only filters, `--exact`,
 `--skip`, `--ignored` and `--include-ignored` may follow `--`.
 

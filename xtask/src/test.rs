@@ -9,8 +9,8 @@
 //! It builds every workspace test target once (`cargo test --workspace --no-run`, the same
 //! artifacts as `ci`'s test step, so nothing rebuilds between them) and then runs each test binary
 //! itself ([`run_binary`]), passing it `ARGS` (a filter, `--exact`, `--skip`, `--nocapture`, …).
-//! It stops at the first failing binary, as `ci` does; `--keep-going` runs every binary and names
-//! each that failed. `--doc` runs the doctests after them. With `LIGHTCRAFT_NEXTEST=1` (and
+//! It stops at the first failing binary; `--keep-going` runs every binary and names each that
+//! failed, as `ci`'s test step does (`--no-fail-fast`). `--doc` runs the doctests after them. With `LIGHTCRAFT_NEXTEST=1` (and
 //! cargo-nextest installed) the binaries run under `cargo nextest run` instead, as in `ci`.
 //!
 //! `ci --quick` runs the changed packages' tests through the same functions ([`selected`]).
