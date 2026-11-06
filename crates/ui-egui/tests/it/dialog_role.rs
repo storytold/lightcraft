@@ -9,7 +9,9 @@ fn harness() -> Harness<'static, LightcraftApp> {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     app.headless_host = true;
     let mut builder = Harness::builder().with_size(vec2(1500.0, 950.0));
-    // Like the accessibility audit, this checks semantics without requiring optional font glyphs.
+    // Settings lists each language by its own name, and some scripts (Georgian, the CJK
+    // languages) have glyphs only in the craft-fonts faces (releases always have them): without
+    // them the names are drawn as boxes, which this check of roles and titles doesn't need
     if lightcraft_engine::CRAFT_FONTS.is_empty() {
         builder = builder.allow_missing_glyphs();
     }
