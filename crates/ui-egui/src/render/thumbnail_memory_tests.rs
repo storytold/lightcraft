@@ -235,6 +235,36 @@ fn the_trim_keeps_the_queued_thumbnail_of_a_photo_a_view_asked_for() {
     assert!(!app.renderer.is_queued(slot), "not asked for two frames: its job goes");
 }
 
+// Given the browser build, where jobs wait in the renderer's own queue for a free worker, the grid's
+// trim drops the queued thumbnail jobs of photos that scrolled away and keeps those a view asked
+// for (as for the pool's jobs above): a Print cell whose job went would build and ask for a new one
+// every frame.
+#[test]
+fn the_trim_keeps_the_offload_queues_thumbnail_jobs_of_photos_a_view_asked_for() {
+    let (mut app, _ctx) = unreadable_library(3);
+    app.renderer.set_offload(Box::new(super::thumbnail_tests::Blocked));
+    for id in 1..=3 {
+        crate::panels::grid::request_thumb(&mut app, PhotoId(id), 256, 10);
+    }
+    let queued = |app: &crate::LightcraftApp| {
+        let mut ids: Vec<u64> = app.renderer.queue.iter().filter_map(|q| if let Slot::Thumb(id) = q.slot { Some(id.0) } else { None }).collect();
+        ids.sort_unstable();
+        ids
+    };
+    assert_eq!(queued(&app), [1, 2, 3], "no worker is free: the three jobs wait");
+    app.renderer.frame_drawn();
+    app.renderer.frame_drawn(); // (nothing has asked for two frames)
+    app.renderer.thumb_asked(PhotoId(2));
+    app.renderer.evict_thumbs_within(&on_screen([1]), 0);
+    assert_eq!(queued(&app), [1, 2], "the one on screen and the one a view asked for stay; the third scrolled away");
+    assert!(app.renderer.is_pending(Slot::Thumb(PhotoId(2))), "and the one kept is still waited for");
+    assert!(!app.renderer.is_pending(Slot::Thumb(PhotoId(3))), "the one dropped is not");
+    app.renderer.frame_drawn();
+    app.renderer.frame_drawn();
+    app.renderer.evict_thumbs_within(&on_screen([1]), 0);
+    assert_eq!(queued(&app), [1], "not asked for two frames: the job goes like the rest");
+}
+
 // Given photos a view asked a thumbnail of, the asks age with the frames the window draws: the
 // logic ticks a hidden window gets leave them as they were (nothing drew, nothing could ask again),
 // so the first frame drawn after it comes back still finds them. A drawn frame makes them the
@@ -339,6 +369,38 @@ fn the_loupes_window_of_thumbnails_holds_to_their_share_of_the_budget() {
     assert!(!app.renderer.thumbs_over_limit(), "{} MiB held against the 16 MiB share: {kept:?}", kept.len());
     assert!(kept.contains(&150) && kept.contains(&149) && kept.contains(&151), "the open photo and its neighbors stay: {kept:?}");
     assert!(kept.iter().all(|id| id.abs_diff(150) <= 8), "the nearest ones are the ones kept: {kept:?}");
+}
+
+/// The photos whose grid thumbnail the renderer holds, in order.
+fn held_thumbnails(app: &crate::LightcraftApp, n: u64) -> Vec<u64> {
+    (1..=n).filter(|&id| app.renderer.thumb(PhotoId(id)).is_some()).collect()
+}
+
+// Given an open photo whose own thumbnail is over the whole share (a 3000 px one against 16 MiB),
+// the loupe still keeps it, and only it: the window around it is the nearest that fit, and none do.
+#[test]
+fn the_loupe_keeps_the_open_photos_thumbnail_though_it_alone_is_over_the_share() {
+    let mut app = library_with_thumbnails(300, [128, 128]);
+    let ctx = egui::Context::default();
+    let _turn = BudgetGuard::hold();
+    memory::set_budget(64 * MB);
+    app.renderer.textures.insert(Slot::Thumb(PhotoId(150)), tex(&ctx, 150, [3000, 3000]));
+    rest_on(&mut app, 150);
+    assert_eq!(held_thumbnails(&app, 300), [150]);
+}
+
+// Given the open photo at either end of the library, the loupe's window is the 64 photos that
+// exist on the other side, not nothing and not a shorter one: nothing is kept past the ends.
+#[test]
+fn the_loupes_window_of_thumbnails_reaches_from_either_end_of_the_library() {
+    let _turn = BudgetGuard::hold();
+    memory::set_budget(64 * MB); // (300 thumbnails of 64 KiB are 18.75 MiB: over the 16 MiB share)
+    let mut first = library_with_thumbnails(300, [128, 128]);
+    rest_on(&mut first, 1);
+    assert_eq!(held_thumbnails(&first, 300), (1..=65).collect::<Vec<u64>>(), "the first photo and the 64 after it");
+    let mut last = library_with_thumbnails(300, [128, 128]);
+    rest_on(&mut last, 300);
+    assert_eq!(held_thumbnails(&last, 300), (236..=300).collect::<Vec<u64>>(), "the last photo and the 64 before it");
 }
 
 // `ui.inspect` reports the thumbnails beside the stage caches: how many, how much, the limit they
