@@ -23,15 +23,19 @@ mod status;
 pub(crate) use status::UsabilityCache;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod migration;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod tests_conversion;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests_cut_short;
 #[cfg(test)]
 mod tests_lossless;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests_round3;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod tests_round4;
 pub use format::Format;
 
