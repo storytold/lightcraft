@@ -113,7 +113,8 @@ fn import_review_open(h: &Headless) -> bool {
 #[test]
 fn an_empty_folders_section_offers_both_imports() {
     let (pick_folder, _) = folder_picker(None);
-    let h = app(Session::with_demo(), Services { pick_folder: Some(pick_folder), ..Default::default() });
+    let (pick_files, _) = file_picker(Vec::new());
+    let h = app(Session::with_demo(), Services { pick_folder: Some(pick_folder), pick_files: Some(pick_files), ..Default::default() });
     let rect = |id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"));
     let (hint, photos, folder) = (rect("sidebarEmpty:folders"), rect("source:folders:import"), rect("source:folders:importFolder"));
     assert!(hint.bottom() <= photos.top() && photos.bottom() <= folder.top(), "{hint:?} {photos:?} {folder:?}");
@@ -124,7 +125,8 @@ fn an_empty_folders_section_offers_both_imports() {
 /// Photos… is offered.
 #[test]
 fn without_a_folder_picker_only_import_photos_is_offered() {
-    let h = app(Session::with_demo(), Services::default());
+    let (pick_files, _) = file_picker(Vec::new());
+    let h = app(Session::with_demo(), Services { pick_files: Some(pick_files), ..Default::default() });
     assert!(has(&h, "source:folders:import"));
     assert!(!has(&h, "source:folders:importFolder"));
 }
@@ -160,7 +162,8 @@ fn the_import_from_folder_row_runs_file_add_folder() {
 /// rows (they are for the empty section), and its header still has the +.
 #[test]
 fn a_folders_section_with_folders_keeps_the_plus_and_drops_the_rows() {
-    let h = app(imported_from_a_folder(), Services::default());
+    let (pick_files, _) = file_picker(Vec::new());
+    let h = app(imported_from_a_folder(), Services { pick_files: Some(pick_files), ..Default::default() });
     assert!(!has(&h, "sidebarEmpty:folders"), "Folders lists a folder");
     assert!(!has(&h, "source:folders:import") && !has(&h, "source:folders:importFolder"));
     assert!(has(&h, "icon:foldersImport"), "the header's +");
@@ -183,8 +186,23 @@ fn the_folders_plus_menu_offers_the_same_two_imports() {
 /// Given a host with no folder picker, the + menu has only Import Photos….
 #[test]
 fn the_folders_plus_menu_has_no_folder_item_without_a_folder_picker() {
-    let mut h = app(Session::with_demo(), Services::default());
+    let (pick_files, _) = file_picker(Vec::new());
+    let mut h = app(Session::with_demo(), Services { pick_files: Some(pick_files), ..Default::default() });
     click(&mut h, "icon:foldersImport");
     assert!(has(&h, "button:foldersImportPhotos"));
     assert!(!has(&h, "button:foldersImportFolder"));
+}
+
+/// Given a host with no dialog to pick files with (neither `pick_files` nor `picker`), when
+/// Folders is empty, then Import Photos… is not offered, as a row or in the + menu, and a header
+/// with nothing to open has no +; a host that has only a background `picker` still gets it.
+#[test]
+fn import_photos_is_not_offered_where_nothing_can_pick_files() {
+    let h = app(Session::with_demo(), Services::default());
+    assert!(has(&h, "sidebarEmpty:folders"), "Folders still says it is empty");
+    assert!(!has(&h, "source:folders:import") && !has(&h, "source:folders:importFolder"), "no rows");
+    assert!(!has(&h, "icon:foldersImport"), "no + that would open an empty menu");
+    let picker: crate::pick::Picker = Box::new(|_| Err("no dialog in this test".into()));
+    let h = app(Session::with_demo(), Services { picker: Some(picker), ..Default::default() });
+    assert!(has(&h, "source:folders:import") && has(&h, "icon:foldersImport"), "a background picker is a way to pick files");
 }

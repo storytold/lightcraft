@@ -21,7 +21,13 @@ fn sidebar() -> Harness<'static, LightcraftApp> {
 }
 
 fn sidebar_in(language: Locale) -> Harness<'static, LightcraftApp> {
-    let services = Services { png: None, local_places: Some(Vec::new()), pick_folder: Some(Box::new(|| None)), ..Default::default() };
+    let services = Services {
+        png: None,
+        local_places: Some(Vec::new()),
+        pick_folder: Some(Box::new(|| None)),
+        pick_files: Some(Box::new(Vec::new)),
+        ..Default::default()
+    };
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     app.headless_host = true;
     app.ui.left_panel = true;

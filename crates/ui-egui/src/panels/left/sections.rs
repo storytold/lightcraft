@@ -208,7 +208,8 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     }
     // dragged by its header, a section moves among the others (see `section_drag`); a press on
     // the header's button is the button's, also when it turns into a drag
-    let on_button = header_button(section).is_some() && ui.input(|i| i.pointer.press_origin()).is_some_and(|p| header_button_rect(ui, r).contains(p));
+    let on_button =
+        header_button(app, section).is_some() && ui.input(|i| i.pointer.press_origin()).is_some_and(|p| header_button_rect(ui, r).contains(p));
     if resp.drag_started_by(egui::PointerButton::Primary) && !on_button {
         // picked up by the pinned header, the drag starts inside the top edge (see `drag_auto_scroll`)
         ui.data_mut(|d| d.insert_temp(egui::Id::unique("left-section-drag-from-pinned"), pinned));
@@ -229,7 +230,7 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     let col = if hovered { t.text } else { t.text_dim };
     paint(ui.painter(), Rect::from_center_size(c, vec2(16.0, 16.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, col);
     ui.painter().text(pos2(r.left() + 18.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(13.5), t.text_label);
-    let button = header_button(section);
+    let button = header_button(app, section);
     // (an album being dragged puts "Top Level" in the Albums header)
     let room = !(section == SidebarSection::Albums && app.ui.dragging_album.is_some());
     if !open && rows > 0 && app.ui.show_counts && room {
@@ -271,7 +272,7 @@ enum HeaderAction {
 /// The button a section has at the end of its header, if it has one. This is the one place that
 /// says so: the header (its own and the pinned copy) draws the button at the visible edge, keeps
 /// its clicks from folding the section and leaves it room beside a folded section's count.
-fn header_button(section: SidebarSection) -> Option<HeaderButton> {
+fn header_button(app: &LightcraftApp, section: SidebarSection) -> Option<HeaderButton> {
     match section {
         SidebarSection::Albums => {
             Some(HeaderButton { id: "albumNew", icon: Icon::Plus, tooltip: "Create Album", action: HeaderAction::Menu(new_album_menu) })
@@ -279,9 +280,13 @@ fn header_button(section: SidebarSection) -> Option<HeaderButton> {
         SidebarSection::Keywords => {
             Some(HeaderButton { id: "keywordNew", icon: Icon::Plus, tooltip: "Create Keyword Tag", action: HeaderAction::Run(new_keyword) })
         }
-        SidebarSection::Folders => {
-            Some(HeaderButton { id: "foldersImport", icon: Icon::Plus, tooltip: "Import", action: HeaderAction::Menu(import_menu) })
-        }
+        // (a host with no dialog to pick with can't import from here: no + either)
+        SidebarSection::Folders => (import_ways(app).next().is_some()).then_some(HeaderButton {
+            id: "foldersImport",
+            icon: Icon::Plus,
+            tooltip: "Import",
+            action: HeaderAction::Menu(import_menu),
+        }),
         SidebarSection::Local | SidebarSection::ByDate => None,
     }
 }
@@ -408,10 +413,13 @@ const IMPORT_WAYS: [ImportWay; 2] = [
     ImportWay { command: "file.addFolder", label: "Import from Folder…", row: "folders:importFolder", item: "button:foldersImportFolder" },
 ];
 
-/// The ways in this build offers right now (the menu's own rule: a command that can't run is not
-/// offered), each with its [`IMPORT_WAYS`] entry. Decided up front, so the caller is free to use `app` as it draws them.
+/// The ways in this build offers right now: a command that can't run is not offered. That is the menu's
+/// own rule, and for Import Photos… (which the menu always enables, and which does nothing on a host with
+/// no dialog to pick files with) a file picker of either kind. Decided up front, so the caller is free to
+/// use `app` as it draws them.
 fn import_ways(app: &LightcraftApp) -> impl Iterator<Item = &'static ImportWay> + use<> {
-    let offered = IMPORT_WAYS.each_ref().map(|w| crate::menus::ui_enabled(app, w.command));
+    let can_pick_files = app.services.pick_files.is_some() || app.services.picker.is_some();
+    let offered = IMPORT_WAYS.each_ref().map(|w| crate::menus::ui_enabled(app, w.command) && (w.command != "file.addPhotos" || can_pick_files));
     IMPORT_WAYS.iter().zip(offered).filter_map(|(way, offered)| offered.then_some(way))
 }
 
