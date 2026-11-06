@@ -931,18 +931,7 @@ pub fn render(
         dark: prep.dark.is_some(),
         chroma: masks.is_some() && prep.chroma.is_some(),
     };
-    // the finish kernel's `tex` binding: the texture plane, then the sharpening plane (one binding
-    // for both keeps the kernel within the storage-buffer count every supported device has)
-    let tex_buf: Option<Arc<Buf>> = match (&prep.texture, &prep.sharpen) {
-        (Some(t), Some(sh)) => {
-            let both = cx.gpu.buffer(2 * n);
-            cx.copy_into(t, &both, 0);
-            cx.copy_into(sh, &both, n);
-            Some(Arc::new(both))
-        }
-        (Some(b), None) | (None, Some(b)) => Some(b.clone()),
-        (None, None) => None,
-    };
+    let tex_buf = texture_binding(&mut cx, &prep, n);
     let finish_keep = plan.keep.filter(|_| req.overlay == Overlay::None);
     let crop = plan.keep.filter(|_| finish_keep.is_none());
     let output = finish_keep.unwrap_or(PixelWindow { x: 0, y: 0, w, h });
@@ -1365,6 +1354,21 @@ fn frame_airlight(
 }
 
 /// The spatial planes (`local::prepare`), reusing those in `planes`.
+/// The finish kernel's `tex` binding: the texture plane, then the sharpening plane (one binding
+/// for both keeps the kernel within the storage-buffer count every supported device has).
+fn texture_binding(cx: &mut Cx<'_>, prep: &Prep, n: usize) -> Option<Arc<Buf>> {
+    match (&prep.texture, &prep.sharpen) {
+        (Some(t), Some(sh)) => {
+            let both = cx.gpu.buffer(2 * n);
+            cx.copy_into(t, &both, 0);
+            cx.copy_into(sh, &both, n);
+            Some(Arc::new(both))
+        }
+        (Some(b), None) | (None, Some(b)) => Some(b.clone()),
+        (None, None) => None,
+    }
+}
+
 fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, planes: &mut Planes) -> Prep {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
