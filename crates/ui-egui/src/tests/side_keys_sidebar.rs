@@ -584,3 +584,31 @@ fn a_library_opened_while_the_keys_are_on_starts_the_cursor_from_its_own_rows() 
     assert_ne!(first.as_deref(), Some("source:recentlyAdded"));
     assert_eq!(cursor_row(&h).as_deref(), Some("source:recentlyAdded"), "the shown row of this library, not of the last one");
 }
+
+/// F2 on one of Local's built-in places (Home, Pictures… or a place the host lists) opens no rename dialog and says so:
+/// the folder's menu offers no Rename for it either.
+#[test]
+fn f2_does_not_rename_a_built_in_place() {
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let place = std::env::temp_dir().join(format!("lc-ui-keys-place-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&place);
+    let _cleanup = Cleanup(place.clone());
+    std::fs::create_dir_all(&place).unwrap();
+    let path = place.to_string_lossy().to_string();
+    let mut h = app();
+    h.app.services.local_places = Some(vec![("Pictures".to_string(), path.clone())]);
+    h.hide_home_above(&place);
+    exec(&mut h, "local.addRoot", json!({"path": path}));
+    h.settle(SETTLE);
+    toggle(&mut h);
+    h.app.ui.sidebar_cursor = Some(format!("local:{path}"));
+    h.step();
+    key(&mut h, "F2");
+    assert!(h.app.ui.dialog.is_none(), "no rename dialog: {:?}", h.app.ui.dialog);
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("This row has no name to change"));
+}
