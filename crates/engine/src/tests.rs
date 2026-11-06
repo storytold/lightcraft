@@ -532,6 +532,22 @@ fn auto_skips_a_selected_photo_it_cannot_read() {
     assert!(s.execute("develop.auto", &json!({"ids": [good.0, 999_999]})).is_err(), "a wrong id is refused, not skipped");
 }
 
+/// A call that names its photos (`ids`) is not held back by the selection, as `develop.updateProcess`'s is not: an
+/// agent's `develop.auto {ids}` works with nothing selected (#1752).
+#[test]
+fn auto_on_named_photos_needs_no_selection() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    s.selection = Default::default();
+    assert!(s.execute("develop.auto", &json!({})).is_err(), "nothing named and nothing selected");
+    assert!(s.execute("develop.auto", &json!({"ids": [999_999]})).is_err(), "a wrong id is still refused");
+    s.execute("develop.auto", &json!({"ids": ids.clone()})).unwrap();
+    for id in ids {
+        assert_eq!(s.develop_of(PhotoId(id)).unwrap().color.vibrance, 30.0, "photo {id} got Auto");
+    }
+}
+
 #[test]
 fn versions_history_and_reset() {
     let mut s = demo();
