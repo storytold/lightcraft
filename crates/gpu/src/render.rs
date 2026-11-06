@@ -1588,7 +1588,9 @@ fn frame_airlight(
         }
         b
     };
-    let lin = Arc::new(linear(&mut cx, &sampled, info, full, &mut host));
+    // the joint colour NR with the whole frame's noise model, as the full render filters it
+    let noise = lightcraft_pipeline::colour_noise(src, info, full);
+    let lin = Arc::new(linear(&mut cx, &sampled, info, full, &mut host, noise.as_ref()));
     let d0 = cx.gpu.buffer(n);
     map(&mut cx, "dark_k", n, &[], [Some(&lin), None, None], &d0);
     let dark = gaussian_owned(&mut cx, d0, w, h, 1, (0.02 * full.px_per_long as f32).max(1.0));
