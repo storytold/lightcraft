@@ -411,7 +411,7 @@ mod tests {
     /// What `build` asks of a builder for `request`, in order.
     fn built(request: PickRequest) -> Vec<String> {
         let notes = Arc::new(Mutex::new(Vec::new()));
-        let _ = build(Noted(notes.clone()), &request);
+        drop(build(Noted(notes.clone()), &request));
         let asked = notes.lock().unwrap();
         asked.clone()
     }
