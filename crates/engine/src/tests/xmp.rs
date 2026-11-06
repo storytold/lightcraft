@@ -1390,6 +1390,56 @@ fn external_edit_again_after_the_copy_was_trashed_keeps_the_file_the_restored_co
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Review of #3628: same bytes alone don't make another photo this photo's edit copy. An unrelated photo that holds the
+/// render is not handed to the editor or stacked; the command fails and leaves no stray file.
+#[test]
+fn external_edit_again_does_not_reuse_an_unrelated_photo_with_the_same_bytes() {
+    let dir = temp_dir("extedit-unrelated");
+    let src = dir.join("beach.png");
+    write_png(&src, 9);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let orig = s.active().unwrap();
+    let first = s.execute("photo.editExternal", &json!({})).unwrap();
+    let first_path = first["path"].as_str().unwrap().to_string();
+    // the render's bytes now belong to a photo that is not the original's copy
+    let unrelated = dir.join("holiday.tif");
+    std::fs::copy(&first_path, &unrelated).unwrap();
+    s.execute("photo.deletePermanently", &json!({"ids": [first["id"].as_u64().unwrap()]})).unwrap();
+    let _ = std::fs::remove_file(&first_path);
+    let imported = s.execute("library.import", &json!({"paths": [unrelated.to_string_lossy()]})).unwrap();
+    let other = lightcraft_catalog::PhotoId(imported["imported"][0].as_u64().expect("the unrelated photo is imported"));
+    s.execute("library.select", &json!({"ids": [orig.0]})).unwrap();
+    let files = || std::fs::read_dir(&dir).unwrap().count();
+    let before = files();
+    assert!(s.execute("photo.editExternal", &json!({})).is_err(), "not reused");
+    assert!(s.catalog.stack_of(other).is_none(), "the unrelated photo is not stacked on the original");
+    assert!(files() <= before, "no stray file left");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review of #3628: the catalog still has the copy but its file was removed outside the app. The editor is handed a file
+/// that exists (import adds the new render as a copy), never a path to the missing one, and nothing is orphaned.
+#[test]
+fn external_edit_again_hands_over_a_file_that_exists_when_the_copys_file_is_gone() {
+    let dir = temp_dir("extedit-gone");
+    let src = dir.join("beach.png");
+    write_png(&src, 9);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let orig = s.active().unwrap();
+    let first = s.execute("photo.editExternal", &json!({})).unwrap();
+    std::fs::remove_file(first["path"].as_str().unwrap()).unwrap();
+    s.execute("library.select", &json!({"ids": [orig.0]})).unwrap();
+    let files = || std::fs::read_dir(&dir).unwrap().count();
+    let before = files();
+    let again = s.execute("photo.editExternal", &json!({})).expect("Edit In works when the copy's file is gone");
+    let path = again["path"].as_str().unwrap();
+    assert!(std::path::Path::new(path).is_file(), "the editor gets a file that exists: {again}");
+    assert_eq!(files(), before + 1, "one new copy, nothing orphaned");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Issue #920: with several photos selected, each gets its own `-Edit` copy stacked on its
 /// original, the copies end up selected and are all reported; `ids` picks photos explicitly.
 #[test]

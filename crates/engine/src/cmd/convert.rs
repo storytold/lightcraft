@@ -189,7 +189,7 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
         written.push(path.to_string());
         Ok(())
     };
-    let to = crate::export::Destination { dir, exact: None };
+    let to = crate::export::Destination { dir: dir.clone(), exact: None };
     crate::export::export_batch(s, &[id], opts, &to, &mut write, &|path| Path::new(path).exists()).map_err(|e| bad(C, e))?;
     let ext = format!(".{}", opts.format.extension());
     let out = written.into_iter().find(|w| w.ends_with(&ext)).ok_or_else(|| bad(C, "nothing was written"))?;
@@ -205,8 +205,10 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
             .and_then(|i| s.catalog.photo(lightcraft_catalog::PhotoId(i)))
             .filter(|p| !p.deleted)
             .and_then(|p| match &p.source {
-                Source::File { path } => Some((p.id.0, path.clone())),
-                Source::Demo { .. } => None,
+                // only a copy this command could have made (next to the original, named `<name>-Edit…`: same bytes
+                // alone don't make another photo this one's copy) and whose file is still there
+                Source::File { path } if is_edit_copy_name(&ph.file_name, &dir, path) && Path::new(path).is_file() => Some((p.id.0, path.clone())),
+                _ => None,
             });
         if existing.as_ref().is_none_or(|(_, path)| *path != out) {
             let _ = std::fs::remove_file(&out);
@@ -225,6 +227,16 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
     };
     stack_on_top(s, new, id.0);
     Ok(json!({"path": out, "id": new, "original": id.0}))
+}
+
+/// Whether `copy` is where and as `edit_copy` names the copy of the photo called `original_name` in `dir`: in `dir`, with a
+/// file name that starts with the original's name and `-Edit` (a `-2` for a taken name follows it).
+fn is_edit_copy_name(original_name: &str, dir: &str, copy: &str) -> bool {
+    let same = |a: &str, b: &str| a.replace('\\', "/").trim_end_matches('/') == b.replace('\\', "/").trim_end_matches('/');
+    let copy = Path::new(copy);
+    let stem = Path::new(original_name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let copy_stem = copy.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    !stem.is_empty() && copy.parent().is_some_and(|p| same(&p.to_string_lossy(), dir)) && copy_stem.starts_with(&format!("{stem}-Edit"))
 }
 
 /// Stack an edit copy on top of its original, expanded so both show.
