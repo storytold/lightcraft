@@ -31,11 +31,7 @@ pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::res
 
 /// [`write_dng_for`] without the session (imports convert on a worker thread).
 pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path: &str, packet: String) -> std::result::Result<String, String> {
-    crate::file_access::check_read(path)?;
-    let bytes = match file_bytes {
-        Some(r) => r(path)?,
-        None => std::fs::read(path).map_err(|e| format!("{path}: {e}"))?,
-    };
+    let bytes = crate::merge::read_file(file_bytes, path)?;
     let mut raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
     crate::camera_preview::with_starting_colour(&mut raw, &bytes);
     drop(bytes);

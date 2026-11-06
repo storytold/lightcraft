@@ -76,6 +76,16 @@ pub struct MergeFinish {
 /// Reads a source photo's bytes (by catalog path).
 pub type ByteReader = Arc<dyn Fn(&str) -> std::result::Result<Vec<u8>, String> + Send + Sync>;
 
+/// The bytes of `path`, through the host's reader when it has one. Either way `path` has to pass
+/// the automation roots first: a reader the host installed knows nothing of them.
+pub(crate) fn read_file(host: Option<&ByteReader>, path: &str) -> std::result::Result<Vec<u8>, String> {
+    crate::file_access::check_read(path)?;
+    match host {
+        Some(r) => r(path),
+        None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
+    }
+}
+
 /// A planned merge, detached from the session.
 #[derive(Clone)]
 pub struct MergeJob {
@@ -428,13 +438,8 @@ impl Session {
         if !preview && let Some((_, first)) = sources.first() {
             crate::file_access::check_write(output_dir(first)).map_err(EngineError::Other)?;
         }
-        let read: ByteReader = match &self.media.file_bytes {
-            Some(r) => r.clone(),
-            None => Arc::new(|path: &str| {
-                crate::file_access::check_read(path)?;
-                std::fs::read(path).map_err(|e| format!("{path}: {e}"))
-            }),
-        };
+        let host = self.media.file_bytes.clone();
+        let read: ByteReader = Arc::new(move |path: &str| read_file(host.as_ref(), path));
         Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read })
     }
 

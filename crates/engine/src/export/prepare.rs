@@ -227,13 +227,7 @@ impl PreparedExport {
                 Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
             }
             Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
-                let bytes = match &read {
-                    Some(r) => r(&path)?,
-                    None => {
-                        crate::file_access::check_read(&path)?;
-                        std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?
-                    }
-                };
+                let bytes = crate::merge::read_file(read.as_ref(), &path)?;
                 let Some(dng) = dng else {
                     // the file is copied byte for byte: refuse rather than leak a location it embeds
                     if remove_location {

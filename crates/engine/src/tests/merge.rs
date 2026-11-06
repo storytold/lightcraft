@@ -251,6 +251,46 @@ fn a_photo_named_twice_is_merged_once() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A reader the host installed is only asked for files inside the roots.
+#[test]
+fn a_hosts_reader_is_held_to_the_roots() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = temp_dir("host-reader");
+    let (inside, outside) = (dir.join("in"), dir.join("outside"));
+    std::fs::create_dir_all(&inside).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let asked = Arc::new(AtomicUsize::new(0));
+    let count = asked.clone();
+    let reader: crate::merge::ByteReader = Arc::new(move |_| {
+        count.fetch_add(1, Ordering::Relaxed);
+        Ok(vec![])
+    });
+    let roots = crate::file_access::AutomationRoots::new(Some(&inside), None).unwrap().unwrap();
+    let there = outside.join("secret.jpg").to_string_lossy().to_string();
+    let mut s = Session::new();
+    s.media.file_bytes = Some(reader.clone());
+    let id = s.catalog.alloc_photo_id();
+    let photo = lightcraft_catalog::Photo::new(
+        id,
+        lightcraft_catalog::Source::File { path: there.clone() },
+        "secret.jpg",
+        "JPEG",
+        60,
+        40,
+        "2026-01-01T10:00:00",
+    );
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    crate::file_access::confine(Some(&roots), || {
+        assert!(crate::merge::read_file(Some(&reader), &there).is_err());
+        assert!(s.execute("photo.allMetadata", &json!({"id": id.0})).is_err());
+        assert_eq!(asked.load(Ordering::Relaxed), 0, "the host's reader was asked");
+        assert!(crate::merge::read_file(Some(&reader), &inside.join("a.jpg").to_string_lossy()).is_ok());
+        assert_eq!(asked.load(Ordering::Relaxed), 1);
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A merge of a bare file name is written in the current folder.
 #[test]
 fn a_merge_of_a_bare_file_name_is_written_in_the_current_folder() {
