@@ -92,6 +92,30 @@ fn export_preset_with_a_watermark_outside_is_refused() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// An export can't hand its files to Apple Photos, asked for in the call or by a preset.
+#[test]
+fn export_to_apple_photos_is_refused() {
+    let (mut server, base) = confined("to_photos", true, true);
+    ok(&mut server, "import", json!({"paths": [s(&base.join("in/photo.png"))]}));
+    let out = base.join("out/photos.jpg");
+    let mut asks = vec![json!({"addToPhotos": true})];
+    // only a Mac gets as far as the roots; elsewhere the option itself is invalid
+    let why = if cfg!(target_os = "macos") {
+        ok(&mut server, "run_command", json!({"command": "export.savePreset", "params": {"name": "photos", "params": {"addToPhotos": true}}}));
+        asks.push(json!({"preset": "photos"}));
+        "another application"
+    } else {
+        "only available on macOS"
+    };
+    for asked in asks {
+        let mut args = json!({"path": s(&out), "format": "jpeg"});
+        args.as_object_mut().unwrap().extend(asked.as_object().unwrap().clone());
+        refused(&mut server, "export", args, why);
+        assert!(!out.exists(), "nothing is written");
+    }
+    let _ = std::fs::remove_dir_all(base);
+}
+
 /// Imports only from inside read root.
 #[test]
 fn imports_only_from_inside_read_root() {

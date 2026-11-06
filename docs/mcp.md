@@ -66,7 +66,7 @@ The rules:
 - **The check comes before anything else a command looks at.** With roots in force, `photo.convertToDng` on a photo that
   isn't raw and sits in a read-only place answers with an error, not a skip entry.
 
-Refused while roots are in force: `export.addToPhotos` (hands files to another application) and `library.devices` (lists
+Refused while roots are in force: `export.addToPhotos` and `addToPhotos` on an export (hand files to another application) and `library.devices` (lists
 the mounted volumes).
 
 Not confined, on purpose:

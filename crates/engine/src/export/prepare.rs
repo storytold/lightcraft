@@ -392,6 +392,10 @@ impl crate::Session {
         if !o.add_to_photos {
             return Ok(AfterExport::default());
         }
+        // what `export.addToPhotos` is refused for, and a preset can ask for it too
+        if crate::file_access::current().is_some() {
+            return Err("automation command refused: adding to Apple Photos hands files to another application".into());
+        }
         if let Some(why) = apple_photos_unsupported() {
             return Err(why.into());
         }
