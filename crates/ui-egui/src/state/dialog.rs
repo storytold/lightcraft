@@ -314,6 +314,9 @@ pub enum Dialog {
     DeletePresets {
         ids: Vec<String>,
         builtin: usize,
+        /// The library it was asked in (`Session::library_generation`): ids can mean other presets
+        /// in another one.
+        library: u64,
     },
     /// Confirm deleting a preset group and the `count` user presets in it.
     DeletePresetGroup {

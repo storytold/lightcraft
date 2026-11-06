@@ -271,6 +271,40 @@ fn a_created_group_stays_after_its_last_preset_leaves() {
     assert!(!s.presets.iter().any(|p| p.group == "Holding"));
 }
 
+/// A group chosen from the list is used as it is written, and a new name is trimmed.
+#[test]
+fn copy_and_move_keep_the_exact_name_of_an_existing_group() {
+    let (mut s, ids) = with_user_presets();
+    s.execute("preset.move", &json!({"id": ids[2], "group": "Other"})).unwrap();
+    s.presets.iter_mut().find(|p| p.id == ids[2]).unwrap().group = " Spaced ".into();
+    let r = s.execute("preset.copy", &json!({"ids": [ids[0]], "group": " Spaced "})).unwrap();
+    let copy = r["ids"][0].as_str().unwrap().to_string();
+    assert_eq!(group_of(&s, &copy), " Spaced ");
+    s.execute("preset.moveMany", &json!({"ids": [ids[1]], "group": " Spaced "})).unwrap();
+    assert_eq!(group_of(&s, &ids[1]), " Spaced ");
+    s.execute("preset.moveMany", &json!({"ids": [ids[1]], "group": " New "})).unwrap();
+    assert_eq!(group_of(&s, &ids[1]), "New");
+}
+
+/// A bulk command that changes nothing doesn't cost a save of every preset, and a star goes with
+/// its group here too.
+#[test]
+fn bulk_commands_that_change_nothing_keep_the_generation_and_stars_follow() {
+    let (mut s, ids) = with_user_presets();
+    let builtin = builtin_id(&s);
+    let generation = s.presets.generation();
+    s.execute("preset.moveMany", &json!({"ids": ids, "group": "Mine"})).unwrap();
+    s.execute("preset.deleteMany", &json!({"ids": [builtin, "no.such.preset"]})).unwrap();
+    assert_eq!(s.presets.generation(), generation);
+
+    s.execute("preset.favoriteGroup", &json!({"name": "Mine"})).unwrap();
+    s.execute("preset.moveMany", &json!({"ids": ids, "group": "Elsewhere"})).unwrap();
+    assert!(s.presets.favorite_groups().is_empty());
+    s.execute("preset.favoriteGroup", &json!({"name": "Elsewhere"})).unwrap();
+    s.execute("preset.deleteMany", &json!({"ids": ids})).unwrap();
+    assert!(s.presets.favorite_groups().is_empty());
+}
+
 #[test]
 fn delete_many_removes_user_presets_and_keeps_built_in_ones() {
     let (mut s, ids) = with_user_presets();

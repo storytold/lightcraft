@@ -35,6 +35,17 @@ fn existing_group_param(p: &Value, key: &str, c: &str) -> Result<String> {
     str_param(p, key).filter(|n| !n.is_empty()).map(str::to_string).ok_or_else(|| bad(c, format!("missing {key}")))
 }
 
+/// The group `group` names: a group that exists as written (its name may have spaces around it or
+/// run long), else a new one, trimmed.
+fn destination_param(s: &Session, p: &Value, c: &str) -> Result<String> {
+    if let Some(name) = str_param(p, "group")
+        && group_exists(s, name)
+    {
+        return Ok(name.to_string());
+    }
+    group_param(p, "group", c)
+}
+
 fn create_group(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "preset.createGroup";
     let name = group_param(p, "name", C)?;
@@ -130,29 +141,34 @@ fn delete_many(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = ids_param(p, "preset.deleteMany")?;
     let kept_builtin = s.presets.iter().filter(|x| x.builtin && ids.contains(&x.id)).count();
     let before = s.presets.len();
-    s.presets.retain(|x| x.builtin || !ids.contains(&x.id));
+    // mutable access counts as a change, and a change means saving every preset
+    if s.presets.iter().any(|x| !x.builtin && ids.contains(&x.id)) {
+        s.presets.retain(|x| x.builtin || !ids.contains(&x.id));
+        s.presets.prune_favorite_groups();
+    }
     Ok(json!({"deleted": before.saturating_sub(s.presets.len()), "keptBuiltin": kept_builtin}))
 }
 
 fn move_many(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "preset.moveMany";
-    let group = group_param(p, "group", C)?;
+    let group = destination_param(s, p, C)?;
     let ids = ids_param(p, C)?;
-    let (mut moved, mut kept_builtin) = (0usize, 0usize);
-    for x in s.presets.iter_mut().filter(|x| ids.contains(&x.id)) {
-        if x.builtin {
-            kept_builtin += 1;
-        } else if x.group != group {
+    let kept_builtin = s.presets.iter().filter(|x| x.builtin && ids.contains(&x.id)).count();
+    let moves = |x: &Preset| !x.builtin && ids.contains(&x.id) && x.group != group;
+    let moved = s.presets.iter().filter(|x| moves(x)).count();
+    // mutable access counts as a change, and a change means saving every preset
+    if moved > 0 {
+        for x in s.presets.iter_mut().filter(|x| moves(x)) {
             x.group.clone_from(&group);
-            moved += 1;
         }
+        s.presets.prune_favorite_groups();
     }
     Ok(json!({"moved": moved, "keptBuiltin": kept_builtin}))
 }
 
 fn copy(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "preset.copy";
-    let group = group_param(p, "group", C)?;
+    let group = destination_param(s, p, C)?;
     let ids = ids_param(p, C)?;
     let copies: Vec<Preset> = s
         .presets

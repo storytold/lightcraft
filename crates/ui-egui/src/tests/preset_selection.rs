@@ -166,7 +166,7 @@ fn delete_from_the_bar_asks_and_keeps_built_in_presets() {
     click(&mut h, "presetMenu:selectAll", json!({}));
     click(&mut h, "presetSelectionActions", json!({}));
     click(&mut h, "presetBulk:delete", json!({}));
-    let Some(Dialog::DeletePresets { ids: asked, builtin: kept }) = h.app.ui.dialog.as_ref() else {
+    let Some(Dialog::DeletePresets { ids: asked, builtin: kept, .. }) = h.app.ui.dialog.as_ref() else {
         panic!("the dialog asks first: {:?}", h.app.ui.dialog.is_some());
     };
     assert_eq!((asked.len() - kept, *kept), (3, builtin));
@@ -179,12 +179,63 @@ fn delete_from_the_bar_asks_and_keeps_built_in_presets() {
     assert!(selected(&h).is_empty());
 }
 
+/// Presets gone from the list leave the selection: the count stays true, and importing them again
+/// doesn't select them.
+#[test]
+fn presets_gone_leave_the_selection() {
+    let (mut h, ids) = app();
+    let other = h.app.session.presets.iter().find(|p| p.builtin).map(|p| p.id.clone()).unwrap();
+    h.app.ui.preset_selection.extend(ids.iter().cloned());
+    h.app.ui.preset_selection.insert(other.clone());
+    frames(&mut h);
+    h.app.run("preset.deleteGroup", json!({"name": "AAA Mine"})).unwrap();
+    frames(&mut h);
+    assert_eq!(selected(&h), vec![other], "only what still exists stays selected");
+}
+
+/// An answer to a question asked in another library deletes nothing.
+#[test]
+fn a_deletion_asked_in_another_library_deletes_nothing() {
+    let (mut h, ids) = app();
+    let library = h.app.session.library_generation() + 1;
+    let stale = Dialog::DeletePresets { ids: ids.clone(), builtin: 0, library };
+    assert!(crate::dialogs::confirm_dialog(&mut h.app, &stale).is_err());
+    assert!(ids.iter().all(|id| h.app.session.presets.iter().any(|p| &p.id == id)));
+}
+
+/// At the very end of the list too, the bar going away leaves the rows where they are.
+#[test]
+fn the_bar_going_leaves_the_rows_in_place_at_the_end_of_the_list() {
+    let (mut h, ids) = app();
+    h.app.ui.preset_selection.extend(ids[..2].iter().cloned());
+    frames(&mut h);
+    let header = |h: &Headless| h.app.widgets.iter().find(|(w, _)| w == "presetGroup:AAA Mine").map(|(_, r)| r.top()).unwrap();
+    let top = header(&h);
+    req(&mut h, "ui.hoverWidget", json!({"id": "presetGroup:AAA Mine"}));
+    req(&mut h, "ui.scroll", json!({"dy": -100_000.0}));
+    for _ in 0..120 {
+        h.step();
+    }
+    assert!(header(&h) < top - 100.0, "the list has scrolled to its end");
+    let last = |h: &Headless| {
+        let rows = h.app.widgets.iter().filter(|(w, _)| w.starts_with("preset:"));
+        rows.max_by(|a, b| a.1.top().total_cmp(&b.1.top())).map(|(w, r)| (w.clone(), r.top())).unwrap()
+    };
+    let before = last(&h);
+    h.app.ui.preset_selection.clear();
+    for _ in 0..30 {
+        h.step();
+    }
+    assert_eq!(last(&h), before);
+}
+
 /// The question reads right for one preset to delete and one built-in preset staying.
 #[test]
 fn deleting_one_preset_with_one_built_in_says_so() {
     let (mut h, ids) = app();
     let builtin = h.app.session.presets.iter().find(|p| p.builtin).map(|p| p.id.clone()).unwrap();
-    h.app.ui.dialog = Some(Dialog::DeletePresets { ids: vec![ids[0].clone(), builtin], builtin: 1 });
+    let library = h.app.session.library_generation();
+    h.app.ui.dialog = Some(Dialog::DeletePresets { ids: vec![ids[0].clone(), builtin], builtin: 1, library });
     frames(&mut h);
     let text = h.painted_text();
     assert!(text.iter().any(|t| t.contains("Delete this preset?")), "{text:?}");

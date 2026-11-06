@@ -368,7 +368,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ui.allocate_space(vec2(ui.available_width(), (grp.items.len() - end) as f32 * row_h));
                 }
             }
-            ui.add_space(30.0);
+            // as much more room as the bar takes when it isn't there: at the very end of the list the
+            // bar going away would otherwise bring the rows down, under the pointer
+            ui.add_space(30.0 + SELECTION_BAR_H + 1.0 - bar_room);
         });
         selection_bar(app, ui);
         let last_hover_id = egui::Id::unique("last-preset-hover");
@@ -443,8 +445,10 @@ fn ids_between<'a>(rows: &'a [String], a: &str, b: &str) -> Option<&'a [String]>
 /// A plain click on a preset also ends the selection. One preset selected has its own menu.
 fn selection_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (total, user) = selection_counts(&app.session.presets, &app.ui.preset_selection);
-    if total == 0 {
-        app.ui.preset_selection.clear();
+    // presets gone (a group deleted, an agent): they shouldn't count, nor come back selected if imported again
+    if total < app.ui.preset_selection.len() {
+        let exists: std::collections::HashSet<&str> = app.session.presets.iter().map(|p| p.id.as_str()).collect();
+        app.ui.preset_selection.retain(|id| exists.contains(id.as_str()));
     }
     if total < MIN_FOR_BAR {
         return;
@@ -466,7 +470,8 @@ fn selection_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// What can be done with the selection: built-in presets can be copied, not moved or deleted.
 fn bulk_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], total: usize, user: usize) {
-    let ids: Vec<String> = app.ui.preset_selection.iter().cloned().collect();
+    let selection = &app.ui.preset_selection;
+    let ids: Vec<String> = app.session.presets.iter().filter(|p| selection.contains(&p.id)).map(|p| p.id.clone()).collect();
     let r = crate::widgets::menu_button(ui, crate::i18n::tr("Copy to Group"), |ui| {
         group_targets(app, ui, groups, "preset.copy", &ids, "Copy Presets to New Group");
     });
@@ -481,7 +486,8 @@ fn bulk_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], total
     let r = ui.add_enabled(user > 0, egui::Button::new(crate::i18n::tr("Delete…")));
     register(ui, "presetBulk:delete", r.rect);
     if r.clicked() {
-        app.ui.dialog = Some(crate::state::Dialog::DeletePresets { ids, builtin: total.saturating_sub(user) });
+        app.ui.dialog =
+            Some(crate::state::Dialog::DeletePresets { ids, builtin: total.saturating_sub(user), library: app.session.library_generation() });
     }
 }
 

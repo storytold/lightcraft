@@ -97,6 +97,9 @@ fn switch_library(app: &mut LightcraftApp, path: &str) -> Result<Value, String> 
     app.ui.reference = None;
     app.ui.compare = None;
     app.ui.brief_info = crate::state::BriefInfo::default();
+    // presets selected in the library being left
+    app.ui.preset_selection.clear();
+    app.ui.preset_anchor = None;
     // a keyword picked in the Keyword List belongs to the library being left
     app.ui.keyword_list_selected = None;
     if app.ui.view == crate::state::ViewMode::Reference {
