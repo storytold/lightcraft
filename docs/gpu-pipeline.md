@@ -8,6 +8,11 @@ CPU fast guided-filter allocation measurements and reproduction commands are doc
 [guided-filter-memory.md](guided-filter-memory.md). That optimization retains the full-size base
 and does not change the GPU's coefficient buffers.
 
+Process V4's camera-look Contrast and Blacks share the CPU's generated lookup tables and
+ProPhoto matrices. `finish.wgsl::light_ops` applies them after V2's Whites tone curve and
+before the colour stage. Full frames and render windows use the same pointwise operators;
+see [calibrated Light operators](light-v3.md) for HDR rules and limits.
+
 Warped geometry uses a CPU-computed coverage bit mask for the source boundary.
 The CPU reference evaluates that boundary in double precision; GPU float
 rounding otherwise can turn a blank edge pixel into a photo pixel. The mask
@@ -49,6 +54,21 @@ Overrides (read once at launch):
 - `LIGHTCRAFT_GPU=0`: GPU rendering off for the process (the window is unaffected).
 - Both `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off` also keep AI Denoise, the face models
   and the AI mask model (SAM 3 on Metal) on the CPU.
+- `LIGHTCRAFT_GPU_ADAPTER=<part of a card's name>` (any case, e.g. `4070`, `radeon`, `"rtx 4070 super"`):
+  the graphics card for GPU rendering, AI Denoise and the face models, on a machine with more than one
+  (`backend::pick_adapter`). Of the hardware cards whose name contains it, the one whose whole name it
+  is wins, then dedicated before built-in before virtual cards, then wgpu's order
+  (`backend::choose_named_adapter`); the log says which when several match (`… matches 2 graphics
+  cards (…): using …`). Software renderers (WARP, llvmpipe) never: a name that matches only one is
+  logged as such. A name that matches no card is logged
+  (`gpu: LIGHTCRAFT_GPU_ADAPTER=… names none of the graphics cards (…); using the default choice`) and
+  the default high-performance card is used. Each line is logged once, though the render device, AI
+  Denoise and the face models each ask. Each of those makes its own wgpu instance and device, so
+  devices on different cards share no buffer, pipeline or queue. The window keeps the card wgpu picks for it by power preference, and
+  rendering runs on a device of its own on the chosen card (the photo is copied to the window's card).
+  Rendering shares the window's device when the variable is unset or names the window's card
+  (`backend::may_adopt_window_device`). The log's `gpu: LIGHTCRAFT_GPU_ADAPTER=…: using …` line names the card
+  used. Handy to keep test runs or a long export off the card the screens hang on.
 - `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter (llvmpipe / lavapipe, WARP), which is
   otherwise refused because the CPU pipeline is faster. For running the GPU tests on a machine
   without a GPU (below); the app never sets it.
@@ -70,6 +90,14 @@ shifted; DXC and Vulkan were right), so `nn_conv.wgsl` steps those stores by `1 
 leaves them apart. The transposed convolution's merged store ran right on that card, but it steps the same way.
 `nn::tests::a_layer_stores_every_pixels_channels_where_the_next_reads_them` catches the fault on such a card;
 `a_transposed_convolution_stores_every_pixels_channels_where_the_next_reads_them` checks the other store exactly.
+
+FXC also cannot address two things the WGSL looks harmless with, and answers with `X3550 … forcing loop to unroll`
+and then `X3511 unable to unroll loop` (the shader module fails, so the pipeline is never made): an array handed to a
+function through a pointer (`ptr<function, array<…>>`) that the function then indexes with a loop variable, and a vector
+indexed with a loop variable on the left of an assignment (`acc[ch] = …` with `acc: vec4<f32>`). The block-matching
+kernels (`wgsl/bm3d_*.wgsl`) keep their working arrays at module scope (`var<private>`, one copy of the transforms
+generated per array, `bm3d_transform.wgsl`) and accumulate in `array<f32, 4>` instead. A GPU test that only records a
+skip when the device cannot build the kernels hides this, so read the skip note (`cargo test … -- --nocapture`).
 
 **Off the startup path.** The compute device is created on a background thread once the window is
 up (`gpu::warm_up` from the first frame's settings), and never while GPU rendering is off: with
@@ -152,7 +180,22 @@ walks the drive.
 ## Where it is used
 - `lightcraft_engine::media::develop` (called by every `RenderJob`): loupe / before / compare views,
   `render_now` (CLI, MCP, control channel renders) and exports render on the GPU when one is
-  available; grid/filmstrip thumbnails (many small jobs in parallel) stay on the CPU.
+  available. Thumbnails (grid, filmstrip, preset and profile previews, faces) render on the GPU
+  once the device is ready (`lightcraft_gpu::ready()`) and on the CPU until then, so they never
+  wait for device creation at startup. Six workers rendering 256 px thumbnails: 3.6 ms each on an
+  RTX 5070 vs 4.3–5.2 ms on 32 CPU threads (`crates/gpu/tests/it/thumbs_bench.rs`), and the cores stay
+  free for raw decoding.
+- 8-bit renders take the GPU path with LUT profiles (the `.cube` table rides in the kernel's
+  `aux` buffer, trilinear like `Lut3d::apply`, after grain), masks with Refine Edges (the cross
+  guided filter of Auto Mask, blended by √refine before the mask's invert and amount) and soft
+  proofs into a colour space (proof-space gamut mapping and both gamut warnings, into an output
+  space or a display). The float HDR render (`OutputDepth::F32Hdr`) takes the GPU path too: the
+  `finish` kernel keeps values up to the edit's peak, encodes with the exact sRGB curve and writes
+  three linear floats per pixel into `out` (within 1 step of 8 on the sRGB curve of the CPU's float
+  render, 0.02 on average: `hdr_float_render_matches`). These render on the CPU: 16-bit and linear float exports,
+  Visualize HDR (it draws the float render over the 8-bit one), soft proofs to an output device's
+  profile (a printer or paper profile), and photos with a content-aware Fill spot (no GPU kernel
+  for it).
 - Anything the GPU path cannot do returns `None` and the CPU renders instead: no adapter (CI
   machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole
   process; see [Backends](#backends-environment-variables-and-troubleshooting-issue-136)), the `app.gpu {enabled}`
@@ -178,10 +221,17 @@ walks the drive.
   (log luminance, dark channel, guided-filter steps, white balance, luminance / colour NR, airlight
   sampling), `mask` (linear / radial / luminance / colour range / brush shapes, combine, finalize),
   `finish` (the whole per-pixel stage) — each mirrors a named CPU function.
+- Defringe (`fringe_lab`, a separable lightness `minmax` filter, `fringe_apply`; parameters from
+  `optics::defringe_params`) and spot removal (`spot` module, spot by spot in place: `spot_prep`,
+  the Heal tone correction as two device Gaussians, `spot_apply`; Remove's 48 candidate sources are
+  scored by `spot_score` and only the scores are read back; layout and candidates from
+  `spots::{layout, candidates, ring_dirs, score_radii, rank}`) run on the device in `lin_cpu`'s
+  order. The histogram is counted on the device (`hist`, atomics, the same sampling grid as
+  `Histogram::of_srgb8`, so it is exact).
 - Soft proofing against an output space (`RenderRequest::proof`, with its destination and display gamut
   warnings) runs in `finish`; a proof against an output-device profile (its 3D table) renders on the CPU.
-- Per-stage hybrid: defringe and spot removal (rare, CPU-only for now) download the resampled image,
-  run on the CPU and upload; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
+- Per-stage hybrid: the camera's local tone mapping (ProRAW gain tables, off by default) runs the
+  scene-linear stage on the CPU and uploads; heuristic mask shapes (Sky, Subject, Background, …) and brushes of more
   than 4096 dabs are evaluated on the CPU and uploaded; sources over the buffer limit are resampled
   on the CPU.
 - Stage cache: `GpuStages` mirrors `StageCache` (same keys: source identity + `geo`, `lin_key`,
@@ -247,7 +297,8 @@ thread. A render's *own* reason comes from `lightcraft_gpu::try_render` (`Err(Fa
 passes on as `RenderResult::gpu_fallback`; an export carries it as `Exported::gpu_fallback`, and
 each file of an `app.export` batch result has `gpuFallback` when its render fell back (issue #675).
 **Reproducing a smaller GPU:** `LIGHTCRAFT_GPU_LIMITS=webgpu` (or `downlevel`) creates the device
-with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB.
+with 128 MiB storage bindings / 256 MiB buffers, `LIGHTCRAFT_GPU_LIMITS=<n>` with n MiB / 2n MiB;
+the window's device, when adopted, is capped the same way.
 Tests inject failures with `lightcraft_gpu::inject_fault` (`crates/gpu/tests/it/fallback.rs`,
 `export_falls_back_to_the_cpu_when_gpu_work_is_lost`). The fault is thread-local, and so are its
 consequences: a simulated fatal failure stops GPU use on the injecting thread only (`available()`
@@ -348,6 +399,38 @@ most likely the largest kernel (`finish.wgsl`) alone (not timed per kernel). wgp
 opens its own; a refused kernel still means no GPU. The `gpu:` info log line gives the kernel count
 and build time.
 
+## Drawing renders straight from the GPU
+The desktop app creates the window's wgpu device with the adapter's limits and hands it to the GPU
+renderer (`lightcraft_gpu::adopt_window_device`, on a background thread at startup: the kernels
+build there; the crash sentinel covers it), so rendering and drawing share one device. A slider
+drag's drafts of the views (Detail, Before, the zoomed window, hover, Compare, the second window)
+are then marked `RenderJob::on_screen`: the render ends in an `Rgba8Unorm` texture
+(`lightcraft_gpu::render_display` → `Output::Display`) that egui-wgpu draws as a native texture
+(`ScreenTextures` in `ui-egui`, implemented by the app) - no readback, no conversion to egui's
+pixels, no re-upload. The per-render checks run on the device instead: every pixel written (an
+atomic count), not entirely black (the device histogram). Rows are re-laid at a 256-byte stride
+for the texture copy when the width needs it.
+
+Renders that need pixels keep the readback: the settled full-quality render after a drag (the cached
+view preview, overlays, screenshots), thumbnails, exports, overlays (Visualize Spots, mask
+overlays), windows that spots grew (cut on the CPU), a monitor profile (corrected on the CPU), and
+anything the GPU path declines. A device that doesn't suit (software adapter, too few storage
+buffers, kernels that don't build there) makes the renderer create a device of its own, as before.
+A headless `ui.screenshot` (the control channel keeps CPU copies of what is drawn) taken while a
+view shows a GPU-resident draft reads that texture back for the picture (`ScreenTextures::read`,
+`lightcraft_gpu::read_texture`); drawing never does.
+
+- `LIGHTCRAFT_GPU_WINDOW=0`: never adopt the window's device (a device of its own, renders read
+  back) - to compare, or for a driver that misbehaves with compute and drawing on one device.
+- `ui.inspect` → `perf.gpuWindowDevice` (renders run on the window's device), `perf.screenTextures`
+  (the UI can draw GPU-resident renders), `perf.mainOnGpu` (the loupe shows one now).
+- Measured (RTX 5070, DX12, a 45 MP CR3, 90 exposure steps of a drag at 30 Hz): the loupe's draft
+  render 1.69 ms median from the texture vs 2.05 ms with the readback; the UI thread unchanged
+  within noise (~1 ms). The difference grows with the loupe's size (4K/5K displays, zoom).
+- With the renderer on the window's device, errors the device raises outside a render (the window's
+  own included) are logged and stop GPU rendering (CPU from then on) instead of wgpu's default
+  panic.
+
 ## Opening a photo (M5.4)
 - The loupe shows a stand-in at once (`media::QuickJob`): the photo's cached view render for its
   current settings, else (raws with their import look) the embedded camera JPEG, else a
@@ -357,6 +440,11 @@ and build time.
 - The next and previous photos in filmstrip order are prepared in the background once the current
   one is rendered (decoded source kept, view render cached): stepping through photos shows the
   developed image in ~50 ms.
+- Culling (PERF-CULL): the stand-ins of the next five photos in the direction of travel and the one
+  behind are made ahead (`render::Slot::QuickAhead`) and taken over at the step, so a step shows
+  the camera JPEG at once; while an arrow key is held (a photo left within 0.25 s) the raw render
+  of a photo waits until it has stayed 0.12 s, and a render queued for a photo already left is
+  dropped. `ui.inspect` → `perf.loupeSteps` times each step on the frames drawn.
 
 ## Memory (M5.6)
 A view's stages keep an uploaded source only up to 96 MB (a Preview-level source); a bigger one (the original a zoom window is cut from) is kept once, outside the views' stages, for all views of the photo (the Before and After windows and every pan share it; the Before window of a Before/After waits at first open until the After's job has handed the original over, or each would decode and upload its own copy) and given back when the app idles with no zoom window on screen (a zoomed view keeps it for its next pan: a 64 MP original is 800 MB to upload again; issue #323: kept per view it counted against the stage budget on every tick of a drag, and not kept every new window uploaded 288 MB again).
@@ -389,10 +477,8 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   2.5–2.6 GB → 0.91–0.96 GB, heap peak 930 → ~600 MB; stepping median ~13 ms (unchanged).
 
 ## Open items
-- Keep the loupe texture on the GPU (render into an `egui-wgpu` texture on eframe's device instead of
-  reading back); share the device with eframe.
 - WebGPU in the browser build (async init, single device per canvas).
-- Defringe and spot removal kernels; Sky/Subject heuristics (replaced by the segmenter in M12).
+- Sky/Subject heuristics (replaced by the segmenter in M12); the ProRAW local tone map.
 - Tiling for sources / outputs beyond the buffer limit (24 MP+ on WebGPU-default limits, 60 MP+
   on most desktop adapters; these render on the CPU now): tile with overlap equal to the largest
   filter radius, with global values (airlight) from a first pass.
@@ -400,4 +486,3 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   faster path for exports.
 - Large-radius blurs at full size (dehaze dark channel at 24 MP) dominate the export: a summed-area
   table or a downsampled dark channel would cut them further.
-- GPU histogram (atomics) to skip the CPU pass over the readback.

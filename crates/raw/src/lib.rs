@@ -18,8 +18,8 @@
 //! Canon CR2 / CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW) / CRW (the CIFF bodies of 2000–2004; clean-room-derived
 //! compression, `vendor::crw`; the PowerShot G5's anomalous coding is refused), Nikon NEF/NRW (uncompressed, Huffman lossless / lossy compressed), Sony ARW (uncompressed, ARW2, lossless), Fujifilm RAF (uncompressed Bayer
 //! and X-Trans, lossless and lossy compressed), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format: compressed 4 and 6, the prefix-coded strips of 8,
-//! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed: 16-bit words, 12-bit XZ-2 words, 12-bit 16-byte blocks of the E-300/E-330/E-500).
-//! [`embedded_preview`] covers these containers' JPEG previews. Variants we can't decode yet (compressed ORF, CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
+//! packed 2/5/7, the 16-bit words of the oldest bodies), Pentax PEF (uncompressed, Huffman), Olympus ORF (uncompressed: 16-bit words, 12-bit XZ-2 words, 12-bit 16-byte blocks of the E-300/E-330/E-500; compressed: 12-bit entropy-coded sensor differences across interchangeable-lens and modern compact bodies).
+//! [`embedded_preview`] covers these containers' JPEG previews. Variants we can't decode yet (CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
 //! (public specifications, tag-name documentation, black-box analysis of CC0 samples) and gaps. Non-DNG files carry no
 //! colour matrix: [`spectral`] has matrices fitted to measured spectral sensitivities for 52 models, and
 //! otherwise [`color`] falls back to a documented neutral model. The decoders never panic on malformed input.
@@ -28,11 +28,13 @@
 
 mod binned;
 pub mod color;
+pub mod dcp;
 pub mod demosaic;
 mod dng;
 pub mod dngwrite;
 pub mod gaintable;
 pub mod highlight;
+mod hotpixel;
 #[cfg(feature = "jxl")]
 mod jxl;
 pub mod kelvin_builtin;
@@ -54,6 +56,7 @@ mod wb_estimate;
 
 pub use demosaic::{Method, demosaic};
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};
+pub use hotpixel::HOT_PIXEL_MAX_SHARE;
 pub use lens_metadata::LensMetadata;
 pub use lightcraft_color::Mat3;
 pub use lightcraft_geom::Orientation;
@@ -662,6 +665,8 @@ pub struct ColorData {
     pub as_shot_neutral: Option<[f64; 3]>,
     pub as_shot_white_xy: Option<Xy>,
     /// EV to add for a "normal" rendering (`BaselineExposure` + `BaselineExposureOffset`).
+    /// A full CR3 decode also includes compensation for sample-derived white headroom;
+    /// a header-only probe cannot determine that adjustment.
     pub baseline_exposure: f64,
     /// `BaselineSharpness`: sharpening relative to a reference camera (`None`: the DNG default,
     /// 1). Read and written back by DNG export; rendering doesn't use it yet.
