@@ -190,11 +190,11 @@ of it.
   once in each binary).
 - **When `ci` fails on a test your change doesn't touch,** rerun only that package's tests: `cargo xtask test -p PKG`
   (`-- --exact TEST_PATH` narrows it to the one test; a bare `-- NAME` runs every test whose path contains it). If
-  it's intermittent, or fails without your change too, say so in the PR and link its issue, or file
-  one. Don't widen the run or bypass xtask to get past it. `ci` stops at the first
-  failing binary, so cover what it didn't reach: `cargo xtask test --keep-going --doc -p …` for the packages you
-  changed and those that depend on them (`--doc` adds the doctests, which `ci` runs after the test binaries), and
-  `cargo xtask parity`, `layers`, `assets` and `wasm` for the steps after `test`.
+  it fails without your change too, say so in the PR and link its issue, or file one; if it passes on a rerun, it's
+  flaky (**Flaky tests** below). Don't widen the run or bypass xtask to get past it. `ci`'s test step runs every
+  test binary, but it runs the doctests only when they all pass, and `ci` stops at the first failing step, so cover
+  what it didn't reach: `cargo xtask test --doc -p …` for the packages you changed (their tests, then their
+  doctests), and `cargo xtask parity`, `layers`, `assets`, `roots` and `wasm` for the steps after `test`.
 - **Nothing outlives your session:** never leave a test run going in the background when you finish, and wrap a long
   run in `timeout` (`timeout 60m cargo xtask test -p …`; on macOS that's `gtimeout`, from Homebrew's
   `coreutils`). Before you stop, check that no `cargo` or test process you started is still running.
