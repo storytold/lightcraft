@@ -254,7 +254,11 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 }
                 let sidecar = sidecar.map(|sc| sc.resolve_label(&s.catalog)).filter(|sc| *sc != crate::sidecar::SidecarData::default());
                 // the photo is upright as the file's own orientation turns it, when the file states one
-                let sidecar = sidecar.map(|sc| crate::sidecar::SidecarData { orientation: info.orientation.or(sc.orientation), ..sc });
+                // (and a `crs:` crop and masks turn with it: Lightroom places them on the stored image)
+                let sidecar = sidecar.map(|sc| {
+                    let develop_frame = sc.has_positioned_develop().then(|| info.orientation.unwrap_or_default());
+                    crate::sidecar::SidecarData { orientation: info.orientation.or(sc.orientation), develop_frame, ..sc }
+                });
                 // a copy is catalogued under its new name
                 let name = Path::new(&stored).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
                 let mut p = Photo::new(id, Source::File { path: stored }, &name, &info.format, info.width, info.height, &now);

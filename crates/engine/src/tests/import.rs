@@ -2998,7 +2998,10 @@ fn raw_sidecar_rating_and_crop_survive_naming_and_encoding_variants() {
         let p = s.catalog.photos().next().unwrap();
         assert_eq!(p.rating, 3, "{name}");
         let c = p.develop.to_json()["crop"]["geometry"].clone();
-        assert!((c["rect"]["x0"].as_f64().unwrap_or(0.0) - 0.2).abs() < 1e-6, "{name}: {c}");
+        // in the photo's frame, as the catalog import puts it (#2687): the straighten turns the other way, and
+        // the edges are those of the turned rectangle
+        assert!((c["angle"].as_f64().unwrap_or(0.0) + 1.5).abs() < 1e-9, "{name}: {c}");
+        assert!((c["rect"]["x0"].as_f64().unwrap_or(0.0) - 0.193_122_283).abs() < 1e-6, "{name}: {c}");
         if name == "lower-full" {
             // a move takes that sidecar along
             let dest = temp_dir("sc-variant-dest");
