@@ -88,8 +88,9 @@ impl Headless {
     /// With `path` and no `format`, the format follows the path's extension.
     fn export(&mut self, p: &Value) -> Result<Value, String> {
         use lightcraft_engine::export::{Destination, ExportFormat, ExportOptions, Resize, prepare_batch, run_batch};
-        lightcraft_engine::file_access::check_command("app.export", p)?;
+        // After the merge: a preset can name a watermark too, and without this it would just go missing.
         let p = &self.session.export_params_or(p, ExportFormat::Png)?;
+        lightcraft_engine::file_access::check_command("app.export", p)?;
         // PNG for a `path` that names no format; `bitDepth` is checked against the format written
         let mut opts = ExportOptions::from_params_or(p, ExportFormat::Png).map_err(|e| e.to_string())?;
         if !ExportOptions::has_size_param(p) {

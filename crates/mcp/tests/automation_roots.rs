@@ -78,6 +78,20 @@ fn refused(server: &mut Server, name: &str, args: Value, why: &str) {
     assert!(!text.contains(SECRET), "{name}: {text} leaked secret!");
 }
 
+/// A preset's watermark is held to the roots like one in the call: the export is refused, not
+/// written without it.
+#[test]
+fn export_preset_with_a_watermark_outside_is_refused() {
+    let (mut server, base) = confined("preset_mark", true, true);
+    ok(&mut server, "import", json!({"paths": [s(&base.join("in/photo.png"))]}));
+    let watermark = json!({"image": s(&base.join("outside/secret.png"))});
+    ok(&mut server, "run_command", json!({"command": "export.savePreset", "params": {"name": "marked", "params": {"watermark": watermark}}}));
+    let out = base.join("out/marked.jpg");
+    refused(&mut server, "export", json!({"path": s(&out), "format": "jpeg", "preset": "marked"}), "outside");
+    assert!(!out.exists(), "nothing is written");
+    let _ = std::fs::remove_dir_all(base);
+}
+
 /// Imports only from inside read root.
 #[test]
 fn imports_only_from_inside_read_root() {
