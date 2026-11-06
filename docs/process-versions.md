@@ -1,6 +1,6 @@
 # Process versions
 
-> **Last updated:** 2026-10-12 · **Change:** minor (calibrated Contrast and Blacks)
+> **Changes:** [revision history](#revision-history)
 
 Every photo's develop settings record the **rendering process** they are interpreted by
 (`DevelopSettings::process`, a `ProcessVersion` in `crates/develop/src/settings.rs`). Lightroom calls
@@ -12,7 +12,8 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 | **V1** | LightCraft's rendering from before process versions existed. Frozen. |
 | **V2** | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
 | **V3** | Pixel-scale sharpening (issue #757): Radius uses the original photo’s pixels, Detail controls halo damping, and downsized sources retain a response-matched sharpening band. V1 and V2 keep texture-band sharpening exactly. The sharpen plane is keyed by radius and process and invalidated after noise-reduction changes. The Highlights/Shadows base and tone map are unchanged from V2. |
-| **V4** (the latest) | V3 plus calibrated global Contrast (per channel) and Blacks (per-channel/luminance mix) on raws with a camera tone curve. Whites behaves exactly as V2, both signs; its calibration is a planned follow-up. Other sources and local adjustments retain V2 operators. See [calibrated Light operators](light-v3.md). |
+| **V4** | V3 plus calibrated global Contrast (per channel) and Blacks (per-channel/luminance mix) on raws with a camera tone curve. Whites behaves exactly as V2, both signs; its calibration is a planned follow-up. Other sources and local adjustments retain V2 operators. See [calibrated Light operators](light-v3.md). |
+| **V5** (the latest) | V4 plus: a raw's tone curve rolls off into white in stops instead of reaching it within about a stop of the sensor's white, so raising Exposure keeps the highlights the sensor recorded (issue #1632). **Camera curve** (the look fitted to the embedded JPEG, or a DNG's `ProfileToneCurve`; `CameraTone`): past its last knot `CameraTone::apply_rolloff` closes the gap to white by `gap / (1 + c·(2^t − 1))` at `t` stops past the knot, with `c` matching the curve's slope there and the gap halving every stop in the end (`tone::ROLLOFF_STOPS`); `ToneMap::camera_rolloff_hdr` builds the table from it. Under V1 to V4 the curve past its last knot (fitted only to camera JPEG tones below 0.85, so 1 to 3 stops below the sensor's white on most photos) closes on white exponentially in linear light: the sensor's white renders at 8-bit 246 to 254 at Exposure 0 and 254 to 255 from Exposure +1. On the 11 CC0 corpus files with a fitted look (8 Sony, 2 Nikon, 1 Fujifilm) it now renders at 239 to 250 at Exposure 0 and 247 to 253 at +1. A DNG curve that reaches white at the sensor's white renders as before. **Generic curve** (raws without a camera curve, `ToneMap::rolloff_hdr`): from half a stop below its white point (`tone::GENERIC_KNEE_STOPS`) the same shoulder takes over, with the extended Reinhard curve's value and slope at the join, where V1 to V4 clip at the white point (scene 1.18 at default settings, ¼ stop above the sensor's white). The sensor's white renders at about 235, 248 and 252 at Exposure 0, +1 and +2 (V1 to V4: 239, 255, 255; the CC0 Canon R8 file and 6 CC0 DNGs without a camera curve). Content past the old clip point, such as a clipped sky, now renders up to 15 codes below white at Exposure 0 and reaches 255 about 5 stops past the sensor's white. Below the last knot or the join, JPEGs and other display-referred sources, and the camera fit itself are unchanged; CPU and GPU share the tone LUT. |
 
 ## The rule
 
@@ -102,4 +103,5 @@ extra field and retain their existing cached renders. No cache-version bump is n
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | V5: a raw's tone curve rolls off into white in stops, so raising Exposure keeps recorded highlights (#1632) |
 | 2026-10-12 | minor | Calibrated Contrast and Blacks, V2 Whites, resolved-process cache keys and number coordination |

@@ -608,6 +608,7 @@ mod tests {
         let _ = std::fs::remove_file(beside(&dir, LOCK));
     }
 
+    #[allow(clippy::unwrap_used)]
     fn scratch(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lc-lensfun-{name}-{}", std::process::id()));
         for leftover in [d.clone(), beside(&d, STAGING), beside(&d, PREVIOUS)] {
@@ -618,6 +619,7 @@ mod tests {
     }
 
     /// A local server answering `GET /db/<name>` with that file's body (404 otherwise).
+    #[allow(clippy::unwrap_used)]
     fn serve(files: Vec<(&'static str, Vec<u8>)>) -> String {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}/db", l.local_addr().unwrap());
