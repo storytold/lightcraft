@@ -62,11 +62,11 @@ hierarchical keywords, regular collections/collection sets, virtual copies and m
 settings are imported. A Rotate Left / Right made in Lightroom carries over: the catalog keeps one
 orientation, the file's own turned by it, so the import compares it with the file's own orientation and gives the
 photo the difference as its own rotation, virtual copies from their master's file. Each photo keeps its file's
-orientation from when its file was read (an import or a folder browse, catalog format v12), so a browsed photo, a
+orientation from when its file was read (an import or a folder browse, catalog format v13), so a browsed photo, a
 virtual copy made in Lightroom later and a re-import get the same turn without reading the file again. A photo the
 library already had with edits of its own keeps its rotation, and the catalog's crop and masks go into the frame it
 shows in. A photo whose file orientation isn't known (an offline original, a raw shown from its preview, a photo
-catalogued before v12) keeps the catalog's orientation as the file's. Missing originals remain catalogued for relinking, count as added records and are reported
+catalogued before v13) keeps the catalog's orientation as the file's. Missing originals remain catalogued for relinking, count as added records and are reported
 separately from failures reading files that are present. Known-missing originals are not probed
 again. Previously browsed Local records join All Photos even when their originals are offline;
 their promotion is counted once and undone together with the catalog import.
@@ -117,7 +117,14 @@ fields are reported. Lightroom's `ProcessVersion` is not mapped: newly imported 
 LightCraft's latest rendering process, and photos already in the library keep theirs
 ([process-versions.md](process-versions.md)). When a recovery archive is saved, it retains source settings/history/snapshots
 and original smart-collection rules. Smart collections become regular albums with current
-membership. Archived history and snapshots are source data, not native LightCraft history yet.
+membership, and so do saved prints, books, slideshows and web galleries (with the photos they hold). A LightCraft
+album nests only inside a folder (a Lightroom collection set). A collection or creation Lightroom keeps elsewhere,
+such as a print saved inside a plain collection, or one whose parent is system-only or gone from the catalog, joins the
+nearest collection set above it, or the top level, and the result names it under warnings (issues #2165, #2532).
+Quick Collection and unsaved creations are system-only and not imported; publish collections live in tables the
+importer doesn't read. A collection the catalog lists twice imports once; a different collection with the id of an
+earlier one is left out with a warning naming both, and the photos listed under that id go to the first. Archived
+history and snapshots are source data, not native LightCraft history yet.
 A Custom white balance on a raw LightCraft develops relative to its as-shot look (ARW, NEF, RW2,
 RAF, CR3, CR2, PEF, SRW; Lightroom names them all `RAW`) can't be taken as Kelvin: the catalog keeps no
 as-shot white for Custom photos, so the photo stays As Shot and `Temperature, Tint` are reported
