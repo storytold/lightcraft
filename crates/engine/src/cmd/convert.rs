@@ -233,12 +233,23 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m.lens.is_empty() {
         m.lens = src.lens.clone();
     }
+    if m.make.is_empty() {
+        m.make = src.make.clone();
+    }
+    if m.lens_make.is_empty() {
+        m.lens_make = src.lens_make.clone();
+    }
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
     }
     m.focal_mm = m.focal_mm.or(src.focal_mm);
     m.aperture = m.aperture.or(src.aperture);
     m.iso = m.iso.or(src.iso);
+    m.flash = m.flash.or(src.flash);
+    m.exposure_bias = m.exposure_bias.or(src.exposure_bias);
+    if m.serial_number.is_empty() {
+        m.serial_number = src.serial_number.clone();
+    }
     m.gps = m.gps.or(src.gps);
     // the camera's focus point: photos imported before it was read get it here
     if m.focus.is_none() {

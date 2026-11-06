@@ -211,7 +211,7 @@ pub fn register(frames: &[Frame], progress: &Progress) -> Result<(Vec<Option<Cam
         }
     }
     let long = sizes[ids[0]].0.max(sizes[ids[0]].1) as f64;
-    let exif_f = frames[ids[0]].metadata.focal_length_35mm.filter(|v| *v > 1.0).map(|f35| f35 / 36.0 * long);
+    let exif_f = exif_focal(&frames[ids[0]]);
     let hom_f = (!fs.is_empty()).then(|| median(fs.clone())).filter(|f| *f > 0.1 * long && *f < 20.0 * long);
     let f0 = exif_f.or(hom_f).unwrap_or(long * 1.07);
     let cams = camera::initial_cameras(&ids, &sizes, &pairs, f0);
@@ -221,6 +221,12 @@ pub fn register(frames: &[Frame], progress: &Progress) -> Result<(Vec<Option<Cam
     let mut cams = adj.cameras;
     camera::straighten(&mut cams);
     Ok((cams, adj.rms_before, adj.rms))
+}
+
+/// A frame's focal length in pixels, from EXIF's 35 mm equivalent.
+fn exif_focal(frame: &Frame) -> Option<f64> {
+    let long = frame.width().max(frame.height()) as f64;
+    frame.metadata.focal_length_35mm.filter(|v| *v > 1.0).map(|f35| f35 / 36.0 * long)
 }
 
 /// Stitch `frames` (oriented, linear) into a panorama.
@@ -250,7 +256,14 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
     }
     // output scale: native resolution, limited to max_megapixels and the longest edge
     let max_px = if opts.max_megapixels.is_nan() { MAX_MEGAPIXELS } else { opts.max_megapixels.clamp(0.1, MAX_MEGAPIXELS) } * 1e6;
-    let s = (max_px / ((bx1 - bx0) * (by1 - by0))).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0)).min(1.0);
+    let surface = (bx1 - bx0) * (by1 - by0);
+    // Bundle adjustment fits the focal length freely, and a few wide frames can settle it below the
+    // lens's: the canvas, sized from it, then holds fewer pixels than the photos do. The lens's own
+    // focal length, where EXIF gives it, sets the native scale instead: a canvas pixel at the centre
+    // of a frame is then one pixel of the photo, and nothing is upsampled past that.
+    let lens = used.iter().filter_map(|&i| exif_focal(&frames[i])).fold(0.0, f64::max);
+    let native = if fmed > 0.0 { (lens / fmed).max(1.0) } else { 1.0 };
+    let s = (max_px / surface).sqrt().min(MAX_EDGE / (bx1 - bx0).max(by1 - by0)).min(native);
     let f_out = fmed * s;
     let (ox, oy) = (bx0 * s, by0 * s);
     let (cw, ch) = (((bx1 - bx0) * s).ceil() as usize + 1, ((by1 - by0) * s).ceil() as usize + 1);
@@ -400,7 +413,7 @@ pub fn stitch(mut frames: Vec<Frame>, opts: &PanoOptions, progress: &Progress) -
         rms_before,
         rms,
         fov,
-        native_megapixels: (bx1 - bx0) * (by1 - by0) / 1e6,
+        native_megapixels: surface * native * native / 1e6,
         focal: f_out,
         origin: (ox, oy),
         color,
