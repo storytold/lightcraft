@@ -295,7 +295,12 @@ fn oversized_filter_support_keeps_mains_bounded_window() {
     s.detail.nr_color = 25.;
     let req = RenderRequest { window: Some(PixelWindow { x: 20_000, y: 12_000, w: 400, h: 300 }), ..RenderRequest::fit(48_000, 32_000) };
     let p = crate::plan(&src, &SourceInfo::default(), &s, &req);
-    assert_eq!((p.w, p.h), (400, 300));
+    // main's bounded window, with the joint colour NR's halo around it as main gives it
+    let halo = crate::local::nrc_params(&s, p.detail_scale)
+        .filter(|_| crate::local::joint_colour_nr(&s))
+        .and_then(|n| n.passes.last().map(|q| ((6.0 * q.sigma).ceil() as usize).saturating_add(4)))
+        .unwrap_or(0);
+    assert_eq!((p.w, p.h), (400 + 2 * halo, 300 + 2 * halo));
     assert!(p.needs_airlight);
     let out = render(&src, &SourceInfo::default(), &s, &req).unwrap();
     assert_eq!((out.image.width, out.image.height), (400, 300));

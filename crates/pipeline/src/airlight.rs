@@ -120,7 +120,11 @@ pub fn prepare_bytes(full: &Plan<'_>, work: Option<&Plan<'_>>, gpu: bool) -> u64
     let (lum, col) = local::nr_params(&full.settings, full.detail_scale);
     // GPU luminance NR peaks while writing RGB output with its input, log
     // luminance, coefficients and filtered luminance still alive (28 bytes).
-    let scratch = if gpu && lum.is_some() {
+    // The joint colour NR peaks with its pilot planes (Y, U, V: 12 bytes) and four chroma pair
+    // images alive (filtered, scratch, paths and links: 8 bytes each), 44 bytes.
+    let scratch = if col.is_some() && local::joint_colour_nr(&full.settings) {
+        44
+    } else if gpu && lum.is_some() {
         28
     } else if col.is_some() {
         24
