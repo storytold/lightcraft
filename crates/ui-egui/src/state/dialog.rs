@@ -310,6 +310,11 @@ pub enum Dialog {
     DeleteEffects {
         names: Vec<String>,
     },
+    /// Confirm deleting a preset group and the `count` user presets in it.
+    DeletePresetGroup {
+        name: String,
+        count: usize,
+    },
     /// Confirm moving photos to Recently Deleted.
     ConfirmDelete {
         count: usize,

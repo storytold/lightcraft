@@ -43,6 +43,7 @@ mod move_to_share;
 mod organize;
 mod persist;
 mod prefs;
+mod preset_groups;
 mod presets_scale;
 mod preview_prep;
 mod print;

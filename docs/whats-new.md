@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Preset groups of your own
+- ⋯ → New Group… makes a group without moving a preset: it stays listed while empty, and is saved with the library.
+- A group of your own has Rename… and Delete Group… on its header. A group with built-in presets offers neither.
+- Add to Favorites on any group's header, built-in ones included, stars it and lists it above the other groups.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

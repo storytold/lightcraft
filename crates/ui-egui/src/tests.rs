@@ -70,6 +70,7 @@ mod offline;
 mod open_lightroom;
 pub(super) mod panels;
 mod preset_favorites;
+mod preset_groups;
 mod preset_import;
 mod preview_limit;
 mod print;

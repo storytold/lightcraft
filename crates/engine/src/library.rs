@@ -177,6 +177,13 @@ pub struct LibraryStores {
 struct PresetsFile {
     user: Vec<Preset>,
     favorites: Vec<String>,
+    /// Groups the user made by name, which stay while empty. Left out when there are none, so a
+    /// library that uses none keeps the file it had.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    groups: Vec<String>,
+    /// Groups starred by name, listed first. Left out when there are none, as `groups` is.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    favorite_groups: Vec<String>,
     /// Favourite profiles, and the recently applied ones (newest first).
     profile_favorites: Vec<String>,
     profile_recent: Vec<String>,
@@ -331,6 +338,8 @@ fn presets_json(s: &Session) -> String {
     let f = PresetsFile {
         user: presets.iter().filter(|p| !p.builtin).cloned().collect(),
         favorites: presets.iter().filter(|p| p.builtin && p.favorite).map(|p| p.id.clone()).collect(),
+        groups: presets.created_groups().iter().cloned().collect(),
+        favorite_groups: presets.favorite_groups().iter().cloned().collect(),
         profile_favorites: s.profile_favorites.clone(),
         profile_recent: s.profile_recent.clone(),
     };
@@ -621,6 +630,19 @@ impl Session {
             for u in f.user {
                 if ids.insert(u.id.clone()) {
                     self.presets.push(u);
+                }
+            }
+            // the file may have been edited by hand: the same limits as `preset.createGroup`
+            for g in f.groups {
+                let g = g.trim();
+                if !g.is_empty() && g.chars().count() <= crate::presets::MAX_GROUP_NAME {
+                    self.presets.add_created_group(g.to_string());
+                }
+            }
+            for g in f.favorite_groups {
+                let g = g.trim();
+                if !g.is_empty() && g.chars().count() <= crate::presets::MAX_GROUP_NAME {
+                    self.presets.set_favorite_group(g, true);
                 }
             }
             let known = |id: &String| {

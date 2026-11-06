@@ -34,8 +34,16 @@ pub struct PresetFile {
 #[derive(Clone, Debug)]
 pub struct PresetList {
     items: Vec<Preset>,
+    /// Groups the user made by name (`preset.createGroup`): every other group exists only through
+    /// the presets naming it, so an empty one needs this list to be listed and saved.
+    created_groups: std::collections::BTreeSet<String>,
+    /// Groups starred by name (`preset.favoriteGroup`), listed before the others.
+    favorite_groups: std::collections::BTreeSet<String>,
     generation: u64,
 }
+
+/// The longest group name `preset.createGroup` and the bulk commands take (characters).
+pub const MAX_GROUP_NAME: usize = 100;
 
 static PRESET_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -45,12 +53,44 @@ fn next_generation() -> u64 {
 
 impl PresetList {
     pub fn new(items: Vec<Preset>) -> PresetList {
-        PresetList { items, generation: next_generation() }
+        PresetList { items, created_groups: Default::default(), favorite_groups: Default::default(), generation: next_generation() }
     }
 
     /// Changes whenever the list may have changed.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The groups the user made by name, which stay listed while they hold no preset.
+    pub fn created_groups(&self) -> &std::collections::BTreeSet<String> {
+        &self.created_groups
+    }
+
+    /// Keep `name` as a group. False when it was one already.
+    pub fn add_created_group(&mut self, name: String) -> bool {
+        self.generation = next_generation();
+        self.created_groups.insert(name)
+    }
+
+    /// Stop keeping `name` as a group. False when it wasn't one.
+    pub fn remove_created_group(&mut self, name: &str) -> bool {
+        self.generation = next_generation();
+        self.created_groups.remove(name)
+    }
+
+    /// The groups starred by name, which the panel lists first.
+    pub fn favorite_groups(&self) -> &std::collections::BTreeSet<String> {
+        &self.favorite_groups
+    }
+
+    /// Star group `name`, or take its star away.
+    pub fn set_favorite_group(&mut self, name: &str, favorite: bool) {
+        self.generation = next_generation();
+        if favorite {
+            self.favorite_groups.insert(name.to_string());
+        } else {
+            self.favorite_groups.remove(name);
+        }
     }
 }
 
