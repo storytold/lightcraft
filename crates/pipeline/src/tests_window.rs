@@ -614,8 +614,8 @@ fn joint_colour_nr_measures_the_noise_of_the_whole_frame() {
     for (w, h, win) in [(768, 128, PixelWindow { x: 640, y: 32, w: 64, h: 64 }), (1664, 1536, PixelWindow { x: 1400, y: 700, w: 128, h: 128 })] {
         let src = crate::tests::colour_noise_scene(w, h, w * 2 / 3);
         let req = RenderRequest::fit(w, h);
-        let f = render(&src, &SourceInfo::default(), &s, &req).image;
-        let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..req }).image;
+        let f = render(&src, &SourceInfo::default(), &s, &req).unwrap().image;
+        let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..req }).unwrap().image;
         let (max, mean) = compare_inset(&f, &part, win, win.w / 4);
         assert!(max <= 2 && mean <= 0.1, "{w}×{h}: max {max}, mean {mean:.3}");
     }
@@ -633,7 +633,7 @@ fn a_deep_window_with_colour_noise_reduction_matches_the_whole_render() {
     s.detail.nr_color_smoothness = 0.0;
     for depth in [OutputDepth::U16, OutputDepth::F32Linear] {
         let req = RenderRequest { depth, ..RenderRequest::fit(w, h) };
-        let deep = |req: &RenderRequest| render(&src, &SourceInfo::default(), &s, req).deep.map(|d| d.to_rgba8());
+        let deep = |req: &RenderRequest| render(&src, &SourceInfo::default(), &s, req).unwrap().deep.map(|d| d.to_rgba8());
         let (Some(f), Some(part)) = (deep(&req), deep(&RenderRequest { window: Some(win), ..req })) else {
             panic!("{depth:?}: no deep image");
         };
@@ -902,6 +902,7 @@ fn cache_bytes_include_chroma() {
     let cache = crate::StageCache::default();
     cache.put(crate::CacheEntry {
         full_airlight: None,
+        colour_noise: None,
         src: src.clone(),
         geo: 0,
         sampled: Arc::new((*src).clone()),

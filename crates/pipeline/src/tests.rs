@@ -1056,11 +1056,11 @@ fn a_process_change_does_not_reuse_the_other_colour_filter() {
     old.detail.nr_color_smoothness = 0.0;
     old.process = Process::V2.version();
     let current = DevelopSettings { process: Process::LATEST.version(), ..old.clone() };
-    let first = render_cached(&src, &info, &old, &req, &cache).image;
-    let fresh = render(&src, &info, &current, &req).image;
+    let first = render_cached(&src, &info, &old, &req, &cache).unwrap().image;
+    let fresh = render(&src, &info, &current, &req).unwrap().image;
     assert!(max_diff(&first, &fresh) > 0, "the two colour filters differ on this scene");
-    assert_eq!(render_cached(&src, &info, &current, &req, &cache).image, fresh, "process update");
-    assert_eq!(render_cached(&src, &info, &old, &req, &cache).image, first, "undo");
+    assert_eq!(render_cached(&src, &info, &current, &req, &cache).unwrap().image, fresh, "process update");
+    assert_eq!(render_cached(&src, &info, &old, &req, &cache).unwrap().image, first, "undo");
 }
 
 /// Flat grey with chroma noise: `quiet` columns on the left with little noise, the rest with much.

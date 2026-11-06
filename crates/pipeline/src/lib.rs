@@ -712,6 +712,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 w: t.w,
                 h: t.h,
                 eyes: Vec::new(),
+                #[cfg(target_arch = "wasm32")]
                 fixed_air: None,
                 keep: None,
                 mattes: None,
