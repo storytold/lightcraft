@@ -17,8 +17,10 @@
 //!   open" for a moment and a re-open would be refused (issue #680). `LOCK_UN` through our
 //!   descriptor frees the lock whatever copies a child still holds.
 //! - Who holds it (process id, computer, program, version) is written to `catalog.lock.owner`, for
-//!   the error message. It's a separate file because a Windows lock also blocks reading the
-//!   locked file. It's only a hint: it may be missing or left over from a crash.
+//!   the error message. Only dropping the [`LibraryLock`] removes it, so a program that ends with
+//!   `std::process::exit` releases the lock first (`Session::release_library_lock`). It's a separate
+//!   file because a Windows lock also blocks reading the locked file. It's only a hint: it may be
+//!   missing or left over from a crash.
 //! - File systems without lock support (some network shares): the library opens unlocked, with a
 //!   warning — refusing it would lock the user out of their own library. Locks over SMB/NFS are
 //!   advisory and depend on the server; the owner file is then the only hint.

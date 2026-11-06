@@ -301,3 +301,66 @@ fn given_a_small_frame_pushed_past_a_tilted_edge_then_it_stops_on_the_edge_and_s
     }
     assert!(b.rect.y0 > a.rect.y0 + 0.01 && a.rect.y0 > start.rect.y0, "{:?} then {:?}", a.rect, b.rect);
 }
+
+//   Scenario: a free corner dragged diagonally out on a straightened photo (issue #2308)
+#[test]
+fn given_straightened_photo_when_a_free_corner_is_dragged_out_diagonally_then_both_sides_grow() {
+    for angle in [6.0, 12.0] {
+        let start = CropGeometry { rect: Rect::new(0.3, 0.3, 0.6, 0.6), angle };
+        let g = drag(start, BottomRight, p(0.6, 0.6), p(1.2, 1.2), None);
+        assert!(g.is_within_image(W, H), "{angle}: {:?}", g.rect);
+        assert!(near(g.rect.x0, 0.3) && near(g.rect.y0, 0.3), "{angle}: the anchor corner stays: {:?}", g.rect);
+        // both sides grow (main stops at y1 0.600)
+        assert!(g.rect.x1 > 0.9 && g.rect.y1 > 0.9, "{angle}: one side only: {:?}", g.rect);
+        let further = drag(g, BottomRight, p(g.rect.x1, g.rect.y1), p(1.2, 1.2), None);
+        assert!((further.rect.x1 - g.rect.x1).abs() < 1e-4 && (further.rect.y1 - g.rect.y1).abs() < 1e-4, "{angle}: {:?}", further.rect);
+    }
+    let start = CropGeometry { rect: Rect::new(0.3, 0.3, 0.6, 0.6), angle: 8.0 };
+    for (hd, from, to) in [(TopLeft, p(0.3, 0.3), p(-0.5, -0.5)), (TopRight, p(0.6, 0.3), p(1.5, -0.5)), (BottomLeft, p(0.3, 0.6), p(-0.5, 1.5))] {
+        let g = drag(start, hd, from, to, None);
+        assert!(g.is_within_image(W, H), "{hd:?}: {:?}", g.rect);
+        assert!(g.rect.width() > 0.5 && g.rect.height() > 0.45, "{hd:?}: one side only: {:?}", g.rect);
+        let (ax, ay) = (if from.x < 0.5 { g.rect.x1 } else { g.rect.x0 }, if from.y < 0.5 { g.rect.y1 } else { g.rect.y0 });
+        assert!(near(ax, if from.x < 0.5 { 0.6 } else { 0.3 }) && near(ay, if from.y < 0.5 { 0.6 } else { 0.3 }), "{hd:?}: {:?}", g.rect);
+    }
+}
+
+//   Scenario: a free corner pushed along one axis past a tilted edge on a straightened photo
+#[test]
+fn given_straightened_photo_when_a_free_corner_is_pushed_sideways_past_an_edge_then_the_other_side_keeps_its_size() {
+    for angle in [6.0, 12.0, -8.0] {
+        let start = CropGeometry { rect: Rect::new(0.3, 0.3, 0.6, 0.6), angle };
+        let g = drag(start, BottomRight, p(0.6, 0.6), p(1.3, 0.6), None);
+        assert!(g.is_within_image(W, H), "{angle}: {:?}", g.rect);
+        assert!(near(g.rect.y1, 0.6) && near(g.rect.x0, 0.3) && near(g.rect.y0, 0.3), "{angle}: the height changed: {:?}", g.rect);
+        assert!(g.rect.x1 > 0.85, "{angle}: it stopped short of the edge: {:?}", g.rect);
+        let g = drag(start, BottomRight, p(0.6, 0.6), p(0.6, 1.3), None);
+        assert!(near(g.rect.x1, 0.6) && g.rect.y1 > 0.8, "{angle}: the width changed: {:?}", g.rect);
+    }
+}
+
+//   Scenario: a free corner of a crop under the minimum size on a straightened photo
+#[test]
+fn given_straightened_photo_when_a_corner_of_a_too_small_crop_is_dragged_then_it_reaches_the_minimum() {
+    let start = CropGeometry { rect: Rect::new(0.3, 0.3, 0.3 + 2.0 / W, 0.6), angle: 6.0 };
+    let g = drag(start, BottomRight, p(start.rect.x1, 0.6), p(start.rect.x1 + 2.0 / W, 0.62), None);
+    assert!(g.rect.width() * W >= MIN_CROP_FRACTION * H - EPS, "{:?}", g.rect);
+    assert!(g.is_within_image(W, H) && near(g.rect.x0, 0.3) && near(g.rect.y0, 0.3), "{:?}", g.rect);
+}
+
+//   Scenario: a free corner moved inside, or across its anchor, on a straightened photo
+#[test]
+fn given_straightened_photo_when_a_free_corner_moves_inside_then_it_follows_and_keeps_a_minimum_size() {
+    let start = CropGeometry { rect: Rect::new(0.3, 0.3, 0.6, 0.6), angle: 8.0 };
+    let g = drag(start, BottomRight, p(0.6, 0.6), p(0.7, 0.55), None);
+    assert!(near(g.rect.x1, 0.7) && near(g.rect.y1, 0.55) && near(g.rect.x0, 0.3) && near(g.rect.y0, 0.3), "{:?}", g.rect);
+    let z = drag(start, BottomRight, p(0.6, 0.6), p(0.6, 0.6), None).rect;
+    assert!(near(z.x1, 0.6) && near(z.y1, 0.6), "a click moves nothing: {z:?}");
+    let crossed = drag(start, BottomRight, p(0.6, 0.6), p(0.0, 0.0), None);
+    assert!(near(crossed.rect.x0, 0.3) && near(crossed.rect.y0, 0.3), "{:?}", crossed.rect);
+    assert!(
+        crossed.rect.width() * W >= MIN_CROP_FRACTION * H - EPS && crossed.rect.height() * H >= MIN_CROP_FRACTION * H - EPS,
+        "{:?}",
+        crossed.rect
+    );
+}

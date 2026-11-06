@@ -62,7 +62,8 @@ fn keyed(mn: &Ifd, tag: u16, sign: i64) -> Option<Vec<i64>> {
     let key = mn.u64s(ENCRYPTION_KEY).filter(|k| k.len() == 11)?;
     let vals = mn.f64s(tag)?;
     // 32-bit entries: the stored value wraps modulo 2^32 (a negative number stored as a LONG)
-    Some(vals.iter().enumerate().map(|(i, &v)| i64::from((v as i64).wrapping_add(sign * key[i % 11] as i64) as i32)).collect())
+    // (a key value past i64::MAX must not overflow the multiply: only the low 32 bits are kept)
+    Some(vals.iter().enumerate().map(|(i, &v)| i64::from((v as i64).wrapping_add((key[i % 11] as i64).wrapping_mul(sign)) as i32)).collect())
 }
 
 /// The raw image's IFD: the one with a private compression value.
@@ -97,7 +98,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let (w, h) = (info.width as usize, info.height as usize);
     let n = w.checked_mul(h).filter(|n| *n > 0 && *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
     let chunks = info.chunks(bytes.len() as u64);
-    let strip: u64 = chunks.iter().map(|c| c.len).sum();
+    let strip = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len));
     let Some(coding) = coding(info.compression, w, h, strip).filter(|_| chunks.len() == 1) else {
         return Err(RawError::Unsupported(format!(
             "Samsung compressed raw (compression {}, {:.2} stored bits per sample)",
@@ -107,6 +108,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     };
     let data = if mode == Mode::Full {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("SRW strip outside file".into()))?;
+        if src.len() as u64 != strip {
+            return Err(RawError::Corrupt("SRW strip shorter than its rows".into()));
+        }
         let mut d = vec![0u16; n];
         match coding {
             Coding::Words => read_u16s(src, ByteOrder::Little, &mut d),
@@ -283,19 +287,25 @@ mod tests {
 
     /// A maker note in the Samsung layout: a big-endian IFD of LONG vectors, offsets relative to the note's start.
     fn note(entries: &[(u16, Vec<u32>)]) -> Vec<u8> {
+        let typed: Vec<_> = entries.iter().map(|(tag, v)| (*tag, 4, v.len() as u32, v.iter().flat_map(|x| x.to_be_bytes()).collect())).collect();
+        note_typed(&typed)
+    }
+
+    /// [`note`] with any entry types: `(tag, type, count, big-endian value bytes)`.
+    fn note_typed(entries: &[(u16, u16, u32, Vec<u8>)]) -> Vec<u8> {
         let mut head = Vec::new();
         let mut tail = Vec::new();
         head.extend_from_slice(&(entries.len() as u16).to_be_bytes());
         let values_at = 2 + 12 * entries.len() + 4;
-        for (tag, v) in entries {
+        for (tag, kind, count, v) in entries {
             head.extend_from_slice(&tag.to_be_bytes());
-            head.extend_from_slice(&4u16.to_be_bytes());
-            head.extend_from_slice(&(v.len() as u32).to_be_bytes());
-            if v.len() == 1 {
-                head.extend_from_slice(&v[0].to_be_bytes());
+            head.extend_from_slice(&kind.to_be_bytes());
+            head.extend_from_slice(&count.to_be_bytes());
+            if v.len() <= 4 {
+                head.extend(v.iter().copied().chain(std::iter::repeat(0)).take(4));
             } else {
                 head.extend_from_slice(&((values_at + tail.len()) as u32).to_be_bytes());
-                tail.extend(v.iter().flat_map(|x| x.to_be_bytes()));
+                tail.extend_from_slice(v);
             }
         }
         head.extend_from_slice(&[0; 4]);
@@ -353,6 +363,23 @@ mod tests {
         ifd0.set_child(t::EXIF_IFD, exif);
         ifd0.add_sub_ifd(raw);
         TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[ifd0]).unwrap()
+    }
+
+    /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow.
+    #[test]
+    fn strip_byte_counts_past_u64_max_do_not_overflow() {
+        let file = crate::vendor::tests::huge_strip_counts(srw(Spec {
+            w: 4,
+            h: 2,
+            compression: 32769,
+            strip: vec![0; 16],
+            pattern: None,
+            note: None,
+            picture: None,
+        }));
+        for mode in [Mode::Header, Mode::Full] {
+            let _ = super::decode(&file, mode);
+        }
     }
 
     /// The camera-stated description every test file carries: JPEG framing, white balance, levels.
@@ -510,6 +537,27 @@ mod tests {
         assert!(matches!(decode(&bytes), Err(RawError::Unsupported(w)) if w.contains("CFAPattern")));
     }
 
+    /// An encryption key value past i64::MAX (LONG8) overflowed `-1 * key` in debug builds.
+    #[test]
+    fn a_huge_encryption_key_does_not_panic() {
+        let key: Vec<u8> = std::iter::repeat_n((1u64 << 63).to_be_bytes(), 11).flatten().collect();
+        let note = note_typed(&[(ENCRYPTION_KEY, 16, 11, key), (WB_UNCORRECTED, 4, 4, [0u8; 16].to_vec()), (WB_BLACK, 4, 4, [0u8; 16].to_vec())]);
+        let bytes = srw(Spec {
+            w: 64,
+            h: 32,
+            compression: 32770,
+            strip: pack12(&ramp(64, 32, 4096)),
+            pattern: Some([2, 1, 1, 0]),
+            note: Some(note),
+            picture: None,
+        });
+        let mn = maker_note(&bytes, &Tiff::parse(&bytes).unwrap()).unwrap();
+        assert_eq!(mn.u64s(ENCRYPTION_KEY).map(|k| k[0]), Some(1 << 63), "the key reaches keyed()");
+        assert_eq!(keyed(&mn, WB_BLACK, -1), Some(vec![0; 4]), "(2^63 mod 2^32 is 0)");
+        assert!(decode(&bytes).is_ok());
+        assert!(probe_info(&bytes).is_ok());
+    }
+
     /// A framing rectangle outside the array, or reversed, is ignored; truncated files fail without panicking.
     #[test]
     fn hostile_framing_and_truncation_do_not_panic() {
@@ -538,6 +586,18 @@ mod tests {
         for cut in [10, bytes.len() / 2, bytes.len() - 20] {
             let _ = decode(&bytes[..cut]);
             let _ = probe_info(&bytes[..cut]);
+        }
+    }
+
+    /// #2561: a small file whose strip declares a large frame is refused before the full decode allocates the frame.
+    #[test]
+    fn a_strip_cut_short_is_refused_before_allocating() {
+        let (w, h) = (3000u32, 2000u32);
+        for (compression, declared) in [(32769, w * h * 2), (32770, w * h / 2 * 3)] {
+            let mut f = srw(Spec { w, h, compression, strip: vec![0u8; 12], pattern: Some([0, 1, 1, 2]), note: None, picture: None });
+            crate::vendor::declare_strip_len(&mut f, 12, declared);
+            assert_eq!(probe(&f), Some(crate::RawFormat::Srw));
+            assert!(matches!(decode(&f), Err(RawError::Corrupt(_))), "compression {compression}");
         }
     }
 }

@@ -14,7 +14,7 @@
     # is not part of that default set and is not embedded. Official releases always build with the
     # default fonts; without them everything works but non-Latin text lacks glyphs. Pinned to the same
     # revision CI, the release workflow and the standalone packaging helpers use — bump all of them
-    # together (`nix flake update craft-fonts`); craftrules standards/fonts.md.
+    # together (`nix flake update craft-fonts`).
     craft-fonts = {
       url = "github:storytold/craft-fonts/b076417b5880bd4154bd22f00695b1d28c6bea83";
       flake = false;

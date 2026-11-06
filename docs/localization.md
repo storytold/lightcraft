@@ -95,8 +95,12 @@ cargo test -p lightcraft-ui-egui --lib -- --exact i18n::tests::translation_gaps_
 The tests fail on a broken catalog (malformed JSON, a repeated key, placeholders that differ from
 the source), never on a missing translation. The last command is the translation gaps report: per
 language, the count and list of plain and format messages it lacks and the number of untranslated
-What's New lines. It always passes, and `cargo xtask ci` prints it after its test step. The glyph
-tests are skipped without `CRAFT_FONTS_DIR` (there are no CJK faces to check then).
+What's New lines. The plain messages include every `tr("…")` string in the app's source, whether
+or not some catalog has it yet: the report reads calls rustfmt wrapped over several lines and the
+literal branches of `tr(if …)` and `tr(match …)`, and skips tests and comments. A string that
+reaches `tr` through a variable is listed only when it is a catalog key or in one of the label
+tables the report reads. It always passes, and `cargo xtask ci` prints it after its test step. The
+glyph tests are skipped without `CRAFT_FONTS_DIR` (there are no CJK faces to check then).
 To look at a language, render it headless:
 
 ```sh

@@ -65,6 +65,7 @@ fn flags_and_labels_that_leave_the_view_go_on_to_the_next_photo_too() {
         (json!({"flag": "pick"}), "photo.cycleFlag", json!({})),
         (json!({"flag": "pick"}), "photo.decreaseFlag", json!({})),
         (json!({"label": "red"}), "photo.label", json!({"label": "none"})),
+        (json!({"label": "red"}), "photo.clearLabel", json!({})),
         (json!({}), "photo.increaseRating", json!({})),
     ] {
         let mut s = one_star().unwrap();

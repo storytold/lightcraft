@@ -167,11 +167,13 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.copySettings",
             "develop.paste",
             "dialog.pasteSettings",
+            "develop.pastePrevious",
             "develop.sync",
             "develop.autoSync",
             "---",
             "library.selectAll",
             "library.selectNone",
+            "library.selectOnlyActive",
             "@Select by",
             "---",
             "view.focusSearch",
@@ -281,6 +283,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.rename",
             "dialog.captureTime",
             "photo.tagFromTracklog",
+            "tool.enablePainting",
             "---",
             "album.removePhotos",
             "photo.delete",
@@ -341,6 +344,7 @@ const HIDDEN: &[&str] = &[
     "photo.reject",
     "photo.unflag",
     "photo.label",
+    "photo.clearLabel",
     "library.sort",
     "library.shuffle",
     "album.addPhotos",
@@ -461,17 +465,31 @@ fn live_label(app: &LightcraftApp, id: &str, label: &str) -> String {
 }
 
 /// The parameterized submenus.
+/// The params of Build Standard-Sized Previews: automatic builds as big as the loupe on this screen shows photos
+/// (the engine's standard size, once a loupe has been drawn); before that, in a fresh session, the standard
+/// 2560 px, not the engine's 2048 px minimum, so a typical fit view needn't render again; a chosen limit is used as is.
+pub(crate) fn standard_build_params(settings: &crate::state::AppSettings, loupe_edge: usize) -> Value {
+    match settings.preview_limit {
+        0 if loupe_edge == 0 => json!({"size": "standard", "edge": settings.standard_preview_edge()}),
+        0 => json!({"size": "standard"}),
+        edge => json!({"size": "standard", "edge": edge}),
+    }
+}
+
 pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
     let has = active.is_some();
     Some(match name {
         "Previews" => {
-            let running = app.session.preview_build.as_ref().is_some_and(|b| !b.finished.load(std::sync::atomic::Ordering::Relaxed));
+            // (the background preparation's build gives way to one asked for here)
+            let running = app.session.preview_build.as_ref().is_some_and(|b| b.running() && !b.background);
+            let stoppable = app.session.preview_build.as_ref().is_some_and(|b| b.running());
+            let standard = standard_build_params(&app.ui.settings, app.session.loupe_edge);
             let scope = if app.session.selection.ids.len() > 1 { "Selected" } else { "Visible" };
             vec![
                 item(
                     "library.buildPreviews",
-                    json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge()}),
+                    standard,
                     crate::i18n::tr_format!("Build Standard-Sized Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
                     !running,
@@ -485,7 +503,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                     !running,
                     None,
                 ),
-                item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, running, None),
+                item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, stoppable, None),
                 MenuNode::Separator,
                 // (read and written on a worker thread: the originals may be on a slow drive)
                 item(
@@ -546,7 +564,8 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                 })
                 .collect();
             v.push(MenuNode::Separator);
-            v.push(item("photo.label", json!({"label": "none"}), "None", None, has, Some(active.as_ref().is_some_and(|p| p.label.is_none()))));
+            let clear_key = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.clearLabel");
+            v.push(item("photo.clearLabel", Value::Null, "None", clear_key, has, Some(active.as_ref().is_some_and(|p| p.label.is_none()))));
             v.push(MenuNode::Separator);
             // label sets: each a checkable item; Edit… names them
             let sets = lightcraft_engine::cmd::manage::label_sets_json(&app.session);
@@ -921,6 +940,7 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
         "photo.rate"
             | "photo.flag"
             | "photo.label"
+            | "photo.clearLabel"
             | "photo.pick"
             | "photo.reject"
             | "photo.unflag"
@@ -990,20 +1010,22 @@ pub fn run_native_command(app: &mut LightcraftApp, id: &str, params: Value) -> N
     policy
 }
 
-/// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⌘⇧Z` on macOS, `Ctrl+Shift+Z` elsewhere.
+/// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⇧⌘Z` on macOS, `Ctrl+Shift+Z` elsewhere.
+/// On macOS the modifiers come in AppKit's and Apple's HIG order, ⌃⌥⇧⌘, however the binding spells them.
 pub fn shortcut_text(sc: &str, mac: bool) -> String {
     if mac {
-        let mut mods = String::new();
+        let (mut ctrl, mut alt, mut shift, mut cmd) = (false, false, false, false);
         let mut key = "";
         for part in sc.split('+') {
             match part {
-                "Ctrl" => mods.push('⌃'),
-                "Alt" => mods.push('⌥'),
-                "Shift" => mods.push('⇧'),
-                "Cmd" => mods.push('⌘'),
+                "Ctrl" => ctrl = true,
+                "Alt" => alt = true,
+                "Shift" => shift = true,
+                "Cmd" => cmd = true,
                 k => key = k,
             }
         }
+        let mods: String = [(ctrl, '⌃'), (alt, '⌥'), (shift, '⇧'), (cmd, '⌘')].into_iter().filter_map(|(on, glyph)| on.then_some(glyph)).collect();
         let key = match key {
             "Delete" => "⌫",
             "Escape" => "⎋",

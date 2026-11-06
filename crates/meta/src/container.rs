@@ -11,6 +11,8 @@
 //! - Minolta MRW (see [`crate::mrw`]): the `TTW` block is the Exif block.
 //! - Canon CR3 (ISO base media file, see [`crate::cr3`]): `CMT1`/`CMT2`/`CMT4` merged into one Exif block; the
 //!   XMP `uuid` box.
+//! - HEIF/HEIC/AVIF (ISO base media file, see [`crate::heif`]): the `Exif` item's TIFF stream and the XMP
+//!   `mime` item.
 
 use lightcraft_tiff::{Tiff, tags};
 
@@ -52,6 +54,9 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     if let Some(c) = crate::cr3::parse_cr3(bytes) {
         return Embedded { exif: crate::cr3::merged_exif(&c), xmp: c.xmp.map(|b| String::from_utf8_lossy(b).into_owned()), ..Default::default() };
     }
+    if crate::heif::is_heif(bytes) {
+        return crate::heif::metadata(bytes);
+    }
     if bytes.starts_with(&[0xff, 0xd8]) {
         jpeg_segments(bytes)
     } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -90,7 +95,9 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
     if !b.starts_with(&[0xff, 0xd8]) {
         return out;
     }
-    let mut icc_parts: Vec<(u8, Vec<u8>)> = Vec::new();
+    let mut icc_parts: [Option<&[u8]>; 255] = [None; 255];
+    let mut icc_total = None;
+    let mut icc_invalid = false;
     let mut ext: Vec<(u32, Vec<u8>)> = Vec::new();
     let mut i = 2usize;
     while i + 4 <= b.len() {
@@ -113,8 +120,11 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
         if len < 2 {
             break;
         }
-        let end = (i + 2 + len).min(b.len());
-        let payload = &b[i + 4..end];
+        let Some(start) = i.checked_add(4) else { break };
+        let Some(declared_end) = i.checked_add(2).and_then(|at| at.checked_add(len)) else { break };
+        let complete = declared_end <= b.len();
+        let end = declared_end.min(b.len());
+        let Some(payload) = b.get(start..end) else { break };
         match marker {
             0xe1 if payload.starts_with(b"Exif\0") && out.exif.is_none() => out.exif = Some(payload.get(6..).unwrap_or(&[]).to_vec()),
             0xe1 if payload.starts_with(XMP_SIG) && out.xmp.is_none() => {
@@ -128,15 +138,64 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
                     ext.push((off, p[40..].to_vec()));
                 }
             }
-            0xe2 if payload.starts_with(b"ICC_PROFILE\0") && payload.len() >= 14 => icc_parts.push((payload[12], payload[14..].to_vec())),
+            0xe2 if payload.starts_with(b"ICC_PROFILE\0") => {
+                if !complete || payload.len() < 14 {
+                    icc_invalid = true;
+                } else if let Some(header) = payload.get(12..14) {
+                    let (Some(&sequence), Some(&total)) = (header.first(), header.get(1)) else {
+                        icc_invalid = true;
+                        i = end;
+                        continue;
+                    };
+                    if sequence == 0 || total == 0 || sequence > total || icc_total.is_some_and(|expected| expected != total) {
+                        icc_invalid = true;
+                    } else {
+                        icc_total = Some(total);
+                        if let Some(slot) = icc_parts.get_mut(usize::from(sequence - 1)) {
+                            if slot.is_some() {
+                                icc_invalid = true;
+                            } else if let Some(data) = payload.get(14..) {
+                                *slot = Some(data);
+                            } else {
+                                icc_invalid = true;
+                            }
+                        } else {
+                            icc_invalid = true;
+                        }
+                    }
+                } else {
+                    icc_invalid = true;
+                }
+            }
             0xed if payload.starts_with(b"Photoshop 3.0\0") && out.iptc.is_none() => out.iptc = photoshop_iptc(&payload[14..]),
             _ => {}
         }
         i = end;
     }
-    if !icc_parts.is_empty() {
-        icc_parts.sort_by_key(|p| p.0);
-        out.icc = Some(icc_parts.into_iter().flat_map(|p| p.1).collect());
+    if let Some(total) = icc_total {
+        let mut profile_len = 0usize;
+        for chunk in icc_parts.iter().take(usize::from(total)) {
+            let Some(bytes) = chunk else {
+                icc_invalid = true;
+                break;
+            };
+            let Some(next_len) = profile_len.checked_add(bytes.len()) else {
+                icc_invalid = true;
+                break;
+            };
+            profile_len = next_len;
+        }
+        let maximum_len = usize::from(total).checked_mul(65_519);
+        if maximum_len.is_none_or(|maximum| profile_len > maximum) {
+            icc_invalid = true;
+        }
+        if !icc_invalid {
+            let mut profile = Vec::with_capacity(profile_len);
+            for bytes in icc_parts.iter().take(usize::from(total)).flatten() {
+                profile.extend_from_slice(bytes);
+            }
+            out.icc = Some(profile);
+        }
     }
     if !ext.is_empty() {
         ext.sort_by_key(|p| p.0);
@@ -225,6 +284,26 @@ mod tests {
         v
     }
 
+    fn icc_seg(sequence: u8, total: u8, data: &[u8]) -> Vec<u8> {
+        let mut payload = b"ICC_PROFILE\0".to_vec();
+        payload.extend_from_slice(&[sequence, total]);
+        payload.extend_from_slice(data);
+        seg(0xe2, &payload)
+    }
+
+    fn jpeg_with_icc(parts: &[Vec<u8>]) -> Vec<u8> {
+        let mut jpeg = vec![0xff, 0xd8];
+        let packet = crate::write_xmp(&crate::Metadata { title: Some("retained".into()), ..Default::default() }, None);
+        let mut xmp = XMP_SIG.to_vec();
+        xmp.extend_from_slice(packet.as_bytes());
+        jpeg.extend_from_slice(&seg(0xe1, &xmp));
+        for part in parts {
+            jpeg.extend_from_slice(part);
+        }
+        jpeg.extend_from_slice(&[0xff, 0xda, 0, 2]);
+        jpeg
+    }
+
     pub(crate) fn sample_jpeg() -> Vec<u8> {
         let mut j = vec![0xff, 0xd8];
         j.extend(seg(0xe0, b"JFIF\0\x01\x02\0\0\x01\0\x01\0\0"));
@@ -279,6 +358,49 @@ mod tests {
             j.extend(seg(0xe1, &p));
         }
         assert_eq!(jpeg_segments(&j).xmp_extended.as_deref(), Some("helloworld"));
+    }
+
+    #[test]
+    fn jpeg_icc_accepts_reordered_chunks() {
+        let parts = [icc_seg(2, 2, b"world"), icc_seg(1, 2, b"hello")];
+        let embedded = jpeg_segments(&jpeg_with_icc(&parts));
+        assert_eq!(embedded.icc.as_deref(), Some(&b"helloworld"[..]));
+    }
+
+    #[test]
+    fn jpeg_icc_rejects_incomplete_or_incoherent_chunks() {
+        let cases = [
+            ("missing", vec![icc_seg(1, 2, b"helloworld")]),
+            ("duplicate", vec![icc_seg(1, 2, b"hello"), icc_seg(1, 2, b"world")]),
+            ("zero sequence", vec![icc_seg(0, 1, b"helloworld")]),
+            ("zero total", vec![icc_seg(1, 0, b"helloworld")]),
+            ("out of range", vec![icc_seg(2, 1, b"helloworld")]),
+            ("gap", vec![icc_seg(1, 3, b"hello"), icc_seg(3, 3, b"world")]),
+            ("inconsistent totals", vec![icc_seg(1, 2, b"hello"), icc_seg(2, 3, b"world")]),
+            ("short header", vec![seg(0xe2, b"ICC_PROFILE\0\x01")]),
+        ];
+        for (name, parts) in cases {
+            let embedded = jpeg_segments(&jpeg_with_icc(&parts));
+            assert!(embedded.icc.is_none(), "{name} ICC chunks must be rejected");
+            assert!(embedded.xmp.as_deref().is_some_and(|x| x.contains("retained")), "{name}: unrelated XMP must remain readable");
+        }
+    }
+
+    #[test]
+    fn jpeg_icc_rejects_truncated_segment_and_keeps_other_metadata() {
+        let mut truncated = icc_seg(1, 1, b"profile");
+        let declared = u16::from_be_bytes([truncated[2], truncated[3]]).saturating_add(1);
+        truncated[2..4].copy_from_slice(&declared.to_be_bytes());
+        let mut jpeg = vec![0xff, 0xd8];
+        let xmp = crate::write_xmp(&crate::Metadata { title: Some("kept".into()), ..Default::default() }, None);
+        let mut packet = XMP_SIG.to_vec();
+        packet.extend_from_slice(xmp.as_bytes());
+        jpeg.extend_from_slice(&seg(0xe1, &packet));
+        jpeg.extend_from_slice(&truncated);
+
+        let embedded = jpeg_segments(&jpeg);
+        assert!(embedded.icc.is_none());
+        assert!(embedded.xmp.as_deref().is_some_and(|x| x.contains("kept")));
     }
 
     #[test]

@@ -144,7 +144,11 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         // Linux: the profile the desktop assigns in colord, read off the UI thread
         #[cfg(target_os = "linux")]
         screen_profile: Some(colord::service()),
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        // Windows: the profile it uses for the window's monitor, unless it colour-manages the
+        // desktop itself (HDR, Auto Color Management)
+        #[cfg(windows)]
+        screen_profile: win_screen_profile::service(cc),
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         screen_profile: None,
         pick_display_profile: Some(Box::new(|| {
             let mut d = file_dialog()
@@ -253,8 +257,12 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
 pub(crate) fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
     let (mut s, problem) = match launch {
         Launch::Ask => (Session::new().with_fs().with_default_denoise_models().with_system_clock(), None),
-        Launch::Open { dir, .. } => open_library_session(in_memory, dir.clone(), seed_demo),
+        Launch::Open { dir, remembered, .. } => open_library_session(in_memory, dir.clone(), *remembered, seed_demo),
     };
+    // lens profiles from the app's own lensfun copy, offered on the first launch (not for a throwaway session)
+    if !in_memory {
+        s = s.with_default_lens_database().with_lens_auto_download();
+    }
     s.face_models_dir = lightcraft_engine::config::default_face_models_dir();
     s.slide_templates_dir = lightcraft_engine::config::config_dir().map(|d| d.join(lightcraft_engine::slide_template::DIR_NAME));
     // Control requests are answered on the UI thread: Add to Apple Photos must not wait there
@@ -267,7 +275,9 @@ pub(crate) fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool) ->
 /// If the library can't be opened the session is empty and in memory — never seeded with the
 /// demo photos, never written anywhere — and the problem is returned: the window then says so
 /// and offers Try Again / Choose Another Library… / Continue Without Saving / Quit (issue #100).
-fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
+/// So is a `remembered` library (the one last opened) that isn't there any more: opening would
+/// make a new, empty one in its place, e.g. on an unmounted drive's path (issue #3239).
+fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, remembered: bool, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
     if in_memory {
         return (if seed_demo { Session::with_demo() } else { Session::new() }.with_fs().with_default_denoise_models().with_system_clock(), None);
     }
@@ -276,9 +286,14 @@ fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_d
         log::warn!("no library location (set --library or LIGHTCRAFT_LIBRARY)");
         return (unopened(), Some(LibraryProblem::new("", "There is no home folder to keep the library in. Choose a folder for it.")));
     };
+    if remembered && let Some(why) = lightcraft_ui_egui::panels::library_problem::missing_library_reason(&dir) {
+        log::error!("library {} can't be opened: {why}", dir.display());
+        // Try Again must not make one there either (an empty mount point, issue #3239)
+        return (unopened(), Some(LibraryProblem { existing_only: true, ..LibraryProblem::new(dir.to_string_lossy(), why) }));
+    }
     let t0 = std::time::Instant::now();
     let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
-    match s.open_library(&dir, seed_demo) {
+    match s.open_library(&dir, seed_demo && !remembered) {
         Ok(r) => {
             let (replayed, torn) = (r.replayed, r.torn_bytes);
             log::info!(

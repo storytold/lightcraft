@@ -59,3 +59,43 @@ fn filmstrip_stack_badge_expands_and_collapses_the_stack() {
     assert!(h.app.session.catalog.stack(StackId(1)).unwrap().collapsed, "a second click collapses it");
     assert!(!h.app.session.visible_cloned().contains(&member));
 }
+
+/// The filmstrip rings its selected photos by the same rule as the grid, in the theme's colours:
+/// the active photo's ring is heavier than the other selected photo's, and a light theme gets no
+/// fixed white or grey ring.
+#[test]
+fn the_filmstrip_marks_the_active_photo_heavier_than_the_other_selected_one() {
+    use egui::epaint::Shape;
+    let mut session = lightcraft_engine::Session::with_demo();
+    let ids = session.visible_cloned();
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.app.ui.settings.appearance_mode = crate::state::AppearanceMode::Light;
+    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [a.0, b.0]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let t = crate::theme::Tokens::get(&h.view.ctx);
+    assert!(crate::theme::current(&h.view.ctx).is_some_and(|k| !k.is_dark()));
+    let active = h.app.session.selection.active.expect("active");
+    let other = if active == a { b } else { a };
+    let shapes = h.view.painted_shapes();
+    let strokes = |id: lightcraft_catalog::PhotoId| -> Vec<(f32, egui::Color32)> {
+        let cell = h.app.widgets.iter().find(|(w, _)| *w == format!("film:{}", id.0)).map(|(_, r)| *r).expect("cell drawn");
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Rect(rs) if rs.stroke.width > 0.0 && rs.stroke_kind == egui::StrokeKind::Outside && cell.contains_rect(rs.rect) => {
+                    Some((rs.stroke.width, rs.stroke.color))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let (on_active, on_other, on_unselected) = (strokes(active), strokes(other), strokes(c));
+    assert_eq!(on_active, vec![(3.0, t.ring_active), (1.0, t.ring_inner)]);
+    assert_eq!(on_other, vec![(1.5, t.ring_selected)]);
+    assert!(on_unselected.is_empty(), "{on_unselected:?}");
+}

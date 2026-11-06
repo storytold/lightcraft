@@ -701,3 +701,18 @@ fn a_destination_without_write_permission_reports_an_error_and_keeps_everything(
     }
     std::fs::set_permissions(dir.0.join("ro"), std::fs::Permissions::from_mode(0o755)).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn the_library_folder_is_protected_however_its_path_is_spelled() {
+    let dir = Scratch::new("library-link");
+    let lib = dir.0.join("library");
+    let mut s = Session::new();
+    s.open_library(&lib, true).unwrap();
+    // a link to the library's folder names the same folder on disk
+    std::os::unix::fs::symlink(&lib, dir.0.join("alias")).unwrap();
+    std::fs::create_dir_all(dir.0.join("elsewhere")).unwrap();
+    let err = s.execute("folder.move", &json!({"path": dir.path("alias"), "into": dir.path("elsewhere")})).unwrap_err().to_string();
+    assert!(err.contains("library's own folders"), "{err}");
+    assert!(lib.is_dir() && !dir.0.join("elsewhere/alias").exists());
+}
