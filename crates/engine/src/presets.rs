@@ -68,14 +68,20 @@ impl PresetList {
 
     /// Keep `name` as a group. False when it was one already.
     pub fn add_created_group(&mut self, name: String) -> bool {
-        self.generation = next_generation();
-        self.created_groups.insert(name)
+        let added = self.created_groups.insert(name);
+        if added {
+            self.generation = next_generation();
+        }
+        added
     }
 
     /// Stop keeping `name` as a group. False when it wasn't one.
     pub fn remove_created_group(&mut self, name: &str) -> bool {
-        self.generation = next_generation();
-        self.created_groups.remove(name)
+        let removed = self.created_groups.remove(name);
+        if removed {
+            self.generation = next_generation();
+        }
+        removed
     }
 
     /// The groups starred by name, which the panel lists first.
@@ -85,11 +91,33 @@ impl PresetList {
 
     /// Star group `name`, or take its star away.
     pub fn set_favorite_group(&mut self, name: &str, favorite: bool) {
-        self.generation = next_generation();
-        if favorite {
-            self.favorite_groups.insert(name.to_string());
-        } else {
-            self.favorite_groups.remove(name);
+        let changed = if favorite { self.favorite_groups.insert(name.to_string()) } else { self.favorite_groups.remove(name) };
+        if changed {
+            self.generation = next_generation();
+        }
+    }
+
+    /// Take the star from groups that no longer exist: a later group of that name is a new group,
+    /// and shouldn't come up starred. A group made by name exists while empty.
+    pub fn prune_favorite_groups(&mut self) {
+        if self.favorite_groups.is_empty() {
+            return;
+        }
+        let held: std::collections::HashSet<&str> = self.items.iter().map(|p| p.group.as_str()).collect();
+        let keep: std::collections::BTreeSet<String> =
+            self.favorite_groups.iter().filter(|g| self.created_groups.contains(*g) || held.contains(g.as_str())).cloned().collect();
+        if keep.len() != self.favorite_groups.len() {
+            self.favorite_groups = keep;
+            self.generation = next_generation();
+        }
+    }
+
+    /// Forget the groups made by name and the stars: they belong to the library being left.
+    pub fn clear_group_names(&mut self) {
+        if !self.created_groups.is_empty() || !self.favorite_groups.is_empty() {
+            self.created_groups.clear();
+            self.favorite_groups.clear();
+            self.generation = next_generation();
         }
     }
 }

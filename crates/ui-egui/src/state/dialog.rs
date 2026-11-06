@@ -314,6 +314,9 @@ pub enum Dialog {
     DeletePresetGroup {
         name: String,
         count: usize,
+        /// The library it was asked in (`Session::library_generation`): another one opened
+        /// meanwhile can have a group of that name.
+        library: u64,
     },
     /// Confirm moving photos to Recently Deleted.
     ConfirmDelete {

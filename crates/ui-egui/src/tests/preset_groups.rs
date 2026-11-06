@@ -80,11 +80,30 @@ fn a_group_is_made_from_the_menu_and_deleted_from_its_header() {
     assert!(!laid_out(&h, "presetGroup:AAA Empty"));
 }
 
+/// An answer to a question asked in another library, or about fewer presets than the group holds
+/// now, deletes nothing.
+#[test]
+fn a_stale_group_deletion_deletes_nothing() {
+    let (mut h, ids) = app();
+    let library = h.app.session.library_generation();
+    for stale in [
+        Dialog::DeletePresetGroup { name: "AAA Mine".into(), count: 3, library: library + 1 },
+        Dialog::DeletePresetGroup { name: "AAA Mine".into(), count: 2, library },
+    ] {
+        assert!(crate::dialogs::confirm_dialog(&mut h.app, &stale).is_err());
+        assert!(h.app.session.presets.iter().any(|p| p.id == ids[0]), "the presets stay");
+    }
+    let asked = Dialog::DeletePresetGroup { name: "AAA Mine".into(), count: 3, library };
+    crate::dialogs::confirm_dialog(&mut h.app, &asked).unwrap();
+    assert!(!h.app.session.presets.iter().any(|p| p.id == ids[0]));
+}
+
 /// The question reads right for a group of one preset.
 #[test]
 fn deleting_a_group_of_one_preset_says_so() {
     let (mut h, _) = app();
-    h.app.ui.dialog = Some(Dialog::DeletePresetGroup { name: "AAA Mine".into(), count: 1 });
+    let library = h.app.session.library_generation();
+    h.app.ui.dialog = Some(Dialog::DeletePresetGroup { name: "AAA Mine".into(), count: 1, library });
     frames(&mut h);
     assert!(h.painted_text().iter().any(|t| t.contains("its only preset")), "{:?}", h.painted_text());
     assert!(!h.painted_text().iter().any(|t| t.contains("1 presets")));
@@ -96,7 +115,7 @@ fn deleting_a_group_with_presets_asks_and_built_in_groups_offer_no_delete() {
     let (mut h, _) = app();
     click(&mut h, "presetGroup:AAA Mine", json!({"button": "right"}));
     click(&mut h, "presetGroupMenu:delete", json!({}));
-    assert!(matches!(&h.app.ui.dialog, Some(Dialog::DeletePresetGroup { name, count: 3 }) if name == "AAA Mine"));
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::DeletePresetGroup { name, count: 3, .. }) if name == "AAA Mine"));
     h.app.ui.dialog = None;
     frames(&mut h);
 
@@ -143,7 +162,7 @@ fn a_starred_group_rises_to_the_top_and_comes_back() {
     click(&mut h, "presetGroupMenu:favorite", json!({}));
     assert!(top(&h, &header).unwrap() < top(&h, "presetGroup:AAA Mine").unwrap(), "a starred group comes first");
     assert!(h.app.session.presets.favorite_groups().contains(&builtin));
-    assert!(top(&h, &format!("preset:{}", ids[0])).unwrap_or(f32::MAX) > top(&h, "presetGroup:AAA Mine").unwrap(), "its rows stay under its header");
+    assert!(top(&h, &format!("preset:{}", ids[0])).unwrap() > top(&h, "presetGroup:AAA Mine").unwrap(), "its rows stay under its header");
 
     click(&mut h, &header, json!({"button": "right"}));
     click(&mut h, "presetGroupMenu:favorite", json!({}));

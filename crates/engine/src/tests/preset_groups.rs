@@ -150,6 +150,85 @@ fn starred_groups_survive_reopening() {
     assert!(t.presets.favorite_groups().contains(&builtin_group));
 }
 
+/// An imported group's name is kept as it is: acting on ` Mine ` doesn't touch `Mine`, and a long
+/// name can still be renamed and deleted.
+#[test]
+fn group_commands_act_on_the_exact_name() {
+    let (mut s, ids) = with_user_presets();
+    let long = "x".repeat(150);
+    let extra = [" Mine ", long.as_str()].map(|group| Preset {
+        id: String::new(),
+        name: "other".into(),
+        group: group.into(),
+        settings: json!({"light": {"exposure": 1.0}}),
+        favorite: false,
+        builtin: false,
+    });
+    s.add_presets(extra.to_vec());
+
+    s.execute("preset.favoriteGroup", &json!({"name": " Mine "})).unwrap();
+    assert_eq!(s.presets.favorite_groups().iter().collect::<Vec<_>>(), [" Mine "]);
+    assert_eq!(s.execute("preset.deleteGroup", &json!({"name": " Mine "})).unwrap()["deleted"], 1);
+    assert!(ids.iter().all(|id| group_of(&s, id) == "Mine"), "`Mine` keeps its presets");
+
+    assert_eq!(s.execute("preset.renameGroup", &json!({"name": long, "to": "Shorter"})).unwrap()["renamed"], 1);
+    assert_eq!(s.execute("preset.deleteGroup", &json!({"name": "Shorter"})).unwrap()["deleted"], 1);
+}
+
+/// A group's star goes with the group, so a new group of that name doesn't come up starred; a group
+/// made by name exists while empty and keeps its star.
+#[test]
+fn a_star_goes_with_its_group() {
+    let (mut s, ids) = with_user_presets();
+    s.execute("preset.favoriteGroup", &json!({"name": "Mine"})).unwrap();
+    for id in &ids {
+        s.execute("preset.move", &json!({"id": id, "group": "Elsewhere"})).unwrap();
+    }
+    assert!(s.presets.favorite_groups().is_empty(), "the group is gone, with its star");
+    s.execute("preset.createGroup", &json!({"name": "Mine"})).unwrap();
+    assert!(s.presets.favorite_groups().is_empty(), "a new group of that name isn't starred");
+
+    s.execute("preset.favoriteGroup", &json!({"name": "Mine"})).unwrap();
+    s.execute("preset.move", &json!({"id": ids[0], "group": "Mine"})).unwrap();
+    s.execute("preset.delete", &json!({"id": ids[0]})).unwrap();
+    assert!(s.presets.favorite_groups().contains("Mine"), "a group made by name keeps its star while empty");
+}
+
+/// Setting what is already set doesn't count as a change: with 10 000+ presets, a change means
+/// saving them all.
+#[test]
+fn a_star_set_again_keeps_the_generation() {
+    let (mut s, _) = with_user_presets();
+    s.presets.set_favorite_group("Mine", true);
+    let generation = s.presets.generation();
+    s.presets.set_favorite_group("Mine", true);
+    s.presets.prune_favorite_groups();
+    assert_eq!(s.presets.generation(), generation);
+}
+
+#[test]
+fn delete_group_refuses_when_the_group_changed_since_asking() {
+    let (mut s, ids) = with_user_presets();
+    assert!(s.execute("preset.deleteGroup", &json!({"name": "Mine", "expect": 2})).is_err());
+    assert!(ids.iter().all(|id| group_of(&s, id) == "Mine"));
+    assert_eq!(s.execute("preset.deleteGroup", &json!({"name": "Mine", "expect": 3})).unwrap()["deleted"], 3);
+}
+
+/// Another library has its own groups and stars, and a star for a group it doesn't have is dropped.
+#[test]
+fn group_names_belong_to_their_library() {
+    let (a, b) = (temp_dir("switch-a"), temp_dir("switch-b"));
+    std::fs::write(b.join("presets.json"), json!({"groups": ["In B"], "favoriteGroups": ["In B", "Gone"]}).to_string()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&a, false).unwrap();
+    s.execute("preset.createGroup", &json!({"name": "In A"})).unwrap();
+    s.execute("preset.favoriteGroup", &json!({"name": "In A"})).unwrap();
+    s.close_library().unwrap();
+    s.open_library(&b, false).unwrap();
+    assert_eq!(s.presets.created_groups().iter().collect::<Vec<_>>(), ["In B"]);
+    assert_eq!(s.presets.favorite_groups().iter().collect::<Vec<_>>(), ["In B"]);
+}
+
 #[test]
 fn a_created_group_stays_after_its_last_preset_leaves() {
     let (mut s, ids) = with_user_presets();

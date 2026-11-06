@@ -383,7 +383,11 @@ fn group_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, group: &Group) {
                 app.toast(ui.ctx(), e);
             }
         } else {
-            app.ui.dialog = Some(crate::state::Dialog::DeletePresetGroup { name: group.name.clone(), count: group.items.len() });
+            app.ui.dialog = Some(crate::state::Dialog::DeletePresetGroup {
+                name: group.name.clone(),
+                count: group.items.len(),
+                library: app.session.library_generation(),
+            });
         }
     }
 }

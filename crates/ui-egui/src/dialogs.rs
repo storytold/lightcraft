@@ -1981,7 +1981,7 @@ fn delete_effects_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 
 /// The body of the DeletePresetGroup dialog. Presets have no undo.
 fn delete_preset_group_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::DeletePresetGroup { name, count } = dlg else { return };
+    let Dialog::DeletePresetGroup { name, count, .. } = dlg else { return };
     ui.label(if *count == 1 {
         crate::i18n::tr_format!("Delete the group “{name}” and its only preset?", name = name)
     } else {

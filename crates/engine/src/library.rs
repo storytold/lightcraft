@@ -622,6 +622,7 @@ impl Session {
             self.media.smart_dir = Some(d.clone());
         }
         // presets
+        self.presets.clear_group_names();
         if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
             for p in &mut self.presets {
                 p.favorite = p.builtin && f.favorites.contains(&p.id) || (!p.builtin && p.favorite);
@@ -639,12 +640,11 @@ impl Session {
                     self.presets.add_created_group(g.to_string());
                 }
             }
+            // as stored: the star of a group with spaces around its name stays on it
             for g in f.favorite_groups {
-                let g = g.trim();
-                if !g.is_empty() && g.chars().count() <= crate::presets::MAX_GROUP_NAME {
-                    self.presets.set_favorite_group(g, true);
-                }
+                self.presets.set_favorite_group(&g, true);
             }
+            self.presets.prune_favorite_groups();
             let known = |id: &String| {
                 crate::presets::profile(id).is_some()
                     || self.lut_profiles.iter().any(|p| &p.id == id)

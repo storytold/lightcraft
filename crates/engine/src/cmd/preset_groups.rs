@@ -15,6 +15,12 @@ fn group_param(p: &Value, key: &str, c: &str) -> Result<String> {
     Ok(name.to_string())
 }
 
+/// The name of a group that exists, exactly as stored: an imported group's name can have spaces
+/// around it or run long, and trimming it would act on another group.
+fn existing_group_param(p: &Value, key: &str, c: &str) -> Result<String> {
+    str_param(p, key).filter(|n| !n.is_empty()).map(str::to_string).ok_or_else(|| bad(c, format!("missing {key}")))
+}
+
 fn create_group(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "preset.createGroup";
     let name = group_param(p, "name", C)?;
@@ -27,7 +33,7 @@ fn create_group(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "preset.renameGroup";
-    let name = group_param(p, "name", C)?;
+    let name = existing_group_param(p, "name", C)?;
     let to = group_param(p, "to", C)?;
     if s.presets.iter().any(|x| x.group == name && x.builtin) {
         return Err(bad(C, "a group holding built-in presets can't be renamed"));
@@ -62,7 +68,7 @@ fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn favorite_group(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "preset.favoriteGroup";
-    let name = group_param(p, "name", C)?;
+    let name = existing_group_param(p, "name", C)?;
     if !s.presets.created_groups().contains(&name) && !s.presets.iter().any(|x| x.group == name) {
         return Err(bad(C, format!("unknown group “{name}”")));
     }
@@ -73,13 +79,19 @@ fn favorite_group(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "preset.deleteGroup";
-    let name = group_param(p, "name", C)?;
+    let name = existing_group_param(p, "name", C)?;
     if s.presets.iter().any(|x| x.group == name && x.builtin) {
         return Err(bad(C, "a group holding built-in presets can't be deleted"));
     }
     let held = s.presets.iter().filter(|x| x.group == name).count();
     if held == 0 && !s.presets.created_groups().contains(&name) {
         return Err(bad(C, format!("unknown group “{name}”")));
+    }
+    // what the person was asked about: presets moved in since then aren't deleted unseen
+    if let Some(expected) = p.get("expect").and_then(Value::as_u64)
+        && expected != held as u64
+    {
+        return Err(bad(C, format!("the group now holds {held} presets, not {expected}")));
     }
     if held > 0 {
         s.presets.retain(|x| x.group != name);
@@ -123,7 +135,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Preset Group",
             [],
             None,
-            "{name} → {deleted} — the group and the user presets in it; refused for a group holding built-in presets",
+            "{name, expect?: how many presets it should hold} → {deleted} — the group and the user presets in it; refused for a group holding built-in presets, and when `expect` is given and wrong",
             always,
             delete_group
         ),

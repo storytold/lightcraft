@@ -1256,6 +1256,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Err(bad("preset.delete", "built-in presets can't be deleted"));
             }
             s.presets.remove(i);
+            s.presets.prune_favorite_groups();
             ok()
         }),
         cmd!("preset.favorite", "Favorite Preset", [], None, "{id, favorite?: bool}", always, |s, p| {
@@ -1274,6 +1275,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let c = "preset.move";
             let group = str_param(p, "group").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(c, "missing group"))?.to_string();
             user_preset(s, p, c)?.group = group;
+            s.presets.prune_favorite_groups();
             ok()
         }),
         cmd!(
