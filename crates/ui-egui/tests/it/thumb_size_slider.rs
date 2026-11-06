@@ -87,6 +87,7 @@ fn the_survey_slider_is_named_for_the_filmstrip_it_resizes() {
     );
 }
 
+/// Every non-English locale translates the Survey filmstrip-size slider label.
 #[test]
 fn the_filmstrip_size_label_is_translated_in_every_catalog() {
     for locale in Locale::ALL.iter().filter(|locale| **locale != Locale::En) {

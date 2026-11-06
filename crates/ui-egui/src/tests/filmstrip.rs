@@ -84,6 +84,7 @@ fn survey_filmstrip_size_keeps_canvas_in_a_short_window() {
     assert!(canvas.bottom() <= strip.top(), "canvas and strip do not overlap: {canvas:?}, {strip:?}");
 }
 
+/// Resizing the Survey filmstrip preserves selection and horizontal scroll position.
 #[test]
 fn survey_filmstrip_size_preserves_selection_and_scroll() {
     let library = crate::tests_fixtures::SyntheticLibrary::with_photos("survey-filmstrip-scroll", 26);
@@ -112,6 +113,7 @@ fn survey_filmstrip_size_preserves_selection_and_scroll() {
     assert!((after_scroll - before_scroll).abs() < 1.0, "resizing preserves the scroll offset: {before_scroll} → {after_scroll}");
 }
 
+/// Survey filmstrip dimensions stay within the supported bounds, including non-finite settings.
 #[test]
 fn survey_filmstrip_size_is_bounded() {
     let app = crate::tests_fixtures::SyntheticLibrary::new("survey-filmstrip-bounds").app();

@@ -185,6 +185,7 @@ pub fn target_active(app: &LightcraftApp, params: &mut Value) {
     }
 }
 
+/// Reserve the visible filmstrip height while keeping at least 120 points for the Survey canvas.
 fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
