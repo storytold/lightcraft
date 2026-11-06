@@ -15,7 +15,8 @@
 //! 6. Apply each photo's XMP sidecar (or a raw/DNG file's embedded XMP): the sidecar wins for
 //!    metadata and develop settings are restored (see [`crate::sidecar`]). Its capture time fills
 //!    in when the file has none (read before step 5, so it also files and names the copy).
-//! 7. Optionally apply a preset and add keywords (the import dialog's options).
+//! 7. Optionally apply a preset, then a batch-edit recipe (one more History step), and add
+//!    keywords (the import dialog's options).
 //! 8. Commit all new photos as one undoable op. (Undoing a move removes the catalog records;
 //!    the files stay at the destination — undo never moves files back over a card.)
 //! 9. Copy and Move rename sequences use checked platform-sized numbers: the last number is usable once, and any
@@ -46,14 +47,18 @@ pub(crate) use commit::workers;
 pub use commit::{batch_size, civil, commit_prepared, system_clock};
 pub use defaults::{CameraDefault, ImportDefaults, apply_import_defaults, has_import_look, import_defaults};
 pub use files::{
-    EXTENSIONS, LAUNCH_PROBE_LIMIT, LaunchPath, accept_list, expand, expand_within, is_supported, launch_deadline, launch_path, launch_path_until,
+    EXTENSIONS, Expansion, LAUNCH_PROBE_LIMIT, LaunchPath, accept_list, expand, expand_report, expand_within, is_supported, launch_deadline,
+    launch_path, launch_path_until,
 };
 pub(crate) use files::{expand_noting, probe_all, probe_paths, probe_with};
 #[cfg(test)]
 use job::PreparedItem;
 pub use job::{ImportJob, Prepared, candidate_thumb_key, import, import_with};
 pub(crate) use scan::scan_files;
-pub use scan::{ScanInput, ScanOutput, ScanProgress, scan, scan_with};
+pub use scan::{
+    ScanInput, ScanOutput, ScanProgress, browse_files, browse_order, browse_path, browse_queue, browse_queue_until, browse_spelling, scan,
+    scan_report, scan_with,
+};
 #[cfg(test)]
 use scan::{library_files, library_hashes};
 pub use types::{

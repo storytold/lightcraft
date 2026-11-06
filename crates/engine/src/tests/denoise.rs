@@ -108,7 +108,8 @@ fn model_installation_keeps_the_frame_pump_responsive_and_reuses_the_loaded_mode
     // The loader is blocked: the frame pump must still return, reporting installation in progress.
     let state = x.s.execute("denoise.models.downloads", &json!({})).unwrap();
     assert_eq!(state["downloads"][0]["state"], "installing");
-    assert_eq!(x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap()["active"], false);
+    // the built-in denoiser is in use meanwhile
+    assert_eq!(x.s.execute("denoise.status", &json!({})).unwrap()["model"]["id"], "builtin");
     assert!(x.s.execute("denoise.models.install", &json!({"path": path, "acknowledged": true, "background": true})).is_err());
     release_tx.send(()).unwrap();
     for _ in 0..600 {
@@ -226,13 +227,13 @@ fn a_model_is_installed_chosen_and_removed_with_the_terms_accepted() {
     // it can be checked again, switched off and on, and removed
     assert_eq!(x.s.execute("denoise.models.test", &json!({"id": "stand-in"})).unwrap()["ok"], true);
     assert_eq!(x.s.execute("denoise.models.select", &json!({"id": null})).unwrap()["model"], Value::Null);
-    assert!(x.s.denoise.active.is_none());
+    assert_eq!(x.s.denoise.active.as_ref().map(|a| a.id.as_str()), Some("builtin"), "without a model the built-in denoiser runs");
     assert!(x.s.execute("denoise.models.select", &json!({"id": "nothing"})).is_err());
     x.s.execute("denoise.models.select", &json!({"id": "stand-in"})).unwrap();
     assert!(x.s.denoise.active.is_some());
     let r = x.s.execute("denoise.models.remove", &json!({"id": "stand-in"})).unwrap();
     assert_eq!(r["model"], Value::Null);
-    assert!(x.s.denoise.active.is_none());
+    assert_eq!(x.s.denoise.active.as_ref().map(|a| a.id.as_str()), Some("builtin"));
     assert!(!x.dir.join("denoise-models").join("stand-in").exists());
     // ids that are not folder names, and folders that are not models, are never touched
     for bad in ["../library", "", "a/b", "settings.json"] {
@@ -407,10 +408,13 @@ fn an_export_makes_its_picture_when_the_queue_has_not_and_never_comes_out_withou
     x.s.denoise_pump(crate::denoise::Pace::Pause);
     assert_eq!(x.s.denoise_photo_state(id), PhotoState::Ready);
 
-    // no model: the export says so instead of leaving the denoise out
+    // no model: the built-in denoiser makes the picture instead (the stand-in is not asked)
     x.s.execute("denoise.models.select", &json!({"id": null})).unwrap();
-    let e = export_photo(&mut x.s, id, &o, 1).err().unwrap();
-    assert!(e.contains("no denoise model is chosen") && e.contains("ramp.dng"), "{e}");
+    let runs = x.runs.load(Ordering::Relaxed);
+    let builtin = decode(&export_photo(&mut x.s, id, &o, 1).unwrap().bytes);
+    assert_eq!(x.runs.load(Ordering::Relaxed), runs);
+    assert!(builtin.is_finite());
+    assert_eq!(std::fs::read_dir(x.dir.join("library").join("denoise")).unwrap().flatten().count(), 2, "its picture is its own");
     set_amount(&mut x.s, 0.0);
     assert!(export_photo(&mut x.s, id, &o, 1).is_ok(), "without an amount nothing is asked of the model");
     let _ = std::fs::remove_dir_all(&x.dir);
@@ -478,14 +482,13 @@ fn only_raw_photos_on_disk_are_denoised_and_nothing_is_queued_without_a_model() 
     let id = demo.active().unwrap();
     assert_eq!(demo.denoise_photo_state(id), PhotoState::NotApplicable, "a generated photo has no sensor data");
     let e = demo.execute("denoise.queue", &json!({})).unwrap_err().to_string();
-    assert!(e.contains("no denoise model is chosen"), "{e}");
+    assert!(e.contains("open a library on disk first"), "no model is needed, a place for the pictures is: {e}");
     // no models folder at all (the web build): the commands say so, nothing panics
     let mut web = Session::with_demo();
     for cmd in ["denoise.models.install", "denoise.models.select", "denoise.models.remove", "denoise.settings"] {
         assert!(web.execute(cmd, &json!({"path": "x", "acknowledged": true, "id": "x"})).is_err(), "{cmd}");
     }
-    assert_eq!(web.execute("denoise.pump", &json!({})).unwrap()["active"], false);
-    assert_eq!(web.execute("denoise.status", &json!({})).unwrap()["enabled"], false);
+    assert_eq!(web.execute("denoise.status", &json!({})).unwrap()["model"]["id"], "builtin");
     // no library open: nowhere to keep pictures, and the queue says so
     let x = setup("eligible2", true);
     let mut bare = Session::new().with_fs();
@@ -797,8 +800,6 @@ fn the_denoise_switch_validates_arguments_and_accepts_explicit_targets_without_s
     for params in [json!({"id": "bad"}), json!({"id": u64::MAX}), json!({"id": id.0, "enabled": "yes"})] {
         assert!(x.s.execute("denoise.toggle", &params).is_err());
     }
-    assert!(x.s.execute("denoise.toggle", &json!({"id": id.0, "enabled": true})).is_err());
-    assert_eq!(x.s.develop_of(id).unwrap().enhance.denoise, 0.0);
     let model = model_files(&x.dir, "toggle-model");
     x.s.execute("denoise.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
     x.s.selection = Default::default();
@@ -857,5 +858,52 @@ fn denoise_row_while_queue_is_busy() {
     }
     assert!(shown, "the photo never showed a row");
     assert!(rows(&x.s).is_empty(), "the row goes once the photo is made");
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+/// With no model installed, turning denoise on makes the picture with the built-in denoiser alone; it is not an
+/// installed model, and no model can take its id.
+#[test]
+fn without_a_model_the_built_in_denoiser_makes_the_picture_by_itself() {
+    let mut x = setup("builtin", false);
+    let id = photo(&x.s);
+    assert!(x.s.denoise.active.is_none(), "nothing is looked at before it is needed");
+    let r = x.s.execute("denoise.toggle", &json!({"id": id.0, "enabled": true})).unwrap();
+    assert_eq!(r["amount"], 50.0);
+    assert_eq!(x.s.denoise.active.as_ref().map(|a| a.id.as_str()), Some("builtin"));
+    let r = pump_until_ready(&mut x.s, 1);
+    assert_eq!(r["queued"], 0, "{r}");
+    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Ready);
+    assert_eq!(x.runs.load(Ordering::Relaxed), 0, "no model was involved");
+    assert_eq!(x.s.execute("denoise.status", &json!({})).unwrap()["model"]["name"], "Built-in");
+    assert!(x.s.execute("denoise.models.test", &json!({"id": "builtin"})).is_err(), "it is not an installed model");
+    // a model cannot take its id
+    let onnx = model_files(&x.dir, "builtin");
+    let e = x.s.execute("denoise.models.install", &json!({"path": onnx.to_string_lossy(), "acknowledged": true})).unwrap_err().to_string();
+    assert!(e.contains("builtin"), "{e}");
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+/// A build with no models folder still makes products with the built-in denoiser, so its cache obeys the default limit.
+#[test]
+fn without_a_models_folder_the_cache_still_obeys_the_default_limit() {
+    let mut x = setup("builtin-evict", false);
+    x.s.execute("denoise.toggle", &json!({"id": photo(&x.s).0, "enabled": true})).unwrap();
+    pump_until_ready(&mut x.s, 1);
+    x.s.set_denoise_models_dir(None);
+    let limit = u64::from(crate::denoise::DEFAULT_CACHE_GB) << 30;
+    assert_eq!(x.s.denoise_cache_limit(), limit);
+    // sparse files are cheap on Unix only: elsewhere a file that size may reserve its space
+    #[cfg(unix)]
+    {
+        let stray = x.dir.join("library").join("denoise").join("aaaa.lcdn");
+        let f = std::fs::File::create(&stray).unwrap();
+        f.set_len(limit + 1).unwrap();
+        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(1000)).unwrap();
+        drop(f);
+        x.s.denoise_evict(None);
+        assert!(!stray.exists(), "the stray picture goes");
+        assert_eq!(x.s.denoise_photo_state(photo(&x.s)), PhotoState::Ready, "the photo's own picture stays");
+    }
     let _ = std::fs::remove_dir_all(&x.dir);
 }
