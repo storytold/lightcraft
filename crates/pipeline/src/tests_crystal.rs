@@ -187,11 +187,193 @@ fn hostile_settings_render_finite_or_no_grain() {
 #[test]
 fn seed_picks_the_pattern() {
     let look = CrystalLook::new(25.0, 50.0);
-    let (a, b, c) = (tile(look, 1, true), tile(look, 1, true), tile(look, 2, true));
-    let (Some(a), Some(b), Some(c)) = (a, b, c) else { panic!("tiles") };
-    let (pa, pb, pc) = (patch(&a, REF_LONG, 64, 0), patch(&b, REF_LONG, 64, 0), patch(&c, REF_LONG, 64, 0));
-    assert_eq!(pa, pb);
-    assert_ne!(pa, pc);
+    let (Some(a), Some(c)) = (tile(look, 1, true), tile(look, 2, true)) else { panic!("tiles") };
+    assert_ne!(patch(&a, REF_LONG, 64, 0), patch(&c, REF_LONG, 64, 0));
+}
+
+/// A tile drawn again (its cache entry evicted, another process, an export after a preview) is the
+/// same to the bit, however many threads draw it. These draw directly: through [`tile`], the second
+/// would be the first one out of the cache.
+#[test]
+fn a_tile_draws_the_same_every_time() {
+    let look = CrystalLook::new(25.0, 50.0);
+    let one_thread = rayon::ThreadPoolBuilder::new().num_threads(1).build().expect("a pool");
+    let (Some(a), Some(b)) = (CrystalTile::new(look, 1), one_thread.install(|| CrystalTile::new(look, 1))) else { panic!("tiles") };
+    assert!(a.sats == b.sats, "the same seed drew different tiles");
+}
+
+/// Every seed has the same mix of crystal sizes, dealt to the layers in its own order.
+#[test]
+fn seeds_share_the_mix_of_crystal_sizes() {
+    let look = CrystalLook::new(50.0, 80.0);
+    let radii = |seed| emulsion(seed, &look).iter().map(|l| l.r).collect::<Vec<f64>>();
+    let sorted = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v
+    };
+    let (a, b) = (radii(1), radii(2));
+    assert_eq!(a.len(), look.layers);
+    assert_eq!(a, radii(1), "the same seed deals the same order");
+    assert_ne!(a, b, "another seed deals another order");
+    assert_eq!(sorted(a), sorted(b));
+    assert_eq!(emulsion(1, &CrystalLook { layers: 0, ..look }).len(), 1, "an emulsion has a layer");
+}
+
+#[test]
+fn sliders_clamp_and_fall_back() {
+    let look = CrystalLook::new;
+    assert_eq!(look(f64::NAN, f64::NAN), look(25.0, 50.0), "NaN is the default");
+    assert_eq!(look(-1e9, f64::NEG_INFINITY), look(0.0, 0.0));
+    assert_eq!(look(1e9, f64::INFINITY), look(100.0, 100.0));
+    // the ends of the tables
+    assert_eq!((look(0.0, 50.0).width, look(0.0, 50.0).layers), (0.55, 16));
+    assert_eq!((look(100.0, 50.0).width, look(100.0, 50.0).layers), (12.38, 70));
+    assert_eq!(look(100.0, 0.0).width, 12.38 * 0.734);
+    assert_eq!(look(100.0, 100.0).width, 12.38 * 1.422);
+    assert!(look(25.0, 100.0).spread > look(25.0, 0.0).spread);
+
+    let default = strength_levels(50.0, 25.0, 50.0);
+    assert_eq!(strength_levels(f64::NAN, 25.0, 50.0), 0.0, "a NaN Amount is no grain");
+    assert_eq!(strength_levels(-5.0, 25.0, 50.0), 0.0);
+    assert_eq!(strength_levels(50.0, f64::NAN, f64::NAN), default);
+    assert_eq!(strength_levels(1e9, 25.0, 50.0), 2.0 * default);
+    assert_eq!(strength_levels(50.0, -1e9, 50.0), strength_levels(50.0, 0.0, 50.0));
+    assert_eq!(strength_levels(50.0, 25.0, f64::INFINITY), strength_levels(50.0, 25.0, 100.0));
+    // Lightroom Classic's at the ends of each slider (`docs/grain.md`)
+    for (want, (a, s, r)) in [(23.08, (50.0, 0.0, 50.0)), (5.83, (50.0, 100.0, 50.0)), (12.42, (50.0, 25.0, 0.0)), (11.68, (50.0, 25.0, 100.0))] {
+        let got = strength_levels(a, s, r);
+        assert!((got / want - 1.0).abs() < 0.01, "{a}/{s}/{r}: {got}, want {want}");
+    }
+}
+
+#[test]
+fn interp_is_linear_between_knots_and_constant_outside() {
+    let knots = [(0.0, 1.0), (10.0, 3.0), (20.0, 2.0)];
+    for (x, want) in [(-5.0, 1.0), (0.0, 1.0), (5.0, 2.0), (10.0, 3.0), (15.0, 2.5), (20.0, 2.0), (99.0, 2.0)] {
+        assert_eq!(interp(&knots, x), want, "at {x}");
+    }
+    assert_eq!(interp(&[], 5.0), 0.0);
+    assert_eq!(interp(&[(3.0, 7.0)], 5.0), 7.0);
+}
+
+#[test]
+fn normal_quantile_matches_the_table() {
+    for (p, z) in [(0.5, 0.0), (0.975, 1.959_963_985), (0.841_344_746, 1.0), (0.001, -3.090_232_306), (1e-6, -4.753_424_309)] {
+        assert!((normal_quantile(p) - z).abs() < 1e-7, "at {p}: {}, want {z}", normal_quantile(p));
+        assert!((normal_quantile(1.0 - p) + z).abs() < 1e-7, "at 1 - {p}");
+    }
+    // increasing across the approximation's joins (0.02425 and its mirror), finite at the ends
+    let sweep: Vec<f64> = (0..=1000).map(|k| normal_quantile(k as f64 / 1000.0)).collect();
+    assert!(sweep.iter().all(|z| z.is_finite()));
+    assert!(sweep.windows(2).all(|w| w[0] < w[1]));
+}
+
+#[test]
+fn poisson_counts_have_the_mean_and_variance_of_mu() {
+    let n = 40_000u32;
+    for mu in [0.5, 4.0, 40.0, 150.0] {
+        let cdf = poisson_cdf(mu);
+        assert!(cdf.windows(2).all(|w| w[0] <= w[1]), "mu {mu}: the distribution must not fall");
+        assert!(cdf.last().is_some_and(|&c| c >= 1.0 - 1e-12), "mu {mu}: the distribution must reach 1");
+        let draws: Vec<f64> = (0..n).map(|i| poisson(&cdf, mix(i)) as f64).collect();
+        let mean = draws.iter().sum::<f64>() / n as f64;
+        let var = draws.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / n as f64;
+        assert!((mean - mu).abs() < 4.0 * (mu / n as f64).sqrt(), "mu {mu}: mean {mean}");
+        assert!((var / mu - 1.0).abs() < 0.05, "mu {mu}: variance {var}");
+    }
+}
+
+#[test]
+fn poisson_stays_in_range_at_the_ends() {
+    for h in [0, u32::MAX] {
+        assert_eq!(poisson(&poisson_cdf(0.0), h), 0, "mean 0 is never a crystal");
+        // past what the model uses, e^-mu underflows: a capped count, not a panic
+        assert!(poisson(&poisson_cdf(1e6), h) <= 512);
+        assert_eq!(poisson(&[], h), 0);
+    }
+}
+
+#[test]
+fn summed_area_matches_brute_force() {
+    let t = 7;
+    let count: Vec<u8> = (0..t * t).map(|i| (mix(i as u32) % 71) as u8).collect();
+    let sat = summed_area(&count, t);
+    assert_eq!(sat.len(), (t + 1) * (t + 1));
+    for y in 0..=t {
+        for x in 0..=t {
+            let want: u32 = (0..y).flat_map(|j| (0..x).map(move |i| (i, j))).map(|(i, j)| count[j * t + i] as u32).sum();
+            assert_eq!(sat[y * (t + 1) + x], want, "[0, {x}) × [0, {y})");
+        }
+    }
+}
+
+/// Boxes against the emulsion's own pixels (each table's counts, less their mean, scaled to unit
+/// variance as [`CrystalTile::new`] does), integrated by hand. Whole and fractional boxes, across
+/// the torus's seams, at negative coordinates and periods away.
+#[test]
+fn box_sum_is_the_integral_of_the_emulsion() {
+    let (look, seed) = (CrystalLook::new(25.0, 50.0), 7);
+    let tile = CrystalTile::new(look, seed).expect("a tile");
+    let counts = [0, 1].map(|which| draw_torus(which, TORI[which], seed, &look));
+    let means: [f64; 2] = [0, 1].map(|w| counts[w].iter().map(|&c| c as f64).sum::<f64>() / (TORI[w] * TORI[w]) as f64);
+    let var: f64 = [0, 1]
+        .map(|w| {
+            let (sq, n) = reference_square_sum(&counts[w], TORI[w], means[w]);
+            sq / n as f64
+        })
+        .iter()
+        .sum();
+    let k = 1.0 / var.sqrt();
+    // The overlap of the cell at `i` with `[a, a + w]`.
+    let overlap = |i: i64, a: f64, w: f64| ((i + 1) as f64).min(a + w) - (i as f64).max(a);
+    let integral_by_hand = |which: usize, x0: f32, y0: f32, w: f32| {
+        let (x0, y0, w, t) = (x0 as f64, y0 as f64, w as f64, TORI[which] as i64);
+        let mut sum = 0.0;
+        for j in y0.floor() as i64..(y0 + w).ceil() as i64 {
+            for i in x0.floor() as i64..(x0 + w).ceil() as i64 {
+                let c = counts[which][(j.rem_euclid(t) * t + i.rem_euclid(t)) as usize] as f64;
+                sum += (c - means[which]) * k * overlap(i, x0, w) * overlap(j, y0, w);
+            }
+        }
+        sum
+    };
+    for which in [0, 1] {
+        let t = TORI[which] as f32;
+        for (x0, y0, w) in [
+            (0.0, 0.0, 2.0),
+            (100.0, 200.0, 37.0),
+            (3.25, 7.5, 2.0),
+            (10.6, 11.3, 0.7),
+            (50.5, 60.25, 400.0),
+            (t - 1.5, 20.0, 4.0),
+            (20.0, t - 1.5, 4.0),
+            (t - 0.5, t - 0.25, 31.0),
+            (-1.5, -2.25, 8.0),
+            (3.0 * t + 12.5, -2.0 * t + 40.5, 8.0),
+        ] {
+            let (got, want) = (tile.box_sum(which, x0, y0, w) as f64, integral_by_hand(which, x0, y0, w));
+            let area = (w * w) as f64;
+            assert!((got - want).abs() / area < 2e-3, "torus {which}, ({x0}, {y0}) side {w}: {got} vs {want}");
+        }
+    }
+    // the field is the two tori's mean, centred on its position
+    let (x, y, w) = (640.25, 1133.5, 3.0);
+    let want = (integral_by_hand(0, x - 0.5 * w, y - 0.5 * w, w) + integral_by_hand(1, x - 0.5 * w, y - 0.5 * w, w)) / (w * w) as f64;
+    assert!((tile.field(x, y, w) as f64 - want).abs() < 2e-3, "field {} vs {want}", tile.field(x, y, w));
+}
+
+/// A render under the footprint limit gets grain, one at or past it none, whatever else it asks.
+#[test]
+fn only_a_render_past_the_footprint_limit_loses_its_grain() {
+    let g = Grain { amount: 50.0, size: 25.0, roughness: 50.0, seed: 3 };
+    let limit = TILE_PER_LONG / MAX_FOOTPRINT as f64;
+    assert_eq!(limit, 24.0);
+    for none in [limit, limit - 1.0, 1.0, 0.0, -5.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(CrystalGrain::new(&g, none).is_none(), "{none} px per long edge");
+    }
+    assert_eq!(CrystalGrain::new(&g, limit + 1.0).expect("grain").foot, 480.0);
+    assert_eq!(CrystalGrain::new(&g, REF_LONG).expect("grain").foot, 2.0);
+    assert!(CrystalGrain::new(&Grain { amount: 0.0, ..g }, REF_LONG).is_none(), "no grain at Amount 0");
 }
 
 /// A draft (a Size or Roughness drag) doesn't wait for a new tile: the last tile of the seed stands

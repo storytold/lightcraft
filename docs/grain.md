@@ -132,6 +132,7 @@ curtain; #1060: −9.3). Fine detail under the grain is kept (detail gain
   | main (value noise) | 3.2–3.4 | 2.9–3.0 | 2.9 |
   | #1060 (particles) | 3.3 | 3.0–3.1 | 35.6–36.0 |
   | this model | 3.2–3.3 | 3.4–3.5 | 5.9–6.0 |
+
 - **Per pixel:** two box sums, on the CPU and on the GPU. The tables (12 MB) stay on the GPU
   between renders, for the last tile used (`Gpu::grain_tables`), and are copied after the finish
   kernel's other tables in its `aux` buffer on the GPU: an Amount drag uploads nothing. On the

@@ -50,7 +50,7 @@ pub const FILLING: f64 = 0.5;
 const BAND: usize = 64;
 /// Encoded luminance at which the strength is specified (mid grey, 128 of 255).
 const MID_GREY: f32 = 128.0 / 255.0;
-/// A footprint this large (tile pixels: a render under 24 px long) gets no grain.
+/// A footprint this large (tile pixels: a render 24 px long or less) gets no grain.
 const MAX_FOOTPRINT: f32 = 500.0;
 /// Settings whose tiles are kept (a preview and an export, a few thumbnails).
 const CACHE: usize = 4;
