@@ -440,7 +440,8 @@ fn an_export_that_never_got_going_leaves_the_previous_one_alone() {
             let id = seen["activity"][0]["id"].as_u64().unwrap();
             assert_eq!(h.request("engine.execute", json!({"command": "activity.cancel", "params": {"id": id}}), T)["ok"], true);
         }),
-        // (a library opened meanwhile loads its own last export: `switching_library_while_an_export_prepares_stops_it`)
+        // (a library opened meanwhile loads its own last export; the guard is the same `stopped` as the ✕'s:
+        // `switching_library_while_an_export_prepares_stops_it` shows it stops, and this test is not run for it)
     ];
     for (what, go) in kinds {
         let mut h = demo();
