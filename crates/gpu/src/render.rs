@@ -948,6 +948,9 @@ pub fn render(
     let output = finish_keep.unwrap_or(PixelWindow { x: 0, y: 0, w, h });
     let out_n = output.w * output.h;
     let (p, aux) = finish_block(&fp, &terms, &present, output);
+    if crate::ctx::failed() {
+        return None; // a malformed parameter block failed the render: the CPU fallback redoes it
+    }
     let aux = gpu.upload(&aux);
     // cleared, so that work which never ran cannot pass for an image (see the check below)
     let out = cx.zeroed(out_n);
