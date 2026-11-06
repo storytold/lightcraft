@@ -210,12 +210,20 @@ fn request_tile_renders(app: &mut LightcraftApp, id: PhotoId, slot: Slot, want: 
 
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
 /// strip below. Returns the image rect and the click/drag response.
-fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area: Rect, label: &str, zoom: Zoom) -> (Rect, egui::Response) {
+fn photo_tile(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    id: PhotoId,
+    slot: Slot,
+    area: Rect,
+    label: &str,
+    zoom: Zoom,
+) -> (Rect, Rect, egui::Response) {
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
     let resp = ui.interact(area, egui::Id::unique(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
     crate::widgets::announce(&resp, app.session.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default());
-    let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, resp) };
+    let Some(photo) = app.session.catalog.photo(id).cloned() else { return (area, area, resp) };
     let caption_h = 26.0;
     let img_area = Rect::from_min_max(area.min, pos2(area.right(), area.bottom() - caption_h));
     let frame = lightcraft_pipeline::geometry::Frame::with_lens(
@@ -277,14 +285,14 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     if let Some(tex) = app.renderer.textures.get(&slot).filter(|x| x.photo == id) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
-        p.image(tex.tex.id(), display, uv, Color32::WHITE);
+        p.image(tex.id(), display, uv, Color32::WHITE);
         if let Some(i) = window {
-            draw_window(&p, app, i, id, photo.develop.hash64(), display);
+            draw_window(&p, app, i, id, photo.develop.hash64(), img);
         }
     } else if let Some(tex) = app.renderer.textures.get(&Slot::Thumb(id)) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
-        p.image(tex.tex.id(), display, uv, Color32::WHITE);
+        p.image(tex.id(), display, uv, Color32::WHITE);
     } else {
         p.rect_filled(img.intersect(img_area), 0.0, t.skeleton);
     }
@@ -369,7 +377,10 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         register(ui, format!("cull:{}:label", id.0), lr);
     }
     register(ui, format!("cull:{}", id.0), display);
-    (display, resp)
+    // The frame rect the window was requested in (`img`) and the texture's rect (`display`): they
+    // differ when the texture's aspect differs from the frame's. The first is the window's
+    // reference, the second is the photo as painted.
+    (img, display, resp)
 }
 
 /// Panes that get window renders: Compare's Select and Candidate, Reference's two sides.
@@ -452,7 +463,7 @@ fn draw_window(p: &egui::Painter, app: &LightcraftApp, pane: u8, id: PhotoId, lo
     let (fw, fh) = (tile.full.0.max(1) as f32, tile.full.1.max(1) as f32);
     let at = display.min + vec2(tile.window.x as f32 / fw * display.width(), tile.window.y as f32 / fh * display.height());
     let dst = Rect::from_min_size(at, vec2(tile.window.w as f32 / fw * display.width(), tile.window.h as f32 / fh * display.height()));
-    p.image(tex.tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    p.image(tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }
 
 /// Per frame, before the central view is shown: Compare and Reference keep two photos' originals
@@ -510,7 +521,7 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ];
     let zoom = app.ui.zoom;
     for (id, r, label, i) in panes {
-        let (img, resp) = photo_tile(app, ui, id, Slot::Compare(i), r, label, zoom);
+        let (img, _, resp) = photo_tile(app, ui, id, Slot::Compare(i), r, label, zoom);
         if i == 1 {
             app.image_rect = Some(img);
         }
@@ -565,7 +576,8 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     for (i, id) in photos.iter().enumerate() {
         let (c, r) = (i % cols, i / cols);
         let cell = Rect::from_min_size(pos2(area.left() + c as f32 * cw, area.top() + r as f32 * ch), vec2(cw, ch)).shrink(6.0);
-        let (img, resp) = photo_tile(app, ui, *id, Slot::Compare(i as u8), cell, "", Zoom::Fit);
+        // (Survey tiles are fit views with no windows: what counts is the photo as painted)
+        let (_, img, resp) = photo_tile(app, ui, *id, Slot::Compare(i as u8), cell, "", Zoom::Fit);
         if app.session.selection.active == Some(*id) {
             app.image_rect = Some(img);
         }
@@ -581,8 +593,9 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run("library.select", json!({"ids": [id.0]}));
             app.ui.view = ViewMode::Detail;
         }
-        // remove from the survey (deselect) on hover
-        if resp.hovered() && photos.len() > 1 {
+        // remove from the survey (deselect) on hover; the × stays while the pointer is on it, where
+        // the tile has lost its hover to the × (tied to `hovered()`, it vanished before a click landed)
+        if resp.contains_pointer() && photos.len() > 1 {
             let xr = Rect::from_min_size(pos2(img.right() - 26.0, img.top() + 6.0), vec2(20.0, 20.0));
             let xresp = ui.interact(xr, egui::Id::unique(("survey-x", id.0)), Sense::click()).on_hover_text(crate::i18n::tr("Remove from survey"));
             crate::widgets::announce(&xresp, crate::i18n::tr("Remove from survey"));
@@ -619,8 +632,8 @@ pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let zoom = app.ui.zoom;
     let left = Rect::from_min_size(area.min, vec2(half, area.height()));
     let right = Rect::from_min_size(pos2(area.right() - half, area.top()), vec2(half, area.height()));
-    let (_, lresp) = photo_tile(app, ui, r, Slot::Compare(0), left, "Reference", zoom);
-    let (img, _) = photo_tile(app, ui, active, Slot::Compare(1), right, "Active", zoom);
+    let (_, _, lresp) = photo_tile(app, ui, r, Slot::Compare(0), left, "Reference", zoom);
+    let (img, _, _) = photo_tile(app, ui, active, Slot::Compare(1), right, "Active", zoom);
     app.image_rect = Some(img);
     crate::widgets::context_menu(&lresp, |ui| {
         if ui.button(crate::i18n::tr("Clear Reference")).clicked() {

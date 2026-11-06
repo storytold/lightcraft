@@ -757,25 +757,29 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     }
                     // keywords are stored cleaned (`a | b ` is `a|b`), each once whatever its case
-                    use lightcraft_catalog::keywords::{clean, same};
-                    let add = |m: &mut lightcraft_catalog::Meta, k: &str| {
+                    use lightcraft_catalog::keywords::clean;
+                    // (a set of the lower-cased keywords keeps this linear however many are supplied)
+                    let mut seen: std::collections::HashSet<String> = m.keywords.iter().map(|x| x.to_lowercase()).collect();
+                    let add = |m: &mut lightcraft_catalog::Meta, seen: &mut std::collections::HashSet<String>, k: &str| {
                         let k = clean(k);
-                        if !k.is_empty() && !m.keywords.iter().any(|x| same(x, &k)) {
+                        if !k.is_empty() && seen.insert(k.to_lowercase()) {
                             m.keywords.push(k);
                         }
                     };
                     if let Some(k) = strs("keywords") {
                         m.keywords.clear();
+                        seen.clear();
                         for k in k {
-                            add(&mut m, &k);
+                            add(&mut m, &mut seen, &k);
                         }
                     }
                     for k in strs("addKeywords").unwrap_or_default() {
-                        add(&mut m, &k);
+                        add(&mut m, &mut seen, &k);
                     }
-                    for k in strs("removeKeywords").unwrap_or_default() {
-                        let k = clean(&k);
-                        m.keywords.retain(|x| !same(&clean(x), &k));
+                    let removed: std::collections::HashSet<String> =
+                        strs("removeKeywords").unwrap_or_default().iter().map(|k| clean(k).to_lowercase()).collect();
+                    if !removed.is_empty() {
+                        m.keywords.retain(|x| !removed.contains(&clean(x).to_lowercase()));
                     }
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
@@ -1321,16 +1325,22 @@ pub fn specs() -> Vec<CommandSpec> {
             "Review Import",
             [],
             None,
-            "{paths: [file or folder (recursive)]} → {candidates: [{path, name, format, kind, width, height, fileSize, captured, duplicate?: path|content, existing?, error?, previewOnly?: why a raw can only be shown from its embedded preview}], duplicates, scanned} — nothing is added",
+            "{paths: [file or folder (recursive)]} → {candidates: [{path, name, format, kind, width, height, fileSize, captured, duplicate?: path|content, existing?, error?, previewOnly?: why a raw can only be shown from its embedded preview}], duplicates, scanned, scanLimited: bool (the folder walk stopped at its scan limit: there may be more photos), skipped: {unreadable (folders that could not be listed), unsupported (files in the folders that are not a supported photo type, XMP sidecars not counted; a file named in paths is always tried)}} — nothing is added",
             always,
             |s, p| {
                 let paths = strs(p, "paths");
                 if paths.is_empty() {
                     return Err(bad("library.importPreview", "no paths"));
                 }
-                let c = crate::import::scan(s, &paths);
-                let dups = c.iter().filter(|c| c.duplicate.is_some()).count();
-                Ok(json!({"scanned": c.len(), "duplicates": dups, "candidates": c}))
+                let out = crate::import::scan_report(s, &paths);
+                let dups = out.candidates.iter().filter(|c| c.duplicate.is_some()).count();
+                Ok(json!({
+                    "scanned": out.candidates.len(),
+                    "duplicates": dups,
+                    "candidates": out.candidates,
+                    "scanLimited": out.truncated,
+                    "skipped": {"unreadable": out.unreadable, "unsupported": out.unsupported},
+                }))
             }
         ),
         cmd!(
@@ -1338,7 +1348,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Photos",
             ["File"],
             Some("Cmd+Shift+I"),
-            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source — only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`) — dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each; blank = keep names), renameStart?: 1 (must fit this platform; later files are reported failed if the sequence runs out), metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, keywords?: [..], onDeleted?: restore|skip|fresh (a file that is in Recently Deleted: restore (default) = bring the photo back with its edits — relinked to the file when its own is gone, skip = leave it there and say so, fresh = delete the trashed record and import the file as new)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, warnings?: [{path, code: cameraProfile|uprightGeometry|unmappedXmp, profile?, mode?: off|auto|level|vertical|full|guided|unknown, fields?}], moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
+            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source — only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`) — dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each; blank = keep names), renameStart?: 1 (must fit this platform; later files are reported failed if the sequence runs out), metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, recipe?: [{id: a plain develop control (develop.controls; no white balance, geometry or crop), value}] (a batch-edit recipe: each control is set to its value, clamped to the control's range, on every photo this import adds, after its sidecar, camera default and preset, as one extra History step named Import adjustments; a photo the library already has — a duplicate, one restored from Recently Deleted, one joined from a browsed folder — is not changed; a control a recipe may not name is refused before anything is imported; preset.saveRecipe keeps a recipe for reuse), keywords?: [..], onDeleted?: restore|skip|fresh (a file that is in Recently Deleted: restore (default) = bring the photo back with its edits — relinked to the file when its own is gone, skip = leave it there and say so, fresh = delete the trashed record and import the file as new)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, warnings?: [{path, code: cameraProfile|uprightGeometry|unmappedXmp, profile?, mode?: off|auto|level|vertical|full|guided|unknown, fields?}], moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
             always,
             |s, p| {
                 let req = import_params(s, p)?;
@@ -1363,6 +1373,8 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         // ---- persistence
         cmd!(query "library.info", "Library Info", [], None, "{}", always, |s, _| {
+            // the answer of a free-space read that ran on a worker (lowDiskSpace below)
+            s.poll_disk_space();
             let photos = s.catalog.len();
             let albums = s.catalog.albums().count();
             let (rendered_n, rendered_bytes) = s.media.rendered.mem_usage();
@@ -1398,6 +1410,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 "lastError": lib.last_error,
                 // settings files that were unreadable or damaged at open (kept, defaults used)
                 "settingsWarnings": lib.settings_warnings,
+                // the drive holding the preview cache ran low this session (warned once)
+                "lowDiskSpace": s.disk_space_alert_raised(),
                 // changes applied in memory whose write failed (retried by every save)
                 "unsavedOps": s.unsaved().map_or(0, |u| u.0),
                 "unsavedError": s.unsaved().map(|u| u.1),

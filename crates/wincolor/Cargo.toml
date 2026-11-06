@@ -1,0 +1,28 @@
+[package]
+name = "lightcraft-wincolor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft wincolor (L0): the colour profile Windows assigns to the monitor showing a window. One of the two crates allowed `unsafe` (Win32 calls)."
+
+# The workspace lints: they deny `unsafe_code` (deny, not forbid), which the `win32` module in
+# src/lib.rs allows for its Win32 calls; every other crate root has `#![forbid(unsafe_code)]`. See
+# AGENTS.md and craftrules standards/never-crash.md ("isolated helper library crate").
+[lints]
+workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_ColorSystem",
+    "Win32_Devices_Display",
+] }
+
+[dev-dependencies]
+# tests record why they skip (`cargo xtask ci` lists the skips)
+lightcraft-testkit = { workspace = true }
+
+# the desktop window, for a test
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
