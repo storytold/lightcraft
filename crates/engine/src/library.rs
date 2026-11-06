@@ -37,17 +37,25 @@ use crate::{EngineError, LibrarySource, Result, Selection, Session};
 pub const DEFAULT_NAME: &str = "LightCraft Library";
 
 /// The library folder `path` names. A library is a folder; naming one of its own files
-/// (`catalog.snap`, `catalog.log`, `catalog.lock`) means the folder that holds it. Any other
+/// (`catalog.snap`, `catalog.log`, `catalog.lock`, `presets.json`, `view.json`, `prefs.json`)
+/// means the folder that holds it. Any other
 /// existing file is an error that says so, instead of the OS's "File exists" from creating the
 /// folder.
 pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
     if !path.is_file() {
         return Ok(path.to_path_buf());
     }
-    let own = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| [lightcraft_catalog::journal::SNAPSHOT, lightcraft_catalog::journal::LOG, lightcraft_catalog::lock::LOCK].contains(&n));
+    let own = path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+        [
+            lightcraft_catalog::journal::SNAPSHOT,
+            lightcraft_catalog::journal::LOG,
+            lightcraft_catalog::lock::LOCK,
+            "presets.json",
+            "view.json",
+            "prefs.json",
+        ]
+        .contains(&n)
+    });
     if !own {
         return Err(EngineError::Other(format!("{} is a file; a library is a folder", path.display())));
     }
@@ -1059,6 +1067,21 @@ mod resolve_tests {
         let e = Session::new().with_fs().open_library(&other, false).err().unwrap().to_string();
         assert!(e.contains("is a file"), "{e}");
         assert!(!e.contains("File exists"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A library's settings files (`presets.json`, `view.json`, `prefs.json`) name the folder that
+    /// holds them, like its catalog files do.
+    #[test]
+    fn a_library_settings_file_opens_its_folder() {
+        let dir = std::env::temp_dir().join(format!("lc-resolve-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["presets.json", "view.json", "prefs.json"] {
+            let file = dir.join(name);
+            std::fs::write(&file, b"{}").unwrap();
+            assert_eq!(resolve_dir(&file).ok(), Some(dir.clone()), "{name}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
