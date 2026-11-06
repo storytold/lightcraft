@@ -309,5 +309,8 @@
   "{name} is installed and in use: face recognition is on": "Το {name} είναι εγκατεστημένο και σε χρήση: η αναγνώριση προσώπων είναι ενεργή",
   "{name} value": "Τιμή {name}",
   "{n} photo{} in view · {slides} slide{} · {time}": "Φωτογραφίες σε προβολή: {n}{:.0} · διαφάνειες: {slides}{:.0} · {time}",
-  "{n} selected photo{} · {pages} page{}": "Επιλεγμένες φωτογραφίες: {n}{:.0} · σελίδες: {pages}{:.0}"
+  "{n} selected photo{} · {pages} page{}": "Επιλεγμένες φωτογραφίες: {n}{:.0} · σελίδες: {pages}{:.0}",
+  "Bring photos in with File › Import Photos… ({keys}).": "Φέρτε φωτογραφίες με Αρχείο › Εισαγωγή φωτογραφιών… ({keys}).",
+  "View › Detail View ({keys}).": "Προβολή › Προβολή λεπτομέρειας ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Αρχείο › Εξαγωγή… · Αρχείο › Εκτύπωση… ({keys})."
 }
