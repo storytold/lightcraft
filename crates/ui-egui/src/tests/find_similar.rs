@@ -152,9 +152,6 @@ fn a_second_search_waits_for_the_first() {
 fn stopping_leaves_the_view_alone_and_the_next_search_reads_only_the_rest() {
     let (mut h, drive) = app_on_a_slow_drive(GUARD);
     h.app.ui.view = ViewMode::Detail;
-    // Count search reads, not races with filmstrip prefetch warming the same source cache.
-    // This test has no active photo: hide the filmstrip so only the real search reads files.
-    h.app.ui.filmstrip = false;
     h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
     // stopped while the searched photo is being read: that one read is all it does
     assert!(h.step_until(T, |_| drive.reads.load(Ordering::SeqCst) == 1), "the first read never started");
@@ -298,6 +295,7 @@ fn another_library_stops_the_search_and_gets_nothing_from_it() {
     let dir = std::env::temp_dir().join(format!("lc-ui-similar-other-{}", std::process::id()));
     // The library-switch hook must invalidate face review as well as cancel the old search.
     h.app.ui.ignored_faces = Some(Default::default());
+    h.app.ui.dismissed_faces.insert((1, 0));
     h.app.ui.unnamed_selected.insert((1, 0));
     h.app.ui.unnamed_anchor = Some(0);
     let revision = h.app.session.catalog.revision;
@@ -307,6 +305,7 @@ fn another_library_stops_the_search_and_gets_nothing_from_it() {
     h.app.session.open_library(&dir, false).unwrap();
     h.step();
     assert!(h.app.ui.ignored_faces.is_none());
+    assert!(h.app.ui.dismissed_faces.is_empty());
     assert!(h.app.ui.unnamed_selected.is_empty());
     assert!(h.app.ui.unnamed_anchor.is_none());
     assert!(h.app.caches.unnamed.is_none());

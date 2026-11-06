@@ -332,6 +332,7 @@ impl LightcraftApp {
             crate::find_similar::library_changed(self);
             self.ui.ignored_faces = None;
             self.ui.person_selection = Default::default();
+            self.ui.dismissed_faces.clear();
             self.ui.unnamed_selected.clear();
             self.ui.unnamed_anchor = None;
             self.caches.unnamed = None;

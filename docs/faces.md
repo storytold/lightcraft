@@ -321,7 +321,7 @@ by its own box.
 
 In **People**, a click on a person opens their page: **only cropped faces**, never whole photos. First the faces named
 with their name (a click opens that photo), then **More**: the unnamed faces that look like them, most alike first. Click one
-to confirm it (that names the face, as one undo step, and it moves up into their faces), or × to hide it for this session.
+to confirm it (that names the face, as one undo step, and it moves up into their faces), or × to hide it for this session. Switching libraries clears these temporary dismissals, so another library's suggestions are not hidden.
 The `↑` control at the top left of a suggested face confirms that face and every currently shown, non-hidden suggestion
 with an equal or higher similarity score. Its tooltip names the person and shows the number of faces before you act.
 Hover a suggestion or focus it with the keyboard and press `A` for the same action. The batch is one undo step;
