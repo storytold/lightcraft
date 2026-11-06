@@ -666,11 +666,12 @@ pub struct SyncCommit {
     /// The library the run was readied for: steps never land in another one (File › Open
     /// Library while the work runs), whose photo ids name other photos.
     library: Arc<()>,
-    /// The run's own undo steps so far, and the history's length after the last of them: they
-    /// are merged only while nothing else came in between (an Undo or an edit made meanwhile
-    /// stays its own step, and the run's parts stay theirs).
+    /// The run's own undo steps so far, and the history's length and the session's commit count
+    /// after the last of them: they are merged only while nothing else came in between (an Undo
+    /// or an edit made meanwhile stays its own step, and the run's parts stay theirs). The count
+    /// sees an edit that left the length as it was (the history was full and dropped its oldest).
     own: usize,
-    after_last: Option<usize>,
+    after_last: Option<(usize, u64)>,
     interleaved: bool,
     /// Keeps the history from dropping the run's first steps before [`SyncCommit::finish`] folds
     /// them (a big folder makes more steps than it holds). Let go once the steps can't be folded
@@ -821,14 +822,14 @@ impl SyncCommit {
             return;
         }
         let commits = s.commits();
-        if self.after_last.is_some_and(|n| n != s.undo.len()) {
+        if self.after_last.is_some_and(|last| last != (s.undo.len(), commits)) {
             self.interleaved = true;
             self.hold = None;
         }
-        self.apply_step(s, step);
+        s.run_step(|s| self.apply_step(s, step));
         if s.commits() != commits {
             self.own += usize::try_from(s.commits().wrapping_sub(commits)).unwrap_or(0);
-            self.after_last = Some(s.undo.len());
+            self.after_last = Some((s.undo.len(), s.commits()));
         }
     }
 
@@ -890,7 +891,7 @@ impl SyncCommit {
         // a report line once, however many steps came after a library switch
         self.report.failed.dedup();
         self.hold = None;
-        let ours = Arc::ptr_eq(&self.library, &s.library_identity) && !self.interleaved && self.after_last == Some(s.undo.len());
+        let ours = Arc::ptr_eq(&self.library, &s.library_identity) && !self.interleaved && self.after_last == Some((s.undo.len(), s.commits()));
         let steps = if ours { self.own.min(s.undo.len()) } else { 0 };
         s.merge_undo(steps, "Synchronize Folder");
         s.trim_undo();

@@ -272,6 +272,9 @@ pub struct Session {
     /// token: the history keeps every step then, so the run can fold them into one whole step
     /// before the bound applies ([`Session::hold_undo`]). Dead (or never set) when no run holds it.
     undo_hold: std::sync::Weak<()>,
+    /// Set while a run puts one of its own steps into the history ([`Session::run_step`]): any
+    /// other commit while a run holds the history (an edit) ends the hold at once.
+    in_run_step: bool,
     /// Undo steps committed in this session, ever (the history drops its oldest past 1000, so
     /// its length can't tell how many steps a command just made; see [`Session::commits`]).
     commits: u64,
@@ -491,6 +494,7 @@ impl Session {
             total: None,
             undo: Vec::new(),
             undo_hold: std::sync::Weak::new(),
+            in_run_step: false,
             commits: 0,
             redo: Vec::new(),
             pending_sidecar_repairs: Vec::new(),
@@ -669,6 +673,11 @@ impl Session {
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
+        if !self.in_run_step {
+            // an edit between a run's steps: they can't be folded any more (the run sees it on
+            // its next step or at its end), so the history is cut now, not when the next step comes
+            self.undo_hold = std::sync::Weak::new();
+        }
         self.trim_undo();
         for mut dropped in self.redo.drain(..) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
@@ -686,6 +695,14 @@ impl Session {
         for mut dropped in self.undo.drain(..excess) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
         }
+    }
+
+    /// Do `f`, a run's own step ([`Session::hold_undo`]): the commits it makes keep the hold.
+    pub(crate) fn run_step<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let before = std::mem::replace(&mut self.in_run_step, true);
+        let out = f(self);
+        self.in_run_step = before;
+        out
     }
 
     /// Let a long run that commits many steps (a synchronize) fold them into one step: while the

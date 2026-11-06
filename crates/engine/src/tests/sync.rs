@@ -780,7 +780,7 @@ fn overlapping_runs_hold_the_history_until_the_last_lets_go() {
     let second = s.hold_undo();
     drop(second);
     for id in &ids {
-        s.commit("Remove", lightcraft_catalog::Op::SetDeleted { id: *id, deleted: true }).unwrap();
+        s.run_step(|s| s.commit("Remove", lightcraft_catalog::Op::SetDeleted { id: *id, deleted: true })).unwrap();
     }
     assert!(s.undo.len() > UNDO_STEPS, "the first run still holds: {}", s.undo.len());
     drop(first);
@@ -837,6 +837,49 @@ fn an_edit_between_the_steps_of_a_big_synchronize_keeps_the_history_bounded() {
     commit.finish(&mut s);
     assert!(s.undo.len() <= 1000, "{}", s.undo.len());
     assert_ne!(s.undo.last().map(|e| e.label.as_str()), Some("Synchronize Folder"), "not folded around the edit");
+}
+
+/// An edit made while the run's worker is between steps (no step arrives for a while) ends the
+/// hold at once: the history is bounded when the edit lands, not when the next step comes.
+#[test]
+fn an_edit_while_the_run_waits_for_its_next_step_bounds_the_history_at_once() {
+    let dir = Scratch::new("big-stalled");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work, mut commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    for id in &ids {
+        commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
+    }
+    assert!(s.undo.len() > UNDO_STEPS, "the run holds its steps: {}", s.undo.len());
+    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 4})).unwrap();
+    assert_eq!(s.undo.len(), UNDO_STEPS, "no step came after the edit, yet the history is cut");
+    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 5})).unwrap();
+    assert_eq!(s.undo.len(), UNDO_STEPS, "and stays cut");
+    commit.finish(&mut s);
+    assert_ne!(s.undo.last().map(|e| e.label.as_str()), Some("Synchronize Folder"), "not folded around the edits");
+}
+
+/// An edit that fills the history to the bound looks, by length alone, like no edit at all
+/// (the oldest step goes as the edit comes): the run still sees it and folds nothing around it.
+#[test]
+fn an_edit_that_leaves_the_history_as_long_as_it_was_is_still_seen_by_the_run() {
+    let dir = Scratch::new("big-same-length");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work, mut commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    for id in ids.iter().take(UNDO_STEPS - s.undo.len()) {
+        commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
+    }
+    assert_eq!(s.undo.len(), UNDO_STEPS);
+    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 4})).unwrap();
+    assert_eq!(s.undo.len(), UNDO_STEPS);
+    let edit_label = s.undo.last().map(|e| e.label.clone()).unwrap();
+    commit.finish(&mut s);
+    assert_eq!(s.undo.last().map(|e| e.label.as_str()), Some(edit_label.as_str()), "the edit stays its own step");
 }
 
 #[test]
