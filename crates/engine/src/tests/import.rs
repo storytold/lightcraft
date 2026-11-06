@@ -189,6 +189,45 @@ fn a_browsed_file_replaced_by_a_copy_of_a_library_photo_is_a_duplicate() {
     let _ = std::fs::remove_dir_all(src);
 }
 
+/// ✕ while the sizes of browsed files are checked: a file that wasn't checked is not promoted (it stays a browsed record),
+/// where the check used to run for every file whatever the ✕ said.
+#[test]
+fn a_cancelled_import_does_not_promote_a_browsed_file_it_did_not_check() {
+    use crate::import::{ImportJob, ImportOptions, commit_prepared};
+    let src = temp_dir("browsed-cancel-import");
+    let a = src.join("a.png");
+    write_png(&a, 75);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [a], "local": true})).unwrap();
+    let id = r["imported"][0].as_u64().unwrap();
+    let mut job = ImportJob::new(&mut s, ImportOptions::default()).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    let prepared = job.prepare(&[a.to_string_lossy().to_string()], &cancel);
+    let report = commit_prepared(&mut s, &job.opts, job.now(), prepared).unwrap();
+    assert!(report.imported.is_empty() && report.duplicates.is_empty(), "nothing was decided about the file: {report:?}");
+    assert!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().local, "the record is still only browsed");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// ✕ while a scan checks the sizes of browsed files: a file that wasn't checked is not offered as the record's own (it is
+/// one of the files the scan didn't reach, like the ones after it).
+#[test]
+fn a_cancelled_scan_does_not_vouch_for_a_browsed_file_it_did_not_check() {
+    use crate::import::{ScanInput, ScanProgress, scan_with};
+    let src = temp_dir("browsed-cancel-scan");
+    let a = src.join("a.png");
+    write_png(&a, 75);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [a], "local": true})).unwrap();
+    let (input, paths) = ScanInput::new(&mut s, &[a.to_string_lossy().to_string()]);
+    let progress = ScanProgress::default();
+    progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    let out = scan_with(input, &paths, &progress);
+    assert_eq!(out.candidates.len(), 1);
+    assert!(!out.candidates[0].local && out.candidates[0].error.is_some(), "not vouched for as the browsed record's file: {:?}", out.candidates[0]);
+    let _ = std::fs::remove_dir_all(src);
+}
+
 /// A file of its own with the new content of a replaced browsed file stands in for it when copying leaves it out.
 #[test]
 fn a_twin_of_a_replaced_browsed_file_stands_in_for_it_when_copying() {

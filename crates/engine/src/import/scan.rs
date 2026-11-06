@@ -1,4 +1,4 @@
-use super::files::{Seen, expand, expand_report, is_supported, probe_all, reusable_probes};
+use super::files::{BrowsedFile, Seen, browsed_files_changed, expand, expand_report, is_supported, probe_all, reusable_probes};
 use super::types::ImportCandidate;
 use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
 
@@ -46,13 +46,6 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
         }
     }
     by_path
-}
-
-/// Whether the file of a browsed (Local) record is no longer the one that was browsed: its size on disk is not the
-/// recorded one, the check the probes kept from a scan go by. A record without a size and a file that can't be read
-/// count as unchanged (a file that is gone is the record's own business).
-pub(super) fn local_file_changed(path: &str, recorded: u64) -> bool {
-    !cfg!(target_arch = "wasm32") && recorded > 0 && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() != recorded)
 }
 
 /// Which photo of the library has each of the contents `hashes` (the later one where several
@@ -331,15 +324,25 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     let mut by_path = library_files(&input.library, &files);
     // a browsed file that was replaced since is not the one its record describes: it is read again like a new file
     // (the record's stored content, kept from the browse, would give the wrong answer against the library), and
-    // its candidate still names the record and says it was only browsed, unless the library has that content
+    // its candidate still names the record and says it was only browsed, unless the library has that content.
+    // Their sizes are looked at together; ✕ while that goes on leaves the files not reached to be read (and so
+    // reported as not probed) like the ones after them, never vouched for as the record's own.
     let mut replaced: HashMap<PathBuf, PhotoId> = HashMap::new();
-    by_path.retain(|path, (id, c, _)| {
-        let changed = c.local && local_file_changed(&path.to_string_lossy(), c.file_size);
-        if changed {
-            replaced.insert(path.clone(), *id);
+    let browsed: Vec<(&str, u64)> =
+        files.iter().filter_map(|f| by_path.get(Path::new(f)).filter(|(_, c, _)| c.local).map(|(_, c, _)| (f.as_str(), c.file_size))).collect();
+    for ((f, _), checked) in browsed.iter().zip(browsed_files_changed(&browsed, &progress.cancel)) {
+        match checked {
+            BrowsedFile::Unchanged => {}
+            BrowsedFile::Changed => {
+                if let Some((id, ..)) = by_path.remove(Path::new(f)) {
+                    replaced.insert(PathBuf::from(f), id);
+                }
+            }
+            BrowsedFile::Unchecked => {
+                by_path.remove(Path::new(f));
+            }
         }
-        !changed
-    });
+    }
     let todo: Vec<String> = files.iter().filter(|f| !by_path.contains_key(Path::new(f))).cloned().collect();
     progress.total.store(todo.len(), Relaxed);
     // probes from a preceding `scan` are reused when the file is unchanged (same size); a file that

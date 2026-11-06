@@ -1,5 +1,5 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{Seen, expand, probe_all, reusable_probes, sidecars_of};
+use super::files::{BrowsedFile, Seen, browsed_files_changed, expand, probe_all, reusable_probes, sidecars_of};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -40,7 +40,7 @@ pub struct ImportJob {
     /// path → (photo, a Local browse record?)
     pub(super) by_path: HashMap<String, (PhotoId, bool, Option<String>)>,
     /// path → the size the record of a browsed (Local) file has: a file of another size has been replaced since
-    /// it was browsed ([`super::scan::local_file_changed`])
+    /// it was browsed ([`super::files::browsed_files_changed`])
     local_sizes: HashMap<String, u64>,
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
@@ -271,13 +271,25 @@ impl ImportJob {
         let mut todo = Vec::new();
         // browsed files replaced since: probed again with `todo`, their records brought up to date as they join the library
         let mut changed: HashMap<String, PhotoId> = HashMap::new();
-        for f in files {
+        // the sizes of the browsed files this import would promote, looked at together before they are decided one by one
+        // (a file promoted earlier, here or in a previous batch, isn't asked about again)
+        let is_browsed = |f: &String| !opts.local && matches!(self.by_path.get(f.as_str()), Some((_, true, _)));
+        let browsed: Vec<(&str, u64)> =
+            files.iter().filter(|f| is_browsed(f)).map(|f| (f.as_str(), self.local_sizes.get(f.as_str()).copied().unwrap_or(0))).collect();
+        let mut looked_at = browsed_files_changed(&browsed, cancel).into_iter();
+        let verdicts: Vec<Option<BrowsedFile>> = files.iter().map(|f| is_browsed(f).then(|| looked_at.next()).flatten()).collect();
+        for (f, verdict) in files.into_iter().zip(verdicts) {
             match self.by_path.get(f.as_str()).cloned() {
                 Some((id, true, hash)) if !opts.local => {
-                    if super::scan::local_file_changed(&f, self.local_sizes.get(f.as_str()).copied().unwrap_or(0)) {
-                        changed.insert(f.clone(), id);
-                        todo.push(f);
-                        continue;
+                    match verdict {
+                        // ✕ before its size was looked at: nothing is decided about it, so it isn't promoted
+                        Some(BrowsedFile::Unchecked) => continue,
+                        Some(BrowsedFile::Changed) => {
+                            changed.insert(f.clone(), id);
+                            todo.push(f);
+                            continue;
+                        }
+                        Some(BrowsedFile::Unchanged) | None => {}
                     }
                     // a library photo with the same content comes first, and a file promoted earlier
                     // (here or in a previous batch) counts as the library's from then on
