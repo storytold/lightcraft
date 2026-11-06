@@ -1077,10 +1077,10 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
     let page = crate::panels::person::PersonPage {
         name: "Jane Doe".into(),
         total: 1,
-        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }],
+        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, region: region(None).rect, score: 0.0 }],
         more: vec![
-            crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, score: 0.9 },
-            crate::panels::person::Face { photo: ids[2].0, index: 0, rect: region(None).rect, score: 0.8 },
+            crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, region: region(None).rect, score: 0.9 },
+            crate::panels::person::Face { photo: ids[2].0, index: 0, rect: region(None).rect, region: region(None).rect, score: 0.8 },
         ],
         ready: true,
         pending: 0,
@@ -1105,8 +1105,8 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
     let other = crate::panels::person::PersonPage {
         name: "John Roe".into(),
         total: 1,
-        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }],
-        more: vec![crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, score: 0.9 }],
+        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, region: region(None).rect, score: 0.0 }],
+        more: vec![crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, region: region(None).rect, score: 0.9 }],
         ready: true,
         pending: 0,
         cover: None,
@@ -1180,6 +1180,62 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
     assert_eq!((named(&h, 1), named(&h, 2)), (None, None), "nothing named from the page made before");
 }
 
+/// A person's page kept while the catalog changed knows its faces by their place on their photo: once a region before
+/// one goes, × on it sets nothing aside and the page is made again, rather than setting aside the face now in its place.
+#[test]
+fn a_face_whose_place_on_its_photo_changed_is_not_set_aside_in_its_stead() {
+    use lightcraft_catalog::Op;
+    use lightcraft_meta::RegionKind;
+    let mut h = demo([1400.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(2).collect();
+    let region = |kind: RegionKind, name: Option<&str>, x0: f64| lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect { x0, y0: 0.2, x1: x0 + 0.2, y1: 0.6 },
+        kind,
+        name: name.map(str::to_string),
+        description: None,
+    };
+    let setups = [
+        vec![region(RegionKind::Face, Some("Jane Doe"), 0.3)],
+        vec![region(RegionKind::Pet, None, 0.0), region(RegionKind::Face, None, 0.3), region(RegionKind::Face, None, 0.6)],
+    ];
+    for (id, regions) in ids.iter().zip(setups) {
+        let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
+        meta.regions = regions;
+        h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+    }
+    h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
+    h.settle(SETTLE);
+    // the demo has no recognition: the page is given the face after the pet as its look-alike
+    let offered = region(RegionKind::Face, None, 0.3).rect;
+    let page = crate::panels::person::PersonPage {
+        name: "Jane Doe".into(),
+        total: 1,
+        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: offered, region: offered, score: 0.0 }],
+        more: vec![crate::panels::person::Face { photo: ids[1].0, index: 1, rect: offered, region: offered, score: 0.9 }],
+        ready: true,
+        pending: 0,
+        cover: None,
+        dismissed: 0,
+    };
+    h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page)));
+    h.app.caches.person_page_gen = h.app.session.people_gen;
+    h.step();
+    // the pet's region goes: no face changed, so the page is kept, and its place 1 is now the other face
+    let mut meta = h.app.session.catalog.photo(ids[1]).unwrap().meta.clone();
+    meta.regions.remove(0);
+    h.app.session.commit("pet gone", Op::SetMeta { id: ids[1], meta: Box::new(meta) }).unwrap();
+    h.step();
+    let x = format!("more-face-x:{}:1", ids[1].0);
+    assert!(h.app.widgets.iter().any(|(w, _)| *w == x), "the page kept shows the face by its old place");
+    let r = h.request("ui.clickWidget", json!({"id": x}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.session.person_dismissed.get("jane doe").is_none_or(Vec::is_empty), "{:?}", h.app.session.person_dismissed);
+    assert!(h.app.ui.dismissed_faces.is_empty(), "{:?}", h.app.ui.dismissed_faces);
+    assert!(!h.app.widgets.iter().any(|(w, _)| *w == x), "the page was made again");
+}
+
 /// A right click on an unnamed face, or on a face a person's page offers, opens its photo.
 #[test]
 fn a_right_click_on_a_face_tile_opens_its_photo() {
@@ -1221,8 +1277,8 @@ fn a_right_click_on_a_face_tile_opens_its_photo() {
     let page = crate::panels::person::PersonPage {
         name: "Jane Doe".into(),
         total: 1,
-        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }],
-        more: vec![crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, score: 0.9 }],
+        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, region: region(None).rect, score: 0.0 }],
+        more: vec![crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, region: region(None).rect, score: 0.9 }],
         ready: true,
         pending: 0,
         cover: None,
@@ -1341,11 +1397,11 @@ fn person_more_confirms_all_above_with_one_undo_step() {
     let page = crate::panels::person::PersonPage {
         name: "Jane Doe".into(),
         total: 1,
-        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }],
+        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, region: region(None).rect, score: 0.0 }],
         more: ids[1..6]
             .iter()
             .zip([0.95, 0.80, 0.80, 0.80, 0.60])
-            .map(|(id, score)| crate::panels::person::Face { photo: id.0, index: 0, rect: region(None).rect, score })
+            .map(|(id, score)| crate::panels::person::Face { photo: id.0, index: 0, rect: region(None).rect, region: region(None).rect, score })
             .collect(),
         ready: true,
         pending: 0,

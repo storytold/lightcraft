@@ -22,6 +22,9 @@ pub struct Face {
     pub photo: u64,
     pub index: usize,
     pub rect: lightcraft_geom::Rect,
+    /// its region's box in the catalog when the page was made (`rect` may be the detector's), to tell the region at
+    /// `index` is still this face
+    pub region: lightcraft_geom::Rect,
     pub score: f32,
 }
 
@@ -45,11 +48,13 @@ pub struct PersonPage {
 
 fn face_of(v: &Value) -> Option<Face> {
     let rect = |r: &Value| Some(lightcraft_geom::Rect { x0: r["x0"].as_f64()?, y0: r["y0"].as_f64()?, x1: r["x1"].as_f64()?, y1: r["y1"].as_f64()? });
+    let region = rect(&v["rect"])?;
     Some(Face {
         photo: v["photo"].as_u64()?,
         index: usize::try_from(v["index"].as_u64()?).ok()?,
         // shown by the detector's box when the scan has one: every face equally close
-        rect: rect(&v["view"]).or_else(|| rect(&v["rect"]))?,
+        rect: rect(&v["view"]).unwrap_or(region),
+        region,
         score: v["score"].as_f64().unwrap_or(0.0) as f32,
     })
 }
@@ -177,6 +182,17 @@ fn at_or_above(more: &[&Face], chosen: &Face, aside: &std::collections::HashSet<
         .collect()
 }
 
+/// Whether each of `faces` is still the region it was on its photo when the page was made. A page kept while the
+/// catalog changed knows a face by its place among the photo's regions: once a region before it goes (a pet's, a focus
+/// area's), that place is another face's, and naming it or setting it aside would act on that one.
+fn still_there<'a>(cat: &lightcraft_catalog::Catalog, mut faces: impl Iterator<Item = &'a Face>) -> bool {
+    faces.all(|f| {
+        cat.photo(lightcraft_catalog::PhotoId(f.photo))
+            .and_then(|p| p.meta.regions.get(f.index))
+            .is_some_and(|r| r.kind == lightcraft_meta::RegionKind::Face && r.rect == f.region)
+    })
+}
+
 fn confirm_above(
     app: &mut LightcraftApp,
     ctx: &egui::Context,
@@ -193,7 +209,14 @@ fn confirm_above(
         ctx.request_repaint();
         return;
     }
-    let faces: Vec<Value> = at_or_above(more, chosen, aside).into_iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
+    let batch = at_or_above(more, chosen, aside);
+    if !still_there(&app.session.catalog, more.iter().copied().filter(|f| batch.contains(&(f.photo, f.index)))) {
+        // made again first: the key names no face rather than other ones
+        app.caches.person_page = None;
+        ctx.request_repaint();
+        return;
+    }
+    let faces: Vec<Value> = batch.into_iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
     if !faces.is_empty()
         && let Err(error) = app.run("faces.nameFaces", json!({"faces": faces, "name": name}))
     {
@@ -421,6 +444,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         app.renderer.want_variants(shown);
     });
     if let Some((what, f)) = hit {
+        let what = if matches!(what, Hit::Confirm | Hit::Dismiss | Hit::MakeCover) && !still_there(&app.session.catalog, std::iter::once(&f)) {
+            // made again first: the click goes to no face rather than to another one
+            app.caches.person_page = None;
+            ui.ctx().request_repaint();
+            Hit::Nothing
+        } else {
+            what
+        };
         match what {
             Hit::Open => {
                 let _ = app.run("library.select", json!({"ids": [f.photo], "active": f.photo}));
@@ -651,7 +682,13 @@ mod tests {
 
     #[test]
     fn all_above_uses_score_including_later_ties_and_only_visible_faces() {
-        let face = |photo, score| Face { photo, index: 0, rect: lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 }, score };
+        let face = |photo, score| Face {
+            photo,
+            index: 0,
+            rect: lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 },
+            region: lightcraft_geom::Rect::default(),
+            score,
+        };
         // The tie is deliberately after a lower-score tile: an index slice would miss it.
         let candidates = [face(1, 0.95), face(2, 0.80), face(3, 0.70), face(4, 0.80), face(5, 0.60)];
         let dismissed = (2_u64, 0_usize);
