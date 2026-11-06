@@ -29,7 +29,8 @@ const REGION_HANDLES: [(f32, f32, egui::CursorIcon); 8] = [
 ];
 
 /// Face/pet/focus regions read from XMP (MWG-RS), drawn as boxes over the photo. Hovering a box shows
-/// a × in its corner and eight resize handles. A drag previews the new box live and is reported once,
+/// a × in its corner and eight resize handles, and dragging its body moves it (not under a tool that
+/// draws on the photo). A drag previews the new box live and is reported once,
 /// on release (one undo step); the × reports the region to remove. Both are catalog-only edits:
 /// LightCraft doesn't write regions to XMP. Regions are stored on the upright (EXIF-oriented) photo;
 /// `orient` is the user's Rotate / Flip on top of it, which the loupe's normalized frame includes.
@@ -42,6 +43,52 @@ pub(super) struct RegionContext<'a> {
     /// the names to offer when a region is named
     pub people: &'a [String],
     pub setup: crate::panels::faces::Setup,
+    /// Dragging a box's body moves it: not while a tool that works on the photo owns the drag.
+    pub movable: bool,
+}
+
+/// Dragging the body of a box moves it. It is laid out before the handles and the × so they win an
+/// overlapping press. The press point and the box at press time are remembered, so the box follows the
+/// pointer from where it was grabbed. The move is reported on release, unless the box ends where it began.
+fn region_body_drag(
+    ui: &egui::Ui,
+    map: &CanvasMap,
+    rect: Rect,
+    (index, norm): (usize, lightcraft_geom::Rect),
+    orient: lightcraft_geom::Orientation,
+    drag_key: egui::Id,
+) -> Option<RegionEdit> {
+    let body_key = egui::Id::unique(("region-body", index));
+    let body_resp = ui.interact(rect, body_key, Sense::drag());
+    if body_resp.drag_started() {
+        let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(body_resp.interact_pointer_pos().unwrap_or(rect.center()));
+        let start = map.norm(press);
+        ui.data_mut(|d| d.insert_temp(body_key, (start, norm)));
+    }
+    // (the release frame reports `dragged()` too, so the last position is taken before the stop)
+    if body_resp.dragged() || body_resp.drag_stopped() {
+        let pp = body_resp.interact_pointer_pos();
+        let shown = ui.data(|d| d.get_temp::<(Point, lightcraft_geom::Rect)>(body_key));
+        if let (Some(pp), Some((start, shown))) = (pp, shown) {
+            let now = map.norm(pp);
+            let (w, h) = (shown.x1 - shown.x0, shown.y1 - shown.y0);
+            let (x0, y0) = ((shown.x0 + now.x - start.x).clamp(0.0, (1.0 - w).max(0.0)), (shown.y0 + now.y - start.y).clamp(0.0, (1.0 - h).max(0.0)));
+            let moved = lightcraft_geom::Rect { x0, y0, x1: x0 + w, y1: y0 + h };
+            if moved == shown {
+                ui.data_mut(|d| d.remove_temp::<(usize, lightcraft_geom::Rect)>(drag_key));
+            } else {
+                ui.data_mut(|d| d.insert_temp(drag_key, (index, orient.inverse().map_norm_rect(moved))));
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+    if !body_resp.drag_stopped() {
+        return None;
+    }
+    let edit = ui.data(|d| d.get_temp::<(usize, lightcraft_geom::Rect)>(drag_key)).map(|(i, new)| RegionEdit::Resize(i, new));
+    ui.data_mut(|d| d.remove_temp::<(usize, lightcraft_geom::Rect)>(drag_key));
+    ui.data_mut(|d| d.remove_temp::<(Point, lightcraft_geom::Rect)>(body_key));
+    edit
 }
 
 pub(super) fn region_overlay(
@@ -51,7 +98,7 @@ pub(super) fn region_overlay(
     regions: &RegionContext,
     editing: &mut Option<crate::state::NameEdit>,
 ) -> Option<RegionEdit> {
-    let RegionContext { photo, orient, hints, people, setup } = *regions;
+    let RegionContext { photo, orient, hints, people, setup, movable } = *regions;
     let t = Tokens::get(p.ctx());
     let clip = p.clip_rect();
     let pointer = ui.input(|i| i.pointer.hover_pos());
@@ -66,42 +113,8 @@ pub(super) fn region_overlay(
         // white with a black keyline just outside it, so the box shows on any background
         p.rect_stroke(rect.expand(1.0), 0.0, Stroke::new(1.0, Color32::from_black_alpha(190)), StrokeKind::Outside);
         p.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Outside);
-        // The body itself moves the box. It is laid out before the handles and the × so they
-        // win an overlapping press, and it avoids the handle strip, the × and the name label.
-        // The press point and the shown box at press time are remembered, so the moved box
-        // follows the pointer from where it was grabbed instead of jumping to it.
-        let body_key = egui::Id::unique(("region-body", index));
-        let body_resp = ui.interact(rect, body_key, Sense::drag());
-        if body_resp.drag_started() {
-            let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(body_resp.interact_pointer_pos().unwrap_or(rect.center()));
-            let start = map.norm(press);
-            ui.data_mut(|d| d.insert_temp(body_key, (start, norm)));
-        }
-        if body_resp.dragged() || body_resp.drag_stopped() {
-            // egui pre-computes the released frame's drag flags against the previous frame's
-            // widget rects, and a PointerMoved after release is not a drag: the frame after
-            // `drag_stopped()` reports a removal with no move, so recomputing on every
-            // dragged frame is harmless. The release frame still reports `dragged()`
-            // alongside `drag_stopped()`, and its press/release event still produces
-            // interact pos, so the final position is captured here before the stop is handled.
-            let pp = body_resp.interact_pointer_pos();
-            let shown = ui.data(|d| d.get_temp::<(Point, lightcraft_geom::Rect)>(body_key));
-            if let (Some(pp), Some((start, shown))) = (pp, shown) {
-                let now = map.norm(pp);
-                let (w, h) = (shown.x1 - shown.x0, shown.y1 - shown.y0);
-                let (x0, y0) =
-                    ((shown.x0 + now.x - start.x).clamp(0.0, (1.0 - w).max(0.0)), (shown.y0 + now.y - start.y).clamp(0.0, (1.0 - h).max(0.0)));
-                let moved = lightcraft_geom::Rect { x0, y0, x1: x0 + w, y1: y0 + h };
-                ui.data_mut(|d| d.insert_temp(drag_key, (index, orient.inverse().map_norm_rect(moved))));
-                ui.ctx().request_repaint();
-            }
-        }
-        if body_resp.drag_stopped() {
-            if let Some((i, new)) = ui.data(|d| d.get_temp::<(usize, lightcraft_geom::Rect)>(drag_key)) {
-                edit = Some(RegionEdit::Resize(i, new));
-            }
-            ui.data_mut(|d| d.remove_temp::<(usize, lightcraft_geom::Rect)>(drag_key));
-            ui.data_mut(|d| d.remove_temp::<(Point, lightcraft_geom::Rect)>(body_key));
+        if movable && let Some(moved) = region_body_drag(ui, map, rect, (index, norm), orient, drag_key) {
+            edit = Some(moved);
         }
         if dragging.is_some() || (live.is_none() && pointer.is_some_and(|h| rect.expand(8.0).contains(h))) {
             for (h, (fx, fy, cursor)) in REGION_HANDLES.iter().enumerate() {
@@ -984,6 +997,7 @@ mod region_drag_tests {
                         hints: None,
                         people: &[],
                         setup: crate::panels::faces::Setup::Running,
+                        movable: true,
                     };
                     edit = region_overlay(ui, &p, &map, &regions, &mut editing);
                 });
