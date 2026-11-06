@@ -43,6 +43,9 @@ pub mod local_tone;
 pub mod lut;
 pub mod mask_space;
 pub mod masks;
+pub mod nrc_joint;
+#[cfg(test)]
+mod nrc_joint_reference;
 pub mod optics;
 pub mod output;
 pub mod profiles;
@@ -463,6 +466,8 @@ struct CacheEntry {
     lin: Option<(u64, Arc<Rgb32f>)>,
     #[cfg(not(target_arch = "wasm32"))]
     full_airlight: Option<u64>,
+    /// The joint colour NR's noise model of the whole frame ([`colour_noise`]), keyed by [`Plan::noise_key`].
+    colour_noise: Option<(u64, nrc_joint::JointNoise)>,
     planes: local::Planes,
     /// Alphas of the last render's masks (kept across changes to the image: those of masks that
     /// don't read it stay valid).
@@ -502,6 +507,9 @@ pub struct Plan<'a> {
     /// [`Self::lin_key`] without the noise-reduction settings: draft renders reuse the smooth
     /// planes of an image that differs from this one only in its noise reduction.
     pub pre_nr_key: u64,
+    /// Key of the whole frame's noise model for the joint colour NR ([`colour_noise`]): what it is
+    /// measured after (everything before the colour NR), not the colour NR's own settings.
+    pub noise_key: u64,
     /// Red eye / pet eye corrections with their detected pupils, in output pixels.
     pub eyes: Vec<redeye::EyeK>,
     /// Whether this window needs the full-frame Dehaze statistic. Planning does no pixel work.
@@ -515,6 +523,8 @@ pub struct Plan<'a> {
     pub keep: Option<PixelWindow>,
     /// The source's segmentation mattes ([`SourceInfo::mattes`]).
     pub mattes: Option<Arc<masks::Mattes>>,
+    /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
+    pub full: (geometry::Frame, usize, usize),
 }
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
@@ -547,6 +557,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     #[cfg(target_arch = "wasm32")]
     let mut fixed_air = None;
     let mut keep = None;
+    let full = (frame.clone(), full_w, full_h);
     let (frame, w, h) = match req.window {
         Some(win) => {
             let win = win.clamped(full_w, full_h);
@@ -585,6 +596,19 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                     work
                 }
             };
+            // The joint colour diffusion reads a chain of neighbours across its scales: its reads
+            // stay outside the requested window too, after the context and spot reads.
+            let mut work = work;
+            if local::joint_colour_nr(s)
+                && let Some(params) = local::nrc_params(s, detail_scale)
+            {
+                let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
+                let x = work.x.saturating_sub(halo);
+                let y = work.y.saturating_sub(halo);
+                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+            }
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
@@ -629,7 +653,10 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         pre_nr_key,
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
+        // the process picks the colour filter (Update to Current Process, undo)
+        local::joint_colour_nr(s),
     ));
+    let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
     Plan {
         settings,
         frame,
@@ -643,6 +670,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         geo,
         lin_key,
         pre_nr_key,
+        noise_key,
         eyes,
         #[cfg(not(target_arch = "wasm32"))]
         needs_airlight,
@@ -650,7 +678,57 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         fixed_air,
         keep,
         mattes: info.mattes.clone(),
+        full,
     }
+}
+
+/// The joint colour NR's noise model of the whole frame, measured on fixed tiles of it
+/// ([`nrc_joint::tiles`]) so that every window of it is filtered alike. The tiles are resampled,
+/// tone-mapped, white-balanced and luminance-denoised like the frame; the retouching and defringing
+/// are left out. `None` when the joint colour NR is off, or when the render is the whole frame and
+/// that is a single tile: the noise is then measured on the image itself, as the CPU and the GPU do.
+pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc_joint::JointNoise> {
+    let s = &*p.settings;
+    if !local::joint_colour_nr(s) || local::nrc_params(s, p.detail_scale).is_none() {
+        return None;
+    }
+    let (full, fw, fh) = &p.full;
+    let windows = nrc_joint::tiles(*fw, *fh);
+    if (p.w, p.h) == (*fw, *fh) && windows.len() == 1 {
+        return None;
+    }
+    let t = profiling().then(std::time::Instant::now);
+    let (lum, _) = local::nr_params(s, p.detail_scale);
+    // the source oriented and prefiltered once for all tiles
+    let sampled = full.sample_windows(src, *fw, *fh, &windows);
+    let tiles: Vec<Rgb32f> = windows
+        .into_iter()
+        .zip(sampled)
+        .map(|(t, mut img)| {
+            let frame = if (t.w, t.h) == (*fw, *fh) { full.clone() } else { full.window(*fw, *fh, t) };
+            let tile = Plan {
+                settings: Cow::Borrowed(s),
+                frame,
+                w: t.w,
+                h: t.h,
+                eyes: Vec::new(),
+                fixed_air: None,
+                keep: None,
+                mattes: None,
+                full: p.full.clone(),
+                ..*p
+            };
+            local_tone::apply(&mut img, info, &tile);
+            local::white_balance(&mut img, info, s);
+            local::apply_nr(&mut img, lum, None);
+            img
+        })
+        .collect();
+    let noise = nrc_joint::noise_of_tiles(&tiles);
+    if let Some(t) = t {
+        eprintln!("    nr colour noise model ({} tiles): {:.0} ms", tiles.len(), t.elapsed().as_secs_f64() * 1e3);
+    }
+    Some(noise)
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -850,6 +928,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     };
     lap("sample", &mut t);
 
+    let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
     #[cfg(not(target_arch = "wasm32"))]
     let prepared_lin = prepared_work
         .as_ref()
@@ -863,7 +942,10 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             // Without a cache the resampled buffer is ours: work on it in place.
             let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
             lin_cpu(&mut img, info, &plan);
-            local::denoise(&mut img, s, detail_scale);
+            if colour_noise.is_none() {
+                colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
+            }
+            local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
             Arc::new(img)
         }
     };
@@ -925,6 +1007,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             masks: alphas,
             #[cfg(not(target_arch = "wasm32"))]
             full_airlight: full.as_ref().map(|p| p.lin_key),
+            colour_noise,
         });
     }
     if req.depth != OutputDepth::U8 {

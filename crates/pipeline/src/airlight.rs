@@ -226,7 +226,9 @@ pub(crate) fn prepare(
     let sampled = sampled.unwrap_or_else(|| Arc::new(full.frame.sample(src, full.w, full.h)));
     let mut img = (*sampled).clone();
     crate::lin_cpu(&mut img, info, full);
-    local::denoise(&mut img, &full.settings, full.detail_scale);
+    // the joint colour NR with the whole frame's noise model, as the full render filters it
+    let noise = crate::colour_noise(src, info, full);
+    local::denoise(&mut img, &full.settings, full.detail_scale, noise.as_ref());
     let dark = img.map(local::dark_of);
     let sigma = (0.02 * full.px_per_long as f32).max(1.0);
     let dark = lightcraft_raster::blur::gaussian_owned(dark, sigma);
@@ -282,7 +284,8 @@ pub(crate) mod tests {
             let air = compute(&src, &info, &full).unwrap();
             let mut img = full.frame.sample(&src, full.w, full.h);
             crate::lin_cpu(&mut img, &info, &full);
-            local::denoise(&mut img, &s, full.detail_scale);
+            let noise = crate::colour_noise(&src, &info, &full);
+            local::denoise(&mut img, &s, full.detail_scale, noise.as_ref());
             let mut planes = local::Planes::default();
             let prep = local::prepare(
                 Arc::new(img),

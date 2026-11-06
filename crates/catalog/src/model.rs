@@ -176,6 +176,15 @@ pub struct Meta {
     pub aperture: Option<f32>,
     pub shutter: String,
     pub iso: Option<u32>,
+    /// Whether the flash fired, from Exif `Flash`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flash: Option<bool>,
+    /// Exposure compensation in EV, from Exif `ExposureBiasValue`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_bias: Option<f32>,
+    /// The camera body's serial number.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub serial_number: String,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
     pub city: String,
