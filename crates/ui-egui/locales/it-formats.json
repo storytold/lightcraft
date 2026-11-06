@@ -351,6 +351,9 @@
     "many": "La cartella delle anteprime avanzate è cambiata. File sorgente che non è stato possibile rimuovere: {count}.",
     "other": "La cartella delle anteprime avanzate è cambiata. File sorgente che non è stato possibile rimuovere: {count}."
   },
+  "Bring photos in with File › Import Photos… ({keys}).": "Importa le foto con File › Importa foto… ({keys}).",
+  "View › Detail View ({keys}).": "Visualizza › Vista dettaglio ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
   "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
 }

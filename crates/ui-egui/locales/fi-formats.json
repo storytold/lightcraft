@@ -350,6 +350,9 @@
   },
   "could not check smart preview storage: {e}": "Älyesikatselujen tallennustilaa ei voitu tarkistaa: {e}",
   "free space is unavailable for {path} on this platform": "Kohteen {path} vapaata tilaa ei voi tarkistaa tällä alustalla",
+  "Bring photos in with File › Import Photos… ({keys}).": "Tuo kuvia valitsemalla Tiedosto › Tuo kuvia… ({keys}).",
+  "View › Detail View ({keys}).": "Näytä › Tarkastelunäkymä ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Tiedosto › Vie… · Tiedosto › Tulosta… ({keys}).",
   "{n} folder{} could not be read": "Kansiot, joita ei voitu lukea: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "Ohitetut tiedostot (ei tuettu valokuvatyyppi): {n}{:.0}"
 }

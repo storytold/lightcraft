@@ -23,6 +23,7 @@
   "Added {n} photo{} to My Photos": "{n} photo{} ajoutée(s) à Mes photos",
   "Added {n} photo{} to “{}”": "{n} photo{} ajoutée(s) à « {} »",
   "Added {what} to {name}": "{what} ajouté à {name}",
+  "Adjustments: {n}": "Réglages : {n}",
   "Adding photos… {} of {}": "Ajout des photos… {} sur {}",
   "All {n} selected photos move by the same amount.": "Les {n} photos sélectionnées se déplacent de la même valeur.",
   "Already in the library, in Recently Deleted: {} photo{} selected · right-click ▸ Restore, or Delete Permanently to import afresh": "Déjà dans la bibliothèque, dans « Supprimés récemment » : {} photo{} sélectionnée(s) · clic droit → Restaurer, ou Supprimer définitivement pour importer à nouveau",
@@ -353,5 +354,8 @@
     "other": "{count} aperçus dynamiques · {size:.1} Mio"
   },
   "could not check smart preview storage: {e}": "Impossible de vérifier le stockage des aperçus dynamiques : {e}",
-  "free space is unavailable for {path} on this platform": "L'espace libre de {path} est indisponible sur cette plateforme."
+  "free space is unavailable for {path} on this platform": "L'espace libre de {path} est indisponible sur cette plateforme.",
+  "Bring photos in with File › Import Photos… ({keys}).": "Importez des photos avec Fichier › Importer des photos… ({keys}).",
+  "View › Detail View ({keys}).": "Affichage › Vue de détail ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Fichier › Exporter… · Fichier › Imprimer… ({keys})."
 }

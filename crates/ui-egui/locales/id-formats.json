@@ -353,6 +353,9 @@
   },
   "could not check smart preview storage: {e}": "Tidak dapat memeriksa penyimpanan pratinjau pintar: {e}",
   "free space is unavailable for {path} on this platform": "Ruang kosong tidak tersedia untuk {path} pada platform ini",
+  "Bring photos in with File › Import Photos… ({keys}).": "Masukkan foto melalui File › Impor foto… ({keys}).",
+  "View › Detail View ({keys}).": "Tampilan › Tampilan Detail ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "File › Ekspor… · File › Cetak… ({keys}).",
   "{n} folder{} could not be read": "Folder yang tidak bisa dibaca: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}"
 }

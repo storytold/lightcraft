@@ -158,6 +158,7 @@
   "; {outside} outside its time range": "; {outside} fora do intervalo de tempo",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}: {} PRs, {} commits, +{} / −{} linhas (Δ {}), +{} / −{} arquivos binários, {} – {}",
   "Added {what} to {name}": "{what} adicionado a {name}",
+  "Adjustments: {n}": "Ajustes: {n}",
   "Auto Import: added {} photo{}": "Importação automática: {} foto{1} adicionada{1}",
   "Building previews for {} photos…": "Gerando prévias de {} fotos…",
   "Couldn't open the editor: {e}": "Não foi possível abrir o editor: {e}",
@@ -353,5 +354,8 @@
     "other": "{count} pré-visualizações inteligentes · {size:.1} MiB"
   },
   "could not check smart preview storage: {e}": "Não foi possível verificar o armazenamento das pré-visualizações inteligentes: {e}",
-  "free space is unavailable for {path} on this platform": "O espaço livre de {path} não está disponível nesta plataforma."
+  "free space is unavailable for {path} on this platform": "O espaço livre de {path} não está disponível nesta plataforma.",
+  "Bring photos in with File › Import Photos… ({keys}).": "Traga fotos com Arquivo › Importar fotos… ({keys}).",
+  "View › Detail View ({keys}).": "Exibir › Exibição de detalhe ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys})."
 }

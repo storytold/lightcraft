@@ -26,12 +26,12 @@ cited here still exists. Formerly docs/parity.md.
 <!-- parity:summary -->
 | Section | ✅ | 🟡 | ⬜ | 🚫 | P0 done | P1 done |
 |---|---:|---:|---:|---:|---:|---:|
-| A. Import (IMP) | 12 | 3 | 1 | 1 | 4/6 (67%) | 5/5 (100%) |
+| A. Import (IMP) | 13 | 3 | 1 | 1 | 4/6 (67%) | 5/5 (100%) |
 | B. Library management (LIB) | 22 | 2 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 41 | 5 | 3 | 1 | 25/28 (89%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 42 | 5 | 3 | 1 | 25/28 (89%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -51,11 +51,11 @@ cited here still exists. Formerly docs/parity.md.
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
-| Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
+| Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 419 | 69 | 57 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 418 | 70 | 57 | 35 | 193/203 (95%) | 147/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 545 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.1%** of 545 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 56.5% of 178.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -75,6 +75,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-IMP-DEVICE | Import from camera/card | P1 | ✅ | `cmd:library.devices`, `cmd:file.addFromDevice`, `crates/engine/src/devices.rs` | mounted volumes with a DCIM folder (macOS /Volumes, Linux /media and /run/media, Windows drive letters); File → Import from Device → the import review, copying into the library by default; menus serve the last scan and rescan in the background (never blocking a frame; hot-plugs repaint); copies are verified (a new file, synced, checked against the content hash the scan computed — byte compare with the source when there is none, issue #134; a bad copy is removed and reported as failed, never counted as imported; taken names get -1, -2…, never replaced — issue #96, `crates/engine/src/import_move.rs`); no PTP/MTP (cameras that don't mount as a disk); Settings → Import → Cameras and Cards can open the import review when a camera or card is connected (off by default; a card that was already in doesn't ask, and an open dialog or running import is finished first; `crates/ui-egui/src/dialogs/import.rs`) |
 | LR-IMP-AUTO | Watched-folder auto import | P2 | ✅ | `cmd:library.autoImport`, `cmd:library.autoImportScan`, `crates/ui-egui/src/dialogs/settings.rs` | Settings ▸ Import ▸ Auto Import: a watched folder whose new photos are added (in place or copied) once complete, into an optional album; scanned every 3 s |
 | LR-IMP-PRESET | Preset on import | P2 | ✅ | `cmd:library.import` (`preset`) | chosen in the import review; one History entry |
+| LR-IMP-RECIPE | Batch edits during import | P2 | ✅ | `cmd:library.import` (`recipe`), `cmd:preset.saveRecipe` (registered; `crates/engine/src/tests/import.rs` asserts it), `crates/ui-egui/src/dialogs/import.rs` | an optional Batch edits section in the import review: sliders for everyday adjustments (Light, Vibrance and Saturation, Clarity, Texture and Dehaze, Sharpening, Grain, Vignette) whose values are set on every photo the import adds, after its XMP sidecar, camera default and the chosen preset, as one extra History step (`Import adjustments`) after the preset's own; a photo the library already has (a duplicate, one restored from Recently Deleted, one joined from a browsed folder) is not changed; a summary beside the section counts the adjustments, it does not list them; Save as Preset stores only the settings the recipe names (`cmd:preset.saveRecipe`) so it can be reused from the Preset list; the recipe lives only in the dialog until the import runs, so Cancel changes neither the catalog nor the preset collections. The command takes any plain develop control, not only the ones the dialog offers, and refuses white balance, geometry and crop controls, per-photo controls and unknown ids before anything is imported. Not a second editor: white balance is not offered (a temperature means something else on a raw than on a rendered photo, so the command refuses it too), and neither are crop, masks, curve or point colour; a slider left at its default names nothing, so setting a control to its default for the whole batch is only possible through the command |
 | LR-IMP-RAWDEFAULT | Raw defaults | P1 | ✅ | `cmd:library.preferences`, `crates/engine/src/import.rs`, `crates/ui-egui/src/dialogs/settings.rs` | LightCraft default / a preset / per camera (make + model); non-raw default too; the preset look counts as unedited and Reset returns to it |
 | LR-IMP-MIGRATE | Migrate other catalogs | OOS | 🚫 | | |
 | LR-IMP-PROFILES | Import profiles & presets | P1 | ✅ | `cmd:file.importPresets`, `cmd:preset.import`, `cmd:profile.import`, `crates/engine/src/preset_import.rs`, `crates/engine/src/preset_luminar.rs` | presets: .lcpreset, XMP, classic .lrtemplate (local adjustment templates become mask effects, LR-MASK-EFFECTS), photos carrying edits ("DNG presets"), Luminar looks (.lmp, .mplumpack collections; sliders with a counterpart), .zip bundles, folders (folder → group), drag & drop (an `.xmp` dropped together with its photo is that photo's sidecar and is not imported as a preset, issue #936); masks carried over; unmapped settings reported (fields that only describe the preset or photo, e.g. `Cluster`, `SortName`, `SupportsAmount2`, the as-shot white, empty Point Color slots, are not); profiles: .cube 3D LUTs (one toast reports both halves; a LUT that fails is named with its reason); a preset that names a profile (`crs:Look`) applies the imported profile of that name, imported before or after it, and Lightroom's basic profiles map to ours (`crates/engine/src/profile_refs.rs`, issue #1001); Adobe profile formats deliberately unsupported (so `.xmp` creative profiles' colour tables aren't read) |
@@ -924,6 +925,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-13 | minor | KEY-SLIDER-RESET: hovering a slider's name or thumb says a double-click resets it; a double-click on the thumb is one undo step, not two; a disabled slider's name doesn't reset it (issue #1436); status unchanged (✅) |
 | 2026-10-20 | patch | LR-MASK-BRUSH: extreme segments skip intermediate dabs; ordinary spacing and endpoints preserved; status unchanged (🟡) |
 | 2026-10-12 | minor | LR-META-XMP: bounded complete-APP1 manual JPEG reread, fail-closed sidecar precedence and scoped regression coverage; LR-META-EXIF-FULL: reuse loaded bytes; statuses unchanged |
+| 2026-10-13 | minor | LR-IMP-RECIPE added (✅): an optional batch-edit recipe for newly imported photos (`library.import` `recipe`, `preset.saveRecipe`, the Batch edits section of the import review); no existing row changes |
 | 2026-10-13 | minor | LR-IMP-ADD-DIALOG: the import review (and `library.importPreview`) says when its folder scan stopped at the walk limit, could not read folders or skipped files that are not a supported photo type; no walk behaviour changes; status unchanged (✅) |
 | 2026-10-13 | minor | LR-IMP-ADD-DIALOG: the import review (and `library.importPreview`) says when its folder scan stopped at the walk limit, could not read folders or skipped files that are not a supported photo type (XMP sidecars are not counted); no walk behaviour changes; status unchanged (✅) |
 | 2026-10-11 | minor | LR-MERGE-HDR: HDR and panorama merges of raws without colour matrices (CR2, NEF, ARW…) write the colour they open with as DNG tags (issue #965); status unchanged |
