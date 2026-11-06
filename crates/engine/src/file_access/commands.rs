@@ -616,6 +616,7 @@ mod tests {
         "config.rs",
         "denoise/builtin.rs",
         "denoise/gpu.rs",
+        "denoise/products.rs",
         "denoise/session.rs",
         "denoise/settings.rs",
         "devices.rs",
