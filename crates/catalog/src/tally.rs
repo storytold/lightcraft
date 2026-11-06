@@ -248,7 +248,7 @@ pub struct FilterTally {
 impl FilterTally {
     /// Counted from every photo.
     pub fn of(cat: &Catalog, filter: &Filter) -> FilterTally {
-        let prepared = filter.prepare();
+        let prepared = filter.prepare(cat);
         let mut members = Members::none();
         for p in cat.photos().filter(|p| filter.matches_in(p, cat, &prepared)) {
             members.set(p.id, true);
@@ -286,7 +286,7 @@ impl FilterTally {
             return true;
         }
         let Some(touched) = cat.touched_since(self.revision).filter(|touched| touched.len() <= MAX_FOLLOWED) else { return false };
-        let prepared = filter.prepare_one();
+        let prepared = filter.prepare_one(cat);
         for id in touched {
             self.members.set(id, cat.photo(id).is_some_and(|p| filter.matches_in(p, cat, &prepared)));
         }
