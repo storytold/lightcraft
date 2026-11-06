@@ -23,6 +23,28 @@ fn a_display_fit_shrinks_the_loupe_render_to_the_drawn_size() {
 }
 
 #[test]
+fn hdr_display_jobs_use_float_for_hdr_edits_including_drafts() {
+    let mut session = crate::Session::with_demo();
+    let id = session.active().unwrap();
+    session.execute("develop.hdr", &serde_json::json!({"enabled": true, "maxEv": 3})).unwrap();
+    let standard = session.loupe_job(id, 320, 240, true).unwrap();
+    let hdr = standard.clone().for_hdr_display();
+    assert_eq!(hdr.request.depth, lightcraft_pipeline::OutputDepth::F32Hdr);
+    assert_ne!(hdr.key, standard.key);
+    assert!(hdr.view_cache.is_none(), "a clipped 8-bit preview is not an HDR view cache hit");
+
+    let draft = standard.clone().draft().for_hdr_display();
+    assert_eq!(draft.request.depth, lightcraft_pipeline::OutputDepth::F32Hdr, "slider drafts preserve HDR on an HDR display");
+
+    let visualized = standard.clone().with_overlay(lightcraft_pipeline::Overlay::HdrRange).for_hdr_display();
+    assert_eq!(visualized.request.depth, lightcraft_pipeline::OutputDepth::U8, "HDR range visualization needs its SDR overlay render");
+
+    session.execute("develop.hdr", &serde_json::json!({"enabled": false})).unwrap();
+    let sdr = session.loupe_job(id, 320, 240, true).unwrap().for_hdr_display();
+    assert_eq!(sdr.request.depth, lightcraft_pipeline::OutputDepth::U8, "HDR-off photos remain SDR");
+}
+
+#[test]
 fn renders_know_the_original_size_whichever_level_they_come_from() {
     // issue #960: noise reduction works in the original's pixels, so a grid cell drawn from the
     // 512-px thumbnail level denoises like a scaled-down export

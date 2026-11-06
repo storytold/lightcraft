@@ -39,11 +39,10 @@ fn steady_hdr_histogram(ctx: &egui::Context, id: PhotoId, hdr_edit: bool, hist: 
     }
 }
 
-/// The histogram of the last drag's small HDR render, while an HDR edit of `id` is being dragged. It stays in
-/// `Renderer` after the drag, so an edit with HDR switched off must not read it: its drags would show the old HDR
-/// histogram (`dragging`: a drag of an HDR edit is on).
-fn live_hdr_histogram(live: Option<&(PhotoId, u64, Histogram)>, id: PhotoId, dragging: bool) -> Option<Histogram> {
-    live.filter(|l| dragging && l.0 == id).map(|l| l.2.clone())
+/// The latest small HDR render for this photo while HDR editing is enabled. It stays in `Renderer` after
+/// a drag, so an edit with HDR switched off must not read it.
+fn live_hdr_histogram(live: Option<&(PhotoId, u64, Histogram)>, id: PhotoId, hdr_edit: bool) -> Option<Histogram> {
+    live.filter(|l| hdr_edit && l.0 == id).map(|l| l.2.clone())
 }
 
 /// The histogram, its clipping buttons and the EXIF strip, drawn above the Edit panel's scrolling sliders
@@ -52,10 +51,9 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let hdr_edit = app.session.develop_of(id).is_some_and(|d| d.hdr.enabled);
-    // a drag of an HDR edit: its drafts have no HDR histogram, so a small render beside them
-    // gives one (at its own pace: the drafts don't wait for it)
-    let interacting = app.session.interaction.is_some();
-    if interacting && hdr_edit {
+    // HDR display renders and cached 8-bit previews have no HDR bins; keep a small HDR render
+    // beside the view so enabling HDR updates the histogram without requiring another edit.
+    if hdr_edit {
         let edge = lightcraft_pipeline::HDR_HISTOGRAM_DRAG_EDGE;
         if let Some(job) = app.session.render_job(id, edge, edge, false, app.ui.right != RightPanel::Crop)
             && app.renderer.live_hdr_histogram.as_ref().is_none_or(|l| l.1 != job.key)
@@ -63,7 +61,7 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
             app.renderer.request(Slot::HdrHistogram, job, 95);
         }
     }
-    let live = live_hdr_histogram(app.renderer.live_hdr_histogram.as_ref(), id, interacting && hdr_edit);
+    let live = live_hdr_histogram(app.renderer.live_hdr_histogram.as_ref(), id, hdr_edit);
     // else the loupe render of this photo, else its thumbnail (grid view before the loupe has
     // rendered it)
     let hist = live.or_else(|| preview_histogram(app, id));
@@ -320,6 +318,27 @@ mod tests {
     }
 
     #[test]
+    fn enabling_hdr_requests_the_hdr_histogram_without_a_slider_interaction() {
+        use crate::headless::Headless;
+        use crate::{LightcraftApp, Services};
+        use std::time::Duration;
+
+        let timeout = Duration::from_secs(20);
+        let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default()), [1400.0, 1000.0], 1.0);
+        let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["light"]}), timeout);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(Duration::from_secs(120));
+
+        h.app.run("develop.hdr", json!({"enabled": true, "maxEv": 3})).unwrap_or_else(|e| panic!("develop.hdr: {e}"));
+        h.settle(Duration::from_secs(120));
+        let id = h.app.session.active().unwrap_or_else(|| panic!("no active photo"));
+        assert!(
+            h.app.renderer.live_hdr_histogram.as_ref().is_some_and(|(photo, _, histogram)| *photo == id && histogram.hdr.is_some()),
+            "enabling HDR should request and retain its HDR histogram without slider interaction"
+        );
+    }
+
+    #[test]
     fn an_hdr_edit_keeps_its_hdr_histogram_through_8_bit_renders() {
         let ctx = egui::Context::default();
         let id = PhotoId(7);
@@ -344,15 +363,15 @@ mod tests {
         assert_eq!(steady_hdr_histogram(&ctx, PhotoId(8), true, Some(sdr.clone())), Some(sdr));
     }
 
-    /// Issue #2819: the last HDR drag's histogram is kept in `Renderer`; with HDR switched off, a drag must not read it.
+    /// The latest HDR histogram is used at rest as well as during slider interactions, but never after HDR is switched off.
     #[test]
-    fn a_drag_with_hdr_off_does_not_read_the_last_hdr_drags_histogram() {
+    fn an_hdr_edit_uses_its_latest_histogram_without_interaction() {
         let id = PhotoId(7);
         let kept = (id, 3, Histogram::of_hdr(&[[2.0, 2.0, 2.0]], 5.0));
         assert!(kept.2.hdr.is_some());
-        // a drag of an HDR edit: the small HDR render's histogram
+        // HDR is on, but no slider interaction is in progress
         assert_eq!(live_hdr_histogram(Some(&kept), id, true), Some(kept.2.clone()));
-        // HDR switched off, a drag of the SDR edit: the panel's own (SDR) histogram
+        // HDR switched off: don't show stale bins from the previous edit
         assert_eq!(live_hdr_histogram(Some(&kept), id, false), None);
         // another photo, or nothing rendered yet
         assert_eq!(live_hdr_histogram(Some(&kept), PhotoId(8), true), None);

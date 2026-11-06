@@ -20,11 +20,22 @@ pub fn icc() -> Option<Vec<u8>> {
     (!icc.is_empty()).then_some(icc)
 }
 
+/// Current EDR headroom of the screen showing the window, or `None` when it is unknown.
+pub fn edr_headroom() -> Option<f32> {
+    let mtm = MainThreadMarker::new()?;
+    let app = NSApplication::sharedApplication(mtm);
+    let window = app.mainWindow().or_else(|| app.keyWindow()).or_else(|| app.windows().firstObject());
+    let screen = window.and_then(|w| w.screen()).or_else(|| NSScreen::mainScreen(mtm))?;
+    let headroom = screen.maximumExtendedDynamicRangeColorComponentValue() as f32;
+    headroom.is_finite().then_some(headroom)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn unknown_off_the_main_thread() {
         // AppKit is main-thread only; a test thread gets nothing rather than undefined behaviour
         assert_eq!(std::thread::spawn(super::icc).join().unwrap(), None);
+        assert_eq!(std::thread::spawn(super::edr_headroom).join().unwrap(), None);
     }
 }

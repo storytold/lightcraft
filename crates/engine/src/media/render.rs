@@ -194,6 +194,20 @@ impl RenderJob {
         self
     }
 
+    /// Render an HDR edit as float pixels for an HDR-capable display, without caching its clipped 8-bit image.
+    pub fn for_hdr_display(mut self) -> Self {
+        if self.settings.hdr.enabled
+            && self.request.overlay == lightcraft_pipeline::Overlay::None
+            && self.request.proof.is_none()
+            && self.request.depth == lightcraft_pipeline::OutputDepth::U8
+        {
+            self.request.depth = lightcraft_pipeline::OutputDepth::F32Hdr;
+            self.key ^= 0x4844_525f_4449_5350;
+            self.view_cache = None;
+        }
+        self
+    }
+
     /// Render. A panic inside (a decoder or pipeline bug) is this job's failure: the view waiting
     /// for it is told, instead of waiting forever on a worker that died (the pool doesn't replace
     /// it, so a few such panics used to stop every render).

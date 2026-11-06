@@ -70,6 +70,16 @@ use prefs::{PrefsWriter, as_remembered, load_prefs, prefs_path};
 use prefs::{load_prefs_at, write_atomic};
 use session::{open_session, services};
 
+#[cfg(target_os = "macos")]
+fn display_headroom() -> Option<f32> {
+    screen_profile::edr_headroom()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn display_headroom() -> Option<f32> {
+    None
+}
+
 /// Reverse-DNS app id: Wayland app id, `.desktop` file and hicolor icon name.
 const APP_ID: &str = "ai.storyteller.lightcraft";
 
@@ -93,6 +103,42 @@ struct WindowTextures {
     renderer: std::sync::Arc<egui::mutex::RwLock<eframe::egui_wgpu::Renderer>>,
 }
 
+fn hdr_texture_pixels(image: &lightcraft_engine::pipeline::DeepImage) -> Option<(Vec<u16>, u32)> {
+    let lightcraft_engine::pipeline::DeepSamples::F32(samples) = &image.samples else { return None };
+    let pixels = image.width.checked_mul(image.height)?;
+    let sample_count = pixels.checked_mul(3)?;
+    if image.width == 0 || image.height == 0 || samples.len() != sample_count {
+        return None;
+    }
+    let rgba_row_samples = image.width.checked_mul(4)?;
+    let row_bytes = rgba_row_samples.checked_mul(2)?;
+    let padded_row_bytes = row_bytes.checked_add(255)? & !255;
+    let padded_row_samples = padded_row_bytes / 2;
+    let upload_samples = padded_row_samples.checked_mul(image.height)?;
+    let row_source_samples = image.width.checked_mul(3)?;
+    let bytes_per_row = u32::try_from(padded_row_bytes).ok()?;
+    let mut rgba = Vec::with_capacity(upload_samples);
+    for row in samples.chunks_exact(row_source_samples) {
+        let (rgb_pixels, remainder) = row.as_chunks::<3>();
+        if !remainder.is_empty() {
+            return None;
+        }
+        for rgb in rgb_pixels {
+            for &sample in rgb {
+                let sample = if sample.is_finite() { sample.clamp(0.0, 65_504.0) } else { 0.0 };
+                rgba.push(half::f16::from_f32(extended_srgb(sample)).to_bits());
+            }
+            rgba.push(half::f16::from_f32(1.0).to_bits());
+        }
+        rgba.resize(rgba.len().checked_add(padded_row_samples - rgba_row_samples)?, 0);
+    }
+    (rgba.len() == upload_samples).then_some((rgba, bytes_per_row))
+}
+
+fn extended_srgb(linear: f32) -> f32 {
+    if linear < 0.003_130_8 { linear * 12.92 } else { 1.055 * linear.powf(1.0 / 2.4) - 0.055 }
+}
+
 impl lightcraft_ui_egui::render::ScreenTextures for WindowTextures {
     fn show(&mut self, frame: &lightcraft_engine::media::ScreenFrame, id: Option<egui::TextureId>) -> Option<egui::TextureId> {
         let view = frame.texture.create_view(&Default::default());
@@ -104,6 +150,42 @@ impl lightcraft_ui_egui::render::ScreenTextures for WindowTextures {
                 id
             }
             None => r.register_native_texture(&self.device, &view, filter),
+        })
+    }
+
+    fn show_hdr(&mut self, image: &lightcraft_engine::pipeline::DeepImage, id: Option<egui::TextureId>) -> Option<egui::TextureId> {
+        let (pixels, bytes_per_row) = hdr_texture_pixels(image)?;
+        let (width, height) = (u32::try_from(image.width).ok()?, u32::try_from(image.height).ok()?);
+        let texture = self.device.create_texture(&eframe::wgpu::TextureDescriptor {
+            label: Some("lightcraft-hdr-view"),
+            size: eframe::wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: eframe::wgpu::TextureDimension::D2,
+            format: eframe::wgpu::TextureFormat::Rgba16Float,
+            usage: eframe::wgpu::TextureUsages::TEXTURE_BINDING | eframe::wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            eframe::wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: eframe::wgpu::Origin3d::ZERO,
+                aspect: eframe::wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&pixels),
+            eframe::wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bytes_per_row), rows_per_image: Some(height) },
+            eframe::wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        let view = texture.create_view(&Default::default());
+        let mut renderer = self.renderer.write();
+        let filter = eframe::wgpu::FilterMode::Linear;
+        Some(match id {
+            Some(id) => {
+                renderer.update_egui_texture_from_wgpu_texture(&self.device, &view, filter, id);
+                id
+            }
+            None => renderer.register_native_texture(&self.device, &view, filter),
         })
     }
 
@@ -358,8 +440,9 @@ fn main() -> eframe::Result {
                 // and the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
                 session = session.with_default_sam3_model();
                 // HDR display: SDR unless the surface, platform and display all allow HDR
-                hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
+                let display_output = hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format), display_headroom());
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
+                app.renderer.set_hdr_display(display_output.is_hdr());
                 app.set_startup_update_check(true);
                 if let Some(ui) = prefs {
                     app.ui = ui;

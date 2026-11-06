@@ -14,7 +14,7 @@
 //! rendered thumbnail arrives (a cached thumbnail found by the quick job becomes the
 //! [`Slot::Thumb`] texture directly).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::Session;
@@ -104,6 +104,14 @@ pub struct Tex {
     pub native: Option<egui::TextureId>,
 }
 
+#[derive(Clone, Copy)]
+struct HdrViewMeta {
+    photo: PhotoId,
+    key: u64,
+    look: Option<(u64, bool)>,
+    ms: f64,
+}
+
 impl Tex {
     /// Draw this slot from the GPU-resident texture `id` from now on. On the switch from pixels, the egui texture
     /// (never drawn while `native` is set) drops its full-size image for a 1 × 1 placeholder, so a view slot on the
@@ -129,6 +137,11 @@ pub trait ScreenTextures {
     /// Show `frame` under `id` (one this returned before, updated in place) or a new id; `None`
     /// when it can't be shown.
     fn show(&mut self, frame: &lightcraft_engine::media::ScreenFrame, id: Option<egui::TextureId>) -> Option<egui::TextureId>;
+    /// Show linear HDR samples under `id`; `None` when the host cannot present them.
+    fn show_hdr(&mut self, image: &lightcraft_pipeline::DeepImage, id: Option<egui::TextureId>) -> Option<egui::TextureId> {
+        let _ = (image, id);
+        None
+    }
     /// Release `id` (and the texture it shows).
     fn free(&mut self, id: egui::TextureId);
     /// The pixels `frame` holds, read back from the GPU: only for a headless screenshot of a view
@@ -306,6 +319,9 @@ pub struct Renderer {
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
+    /// The window can present extended-linear HDR values.
+    hdr_display: bool,
+    hdr_natives: HashSet<Slot>,
     /// Per-view intermediate results (loupe and "before"), so slider drags redo only what changed.
     stages: HashMap<Slot, Arc<StageCache>>,
     /// Slot → key of the last quick job requested for it (each is tried once).
@@ -425,6 +441,8 @@ impl Renderer {
             thumbs_made: 0,
             thumbs_counted: Default::default(),
             keep_pixels: false,
+            hdr_display: false,
+            hdr_natives: HashSet::new(),
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
             quick_edge: HashMap::new(),
@@ -608,6 +626,7 @@ impl Renderer {
         if !Self::renders_for_display(slot) {
             return job;
         }
+        let job = if self.hdr_display { job.for_hdr_display() } else { job };
         let job = job.with_display(self.display.clone());
         // a drag's drafts are only drawn: they may stay on the GPU when the window can show them
         if self.screen.is_some() && job.request.quality == lightcraft_pipeline::Quality::Draft { job.on_screen() } else { job }
@@ -616,7 +635,15 @@ impl Renderer {
     /// Show GPU-resident renders through `screen` from now on (the desktop app, once its GPU
     /// renderer runs on the window's device).
     pub fn set_screen_textures(&mut self, screen: Box<dyn ScreenTextures>) {
+        if self.hdr_display {
+            self.forget_all();
+        }
         self.screen = Some(screen);
+    }
+
+    /// Enable HDR float view renders when the host has an active HDR presentation surface.
+    pub fn set_hdr_display(&mut self, enabled: bool) {
+        self.hdr_display = enabled;
     }
 
     /// Whether GPU-resident renders can be shown.
@@ -674,6 +701,7 @@ impl Renderer {
     /// Let go of `slot`'s GPU-resident texture: its registration with the window, and the frame
     /// kept for headless screenshots.
     fn free_native(&mut self, slot: Slot) {
+        self.hdr_natives.remove(&slot);
         self.native_frames.remove(&slot);
         if let Some(id) = self.natives.remove(&slot)
             && let Some(screen) = self.screen.as_mut()
@@ -996,6 +1024,7 @@ impl Renderer {
             }
         }
         self.natives.clear();
+        self.hdr_natives.clear();
         self.native_frames.clear();
         // a view drawn from a freed texture would show nothing: it is rendered again, as pixels
         self.textures.retain(|_, t| t.native.is_none());
@@ -1322,6 +1351,7 @@ impl Renderer {
             return false;
         };
         self.natives.insert(slot, id);
+        self.hdr_natives.remove(&slot);
         if self.keep_pixels {
             self.native_frames.insert(slot, frame.clone());
         }
@@ -1348,6 +1378,49 @@ impl Renderer {
         }
         if slot == Slot::Main {
             self.last_main_ms = ms;
+        }
+        true
+    }
+
+    fn show_hdr(&mut self, ctx: &egui::Context, slot: Slot, deep: &lightcraft_pipeline::DeepImage, histogram: Histogram, meta: HdrViewMeta) -> bool {
+        let shown = self.screen.as_mut().and_then(|screen| screen.show_hdr(deep, self.natives.get(&slot).copied()));
+        let Some(id) = shown else { return false };
+        self.natives.insert(slot, id);
+        self.hdr_natives.insert(slot);
+        self.native_frames.remove(&slot);
+        let size = [deep.width, deep.height];
+        let pixels = self.keep_pixels.then(|| Arc::new(color_image(&deep.to_rgba8())));
+        match self.textures.get_mut(&slot) {
+            Some(t) => {
+                t.show_native(id);
+                t.look = meta.look;
+                t.key = meta.key;
+                t.photo = meta.photo;
+                t.size = size;
+                t.histogram = Some(histogram);
+                t.ms = meta.ms;
+                t.quick = None;
+                t.pixels = pixels;
+            }
+            None => {
+                let blank = egui::ColorImage::filled([1, 1], egui::Color32::BLACK);
+                let tex = ctx.load_texture(format!("{slot:?}"), blank, egui::TextureOptions::LINEAR);
+                self.textures.insert(
+                    slot,
+                    Tex {
+                        look: meta.look,
+                        key: meta.key,
+                        photo: meta.photo,
+                        tex,
+                        size,
+                        histogram: Some(histogram),
+                        ms: meta.ms,
+                        quick: None,
+                        pixels,
+                        native: Some(id),
+                    },
+                );
+            }
         }
         true
     }
@@ -1437,6 +1510,15 @@ impl Renderer {
                     continue;
                 }
             };
+            if self.hdr_display
+                && slot.is_view()
+                && let Some(deep) = rendered.deep.as_ref()
+                && matches!(&deep.samples, lightcraft_pipeline::DeepSamples::F32(_))
+                && self.show_hdr(ctx, slot, deep, rendered.histogram.clone(), HdrViewMeta { photo: r.photo, key: r.key, look, ms })
+            {
+                changed = true;
+                continue;
+            }
             if matches!(slot, Slot::Prefetch(_)) {
                 continue;
             }
@@ -1563,7 +1645,11 @@ impl Renderer {
     pub fn memory(&self) -> serde_json::Value {
         let cpu: usize = self.stages.values().map(|s| s.bytes()).sum();
         let gpu: usize = self.stages.values().map(|s| lightcraft_engine::gpu::stage_bytes(s)).sum();
-        let tex: usize = self.textures.values().map(|t| t.size[0] * t.size[1] * 4).sum();
+        let tex: usize = self
+            .textures
+            .iter()
+            .map(|(slot, t)| t.size[0].saturating_mul(t.size[1]).saturating_mul(if self.hdr_natives.contains(slot) { 8 } else { 4 }))
+            .sum();
         let copies: usize = self.textures.values().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},

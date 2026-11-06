@@ -1,6 +1,6 @@
 # Gaps: where LightCraft falls short of Lightroom
 
-> **Last reviewed:** 2026-10-11 · **Changes:** [revision history](#revision-history)
+> **Last reviewed:** 2026-11-05 · **Changes:** [revision history](#revision-history)
 
 Every known shortfall, one entry each, ranked by user impact (how many Lightroom users hit it, and
 how hard it blocks them), then by effort. **Agents pick work from the top** (the first entry nobody is
@@ -28,7 +28,7 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 | 11 | **Enhance: Raw Details, Super Resolution; trained denoise weights and X-Trans** | ENH rows 0%; denoise Bayer only; the built-in denoiser is classical (block-matching collaborative filtering), RawNIND weights GPL and opt-in | Fujifilm users get no AI denoise; very noisy files gain less than from a trained model | 30–60 + model decision | [raw-parity](raw-parity.md#demosaic-levels-crops-and-lens-metadata) |
 | 12 | **Content-aware / generative remove, detect distractions, reflections removal** | REM rows 75%; patch synthesis missing | cleanup work goes back to Photoshop | 25–45 (+ generative model) | [target-app-parity](target-app-parity.md#ai) |
 | 13 | **Lightroom catalog migration is one-way and approximate**: unsupported Adobe profiles / AI settings archived, history kept as data; main-file pages read on demand up to 16 GiB, with dense-table and WAL bounds retained (#798); offline record counts and destination are now shown in a lasting import result; catalog VIDEO records match the Videos filter, with older classification repaired on reimport; before an import the app asks whether the catalog merges into the open library or goes into a new library (opt-out in Settings, #2672) | lightroom-catalog-import.md | switching users lose some looks | 8–12 | [file-format-parity](file-format-parity.md) |
-| 14 | **HDR display** (EDR / Windows HDR); the headroom limit and SDR rendition from `crs` XMP (the HDR switch, `HDREditMode`, is read). HLG AVIF export done; the display's SDR/HDR decision is tested, blocked on eframe's 8-bit surface | HDR rows 70%; LR-VIEW-HDR-DISPLAY ⬜ | HDR editing works blind on HDR monitors | 12–25 | [hardware-parity](hardware-parity.md) |
+| 14 | **HDR display on Windows/Linux; macOS EDR preview now works** (fp16 Extended sRGB surface, current screen headroom and float HDR view textures; verified on an M1 Pro internal XDR display). Windows HDR, Wayland HDR, display-change handling, and the headroom limit / SDR rendition from `crs` XMP remain; `HDREditMode` is read and HLG AVIF export is done | HDR rows 70%; LR-VIEW-HDR-DISPLAY 🟡 (macOS implemented; other platforms remain) | HDR edits preview on macOS EDR displays; Windows/Linux HDR displays still show the SDR rendition | 12–25 | [hardware-parity](hardware-parity.md) |
 | 15 | **Print module**: identity plate / watermark / photo info overlays, Cut Guides for the packages, Custom Package Auto Layout, printer-driver Page Setup and direct printing, JPEG file output (the Print dialog writes a colour-managed PDF) | LRC-PRINT rows | Classic users who print | 15–25 | [target-app-parity](target-app-parity.md#features) |
 | 16 | **Map view, Book, Slideshow module, publish services** | LRC-MAP / BOOK / SS rows ⬜ | Classic users; publish services matter for Flickr / SmugMug workflows | 60–100 | [target-app-parity](target-app-parity.md#features) |
 | 17 | **Tethered capture** | ⬜ | studio photographers | 25–45 + cameras | [hardware-parity](hardware-parity.md) |
@@ -92,6 +92,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Gap 14 shrinks: macOS EDR previews use a float surface and float HDR view texture; verified on an M1 Pro internal XDR display; Windows/Linux HDR, display changes and `crs` tuning remain; gap stays open |
 | 2026-11-04 | minor | Gap 6 closed: Compressed ORF decoded (`crates/raw/src/vendor/orfc.rs`), OM-D E-M1 and E-M10 Mark III verified; 58 bodies newly unlocked (78 total across Olympus and OM; OM / Olympus fully working 6% → 81%) |
 | 2026-11-05 | minor | Gap 3: process V5 rolls a raw's tone curve off into white in stops, so raising Exposure keeps the highlights the sensor recorded (#1632); the gap stays open (no Lightroom comparison) and hours are unchanged |
 | 2026-10-27 | minor | Gap 26: the loupe shows built previews (they were rendered again), photos ahead and the whole view are prepared in the background with settings per mode; gap not closed |

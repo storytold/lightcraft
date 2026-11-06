@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn hdr_texture_pixels_preserve_extended_values_and_sanitize_samples() {
+    let image = lightcraft_engine::pipeline::DeepImage {
+        width: 2,
+        height: 2,
+        space: lightcraft_engine::pipeline::OutputSpace::Srgb,
+        samples: lightcraft_engine::pipeline::DeepSamples::F32(vec![0.25, 1.0, 2.0, 32.0, f32::NAN, -2.0, 0.5, 0.75, 1.25, 2.0, 3.0, 4.0]),
+    };
+    let (pixels, stride_bytes) = hdr_texture_pixels(&image).unwrap();
+    assert_eq!(stride_bytes, 256);
+    assert_eq!(pixels.len(), 256);
+    let values: Vec<f32> = pixels.iter().map(|value| half::f16::from_bits(*value).to_f32()).collect();
+    let first_row = [extended_srgb(0.25), 1.0, extended_srgb(2.0), 1.0, extended_srgb(32.0), 0.0, 0.0, 1.0];
+    let second_row =
+        [extended_srgb(0.5), extended_srgb(0.75), extended_srgb(1.25), 1.0, extended_srgb(2.0), extended_srgb(3.0), extended_srgb(4.0), 1.0];
+    for (actual, expected) in values.iter().take(8).zip(first_row) {
+        assert!((actual - expected).abs() < 0.01, "{actual} != {expected}");
+    }
+    assert!(values[8..128].iter().all(|sample| *sample == 0.0));
+    for (actual, expected) in values[128..136].iter().zip(second_row) {
+        assert!((actual - expected).abs() < 0.01, "{actual} != {expected}");
+    }
+}
+
+#[test]
 fn desktop_clear_color_stays_opaque_with_a_modal_open() {
     let mut app = App(
         LightcraftApp::new(Session::new(), Services::default()),

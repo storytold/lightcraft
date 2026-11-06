@@ -1,6 +1,6 @@
 # Target-app parity: LightCraft vs Adobe Lightroom
 
-> **Last reviewed:** 2026-10-10 · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop) · **Changes:** [revision history](#revision-history)
+> **Last reviewed:** 2026-11-05 · **Target:** Adobe Lightroom Classic 15.5 (August 2026) and Lightroom 9.6 (desktop) · **Changes:** [revision history](#revision-history)
 
 The authoritative assessment of how close LightCraft is to Lightroom. The row-by-row checklist is
 [parity-checklist.md](parity-checklist.md); the ranked work list is [gaps.md](gaps.md); deep areas
@@ -75,7 +75,7 @@ from the checklist sections and the deep-dive documents.
 | Remove, heal, Enhance (denoise, Raw Details, Super Resolution, Lens Blur) | 7% | 45% | 30% | 70–130 h | checklist I 75%, P 0% |
 | Presets, profiles, versions, history, sync | 5% | 95% | 85% | 8–15 h | |
 | Export | 6% | 89% | 75% | 15–30 h | checklist S 88.9% |
-| Merge and HDR | 3% | 85% | 60% | 20–35 h | merge 88% (HDR merge 🟡: AI Denoise on merged DNGs, JPEG response, memory; gap 29), HDR 70% (no HDR display) |
+| Merge and HDR | 3% | 85% | 60% | 20–35 h | merge 88% (HDR merge 🟡: AI Denoise on merged DNGs, JPEG response, memory; gap 29), HDR 70% (macOS EDR preview verified; Windows/Linux HDR and `crs` headroom/SDR tuning remain) |
 | Views, compare, zoom, culling | 5% | 90% | 70% | 15–30 h | zoom detail P0 gap |
 | Classic output modules (Map, Book, Slideshow, Print, Web, publish, tethering) | 4% | 15% | 10% | 90–150 h | Classic extras 48% counts many small keys; the modules themselves are mostly ⬜ |
 | Video | 1% | 0% | 0% | 25–45 h | catalogued only |
