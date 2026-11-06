@@ -697,6 +697,103 @@ fn an_undo_pressed_while_synchronizing_is_not_folded_into_it() {
     assert_eq!(s.catalog.photo(a).unwrap().rating, 4, "the earlier, unrelated step stays");
 }
 
+/// A library with `n` more photos (files that need not exist: the steps below never read them).
+fn with_extra_photos(s: &mut Session, n: usize) -> Vec<lightcraft_catalog::PhotoId> {
+    (0..n)
+        .map(|i| {
+            let id = s.catalog.alloc_photo_id();
+            let name = format!("extra-{i}.png");
+            let p = lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path: format!("/gone/{name}") }, &name, "X", 6, 4, "2026-01-01");
+            s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+            id
+        })
+        .collect()
+}
+
+/// The history keeps 1,000 steps; a synchronize of a big folder makes thousands (one per few
+/// photos). Undo must take back all of it, never only the last 1,000 steps.
+#[test]
+fn undoing_a_synchronize_of_more_than_a_thousand_steps_takes_back_all_of_it() {
+    let dir = Scratch::new("big-undo");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let before = holdings(&s);
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work, mut commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    for id in &ids {
+        commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
+    }
+    let r = commit.finish(&mut s);
+    assert_eq!(r.removed, ids.len(), "{r:?}");
+    assert!(s.catalog.photos().filter(|p| p.file_name.starts_with("extra-")).all(|p| !p.in_library()));
+    assert_eq!(s.undo.last().map(|e| e.label.as_str()), Some("Synchronize Folder"));
+    assert!(s.undo.len() <= 1000, "the history is bounded again: {}", s.undo.len());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(holdings(&s), before, "one Undo takes back the whole run");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(s.catalog.photos().filter(|p| p.file_name.starts_with("extra-")).all(|p| !p.in_library()), "and Redo does it all again");
+}
+
+/// What the person did before the run still counts toward the bound: the oldest go, as ever.
+#[test]
+fn a_synchronize_keeps_the_history_bounded_and_drops_the_oldest_earlier_steps() {
+    let dir = Scratch::new("big-bound");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    for rating in [1, 2, 3] {
+        s.execute("photo.rate", &json!({"ids": [a.0], "rating": rating})).unwrap();
+    }
+    let steps_before = s.undo.len();
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work, mut commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    for id in &ids {
+        commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
+    }
+    commit.finish(&mut s);
+    assert!(steps_before >= 4, "{steps_before}");
+    assert!(s.undo.len() <= 1000, "{}", s.undo.len());
+    assert_eq!(s.undo.last().map(|e| e.label.as_str()), Some("Synchronize Folder"));
+}
+
+/// A run nobody finishes (its task dropped) doesn't leave the history growing without bound.
+#[test]
+fn a_synchronize_dropped_without_finishing_leaves_the_history_bounded() {
+    let dir = Scratch::new("big-dropped");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work, mut commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    for id in &ids {
+        commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
+    }
+    drop(commit);
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 2})).unwrap();
+    assert!(s.undo.len() <= 1000, "{}", s.undo.len());
+}
+
+/// Edits made between the steps of a run keep today's behavior: the run is not folded into
+/// one step, and the history stays bounded.
+#[test]
+fn an_edit_between_the_steps_of_a_big_synchronize_keeps_the_history_bounded() {
+    let dir = Scratch::new("big-interleaved");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work, mut commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    for (i, id) in ids.iter().enumerate() {
+        commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
+        if i == 10 {
+            s.execute("photo.rate", &json!({"ids": [a.0], "rating": 4})).unwrap();
+        }
+    }
+    commit.finish(&mut s);
+    assert!(s.undo.len() <= 1000, "{}", s.undo.len());
+    assert_ne!(s.undo.last().map(|e| e.label.as_str()), Some("Synchronize Folder"), "not folded around the edit");
+}
+
 #[test]
 fn sidecar_namings_for_many_photos_agree_with_one_at_a_time() {
     let dir = Scratch::new("namings");

@@ -672,6 +672,10 @@ pub struct SyncCommit {
     own: usize,
     after_last: Option<usize>,
     interleaved: bool,
+    /// Keeps the history from dropping the run's first steps before [`SyncCommit::finish`] folds
+    /// them (a big folder makes more steps than it holds). Let go once the steps can't be folded
+    /// (another library, an edit in between) and at the end.
+    hold: Option<Arc<()>>,
     report: SyncReport,
 }
 
@@ -729,6 +733,7 @@ impl SyncJob {
             own: 0,
             after_last: None,
             interleaved: false,
+            hold: Some(s.hold_undo()),
             report: SyncReport::default(),
         };
         Ok((work, commit))
@@ -811,12 +816,14 @@ impl SyncCommit {
     /// end, and the rest is still done.
     pub fn apply(&mut self, s: &mut Session, step: SyncStep) {
         if !Arc::ptr_eq(&self.library, &s.library_identity) {
+            self.hold = None;
             self.report.failed.push((String::new(), "another library was opened: the rest of the synchronize was dropped".into()));
             return;
         }
         let commits = s.commits();
         if self.after_last.is_some_and(|n| n != s.undo.len()) {
             self.interleaved = true;
+            self.hold = None;
         }
         self.apply_step(s, step);
         if s.commits() != commits {
@@ -882,9 +889,11 @@ impl SyncCommit {
     pub fn finish(mut self, s: &mut Session) -> SyncReport {
         // a report line once, however many steps came after a library switch
         self.report.failed.dedup();
+        self.hold = None;
         let ours = Arc::ptr_eq(&self.library, &s.library_identity) && !self.interleaved && self.after_last == Some(s.undo.len());
         let steps = if ours { self.own.min(s.undo.len()) } else { 0 };
         s.merge_undo(steps, "Synchronize Folder");
+        s.trim_undo();
         if let Some(last) = s.undo.last_mut().filter(|_| steps == 1) {
             last.label = "Synchronize Folder".into();
         }
