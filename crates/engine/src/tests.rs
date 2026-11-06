@@ -532,20 +532,25 @@ fn auto_skips_a_selected_photo_it_cannot_read() {
     assert!(s.execute("develop.auto", &json!({"ids": [good.0, 999_999]})).is_err(), "a wrong id is refused, not skipped");
 }
 
-/// A call that names its photos (`ids`) is not held back by the selection, as `develop.updateProcess`'s is not: an
-/// agent's `develop.auto {ids}` works with nothing selected (#1752).
+/// A call that names its photos (`ids`, or `id`) is not held back by the selection, as `develop.updateProcess`'s is
+/// not: an agent's `develop.auto {ids}` works with nothing selected (#1752). A list that names none is refused, as
+/// `develop.updateProcess` refuses it, not a success that set nothing.
 #[test]
 fn auto_on_named_photos_needs_no_selection() {
     use lightcraft_catalog::PhotoId;
     let mut s = demo();
-    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    let (ids, single) = (ids[..2].to_vec(), ids[2]);
     s.selection = Default::default();
     assert!(s.execute("develop.auto", &json!({})).is_err(), "nothing named and nothing selected");
     assert!(s.execute("develop.auto", &json!({"ids": [999_999]})).is_err(), "a wrong id is still refused");
+    assert!(s.execute("develop.auto", &json!({"ids": []})).is_err(), "an empty list names no photos");
     s.execute("develop.auto", &json!({"ids": ids.clone()})).unwrap();
     for id in ids {
         assert_eq!(s.develop_of(PhotoId(id)).unwrap().color.vibrance, 30.0, "photo {id} got Auto");
     }
+    s.execute("develop.auto", &json!({"id": single})).unwrap();
+    assert_eq!(s.develop_of(PhotoId(single)).unwrap().color.vibrance, 30.0, "the photo named by `id` got Auto");
 }
 
 #[test]

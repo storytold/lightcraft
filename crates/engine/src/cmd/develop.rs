@@ -517,6 +517,9 @@ pub fn specs() -> Vec<CommandSpec> {
             ..cmd!("develop.auto", "Auto Settings", ["Photo"], Some("Shift+A"), "{ids?}", has_selection, |s, p| {
                 const C: &str = "develop.auto";
                 let ids = s.targets(p)?;
+                if ids.is_empty() {
+                    return Err(bad(C, "`ids` names no photos"));
+                }
                 // a wrong id is a bad request, unlike a photo that can't be read just now
                 if let Some(id) = ids.iter().find(|id| s.catalog.photo(**id).is_none()) {
                     return Err(bad(C, format!("no such photo: {}", id.0)));
