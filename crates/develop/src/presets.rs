@@ -255,6 +255,11 @@ fn compose_named(current: &DevelopSettings, original: &DevelopSettings, settings
     }
     let cur = current.to_json();
     let mut base = original.to_json();
+    // the Negative group is left out of the saved JSON while it is off: interpolate against its fields anyway (a
+    // missing base object would leave the preset's numbers at their full value below 100 %)
+    if let Some(b) = base.as_object_mut() {
+        b.insert("negative".into(), negative_json(original));
+    }
     if let (Some(b), Some(c)) = (base.as_object_mut(), cur.as_object()) {
         for k in REPAIR_KEYS {
             if let Some(v) = c.get(k) {

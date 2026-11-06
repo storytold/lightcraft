@@ -13,7 +13,7 @@ mod cull;
 pub mod curves;
 pub mod dcp_profiles;
 pub(crate) mod denoise;
-mod develop;
+pub(crate) mod develop;
 mod edit;
 mod export;
 pub(crate) mod face_detect;

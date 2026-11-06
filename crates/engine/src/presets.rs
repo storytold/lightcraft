@@ -192,7 +192,14 @@ impl Session {
             }
             _ => &current,
         };
-        Some(preset.apply_on(&current, original, amount))
+        let out = preset.apply_on(&current, original, amount);
+        // a preset that converts a scan not converted yet resets the edits made on the negative first, as a click
+        // does (`preset.apply`); the source facts are read only then, not for every row on every frame
+        if !current.negative.converts() && out.negative.converts() {
+            let original = photo.import_look.is_some().then(|| photo.import_defaults()).filter(|_| (amount - 1.0).abs() >= 1e-9);
+            return Some(crate::cmd::develop::apply_preset_for_photo(&current, original.as_ref(), preset, amount, &self.source_info(id)));
+        }
+        Some(out)
     }
 
     /// Add imported presets. Identical presets (same name, group and settings) already present are
@@ -843,6 +850,23 @@ mod tests {
         assert!(id.starts_with("user."));
         assert!(s.presets.iter().find(|p| p.id == builtin.id).unwrap().builtin, "built-in untouched");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Hovering a Film Conversion preset over a scan not converted yet shows what a click commits: the edits made on
+    /// the negative reset, as `preset.apply` (and `negative.convert`) do.
+    #[test]
+    fn the_hover_preview_of_a_converting_preset_resets_the_negative_edits_as_a_click_does() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.8})).unwrap();
+        let preset = builtin().into_iter().find(|p| p.id == "lc.neg-standard").unwrap();
+        let hovered = s.preset_applied(id, &preset, 1.0).unwrap();
+        assert!(hovered.negative.converts());
+        assert_eq!(hovered.light.exposure, 0.0, "set on the negative: reset in the preview");
+        s.execute("preset.apply", &json!({"id": preset.id})).unwrap();
+        let clicked = s.develop_of(id).unwrap();
+        assert_eq!(clicked.light.exposure, hovered.light.exposure, "the preview is what the click committed");
+        assert_eq!(clicked.negative.film, hovered.negative.film);
     }
 
     #[test]
