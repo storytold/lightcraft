@@ -229,6 +229,26 @@ fn the_bar_going_leaves_the_rows_in_place_at_the_end_of_the_list() {
     assert_eq!(last(&h), before);
 }
 
+/// The bar isn't part of the list: it stays in the window, in one place, wherever the list is scrolled.
+#[test]
+fn the_bar_stays_in_view_wherever_the_list_is_scrolled() {
+    let (mut h, ids) = app();
+    h.app.ui.preset_selection.extend(ids[..2].iter().cloned());
+    frames(&mut h);
+    let rect = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap();
+    let at_top = rect(&h, "presetSelectionActions");
+    assert!(at_top.bottom() <= 1000.0, "{at_top:?}");
+    let header = rect(&h, "presetGroup:AAA Mine").top();
+    assert!(header < at_top.top(), "the list starts above the bar");
+    req(&mut h, "ui.hoverWidget", json!({"id": "presetGroup:AAA Mine"}));
+    req(&mut h, "ui.scroll", json!({"dy": -100_000.0}));
+    for _ in 0..120 {
+        h.step();
+    }
+    assert!(rect(&h, "presetGroup:AAA Mine").top() < header - 100.0, "the list has scrolled to its end");
+    assert_eq!(rect(&h, "presetSelectionActions"), at_top);
+}
+
 /// The question reads right for one preset to delete and one built-in preset staying.
 #[test]
 fn deleting_one_preset_with_one_built_in_says_so() {
