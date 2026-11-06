@@ -598,6 +598,7 @@ mod prepared_tests {
         };
         let mut prepared = Prepared {
             scanned: 2,
+            cut_short: false,
             items: vec![PreparedItem::Ready(Box::new(ready(&existing_path))), PreparedItem::Ready(Box::new(ready(&other_path)))],
         };
         prepared.revalidate_add(&s);

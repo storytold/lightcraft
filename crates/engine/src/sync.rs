@@ -756,8 +756,9 @@ impl SyncWork {
                 }
                 let prepared = job.prepare_files(chunk.to_vec(), cancel);
                 // (a batch Cancel cut short left files undone: it is not counted, so the count
-                // says whether everything was done; its files that were ready are still sent)
-                if !cancel.load(Relaxed) {
+                // says whether everything was done; its files that were ready are still sent. A
+                // Cancel after its last file was prepared cut nothing: the batch says so itself)
+                if !prepared.cut_short {
                     step(chunk.len());
                 }
                 // (the files are added in place: a batch nobody takes leaves nothing behind on disk)
