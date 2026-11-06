@@ -882,6 +882,66 @@ fn an_edit_that_leaves_the_history_as_long_as_it_was_is_still_seen_by_the_run() 
     assert_eq!(s.undo.last().map(|e| e.label.as_str()), Some(edit_label.as_str()), "the edit stays its own step");
 }
 
+/// The same edit, and the run goes on: its next step sees the edit too, so nothing is folded
+/// around it.
+#[test]
+fn a_step_after_an_edit_that_left_the_history_as_long_as_it_was_does_not_fold_the_edit() {
+    let dir = Scratch::new("big-same-length-next");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work, mut commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    let before_edit = UNDO_STEPS - s.undo.len();
+    for id in ids.iter().take(before_edit) {
+        commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
+    }
+    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 4})).unwrap();
+    commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![ids[before_edit]]));
+    commit.finish(&mut s);
+    assert_ne!(s.undo.last().map(|e| e.label.as_str()), Some("Synchronize Folder"), "the edit is not part of it");
+    assert!(s.undo.len() <= UNDO_STEPS, "{}", s.undo.len());
+}
+
+/// An edit made before the run's first step is not between its steps: the run still holds the
+/// history, so a run of more than 1,000 steps is one whole step and Undo takes back all of it.
+#[test]
+fn an_edit_before_the_first_step_of_a_big_synchronize_leaves_it_whole() {
+    let dir = Scratch::new("big-early-edit");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work, mut commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 4})).unwrap();
+    let before = holdings(&s);
+    for id in &ids {
+        commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
+    }
+    commit.finish(&mut s);
+    assert_eq!(s.undo.last().map(|e| e.label.as_str()), Some("Synchronize Folder"));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(holdings(&s), before, "one Undo takes back the whole run, and not the edit before it");
+}
+
+/// A step that panics (caught higher up) must not leave the session thinking every later commit
+/// belongs to a run.
+#[test]
+fn a_panic_in_a_run_step_does_not_leave_the_session_marked() {
+    let dir = Scratch::new("big-panic");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let _hold = s.hold_undo();
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.run_step(|_| panic!("a step that fails"))));
+    assert!(caught.is_err());
+    for id in &ids {
+        s.run_step(|s| s.commit("Remove", lightcraft_catalog::Op::SetDeleted { id: *id, deleted: true })).unwrap();
+    }
+    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 4})).unwrap();
+    assert_eq!(s.undo.len(), UNDO_STEPS, "an edit after the run's steps ends the hold");
+}
+
 #[test]
 fn sidecar_namings_for_many_photos_agree_with_one_at_a_time() {
     let dir = Scratch::new("namings");

@@ -272,9 +272,11 @@ pub struct Session {
     /// token: the history keeps every step then, so the run can fold them into one whole step
     /// before the bound applies ([`Session::hold_undo`]). Dead (or never set) when no run holds it.
     undo_hold: std::sync::Weak<()>,
-    /// Set while a run puts one of its own steps into the history ([`Session::run_step`]): any
-    /// other commit while a run holds the history (an edit) ends the hold at once.
+    /// Set while a run puts one of its own steps into the history ([`Session::run_step`]).
     in_run_step: bool,
+    /// A run has put a step into the history under the current hold: from then on any other
+    /// commit (an edit between its steps) ends the hold at once, as the steps can't be folded.
+    hold_stepped: bool,
     /// Undo steps committed in this session, ever (the history drops its oldest past 1000, so
     /// its length can't tell how many steps a command just made; see [`Session::commits`]).
     commits: u64,
@@ -495,6 +497,7 @@ impl Session {
             undo: Vec::new(),
             undo_hold: std::sync::Weak::new(),
             in_run_step: false,
+            hold_stepped: false,
             commits: 0,
             redo: Vec::new(),
             pending_sidecar_repairs: Vec::new(),
@@ -673,10 +676,11 @@ impl Session {
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
-        if !self.in_run_step {
+        if self.hold_stepped && !self.in_run_step {
             // an edit between a run's steps: they can't be folded any more (the run sees it on
             // its next step or at its end), so the history is cut now, not when the next step comes
             self.undo_hold = std::sync::Weak::new();
+            self.hold_stepped = false;
         }
         self.trim_undo();
         for mut dropped in self.redo.drain(..) {
@@ -697,12 +701,19 @@ impl Session {
         }
     }
 
-    /// Do `f`, a run's own step ([`Session::hold_undo`]): the commits it makes keep the hold.
+    /// Do `f`, a run's own step ([`Session::hold_undo`]): the commits it makes keep the hold, and
+    /// any other commit after the run's first one ends it. Every commit a run makes for the hold
+    /// goes through here.
     pub(crate) fn run_step<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        let before = std::mem::replace(&mut self.in_run_step, true);
-        let out = f(self);
-        self.in_run_step = before;
-        out
+        let (was, commits) = (std::mem::replace(&mut self.in_run_step, true), self.commits);
+        // a panic in `f` (caught further up, at the command) must not leave the flag set
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        self.in_run_step = was;
+        self.hold_stepped |= self.commits != commits;
+        match out {
+            Ok(out) => out,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     }
 
     /// Let a long run that commits many steps (a synchronize) fold them into one step: while the
@@ -717,6 +728,7 @@ impl Session {
         }
         let token = std::sync::Arc::new(());
         self.undo_hold = std::sync::Arc::downgrade(&token);
+        self.hold_stepped = false;
         token
     }
 
