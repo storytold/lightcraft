@@ -154,9 +154,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
     }
+    if id == "develop.auto" {
+        return Some(crate::auto_settings::command(app, p));
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);
+    }
+    if id == "library.findSimilar" {
+        // the photos are read in the background (the first search reads the whole library)
+        return Some(crate::find_similar::command(app, p));
     }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
@@ -2035,16 +2042,24 @@ fn file_import_presets_command(app: &mut LightcraftApp, ctx: &egui::Context, id:
         Ok(paths) => paths,
         Err(answer) => return answer,
     };
+    // .cube LUTs (and those inside zips / folders) become profiles, .dcp files camera profiles
     let lut_paths: Vec<&String> = paths
         .iter()
         .filter(|p| {
             let l = p.to_ascii_lowercase();
-            l.ends_with(".cube") || l.ends_with(".zip") || std::path::Path::new(p.as_str()).is_dir()
+            l.ends_with(".cube") || l.ends_with(".dcp") || l.ends_with(".zip") || std::path::Path::new(p.as_str()).is_dir()
         })
         .collect();
     let mut news = ImportNews::default();
     let profiles = if lut_paths.is_empty() { Value::Null } else { import_luts(app, &lut_paths, &mut news) };
-    let preset_paths: Vec<&String> = paths.iter().filter(|p| !p.to_ascii_lowercase().ends_with(".cube")).collect();
+    // (.dcp camera profiles went to profile.import above)
+    let preset_paths: Vec<&String> = paths
+        .iter()
+        .filter(|p| {
+            let l = p.to_ascii_lowercase();
+            !l.ends_with(".cube") && !l.ends_with(".dcp")
+        })
+        .collect();
     let r = import_preset_files(app, &preset_paths, &mut news);
     toast_import_news(app, ctx, &news);
     r.map(|mut v| {
