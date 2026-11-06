@@ -34,7 +34,6 @@ fn create_group(s: &mut Session, p: &Value) -> Result<Value> {
 fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "preset.renameGroup";
     let name = existing_group_param(p, "name", C)?;
-    let to = group_param(p, "to", C)?;
     if s.presets.iter().any(|x| x.group == name && x.builtin) {
         return Err(bad(C, "a group holding built-in presets can't be renamed"));
     }
@@ -43,6 +42,11 @@ fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
     if held == 0 && !created {
         return Err(bad(C, format!("unknown group “{name}”")));
     }
+    // the prompt confirmed as it opened: a name with spaces around it isn't trimmed by that
+    if str_param(p, "to") == Some(name.as_str()) {
+        return Ok(json!({"name": name, "renamed": 0}));
+    }
+    let to = group_param(p, "to", C)?;
     if to == name {
         return Ok(json!({"name": to, "renamed": 0}));
     }
@@ -75,6 +79,11 @@ fn favorite_group(s: &mut Session, p: &Value) -> Result<Value> {
     let favorite = bool_or(p, "favorite", !s.presets.favorite_groups().contains(&name));
     s.presets.set_favorite_group(&name, favorite);
     Ok(json!({"name": name, "favorite": favorite}))
+}
+
+/// Whether a group of exactly this name exists: it holds a preset, or was made by name.
+pub(super) fn group_exists(s: &Session, name: &str) -> bool {
+    s.presets.created_groups().contains(name) || s.presets.iter().any(|x| x.group == name)
 }
 
 fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {

@@ -175,6 +175,24 @@ fn group_commands_act_on_the_exact_name() {
     assert_eq!(s.execute("preset.deleteGroup", &json!({"name": "Shorter"})).unwrap()["deleted"], 1);
 }
 
+/// Confirming the rename prompt as it opened changes nothing, and Move to Group keeps a picked
+/// group's exact name, and so its star.
+#[test]
+fn a_name_with_spaces_survives_the_rename_prompt_and_preset_move() {
+    let (mut s, ids) = with_user_presets();
+    s.presets.iter_mut().find(|p| p.id == ids[0]).unwrap().group = " Spaced ".into();
+    let r = s.execute("preset.renameGroup", &json!({"name": " Spaced ", "to": " Spaced "})).unwrap();
+    assert_eq!(r["renamed"], 0);
+    assert_eq!(group_of(&s, &ids[0]), " Spaced ");
+
+    s.execute("preset.favoriteGroup", &json!({"name": " Spaced "})).unwrap();
+    s.execute("preset.move", &json!({"id": ids[1], "group": " Spaced "})).unwrap();
+    assert_eq!(group_of(&s, &ids[1]), " Spaced ", "an existing group is used as written");
+    s.execute("preset.move", &json!({"id": ids[1], "group": " New "})).unwrap();
+    assert_eq!(group_of(&s, &ids[1]), "New", "a new name is trimmed");
+    assert!(s.presets.favorite_groups().contains(" Spaced "));
+}
+
 /// A group's star goes with the group, so a new group of that name doesn't come up starred; a group
 /// made by name exists while empty and keeps its star.
 #[test]
