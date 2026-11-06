@@ -41,7 +41,7 @@ impl SidebarSection {
             SidebarSection::Local => "Local",
             SidebarSection::ByDate => "By Date",
             SidebarSection::Folders => "Folders",
-            SidebarSection::Keywords => "Keywords",
+            SidebarSection::Keywords => "By Keyword",
         }
     }
 
@@ -290,6 +290,19 @@ mod tests {
         assert_eq!(order(&layout), [Albums, Local, ByDate, Folders, Keywords]);
         assert!(layout.sections().iter().all(|s| !s.hidden && !s.collapsed));
         assert!(layout.is_default());
+    }
+
+    /// The keyword section browses (like By Date), so its heading says so; only the heading
+    /// changed: its id, which commands, saved layouts and widget ids use, is the one older
+    /// settings files hold, and they still load with the section where and how it was left.
+    #[test]
+    fn the_keyword_section_is_titled_by_keyword_and_keeps_its_id() {
+        assert_eq!(Keywords.title(), "By Keyword");
+        assert_eq!(Keywords.id(), "keywords");
+        assert_eq!(SidebarSection::from_id("keywords"), Some(Keywords));
+        let layout = read(json!([{"id": "keywords", "hidden": true, "collapsed": true}, {"id": "albums"}]));
+        assert_eq!(order(&layout), [Keywords, Albums, Local, ByDate, Folders]);
+        assert!(layout.is_hidden(Keywords) && layout.is_collapsed(Keywords));
     }
 
     /// Given an arrangement the user made, when it is saved and read back, then it is the same.

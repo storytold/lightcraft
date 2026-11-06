@@ -2,9 +2,10 @@ use super::dates::browse_all_photos;
 use super::rows::{INDENT_STEP, Row, out_of_sight, tree_open, tree_toggle};
 use super::{Icon, KeywordNode, LightcraftApp, json};
 
-/// "Keywords": the library's keyword tree with photo counts (`a|b|c` keywords nest). A click
-/// filters the grid by the keyword (children included), the triangle opens a level, and the
-/// context menu renames, merges or deletes the keyword across the library.
+/// "By Keyword": the library's keyword tree with photo counts (`a|b|c` keywords nest). A click
+/// shows the photos with the keyword (children included), the triangle opens a level, and the
+/// context menu renames, merges or deletes the keyword across the library. The right panel's
+/// Keyword List is the other list: its tick boxes give keywords to the selected photos.
 pub(super) fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode], indent: f32) {
     for n in nodes {
         // leaves (most keywords) have no open state to look up
@@ -27,7 +28,12 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
     if let Some(k) = open_id {
         tree_toggle(ui, &resp, indent, k, open, format!("keywordToggle:{}", n.path), &n.name);
     }
-    let resp = resp.on_hover_text(if n.children.is_empty() { n.path.clone() } else { format!("{} (includes the keywords below it)", n.path) });
+    let shown = n.path.replace('|', " › ");
+    let resp = resp.on_hover_text(if n.children.is_empty() {
+        crate::i18n::tr_format!("Show photos with {path}", path = shown)
+    } else {
+        crate::i18n::tr_format!("Show photos with {path} (includes the keywords below it)", path = shown)
+    });
     if resp.clicked() {
         let v = if sel { serde_json::Value::Null } else { json!(n.path) };
         browse_all_photos(app, !sel);

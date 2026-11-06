@@ -326,5 +326,9 @@
   "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
   "Bring photos in with File › Import Photos… ({keys}).": "通过 文件 › 导入照片… ({keys}) 导入照片。",
   "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。",
+  "Show photos with {path}": "显示包含 {path} 的照片",
+  "Show photos with {path} (includes the keywords below it)": "显示包含 {path} 的照片（包括其下的关键字）",
+  "Give {path} to the selected photos ({n})": "将 {path} 添加到所选照片（{n}）",
+  "Take {path} off the selected photos ({n})": "将 {path} 从所选照片中移除（{n}）"
 }
