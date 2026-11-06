@@ -168,6 +168,15 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
     let height = (screen.height() - 190.0).clamp(280.0, 780.0);
     let mut pu = std::mem::take(&mut app.ui.print);
     let st = app.session.print.clone();
+    // The settings column's scroll position is kept by egui across frames, but the content above
+    // the Page panel changes with the layout style (the package cells alone take several rows).
+    // When it grows, the paper selector slides out of the scroll area and a scroll request can no
+    // longer place the pointer on it, so the panel below is unreachable. Giving wider styles the
+    // height of their content keeps the selector in the area already shown.
+    // Each style also needs its own scroll area: a scroll offset saved while one style was showing
+    // would carry into another and hide its paper selector. And the taller column must not outrun
+    // the dialog on a short window.
+    let scroll_id = ("print-settings", st.layout.style as u8);
     // (no `id`/`ids` given: the selection, which never fails to parse)
     let ids = app.session.targets(&json!({})).unwrap_or_default();
     // the page shown stays inside the print
@@ -179,7 +188,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(vec2(SETTINGS_W, height), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_min_size(vec2(SETTINGS_W, height));
-            egui::ScrollArea::vertical().id_salt("print-settings").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt(scroll_id).max_height(height).auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_width(SETTINGS_W - 14.0);
                 settings(app, ui, t, &mut pu, &st, ids.len());
             });
@@ -479,6 +488,8 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
                 patch(app, &ctx, json!({"page": {(key): v}}));
             }
         }
+    } else if let Some(v) = check(ui, "printCropMarks", "Cut Guides", st.page.crop_marks) {
+        patch(app, &ctx, json!({"page": {"cropMarks": v}}));
     }
 
     heading(ui, t, "Print Job");
@@ -925,11 +936,8 @@ fn paint_cell(
 
 /// The Page Options as the print draws them ([`compose`]): crop marks at the corners of each
 /// photo, the page number at the bottom right and the print settings at the bottom left.
-/// Packages draw none of them, as the print doesn't ([`compose::has_page_options`]).
+/// Packages draw only the crop marks, as their Cut Guides ([`compose::has_page_options`]).
 fn page_options(painter: &egui::Painter, st: &PrintSettings, sheet: &Sheet, photos: &[Rect], number: usize) {
-    if !compose::has_page_options(st.layout.style) {
-        return;
-    }
     let p = &st.page;
     let ink = compose::mark_ink(p.background);
     let ink = Color32::from_rgb(ink[0], ink[1], ink[2]);
@@ -946,6 +954,9 @@ fn page_options(painter: &egui::Painter, st: &PrintSettings, sheet: &Sheet, phot
         }
     }
     let Ok(area) = st.layout.printable() else { return };
+    if !compose::has_page_options(st.layout.style) {
+        return;
+    }
     let area = sheet.rect(&area);
     let font = egui::FontId::proportional((compose::PAGE_TEXT_PT as f32 / 72.0 * sheet.scale).max(4.0));
     let y = (area.bottom() + sheet.page.bottom()) / 2.0;

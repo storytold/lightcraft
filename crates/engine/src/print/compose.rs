@@ -98,7 +98,7 @@ pub struct PageStyle {
     pub page_numbers: bool,
     /// The print settings (sharpening, profile, resolution) at the bottom left of each page.
     pub page_info: bool,
-    /// Marks at the corners of each photo to cut along.
+    /// Marks at the corners of each photo to cut along (the packages' Cut Guides reuse this).
     pub crop_marks: bool,
 }
 
@@ -115,8 +115,9 @@ pub fn rec2020_from_srgb8(c: [u8; 3]) -> [u16; 3] {
     lin.map(|v| (trc.encode(v) * 65535.0 + 0.5) as u16)
 }
 
-/// Whether a layout style prints the Page Options (page numbers, page info, crop marks):
-/// Lightroom offers them for Single Image and Contact Sheet; its packages have Cut Guides instead.
+/// Whether a layout style prints the Page Options (page numbers, page info) or, for its
+/// packages, the cut guides around each cell: Lightroom offers the former for Single Image
+/// and Contact Sheet and the latter for its packages.
 pub fn has_page_options(style: Style) -> bool {
     !style.is_package()
 }
@@ -464,7 +465,7 @@ impl Marks {
         let page = &settings.page;
         let px = |inches: f64| (inches * ppi).round() as usize;
         Marks {
-            crop: (on && page.crop_marks).then(|| (px(CROP_MARK_IN), px(CROP_MARK_GAP_IN), px(CROP_MARK_PT / 72.0).max(1))),
+            crop: page.crop_marks.then(|| (px(CROP_MARK_IN), px(CROP_MARK_GAP_IN), px(CROP_MARK_PT / 72.0).max(1))),
             numbers: on && page.page_numbers,
             info: (on && page.page_info).then(|| page_info_text(settings)),
             ink: rec2020_from_srgb8(mark_ink(page.background)),
