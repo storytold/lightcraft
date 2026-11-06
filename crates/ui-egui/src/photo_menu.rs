@@ -80,10 +80,9 @@ fn recheck(app: &LightcraftApp, photo: PhotoId, mut sub: MenuNode) -> MenuNode {
                     Flag::Reject => f == "reject",
                     Flag::None => f == "none",
                 }),
-                "photo.label" => params["label"].as_str().map(|l| match p.label {
-                    Some(c) => format!("{c:?}").to_lowercase() == l,
-                    None => l == "none",
-                }),
+                "photo.label" => params["label"].as_str().map(|l| p.label.is_some_and(|c| format!("{c:?}").to_lowercase() == l)),
+                // (None, the row that clears it)
+                "photo.clearLabel" => Some(p.label.is_none()),
                 _ => None,
             };
             if on.is_some() {

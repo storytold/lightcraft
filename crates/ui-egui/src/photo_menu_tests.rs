@@ -55,9 +55,16 @@ fn the_photo_menu_actions_are_all_offered() {
     let bar = crate::menubar::menu_bar(&a);
     let menu = &bar.iter().find(|(t, _)| t == "Photo").expect("Photo menu").1;
     let ours = items(&nodes(&a, p));
-    // a mode, library-wide tools, and Add to My Photos (offered only for Local photos)
-    let not_for_a_photo =
-        ["view.autoAdvance", "dialog.cull", "photo.readFocusPoints", "develop.updateProcess", "metadata.downloadPlaceNames", "photo.addToLibrary"];
+    // a mode, library-wide tools, and Add to My Photos (offered only for Local photos); the keyword painter is a mode too
+    let not_for_a_photo = [
+        "view.autoAdvance",
+        "dialog.cull",
+        "photo.readFocusPoints",
+        "develop.updateProcess",
+        "metadata.downloadPlaceNames",
+        "photo.addToLibrary",
+        "tool.enablePainting",
+    ];
     let missing: Vec<String> = items(menu)
         .into_iter()
         .filter_map(|(_, n)| match n {
@@ -180,7 +187,7 @@ fn rating_flag_and_label_check_the_right_clicked_photo() {
     assert_eq!(checked("photo.rate", json!({"rating": 1})), Some(false));
     assert_eq!(checked("photo.flag", json!({"flag": "pick"})), Some(true));
     assert_eq!(checked("photo.label", json!({"label": "green"})), Some(true));
-    assert_eq!(checked("photo.label", json!({"label": "none"})), Some(false));
+    assert_eq!(checked("photo.clearLabel", Value::Null), Some(false), "None isn't the clicked photo's label");
 }
 
 /// Only what makes sense where the menu opened: no "Open in Detail" in Detail, Compare and
@@ -244,7 +251,9 @@ fn culling_rows(a: &LightcraftApp, photo: PhotoId) -> Vec<Value> {
     items(&nodes(a, photo))
         .into_iter()
         .filter_map(|(_, n)| match n {
-            MenuNode::Item { id, params, .. } if matches!(id.as_str(), "photo.rate" | "photo.flag" | "photo.label") => Some(params),
+            MenuNode::Item { id, params, .. } if matches!(id.as_str(), "photo.rate" | "photo.flag" | "photo.label" | "photo.clearLabel") => {
+                Some(params)
+            }
             _ => None,
         })
         .collect()
