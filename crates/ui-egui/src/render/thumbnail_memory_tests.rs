@@ -535,6 +535,7 @@ fn a_flood_of_thumbnail_failures_does_not_flood_the_log() {
     let traced = app.renderer.decisions.iter().filter(|l| l.contains("not a warning")).count();
     assert_eq!(warned + traced, FLOOD, "each failure is a warning or a debug line");
     assert_eq!(app.renderer.failed_thumbs(), FLOOD, "every failure is remembered: the grid doesn't ask again");
+    app.renderer.thumb_warnings.at_ms = Some(crate::monotonic_ms() + 1e9); // (the last failure was just now, however long the machine stalls between polls)
 
     let job = app.session.render_job(PhotoId(1), 200, 200, false, true).unwrap();
     app.renderer.request(Slot::Main, job, 100);
@@ -569,6 +570,7 @@ fn a_flood_that_stops_is_counted_in_the_log() {
     let held = app.renderer.thumb_warnings.held_back;
     let warned = app.renderer.failure_messages.len();
     assert!(held > 0, "some were held back");
+    app.renderer.thumb_warnings.at_ms = Some(crate::monotonic_ms() + 1e9); // (the last failure was just now, however long the machine stalls between polls)
     app.renderer.poll(&ctx, &mut app.session);
     assert_eq!(app.renderer.failure_messages.len(), warned, "the failures may be going on: nothing is said yet");
 
