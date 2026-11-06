@@ -329,5 +329,6 @@
   "Show photos with {path}": "Zobrazit fotografie s klíčovým slovem {path}",
   "Show photos with {path} (includes the keywords below it)": "Zobrazit fotografie s klíčovým slovem {path} (včetně klíčových slov pod ním)",
   "Add {path} to the selected photos ({n})": "Přidat {path} vybraným fotografiím ({n})",
-  "Take {path} off the selected photos ({n})": "Odebrat {path} vybraným fotografiím ({n})"
+  "Take {path} off the selected photos ({n})": "Odebrat {path} vybraným fotografiím ({n})",
+  "Stop showing only photos with {path}": "Přestat zobrazovat jen fotografie s klíčovým slovem {path}"
 }

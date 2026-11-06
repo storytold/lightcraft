@@ -330,5 +330,6 @@
   "Show photos with {path}": "Показати фото з ключовим словом {path}",
   "Show photos with {path} (includes the keywords below it)": "Показати фото з ключовим словом {path} (разом із ключовими словами нижче)",
   "Add {path} to the selected photos ({n})": "Додати {path} до вибраних фото ({n})",
-  "Take {path} off the selected photos ({n})": "Вилучити {path} з вибраних фото ({n})"
+  "Take {path} off the selected photos ({n})": "Вилучити {path} з вибраних фото ({n})",
+  "Stop showing only photos with {path}": "Більше не показувати лише фото з {path}"
 }

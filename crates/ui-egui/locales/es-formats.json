@@ -330,5 +330,6 @@
   "Show photos with {path}": "Mostrar fotos con {path}",
   "Show photos with {path} (includes the keywords below it)": "Mostrar fotos con {path} (incluye las palabras clave inferiores)",
   "Add {path} to the selected photos ({n})": "Añadir {path} a las fotos seleccionadas ({n})",
-  "Take {path} off the selected photos ({n})": "Quitar {path} de las fotos seleccionadas ({n})"
+  "Take {path} off the selected photos ({n})": "Quitar {path} de las fotos seleccionadas ({n})",
+  "Stop showing only photos with {path}": "Dejar de mostrar solo las fotos con {path}"
 }

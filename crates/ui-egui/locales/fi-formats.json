@@ -326,5 +326,6 @@
   "Show photos with {path}": "Näytä kuvat, joilla on {path}",
   "Show photos with {path} (includes the keywords below it)": "Näytä kuvat, joilla on {path} (sisältää sen alla olevat avainsanat)",
   "Add {path} to the selected photos ({n})": "Lisää {path} valittuihin kuviin ({n})",
-  "Take {path} off the selected photos ({n})": "Poista {path} valituista kuvista ({n})"
+  "Take {path} off the selected photos ({n})": "Poista {path} valituista kuvista ({n})",
+  "Stop showing only photos with {path}": "Lopeta vain kuvien, joilla on {path}, näyttäminen"
 }

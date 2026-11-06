@@ -330,5 +330,6 @@
   "Show photos with {path}": "顯示含有 {path} 的照片",
   "Show photos with {path} (includes the keywords below it)": "顯示含有 {path} 的照片（包含其下的關鍵字）",
   "Add {path} to the selected photos ({n})": "將 {path} 加入選取的照片（{n}）",
-  "Take {path} off the selected photos ({n})": "將 {path} 從選取的照片移除（{n}）"
+  "Take {path} off the selected photos ({n})": "將 {path} 從選取的照片移除（{n}）",
+  "Stop showing only photos with {path}": "不再只顯示含有 {path} 的照片"
 }
