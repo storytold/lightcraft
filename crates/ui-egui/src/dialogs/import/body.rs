@@ -1,5 +1,7 @@
+use serde_json::json;
+
 use super::tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
-use super::{Align2, Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Vec2, pos2, register, vec2};
+use super::{Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Value, Vec2, pos2, register, vec2};
 
 /// The review dialog's first size (points). It can be resized; the photo grid takes the height.
 pub(crate) const DIALOG_SIZE: [f32; 2] = [960.0, 720.0];
@@ -12,6 +14,43 @@ const CONTENT_BOTTOM: &str = "import-content-bottom";
 
 /// Room below the grid before it has been measured (more than the options and buttons take).
 pub(super) const DEFAULT_BELOW_GRID: f32 = 360.0;
+
+pub(crate) const THUMB_SIZE_MIN: f32 = 80.0;
+pub(crate) const THUMB_SIZE_MAX: f32 = 320.0;
+pub(crate) const THUMB_SIZE_DEFAULT: f32 = 116.0;
+
+/// Bound values from saved preferences and the control channel before laying out the grid.
+pub(crate) fn thumb_size(size: f32) -> f32 {
+    if size.is_finite() { size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX) } else { THUMB_SIZE_DEFAULT }
+}
+
+/// A few physical-pixel sizes avoid decoding on every point of a slider drag. The engine caps
+/// candidate previews at 1024 pixels; this covers the largest tile at up to 3× display density.
+pub(crate) fn thumb_edge(size: f32, pixels_per_point: f32) -> usize {
+    let scale = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
+    let pixels = (thumb_size(size) - 8.0) * scale;
+    [192, 384, 512, 768, 1024].into_iter().find(|edge| *edge as f32 >= pixels).unwrap_or(1024)
+}
+
+/// Use the shared control contract for pointer, keyboard, exact-value entry and reset interactions.
+fn thumb_size_slider(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    use lightcraft_develop::controls::{ControlSpec, Section, Track};
+    const SIZE: ControlSpec = ControlSpec {
+        id: "importThumbSize",
+        label: "Thumbnail size",
+        section: Section::Light,
+        min: THUMB_SIZE_MIN as f64,
+        max: THUMB_SIZE_MAX as f64,
+        default: THUMB_SIZE_DEFAULT as f64,
+        step: 1.0,
+        decimals: 0,
+        track: Track::Plain,
+    };
+    let out = crate::widgets::slider(ui, &SIZE, f64::from(thumb_size(app.ui.import_thumb_size)), true, None);
+    if let Some(size) = out.value {
+        let _ = app.run("view.importThumbSize", json!({"size": SIZE.clamp(size)}));
+    }
+}
 
 /// Height of the photo grid: what is `available` once `below` (options and buttons) is left free,
 /// in whole points so the window never grows by a fraction each frame, and at least one `row`.
@@ -37,6 +76,24 @@ pub(super) fn dup_counts(d: &ImportDialog) -> (usize, usize, usize) {
     let in_source = d.candidates.iter().filter(|c| c.duplicate.as_deref() == Some("content") && c.existing.is_none()).count();
     let dups = d.candidates.iter().filter(|c| c.duplicate.is_some()).count().saturating_sub(trashed).saturating_sub(in_source);
     (dups, in_source, trashed)
+}
+
+/// The one line that says what the scan left out, for the review's header: a folder walk that
+/// stopped at its limit, folders it couldn't read, files that are not a supported photo type.
+/// `None` when it left nothing out (the review then shows no line at all).
+pub(crate) fn scan_note(d: &ImportDialog) -> Option<String> {
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let mut parts: Vec<String> = Vec::new();
+    if d.scan_limited {
+        parts.push(crate::i18n::tr("Stopped at the scan limit: there may be more photos").to_string());
+    }
+    if d.unreadable > 0 {
+        parts.push(crate::i18n::tr_format!("{n} folder{} could not be read", plural(d.unreadable), n = d.unreadable));
+    }
+    if d.unsupported > 0 {
+        parts.push(crate::i18n::tr_format!("{n} file{} skipped (not a supported photo type)", plural(d.unsupported), n = d.unsupported));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 /// The dialog body: options, then the candidate grid.
@@ -68,6 +125,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             }
         });
     });
+    // what the scan left out, when it left something out
+    if let Some(note) = scan_note(d) {
+        let r = ui.label(egui::RichText::new(note).color(t.caution).small());
+        register(ui, "label:importScanNote", r.rect);
+    }
     // with more than one file type: a toggle per type checks or unchecks all of its files
     let types = d.file_types();
     if types.len() > 1 {
@@ -83,8 +145,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             }
         });
     }
+    thumb_size_slider(app, ui);
     // candidate grid
-    let cell = 116.0;
+    let cell = thumb_size(app.ui.import_thumb_size).min(ui.available_width().max(1.0));
     let avail = ui.available_width();
     let cols = ((avail + 6.0) / (cell + 6.0)).floor().max(1.0) as usize;
     let rows = n.div_ceil(cols);
@@ -95,6 +158,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
         y(CONTENT_BOTTOM).zip(y(GRID_BOTTOM)).map(|(content, grid)| content - grid)
     });
     let grid_h = grid_height(ui.available_height(), below.unwrap_or(DEFAULT_BELOW_GRID), cell + 26.0);
+    let mut visible = std::collections::HashSet::new();
     let grid =
         egui::ScrollArea::vertical().id_salt("import-grid").max_height(grid_h).auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
             let (area, _) = ui.allocate_exact_size(vec2(avail, rows as f32 * (cell + 26.0)), Sense::hover());
@@ -104,11 +168,14 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                 if !local.intersects(viewport.expand(cell)) {
                     continue;
                 }
+                let Ok(slot) = u32::try_from(i) else { continue };
+                visible.insert(slot);
                 let rect = local.translate(area.min.to_vec2());
                 candidate_cell(app, ui, d, i, rect);
             }
         });
     if !ui.is_sizing_pass() {
+        app.renderer.retain_imports(&visible);
         ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(GRID_BOTTOM), grid.inner_rect.bottom()));
     }
     ui.add_space(4.0);
@@ -380,6 +447,96 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
         let r = ui.add(egui::TextEdit::singleline(&mut d.keywords).hint_text(crate::i18n::tr("comma, separated")).desired_width(f32::INFINITY));
         register(ui, "field:importKeywords", r.rect);
     });
+    recipe_section(app, ui, d);
+}
+
+/// The develop controls offered in the import review's optional batch-edit recipe: the everyday
+/// adjustments, not a second editor. Each must be one a recipe may name (`library.import` refuses
+/// the others: no white balance, geometry or crop); a test holds the list to that. Anything else is
+/// reached by choosing or saving a preset.
+pub(super) const RECIPE_CONTROLS: &[&str] = &[
+    "light.exposure",
+    "light.contrast",
+    "light.highlights",
+    "light.shadows",
+    "light.whites",
+    "light.blacks",
+    "color.vibrance",
+    "color.saturation",
+    "effects.clarity",
+    "effects.texture",
+    "effects.dehaze",
+    "detail.sharpenAmount",
+    "grain.amount",
+    "vignette.amount",
+];
+
+/// A recipe as the `recipe` param of `library.import` and `preset.saveRecipe`.
+pub(super) fn recipe_items(recipe: &std::collections::BTreeMap<String, f64>) -> Value {
+    Value::Array(recipe.iter().map(|(id, v)| json!({"id": id, "value": v})).collect())
+}
+
+/// Record a slider's new value in the recipe: a control back at its default is no longer named.
+pub(super) fn note_recipe_value(recipe: &mut std::collections::BTreeMap<String, f64>, spec: &lightcraft_develop::controls::ControlSpec, value: f64) {
+    if (value - spec.default).abs() < 1e-9 {
+        recipe.remove(spec.id);
+    } else {
+        recipe.insert(spec.id.to_string(), value);
+    }
+}
+
+/// The optional "Batch edits" section of the import review: a small recipe of develop controls set
+/// on every photo this import adds, on top of its XMP sidecar, camera default and the chosen preset.
+/// The recipe lives only in the dialog until the import runs, so cancelling changes neither the
+/// catalog nor the preset collections; "Save as Preset" is the explicit way to keep one for reuse.
+fn recipe_section(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
+    let t = Tokens::get(ui.ctx());
+    let open_id = egui::Id::unique("import-recipe-open");
+    let mut open = ui.ctx().data(|m| m.get_temp::<bool>(open_id)).unwrap_or(false);
+    field(ui, "Batch edits", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if crate::widgets::text_button(ui, "importRecipeToggle", if open { "Hide adjustments" } else { "Adjust…" }, open).clicked() {
+            open = !open;
+        }
+        let n = d.recipe.len();
+        let summary = if n == 0 { crate::i18n::tr("None").to_string() } else { crate::i18n::tr_format!("Adjustments: {n}", n = n) };
+        ui.label(egui::RichText::new(summary).color(if n == 0 { t.text_dim } else { t.text_label }));
+    });
+    ui.ctx().data_mut(|m| m.insert_temp(open_id, open));
+    if !open {
+        return;
+    }
+    ui.label(
+        egui::RichText::new(crate::i18n::tr(
+            "Set on every photo this import adds, after its XMP sidecar and the preset above; photos the library already has are left alone. A slider left at its default changes nothing. Nothing is saved unless you save it as a preset.",
+        ))
+        .color(t.text_dim)
+        .small(),
+    );
+    for &id in RECIPE_CONTROLS {
+        let Some(spec) = lightcraft_develop::controls::find(id) else { continue };
+        let v = d.recipe.get(id).copied().unwrap_or(spec.default);
+        if let Some(nv) = crate::widgets::slider(ui, spec, v, true, None).value {
+            note_recipe_value(&mut d.recipe, spec, nv);
+        }
+    }
+    field(ui, "Recipe", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        crate::text_field::TextField::singleline("field:importRecipeName", &mut d.recipe_name)
+            .hint(crate::i18n::tr("name for a saved preset"))
+            .width(160.0)
+            .show(ui);
+        let can = !d.recipe.is_empty() && !d.recipe_name.trim().is_empty();
+        let b = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Save as Preset")));
+        register(ui, "button:importRecipeSave", b.rect);
+        if b.clicked() {
+            let params = json!({"name": d.recipe_name.trim(), "recipe": recipe_items(&d.recipe)});
+            match app.run("preset.saveRecipe", params) {
+                Ok(_) => app.toast(ui.ctx(), crate::i18n::tr("Saved as a preset")),
+                Err(e) => app.toast_error(ui.ctx(), e),
+            }
+        }
+    });
 }
 
 /// Draw one import-dialog candidate cell: register `import:{i}`, request the cell's thumbnail,
@@ -388,7 +545,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
 /// uses its width as height.
 fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog, i: usize, rect: Rect) {
     let t = Tokens::get(ui.ctx());
-    let c = d.candidates[i].clone();
+    let Some(c) = d.candidates.get(i).cloned() else { return };
+    let Ok(slot_index) = u32::try_from(i) else { return };
     let ok = d.importable(i);
     let img = Rect::from_min_size(rect.min, vec2(rect.width(), rect.width()));
     let resp = ui.interact(img, egui::Id::unique(("import-cell", i)), Sense::click());
@@ -397,20 +555,17 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     let p = ui.painter();
     p.rect_filled(img, 3.0, t.skeleton);
     // thumbnail (background job; the grid only asks for the cells in view)
-    let slot = Slot::Import(i as u32);
-    if !app.renderer.textures.contains_key(&slot)
-        && let Some(job) = app.session.candidate_thumb_job(&c, 192, i as u64)
-    {
-        app.renderer.request_quick(slot, job, 4);
-    }
+    let slot = Slot::Import(slot_index);
+    let edge = thumb_edge(img.width(), ui.ctx().pixels_per_point());
+    app.renderer.import_preview(&mut app.session, &c, slot_index, edge);
     if let Some(tex) = app.renderer.textures.get(&slot) {
         let [tw, th] = tex.size;
         let s = ((img.width() - 8.0) / tw as f32).min((img.height() - 8.0) / th as f32);
         let fit = Rect::from_center_size(img.center(), vec2(tw as f32 * s, th as f32 * s));
         let tint = if ok { Color32::WHITE } else { Color32::from_gray(110) };
-        p.image(tex.tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+        p.image(tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
     }
-    let on = d.checked[i] && ok;
+    let on = d.checked.get(i).copied().unwrap_or(false) && ok;
     if on {
         p.rect_stroke(img, 3.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
@@ -432,13 +587,20 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         _ => None,
     };
     if let Some(b) = badge {
-        let g = p.layout_no_wrap(crate::i18n::tr(b).to_string(), t.semibold(10.0), Color32::WHITE);
+        let mut label = egui::text::LayoutJob::simple_singleline(crate::i18n::tr(b).to_string(), t.semibold(10.0), Color32::WHITE);
+        label.wrap.max_width = (img.width() - 16.0).max(1.0);
+        label.wrap.max_rows = 1;
+        let g = p.layout_job(label);
         let br = badge_rect(img, cb, g.size());
         p.rect_filled(br, 3.0, Color32::from_rgba_unmultiplied(170, 60, 50, 220));
         p.galley(br.min + vec2(4.0, 2.0), g, Color32::WHITE);
     }
-    let name = if c.name.chars().count() > 18 { format!("{}…", c.name.chars().take(17).collect::<String>()) } else { c.name.clone() };
-    p.text(pos2(rect.left() + 2.0, img.bottom() + 9.0), Align2::LEFT_CENTER, name, t.font(10.5), if ok { t.text_label } else { t.text_dim });
+    let color = if ok { t.text_label } else { t.text_dim };
+    let mut name = egui::text::LayoutJob::simple_singleline(c.name.clone(), t.font(10.5), color);
+    name.wrap.max_width = (rect.width() - 4.0).max(1.0);
+    name.wrap.max_rows = 1;
+    let name = p.layout_job(name);
+    p.galley(pos2(rect.left() + 2.0, img.bottom() + 2.0), name, color);
     let tip = format!(
         "{}\n{} × {} · {} · {:.1} MB{}",
         c.path,
