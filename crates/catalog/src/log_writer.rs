@@ -238,6 +238,7 @@ impl Writer {
             return Ok(());
         }
         self.file = None;
+        crate::store::check_regular_directory_entry(&self.path)?;
         let f = match std::fs::OpenOptions::new().write(true).open(&self.path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
