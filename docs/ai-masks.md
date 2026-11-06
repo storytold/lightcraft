@@ -156,10 +156,10 @@ use it as their mirror:
 
 ```sh
 LIGHTCRAFT_SAM3_MIRRORS=https://huggingface.co/facebook/sam3/resolve/main \
-LIGHTCRAFT_SAM3_WORKER_TOKEN=hf_... lightcraft
+LIGHTCRAFT_SAM3_TOKEN=hf_... lightcraft
 ```
 
-(`LIGHTCRAFT_SAM3_WORKER_TOKEN` is sent as a bearer token only over https, and only to the mirror's own
+(`LIGHTCRAFT_SAM3_TOKEN` is sent as a bearer token only over https, and only to the mirror's own
 host — not to the storage host it redirects to.)
 
 The download is plain HTTP/1.1 over TLS in pure Rust (rustls with the RustCrypto provider and
