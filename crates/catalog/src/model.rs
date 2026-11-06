@@ -171,11 +171,26 @@ pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
 #[serde(default)]
 pub struct Meta {
     pub camera: String,
+    /// The camera's maker, from Exif `Make` (`camera` is maker and model together).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub make: String,
     pub lens: String,
+    /// The lens's maker, from Exif `LensMake`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub lens_make: String,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,
     pub shutter: String,
     pub iso: Option<u32>,
+    /// Whether the flash fired, from Exif `Flash`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flash: Option<bool>,
+    /// Exposure compensation in EV, from Exif `ExposureBiasValue`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_bias: Option<f32>,
+    /// The camera body's serial number.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub serial_number: String,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
     pub city: String,
@@ -438,6 +453,23 @@ impl Photo {
     /// ([`relative_wb_camera`]). Other raws edit white balance in Kelvin.
     pub fn relative_wb(&self) -> bool {
         self.develops_raw() && relative_wb_camera(&self.format, &self.meta.camera)
+    }
+    /// Every settings holder of this photo that can carry segmentation grids: the develop
+    /// settings, the versions', the history steps' and the import look. A snapshot's shared grid
+    /// table ([`crate::Catalog`]'s `grids`) covers all of them, so a new holder belongs here.
+    pub(crate) fn settings_holders(&self) -> impl Iterator<Item = &Arc<DevelopSettings>> {
+        std::iter::once(&self.develop)
+            .chain(self.versions.iter().map(|v| &v.settings))
+            .chain(self.history.iter().map(|h| &h.settings))
+            .chain(self.import_look.iter())
+    }
+    /// [`Photo::settings_holders`] with mutable access (resolving a snapshot's grid references).
+    pub(crate) fn settings_holders_mut(&mut self) -> impl Iterator<Item = &mut Arc<DevelopSettings>> {
+        let Photo { develop, versions, history, import_look, .. } = self;
+        std::iter::once(develop)
+            .chain(versions.iter_mut().map(|v| &mut v.settings))
+            .chain(history.iter_mut().map(|h| &mut h.settings))
+            .chain(import_look.as_mut())
     }
     /// The develop settings import gave this photo: [`Photo::camera_defaults`], or the user's
     /// default preset applied on top of them ([`Photo::import_look`]). Like the camera defaults,

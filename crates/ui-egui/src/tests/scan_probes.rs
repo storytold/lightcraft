@@ -68,7 +68,14 @@ fn a_scan_closed_with_its_cross_hands_back_its_probes_when_the_worker_ends() {
     h.step();
     assert!(h.app.scan.is_none(), "✕ closes the scan at once");
     // the worker ends later, with the probes it took
-    tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput { candidates: Vec::new(), probes: probes() })).unwrap();
+    tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput {
+        candidates: Vec::new(),
+        probes: probes(),
+        truncated: false,
+        unreadable: 0,
+        unsupported: 0,
+    }))
+    .unwrap();
     assert!(h.step_until(T, kept), "the probes came back");
     assert!(h.app.ui.dialog.is_none(), "no review opened");
     assert!(!failed_toast(&h));
