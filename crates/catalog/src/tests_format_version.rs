@@ -97,35 +97,65 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
-/// A v9 library (before photos kept their file's own orientation) opens with none, so a Lightroom
-/// catalog import treats its photos as before, and is rewritten in the current format; a photo
-/// that has one keeps it across a save and reload.
+/// A v11 library (before photos kept their file's own orientation), written out by hand as v11
+/// wrote it: no `file_orientation` in the snapshot's photos nor in a logged `setContent`. It opens
+/// with no orientation on any photo, so a Lightroom catalog import treats them as before, and is
+/// rewritten in the current format, where a photo given one keeps it across a reload.
 #[test]
-fn v9_photo_loads_without_a_file_orientation_and_is_upgraded() {
-    let mut c = Catalog::new();
-    let id = c.alloc_photo_id();
-    c.apply(Op::AddPhoto { photo: Box::new(Photo::new(id, Source::File { path: "/p/a.crw".into() }, "a.crw", "CRW", 160, 120, "2026-01-01")) })
-        .unwrap();
-    let turned = c.alloc_photo_id();
-    let mut p = Photo::new(turned, Source::File { path: "/p/b.jpg".into() }, "b.jpg", "JPEG", 120, 160, "2026-01-01");
-    p.file_orientation = Some(lightcraft_geom::Orientation::Rotate90);
-    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
-    let snap = c.to_snapshot();
-    assert_eq!(snap.matches("file_orientation").count(), 1, "an unknown orientation isn't written");
+fn v11_photo_loads_without_a_file_orientation_and_is_upgraded() {
+    let photo = |id: u64, name: &str, w: u32, h: u32| {
+        format!(
+            r#"{{"id":{id},"source":{{"type":"file","path":"/p/{name}"}},"file_name":"{name}","format":"JPEG","width":{w},"height":{h},"file_size":10,"imported":"2026-01-01","develop":{{}},"content_hash":"h{id}"}}"#
+        )
+    };
+    let catalog = format!(
+        r#"{{"photos":{{"1":{},"2":{}}},"albums":{{}},"next_photo":3,"next_album":1}}"#,
+        photo(1, "a.jpg", 160, 120),
+        photo(2, "b.jpg", 160, 120)
+    );
+    // the file of photo 2 was turned on disk and reloaded under v11: new size, no orientation field
+    let body = r#"{"op":"setContent","id":2,"width":120,"height":160,"file_size":11,"content_hash":"h2b"}"#;
     let m = MemStore::new();
     m.set(
         SNAPSHOT,
         format!(
-            "{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":1,\"catalog\":{snap}}}
+            "{{\"format\":\"lightcraft-catalog\",\"version\":11,\"seq\":1,\"catalog\":{catalog}}}
 "
         )
         .into_bytes(),
     );
-    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(loaded.photo(id).unwrap().file_orientation, None);
-    assert_eq!(loaded.photo(turned).unwrap().file_orientation, Some(lightcraft_geom::Orientation::Rotate90));
-    assert_eq!(r.upgraded_from, Some(9));
+    m.set(
+        LOG,
+        format!(
+            "{{\"seq\":2,\"crc\":{},\"op\":{body}}}
+",
+            crc32fast::hash(body.as_bytes())
+        )
+        .into_bytes(),
+    );
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.upgraded_from), (1, Some(11)));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    let (a, b) = (loaded.photo(PhotoId(1)).unwrap(), loaded.photo(PhotoId(2)).unwrap());
+    assert_eq!((a.file_orientation, b.file_orientation), (None, None));
+    assert_eq!((b.width, b.height, b.file_size, b.content_hash.as_deref()), (120, 160, 11, Some("h2b")), "the logged reload applied");
+    // in the current format an orientation is written and read back
+    let op = Op::SetContent {
+        id: PhotoId(2),
+        width: 120,
+        height: 160,
+        file_size: 11,
+        content_hash: Some("h2b".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+        file_orientation: Some(lightcraft_geom::Orientation::Rotate90),
+    };
+    j.append(std::slice::from_ref(&op)).unwrap();
+    drop(j);
+    let (_, reopened, r) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    assert_eq!(reopened.photo(PhotoId(2)).unwrap().file_orientation, Some(lightcraft_geom::Orientation::Rotate90));
+    assert_eq!(reopened.photo(PhotoId(1)).unwrap().file_orientation, None);
 }
 
 #[test]

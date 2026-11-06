@@ -223,7 +223,10 @@ pub(crate) fn forget_orientation_op(id: lightcraft_catalog::PhotoId, ph: &lightc
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
     let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
     // a probe that can't tell the orientation (a raw shown from its preview) doesn't forget the
-    // one on record while the bytes are the same; for other bytes only the probe's answer counts
+    // one on record while the bytes are the same; for other bytes only the probe's answer counts.
+    // Without a hash on both sides the bytes can't be shown to be the same, and an equal size
+    // proves nothing (turning a JPEG losslessly rewrites only its orientation tag): the
+    // orientation on record is dropped rather than kept for a file that may be turned since
     let same_bytes = info.content_hash.is_some() && info.content_hash == ph.content_hash && info.file_size == ph.file_size;
     let file_orientation = info.orientation.or(if same_bytes { ph.file_orientation } else { None });
     let same = info.content_hash == ph.content_hash
@@ -573,6 +576,49 @@ mod tests {
         let known = crate::media::ProbeInfo { orientation: Some(Orientation::Normal), ..unknown };
         let Some(Op::SetContent { file_orientation, .. }) = content_op(ph.id, &ph, known) else { panic!() };
         assert_eq!(file_orientation, Some(Orientation::Normal));
+    }
+
+    /// With no content hash on either side, an equal size doesn't show the bytes are the same (a
+    /// lossless JPEG turn rewrites only the orientation tag): a probe that can't tell the
+    /// orientation drops the one on record instead of keeping it for a file that may be turned.
+    #[test]
+    fn an_unknown_orientation_without_hashes_drops_the_known_one() {
+        use lightcraft_geom::Orientation;
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.jpg".into() }, "x.jpg", "JPEG", 6000, 4000, "2026-10-06T00:00:00");
+        ph.file_size = 10;
+        ph.file_orientation = Some(Orientation::Rotate90);
+        let unknown = crate::media::ProbeInfo { width: 6000, height: 4000, file_size: 10, orientation: None, ..Default::default() };
+        let Some(Op::SetContent { file_orientation, content_hash, file_size, .. }) = content_op(ph.id, &ph, unknown.clone()) else {
+            panic!("the orientation on record changes")
+        };
+        assert_eq!((file_orientation, content_hash, file_size), (None, None, 10));
+        // nothing on record: nothing to drop, nothing changes
+        ph.file_orientation = None;
+        assert!(content_op(ph.id, &ph, unknown).is_none());
+    }
+
+    /// `forget_orientation_op` clears only the orientation (size, hash and preview state stay as
+    /// recorded), undo puts it back, and a photo with none gets no op.
+    #[test]
+    fn forget_orientation_clears_only_the_orientation_and_undoes() {
+        use lightcraft_geom::Orientation;
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.cr3".into() }, "x.cr3", "CR3", 4000, 6000, "2026-10-06T00:00:00");
+        ph.file_size = 10;
+        ph.content_hash = Some("old".into());
+        ph.set_preview_only(Some("no decoder".into()));
+        ph.file_orientation = Some(Orientation::Rotate90);
+        cat.apply(Op::AddPhoto { photo: Box::new(ph.clone()) }).unwrap();
+        let op = forget_orientation_op(ph.id, &ph).expect("an orientation to forget");
+        let inv = cat.apply(op).unwrap();
+        let p = cat.photo(ph.id).unwrap();
+        assert_eq!(p.file_orientation, None);
+        assert_eq!((p.width, p.height, p.file_size, p.content_hash.as_deref()), (4000, 6000, 10, Some("old")));
+        assert_eq!((p.preview_only.as_deref(), p.preview_checked.as_str()), (Some("no decoder"), ph.preview_checked.as_str()));
+        cat.apply(inv).unwrap();
+        assert_eq!(cat.photo(ph.id).unwrap().file_orientation, Some(Orientation::Rotate90), "undo puts it back");
+        ph.file_orientation = None;
+        assert!(forget_orientation_op(ph.id, &ph).is_none(), "no orientation, no op");
     }
 
     fn lens() -> lightcraft_develop::EmbeddedLens {
