@@ -54,7 +54,12 @@ impl Files {
         if let Some(d) = p.parent() {
             let _ = std::fs::create_dir_all(d);
         }
-        if let Err(e) = std::fs::write(&p, format!("{}\n", r.name())) {
+        // on disk before the driver is touched: a driver fault can take the machine down with it
+        let written = std::fs::File::create(&p).and_then(|mut f| {
+            std::io::Write::write_all(&mut f, format!("{}\n", r.name()).as_bytes())?;
+            f.sync_all()
+        });
+        if let Err(e) = written {
             log::warn!("window: could not write {}: {e}", p.display());
         }
     }
@@ -407,16 +412,18 @@ mod tests {
 
     /// The probe builds egui's pipeline on a live device before the window opens; a driver crash
     /// there must leave the window-init marker on disk so the next launch tries another renderer.
-    /// `choose` probes first and only arms the marker afterwards (main.rs), so nothing is written
-    /// while the probe runs.
     #[cfg(windows)]
     #[test]
     fn the_window_marker_is_written_while_the_renderer_is_probed() {
+        // glow is taken without a probe, so a forced glow arms nothing here
+        let forced = backend::forced_window_renderer(std::env::var("LIGHTCRAFT_GPU_BACKEND").ok().as_deref(), std::env::var("WGPU_BACKEND").ok().as_deref());
+        if forced == Some(WindowRenderer::Glow) {
+            return;
+        }
         let d = dir("probe-marker");
         let f = Files::new(Some(d.clone()));
         choose(&f, false);
         assert!(f.armed(), "the window-init marker must be written while the renderer is probed");
         let _ = std::fs::remove_dir_all(&d);
-    }
     }
 }
