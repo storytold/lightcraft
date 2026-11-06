@@ -6,11 +6,12 @@
 //!   eframe's glow) is *probed* before the window opens: a device is created with an error handler
 //!   that logs instead of panicking, and egui's pipeline is built inside error scopes. The first
 //!   that builds cleanly is handed to eframe as an existing device (so its error handler stays).
-//! - **Everywhere:** a marker file names the renderer being started and is removed once the
+//! - **Everywhere:** a marker file names the renderer being started and is emptied once the
 //!   window's renderer is up. Left behind — the start died or panicked — the next launch tries that
 //!   renderer last; [`relaunch_after_failure`] starts that next launch right away. The copy that
 //!   starts holds an OS lock on the marker, so a second copy starting at the same time sees a live
-//!   start, not a dead one, and leaves the marker alone; a crash or kill releases the lock.
+//!   start, not a dead one, and leaves the marker alone; a crash or kill releases the lock. A copy
+//!   whose start hangs without dying still holds it: end it to clear the way.
 //! - The renderer that worked is remembered (`<config>/window-renderer`, Windows only) and tried
 //!   first next time. `LIGHTCRAFT_GPU_BACKEND=dx12|vulkan|gl|glow` (or `WGPU_BACKEND`) forces one.
 
@@ -73,7 +74,7 @@ impl Files {
             log::warn!("window: could not write {}: {e}", p.display());
         }
     }
-    /// The renderer the last start died in (marker left behind), removing the marker. A marker
+    /// The renderer the last start died in (marker left behind), clearing the marker. A marker
     /// whose lock another running copy holds is that copy's start in flight: not a failure, not
     /// touched. A marker without a lock holder (a crash, an older version's) is a failed start.
     pub fn take_failed(&self) -> Option<WindowRenderer> {
@@ -88,9 +89,17 @@ impl Files {
         // through the locked handle: on Windows a lock refuses reads through any other
         let mut text = String::new();
         let _ = std::io::Read::read_to_string(&mut f, &mut text);
-        let _ = std::fs::remove_file(m);
+        Self::clear(&f, Some(m));
         let _ = f.unlock();
         WindowRenderer::parse(&text)
+    }
+    /// Empty the marker through its locked handle; only if that fails, delete it.
+    fn clear(f: &File, path: Option<PathBuf>) {
+        if f.set_len(0).is_err() {
+            if let Some(p) = path {
+                let _ = std::fs::remove_file(p);
+            }
+        }
     }
     /// Before the window opens: record what is being started, holding the marker's lock until
     /// the start finishes. Another copy's start in flight keeps its marker (this one writes none).
@@ -114,24 +123,24 @@ impl Files {
         }
         let Some(f) = held.as_mut() else { return };
         // on disk before the driver is touched: a driver fault can take the machine down with it
-        let written = f.set_len(0).and_then(|()| f.rewind()).and_then(|()| f.write_all(format!("{}\n", r.name()).as_bytes())).and_then(|()| f.sync_all());
+        let written =
+            f.set_len(0).and_then(|()| f.rewind()).and_then(|()| f.write_all(format!("{}\n", r.name()).as_bytes())).and_then(|()| f.sync_all());
         if let Err(e) = written {
             log::warn!("window: could not write {}: {e}", p.display());
         }
     }
-    /// The window's renderer is up: clear the marker and (Windows) remember it.
+    /// The window's renderer is up: empty the marker (it is never deleted, so every copy locks the
+    /// same file; an empty one names no failed start) and (Windows) remember the renderer.
     pub fn started(&self, r: WindowRenderer) {
         if let Some(f) = self.held().take() {
-            if let Some(m) = self.marker() {
-                let _ = std::fs::remove_file(m);
-            }
+            Self::clear(&f, self.marker());
             let _ = f.unlock();
         }
         if cfg!(windows) {
             Self::write(self.remembered(), r);
         }
     }
-    /// The marker is armed by this copy and the start has not come up.
+    /// Whether this copy armed the marker and the start has not come up.
     pub fn armed(&self) -> bool {
         self.held().is_some()
     }
@@ -313,13 +322,15 @@ pub fn relaunch_after_failure(files: &Files) -> bool {
     if !files.armed() {
         return false;
     }
+    // this start failed: the marker now belongs to the next one (relaunched, or started later while
+    // this copy shows its error), and a lock still held here would hide it from that one
+    files.release_for_relaunch();
     let tries = std::env::var(RETRY_VAR).ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
     if tries >= MAX_RETRIES {
         return false;
     }
     let Ok(exe) = std::env::current_exe() else { return false };
     log::warn!("window: the renderer failed to start; starting again with the next one");
-    files.release_for_relaunch();
     std::process::Command::new(exe)
         .args(std::env::args_os().skip(1))
         .env(RETRY_VAR, (tries + 1).to_string())
@@ -355,8 +366,13 @@ mod tests {
         d
     }
 
+    /// Bytes in the marker (metadata, not a read: on Windows a held lock refuses reads).
+    fn marker_len(f: &Files) -> u64 {
+        std::fs::metadata(f.marker().unwrap()).map_or(0, |m| m.len())
+    }
+
     /// The marker names the renderer being started; left behind by a copy that is gone, the next
-    /// start reads it as the failed one (and removes it); a good start removes it and remembers
+    /// start reads it as the failed one (and clears it); a good start clears it and remembers
     /// the renderer (Windows).
     #[test]
     fn marker_records_the_failed_renderer() {
@@ -364,15 +380,18 @@ mod tests {
         let f = Files::new(Some(d.clone()));
         let dx = WindowRenderer::Wgpu(Backends::DX12);
         f.arm(dx);
-        assert!(f.armed());
-        drop(f); // the start died: the OS releases its lock, the marker stays
+        assert!(f.armed() && marker_len(&f) > 0);
+        // the start died: the OS releases its lock, the marker stays (unlocked by hand: a sibling
+        // test spawning a process can hold a copy of our descriptor, and a flock lasts while one is open)
+        f.release_for_relaunch();
+        drop(f);
         let next = Files::new(Some(d.clone()));
         assert_eq!(next.take_failed(), Some(dx));
-        assert!(!next.marker().unwrap().exists());
+        assert_eq!(marker_len(&next), 0, "taken: the marker is emptied");
         assert_eq!(next.take_failed(), None);
         next.arm(WindowRenderer::Glow);
         next.started(WindowRenderer::Glow);
-        assert!(!next.armed() && !next.marker().unwrap().exists());
+        assert!(!next.armed() && marker_len(&next) == 0);
         assert_eq!(Files::read(next.remembered()), cfg!(windows).then_some(WindowRenderer::Glow));
         // nothing written without a settings folder
         let none = Files::new(None);
@@ -392,13 +411,13 @@ mod tests {
         first.arm(dx);
         let second = Files::new(Some(d.clone()));
         assert_eq!(second.take_failed(), None, "the first copy is still starting");
-        assert!(second.marker().unwrap().exists(), "its marker is not removed");
+        assert!(marker_len(&second) > 0, "its marker is not cleared");
         second.arm(WindowRenderer::Glow);
         assert!(!second.armed(), "the second copy does not take over the first's marker");
         second.started(WindowRenderer::Glow);
-        assert!(second.marker().unwrap().exists(), "nor does its start clear it");
+        assert!(marker_len(&second) > 0, "nor does its start clear it");
         first.started(dx);
-        assert!(!first.marker().unwrap().exists());
+        assert_eq!(marker_len(&first), 0);
         assert_eq!(Files::new(Some(d.clone())).take_failed(), None);
         let _ = std::fs::remove_dir_all(&d);
     }
