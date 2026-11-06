@@ -9,8 +9,12 @@ pub fn list_auto_import_folder(folder: &str) -> std::result::Result<Vec<(String,
         .flatten()
         .filter_map(|e| {
             let path = e.path();
+            // through a link: its target's type and size
             let m = std::fs::metadata(&path).ok()?;
-            (m.is_file() && !crate::walk::is_hidden_with(&path, &m)).then(|| (path.to_string_lossy().to_string(), m.len()))
+            // but a link's own hidden attribute, not its target's, as in a folder walk
+            let hidden =
+                if e.file_type().is_ok_and(|t| t.is_symlink()) { crate::walk::is_hidden_entry(&e) } else { crate::walk::is_hidden_with(&path, &m) };
+            (m.is_file() && !hidden).then(|| (path.to_string_lossy().to_string(), m.len()))
         })
         .collect())
 }
