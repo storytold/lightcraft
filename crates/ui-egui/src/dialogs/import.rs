@@ -3,10 +3,12 @@
 //! a grid of thumbnails with checkboxes (duplicates marked and unchecked; Shift-click sets a
 //! range), the destination (add in place / copy or move into the library's `Originals/` or a
 //! chosen folder, filed by day, by month, into one folder or by a custom folder template,
-//! optionally renamed), an album (existing or new), a preset and keywords to apply. Importing
-//! runs on a worker thread (files are probed, copied or moved there) and its batches join the
-//! catalog between frames, with a row and ✕ in the activity stack (issue #345); the whole import is
-//! one undo step.
+//! optionally renamed), an album (existing or new), a preset, an optional batch-edit recipe
+//! ("Batch edits": develop controls set on every new photo) and keywords to apply. When the scan
+//! left something out (a walk cut at its limit, folders it couldn't read, files that are not
+//! photos) one line under the count says so ([`scan_note`]). Importing runs on a worker thread
+//! (files are probed, copied or moved there) and its batches join the catalog between frames, with
+//! a row and ✕ in the activity stack (issue #345); the whole import is one undo step.
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use lightcraft_engine::import::{
@@ -28,17 +30,22 @@ mod task;
 
 #[cfg(test)]
 pub(crate) use body::grid_height;
+use body::recipe_items;
+pub(crate) use body::scan_note;
 #[cfg(test)]
 pub(crate) use body::thumb_edge;
 #[cfg(test)]
 use body::{DEFAULT_BELOW_GRID, badge_rect, dup_counts};
 pub use body::{DEFAULT_FOLDER_TEMPLATE, body, example_destination, source_summary};
 pub(crate) use body::{DIALOG_SIZE, THUMB_SIZE_DEFAULT, note_dialog_bottom, thumb_size};
+#[cfg(test)]
+use body::{RECIPE_CONTROLS, note_recipe_value};
+pub(crate) use scan::StoppingScans;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use scan::cards_seen;
-pub use scan::{ScanTask, browse, open, poll_scan, running};
 #[cfg(test)]
-pub(crate) use scan::{stall_scan, stall_scan_of};
+pub(crate) use scan::{HELD_RESOLVES, ScanEnd, scan_by_hand, stall_scan, stall_scan_of};
+pub use scan::{ScanTask, browse, open, poll_scan, running};
 pub(crate) use tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
 pub use task::{ImportTask, start, start_paths, tick};
 
@@ -60,6 +67,12 @@ pub struct ImportDialog {
     pub new_album: String,
     /// Preset id ("" = none).
     pub preset: String,
+    /// An optional batch-edit recipe: develop control id → value (only controls moved off their
+    /// default are kept), set on every photo this import adds, on top of its sidecar, camera
+    /// default and preset (the `recipe` param of `library.import`).
+    pub recipe: std::collections::BTreeMap<String, f64>,
+    /// Name typed for "Save as Preset" (the recipe saved for reuse).
+    pub recipe_name: String,
     /// Comma-separated keywords.
     pub keywords: String,
     /// Copy: destination folder ("" = the library's Originals/).
@@ -79,6 +92,14 @@ pub struct ImportDialog {
     /// What to do with those: `restore` (the default: the photo comes back with its edits), `fresh`
     /// (imported as a new photo, the old record deleted) or "" (leave them) — the `onDeleted` param.
     pub on_deleted: String,
+    /// The scan's folder walk stopped at a depth or entry limit: there may be more photos than the
+    /// review lists ([`ScanOutput::truncated`]; `scanLimited` in the `library.importPreview` reply).
+    pub scan_limited: bool,
+    /// Folders the scan couldn't list ([`ScanOutput::unreadable`]).
+    pub unreadable: usize,
+    /// Files in the scanned folders that are not a supported photo type, XMP sidecars not counted
+    /// ([`ScanOutput::unsupported`]).
+    pub unsupported: usize,
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
@@ -372,5 +393,51 @@ mod tests {
         d.last_clicked = Some(99);
         d.click(2, true);
         assert_eq!(d.checked, [true, true, false, false, true, true]);
+    }
+
+    /// The dialog offers only controls a recipe may name: `library.import` refuses the others
+    /// (white balance, geometry and crop, per-photo controls), so one offered here would make every
+    /// import with it fail. Each is moved off its default, as a slider drag does.
+    #[test]
+    fn every_offered_recipe_control_is_accepted_by_the_import() {
+        let session = lightcraft_engine::Session::new();
+        let mut d = dialog();
+        for id in RECIPE_CONTROLS {
+            let spec = lightcraft_develop::controls::find(id).unwrap_or_else(|| panic!("{id} is not a develop control"));
+            let moved = if spec.default < spec.max { spec.max } else { spec.min };
+            note_recipe_value(&mut d.recipe, spec, moved);
+        }
+        assert_eq!(d.recipe.len(), RECIPE_CONTROLS.len(), "all named, none repeated");
+        let params = json!({"paths": ["img0.jpg"], "recipe": recipe_items(&d.recipe)});
+        let request = lightcraft_engine::cmd::library::import_params(&session, &params).unwrap_or_else(|e| panic!("refused: {e}"));
+        assert_eq!(request.opts.recipe.len(), RECIPE_CONTROLS.len());
+    }
+
+    /// A slider moved off its default names its control in the recipe; moved back, it no longer does.
+    #[test]
+    fn a_slider_back_at_its_default_leaves_the_recipe() {
+        let spec = lightcraft_develop::controls::find("light.exposure").unwrap();
+        let mut recipe = std::collections::BTreeMap::new();
+        note_recipe_value(&mut recipe, spec, 0.5);
+        assert_eq!(recipe.get("light.exposure"), Some(&0.5));
+        note_recipe_value(&mut recipe, spec, 1.25);
+        assert_eq!(recipe.get("light.exposure"), Some(&1.25), "a new value replaces the old");
+        note_recipe_value(&mut recipe, spec, spec.default);
+        assert!(recipe.is_empty(), "{recipe:?}");
+    }
+
+    /// `start` hands `library.import` a `recipe` only when the dialog has one.
+    #[test]
+    fn start_passes_the_recipe_only_when_the_dialog_has_one() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services { png: None, ..Default::default() });
+        let mut d = dialog();
+        start(&mut app, &d).unwrap();
+        let params = app.import.take().map(|t| t.params).unwrap();
+        assert!(params.get("recipe").is_none(), "{params}");
+        d.recipe.insert("light.exposure".into(), 0.5);
+        d.recipe.insert("color.vibrance".into(), -20.0);
+        start(&mut app, &d).unwrap();
+        let params = app.import.take().map(|t| t.params).unwrap();
+        assert_eq!(params["recipe"], json!([{"id": "color.vibrance", "value": -20.0}, {"id": "light.exposure", "value": 0.5}]), "{params}");
     }
 }
