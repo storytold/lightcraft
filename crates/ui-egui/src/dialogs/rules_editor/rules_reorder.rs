@@ -163,12 +163,13 @@ pub(crate) fn grip_id(salt: &str) -> Id {
     Id::unique(("ruleGrip", salt))
 }
 
-/// Says which dialog the editor about to be drawn is in (its `instance`): a drag that began in another one is
-/// given up, however alike the rules of the two are.
+/// Says which dialog the editor about to be drawn is in (its `instance`): a drag that began in another one, and
+/// the grip a move there left to be brought into view, are given up, however alike the rules of the two are.
 pub fn bind(ctx: &egui::Context, instance: u64) {
     with_state(ctx, |s| {
         if s.instance != Some(instance) {
             s.drag = None;
+            s.refocus = None;
             s.instance = Some(instance);
         }
     });
@@ -441,6 +442,20 @@ pub fn rule_text(field: &str, op: &str, value: &Value, albums: &[AlbumEntry]) ->
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// What a move leaves for the next frame (the grip to bring into view) belongs to the dialog it was made in: another
+    /// dialog drawn next doesn't scroll to it, while the same one still does.
+    #[test]
+    fn a_pending_refocus_is_given_up_for_another_dialog() {
+        let ctx = egui::Context::default();
+        let grip = grip_id("rules-1");
+        bind(&ctx, 1);
+        with_state(&ctx, |s| s.refocus = Some(grip));
+        bind(&ctx, 1);
+        assert_eq!(with_state(&ctx, |s| s.refocus), Some(grip), "the same dialog keeps it");
+        bind(&ctx, 2);
+        assert_eq!(with_state(&ctx, |s| s.refocus), None, "another dialog doesn't");
+    }
 
     fn row(path: &[usize], top: f32, bottom: f32, group: bool) -> RowRec {
         RowRec { path: path.to_vec(), rect: Rect::from_min_max(pos2(0.0, top), pos2(100.0, bottom)), group }
