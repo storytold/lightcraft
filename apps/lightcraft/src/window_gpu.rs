@@ -95,10 +95,10 @@ impl Files {
     }
     /// Empty the marker through its locked handle; only if that fails, delete it.
     fn clear(f: &File, path: Option<PathBuf>) {
-        if f.set_len(0).is_err() {
-            if let Some(p) = path {
-                let _ = std::fs::remove_file(p);
-            }
+        if f.set_len(0).is_err()
+            && let Some(p) = path
+        {
+            let _ = std::fs::remove_file(p);
         }
     }
     /// Before the window opens: record what is being started, holding the marker's lock until
