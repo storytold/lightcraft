@@ -9,6 +9,11 @@
 //! with the answer filled in under the parameter it was missing. Hosts without a `Picker` (the
 //! web, where browser pickers are asynchronous already; tests) answer through the synchronous
 //! services as before.
+//!
+//! A host whose dialogs are sheets of the window (macOS, where the dialog is built on the UI
+//! thread and only the wait for its answer is off it) shows one at a time: it sets
+//! [`Services::picker_one_at_a_time`], and a request made while a dialog is up waits in
+//! `pending_picks` until that one has closed, then starts, in the order asked (#3735).
 
 use crate::{LightcraftApp, Services};
 use serde_json::{Value, json};
@@ -66,14 +71,23 @@ pub const CURVE_PRESET_EXTENSIONS: &[&str] = &["lccurve", "json"];
 /// channel with the chosen paths (none = cancelled). `Err` when no dialog could be started.
 pub type Picker = Box<dyn FnMut(PickRequest) -> Result<Receiver<Vec<String>>, String>>;
 
-/// A dialog that is up for a command. When it closes, the command runs again with the answer
-/// under `key`.
+/// A dialog that is up for a command, or waits for its turn. When it closes, the command runs
+/// again with the answer under `key`.
 pub struct Pending {
     pub command: String,
     params: Value,
     key: &'static str,
     kind: PickKind,
-    rx: Receiver<Vec<String>>,
+    stage: Stage,
+}
+
+/// Where a command's dialog stands.
+enum Stage {
+    /// Shown: the host answers through the channel.
+    Up(Receiver<Vec<String>>),
+    /// Not shown yet: [`Services::picker_one_at_a_time`] hosts show one dialog at a time, and this
+    /// one waits for the dialog in front of it to close.
+    Waiting(PickRequest),
 }
 
 /// How a command's request for a path was answered.
@@ -88,8 +102,8 @@ pub enum Picked {
 
 /// Ask for a path for `command`, which was run with `params` but without `key`. With a [`Picker`]
 /// the dialog runs off the UI thread and the command comes back through [`poll`] with `key` filled
-/// in; a dialog already up for the command is not opened twice. Without one, `now` asks the
-/// synchronous service.
+/// in; a dialog already up (or waiting) for the command is not opened twice. Without one, `now`
+/// asks the synchronous service.
 pub fn ask(
     app: &mut LightcraftApp,
     command: &str,
@@ -103,9 +117,14 @@ pub fn ask(
     }
     if let Some(start) = app.services.picker.as_mut() {
         let kind = request.kind;
+        let pending = |stage| Pending { command: command.to_string(), params: params.clone(), key, kind, stage };
+        if app.services.picker_one_at_a_time && !app.pending_picks.is_empty() {
+            app.pending_picks.push(pending(Stage::Waiting(request)));
+            return Picked::Later;
+        }
         match start(request) {
             Ok(rx) => {
-                app.pending_picks.push(Pending { command: command.to_string(), params: params.clone(), key, kind, rx });
+                app.pending_picks.push(pending(Stage::Up(rx)));
                 return Picked::Later;
             }
             Err(e) => log::warn!("{command}: no background file dialog ({e}); asking on the UI thread"),
@@ -131,6 +150,7 @@ pub fn with_answer(params: &Value, key: &str, kind: PickKind, paths: &[String]) 
 
 /// Each frame: run the commands whose dialogs have closed with something chosen; forget the
 /// cancelled ones and those whose dialog went away without an answer.
+/// On a host that shows one dialog at a time, then show the next waiting one.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.pending_picks.is_empty() {
         return;
@@ -138,7 +158,11 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     let mut answered = Vec::new();
     let mut waiting = Vec::new();
     for p in std::mem::take(&mut app.pending_picks) {
-        match p.rx.try_recv() {
+        let Stage::Up(rx) = &p.stage else {
+            waiting.push(p);
+            continue;
+        };
+        match rx.try_recv() {
             Ok(paths) if paths.is_empty() => {}
             Ok(paths) => answered.push((p, paths)),
             Err(TryRecvError::Empty) => waiting.push(p),
@@ -159,6 +183,27 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
             }
             Err(e) => app.toast_error(ctx, e),
+        }
+    }
+    start_waiting(app);
+}
+
+/// Show the first waiting request once no dialog is up. One the host can't show is dropped (and
+/// logged), and the next in line gets its turn.
+fn start_waiting(app: &mut LightcraftApp) {
+    let Some(start) = app.services.picker.as_mut() else { return };
+    while !app.pending_picks.iter().any(|p| matches!(p.stage, Stage::Up(_))) {
+        let next = app.pending_picks.iter().enumerate().find_map(|(i, p)| match &p.stage {
+            Stage::Waiting(request) => Some((i, request.clone())),
+            Stage::Up(_) => None,
+        });
+        let Some((i, request)) = next else { return };
+        match start(request) {
+            Ok(rx) => app.pending_picks[i].stage = Stage::Up(rx),
+            Err(e) => {
+                let dropped = app.pending_picks.remove(i);
+                log::warn!("{}: the file dialog could not be shown ({e}); the command was not run", dropped.command);
+            }
         }
     }
 }
@@ -189,6 +234,11 @@ mod tests {
     /// sender that answers it. Frames run through the headless harness, so [`poll`] and the import
     /// scan happen as in the app.
     fn app_with_picker() -> (Headless, Asked) {
+        app_with(false)
+    }
+
+    /// [`app_with_picker`] for a host whose dialogs are sheets (`one_at_a_time`) or not.
+    fn app_with(one_at_a_time: bool) -> (Headless, Asked) {
         let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
         let asked: Asked = Default::default();
         let a = asked.clone();
@@ -197,6 +247,7 @@ mod tests {
             a.lock().unwrap().push((req, tx));
             Ok(rx)
         }));
+        app.services.picker_one_at_a_time = one_at_a_time;
         let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
         h.settle(SETTLE);
         (h, asked)
@@ -299,5 +350,100 @@ mod tests {
         assert_eq!(bare.run("file.addPhotos", json!({})).unwrap(), Value::Null);
         assert!(bare.run("file.importPresets", json!({})).is_err(), "no dialog on this platform");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The kinds of dialog the host has been asked to show, in order.
+    fn kinds(asked: &Asked) -> Vec<PickKind> {
+        asked.lock().unwrap().iter().map(|(request, _)| request.kind).collect()
+    }
+
+    #[test]
+    fn a_host_that_shows_one_dialog_at_a_time_holds_the_next_request_until_the_first_has_closed() {
+        let dir = std::env::temp_dir().join(format!("lc-pick-sheets-{}", std::process::id()));
+        let _photo = photo_in(&dir);
+        let (mut h, asked) = app_with(true);
+        h.app.run("file.addPhotos", json!({})).unwrap();
+        h.app.run("file.addFolder", json!({})).unwrap();
+        h.settle(SETTLE);
+        assert_eq!(kinds(&asked), [PickKind::Files], "only the first dialog is shown");
+        // the second is still waiting for its answer: the control channel lists both
+        let listed = h.request("ui.inspect", json!({}), SETTLE)["result"]["fileDialogs"].clone();
+        assert_eq!(listed, json!(["file.addPhotos", "file.addFolder"]));
+        // the first is closed with nothing chosen: the second is shown, and its answer runs as it would have
+        asked.lock().unwrap()[0].1.send(vec![]).unwrap();
+        h.settle(SETTLE);
+        assert_eq!(kinds(&asked), [PickKind::Files, PickKind::Folder]);
+        assert_eq!(h.app.pending_picks.len(), 1);
+        asked.lock().unwrap()[1].1.send(vec![dir.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(import_sources(&mut h), Some(vec![dir.to_string_lossy().to_string()]));
+        assert!(h.app.pending_picks.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn requests_that_wait_are_shown_in_the_order_asked_and_a_repeat_adds_nothing() {
+        let (mut h, asked) = app_with(true);
+        h.app.run("file.addPhotos", json!({})).unwrap();
+        h.app.run("file.addFolder", json!({})).unwrap();
+        h.app.run("file.exportPresets", json!({"group": "Mine"})).unwrap();
+        h.app.run("file.addFolder", json!({})).unwrap();
+        assert_eq!(h.app.pending_picks.len(), 3, "the repeat is the request already waiting");
+        let order = [PickKind::Files, PickKind::Folder, PickKind::Save];
+        for (i, _) in order.iter().enumerate() {
+            h.settle(SETTLE);
+            assert_eq!(kinds(&asked), order[..=i].to_vec(), "after {i} have closed");
+            asked.lock().unwrap()[i].1.send(vec![]).unwrap();
+        }
+        h.settle(SETTLE);
+        assert!(h.app.pending_picks.is_empty());
+        assert_eq!(kinds(&asked), order.to_vec(), "nothing was shown twice");
+    }
+
+    /// The window went away under a sheet: the host's sender is dropped without an answer.
+    #[test]
+    fn a_sheet_that_goes_away_without_an_answer_lets_the_next_request_show() {
+        let (mut h, asked) = app_with(true);
+        h.app.run("file.addPhotos", json!({})).unwrap();
+        h.app.run("file.addFolder", json!({})).unwrap();
+        asked.lock().unwrap().pop();
+        h.settle(SETTLE);
+        assert_eq!(kinds(&asked), [PickKind::Folder], "the first is forgotten and the second is shown");
+        assert_eq!(h.app.pending_picks.len(), 1);
+        assert!(h.app.ui.dialog.is_none(), "nothing ran for the first");
+    }
+
+    #[test]
+    fn a_waiting_request_the_host_cannot_show_is_dropped_and_the_next_gets_its_turn() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.services.picker_one_at_a_time = true;
+        let asked: Asked = Default::default();
+        let a = asked.clone();
+        app.services.picker = Some(Box::new(move |req| {
+            if req.kind == PickKind::Folder {
+                return Err("no sheet for a folder".to_string());
+            }
+            let (tx, rx) = channel();
+            a.lock().unwrap().push((req, tx));
+            Ok(rx)
+        }));
+        let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+        h.settle(SETTLE);
+        h.app.run("file.addPhotos", json!({})).unwrap();
+        h.app.run("file.addFolder", json!({})).unwrap();
+        h.app.run("file.exportPresets", json!({"group": "Mine"})).unwrap();
+        assert_eq!(h.app.pending_picks.len(), 3);
+        asked.lock().unwrap()[0].1.send(vec![]).unwrap();
+        h.settle(SETTLE);
+        assert_eq!(kinds(&asked), [PickKind::Files, PickKind::Save], "the folder dialog could not be shown; the save dialog was");
+        assert_eq!(h.app.pending_picks.len(), 1);
+    }
+
+    #[test]
+    fn a_host_without_sheets_shows_every_dialog_at_once() {
+        let (mut h, asked) = app_with_picker();
+        h.app.run("file.addPhotos", json!({})).unwrap();
+        h.app.run("file.addFolder", json!({})).unwrap();
+        assert_eq!(kinds(&asked), [PickKind::Files, PickKind::Folder]);
+        assert_eq!(h.app.pending_picks.len(), 2);
     }
 }

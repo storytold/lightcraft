@@ -504,8 +504,8 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-APP-SIGNOUT | Sign out | OOS | 🚫 | | |
 | MENU-APP-HIDE | Hide / hide others / show all | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | the system's own items in the app menu (⌘H, ⌥⌘H) |
 | MENU-APP-QUIT | Quit | P0 | ✅ | `cmd:app.quit`, `apps/lightcraft/src/native_menu.rs` | macOS: app menu (native); elsewhere: File → Quit LightCraft, always the last item in its own group (after commands the File layout does not list) |
-| MENU-FILE-ADDPHOTOS | Import Photos… (was Add Photos…) | P0 | ✅ | `cmd:file.addPhotos`, `crates/ui-egui/src/menus.rs` | first item of File, ⇧⌘I; file picker → the import review |
-| MENU-FILE-ADDFOLDER | Import from Folder… (was Add Folder…) | P0 | ✅ | `cmd:file.addFolder`, `cmd:library.importPreview` | folder picker (desktop) → the import review, subfolders included; `path` param for agents. Worded as importing: it doesn't save a Local location (that is Local → Browse Folder…) |
+| MENU-FILE-ADDPHOTOS | Import Photos… (was Add Photos…) | P0 | ✅ | `cmd:file.addPhotos`, `crates/ui-egui/src/menus.rs` | first item of File, ⇧⌘I; file picker (a sheet of the window on macOS) → the import review |
+| MENU-FILE-ADDFOLDER | Import from Folder… (was Add Folder…) | P0 | ✅ | `cmd:file.addFolder`, `cmd:library.importPreview` | folder picker (desktop; a sheet of the window on macOS) → the import review, subfolders included; `path` param for agents. Worded as importing: it doesn't save a Local location (that is Local → Browse Folder…) |
 | MENU-FILE-MIGRATE | Migrate photos | OOS | 🚫 | | |
 | MENU-FILE-NEWALBUM | New Album… | P0 | ✅ | `cmd:dialog.newAlbum` | |
 | MENU-FILE-NEWFOLDER | New Folder… | P0 | ✅ | `cmd:dialog.newFolder` | ⇧⌘N |
@@ -802,6 +802,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | patch | MENU-FILE-ADDPHOTOS, MENU-FILE-ADDFOLDER: on macOS the file dialogs of commands (Import Photos…, Import from Folder…, New Library…, Open Library…, the exports, preset and keyword lists) open as a sheet of the window, made on the UI thread and one at a time; made from another thread, rfd's dialog hung the window on macOS 26.6 (#3735); statuses unchanged |
 | 2026-11-04 | minor | LR-IMP-FORMATS / LR-IMP-CAMERA-COVERAGE: Olympus compressed ORF bitstream decoder implemented (`crates/raw/src/vendor/orfc.rs`); OM-D E-M1 and E-M10 Mark III verified on CC0 files; 58 bodies newly unlocked (78 total across Olympus and OM) |
 | 2026-10-28 | minor | KEY-HIDEPINS ✅ → 🟡: in the Masking panel an unmodified H toggles the mask pins (`view.maskPins`, the View ▸ Show Mask Pins switch) instead of opening Remove; the toggle yields only to an explicit assignment of H itself, a Remove key reassigned to anything else still opens Remove there, and outside Masking — and the full-screen preview, where no panel shows — H keeps its own binding (Remove, by default). Remove's spot pins keep ⇧H as their only hide toggle (`tests/keymap` `h_toggles_the_mask_pins_while_masking`, `a_remapped_remove_key_still_opens_remove_while_masking`, `h_still_toggles_the_pins_when_remove_moves_to_another_key`) |
 | 2026-11-06 | minor | LR-EDIT-DETAIL-CNR, LRC-DEV-PROCESS: process V6 takes colour noise reduction to the joint method on linear R−Y / B−Y (issue #815); status unchanged |
