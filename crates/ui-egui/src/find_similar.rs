@@ -41,6 +41,7 @@ fn start(app: &mut LightcraftApp, p: &Value, end: impl FnOnce(&mut LightcraftApp
     let (flag, stopped) = (cancel.clone(), cancel.clone());
     let work = move |task: lightcraft_engine::activity::TaskHandle| {
         let total = count as u64;
+        task.progress(0, total);
         lightcraft_engine::guard::catch(LABEL, || similar::measure(reads, &flag, &|done| task.progress(done as u64, total)))
     };
     let done = move |app: &mut LightcraftApp, ctx: &egui::Context, found: Result<Vec<similar::Signature>, String>| {
@@ -61,7 +62,7 @@ fn start(app: &mut LightcraftApp, p: &Value, end: impl FnOnce(&mut LightcraftApp
         };
         end(app, ctx, ended);
     };
-    crate::tasks::spawn_tracked(app, LABEL, similar::KIND, cancel, count as u64, work, done)?;
+    crate::tasks::spawn_tracked(app, LABEL, similar::KIND, cancel, work, done)?;
     Ok(count)
 }
 

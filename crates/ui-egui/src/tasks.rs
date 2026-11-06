@@ -24,9 +24,6 @@ pub struct Tasks {
     running: Vec<Task>,
     /// Repaints the window when a task finishes (set every frame).
     pub(crate) repaint: Option<egui::Context>,
-    /// Pause the next worker before its first instruction, without relying on OS scheduling.
-    #[cfg(test)]
-    pub(crate) next_worker_start: Option<Receiver<()>>,
 }
 
 impl Tasks {
@@ -60,18 +57,16 @@ pub fn spawn<T: Send + 'static>(
 
 /// [`spawn`] for a task with progress that can stop: its row (`kind`, `label`) adopts `cancel`,
 /// the flag `work` checks, so the row's ✕ and `activity.cancel` stop it; `work` reports progress
-/// through the handle it is given. `total` is published before the worker starts (0 if unknown).
+/// through the handle it is given.
 pub fn spawn_tracked<T: Send + 'static>(
     app: &mut LightcraftApp,
     label: &str,
     kind: &'static str,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    total: u64,
     work: impl FnOnce(lightcraft_engine::activity::TaskHandle) -> T + Send + 'static,
     done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
 ) -> Result<(), String> {
     let guard = app.session.activity.start(kind, label, lightcraft_engine::activity::Cancel::Flag(cancel));
-    guard.progress(0, total);
     let handle = guard.handle();
     start(app, label, Some(guard), move || work(handle), done)
 }
@@ -86,13 +81,7 @@ fn start<T: Send + 'static>(
 ) -> Result<(), String> {
     let (tx, rx) = channel::<Finish>();
     let repaint = app.tasks.repaint.clone();
-    #[cfg(test)]
-    let gate = app.tasks.next_worker_start.take();
     let job = move || {
-        #[cfg(test)]
-        if let Some(gate) = gate {
-            let _ = gate.recv();
-        }
         let t = work();
         let _ = tx.send(Box::new(move |app: &mut LightcraftApp, ctx: &egui::Context| done(app, ctx, t)));
         if let Some(c) = repaint {

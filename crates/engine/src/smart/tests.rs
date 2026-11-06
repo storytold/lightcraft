@@ -362,3 +362,70 @@ fn a_proxy_from_an_older_encode_is_stale() {
     assert!(!look_checked(&dir), "a look-only marker is not enough to skip the rebuild");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A lens database changes the geometry used to align the fitted camera look, although the fit
+/// algorithm version stays the same. Keep these checks independent of process-global environment.
+#[test]
+fn lens_database_changes_rebuild_fitted_smart_previews_and_scan_markers() {
+    let fit = u64::from(crate::camera_preview::LOOK_VERSION);
+    let mut head = serde_json::json!({LOOK_FIELD: fit, ENC_FIELD: ENCODE_VERSION, LENS_FIELD: 123});
+    assert!(!header_is_stale(&head, true, 123));
+    for next_db in [0, 456] {
+        assert!(header_is_stale(&head, true, next_db), "removing or replacing the database rebuilds fitted pixels");
+        assert!(!header_is_stale(&head, false, next_db), "non-fitted photos do not depend on lens alignment");
+        assert!(!marker_is_current(&format!("{fit} {ENCODE_VERSION} 123"), next_db), "the folder must be scanned again");
+    }
+    assert!(marker_is_current(&format!("{fit} {ENCODE_VERSION} 123"), 123));
+    head.as_object_mut().unwrap().remove(LENS_FIELD);
+    assert!(header_is_stale(&head, true, 123), "adding a database rebuilds legacy fits");
+    assert!(header_is_stale(&head, true, 0), "a legacy fit may have used a database that is no longer installed");
+    head[LENS_FIELD] = serde_json::json!(0);
+    assert!(!header_is_stale(&head, true, 0), "an explicit no-database identity remains valid");
+    assert!(!marker_is_current(&format!("{fit} {ENCODE_VERSION}"), 123), "old markers require a new scan");
+    for field in [LOOK_FIELD, ENC_FIELD] {
+        let mut newer = head.clone();
+        newer[field] = serde_json::json!(newer[field].as_u64().unwrap() + 1);
+        assert!(!header_is_stale(&newer, true, 123), "a different database does not downgrade newer proxies");
+    }
+    assert!(marker_is_current(&format!("{} {ENCODE_VERSION} 456", fit + 1), 123));
+    assert!(marker_is_current(&format!("{fit} {} 456", ENCODE_VERSION + 1), 123));
+}
+
+#[test]
+fn smart_preview_from_another_database_stays_decodable_offline() {
+    let image = lightcraft_scenes::demo_library()[0].render(64, 40);
+    let bytes = encode(&image, None).unwrap();
+    let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let mut head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
+    head[LENS_FIELD] = serde_json::json!(crate::lens_profiles::cache_key().wrapping_add(1));
+    let mut changed = MAGIC.to_vec();
+    changed.extend_from_slice(head.to_string().as_bytes());
+    changed.extend_from_slice(&bytes[nl..]);
+    let dir = temp("lens-database-offline");
+    let path = dir.join("old.lcsp");
+    std::fs::write(&path, &changed).unwrap();
+    assert!(is_stale_for(&path, true), "the public disk check compares the current lens identity");
+    assert!(!is_stale_for(&path, false), "non-fitted photos do not depend on the lens database");
+    assert!(is_valid(&path), "staleness does not invalidate the offline copy");
+    let decoded = load(&path).unwrap();
+    assert!(decoded.from_proxy);
+    assert_eq!((decoded.image.width, decoded.image.height), (image.width, image.height));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn explicit_lens_identity_is_kept_by_encoder_and_scan_marker() {
+    let dir = temp("captured-lens");
+    let image = Rgb32f::new(16, 16);
+    let captured = crate::lens_profiles::cache_key().wrapping_add(1);
+    let bytes = encode_with_lens_key(&image, None, captured).unwrap();
+    let start = MAGIC.len();
+    let end = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+    let head: serde_json::Value = serde_json::from_slice(&bytes[start..end]).unwrap();
+    assert_eq!(head[LENS_FIELD], serde_json::json!(captured), "encoding must not read a later identity");
+    mark_look_checked_with_lens_key(&dir, captured).unwrap();
+    let marker = std::fs::read_to_string(dir.join(LOOK_MARKER)).unwrap();
+    assert!(marker_is_current(&marker, captured));
+    assert!(!look_checked(&dir), "a captured older identity does not mark the current database checked");
+    std::fs::remove_dir_all(dir).unwrap();
+}

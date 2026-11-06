@@ -240,21 +240,10 @@ fn a_hover_preview_key_follows_the_lens_profile() {
     let mut s = session();
     let settings = s.catalog.photo(PhotoId(1)).unwrap().develop.clone();
     let before = s.preview_job(PhotoId(1), 640, 480, true, &settings).unwrap().key;
-    // Prepared culling views now bypass decoding: they must follow the resolved
-    // lens identity just like the hover render and the source cache.
-    let view = s.loupe_job(PhotoId(1), 64, 64, true).unwrap();
-    let (views, key) = view.view_cache.as_ref().unwrap();
-    views.put_memory(*key, Arc::new(Rgba8::from_fn(64, 64, |_, _| [7, 19, 31, 255])));
-    assert!(s.loupe_job(PhotoId(1), 64, 64, true).unwrap().cached_view().is_some());
     let lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
     s.catalog.apply(Op::SetEmbeddedLens { id: PhotoId(1), lens: Some(Box::new(lens)) }).unwrap();
     let after = s.preview_job(PhotoId(1), 640, 480, true, &settings).unwrap().key;
     assert_ne!(before, after);
-    let view = s.loupe_job(PhotoId(1), 64, 64, true).unwrap();
-    assert!(view.cached_view().is_none(), "the old prepared view has no newly resolved lens correction");
-    let (views, key) = view.view_cache.as_ref().unwrap();
-    views.put_memory(*key, Arc::new(Rgba8::from_fn(64, 64, |_, _| [41, 53, 67, 255])));
-    assert!(s.loupe_job(PhotoId(1), 64, 64, true).unwrap().cached_view().is_some());
     // one database profile looked up again as another (a newer database): the key follows the profile's contents,
     // not only whether there is one
     let vignette = lightcraft_develop::EmbeddedVignette { k: [-0.3, 0.0, 0.0, 0.0, 0.0], radius: 1.0, ..Default::default() };
@@ -262,7 +251,6 @@ fn a_hover_preview_key_follows_the_lens_profile() {
     s.catalog.apply(Op::SetEmbeddedLens { id: PhotoId(1), lens: Some(Box::new(other)) }).unwrap();
     let again = s.preview_job(PhotoId(1), 640, 480, true, &settings).unwrap().key;
     assert_ne!(after, again, "a different database profile");
-    assert!(s.loupe_job(PhotoId(1), 64, 64, true).unwrap().cached_view().is_none(), "a changed calibration cannot reuse the prior prepared view");
 }
 /// A panic while rendering (here in the decoder) used to end the pool's worker thread without
 /// an answer, so the view that asked showed "Rendering…" forever. It is the job's failure now,

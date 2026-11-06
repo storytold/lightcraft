@@ -1,8 +1,9 @@
 # CR3 profile correspondence geometry
 
 CR3 colour calibration can propose a resolved lens profile’s geometry before collecting
-sensor/JPEG training pairs. It reuses the guarded correspondence algorithm proposed in
-#2675, with an additional comparison against CR3’s existing framing fallback.
+sensor/JPEG training pairs. It contains its own guarded correspondence helpers and database/Smart-preview provenance,
+with an additional comparison against CR3’s existing framing fallback. This PR applies directly
+to upstream main and requires no prior merge of #2675.
 It does not change CR3 decoding or the lens warp applied when developing the photograph.
 
 A resolved external lens profile may propose geometry only for file-local colour calibration
@@ -24,8 +25,10 @@ CR3 framing path. All subsequent colour,
 tone, hue/saturation, clipping, and held-out acceptance gates stay unchanged.
 
 The proposal reaches file-local colour and tone, pooled camera-profile pairs, and colour tags
-for merge/DNG conversion. Cache versions advance from upstream look 13/render 75 to look 14/render 76.
-Render 76 also separates the combined result from the earlier CR3-only render 74 cache.
+for merge/DNG conversion. Cache versions advance from upstream look 13/render 76 to look 14/render 77.
+The loaded database semantic identity also invalidates camera render/view keys, Smart-preview
+headers and scan markers. Fresh original decodes retain the photo’s hot-pixel setting; offline
+proxies remain readable and cannot be relabelled as freshly fitted pixels.
 The upstream source-position vignetting correction remains before geometry, including CR3. No camera allowlist,
 new profile matching rules, or weaker acceptance gate is introduced. Other RAW formats
 retain their existing correspondence behaviour. The non-CR3 and fixed-mount changes

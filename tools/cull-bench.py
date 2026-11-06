@@ -329,3 +329,8 @@ p = inspect()["perf"]
 out["perf"] = {k: p.get(k) for k in ("fps", "maxUpdateMs", "gpu", "rendersDone", "thumbTextures")}
 print(json.dumps(out, indent=1, default=str))
 open(LABEL + ".json", "w" if OVERWRITE else "x", encoding="utf-8").write(json.dumps(out, indent=1, default=str))
+
+
+
+
+

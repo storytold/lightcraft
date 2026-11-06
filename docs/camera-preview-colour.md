@@ -337,3 +337,16 @@ the neutral fallback): E-1 0.126 → 0.014, E-400 0.087 → 0.022, XZ-2 0.061 �
 still open from their embedded JPEG. Against Lightroom Classic's render of a CC0 E-1 photo (2000 px, ΔE00 of the
 unedited render) the starting look moved from 11.25 to 8.30. Lightroom frames that E-1 file about 4 × 11 sensor pixels
 differently from the crop the file records (`CropLeft`/`CropTop` 36, 34); the file's own crop is kept.
+
+### Standalone CR3 cache and Smart-preview provenance
+
+The CR3-only proposal contains its own semantic identity for the loaded lens database.
+Camera render/view keys, Smart-preview headers and scan markers follow that identity.
+The producer captures it before decoding a fresh original, rejects a database change
+during decode and retains the captured identity during encoding. Cached or offline proxy
+pixels cannot be relabelled as current; existing offline proxies remain readable.
+The fresh original path retains the photo's hot-pixel decode setting. This infrastructure
+does not enable non-CR3 profile geometry or unnamed fixed-mount matching.
+The proposal applies directly to upstream main, without a prior #2675 merge, and uses
+look14/render77 against upstream look13/render76. Historical image measurements above
+have not been repeated on this integrated source.
