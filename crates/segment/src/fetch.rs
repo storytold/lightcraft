@@ -31,15 +31,12 @@ pub const SAM3_FILES: &[FileSpec] = &[
 pub const SAM3_WEIGHTS_SIZE: u64 = 3_439_938_512;
 
 /// Where LightCraft downloads the model from, in order: each is a base URL, and file `f` is at
-/// `<base>/<f>`. **Empty for now**: LightCraft has no download location of its own yet, so the
-/// in-app download needs the user's list (`LIGHTCRAFT_SAM3_MIRRORS` or the mirrors file, see
-/// [`mirrors`] and docs/ai-masks.md) until this is filled in.
-///
+/// `<base>/<f>`.
 /// Hugging Face's `facebook/sam3` can't be a default: it is gated (each user must accept the
 /// SAM License there and download with their own token).
 // TODO(maintainer): add LightCraft's CDN locations (https, primary first), e.g.
 // "https://<cdn-host>/models/sam3/<revision>" — the files there must match `SAM3_FILES`.
-pub const DEFAULT_MIRRORS: &[&str] = &[];
+pub const DEFAULT_MIRRORS: &[&str] = &["https://getartcraft.com/models/sam3"];
 
 /// Environment variable with extra mirrors (base URLs separated by commas, spaces or newlines),
 /// tried before the defaults.
@@ -75,5 +72,12 @@ mod tests {
         let m = mirrors(Some("https://a.example/x/"), Some(Path::new("/nonexistent/mirrors.txt")));
         assert_eq!(m.len(), 1 + DEFAULT_MIRRORS.len());
         assert!(no_mirrors_message().contains(MIRRORS_ENV));
+    }
+
+    #[test]
+    fn default_mirrors_offer_a_download_location() {
+        let m = mirrors(None, None);
+        assert!(!m.is_empty(), "mirrors() must offer a download location by default");
+        assert!(m.iter().all(|base| base.starts_with("https://")));
     }
 }
