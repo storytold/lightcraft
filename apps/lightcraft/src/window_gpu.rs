@@ -89,7 +89,9 @@ impl Files {
         // through the locked handle: on Windows a lock refuses reads through any other
         let mut text = String::new();
         let _ = std::io::Read::read_to_string(&mut f, &mut text);
-        Self::clear(&f, Some(m));
+        if !text.is_empty() {
+            Self::clear(&f, Some(m));
+        }
         let _ = f.unlock();
         WindowRenderer::parse(&text)
     }
@@ -366,9 +368,10 @@ mod tests {
         d
     }
 
-    /// Bytes in the marker (metadata, not a read: on Windows a held lock refuses reads).
-    fn marker_len(f: &Files) -> u64 {
-        std::fs::metadata(f.marker().unwrap()).map_or(0, |m| m.len())
+    /// Bytes in the marker, `None` when the file is gone (metadata, not a read: on Windows a held
+    /// lock refuses reads).
+    fn marker_len(f: &Files) -> Option<u64> {
+        std::fs::metadata(f.marker().unwrap()).ok().map(|m| m.len())
     }
 
     /// The marker names the renderer being started; left behind by a copy that is gone, the next
@@ -380,18 +383,18 @@ mod tests {
         let f = Files::new(Some(d.clone()));
         let dx = WindowRenderer::Wgpu(Backends::DX12);
         f.arm(dx);
-        assert!(f.armed() && marker_len(&f) > 0);
+        assert!(f.armed() && marker_len(&f) > Some(0));
         // the start died: the OS releases its lock, the marker stays (unlocked by hand: a sibling
         // test spawning a process can hold a copy of our descriptor, and a flock lasts while one is open)
         f.release_for_relaunch();
         drop(f);
         let next = Files::new(Some(d.clone()));
         assert_eq!(next.take_failed(), Some(dx));
-        assert_eq!(marker_len(&next), 0, "taken: the marker is emptied");
+        assert_eq!(marker_len(&next), Some(0), "taken: the marker is emptied, not deleted");
         assert_eq!(next.take_failed(), None);
         next.arm(WindowRenderer::Glow);
         next.started(WindowRenderer::Glow);
-        assert!(!next.armed() && marker_len(&next) == 0);
+        assert!(!next.armed() && marker_len(&next) == Some(0));
         assert_eq!(Files::read(next.remembered()), cfg!(windows).then_some(WindowRenderer::Glow));
         // nothing written without a settings folder
         let none = Files::new(None);
@@ -411,13 +414,13 @@ mod tests {
         first.arm(dx);
         let second = Files::new(Some(d.clone()));
         assert_eq!(second.take_failed(), None, "the first copy is still starting");
-        assert!(marker_len(&second) > 0, "its marker is not cleared");
+        assert!(marker_len(&second) > Some(0), "its marker is not cleared");
         second.arm(WindowRenderer::Glow);
         assert!(!second.armed(), "the second copy does not take over the first's marker");
         second.started(WindowRenderer::Glow);
-        assert!(marker_len(&second) > 0, "nor does its start clear it");
+        assert!(marker_len(&second) > Some(0), "nor does its start clear it");
         first.started(dx);
-        assert_eq!(marker_len(&first), 0);
+        assert_eq!(marker_len(&first), Some(0));
         assert_eq!(Files::new(Some(d.clone())).take_failed(), None);
         let _ = std::fs::remove_dir_all(&d);
     }

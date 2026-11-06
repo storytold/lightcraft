@@ -139,8 +139,9 @@ pipeline inside wgpu error scopes, so a driver that cannot compile egui's shader
 incorrect. (0x80070057)" in `egui_pipeline`) is logged and skipped instead of killing the app; no pop-up
 unless that renderer was forced (#1624). The renderer
 that worked is remembered in the settings folder (`window-renderer`); a start that dies before the window is up
-leaves `window-init.marker` (emptied once the window is up), and the next start (relaunched automatically, at most
-4 times) tries that renderer last. Where the file system supports locks, the starting copy holds an
+leaves the renderer's name in `window-init.marker` (emptied once the window is up), and the next start
+(relaunched automatically, at most 4 times) tries that renderer last. Where the file system supports locks, the
+starting copy holds an
 operating-system lock on the marker until its window is up, so a second copy started on the same settings folder
 while the first is still starting leaves the first's marker alone and does not read it as a failed start (no
 "could not start with its … renderer last time" notice, and Windows does not remember a weaker renderer because
