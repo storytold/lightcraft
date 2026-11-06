@@ -591,7 +591,7 @@ fn cached_denoise_uses_the_same_white_balance_profile_and_orientation_as_plain_r
     product::write(&path, &camera_rgb, key).unwrap();
     let spec = DenoiseSpec { product: path, key: key.into(), make: None };
     let (ordinary, _) = load_bytes(&bytes, 2048).unwrap();
-    let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec).unwrap();
+    let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec, Default::default()).unwrap();
     assert_eq!(plain.data, ordinary.data, "requesting a twin must not change the ordinary path");
     let cached = cached.unwrap();
     assert_eq!((plain.width, plain.height), (24, 32));
@@ -1255,10 +1255,10 @@ fn exports_never_develop_a_dngs_reduced_copy() {
     let mean = |img: &lightcraft_raster::Rgba8| img.data.iter().map(|p| p[1] as f64).sum::<f64>() / img.data.len().max(1) as f64;
 
     // the loaders: only the thumbnail's develops the copy, and only when it covers the size
-    let (copy, _, used) = load_vec_reduced(bytes.clone(), 512).unwrap();
+    let (copy, _, used) = load_vec_reduced(bytes.clone(), 512, Default::default()).unwrap();
     assert!(used, "a thumbnail develops the copy");
-    assert!(!load_vec_reduced(bytes.clone(), 1024).unwrap().2, "no copy covers 1024 px");
-    let (full, _) = load_vec(bytes.clone(), 512).unwrap();
+    assert!(!load_vec_reduced(bytes.clone(), 1024, Default::default()).unwrap().2, "no copy covers 1024 px");
+    let (full, _) = load_vec(bytes.clone(), 512, Default::default()).unwrap();
     assert!(g(&copy) > 4.0 * g(&full), "the fixture's copy is much brighter: {} vs {}", g(&copy), g(&full));
 
     let dir = std::env::temp_dir().join(format!("lc-reduced-export-{}", std::process::id()));
@@ -1843,4 +1843,36 @@ fn existing_photo_settings_are_not_rewritten() {
     assert!(!s.catalog.photo(old).unwrap().is_edited(), "still as imported");
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Issue #1632: a DNG's `ProfileToneCurve` is the finish stage's camera curve, so process V5 extends
+/// it past its last point (the sensor's white, scene 1.0) with the stop roll-off as well. A curve
+/// that reaches white there renders as under V4 up to it and white past it; one that ends below
+/// white (here 0.9) keeps what Exposure lifts past the sensor's white apart instead of reaching
+/// 8-bit 255 within a stop.
+#[test]
+fn v5_extends_a_dng_tone_curve_past_white_in_stops() {
+    use lightcraft_color::transfer::linear_to_srgb;
+    use lightcraft_develop::{DevelopSettings, Process};
+    use lightcraft_pipeline::SourceInfo;
+    let code = |curve: &[f64], process: Process, y: f32| {
+        let tone = lightcraft_raw::profile::ToneCurve::from_tag(curve).and_then(|c| super::dng_tone_curve(&c));
+        let info = SourceInfo { raw: true, camera_tone: Some(tone.expect("a valid curve")), ..SourceInfo::default() };
+        let s = DevelopSettings { process: process.version(), ..DevelopSettings::default() };
+        let o = lightcraft_pipeline::finish::base_tone(&s, &info, 1.0).apply(y);
+        (linear_to_srgb(o.clamp(0.0, 1.0)) * 255.0).round()
+    };
+    let to_white = [0.0, 0.0, 0.03, 0.09, 0.18, 0.4, 0.5, 0.78, 1.0, 1.0];
+    for y in [0.01, 0.05, 0.18, 0.5, 0.9] {
+        assert_eq!(code(&to_white, Process::V5, y), code(&to_white, Process::V4, y), "{y}");
+    }
+    for y in [1.0, 2.0, 4.0] {
+        assert_eq!((code(&to_white, Process::V4, y), code(&to_white, Process::V5, y)), (255.0, 255.0), "{y}");
+    }
+    let below_white = [0.0, 0.0, 0.03, 0.09, 0.18, 0.4, 0.5, 0.72, 1.0, 0.9];
+    let at = |process, ev: f32| code(&below_white, process, ev.exp2());
+    assert_eq!(at(Process::V5, 0.0), at(Process::V4, 0.0));
+    assert_eq!(at(Process::V4, 1.0), 255.0, "V4 is frozen");
+    let (white, beyond) = (at(Process::V5, 0.0), at(Process::V5, 1.0));
+    assert!(beyond < 254.0 && beyond - white >= 3.0, "{white} then {beyond} a stop past the sensor's white");
 }
