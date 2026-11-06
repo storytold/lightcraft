@@ -1,9 +1,9 @@
-//! Native file dialogs for commands, off the UI thread (#191). A synchronous dialog blocks the
+//! Native file dialogs for commands that don't block the UI thread (#191). A synchronous dialog blocks the
 //! thread that shows it, and on the desktop that was the UI thread: the window stopped answering
 //! the compositor (GNOME marked LightCraft "not responding" and offered to kill it), the menu the
 //! command came from stayed drawn, and the control channel went quiet until the dialog closed.
 //!
-//! A host that can run a dialog elsewhere installs a [`Picker`] in `Services`: it starts the
+//! A host that can show a dialog without blocking installs a [`Picker`] in `Services`: it starts the
 //! dialog and answers through a channel. A command that needs a path the caller didn't give
 //! [`ask`]s for one and returns at once; when the dialog closes, [`poll`] runs the command again
 //! with the answer filled in under the parameter it was missing. Hosts without a `Picker` (the
@@ -101,7 +101,7 @@ pub enum Picked {
 }
 
 /// Ask for a path for `command`, which was run with `params` but without `key`. With a [`Picker`]
-/// the dialog runs off the UI thread and the command comes back through [`poll`] with `key` filled
+/// the dialog doesn't block the UI thread and the command comes back through [`poll`] with `key` filled
 /// in; a dialog already up (or waiting) for the command is not opened twice. Without one, `now`
 /// asks the synchronous service.
 pub fn ask(
