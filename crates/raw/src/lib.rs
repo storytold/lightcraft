@@ -665,6 +665,8 @@ pub struct ColorData {
     pub as_shot_neutral: Option<[f64; 3]>,
     pub as_shot_white_xy: Option<Xy>,
     /// EV to add for a "normal" rendering (`BaselineExposure` + `BaselineExposureOffset`).
+    /// A full CR3 decode also includes compensation for sample-derived white headroom;
+    /// a header-only probe cannot determine that adjustment.
     pub baseline_exposure: f64,
     /// `BaselineSharpness`: sharpening relative to a reference camera (`None`: the DNG default,
     /// 1). Read and written back by DNG export; rendering doesn't use it yet.
