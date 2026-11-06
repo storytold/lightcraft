@@ -1391,6 +1391,7 @@
   "No folders to browse": "Inga mappar att bläddra i",
   "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "Ingen grafikprocessor hittades: LightCraft renderar på CPU:n, vilket är mycket långsammare. Mer information i Hjälp → Systeminfo.",
   "No imported folders yet": "Inga importerade mappar än",
+  "Folders on this computer, browsed without adding them": "Mappar på den här datorn, som bläddras i utan att läggas till",
   "No keywords are exported": "Inga nyckelord exporteras",
   "No keywords match": "Inga nyckelord matchar",
   "No keywords yet": "Inga nyckelord än",

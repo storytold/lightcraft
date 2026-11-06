@@ -1356,6 +1356,7 @@
   "No folders to browse": "დასათვალიერებელი საქაღალდეები არ არის",
   "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "გრაფიკული პროცესორი ვერ მოიძებნა: LightCraft რენდერს CPU-ზე ასრულებს, რაც გაცილებით ნელია. დეტალები: დახმარება → სისტემის ინფორმაცია.",
   "No imported folders yet": "იმპორტირებული საქაღალდეები ჯერ არ არის",
+  "Folders on this computer, browsed without adding them": "ამ კომპიუტერის საქაღალდეები, რომლებიც დამატების გარეშე დათვალიერდება",
   "No keywords are exported": "საკვანძო სიტყვები არ ექსპორტირდება",
   "No keywords match": "შესაბამისი საკვანძო სიტყვა არ არის",
   "No keywords yet": "საკვანძო სიტყვები ჯერ არ არის",

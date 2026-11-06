@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### An empty Folders section offers the import
+- The sidebar's Folders section, when it has no imported folders yet, now offers Import Photos… and (in the desktop
+  app) Import from Folder… as rows under "No imported folders yet", instead of only saying it is empty. Folders' header
+  also has a + like Albums' and Keywords', with the same two items, so the import is there when Folders is not empty
+  either. Hovering Local's header now says what it is: "Folders on this computer, browsed without adding them".
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

@@ -1,5 +1,5 @@
 use super::albums::top_level_drop_target;
-use super::rows::{ROW_HEIGHT, note_width};
+use super::rows::{ROW_HEIGHT, Row, note_width};
 use super::{Align2, Icon, LightcraftApp, Rect, Sense, SidebarSection, Tokens, icon_button, json, paint, pos2, register, vec2};
 
 /// Space above a section's header.
@@ -43,7 +43,7 @@ pub(super) fn section(
         let rows_from = ui.cursor().top();
         body(app, ui);
         if ui.cursor().top() <= rows_from {
-            empty_hint(ui, section);
+            empty_hint(app, ui, section);
         }
     }
     PlacedSection { section, top: header.top(), bottom: ui.cursor().top(), open, rows }
@@ -83,8 +83,9 @@ pub(super) fn pinned_header(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: 
 }
 
 /// What an open section with nothing to list says in place of its rows (widget
-/// `sidebarEmpty:<id>`), so the section stays where it is instead of disappearing.
-fn empty_hint(ui: &mut egui::Ui, section: SidebarSection) {
+/// `sidebarEmpty:<id>`), so the section stays where it is instead of disappearing. An empty
+/// Folders also offers the ways to fill it ([`IMPORT_WAYS`]), as rows.
+fn empty_hint(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSection) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
     register(ui, format!("sidebarEmpty:{}", section.id()), r);
@@ -92,6 +93,9 @@ fn empty_hint(ui: &mut egui::Ui, section: SidebarSection) {
     let galley = ui.painter().layout_no_wrap(text.to_string(), t.font(12.5), t.text_dim);
     note_width(ui, 42.0 + galley.size().x + 18.0);
     ui.painter().galley(pos2(r.left() + 42.0, r.center().y - galley.size().y / 2.0), galley, t.text_dim);
+    if section == SidebarSection::Folders {
+        folders_import_rows(app, ui);
+    }
 }
 
 /// Where a section was laid out this frame (screen y): from its header's top to the end of its rows.
@@ -192,6 +196,11 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     let title = crate::i18n::tr(section.title());
     let (interact, widget) = if pinned { ("sidebar-section-pinned", "sidebarSectionPinned") } else { ("sidebar-section", "sidebarSection") };
     let resp = ui.interact(r, ui.scope_id().with((interact, id)), Sense::click_and_drag());
+    // (what the name leaves open, as Local's is the disk and not the library)
+    let resp = match section.header_hint() {
+        Some(hint) => resp.on_hover_text(crate::i18n::tr(hint)),
+        None => resp,
+    };
     register(ui, format!("{widget}:{id}"), r);
     let toggled = resp.clicked();
     if toggled {
@@ -270,7 +279,10 @@ fn header_button(section: SidebarSection) -> Option<HeaderButton> {
         SidebarSection::Keywords => {
             Some(HeaderButton { id: "keywordNew", icon: Icon::Plus, tooltip: "Create Keyword Tag", action: HeaderAction::Run(new_keyword) })
         }
-        SidebarSection::Local | SidebarSection::ByDate | SidebarSection::Folders => None,
+        SidebarSection::Folders => {
+            Some(HeaderButton { id: "foldersImport", icon: Icon::Plus, tooltip: "Import", action: HeaderAction::Menu(import_menu) })
+        }
+        SidebarSection::Local | SidebarSection::ByDate => None,
     }
 }
 
@@ -374,6 +386,56 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.separator();
         if ui.button(crate::i18n::tr("Sort Albums A–Z")).on_hover_text(crate::i18n::tr("Go back to listing them by name")).clicked() {
             let _ = app.run("album.sort", json!({}));
+        }
+    }
+}
+
+/// One way into the library from the Folders section: a command File ▸ Import offers, as a row of
+/// the empty section and as an item of the header's + menu.
+struct ImportWay {
+    command: &'static str,
+    /// In English (translated where it is shown).
+    label: &'static str,
+    /// The empty section's row: widget `source:<row>`.
+    row: &'static str,
+    /// The + menu's item: its widget.
+    item: &'static str,
+}
+
+/// Import Photos…, and where the host has a folder picker (not the web build) Import from Folder….
+const IMPORT_WAYS: [ImportWay; 2] = [
+    ImportWay { command: "file.addPhotos", label: "Import Photos…", row: "folders:import", item: "button:foldersImportPhotos" },
+    ImportWay { command: "file.addFolder", label: "Import from Folder…", row: "folders:importFolder", item: "button:foldersImportFolder" },
+];
+
+/// The ways in this build offers right now (the menu's own rule: a command that can't run is not offered).
+fn import_ways(app: &LightcraftApp) -> Vec<&'static ImportWay> {
+    IMPORT_WAYS.iter().filter(|w| crate::menus::ui_enabled(app, w.command)).collect()
+}
+
+/// Run one of [`IMPORT_WAYS`] as its menu item does (it asks for the photos or the folder); a refusal is a toast.
+fn run_import(app: &mut LightcraftApp, ctx: &egui::Context, way: &ImportWay) {
+    if let Err(e) = app.run(way.command, json!({})) {
+        app.toast(ctx, e);
+    }
+}
+
+/// What an empty Folders offers below its "No imported folders yet": a row for each of [`IMPORT_WAYS`].
+fn folders_import_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    for way in import_ways(app) {
+        if Row::new(way.row, Icon::Plus, crate::i18n::tr(way.label)).show(app, ui).clicked() {
+            run_import(app, ui.ctx(), way);
+        }
+    }
+}
+
+/// The menu of Folders' +: Import Photos…, Import from Folder….
+fn import_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    for way in import_ways(app) {
+        let item = ui.button(crate::i18n::tr(way.label));
+        register(ui, way.item, item.rect);
+        if item.clicked() {
+            run_import(app, ui.ctx(), way);
         }
     }
 }

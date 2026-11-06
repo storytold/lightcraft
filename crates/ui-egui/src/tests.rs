@@ -84,6 +84,7 @@ mod rules_editor;
 mod sam_setup;
 mod scan_probes;
 mod scroll;
+mod sidebar_folders_import;
 mod slider_reset;
 mod slideshow;
 mod solo_sections;

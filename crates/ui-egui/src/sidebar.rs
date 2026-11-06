@@ -56,6 +56,15 @@ impl SidebarSection {
         }
     }
 
+    /// What hovering the section's header says, in English, where the name alone leaves it open
+    /// (Local is the disk, not the library); `None` where the name says it.
+    pub const fn header_hint(self) -> Option<&'static str> {
+        match self {
+            SidebarSection::Local => Some("Folders on this computer, browsed without adding them"),
+            SidebarSection::Albums | SidebarSection::ByDate | SidebarSection::Folders | SidebarSection::Keywords => None,
+        }
+    }
+
     pub fn from_id(id: &str) -> Option<SidebarSection> {
         Self::ALL.into_iter().find(|s| s.id() == id)
     }

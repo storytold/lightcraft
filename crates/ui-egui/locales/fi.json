@@ -1276,6 +1276,7 @@
   "No folders to browse": "Ei selattavia kansioita",
   "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "Grafiikkaprosessoria ei löytynyt: LightCraft renderöi suorittimella, mikä on paljon hitaampaa. Lisätietoja kohdassa Ohje → Järjestelmätiedot.",
   "No imported folders yet": "Ei vielä tuotuja kansioita",
+  "Folders on this computer, browsed without adding them": "Tämän tietokoneen kansiot, joita selataan lisäämättä niitä",
   "No keywords are exported": "Avainsanoja ei viedä",
   "No keywords match": "Yksikään avainsana ei täsmää",
   "No keywords yet": "Ei vielä avainsanoja",
