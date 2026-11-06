@@ -363,14 +363,17 @@
 
 ### Menus look the same everywhere
 - Every menu row, in the menu bar, in right-click menus and in the dropdowns of the panels, now has one height, one
-  hover look and one check mark column, and shows its shortcut at the right edge as the menu bar does. Choices that
-  are on show a check mark that screen readers announce as checked, and a disabled row can't be chosen. (The list of
+  hover look and one check mark column. Where a menu lists shortcuts (the menu bar, the bottom bar's dropdowns and the
+  text-field right-click menu) a row shows its shortcut at the right edge as the menu bar does; the photo right-click
+  menu lists none. Choices that are on show a check mark that screen readers announce as checked, and a disabled
+  row can't be chosen. (The list of
   effects in a mask's Effect menu keeps its own rows: its current effect has a check mark that screen readers don't
   announce.)
 - Help ▸ Keyboard Shortcuts shows the fixed keys on keycaps.
-- The tooltips of the tool strip, the bottom bar's view buttons, the top bar's icons and the mask overlay buttons
-  name the key their command has now, so a key you remapped shows as remapped. The tool strip's History & Activity
-  button no longer shows a Y it never had.
+- The tooltips of the tool strip, the bottom bar's view buttons, the top bar's right-side action icons and the mask
+  overlay buttons name the key their command has now, so a key you remapped shows as remapped (the filter and
+  appearance buttons keep their plain tooltips). The tool strip's History & Activity button no longer shows a Y it
+  never had.
 
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
