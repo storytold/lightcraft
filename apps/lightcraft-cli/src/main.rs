@@ -11,11 +11,13 @@
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
 //! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+//! lightcraft-cli bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
 //! ```
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod alloc_release;
+mod bench_cull;
 
 use std::io::Write;
 use std::path::Path;
@@ -110,6 +112,12 @@ USAGE:
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
+  lightcraft-cli bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
+      Time what culling a shoot costs on its own files: reading the folder (browse), the first
+      screen of grid thumbnails, camera previews at loupe sizes and full size, a loupe render,
+      rating, and importing N files in place (default 2000) and copying M (default 200). Libraries
+      are made in a new folder under DIR (default: the temp folder); nothing is written next to the
+      photos. --files K reads only the first K files by name (a sample of a slow network folder).
   lightcraft-cli --version | --help
 ";
 
@@ -176,6 +184,7 @@ fn main() -> ExitCode {
         Some("controls") => controls(&args[1..]),
         Some("denoise-serve") => denoise_serve(&args[1..]),
         Some("calibrate") => calibrate(&args[1..]),
+        Some("bench-cull") => bench_cull::run(&args[1..]),
         Some("--version" | "-V" | "version") => {
             println!("lightcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -196,7 +205,12 @@ fn main() -> ExitCode {
 }
 
 /// Raw files below `path` (or `path` itself), skipping hidden and NAS metadata folders.
-fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
+///
+/// Folders go through the engine's bounded walk ([`lightcraft_engine::walk::files_in`]): it enters
+/// a folder reached through a link once at most and stops at a depth and an entry budget. A
+/// folder of links pointing back at their parents made the old recursive walk re-read the same
+/// folders exponentially often before its depth limit cut it off (CWE-400).
+fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>) {
     let is_raw = |p: &Path| {
         p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw", "raf", "crw"].iter().any(|x| e.eq_ignore_ascii_case(x)))
     };
@@ -206,17 +220,20 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
         }
         return;
     }
-    let Ok(entries) = std::fs::read_dir(path) else { return };
-    if depth > 32 {
-        return;
+    // (hidden entries are left out by the walk; `@eaDir` and other NAS metadata folders and files
+    // here, folders before they are listed so their entries do not use up the walk's budget)
+    let nas_metadata = |p: &Path| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('@'));
+    let walked = lightcraft_engine::walk::files_in_entering(
+        path,
+        None,
+        lightcraft_engine::walk::Limits::default(),
+        |p| is_raw(p) && !nas_metadata(p) && p.is_file(),
+        |p| !nas_metadata(p),
+    );
+    if walked.truncated {
+        eprintln!("calibrate: {} has more folders or entries than a walk looks at; the rest is left out", path.display());
     }
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if name.to_string_lossy().starts_with(['.', '@']) {
-            continue;
-        }
-        raw_files(&entry.path(), out, depth + 1);
-    }
+    out.extend(walked.files);
 }
 
 fn calibrate(args: &[String]) -> Result<(), String> {
@@ -238,7 +255,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     }
     let mut files = Vec::new();
     for input in &inputs {
-        raw_files(Path::new(input), &mut files, 0);
+        raw_files(Path::new(input), &mut files);
     }
     files.sort();
     files.dedup();
@@ -426,7 +443,7 @@ fn merge(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let mut s = file_session();
     let paths = expand_paths(&files);
     let r = s.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
     let mut ids: Vec<u64> = r["imported"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
@@ -704,6 +721,12 @@ fn read_settings(p: &str) -> Result<SettingsFile, String> {
     }
 }
 
+/// The session `render` and `merge` develop files in: with the lens database the desktop app downloaded, when it is
+/// there (never fetched from here: scripts and tests stay offline).
+fn file_session() -> Session {
+    Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_lens_database()
+}
+
 fn render(args: &[String]) -> Result<(), String> {
     let mut input = None;
     let mut output = None;
@@ -742,7 +765,7 @@ fn render(args: &[String]) -> Result<(), String> {
     }
     let input = input.ok_or("render: missing input file")?;
     let output = output.ok_or("render: missing -o OUTPUT")?;
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let mut s = file_session();
     let abs = expand_paths(std::slice::from_ref(&input));
     let r = s.execute("library.import", &json!({"paths": abs})).map_err(|e| e.to_string())?;
     let id = r["imported"][0].as_u64().ok_or_else(|| format!("{input}: not a readable photo"))?;
@@ -837,15 +860,30 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     let t0 = Instant::now();
     let mut session = match &library {
         Some(dir) => {
-            let mut s =
-                Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models().with_default_slide_templates();
+            let mut s = Session::new()
+                .with_fs()
+                .with_default_denoise_models()
+                .with_system_clock()
+                .with_default_face_models()
+                .with_default_lens_database()
+                .with_default_slide_templates();
             s.open_library(dir, false).map_err(|e| library_error(dir, e))?;
             s
         }
-        None if files.is_empty() => {
-            Session::with_demo().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models().with_default_slide_templates()
-        }
-        None => Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models().with_default_slide_templates(),
+        None if files.is_empty() => Session::with_demo()
+            .with_fs()
+            .with_default_denoise_models()
+            .with_system_clock()
+            .with_default_face_models()
+            .with_default_lens_database()
+            .with_default_slide_templates(),
+        None => Session::new()
+            .with_fs()
+            .with_default_denoise_models()
+            .with_system_clock()
+            .with_default_face_models()
+            .with_default_lens_database()
+            .with_default_slide_templates(),
     };
     // Apply compute policy before imports or the first scripted query can discover an adapter.
     session.execute("app.gpu", &json!({"enabled": false})).map_err(|e| e.to_string())?;
@@ -1068,6 +1106,47 @@ fn denoise_serve(args: &[String]) -> Result<(), String> {
 #[cfg(not(feature = "denoise"))]
 fn denoise_serve(_: &[String]) -> Result<(), String> {
     Err("denoise-serve: this build has no denoise support (build with the `denoise` feature)".into())
+}
+
+#[cfg(all(test, unix))]
+mod raw_files_tests {
+    use super::raw_files;
+
+    /// Links back to their own folders are entered once, not once per path that reaches them: a
+    /// handful of such links made the old walk list the same folders exponentially often.
+    #[test]
+    fn folder_links_back_up_are_walked_once() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-cli-raw-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = dir.join("a");
+        std::fs::create_dir_all(a.join("@eaDir")).unwrap();
+        std::fs::write(a.join("one.NEF"), b"").unwrap();
+        std::fs::write(a.join("@eaDir").join("thumb.nef"), b"").unwrap();
+        std::fs::write(a.join("notes.txt"), b"").unwrap();
+        for i in 0..8 {
+            std::os::unix::fs::symlink(&dir, a.join(format!("up{i}"))).unwrap();
+        }
+        // a named pipe with a raw extension: not a file, so never opened (a read would block)
+        assert!(std::process::Command::new("mkfifo").arg(a.join("pipe.nef")).status().unwrap().success());
+        let started = std::time::Instant::now();
+        let mut files = Vec::new();
+        raw_files(&dir, &mut files);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "walk took {:?}", started.elapsed());
+        assert_eq!(files, vec![a.join("one.NEF")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `render` and `merge` read the lens database the desktop app downloaded, as the desktop does (the same raw
+    /// gets the same profile everywhere), but never fetch it.
+    #[test]
+    fn render_reads_the_downloaded_lens_database() {
+        let s = super::file_session();
+        assert_eq!(lightcraft_engine::lens_profiles::host_dir(), lightcraft_engine::lensfun_download::default_dir());
+        assert!(!s.lens_auto_download, "selecting it is not permission to download it");
+    }
 }
 
 #[cfg(test)]
