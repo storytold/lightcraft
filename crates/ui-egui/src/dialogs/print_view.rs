@@ -168,8 +168,6 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
     let height = (screen.height() - 190.0).clamp(280.0, 780.0);
     let mut pu = std::mem::take(&mut app.ui.print);
     let st = app.session.print.clone();
-    // Each layout style has its own scroll position: what is above the Page panel differs between them
-    let scroll_id = ("print-settings", st.layout.style as u8);
     // (no `id`/`ids` given: the selection, which never fails to parse)
     let ids = app.session.targets(&json!({})).unwrap_or_default();
     // the page shown stays inside the print
@@ -181,7 +179,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(vec2(SETTINGS_W, height), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_min_size(vec2(SETTINGS_W, height));
-            egui::ScrollArea::vertical().id_salt(scroll_id).max_height(height).auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("print-settings").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_width(SETTINGS_W - 14.0);
                 settings(app, ui, t, &mut pu, &st, ids.len());
             });
