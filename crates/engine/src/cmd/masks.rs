@@ -1,9 +1,9 @@
 //! Masking and Remove (spot) commands on the active photo.
 
+use lightcraft_codecs::{EncodeImage, EncodeMeta, Samples, encode_png};
 use lightcraft_develop::{
     BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode,
 };
-use lightcraft_codecs::{EncodeImage, EncodeMeta, Samples, encode_png};
 use lightcraft_geom::Point;
 use lightcraft_pipeline::{MaskView, Overlay, RenderRequest};
 use serde_json::{Value, json};
