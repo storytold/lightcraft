@@ -507,6 +507,21 @@ mod tests {
         assert!(PrepSettings::default().patched(&json!({"library": {"previews": false, "unknown": true}})).is_err());
     }
 
+    #[test]
+    fn a_patch_with_an_unknown_field_is_rejected_at_every_level() {
+        let original = PrepSettings::default().patched(&json!({"culling": {"ahead": 3}, "develop": {"ahead": 1}})).unwrap();
+        let before = original;
+        for patch in [
+            json!({"unknown": true}),
+            json!({"culling": {"ahead": 4}, "unknown": true}),
+            json!({"culling": {"previews": false, "unknown": true}}),
+            json!({"develop": {"ahead": 0, "unknown": true}}),
+        ] {
+            assert!(original.patched(&patch).is_err(), "{patch}");
+            assert_eq!(original, before, "{patch} leaves the settings as they were");
+        }
+    }
+
     /// Tests side by side: one test's release doesn't free the build another test holds (CodeRabbit on #3077).
     #[test]
     fn one_tests_release_does_not_free_another_tests_hold() {
