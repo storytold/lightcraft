@@ -671,3 +671,19 @@ fn deleting_one_of_several_shown_albums_moves_the_active_photo_into_what_is_left
     s.execute("album.delete", &json!({"id": b})).unwrap();
     assert_eq!(s.active(), Some(PhotoId(ids[2])));
 }
+
+#[test]
+fn deleting_several_shown_albums_at_once_moves_the_active_photo_into_what_is_left() {
+    let mut s = Session::new();
+    let (ids, a, b) = two_albums(&mut s);
+    let c = album(&mut s, "Cairo", &[ids[3]]);
+    s.execute("library.source", &json!({"kind": "album", "ids": [a, b, c]})).unwrap();
+    // Given the active photo is in an album that goes only (Cairo, the one chosen last)
+    s.execute("library.select", &json!({"ids": [ids[3]]})).unwrap();
+    // When Beach and Cairo are deleted in one call
+    s.execute("album.delete", &json!({"ids": [b, c]})).unwrap();
+    // Then Alps is what the grid shows and the active photo is one of its photos
+    let left = shown(&mut s);
+    assert_eq!(left, vec![ids[0], ids[1]]);
+    assert!(s.active().is_some_and(|p| left.contains(&p.0)), "{:?}", s.active());
+}
