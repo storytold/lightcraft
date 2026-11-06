@@ -610,7 +610,7 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         assert_eq!(h.app.ui.proof.profile, 0, "a colour space, no device profile");
         h.app.ui.soft_proof = true;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.soft_proof");
         let (main, small) = drag_exposure(&mut h);
         if !gpu {
             lightcraft_testkit::skip!(Gpu, "no GPU: every drag drafts small");
@@ -1298,7 +1298,7 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail_in([1800.0, 900.0]);
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         h.events.push(egui::Event::Key {
             key: egui::Key::Backslash,
             physical_key: Some(egui::Key::Backslash),
@@ -1306,10 +1306,10 @@ mod in_the_loupe {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         });
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after the injected input");
         // (the key's own shortcut switches to the Before view; side by side is chosen again with the key down)
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.before_after");
         assert!(h.app.renderer.textures.contains_key(&Slot::RegionBefore), "the Before window is rendered");
         // the After pane back to a stand-in: no whole-frame render and no window of its own
         h.app.renderer.textures.remove(&Slot::Main);
@@ -1345,7 +1345,7 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail_in([1800.0, 900.0]);
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.zoom100");
         h.events.push(egui::Event::Key {
             key: egui::Key::Backslash,
             physical_key: Some(egui::Key::Backslash),
@@ -1353,10 +1353,10 @@ mod in_the_loupe {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         });
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after the injected input");
         // (the key's own shortcut switches to the Before view; side by side is chosen again with the key down)
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.before_after");
         h.step();
         let canvas = h.app.canvas_rect.unwrap();
         let (before, after) = (drawn(&h, Slot::RegionBefore), drawn(&h, Slot::Region));
