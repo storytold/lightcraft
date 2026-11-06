@@ -291,6 +291,10 @@ fn a_refused_command_on_photos_that_exist_confirms_nothing_and_changes_nothing()
         ("photo.label", json!({"label": "chartreuse"})),
         ("photo.label", json!({"label": 7})),
         ("photo.label", json!({"label": "red", "ids": [1, 999]})),
+        ("photo.increaseRating", json!({"ids": [1, 999]})),
+        ("photo.cycleFlag", json!({"ids": [1, 999]})),
+        ("photo.pick", json!({"ids": [1, 999]})),
+        ("photo.reject", json!({"id": 999})),
     ] {
         app.ui.status.clear();
         let refusal = app.run_typed(id, params.clone());
