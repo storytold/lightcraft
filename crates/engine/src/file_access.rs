@@ -20,7 +20,9 @@
 //! parameters before it runs, and refuses a command that isn't classified: see [`commands`].
 //!
 //! A path is checked, then opened: a process that can change the folders in between (swapping in
-//! a link) can still win that race. The roots keep an agent to the files it was given; they don't
+//! a link) can still win that race. A file with more than one name is refused, because another
+//! name may lie outside the roots, and a name count that cannot be read is refused too. A file
+//! with one name is an ordinary file. The roots keep an agent to the files it was given; they don't
 //! guard against other programs on the computer.
 
 pub mod commands;
@@ -92,6 +94,11 @@ impl AutomationRoots {
     }
 
     /// May the file or folder at `path` be read (or written)? `Err` says why not.
+    ///
+    /// A file with more than one name is rejected: another name may lie outside the roots, and
+    /// opening this one would read or change that file too. A name count that cannot be read is
+    /// rejected for the same reason. A directory is judged only by where it is, because its link
+    /// count includes `.`, `..` and child directories rather than extra names of the directory.
     pub fn check(&self, path: impl AsRef<Path>, access: Access) -> Result<(), String> {
         let path = path.as_ref();
         let roots: Vec<&Root> = match access {
@@ -114,7 +121,8 @@ impl AutomationRoots {
             allowed = in_roots(&resolve(folder)?);
         }
         if allowed {
-            return Ok(());
+            // A second name can sit outside the roots and still share this file's bytes.
+            return one_name(path);
         }
         let shown: Vec<String> = roots.iter().map(|r| r.shown.display().to_string()).collect();
         let kind = match access {
@@ -212,6 +220,41 @@ pub fn check_read(path: impl AsRef<Path>) -> Result<(), String> {
 /// May `path` be written here? Always, without roots in force.
 pub fn check_write(path: impl AsRef<Path>) -> Result<(), String> {
     current().map_or(Ok(()), |r| r.check(path, Access::Write))
+}
+
+/// Reject `path` when it is a file with another name, or when that count cannot be read.
+///
+/// `Ok(())` when the path has one name, names a directory, or does not exist yet. A directory is
+/// not counted: its link count includes `.`, `..` and child directories.
+fn one_name(path: &Path) -> Result<(), String> {
+    match has_other_names(path) {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(format!("automation path rejected: {} has more than one name, and another may lie outside the roots", path.display())),
+        Err(e) => Err(format!("automation path rejected: cannot count the names of {}: {e}", path.display())),
+    }
+}
+
+/// `Ok(true)` when `path` is an existing file with more than one directory entry.
+///
+/// `Ok(false)` when it has one name, names a directory, or does not exist yet. `Err` when the
+/// count cannot be read, or comes back as zero: neither is a count a confinement check can trust,
+/// so the caller refuses the path. Symbolic links are followed, so the count is the file a read
+/// would open.
+fn has_other_names(path: &Path) -> std::io::Result<bool> {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    if meta.is_dir() {
+        return Ok(false);
+    }
+    // A real file has at least one name. Zero is not a count we can trust.
+    match lightcraft_catalog::safe_file::link_count(path)? {
+        1 => Ok(false),
+        0 => Err(std::io::Error::other("the number of names was 0")),
+        _ => Ok(true),
+    }
 }
 
 /// The folder `path` stands in when its last name is a link (`a/link/` and `a/link/.` are that link too).
@@ -514,6 +557,44 @@ mod tests {
         assert!(roots.check(s(base.join("out/com1.txt")), Access::Write).is_err());
         assert_eq!(roots.check(s(base.join("out/console.txt")), Access::Write), Ok(()));
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A file with another name is refused, inside the root or not: the other name may lie outside it.
+    /// A file with one name, a missing name, and a directory that has child folders all pass.
+    #[test]
+    fn a_file_with_hard_links_is_refused() {
+        let base = std::env::temp_dir().join(format!("lc-file-access-hard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (root, outside) = (base.join("root"), base.join("outside"));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let file = root.join("a.jpg");
+        std::fs::write(&file, b"x").unwrap();
+        let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+        assert_eq!(roots.check(&file, Access::Read), Ok(()), "one name");
+        assert_eq!(roots.check(&file, Access::Write), Ok(()));
+        assert_eq!(roots.check(&root, Access::Read), Ok(()), "a directory's link count is not extra names");
+        assert_eq!(roots.check(root.join("new.jpg"), Access::Write), Ok(()), "a name that does not exist yet");
+        let other = outside.join("also.jpg");
+        match std::fs::hard_link(&file, &other) {
+            Ok(()) => {}
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&base);
+                lightcraft_testkit::skip!(System, "no hard links in {}: {e}", base.display());
+                return;
+            }
+        }
+        for access in [Access::Read, Access::Write] {
+            let e = roots.check(&file, access).unwrap_err();
+            assert!(e.contains("more than one name"), "{access:?}: {e}");
+        }
+        std::fs::remove_file(&other).unwrap();
+        assert_eq!(roots.check(&file, Access::Read), Ok(()), "the extra name is gone");
+        // Both names are inside the root. The other one is still invisible to a path check.
+        std::fs::hard_link(&file, root.join("b.jpg")).unwrap();
+        let e = roots.check(&file, Access::Read).unwrap_err();
+        assert!(e.contains("more than one name"), "{e}");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// Scopes nest and stay on their thread.

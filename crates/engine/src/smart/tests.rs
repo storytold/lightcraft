@@ -399,3 +399,56 @@ fn a_shard_link_does_not_take_a_migration_out_of_the_roots() {
     assert_eq!(std::fs::read(&secret).unwrap(), b"secret");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// The library folder is the operator's, so a smart preview is written there even when that folder
+/// is outside both roots. The source is a photo the catalog names: outside the roots it is not read.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_library_outside_the_roots_builds_its_smart_previews() {
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp("library-previews");
+    let (root, lib, outside) = (base.join("root"), base.join("lib"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let png = |tint: u8| {
+        let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 8) as u8, tint, (y * 8) as u8, 255]);
+        lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()
+    };
+    let photo = root.join("a.png");
+    let secret = outside.join("secret.png");
+    std::fs::write(&photo, png(40)).unwrap();
+    std::fs::write(&secret, png(200)).unwrap();
+
+    let mut s = crate::Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    confine(Some(&roots), || s.execute("library.import", &serde_json::json!({"paths": [photo.to_string_lossy()]}))).unwrap();
+    let id = s
+        .catalog
+        .photos()
+        .find(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if path.ends_with("a.png")))
+        .map(|p| p.id.0)
+        .unwrap();
+    let built = confine(Some(&roots), || s.execute("library.smartPreviews", &serde_json::json!({"ids": [id]}))).unwrap();
+    assert_eq!(built["built"], 1, "{built}");
+    assert_eq!(built["failed"].as_array().map(|a| a.len()), Some(0), "{built}");
+    assert_eq!(stats(&dir(&lib)).0, 1, "the preview lands in the library, outside both roots");
+
+    let refused =
+        confine(Some(&roots), || s.execute("library.import", &serde_json::json!({"paths": [secret.to_string_lossy()]}))).unwrap_err().to_string();
+    assert!(refused.contains("automation"), "{refused}");
+    s.execute("library.import", &serde_json::json!({"paths": [secret.to_string_lossy()]})).unwrap();
+    let outside_id = s
+        .catalog
+        .photos()
+        .find(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if path.ends_with("secret.png")))
+        .map(|p| p.id.0)
+        .unwrap();
+    let again = confine(Some(&roots), || s.execute("library.smartPreviews", &serde_json::json!({"ids": [outside_id]}))).unwrap();
+    assert_eq!(again["built"], 0, "{again}");
+    let failed = again["failed"].to_string();
+    assert!(failed.contains("automation"), "{again}");
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&base);
+}
