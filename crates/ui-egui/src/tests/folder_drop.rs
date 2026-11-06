@@ -674,8 +674,8 @@ fn import_to_this_folder_says_why_while_a_folder_picker_is_open() {
 }
 
 /// `file.addFolder` asks through the host's background dialog when it has one, so a host with that
-/// and no synchronous folder picker still gets Import to This Folder…; Move Folder To… reads the
-/// synchronous picker itself and stays out.
+/// and no synchronous folder picker still gets Import to This Folder…, as it gets Move Folder To…
+/// (which asks the same way).
 #[test]
 fn import_to_this_folder_needs_either_kind_of_folder_picker() {
     let (root, trip, home) = folders("menu-import-picker-only");
@@ -688,6 +688,6 @@ fn import_to_this_folder_needs_either_kind_of_folder_picker() {
     h.step();
     assert!(widget(&h, "folderRename").is_some(), "the menu is open");
     assert!(widget(&h, "folderImportHere").is_some(), "a background dialog is enough for the row");
-    assert!(widget(&h, &format!("folderMove:{}", folder_key(&trip))).is_none(), "Move reads the synchronous picker, which this host lacks");
+    assert!(widget(&h, "folderMoveTo").is_some(), "Move Folder To… asks the same way, so a background dialog is enough for it too");
     let _ = std::fs::remove_dir_all(&root);
 }
