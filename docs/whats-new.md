@@ -348,11 +348,12 @@
 - With several albums shown, Remove from Album is not offered and the Delete key is the photos' Delete once you click
   elsewhere (it asks first while Settings ▸ Confirm before moving photos to Recently Deleted is on), because there is no
   telling which album is meant.
-- Right-click one of several rows chosen to act on them all, as one step to undo: move albums into a folder, export
-  them, or delete them; give folders a color label or remove them from the library; give keywords to the selected
-  photos, take them away, merge them or delete them. Deleting or removing several asks first and says what goes; if
-  another library is opened while it asks, OK changes nothing and says so. Right-click a row that is not among them
-  and you get that row's own menu; the others stay chosen.
+- Right-click one of several rows chosen to act on them all: move albums into a folder, export them, or delete them;
+  give folders a color label or remove them from the library; give keywords to the selected photos, take them away,
+  merge them or delete them. Each change is one step to undo; exporting writes files and is not an undo step.
+  Deleting or removing several asks first and says what goes; if another library is opened while it asks, OK changes
+  nothing and says so. Right-click a row that is not among them and you get that row's own menu; the others stay
+  chosen.
 - Dragging one of several albums or keywords moves them all (albums go into the folder they are dropped in or
   beside; dropped beside a row, the one you dragged is placed there and the others come into that folder).
 - Right after choosing several rows with Cmd or Shift, the Delete key asks about those rows. Click anywhere else,
@@ -792,9 +793,9 @@
 - `library.source` takes `ids` (albums) or `paths` (folders of the library, as `library.folders` lists them, not a
   browsed Local folder) and shows the photos of any of them, each once; `library.filter` takes `keywords`, `dates`,
   `libraryFolders` and `albums`. The single fields stay and count as one
-  more of them. `library.state` lists `albums` and `libraryFolders`. The sidebars' Cmd+click and Shift+click that use
-  this come in a later change. When the albums shown include a smart album, New Smart Album from Filter… is grayed out
-  and says why, as `album.createSmart` does. So does a filter that names a smart album.
+  more of them. `library.state` lists `albums` and `libraryFolders`. When the albums shown include a smart album,
+  New Smart Album from Filter… is grayed out and says why, as `album.createSmart` does. So does a filter that names a
+  smart album.
 - With View ▸ Hold View Until Refreshed on, a view of several albums holds a photo only while one of them has it: a
   photo that stops matching the rules of a smart album among them goes at once, unless another album shown has it.
 - `library.filter` refuses an album that is not there (`no such album N`), as `library.source` does. Deleting a shown
