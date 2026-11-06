@@ -15,6 +15,8 @@
 //! * Synchronize hands the work to the background at once: the dialog closes, the app keeps
 //!   answering, and the photos arrive over the next frames under a row in the activity stack, as one undo
 //!   step.
+//! * A synchronize that was stopped says "Stopped" only when work was left undone; a Cancel that
+//!   came after the last piece was handed over says it finished like any other run.
 //! * While the folder is listed (minutes, on a network share), the scan's row says how many
 //!   folders and files it has listed, with a bar that moves on its own, not "0 of 64085"; then it
 //!   counts the files and photos checked.
@@ -277,7 +279,7 @@ fn a_scan_gone_stale_in_the_dialog_is_made_again_in_the_background() {
 }
 
 #[test]
-fn a_stopped_synchronize_says_it_was_stopped_and_stays_at_most_one_step() {
+fn a_cancelled_synchronize_stays_at_most_one_step_and_never_says_up_to_date() {
     let dir = Scratch::new("stop");
     let mut h = changed_folder(&dir);
     open_and_scan(&mut h, &dir.path("trip"));
@@ -288,8 +290,41 @@ fn a_stopped_synchronize_says_it_was_stopped_and_stays_at_most_one_step() {
     h.app.sync_run.as_mut().expect("running").cancel();
     assert!(h.step_until(T, |h| h.app.sync_run.is_none()), "it ends");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert!(toast.contains("Stopped"), "never 'up to date': {toast:?}");
+    // (the worker may have finished the one new file before the Cancel was seen: then it says what was imported)
+    assert!(toast.contains("Stopped") || toast.contains("Imported 1"), "never 'up to date': {toast:?}");
     assert!(h.app.session.undo.len() <= steps + 1, "what was done by then is at most one step");
+}
+
+/// A synchronize whose worker did `counts` of its work and ended: what its toast says when the
+/// row's ✕ was pressed first (`cancel`) or not.
+fn toast_of_run_that_ended(h: &mut Headless, counts: (usize, usize), cancel: bool) -> String {
+    let worker = crate::sync::ending_run(&mut h.app, "trip", counts);
+    if cancel {
+        let rows = h.app.session.activity.list();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        h.app.session.activity.cancel(rows[0].id).unwrap();
+    }
+    drop(worker);
+    assert!(h.step_until(T, |h| h.app.sync_run.is_none()), "it ends");
+    h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default()
+}
+
+#[test]
+fn a_synchronize_stopped_with_work_left_says_it_was_stopped() {
+    let dir = Scratch::new("stopped-left");
+    let mut h = changed_folder(&dir);
+    let toast = toast_of_run_that_ended(&mut h, (2, 3), true);
+    assert!(toast.contains("Stopped"), "one piece of three was left: {toast:?}");
+}
+
+#[test]
+fn a_cancel_after_the_last_piece_was_handed_over_says_it_finished() {
+    let dir = Scratch::new("stopped-late");
+    let mut h = changed_folder(&dir);
+    let finished = toast_of_run_that_ended(&mut h, (3, 3), false);
+    assert!(!finished.contains("Stopped"), "{finished:?}");
+    let cancelled_late = toast_of_run_that_ended(&mut h, (3, 3), true);
+    assert_eq!(cancelled_late, finished, "nothing was left undone: the same words as a run nobody cancelled");
 }
 
 #[test]
@@ -333,11 +368,12 @@ fn a_synchronize_shows_a_row_and_its_cross_stops_it() {
     assert_eq!((rows[0].kind, rows[0].label.as_str()), ("sync", "Synchronizing folder"));
     assert!(rows[0].detail.ends_with("trip"), "the folder as the dialog named it: {:?}", rows[0].detail);
     assert!(rows[0].cancellable);
-    // the row's ✕ (as `activity.cancel`): what was done stays, and the end says it was stopped
+    // the row's ✕ (as `activity.cancel`): what was done stays, and the end says how it ended
     h.app.session.activity.cancel(rows[0].id).unwrap();
     assert!(h.step_until(T, |h| h.app.sync_run.is_none()), "it ends");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert!(toast.contains("Stopped"), "{toast:?}");
+    // (the worker may have finished the one new file before the ✕ was seen: then it says what was imported)
+    assert!(toast.contains("Stopped") || toast.contains("Imported 1"), "{toast:?}");
     assert!(h.app.session.activity.list().is_empty(), "the row goes with the run");
 }
 
