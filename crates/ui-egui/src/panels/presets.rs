@@ -116,6 +116,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         egui::Popup::menu(&more).show(|ui| {
             let r = ui.checkbox(&mut app.ui.preset_thumbs, crate::i18n::tr("Show Thumbnails"));
             register(ui, "presetMenu:thumbnails", r.rect);
+            let r = ui.checkbox(&mut app.ui.preset_double_click, crate::i18n::tr("Double-Click to Apply"));
+            register(ui, "presetMenu:doubleClick", r.rect);
             ui.separator();
             if ui.button(crate::i18n::tr("Import Presets…")).clicked() {
                 let _ = app.run("file.importPresets", json!({}));
@@ -178,7 +180,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let groups = grouped(ui.ctx(), &app.session.presets);
         let (selected_total, selected_user) = selection_counts(&app.session.presets, &app.ui.preset_selection);
         // the bar goes under the list, in room kept here: above it, its coming and going would move
-        // the rows under the pointer, and the next ⌘/Ctrl+click would land on another preset
+        // the rows between the two clicks of a double-click, onto another preset
         let bar_room = if selected_total >= MIN_FOR_BAR { SELECTION_BAR_H + 1.0 } else { 0.0 };
         let list_height = (ui.available_height() - bar_room).max(0.0);
         let scroll = egui::ScrollArea::vertical().id_salt("presets-scroll").auto_shrink([false, false]).max_height(list_height).show(ui, |ui| {
@@ -295,6 +297,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                     let modifiers = ui.input(|i| i.modifiers);
                     let selects = modifiers.command || modifiers.shift;
+                    let double_click = app.ui.preset_double_click;
                     // while a selection is on show, a plain click ends it and applies nothing: a
                     // slip after selecting a hundred presets shouldn't change the photo
                     let ends_selection = !app.ui.preset_selection.is_empty();
@@ -302,9 +305,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         click_select(app, ui.ctx(), &groups, favorites, &pid, modifiers.shift);
                     } else if resp.clicked() {
                         app.ui.preset_selection.clear();
+                        if double_click {
+                            app.ui.preset_selection.insert(pid.clone());
+                        }
                         app.ui.preset_anchor = Some(pid.clone());
                     }
-                    let applies = resp.clicked() && !selects && !ends_selection;
+                    let applies = !selects && if double_click { resp.double_clicked() } else { resp.clicked() && !ends_selection };
                     if applies && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
                         AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
                         ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));

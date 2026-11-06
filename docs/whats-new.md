@@ -13,6 +13,8 @@
   to Group, Move to Group and Delete then act on the whole selection, from the bar under the list or a right-click
   inside the selection (issues #1630, #3553). Built-in presets can be copied, and stay where they are. While presets
   are selected, a plain click ends the selection and applies nothing.
+- ⋯ → Double-Click to Apply (off by default) keeps a stray click from changing the photo: a click selects a preset and
+  a double-click applies it. Resting the pointer on a preset still previews it.
 
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps

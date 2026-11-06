@@ -115,7 +115,44 @@ fn shift_click_after_a_plain_click_selects_the_range_and_applies_only_the_first(
     assert_eq!(undo_len(&h), undo + 1, "Shift+click applies nothing");
 }
 
-/// The bar coming and going leaves the rows where they are, under the pointer.
+/// Double-Click to Apply: a click selects that preset alone and applies nothing, a double-click
+/// applies it, and the setting is reached from the ⋯ menu.
+#[test]
+fn with_double_click_to_apply_a_click_selects_and_a_double_click_applies() {
+    let (mut h, ids) = app();
+    assert!(!h.app.ui.preset_double_click, "off by default");
+    click(&mut h, "icon:presetMore", json!({}));
+    click(&mut h, "presetMenu:doubleClick", json!({}));
+    assert!(h.app.ui.preset_double_click);
+    req(&mut h, "ui.key", json!({"key": "Escape"}));
+    h.app.ui.dialog = None;
+    let undo = undo_len(&h);
+
+    click(&mut h, &format!("preset:{}", ids[0]), json!({}));
+    assert_eq!(selected(&h), sorted(&[&ids[0]]));
+    assert_eq!(undo_len(&h), undo, "a click applies nothing");
+    assert!(!laid_out(&h, "presetSelectionActions"), "one preset brings up no bar");
+
+    click(&mut h, &format!("preset:{}", ids[1]), json!({}));
+    assert_eq!(selected(&h), sorted(&[&ids[1]]), "another click moves the selection");
+    assert_eq!(undo_len(&h), undo);
+
+    // past egui's double-click delay (0.3 s of simulated time), or these two clicks and the one
+    // above would count as a triple click
+    for _ in 0..30 {
+        h.step();
+    }
+    click(&mut h, &format!("preset:{}", ids[1]), json!({"count": 2}));
+    assert_eq!(undo_len(&h), undo + 1, "a double-click applies");
+    assert_eq!(selected(&h), sorted(&[&ids[1]]));
+
+    click(&mut h, &format!("preset:{}", ids[2]), json!({"shift": true}));
+    assert_eq!(selected(&h), sorted(&[&ids[1], &ids[2]]), "Shift+click extends as in the other mode");
+    assert_eq!(undo_len(&h), undo + 1);
+}
+
+/// The bar coming and going leaves the rows where they are: a double-click's second click lands on
+/// the row of its first.
 #[test]
 fn the_selection_bar_leaves_the_rows_in_place() {
     let (mut h, ids) = app();
