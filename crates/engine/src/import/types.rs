@@ -335,3 +335,44 @@ pub struct Kept {
     pub path: String,
     pub reason: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Origin, Origins, Photo, PhotoId};
+
+    fn photo(local: bool) -> Photo {
+        let source = lightcraft_catalog::Source::File { path: "/photos/a.jpg".into() };
+        let mut p = Photo::new(PhotoId(1), source, "a.jpg", "JPEG", 20, 10, "before");
+        p.local = local;
+        p.set_local_baseline();
+        p
+    }
+
+    /// A photo browsed in Local and untouched since holds only what browsing read from its file,
+    /// so the job counts it as one it made (#3434); any change since browsing, a rating too, makes
+    /// it Promoted; a library record is Existing. Only a record the job made wasn't there before.
+    #[test]
+    fn a_record_s_origin_follows_from_what_it_was_when_the_job_found_it() {
+        let mut browsed = photo(true);
+        assert!(browsed.untouched_local());
+        assert_eq!(Origin::of(&browsed), Origin::Created);
+        browsed.rating = 3;
+        assert_eq!(Origin::of(&browsed), Origin::Promoted);
+        assert_eq!(Origin::of(&photo(false)), Origin::Existing);
+        let there: Vec<bool> = [Origin::Created, Origin::Promoted, Origin::Existing].map(Origin::was_there).into();
+        assert_eq!(there, [false, true, true]);
+    }
+
+    /// The first origin recorded for a record stands for the whole job: a record the job made stays
+    /// Created when a later step finds it in the library, and every later `record` returns it.
+    #[test]
+    fn the_first_origin_recorded_for_a_record_stands() {
+        let mut origins = Origins::default();
+        assert_eq!(origins.record(PhotoId(1), Origin::Created), Origin::Created);
+        assert_eq!(origins.record(PhotoId(1), Origin::Existing), Origin::Created);
+        assert_eq!(origins.record(PhotoId(1), Origin::Promoted), Origin::Created);
+        assert_eq!(origins.record(PhotoId(2), Origin::Promoted), Origin::Promoted);
+        assert_eq!(origins.record(PhotoId(2), Origin::Created), Origin::Promoted);
+        assert_eq!(origins.record(PhotoId(3), Origin::Existing), Origin::Existing);
+    }
+}
