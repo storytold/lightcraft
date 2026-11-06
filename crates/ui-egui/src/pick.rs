@@ -176,35 +176,53 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.pending_picks = waiting;
     for (p, paths) in answered {
         let params = with_answer(&p.params, p.key, p.kind, &paths);
-        match app.run(&p.command, params) {
-            Ok(r) => {
-                if let Some(text) = answered_message(&p.command, &r) {
-                    app.toast(ctx, text);
-                }
-            }
-            Err(e) => app.toast_error(ctx, e),
-        }
+        let result = app.run(&p.command, params);
+        report(app, ctx, &p.command, result);
     }
-    start_waiting(app);
+    start_waiting(app, ctx);
 }
 
-/// Show the first waiting request once no dialog is up. One the host can't show is dropped (and
-/// logged), and the next in line gets its turn.
-fn start_waiting(app: &mut LightcraftApp) {
-    let Some(start) = app.services.picker.as_mut() else { return };
+/// Show the first waiting request once no dialog is up. One the host can't show is asked another
+/// way, as `ask` does for one refused when it is made (the command runs again with no host dialog,
+/// so its own `ask` falls to the synchronous service, and it fails if there is none), and the next
+/// in line gets its turn.
+fn start_waiting(app: &mut LightcraftApp, ctx: &egui::Context) {
     while !app.pending_picks.iter().any(|p| matches!(p.stage, Stage::Up(_))) {
         let next = app.pending_picks.iter().enumerate().find_map(|(i, p)| match &p.stage {
             Stage::Waiting(request) => Some((i, request.clone())),
             Stage::Up(_) => None,
         });
         let Some((i, request)) = next else { return };
+        let Some(start) = app.services.picker.as_mut() else { return };
         match start(request) {
             Ok(rx) => app.pending_picks[i].stage = Stage::Up(rx),
             Err(e) => {
-                let dropped = app.pending_picks.remove(i);
-                log::warn!("{}: the file dialog could not be shown ({e}); the command was not run", dropped.command);
+                let refused = app.pending_picks.remove(i);
+                log::warn!("{}: no background file dialog ({e}); asking on the UI thread", refused.command);
+                run_without_picker(app, ctx, refused);
             }
         }
+    }
+}
+
+/// `p`'s command, run again as on a host with no dialogs of its own: its `ask` falls to the
+/// synchronous service (or finds none and fails), and what comes of it is reported.
+fn run_without_picker(app: &mut LightcraftApp, ctx: &egui::Context, p: Pending) {
+    let picker = app.services.picker.take();
+    let result = app.run(&p.command, p.params);
+    app.services.picker = picker;
+    report(app, ctx, &p.command, result);
+}
+
+/// Say what `command` came to when it ran for a dialog: what it says when it worked, or why it did not.
+fn report(app: &mut LightcraftApp, ctx: &egui::Context, command: &str, result: Result<Value, String>) {
+    match result {
+        Ok(r) => {
+            if let Some(text) = answered_message(command, &r) {
+                app.toast(ctx, text);
+            }
+        }
+        Err(e) => app.toast_error(ctx, e),
     }
 }
 
@@ -412,15 +430,15 @@ mod tests {
         assert!(h.app.ui.dialog.is_none(), "nothing ran for the first");
     }
 
-    #[test]
-    fn a_waiting_request_the_host_cannot_show_is_dropped_and_the_next_gets_its_turn() {
+    /// A host that shows one dialog at a time, and cannot show the dialogs of the kind `refused`.
+    fn app_refusing(refused: PickKind) -> (Headless, Asked) {
         let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
         app.services.picker_one_at_a_time = true;
         let asked: Asked = Default::default();
         let a = asked.clone();
         app.services.picker = Some(Box::new(move |req| {
-            if req.kind == PickKind::Folder {
-                return Err("no sheet for a folder".to_string());
+            if req.kind == refused {
+                return Err("no sheet for that".to_string());
             }
             let (tx, rx) = channel();
             a.lock().unwrap().push((req, tx));
@@ -428,6 +446,12 @@ mod tests {
         }));
         let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
         h.settle(SETTLE);
+        (h, asked)
+    }
+
+    #[test]
+    fn a_waiting_request_the_host_cannot_show_does_not_hold_up_the_next_one() {
+        let (mut h, asked) = app_refusing(PickKind::Folder);
         h.app.run("file.addPhotos", json!({})).unwrap();
         h.app.run("file.addFolder", json!({})).unwrap();
         h.app.run("file.exportPresets", json!({"group": "Mine"})).unwrap();
@@ -436,6 +460,36 @@ mod tests {
         h.settle(SETTLE);
         assert_eq!(kinds(&asked), [PickKind::Files, PickKind::Save], "the folder dialog could not be shown; the save dialog was");
         assert_eq!(h.app.pending_picks.len(), 1);
+    }
+
+    #[test]
+    fn a_waiting_request_the_host_cannot_show_asks_the_synchronous_service_instead() {
+        let dir = std::env::temp_dir().join(format!("lc-pick-refused-{}", std::process::id()));
+        let _photo = photo_in(&dir);
+        let (mut h, asked) = app_refusing(PickKind::Folder);
+        let chosen = dir.to_string_lossy().to_string();
+        let answer = chosen.clone();
+        h.app.services.pick_folder = Some(Box::new(move || Some(answer.clone())));
+        h.app.run("file.addPhotos", json!({})).unwrap();
+        h.app.run("file.addFolder", json!({})).unwrap();
+        asked.lock().unwrap()[0].1.send(vec![]).unwrap();
+        assert_eq!(import_sources(&mut h), Some(vec![chosen]), "the folder went to the synchronous service, as one refused when asked for does");
+        assert!(h.app.pending_picks.is_empty());
+        assert!(h.app.services.picker.is_some(), "the host's own dialogs are back for the next request");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_waiting_request_nothing_can_show_says_so_instead_of_vanishing() {
+        let (mut h, asked) = app_refusing(PickKind::Save);
+        h.app.run("file.addPhotos", json!({})).unwrap();
+        h.app.run("file.exportPresets", json!({"group": "Mine"})).unwrap();
+        asked.lock().unwrap()[0].1.send(vec![]).unwrap();
+        h.step();
+        let said = h.app.ui.toast.as_ref().map(|t| t.0.clone());
+        assert_eq!(said.as_deref(), Some("no file dialog on this platform"), "the user is told, not left waiting for a dialog that never comes");
+        assert!(h.app.pending_picks.is_empty());
+        assert!(h.app.services.picker.is_some());
     }
 
     #[test]
