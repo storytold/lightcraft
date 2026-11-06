@@ -405,11 +405,21 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
 
 impl Session {
     /// Plan a merge of `ids` (catalog order of the given ids is kept). A photo named more than once is merged once
-    /// (issue #1947): it adds nothing to the merge, and each copy would be decoded and held in memory.
+    /// (issue #1947): it adds nothing to the merge, and each copy would be decoded and held in memory. Naming a photo
+    /// in a collapsed stack names all its members (in stack order), since only its top photo is visible.
     pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
         let mut sources = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for id in ids.iter().filter(|id| seen.insert(**id)) {
+        let mut expanded: Vec<PhotoId> = Vec::new();
+        for id in ids {
+            // Borrow the stack out ahead of the per-member lookup below.
+            let members = self.catalog.stack_of(*id).filter(|st| st.collapsed).map(|st| st.photos.clone());
+            match members {
+                Some(members) => expanded.extend(members),
+                None => expanded.push(*id),
+            }
+        }
+        for id in expanded.iter().filter(|id| seen.insert(**id)) {
             let p = self.catalog.photo(*id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(*id))?;
             match &p.source {
                 Source::File { path } => sources.push((*id, path.clone())),
