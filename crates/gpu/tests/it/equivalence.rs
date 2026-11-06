@@ -16,6 +16,9 @@ use lightcraft_raster::{Rgb32f, Rgba8};
 
 const MEAN_LSB: f64 = 0.5;
 const MAX_LSB: u8 = 3;
+/// Float renders have no dither to allow for: the bounds of [`check_hdr`], in 8-bit steps.
+const HDR_MEAN_STEPS: f64 = 0.02;
+const HDR_MAX_STEPS: f64 = 1.0;
 
 fn gpu() -> bool {
     let ok = lightcraft_gpu::available();
@@ -29,6 +32,48 @@ fn gpu() -> bool {
     static NAMED: std::sync::Once = std::sync::Once::new();
     NAMED.call_once(|| eprintln!("GPU equivalence tests on {}", lightcraft_gpu::adapter_name().unwrap_or_default()));
     ok
+}
+
+fn check_v3_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
+    if !gpu() {
+        return;
+    }
+    // These uniform nonnegative sources expose cancellation after camera chroma scaling
+    // and Contrast, just below the positive Blacks luminance cutoff.
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = (i + 1) as f32 / 33.0;
+        [x, x]
+    }))
+    .unwrap()
+    .with_chroma([chroma; 8])
+    .unwrap();
+    let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+    let src = Arc::new(Rgb32f::filled(64, 64, pixel));
+    let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
+    s.light.contrast = 100.0;
+    s.light.blacks = 80.0;
+    let req = RenderRequest::fit(64, 64);
+    let cpu = render(&src, &info, &s, &req).image;
+    let gpu = lightcraft_gpu::try_render(&src, &info, &s, &req, None).expect("GPU render without CPU fallback").image;
+    for image in [&cpu, &gpu] {
+        // (8-bit output is dithered: a flat source varies by a level)
+        assert!(image.data.iter().all(|p| p.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1)));
+        for (actual, expected) in image.data[0].into_iter().zip(expected) {
+            assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {:?}, expected {expected}", image.data[0]);
+        }
+    }
+    let (_, max, _) = diff(&cpu, &gpu);
+    assert!(max <= 1, "chroma {chroma}: CPU {:?}, GPU {:?}", cpu.data[0], gpu.data[0]);
+}
+
+#[test]
+fn v3_luminance_cutoff_chroma_2() {
+    check_v3_luminance_cutoff(2.0, [0.023_433_316, 0.000_071_107_73, 0.005_175_675], [27, 0, 8, 255]);
+}
+
+#[test]
+fn v3_luminance_cutoff_chroma_4() {
+    check_v3_luminance_cutoff(4.0, [0.035_338_085, 0.000_048_468_723, 0.010_193_758], [47, 0, 19, 255]);
 }
 
 #[test]
@@ -50,6 +95,12 @@ fn camera_tone_and_relative_wb() {
     s.wb.mode = WbMode::Custom;
     s.wb.temp = 8000.0;
     check("camera tone edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // each process's shoulder past the last knot, with highlights lifted into it (issue #1632)
+    for p in Process::ALL {
+        let mut lifted = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
+        lifted.light.exposure = 2.0;
+        check(&format!("camera tone {p:?} exposure +2"), &src, &info, &lifted, &RenderRequest::fit(320, 240));
+    }
     // a camera chroma curve: richer shadows, highlights bleached toward white
     let curve = curve.with_chroma([1.4, 1.3, 1.1, 1.0, 0.7, 0.4, 0.25, 0.2]).unwrap();
     let info = SourceInfo { camera_tone: Some(curve), ..info };
@@ -649,6 +700,66 @@ fn cached_renders_match_uncached() {
     }
 }
 
+/// Calibrated Contrast and Blacks, legacy Whites, combined edits, windows and cache reuse.
+#[test]
+fn light_v3_operators_match() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.0 * x).exp()]
+    }))
+    .unwrap()
+    .with_chroma([1.3, 1.2, 1.1, 1.0, 0.9, 0.7, 0.5, 0.4])
+    .unwrap();
+    let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    for id in ["light.contrast", "light.whites", "light.blacks"] {
+        for v in [-100.0, -50.0, 50.0, 100.0] {
+            let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
+            lightcraft_develop::controls::set(&mut s, id, v);
+            check(&format!("V4 {id} {v}"), &src, &info, &s, &req);
+            if id == "light.whites" {
+                let mut old = s.clone();
+                old.process = Process::V2.version();
+                assert_eq!(
+                    lightcraft_gpu::render(&src, &info, &s, &req, None).unwrap().image,
+                    lightcraft_gpu::render(&src, &info, &old, &req, None).unwrap().image
+                );
+            }
+        }
+    }
+    let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
+    typical(&mut s);
+    s.light.contrast = 35.0;
+    s.light.whites = 40.0;
+    s.light.blacks = -30.0;
+    check("V4 combined, typical", &src, &info, &s, &req);
+    s.color.vibrance = 30.0;
+    s.vignette.amount = -20.0;
+    check("V4 combined, colour", &src, &info, &s, &req);
+    use lightcraft_pipeline::PixelWindow;
+    let win = RenderRequest { window: Some(PixelWindow { x: 1200, y: 800, w: 640, h: 480 }), ..RenderRequest::fit(3000, 2000) };
+    check("V4 combined, window", &src, &info, &s, &win);
+    s.hdr.enabled = true;
+    s.hdr.max_ev = 2.0;
+    check("V4 HDR preview", &src, &info, &s, &req);
+    // Other high-bit-depth exports use the CPU; the GPU kernel writes 8 bits or the float HDR render.
+    let deep_req = RenderRequest { depth: lightcraft_pipeline::OutputDepth::U16, ..req };
+    assert_eq!(lightcraft_gpu::try_render(&src, &info, &s, &deep_req, None).err(), Some(lightcraft_gpu::Fallback::NotTried));
+    s.hdr.enabled = false;
+    let cache = StageCache::default();
+    for k in 0..3 {
+        s.light.exposure = 0.3 * k as f64;
+        let warm = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+        let fresh = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu");
+        assert_eq!(warm.image, fresh.image, "exposure step {k}");
+        check(&format!("V4 exposure step {k}"), &src, &info, &s, &req);
+    }
+}
+
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
 /// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.
@@ -681,7 +792,7 @@ fn highlights_shadows_base_matches_on_every_process() {
             }];
             check(&format!("{p:?} local highlights {w}"), &src, &raw, &s, &req);
         }
-        for p in [Process::V1, Process::V2, Process::V1, Process::V2] {
+        for p in [Process::V1, Process::V2, Process::V4, Process::V1, Process::V2, Process::V4] {
             let mut s = DevelopSettings { process: p.version(), ..DevelopSettings::default() };
             s.light.highlights = -100.0;
             let warm = lightcraft_gpu::render(&src, &raw, &s, &req, Some(&cache)).expect("gpu");
@@ -1050,6 +1161,122 @@ fn lut_profiles_match() {
             check(&format!("{id} {amount} {name}"), &src, &raw, &s, &RenderRequest::fit(640, 640));
         }
     }
+}
+
+/// [`check`] for the float HDR render, compared on the sRGB curve (unbounded above SDR white) in
+/// 8-bit steps. `over`: the samples must leave SDR.
+fn check_hdr(name: &str, src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, over: bool) {
+    use lightcraft_color::transfer::linear_to_srgb;
+    use lightcraft_pipeline::{DeepSamples, OutputDepth};
+    let req = RenderRequest { depth: OutputDepth::F32Hdr, ..*req };
+    let cpu = render(src, info, s, &req);
+    let gpu = lightcraft_gpu::try_render(src, info, s, &req, None).expect("a float render on the GPU, without the CPU fallback");
+    let (cd, gd) = (cpu.deep.expect("CPU float samples"), gpu.deep.expect("GPU float samples"));
+    assert_eq!((cd.width, cd.height, cd.space), (gd.width, gd.height, gd.space), "{name}");
+    let (DeepSamples::F32(c), DeepSamples::F32(g)) = (&cd.samples, &gd.samples) else { panic!("{name}: float samples") };
+    assert_eq!(c.len(), g.len(), "{name}");
+    let peak = s.hdr.peak();
+    assert!(g.iter().all(|v| (0.0..=peak).contains(v)), "{name}: GPU samples outside 0..{peak}");
+    let above = g.iter().filter(|v| **v > 1.0).count() as f64 / g.len() as f64;
+    assert_eq!(above > 0.0, over, "{name}: {:.3}% of the samples above SDR white", above * 100.0);
+    let (mut sum, mut max) = (0f64, 0f64);
+    for (a, b) in c.iter().zip(g) {
+        let d = f64::from((linear_to_srgb(*a) - linear_to_srgb(*b)).abs()) * 255.0;
+        sum += d;
+        max = max.max(d);
+    }
+    let mean = sum / c.len() as f64;
+    eprintln!("{name:<36} {}x{}  mean {mean:.4}  max {max:.3}  above SDR {:.2}%", cd.width, cd.height, above * 100.0);
+    assert!(mean < HDR_MEAN_STEPS && max <= HDR_MAX_STEPS, "{name}: mean {mean:.4}, max {max:.3} steps");
+    let (mean, max, _) = diff(&cpu.image, &gpu.image);
+    assert!(mean < MEAN_LSB && max <= MAX_LSB, "{name}: 8-bit image mean {mean:.4}, max {max}");
+    assert_eq!(cpu.histogram.total, gpu.histogram.total, "{name}");
+}
+
+/// The float HDR render matches the CPU's on every process, through every stage with an HDR rule:
+/// tone map and highlight desaturation to the peak, V4's operators, vignette, gamut map, curves
+/// above SDR white, grain and LUT profiles.
+#[test]
+fn hdr_float_render_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(1, 900, 600);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(640, 640);
+    let hdr = |p: Process| {
+        let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+        s.hdr.enabled = true;
+        s.hdr.max_ev = 3.0;
+        s.light.exposure = 1.5;
+        s
+    };
+    for p in Process::ALL {
+        let mut s = hdr(p);
+        check_hdr(&format!("{p:?} HDR"), &src, &raw, &s, &req, true);
+        typical(&mut s);
+        s.light.exposure = 1.5;
+        s.light.contrast = 35.0;
+        s.light.whites = 40.0;
+        s.light.blacks = -30.0;
+        check_hdr(&format!("{p:?} HDR typical"), &src, &raw, &s, &req, true);
+    }
+    lightcraft_pipeline::lut::register("lut:gpu-test-hdr", look_lut(17, 1.0));
+    let cases: [(&str, Edit); 7] = [
+        ("HDR vignette out", |s| s.vignette.amount = -40.0),
+        ("HDR vignette lighten", |s| s.vignette.amount = 40.0),
+        ("HDR saturated", saturated),
+        ("HDR curves", |s| {
+            s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.55), Point::new(1.0, 0.95)];
+            s.curve.blue = vec![Point::new(0.0, 0.0), Point::new(0.5, 0.45), Point::new(1.0, 1.0)];
+            s.curve.refine_saturation = 20.0;
+        }),
+        ("HDR grain", |s| {
+            s.grain.amount = 50.0;
+            s.grain.size = 40.0;
+            s.grain.roughness = 60.0;
+        }),
+        ("HDR LUT", |s| {
+            s.profile.id = "lut:gpu-test-hdr".into();
+            s.profile.amount = 80.0;
+        }),
+        ("HDR peak 1 stop", |s| s.hdr.max_ev = 1.0),
+    ];
+    for (name, edit) in cases {
+        let mut s = hdr(Process::LATEST);
+        edit(&mut s);
+        check_hdr(name, &src, &raw, &s, &req, true);
+    }
+    let s = hdr(Process::LATEST);
+    for space in lightcraft_pipeline::OutputSpace::ALL {
+        check_hdr(&format!("HDR in {space:?}"), &src, &raw, &s, &RenderRequest { space, ..req }, true);
+    }
+    let win = RenderRequest { window: Some(lightcraft_pipeline::PixelWindow { x: 200, y: 100, w: 320, h: 240 }), ..RenderRequest::fit(900, 600) };
+    check_hdr("HDR window", &src, &raw, &s, &win, true);
+    check_hdr("HDR draft", &src, &raw, &s, &RenderRequest { quality: Quality::Draft, ..req }, true);
+    let proof =
+        Some(lightcraft_pipeline::Proof { space: lightcraft_pipeline::OutputSpace::Srgb, dest_warning: false, display_warning: false, profile: 0 });
+    check_hdr("HDR soft proof", &src, &raw, &s, &RenderRequest { space: lightcraft_pipeline::OutputSpace::Rec2020, proof, ..req }, true);
+    // an edit with HDR off: the same request is the linear float render, 0..1
+    let mut s = DevelopSettings::default();
+    typical(&mut s);
+    check_hdr("HDR off", &src, &raw, &s, &req, false);
+}
+
+/// The float output in several bands of rows, with position-dependent grain.
+#[test]
+fn hdr_float_render_matches_in_bands() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(3, 3000, 2000);
+    let mut s = DevelopSettings::default();
+    typical(&mut s);
+    s.hdr.enabled = true;
+    s.hdr.max_ev = 2.0;
+    s.light.exposure = 1.5;
+    s.grain.amount = 30.0;
+    check_hdr("HDR banded", &src, &SourceInfo { raw: true, ..Default::default() }, &s, &RenderRequest::fit(3000, 2000), true);
 }
 
 /// Refine Edges on a mask is the cross guided filter on the device, blended by √refine.

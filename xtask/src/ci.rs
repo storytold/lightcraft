@@ -1,7 +1,7 @@
 use super::layers::cmd_layers;
 use super::raw_samples::RAW_SAMPLES;
 use super::wasm::{cmd_wasm, cmd_wasm_for};
-use super::{Command, Path, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, metadata, parity, root, run};
+use super::{Command, Path, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, metadata, parity, root, roots, run};
 
 /// CI build jobs: one per 1.5 GB of RAM available when CI starts, at most one per CPU, 4 when it
 /// is unknown. With line-table debuginfo, 4 jobs measured about 3 GB of RAM in use and 2 jobs
@@ -92,19 +92,20 @@ fn nextest() -> bool {
 }
 
 /// A test run of `args` (packages, features, targets, filters): `cargo nextest run`, or `cargo
-/// test`. The command and how to print it.
+/// test`. The command and how to print it. `--no-fail-fast`: a failing test binary doesn't stop
+/// the others, so one CI run shows every failure, not just the first crate's.
 fn tests(args: &[&str]) -> (Command, String) {
     let mut c = cargo();
     let tool = if nextest() { "nextest run" } else { "test" };
-    c.args(tool.split(' ')).args(args);
-    (c, format!("cargo {tool} {}", args.join(" ")))
+    c.args(tool.split(' ')).arg("--no-fail-fast").args(args);
+    (c, format!("cargo {tool} --no-fail-fast {}", args.join(" ")))
 }
 
 /// The workspace's doctests.
 fn doctests() -> (Command, String) {
     let mut c = cargo();
-    c.args(["test", "--workspace", "--doc"]);
-    (c, "cargo test --workspace --doc".to_owned())
+    c.args(["test", "--no-fail-fast", "--workspace", "--doc"]);
+    (c, "cargo test --no-fail-fast --workspace --doc".to_owned())
 }
 
 /// `ci --quick`'s tests: build every workspace test target, then run only the test binaries of
@@ -338,6 +339,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     }
     steps.push(("layers", Box::new(cmd_layers)));
     steps.push(("assets", Box::new(|| assets::run(&root))));
+    steps.push(("roots", Box::new(roots::run)));
     if wants("wasm") {
         match plan.as_ref().filter(|p| !p.workspace_wide) {
             Some(p) => steps.push(("wasm", Box::new(|| cmd_wasm_for(Some(&p.packages))))),
