@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Highlights and Shadows closer to Lightroom (process V7)
+- Global Highlights and Shadows ease off at large amounts as Lightroom's do (issue #523): ±100 acts at about half of
+  what it did (0.52 of it for Highlights, 0.43 for Shadows), +52 Shadows at 0.6, and small amounts are as before.
+  Strong Shadows no longer lift the darkest tones about 6 L* above Lightroom's render of the same edit, nor strong
+  Highlights pull the brightest about 5 L* below it. Masks keep their amounts. New photos get it; photos edited before
+  keep their look until Update to Current Process.
+- Fitted to 56 Lightroom exports of real portrait edits (Canon EOS R6 and R5 raws): mean ΔE to the exports 9.5 → 8.7,
+  and on the 16 landscape photos the sidecar fixes of #2239 don't touch, 8.4 → 7.4.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

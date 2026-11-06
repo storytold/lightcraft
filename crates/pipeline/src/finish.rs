@@ -284,8 +284,8 @@ impl FinishParams {
             out_luma: space.luma(),
             out_trc: space.trc(),
             proof: None,
-            hl: (s.light.highlights / 100.0) as f32,
-            sh: (s.light.shadows / 100.0) as f32,
+            hl: tone_slider(s.light.highlights, HIGHLIGHTS_EASE, s.process.process()),
+            sh: tone_slider(s.light.shadows, SHADOWS_EASE, s.process.process()),
             clar,
             tex,
             dehaze,
@@ -323,6 +323,31 @@ impl FinishParams {
     }
 }
 
+/// How much a full global Highlights (−100 or +100) eases off from V6's strength under V7: it acts at
+/// `1 / (1 + HIGHLIGHTS_EASE)` of it.
+pub const HIGHLIGHTS_EASE: f64 = 0.92;
+/// The same for global Shadows.
+pub const SHADOWS_EASE: f64 = 1.33;
+
+/// A global Highlights or Shadows slider (−100..100) as the strength the local tone operator takes (−1..1).
+///
+/// Up to V6 the strength is the slider's, linearly. From V7 it eases off as the amount grows, `a / (1 + ease·|a|)`
+/// for `a` = slider / 100: unchanged for small amounts (slope 1 at 0), and at most `1 / (1 + ease)` of V6's at ±100.
+/// Fitted to 56 Lightroom exports of real portrait edits (Canon raws, Highlights −48 to −100, Shadows +40 to +100):
+/// V6 left their darkest tones about 6 L* above the exports and their brightest about 5 below; the amounts that
+/// cancel that are about 0.6 of V6's at Shadows +52 and 0.43 at +100, and 0.52 at Highlights −100. Masks keep
+/// their linear amounts.
+pub fn tone_slider(value: f64, ease: f64, process: lightcraft_develop::Process) -> f32 {
+    if process < lightcraft_develop::Process::V7 {
+        return (value / 100.0) as f32;
+    }
+    let a = (value / 100.0).clamp(-1.0, 1.0);
+    if !a.is_finite() {
+        return 0.0;
+    }
+    (a / (1.0 + ease * a.abs())) as f32
+}
+
 /// The base tone map (scene → display luminance, with Contrast, Whites and Blacks) of `s`'s
 /// rendering process. This is where a new tone model branches: a retuned default tone curve (issue
 /// #146) is a new [`Process`] with its own arm here, and V1's arm stays as it is, so photos edited
@@ -349,7 +374,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         },
         // V4, with a raw's tone curve rolling off into white in stops: a camera curve past its last
         // knot, the generic curve from half a stop below its white point instead of clipping (issue #1632)
-        Process::V5 | Process::V6 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V5 | Process::V6 | Process::V7 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
             None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -903,6 +928,48 @@ fn enc(v: f32, dither: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lightcraft_develop::Process;
+
+    #[test]
+    fn tone_sliders_ease_off_from_v7_only() {
+        for v in [-100.0, -52.0, 0.0, 13.0, 100.0, 250.0] {
+            for p in [Process::V1, Process::V6] {
+                assert_eq!(tone_slider(v, SHADOWS_EASE, p), (v / 100.0) as f32, "{p:?} keeps the linear amount");
+            }
+        }
+        let v7 = |v: f64, ease: f64| tone_slider(v, ease, Process::V7);
+        assert_eq!(v7(0.0, SHADOWS_EASE), 0.0);
+        assert!((v7(1.0, SHADOWS_EASE) - 0.01).abs() < 2e-4, "small amounts are as before");
+        assert!((v7(100.0, SHADOWS_EASE) - 0.43).abs() < 0.005);
+        assert!((v7(52.0, SHADOWS_EASE) - 0.307).abs() < 0.005);
+        assert!((v7(-100.0, HIGHLIGHTS_EASE) + 0.52).abs() < 0.005);
+        assert_eq!(v7(250.0, SHADOWS_EASE), v7(100.0, SHADOWS_EASE), "clamped to the slider's range");
+        assert_eq!(v7(f64::NAN, SHADOWS_EASE), 0.0);
+        let mut last = -1.0;
+        for i in -100..=100 {
+            let y = v7(i as f64, HIGHLIGHTS_EASE);
+            assert!(y > last, "monotonic at {i}");
+            last = y;
+        }
+    }
+
+    #[test]
+    fn v7_shadows_lift_less_than_v6() {
+        let src = lightcraft_raster::Rgb32f::from_fn(64, 8, |x, _| [0.002 * 1.12f32.powi(x as i32); 3]);
+        let mean = |p: Process| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            s.light.shadows = 80.0;
+            let r = crate::render(&src, &SourceInfo::default(), &s, &crate::RenderRequest::fit(64, 8));
+            r.image.data.iter().take(24).map(|px| px[1] as f32).sum::<f32>() / 24.0
+        };
+        let base = {
+            let s = DevelopSettings { process: Process::V7.version(), ..Default::default() };
+            let r = crate::render(&src, &SourceInfo::default(), &s, &crate::RenderRequest::fit(64, 8));
+            r.image.data.iter().take(24).map(|px| px[1] as f32).sum::<f32>() / 24.0
+        };
+        let (v6, v7) = (mean(Process::V6), mean(Process::V7));
+        assert!(v7 > base && v7 < v6, "Shadows still lifts the darks, less than V6: none {base}, V6 {v6}, V7 {v7}");
+    }
 
     #[test]
     fn grain_noise_is_finite_for_degenerate_coordinates() {
