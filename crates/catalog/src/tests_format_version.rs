@@ -98,8 +98,8 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
 }
 
 /// A v12 library with a folder label (a record without `made`) opens as it was and is rewritten in
-/// the current format; a folder made afterwards is saved with it, and an older build (which reads
-/// up to v12) refuses the library instead of reading it without `made`.
+/// the current format; a folder made afterwards is saved with it. (An older build refuses the new
+/// format by the rule `newer_snapshot_is_refused_untouched` tests.)
 #[test]
 fn v12_library_with_folder_records_is_upgraded_and_the_new_format_is_refused_by_older_builds() {
     let (mut base, _, _) = legacy_parts();
@@ -120,7 +120,7 @@ fn v12_library_with_folder_records_is_upgraded_and_the_new_format_is_refused_by_
     drop(j);
     let (_, reopened, _) = Journal::open(Box::new(m.clone())).unwrap();
     assert!(reopened.holds_made_folder("/p/new"));
-    // what a v12 build sees: a snapshot above its VERSION (12), so it stops before reading any of it
+    // a v12 build refuses a snapshot above 12
     let v: serde_json::Value = serde_json::from_slice(&m.get(SNAPSHOT).unwrap()).unwrap();
     assert!(v["version"].as_u64().unwrap() > 12);
 }
@@ -266,9 +266,9 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v12: `Catalog.grids` and `SegMask.grid`, shared by a snapshot's masks (#2154) (v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
-    /// `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 12;
+    /// v13: `FolderRecord.made` (v12: `Catalog.grids` and `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`;
+    /// v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 13;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
