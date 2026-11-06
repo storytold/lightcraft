@@ -822,9 +822,17 @@ impl SyncCommit {
             return;
         }
         let commits = s.commits();
-        if self.after_last.is_some_and(|last| last != (s.undo.len(), commits)) {
+        if self.after_last.is_none() {
+            // not stepped yet: an edit that ended the hold this run shared with one that had stepped
+            // (that one can't fold around it) is not an edit between this run's own steps
+            if self.hold.is_some() {
+                self.hold = Some(s.hold_undo());
+            }
+        } else if self.after_last != Some((s.undo.len(), commits)) {
             self.interleaved = true;
             self.hold = None;
+            // (a step that commits nothing, a failed batch, would leave the history uncut)
+            s.trim_undo();
         }
         s.run_step(|s| self.apply_step(s, step));
         if s.commits() != commits {

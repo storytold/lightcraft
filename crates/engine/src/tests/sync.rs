@@ -924,6 +924,53 @@ fn an_edit_before_the_first_step_of_a_big_synchronize_leaves_it_whole() {
     assert_eq!(holdings(&s), before, "one Undo takes back the whole run, and not the edit before it");
 }
 
+/// Run A has stepped and run B joins; an edit lands before B's first step. The edit ends A's
+/// hold (A can't be folded around it) but B has not stepped, so it still holds the history: a run
+/// of more than 1,000 steps is one whole step, and Undo takes back all of it.
+#[test]
+fn an_edit_before_the_first_step_of_an_overlapping_run_leaves_it_whole() {
+    let dir = Scratch::new("big-overlap-early-edit");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work_a, mut first) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    first.apply(&mut s, crate::sync::SyncStep::Remove(vec![ids[0]]));
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work_b, mut second) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    s.execute("photo.rate", &json!({"ids": [a.0], "rating": 4})).unwrap();
+    let before = holdings(&s);
+    for id in &ids[1..] {
+        second.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
+    }
+    assert!(s.undo.len() > UNDO_STEPS, "the second run holds its steps: {}", s.undo.len());
+    second.finish(&mut s);
+    assert_eq!(s.undo.last().map(|e| e.label.as_str()), Some("Synchronize Folder"));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(holdings(&s), before, "one Undo takes back the whole second run, and not the edit before it");
+    first.finish(&mut s);
+    assert!(s.undo.len() <= UNDO_STEPS, "the history is bounded again: {}", s.undo.len());
+}
+
+/// An Undo pressed mid-run ends the run's hold (it can't be folded around the Undo); the history
+/// is cut then, even when the step that sees it commits nothing (a failed batch).
+#[test]
+fn an_undo_seen_by_a_step_that_commits_nothing_still_bounds_the_history() {
+    let dir = Scratch::new("big-undo-no-commit");
+    let mut s = library(&dir);
+    let ids = with_extra_photos(&mut s, 1_100);
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let (_work, mut commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    for id in &ids {
+        commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![*id]));
+    }
+    assert!(s.undo.len() > UNDO_STEPS, "the run holds its steps: {}", s.undo.len());
+    s.execute("edit.undo", &json!({})).unwrap();
+    // photos that are gone already: nothing to commit
+    commit.apply(&mut s, crate::sync::SyncStep::Remove(vec![ids[0]]));
+    assert!(s.undo.len() <= UNDO_STEPS, "cut at the step that saw the Undo: {}", s.undo.len());
+}
+
 /// A step that panics (caught higher up) must not leave the session thinking every later commit
 /// belongs to a run.
 #[test]
