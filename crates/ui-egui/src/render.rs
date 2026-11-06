@@ -1089,15 +1089,21 @@ impl Renderer {
 
     /// Why a photo has no grid thumbnail and won't get one: the thumbnail's own render failed, or the embedded
     /// preview failed and nothing else is on its way (an unedited raw asks for no other: see `request_thumb`).
-    /// A new request of either kind (another size or look, a relinked file) is on its way too; a retry of
-    /// the very request that failed keeps the failure until it answers.
+    /// A new request of either kind (another size or look, a relinked file; an undone edit asks only for the
+    /// embedded preview, under a key of its own) is on its way too; a retry of the very request that failed
+    /// keeps the failure until it answers.
     pub fn thumb_failure(&self, id: PhotoId) -> Option<&str> {
         let (full, quick) = (Slot::Thumb(id), Slot::ThumbQuick(id));
         if self.is_pending(full) && !self.retrying(full) {
             return None;
         }
-        // a full-render failure that stands, else the embedded preview's, unless a new request of it is on its way
-        self.failure(full).or_else(|| if self.is_pending(quick) && !self.retrying(quick) { None } else { self.failure(quick) })
+        if let Some((key, why, ..)) = self.failed.get(&full) {
+            // the full render failed: that stands unless a new embedded-preview request is on its way (it carries
+            // its job's key, so the key that failed is the retry)
+            return if self.pending.get(&quick).is_some_and(|p| p.0 != *key) { None } else { Some(why.as_str()) };
+        }
+        // else the embedded preview's failure, unless a new request of it is on its way
+        if self.is_pending(quick) && !self.retrying(quick) { None } else { self.failure(quick) }
     }
 
     /// Why the last render of `photo` for `slot` failed: a view slot shows one photo after

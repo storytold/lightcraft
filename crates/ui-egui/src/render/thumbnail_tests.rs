@@ -1986,3 +1986,19 @@ fn thumb_failure_waits_for_a_new_full_request_but_not_for_a_retry_of_the_failed_
     r.pending.insert(Slot::Thumb(id), (1, 10));
     assert_eq!(r.thumb_failure(id), Some("decode failed"));
 }
+
+#[test]
+fn thumb_failure_waits_for_a_new_quick_request_after_a_full_failure_but_not_for_a_retry_of_the_failed_one() {
+    let id = PhotoId(8);
+    let mut r = Renderer::default();
+    // an edited raw's full render failed; its edit was undone, so only the embedded preview is asked for
+    r.failed.insert(Slot::Thumb(id), (1, "decode failed".into(), 0, id));
+    r.pending.insert(Slot::ThumbQuick(id), (3, 10));
+    assert_eq!(r.thumb_failure(id), None, "a quick request with another key is on its way: the cell is loading");
+    // the very request that failed is asked for again: until it answers the failure stands
+    r.pending.insert(Slot::ThumbQuick(id), (1, 10));
+    assert_eq!(r.thumb_failure(id), Some("decode failed"));
+    // nothing is on its way
+    r.pending.clear();
+    assert_eq!(r.thumb_failure(id), Some("decode failed"));
+}
