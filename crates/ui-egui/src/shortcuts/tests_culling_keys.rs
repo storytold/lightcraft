@@ -266,6 +266,46 @@ fn rating_and_label_keys_are_commands_with_the_digit_defaults() {
     }
 }
 
+/// The ten ids are declared twice: as commands in `UI_COMMANDS` (label and digit, pinned to `COMMANDS` by the test above) and
+/// as what they set in `CULLING_KEYS`. Each one sets the rating or label its editor label and digit name.
+#[test]
+fn each_command_sets_the_rating_or_label_its_label_and_digit_name() {
+    assert_eq!(super::CULLING_KEYS.len(), COMMANDS.len());
+    for (id, label, digit) in COMMANDS {
+        let n: usize = digit.parse().unwrap();
+        let (command, params, fired) = if n <= 5 {
+            assert_eq!(label.matches('★').count(), n, "{id}: the digit is the stars");
+            ("photo.rate", json!({"rating": n}), format!("rate:{n}:0"))
+        } else {
+            let color = label.trim_end_matches(" label").to_lowercase();
+            ("photo.label", json!({"label": color}), format!("label:{color}"))
+        };
+        assert!(super::is_culling_command(id), "{id}");
+        assert_eq!(super::culling_command(id), Some((command, params)), "{id}");
+        assert_eq!(super::culling_fire(id), Some(fired), "{id}");
+    }
+    // the digits 6–9 are red, yellow, green, blue
+    let labels: Vec<&str> = COMMANDS[6..].iter().map(|(_, label, _)| *label).collect();
+    assert_eq!(labels, ["Red label", "Yellow label", "Green label", "Blue label"]);
+    // the engine commands these run, and any other id, are no culling key
+    for id in ["photo.rate", "photo.label", "photo.rate6", "photo.labelPurple", "photo.rate0 ", "view.detail", ""] {
+        assert!(!super::is_culling_command(id), "{id:?}");
+        assert_eq!((super::culling_command(id), super::culling_fire(id)), (None, None), "{id:?}");
+    }
+}
+
+#[test]
+fn a_punctuation_key_at_its_own_place_or_with_shift_is_no_plain_digit() {
+    // the `'` key of a US keyboard is no 4
+    let mut rig = Rig::new();
+    let (fire, aliased) = rig.pressed(vec![press("'", Key::Quote, Modifiers::NONE)]);
+    assert!(fire.is_empty() && aliased.is_empty(), "{fire:?} {aliased:?}");
+    // Shift+1 types `!` on a US keyboard: the one key is Rate ★ and advance, not Rate ★ as well
+    let (fire, aliased) = rig.pressed(vec![press("!", Key::Num1, Modifiers::SHIFT)]);
+    assert_eq!(fire, ["rate:1:1"]);
+    assert!(aliased.is_empty(), "{aliased:?}");
+}
+
 #[test]
 fn a_key_given_to_a_rating_rates_and_the_digit_stops() {
     for sc in ["F3", "Alt+3"] {
