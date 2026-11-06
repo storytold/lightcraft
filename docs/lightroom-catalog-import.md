@@ -110,7 +110,14 @@ fields are reported. Lightroom's `ProcessVersion` is not mapped: newly imported 
 LightCraft's latest rendering process, and photos already in the library keep theirs
 ([process-versions.md](process-versions.md)). When a recovery archive is saved, it retains source settings/history/snapshots
 and original smart-collection rules. Smart collections become regular albums with current
-membership. Archived history and snapshots are source data, not native LightCraft history yet.
+membership, and so do saved prints, books, slideshows and web galleries (with the photos they hold). A LightCraft
+album nests only inside a folder (a Lightroom collection set). A collection or creation Lightroom keeps elsewhere,
+such as a print saved inside a plain collection, or one whose parent is system-only or gone from the catalog, joins the
+nearest collection set above it, or the top level, and the result names it under warnings (issues #2165, #2532).
+Quick Collection and unsaved creations are system-only and not imported; publish collections live in tables the
+importer doesn't read. A collection the catalog lists twice imports once; a different collection with the id of an
+earlier one is left out with a warning naming both, and the photos listed under that id go to the first. Archived
+history and snapshots are source data, not native LightCraft history yet.
 A Custom white balance on a raw LightCraft develops relative to its as-shot look (ARW, NEF, RW2,
 RAF, CR3, CR2, PEF, SRW; Lightroom names them all `RAW`) can't be taken as Kelvin: the catalog keeps no
 as-shot white for Custom photos, so the photo stays As Shot and `Temperature, Tint` are reported
@@ -137,8 +144,10 @@ probes their originals and parses their XMP and maps their develop settings. Eac
 the owner thread as it arrives, so photos appear while the rest is read; the progress counts each
 original as it is read. Cancelling (✕ in the activity stack) keeps the photos added so far, without
 collections, as one undo step; importing the catalog again continues where it stopped (their
-identities are in the import index) and then adds the collections. Each batch is saved as it is added, so the
-same holds after a crash or a forced quit: a master is found again by its path, a virtual copy
+identities are in the import index) and then adds the collections. An import that stops while the collections become
+albums (a library whose album numbering is exhausted) keeps its photos the same way, without any album. Each batch is
+saved as it is added, so the same holds
+after a crash or a forced quit: a master is found again by its path, a virtual copy
 through the import index, which is written after each batch of virtual copies (they come after
 every master, in the last batches). Late batches from a closed or
 switched library are rejected, including reopening the same path. Ordinary edits during the import

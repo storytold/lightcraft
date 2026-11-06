@@ -36,7 +36,6 @@ pub mod links;
 pub mod loupe_timing;
 pub mod menus;
 mod missing_sweep;
-mod model_setup;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -47,6 +46,7 @@ pub mod shortcuts;
 pub mod sidebar;
 pub mod softpaint;
 pub mod space_hand;
+pub mod startup;
 pub mod state;
 pub mod sync;
 pub mod tasks;
@@ -88,6 +88,7 @@ pub use widgets::rating;
 pub use widgets::text_field;
 
 mod app;
+mod auto_settings;
 mod caches;
 mod clock;
 mod services;
@@ -146,7 +147,6 @@ impl QuitPrompt {
 }
 
 pub struct LightcraftApp {
-    pub(crate) model_setup: model_setup::Pending,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
     pub caches: Caches,
