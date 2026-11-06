@@ -126,7 +126,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 p.rect_filled(img_area, 0.0, t.skeleton);
                 if failed {
                     p.text(img_area.center(), Align2::CENTER_CENTER, "!", t.semibold(14.0), t.text);
-                } else {
+                } else if crate::panels::grid::thumb_may_arrive(app, *id) {
                     crate::panels::grid::paint_loading_cue(p, &t, img_area, img_area, "film:badge:loading:", id.0);
                 }
             }

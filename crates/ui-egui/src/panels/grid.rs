@@ -857,11 +857,18 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
         if app.renderer.thumb_failure(id).is_some() {
             // unreadable / missing file
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
-        } else {
+        } else if thumb_may_arrive(app, id) {
             paint_loading_cue(p, t, img_rect, ph, "badge:loading:", id.0);
         }
         ph
     }
+}
+
+/// Whether a thumbnail of `id` can still arrive, so its placeholder says so with the loading cue: no
+/// thumbnail job is ever asked for a video (`Session::thumb_job`: the image decoders can't read one), and
+/// its placeholder stays plain.
+pub(crate) fn thumb_may_arrive(app: &LightcraftApp, id: PhotoId) -> bool {
+    !app.session.catalog.photo(id).is_some_and(|p| p.is_video())
 }
 
 /// A quiet cue on a thumbnail's placeholder while the picture is still on its way (an unreadable one

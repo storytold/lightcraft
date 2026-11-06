@@ -20,10 +20,16 @@ const SETTLE: Duration = Duration::from_secs(60);
 /// opens, and then failed (as an unreadable file's would): the cells are loading, then unreadable, at
 /// the test's say.
 fn app_with_held_thumbnails(view: ViewMode) -> (Headless, Rc<Cell<bool>>) {
+    app_with_held_files(view, "jpg", "JPEG")
+}
+
+/// [`app_with_held_thumbnails`] for files of another kind (`extension` and catalog `format`).
+fn app_with_held_files(view: ViewMode, extension: &str, format: &str) -> (Headless, Rc<Cell<bool>>) {
     let mut s = Session::new();
     for i in 0..12u64 {
-        let path = format!("/lightcraft-loading-cell-test/IMG_{i:03}.jpg");
-        let p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:03}.jpg"), "JPEG", 6000, 4000, "2026-01-01T00:00:00");
+        let name = format!("IMG_{i:03}.{extension}");
+        let path = format!("/lightcraft-loading-cell-test/{name}");
+        let p = Photo::new(PhotoId(i + 1), Source::File { path }, &name, format, 6000, 4000, "2026-01-01T00:00:00");
         s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
     let mut h = Headless::new(LightcraftApp::new(s, Services { png: None, ..Default::default() }), [1000.0, 700.0], 1.0);
@@ -131,4 +137,26 @@ fn the_smallest_square_cells_still_show_the_loading_cue() {
         let cell = h.app.widgets.iter().find(|(w, _)| *w == format!("thumb:{photo}")).map(|(_, r)| *r).unwrap();
         assert!(cell.contains_rect(cue), "{cue:?} in {cell:?}");
     }
+}
+
+/// No thumbnail job is ever asked for a video (the image decoders can't read one), so its placeholder is not
+/// "on its way": it stays the plain skeleton it was, in both grids and the filmstrip, before and after the
+/// renders are let through.
+#[test]
+fn a_video_placeholder_never_shows_the_loading_cue() {
+    for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+        let (mut h, open) = app_with_held_files(view, "mp4", "MP4");
+        first_grid_frame(&mut h);
+        assert!(ids(&h, "badge:loading:").is_empty(), "{view:?}: a video has no thumbnail coming: {:?}", ids(&h, "badge:loading:"));
+        open.set(true);
+        assert!(h.settle(SETTLE));
+        assert!(ids(&h, "badge:loading:").is_empty(), "{view:?}: {:?}", ids(&h, "badge:loading:"));
+        assert!(!h.painted_text().iter().any(|t| t == "!"), "{view:?}: nothing failed: a video is never read as an image");
+    }
+    let (mut h, _open) = app_with_held_files(ViewMode::PhotoGrid, "mp4", "MP4");
+    let r = h.request("ui.set", serde_json::json!({"view": "detail"}), SETTLE);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(!ids(&h, "film:").is_empty(), "the strip is drawn");
+    assert!(ids(&h, "film:badge:loading:").is_empty(), "the filmstrip's video tiles stay plain: {:?}", ids(&h, "film:badge:loading:"));
 }
