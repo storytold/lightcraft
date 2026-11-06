@@ -190,7 +190,7 @@ fn med8(v0: f32, v1: f32, v2: f32, v3: f32, v4: f32, v5: f32, v6: f32, v7: f32) 
     return 0.5 * (d + e);
 }
 
-// The farther of a value's distances to the least and largest of 8 (`speck_share`'s pre-test).
+// The farther of a value's distances to the least and largest of 8 (`speck_bound`).
 fn reach8(p: f32, v0: f32, v1: f32, v2: f32, v3: f32, v4: f32, v5: f32, v6: f32, v7: f32) -> f32 {
     let lo = min(min(min(v0, v1), min(v2, v3)), min(min(v4, v5), min(v6, v7)));
     let hi = max(max(max(v0, v1), max(v2, v3)), max(max(v4, v5), max(v6, v7)));

@@ -1294,6 +1294,12 @@ fn joint_bands(cx: &mut Cx<'_>, img: Buf, w: usize, h: usize, f: &JointFilter<'_
 /// The largest delta `nrcj_dvh` takes (its `JDVH_REACH`).
 const JDVH_REACH: usize = 128;
 
+/// Whether `nrcj_dvh` can run a scale's middle steps: `delta` within its reach, and its `groups` (one
+/// workgroup per row, the only kernel this fine) within the device's limit per dimension.
+fn fits_jdvh(delta: usize, groups: [u32; 3], limit: u32) -> bool {
+    delta <= JDVH_REACH && groups.iter().all(|&g| g <= limit)
+}
+
 /// The filtered chroma pairs of rows `b0 .. b0 + bh` of the image, treated as an image of their own.
 fn joint_band(cx: &mut Cx<'_>, img: &Buf, w: usize, b0: usize, bh: usize, f: &JointFilter<'_>) -> Buf {
     let &JointFilter { noise, brake, plan, .. } = f;
@@ -1330,13 +1336,15 @@ fn joint_band(cx: &mut Cx<'_>, img: &Buf, w: usize, b0: usize, bh: usize, f: &Jo
     lp.push(1);
     nrcj(cx, "nrcj_links", n, &lp, &guide, Some(&paths), &links);
     let mut scratch = cx.gpu.buffer(2 * n);
+    let dvh_groups = groups2(w, bh, [256, 1]);
+    let group_limit = cx.gpu.device.limits().max_compute_workgroups_per_dimension;
     for (k, &(delta, rate)) in plan.iter().enumerate() {
         let dp = [n as u32, w as u32, bh as u32, delta as u32, rate.to_bits()];
         // horizontal, vertical, horizontal, vertical; the middle two in one dispatch where they fit
         nrcj(cx, "nrcj_dh", n, &dp, &filtered, Some(&links), &scratch);
         std::mem::swap(&mut filtered, &mut scratch);
-        if delta <= JDVH_REACH {
-            cx.run("nrcj_dvh", &dp, &[Some(&filtered), Some(&links), Some(&scratch)], groups2(w, bh, [256, 1]));
+        if fits_jdvh(delta, dvh_groups, group_limit) {
+            cx.run("nrcj_dvh", &dp, &[Some(&filtered), Some(&links), Some(&scratch)], dvh_groups);
             std::mem::swap(&mut filtered, &mut scratch);
         } else {
             for kernel in ["nrcj_dv", "nrcj_dh"] {
@@ -1799,12 +1807,26 @@ mod tests {
             let one = joint_bands(&mut cx, gpu.upload(rgb_words(&img)), w, h, &f, h, halo);
             let several = joint_bands(&mut cx, gpu.upload(rgb_words(&img)), w, h, &f, 64, halo);
             let (a, b): (Vec<f32>, Vec<f32>) = (cx.read(&one, 3 * w * h), cx.read(&several, 3 * w * h));
+            // a failed render reads back as zeros, which would match
+            assert!(!crate::ctx::failed(), "the GPU failed");
             let input = rgb_words(&img);
             assert!(a.iter().zip(input).any(|(a, b)| a != b), "the filter changed nothing");
             for (i, (a, b)) in a.iter().zip(&b).enumerate() {
                 assert_eq!(a.to_bits(), b.to_bits(), "brake {}: word {i}: one band {a}, bands {b}", brake.share);
             }
         }
+    }
+
+    /// `nrcj_dvh` runs within its reach and the device's workgroup limit, and the separate kernels otherwise.
+    #[test]
+    fn fused_diffusion_steps_stay_within_their_limits() {
+        let limit = 65_535;
+        assert!(fits_jdvh(JDVH_REACH, groups2(6048, 4032, [256, 1]), limit));
+        assert!(fits_jdvh(1, groups2(1, 65_535, [256, 1]), limit));
+        assert!(!fits_jdvh(JDVH_REACH + 1, groups2(6048, 4032, [256, 1]), limit));
+        // a device with a lower limit: rows, or columns, past it
+        assert!(!fits_jdvh(1, groups2(6048, 4097, [256, 1]), 4096));
+        assert!(!fits_jdvh(1, groups2(6048, 100, [256, 1]), 23));
     }
 
     /// `nrcj_dvh` (a vertical and a horizontal diffusion step in one dispatch) gives `nrcj_dv` then
@@ -1830,6 +1852,8 @@ mod tests {
                 nrcj(&mut cx, "nrcj_dh", n, &dp, &mid, Some(&weights), &two);
                 cx.run("nrcj_dvh", &dp, &[Some(&src), Some(&weights), Some(&fused)], groups2(w, h, [256, 1]));
                 let (want, got): (Vec<f32>, Vec<f32>) = (cx.read(&two, 2 * n), cx.read(&fused, 2 * n));
+                // a failed render reads back as zeros, which would match
+                assert!(!crate::ctx::failed(), "the GPU failed");
                 for (i, (a, b)) in want.iter().zip(&got).enumerate() {
                     assert!((a - b).abs() <= 1e-6, "{w}×{h} delta {delta}: word {i} {b} vs {a}");
                 }

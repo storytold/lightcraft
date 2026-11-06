@@ -755,11 +755,8 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// small detail almost always has a luminance step), and it is compact: the colour shift does not reach
 /// the border (a line or an edge carries it on). Demosaicing spreads high-ISO specks over 2 × 2 to
 /// 3 × 3 pixels, which all lie inside. The noise is taken at the ring's mean luminance (a median of it
-/// is only needed for the few pixels past the threshold).
+/// is only needed for the few pixels past the threshold). `despeck` asks only for pixels past [`speck_bound`].
 fn speck_share(p: [f32; 3], ring: &[[f32; 3]; 8], rest: impl Iterator<Item = [f32; 3]>, noise: &JointNoise, brake: SpeckBrake) -> (f32, [f32; 3]) {
-    if speck_bound(p, ring, noise) <= brake.threshold {
-        return (0.0, [0.0; 3]);
-    }
     let y = ring.iter().map(|q| q[0]).sum::<f32>() / 8.0;
     let (vu, vv) = (noise.var(1, y), noise.var(2, y));
     let m = [0.0, median8(ring.map(|q| q[1])), median8(ring.map(|q| q[2]))];
@@ -789,7 +786,7 @@ fn speck_share(p: [f32; 3], ring: &[[f32; 3]; 8], rest: impl Iterator<Item = [f3
     (brake.share * smoothstep(brake.threshold, 2.0 * brake.threshold, excess) * alone * compact, m)
 }
 
-/// `speck_share`'s first test: a bound from above of the pixel's chroma excess against the ring's medians
+/// The speck brake's first test: a bound from above of the pixel's chroma excess against the ring's medians
 /// (a pixel is a speck candidate above the threshold). The medians lie between the ring's least and largest
 /// value, so the farther of the two bounds the excess (rounding keeps that order): most pixels are decided
 /// without the medians.
@@ -822,7 +819,7 @@ fn despeck(img: &mut Rgb32f, noise: &JointNoise, brake: SpeckBrake) {
             let mut changed = Vec::new();
             let rows: [Option<&[[f32; 3]]>; 5] = std::array::from_fn(|k| source.data.get((y + k - 2) * w..(y + k - 1) * w));
             let [Some(r0), Some(r1), Some(r2), Some(r3), Some(r4)] = rows else { return changed };
-            // the ring alone decides most pixels (`speck_share`'s first test); the rest of the border is
+            // the ring alone decides most pixels (`speck_bound`); the rest of the border is
             // read only for the few that pass it
             for (x, ((w0, w2), w4)) in r0.windows(5).zip(r2.windows(5)).zip(r4.windows(5)).enumerate() {
                 let (&[a0, _, a2, _, a4], &[c0, _, p, _, c4], &[e0, _, e2, _, e4]) = (w0, w2, w4) else {
@@ -1228,7 +1225,7 @@ mod tests {
         }
     }
 
-    /// The speck brake as it was (every pixel's whole 5 × 5 border read up front), for the check below.
+    /// The speck brake without `speck_bound`: `speck_share` of every pixel, for the check below.
     fn despeck_before(img: &mut Rgb32f, noise: &JointNoise, brake: SpeckBrake) {
         let (w, h) = (img.width, img.height);
         let source = img.clone();
@@ -1250,8 +1247,8 @@ mod tests {
         }
     }
 
-    /// The speck brake reads the rest of a pixel's border only once the ring makes it a candidate: same
-    /// result bit for bit.
+    /// The speck brake reads the rest of a pixel's border only once `speck_bound` makes it a candidate: same
+    /// result bit for bit, so the bound never turns away a pixel `speck_share` would change.
     #[test]
     fn despeck_matches_the_whole_border_version() {
         let dark = [0.004f32; 3];
