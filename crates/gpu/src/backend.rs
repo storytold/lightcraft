@@ -494,7 +494,7 @@ pub fn window_renderer_order(
         // no Vulkan on Windows: its driver can crash the process uncatchably (issue #136)
         "windows" => vec![Backends::DX12, Backends::GL],
         "macos" | "ios" => vec![Backends::METAL],
-        _ => vec![Backends::VULKAN, Backends::GL],
+        _ => vec![Backends::GL, Backends::VULKAN],
     };
     let chain = platform.into_iter().map(WindowRenderer::Wgpu).chain([WindowRenderer::Glow]);
     let usable = |r: &WindowRenderer| match r {
@@ -778,6 +778,19 @@ mod tests {
         assert_eq!(remembered.first(), Some(&dx));
         // asked for explicitly (the environment), Vulkan is used
         assert_eq!(window_renderer_order(Some(vk), None, None, "windows", all, true).first(), Some(&vk));
+    }
+
+    /// On Linux the GL software rasterizer is tried before Vulkan, so a machine that
+    /// only has a software GL adapter still brings the GUI up instead of selecting
+    /// the Vulkan software rasterizer first.
+    #[test]
+    fn linux_window_tries_gl_before_vulkan_software() {
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        let gl = WindowRenderer::Wgpu(Backends::GL);
+        let automatic = window_renderer_order(None, None, None, "linux", all, true);
+        assert_eq!(automatic, [gl, vk, WindowRenderer::Glow]);
+        assert_eq!(automatic.first(), Some(&gl));
     }
 
     #[test]
