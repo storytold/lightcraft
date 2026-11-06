@@ -8,6 +8,11 @@ description = "LightCraft segmentation: SAM 3 (Segment Anything with Concepts) i
 [lints]
 workspace = true
 
+[features]
+# Run the worker on an NVIDIA GPU. Building it needs the CUDA toolkit (nvcc), running it the CUDA
+# libraries; `CUDA_COMPUTE_CAP` picks the GPU to compile the kernels for. See docs/ai-masks.md.
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

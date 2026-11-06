@@ -56,15 +56,23 @@ The result is stored with the mask: the model's 288 × 288 mask logits over the 
 need the model, so masks survive moving the library to a machine without it, and the web build
 renders them. Editing the photo's look later does not recompute a mask (click again to update).
 
-## Remote Metal inference
+## Remote GPU inference
 
 Native builds with `sam` can keep the editor, RAW files, library, and exports local while
-a Mac runs SAM 3. Build both ends from the same revision. On the Mac, install the model
-as described below, then run:
+a Mac or an NVIDIA machine runs SAM 3. Build both ends from the same revision. On the Mac, install
+the model as described below, then run:
 
 ```sh
 cargo build --release --locked -p lightcraft-segment --bin lightcraft-sam3-worker
 target/release/lightcraft-sam3-worker "$HOME/Library/Application Support/LightCraft/models/sam3" 127.0.0.1:8793
+```
+
+On an NVIDIA machine, build with the `cuda` feature. That needs the CUDA toolkit, and
+`CUDA_COMPUTE_CAP` names the GPU to compile the kernels for (`121` for a GB10, CUDA 13):
+
+```sh
+CUDA_COMPUTE_CAP=121 cargo build --release --locked -p lightcraft-segment --features cuda --bin lightcraft-sam3-worker
+target/release/lightcraft-sam3-worker ~/.config/lightcraft/models/sam3 127.0.0.1:8793
 ```
 
 On the editing computer, start an SSH tunnel in one terminal and LightCraft in another:
@@ -79,11 +87,11 @@ rendered model input (long edge at most 1008 pixels) and prompts cross the tunne
 worker caches the current photo; detail crops do not replace that cache. Returned masks
 stay in the local library, so later adjustments and exports work without the connection.
 
-The worker requires Metal and accepts one editing connection at a time. It loads weights
+The worker requires a GPU (Metal, or CUDA in a `cuda` build) and accepts one editing connection at a time. It loads weights
 on demand and releases them when the client disconnects or remains idle for ten minutes.
 Both endpoints require loopback addresses: SSH provides authentication and encryption.
 The listener has no independent authentication; do not expose it through a public proxy. Any
-process of any user on the worker Mac can connect to it, and on the editing computer a local
+process of any user on the worker machine can connect to it, and on the editing computer a local
 process listening on the port while the tunnel is down receives the rendered model input, so use
 this only on machines whose local users you trust.
 
