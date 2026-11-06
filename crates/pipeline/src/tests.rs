@@ -287,12 +287,16 @@ fn drafts_keep_wide_planes_across_a_noise_reduction_change_and_full_renders_do_n
     let full = RenderRequest { quality: Quality::Full, ..draft };
     let mut s = typical_edits();
     s.effects.clarity = 60.0;
+    s.detail.sharpen_amount = 80.0;
     render_cached(&src, &info, &s, &draft, &cache);
     let clarity_plane = |c: &StageCache| c.entries.lock().unwrap().first().and_then(|e| e.planes.clarity.clone()).unwrap().1;
+    let sharpen_plane = |c: &StageCache| c.entries.lock().unwrap().first().and_then(|e| e.planes.sharpen.clone()).unwrap().1;
     let first = clarity_plane(&cache);
+    let first_sharpen = sharpen_plane(&cache);
     s.detail.nr_luminance = 50.0;
     render_cached(&src, &info, &s, &draft, &cache);
     assert!(Arc::ptr_eq(&first, &clarity_plane(&cache)), "a draft redid the clarity plane for a noise-reduction change");
+    assert!(!Arc::ptr_eq(&first_sharpen, &sharpen_plane(&cache)), "a draft reused the old sharpening plane after noise reduction changed");
     for v in [10.0, 45.0, 80.0] {
         s.detail.nr_luminance = v;
         s.detail.nr_color = v / 2.0;
@@ -839,6 +843,48 @@ fn sliver_crops_render_quickly_with_wide_stages_on() {
         assert!(t.elapsed().as_secs_f64() < 20.0, "{rect:?}: {:?}", t.elapsed());
         assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
     }
+}
+
+// Given a cached render with one process, a change to a process with another colour filter (Update
+// to Current Process, undo) renders like a fresh render, not the cached denoised image
+#[test]
+fn a_process_change_does_not_reuse_the_other_colour_filter() {
+    use crate::{StageCache, render_cached};
+    use lightcraft_develop::Process;
+    use std::sync::Arc;
+    let src = Arc::new(colour_noise_scene(128, 96, 128));
+    let info = SourceInfo::default();
+    let req = RenderRequest::fit(128, 96);
+    let cache = StageCache::default();
+    let mut old = DevelopSettings::default();
+    old.detail.nr_color = 25.0;
+    old.detail.nr_color_smoothness = 0.0;
+    old.process = Process::V2.version();
+    let current = DevelopSettings { process: Process::LATEST.version(), ..old.clone() };
+    let first = render_cached(&src, &info, &old, &req, &cache).image;
+    let fresh = render(&src, &info, &current, &req).image;
+    assert!(max_diff(&first, &fresh) > 0, "the two colour filters differ on this scene");
+    assert_eq!(render_cached(&src, &info, &current, &req, &cache).image, fresh, "process update");
+    assert_eq!(render_cached(&src, &info, &old, &req, &cache).image, first, "undo");
+}
+
+/// Flat grey with chroma noise: `quiet` columns on the left with little noise, the rest with much.
+pub(crate) fn colour_noise_scene(w: usize, h: usize, quiet: usize) -> Rgb32f {
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let mut noise = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        ((seed >> 11) as f32 / (1u64 << 53) as f32 - 0.5) * 2.0
+    };
+    let mut img = Rgb32f::new(w, h);
+    for (i, p) in img.data.iter_mut().enumerate() {
+        let sigma = if i % w < quiet { 0.001 } else { 0.015 };
+        let y = 0.04f32;
+        let (r, b) = (y + noise() * sigma, y + noise() * sigma);
+        *p = [r, (y - 0.2627 * r - 0.0593 * b) / 0.6780, b];
+    }
+    img
 }
 
 /// A crop of no width used to give grain NaN coordinates (and NaN pixels); the render stays finite.

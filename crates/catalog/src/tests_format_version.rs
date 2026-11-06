@@ -156,7 +156,7 @@ fn v10_catalog_repair_clears_spurious_captured_manual_on_local_photos() {
 }
 
 #[test]
-fn v12_library_preserves_captured_manual_values() {
+fn v13_library_preserves_captured_manual_values() {
     let mut c = Catalog::new();
     let id1 = c.alloc_photo_id();
     let mut p1 = Photo::new(id1, Source::File { path: "/p/1.jpg".into() }, "1.jpg", "JPEG", 100, 100, "2026-01-01");
@@ -384,8 +384,9 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v12: `Photo.captured_manual` and `Op::SetCaptured.manual` (v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 12;
+    /// v13: `Photo.captured_manual` and `Op::SetCaptured.manual` (v12: `Catalog.grids` and `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
+    /// `Photo.preview_checked` and `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 13;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
