@@ -198,6 +198,7 @@ Therefore:
 |---|---|---|
 | `mask.add` | `{kind: "object", points?: [[x,y],…], exclude?: [[x,y],…], seg?}` | an Object mask (empty until clicked) |
 | `mask.add` | `{kind: "prompt", text, seg?}` | a Describe mask |
+| `mask.export` | `{id?, path, longEdge?}` | writes any mask as an 8-bit greyscale PNG over the whole photo, edges as the render draws them, and reports `coverage` and `bounds`; needs no model |
 | `mask.addComponent` | `{op: add\|subtract\|intersect, kind: "object"\|"prompt", …}` | the same as a component |
 | `mask.objectPoint` | `{x, y, exclude?: bool, id?}` | one click on the selected mask's Object selection (≤ 64 clicks) |
 | `mask.refineDetail` | `{id?, component?}` | the zoomed-in detail pass → `{started}` |
