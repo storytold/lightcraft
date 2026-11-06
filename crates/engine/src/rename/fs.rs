@@ -46,6 +46,9 @@ pub(crate) trait MoveFs {
     fn packet_version(&self, path: &Path) -> std::io::Result<PacketVersion> {
         use std::io::Read;
         let mut file = std::fs::File::open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(std::io::Error::other(format!("{} is not a regular file", path.display())));
+        }
         let mut hash = lightcraft_preview::Hasher128::new();
         let mut len = 0u64;
         let mut buffer = [0u8; 16 * 1024];
@@ -141,8 +144,14 @@ impl MoveFs for RealFs {
             .map(|k| b.with_file_name(format!(".{name}.lc-partial-{}-{k}", std::process::id())))
             .find(|p| !self.exists(p))
             .ok_or_else(|| std::io::Error::other(format!("no free temporary name beside {}", b.display())))?;
+        // a sidecar found beside the photo by its name is copied only when it is a plain file: a
+        // link there would have its target's contents copied into a new, readable file
+        let checked = std::fs::symlink_metadata(a)?;
+        if !checked.is_file() {
+            return Err(std::io::Error::other(format!("{} is not a regular file", a.display())));
+        }
         let copied = (|| {
-            let mut from = std::fs::File::open(a)?;
+            let mut from = open_regular(a, &checked)?;
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial)?;
             std::io::copy(&mut from, &mut f)?;
             f.sync_all()
@@ -161,6 +170,33 @@ impl MoveFs for RealFs {
     fn stem_sibling(&self, sidecar: &Path) -> Option<String> {
         crate::import_move::sibling_photo(sidecar)
     }
+}
+
+/// Opens `a` for reading and checks the open handle is the regular file `checked` (the
+/// `symlink_metadata` of `a` taken before): the path check alone can be outrun by a swap for a
+/// link, whose target the open would follow.
+fn open_regular(a: &Path, checked: &std::fs::Metadata) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // FILE_FLAG_OPEN_REPARSE_POINT: a symbolic link is opened itself, and then refused below
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::custom_flags(&mut options, 0x0020_0000);
+    let file = options.open(a)?;
+    let opened = file.metadata()?;
+    #[cfg(unix)]
+    let same = {
+        use std::os::unix::fs::MetadataExt;
+        (opened.dev(), opened.ino()) == (checked.dev(), checked.ino())
+    };
+    #[cfg(not(unix))]
+    let same = {
+        let _ = checked;
+        true
+    };
+    if !opened.is_file() || !same {
+        return Err(std::io::Error::other(format!("{} is not a regular file", a.display())));
+    }
+    Ok(file)
 }
 
 /// Move `a` to `b` on another volume: copy (never replacing), compare the copy with the original
@@ -239,4 +275,26 @@ pub(super) fn move_one(fs: &dyn MoveFs, a: &Path, b: &Path) -> std::io::Result<(
         Ok(()) => e,
         Err(e2) => std::io::Error::other(format!("{e}; it could not be given its old name back either ({e2}): it is now {}", tmp.display())),
     })
+}
+
+#[cfg(all(test, unix))]
+mod open_regular_tests {
+    use super::open_regular;
+
+    #[test]
+    fn a_link_swapped_in_after_the_check_is_not_followed() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-open-regular-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (file, other, link) = (dir.join("a.xmp"), dir.join("secret"), dir.join("link.xmp"));
+        std::fs::write(&file, b"x").unwrap();
+        std::fs::write(&other, b"secret").unwrap();
+        let checked = std::fs::symlink_metadata(&file).unwrap();
+        assert!(open_regular(&file, &checked).is_ok());
+        // the name now holds a link to another file: the handle is not the one checked
+        std::fs::remove_file(&file).unwrap();
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        std::fs::rename(&link, &file).unwrap();
+        assert!(open_regular(&file, &checked).is_err(), "the link's target must not be opened");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
