@@ -1,7 +1,7 @@
 use super::colour::{PROXY, file_local_look};
 use super::mono::{fit_tone_only_with, monochrome};
 use super::pairs::{Attempt, TONE_FITS, fit_attempt, fit_partial, search_ordered};
-use super::proxy::{CLIP_TOLERANCE, LensGeometry, MIN_PREVIEW_FRACTION, proxies, structure_agrees};
+use super::proxy::{CLIP_TOLERANCE, LensGeometry, MIN_PREVIEW_FRACTION, extend_tone, proxies, structure_agrees};
 use super::tone::{HighlightCheck, highlights};
 use super::{CameraLook, CameraTone, CameraTransform, HsvTable, Mat3, RawImage, Rgb32f, ToneMap, luminance_2020};
 
@@ -26,18 +26,17 @@ pub(crate) fn fit_preview(
     // Sony's Dynamic Range Optimizer (on by default) brightens the camera JPEG's darker regions,
     // not the raw: keep the colour fitted to the JPEG, take the tone curve without DRO.
     let dro = lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes) == Some(true);
-    let look = match fit_look_with(&sensor, &reference, &clipped, colour.clone(), dro) {
-        Some(look) => look,
-        // A black-and-white JPEG has no colour to fit: the profile's colour and the JPEG's tone curve
-        // (`monochrome_look` does it without a profile).
-        None if colour.is_some() && black_and_white => {
-            let unclipped = without_clipped(&sensor, &clipped);
-            let bright = HighlightCheck { pairs: highlights(&sensor, &reference), dro, grey: true };
-            let Some(look) = fit_tone_only_with(unclipped.as_ref().unwrap_or(&sensor), &reference, colour, &bright) else { return (None, true) };
-            look
-        }
-        None => return (None, black_and_white),
+    let pooled = profile.as_ref().and_then(|p| p.tone);
+    let profile_matrix = colour.as_ref().map(|c| c.0);
+    let fitted = fit_look_with(&sensor, &reference, &clipped, colour.clone(), dro);
+    let tone_only = |colour| {
+        let unclipped = without_clipped(&sensor, &clipped);
+        let bright = HighlightCheck { pairs: highlights(&sensor, &reference), dro, grey: true };
+        fit_tone_only_with(unclipped.as_ref().unwrap_or(&sensor), &reference, Some(colour), &bright)
     };
+    let Some(look) = with_profile_colour(fitted, colour, pooled, tone_only) else { return (None, black_and_white) };
+    // the camera's own curve past what this photo's JPEG showed
+    let look = with_pooled_tone(look, profile_matrix, pooled);
     let look = if dro { with_dro_off_tone(look) } else { look };
     if lightcraft_pipeline::profiling() {
         eprintln!(
@@ -50,6 +49,34 @@ pub(crate) fn fit_preview(
         );
     }
     (Some(look), black_and_white)
+}
+
+/// `look` with its tone curve continued along the camera profile's `pooled` one ([`extend_tone`]), when the look
+/// takes the profile's colour (`profile_matrix`). A look fitted with the photo's own matrix keeps its curve: the pooled
+/// one maps luminance through the profile's matrix, which that photo's colours don't go through.
+pub(super) fn with_pooled_tone(look: CameraLook, profile_matrix: Option<Mat3>, pooled: Option<CameraTone>) -> CameraLook {
+    match (pooled, profile_matrix) {
+        (Some(pooled), Some(matrix)) if look.matrix == matrix => CameraLook { tone: extend_tone(&look.tone, &pooled), ..look },
+        _ => look,
+    }
+}
+
+/// `fitted`, the photo's own look, or when no look fits it (a black-and-white JPEG has no colour; a dark one too few
+/// colour pairs) its camera profile's `colour`: with the JPEG's tone curve when [`fit_tone_only`] finds one
+/// (`monochrome_look` does it without a profile), else the profile's pooled tone curve, else the default raw one. Dropping the profile there for the
+/// neutral fallback left a NIKON D780 frame 3.7 EV under, pushed back up, at 37% of its properly exposed twin's chroma
+/// (88-99% with the profile's colour).
+pub(super) fn with_profile_colour(
+    fitted: Option<CameraLook>,
+    colour: Option<(Mat3, Option<HsvTable>)>,
+    pooled: Option<CameraTone>,
+    tone_only: impl FnOnce((Mat3, Option<HsvTable>)) -> Option<CameraLook>,
+) -> Option<CameraLook> {
+    if fitted.is_some() {
+        return fitted;
+    }
+    let colour = colour?;
+    tone_only(colour.clone()).or_else(|| Some(CameraLook { matrix: colour.0, tone: pooled.or_else(CameraTone::default_raw)?, hue_sat: colour.1 }))
 }
 
 /// Sensor level (normalised, white = 1) at or above which a raw channel counts as clipped, as in
