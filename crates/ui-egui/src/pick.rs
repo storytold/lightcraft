@@ -183,8 +183,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// Show the first waiting request once no dialog is up. One the host can't show is asked another
-/// way, as `ask` does for one refused when it is made (the command runs again with no host dialog,
-/// so its own `ask` falls to the synchronous service, and it fails if there is none), and the next
+/// way, as `ask` does for one refused when it is made (see [`run_without_picker`]), and the next
 /// in line gets its turn.
 fn start_waiting(app: &mut LightcraftApp, ctx: &egui::Context) {
     while !app.pending_picks.iter().any(|p| matches!(p.stage, Stage::Up(_))) {
@@ -206,7 +205,10 @@ fn start_waiting(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 /// `p`'s command, run again as on a host with no dialogs of its own: its `ask` falls to the
-/// synchronous service (or finds none and fails), and what comes of it is reported.
+/// synchronous service (or finds none and fails), and what comes of it is reported. That holds for
+/// the commands that ask for their own path. Two are asked by their panels, which run them with the
+/// answer (`photo.moveToFolder` from the grid's menu, `folder.move` from the Folders list): run
+/// again with none, they fail with a message, which is what the person is told.
 fn run_without_picker(app: &mut LightcraftApp, ctx: &egui::Context, p: Pending) {
     let picker = app.services.picker.take();
     let result = app.run(&p.command, p.params);
