@@ -771,9 +771,9 @@
 - `library.source` takes `ids` (albums) or `paths` (folders of the library, as `library.folders` lists them, not a
   browsed Local folder) and shows the photos of any of them, each once; `library.filter` takes `keywords`, `dates`,
   `libraryFolders` and `albums`. The single fields stay and count as one
-  more of them. `library.state` lists `albums` and `libraryFolders`. The sidebars' Cmd+click and Shift+click that use
-  this come in a later change. When the albums shown include a smart album, New Smart Album from Filter… is grayed out
-  and says why, as `album.createSmart` does. So does a filter that names a smart album.
+  more of them. `library.state` lists `albums` and `libraryFolders`. When the albums shown include a smart album,
+  New Smart Album from Filter… is grayed out and says why, as `album.createSmart` does. So does a filter that names a
+  smart album.
 - With View ▸ Hold View Until Refreshed on, a view of several albums holds a photo only while one of them has it: a
   photo that stops matching the rules of a smart album among them goes at once, unless another album shown has it.
 - `library.filter` refuses an album that is not there (`no such album N`), as `library.source` does. Deleting a shown
