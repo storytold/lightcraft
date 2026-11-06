@@ -153,6 +153,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-12 | minor | Gap 20 shrinks: Mamiya MEF decodes (`vendor/mef.rs`) and is imported; gap 10 count 240 → 241 |
 | 2026-10-12 | minor | Gap 20 shrinks: Epson ERF decodes (`vendor/erf.rs`), 3 bodies verified; gap 10 count 237 → 240 |
 | 2026-10-13 | minor | Gap 28: F6 (filmstrip) and F7 (left panel) are bound, so the entry no longer lists them as missing; hours unchanged |
+| 2026-10-13 | minor | Import gains an optional batch-edit recipe (LR-IMP-RECIPE); it is additive and no ranked gap lists it, so no gap closes and the numbers do not move |
 | 2026-10-20 | patch | Gap 24: extreme brush segments skip the intermediate dabs; the gap stays open |
 | 2026-10-11 | minor | Gap 10 shrinks: Leica Q3 verified by a recorded check of 38 private DNGs (236 models verified; Leica 14); gap not closed |
 | 2026-10-12 | minor | Camera-look deep shadows follow the JPEG toe (#1307); camera calibration remains partial |
