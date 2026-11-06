@@ -629,3 +629,19 @@ fn people_and_subject_use_person_mattes() {
     let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
     assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
 }
+
+/// A thousand two-point strokes, each a sweep far past the photo that lays most of a stroke's
+/// own budget: the mask shares one budget across its strokes, so it renders in moments rather
+/// than building and visiting most of a billion dabs.
+#[test]
+fn many_far_flung_strokes_share_one_dab_budget() {
+    let (w, h) = (64, 64);
+    let s = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)], size: 0.05, ..Default::default() };
+    assert!(brush_dabs(&s, &frame(w, h), w, h).dabs.len() > 500_000, "each stroke alone is large");
+    let strokes = vec![s; 1000];
+    let t = std::time::Instant::now();
+    let mut out = Plane::new(w, h);
+    rasterize_brush(&strokes, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), &mut out);
+    assert!(t.elapsed().as_secs() < 30, "took {:?}", t.elapsed());
+    assert!(out.data.iter().any(|&v| v > 0.0), "the strokes crossing the photo still paint it");
+}
