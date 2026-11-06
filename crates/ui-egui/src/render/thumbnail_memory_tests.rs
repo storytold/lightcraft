@@ -458,6 +458,30 @@ fn the_warning_limit_tolerates_a_clock_that_stands_still_or_goes_back() {
     assert_eq!(w.admit(5_000.0), Admit::Held);
 }
 
+// Given failures the log held back, and then none for a whole interval, the count is due once: the
+// next warning would have said it, and when the failures have stopped none comes. Failures that go
+// on, a time that isn't one, and nothing held back have nothing due.
+#[test]
+fn the_failures_held_back_are_counted_once_they_stop() {
+    let interval = FAILURE_WARN_INTERVAL_MS;
+    let mut w = WarnLimit::default();
+    assert_eq!(w.settle(10.0 * interval), None, "nothing failed");
+    for _ in 0..FAILURE_WARN_BURST as usize {
+        assert!(matches!(w.admit(100.0), Admit::Warn { held_back: 0 }));
+    }
+    assert_eq!(w.settle(100.0 + 2.0 * interval), None, "the burst was all logged: nothing held back");
+    for _ in 0..3 {
+        assert_eq!(w.admit(100.0), Admit::Held);
+    }
+    assert_eq!(w.settle(100.0 + interval / 2.0), None, "the failures may go on");
+    assert_eq!(w.admit(100.0 + 0.9 * interval), Admit::Held, "and one more comes");
+    assert_eq!(w.settle(100.0 + 1.5 * interval), None, "an interval has not passed since the last one");
+    assert_eq!(w.settle(f64::NAN), None, "not a time");
+    assert_eq!(w.settle(100.0 + 2.0 * interval), Some(4), "an interval with none: the four held back");
+    assert_eq!(w.settle(100.0 + 3.0 * interval), None, "said once");
+    assert_eq!(w.admit(100.0 + 3.0 * interval), Admit::Warn { held_back: 0 }, "and not again with the next warning");
+}
+
 /// A library whose files can't be read (a drive that sleeps): `n` photos, each failing to decode.
 fn unreadable_library(n: u64) -> (crate::LightcraftApp, egui::Context) {
     unreadable_files(n, false)
@@ -528,4 +552,32 @@ fn a_flood_of_thumbnail_failures_does_not_flood_the_log() {
     assert!(last.starts_with("render Thumb(PhotoId(1)): again"), "{last}");
     assert!(last.contains(&format!("not logged since the last warning: {held};")), "{last}");
     assert_eq!(app.renderer.thumb_warnings.held_back, 0);
+}
+
+// Given a flood of thumbnail failures the log held back some of, and then no more, the renderer says
+// how many in a warning of its own once an interval has passed: before, the count waited for a
+// failure that never came. Said once.
+#[test]
+fn a_flood_that_stops_is_counted_in_the_log() {
+    const FLOOD: usize = 100;
+    let (mut app, ctx) = unreadable_library(FLOOD as u64);
+    for id in 1..=FLOOD as u64 {
+        crate::panels::grid::request_thumb(&mut app, PhotoId(id), 384, 10);
+    }
+    assert_eq!(app.renderer.pool.run_inline(FLOOD), FLOOD);
+    app.renderer.poll(&ctx, &mut app.session);
+    let held = app.renderer.thumb_warnings.held_back;
+    let warned = app.renderer.failure_messages.len();
+    assert!(held > 0, "some were held back");
+    app.renderer.poll(&ctx, &mut app.session);
+    assert_eq!(app.renderer.failure_messages.len(), warned, "the failures may be going on: nothing is said yet");
+
+    app.renderer.thumb_warnings.at_ms = Some(crate::monotonic_ms() - 2.0 * FAILURE_WARN_INTERVAL_MS); // (an interval with no failure)
+    app.renderer.poll(&ctx, &mut app.session);
+    assert_eq!(app.renderer.failure_messages.len(), warned + 1, "one warning for the count");
+    let last = app.renderer.failure_messages.last().unwrap();
+    assert!(last.contains(&format!("not logged since the last warning: {held};")), "{last}");
+    assert_eq!(app.renderer.thumb_warnings.held_back, 0);
+    app.renderer.poll(&ctx, &mut app.session);
+    assert_eq!(app.renderer.failure_messages.len(), warned + 1, "said once");
 }

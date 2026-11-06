@@ -287,7 +287,7 @@ enum Admit {
 /// How many thumbnail failures reach the log as warnings (the grid asks for a thousand thumbnails a
 /// second, so a folder whose files can't be read would write a line each). A burst of
 /// [`FAILURE_WARN_BURST`] goes through, then one every [`FAILURE_WARN_INTERVAL_MS`]; the rest are
-/// counted, and the next warning says how many.
+/// counted, and the next warning says how many (or, when the failures stop, a line of its own).
 #[derive(Debug)]
 struct WarnLimit {
     /// Warnings that may go out now: each takes one, and one more comes every interval.
@@ -320,6 +320,17 @@ impl WarnLimit {
             self.held_back = self.held_back.saturating_add(1);
             Admit::Held
         }
+    }
+
+    /// The failures held back, once none has come for a whole interval: the next warning would
+    /// have said how many, and when the failures have stopped none comes. Taken, so each is
+    /// counted once. A time that isn't one says nothing.
+    fn settle(&mut self, now_ms: f64) -> Option<u64> {
+        let last = self.at_ms?;
+        if self.held_back == 0 || !now_ms.is_finite() || now_ms - last < FAILURE_WARN_INTERVAL_MS {
+            return None;
+        }
+        Some(std::mem::take(&mut self.held_back))
     }
 }
 
@@ -1332,6 +1343,7 @@ impl Renderer {
         }
         self.preview_generation = Some((Arc::downgrade(cache), generation));
         self.follow_catalog(&session.catalog, &session.media.availability);
+        self.warn_held_back();
         self.frame += 1;
         self.trim_stages();
         // wasm: run one job per frame on this thread, timed with the host clock
@@ -1830,8 +1842,8 @@ impl Renderer {
     /// Log a failed render as a warning. Thumbnails share a limit ([`WarnLimit`]): a folder whose
     /// files can't be read fails a thumbnail per cell, and the log keeps the first ones and one a
     /// second after them. The failures held back are still logged at debug level
-    /// ([`Self::decided`]), and the next warning says how many there were. A view the person is
-    /// looking at (the loupe, Compare, a slide) always warns.
+    /// ([`Self::decided`]), and the next warning says how many there were ([`Self::warn_held_back`]
+    /// when none comes). A view the person is looking at (the loupe, Compare, a slide) always warns.
     fn warn_failure(&mut self, slot: Slot, message: String) {
         let mut held_back = 0;
         if matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_)) {
@@ -1848,6 +1860,18 @@ impl Renderer {
         } else {
             message
         };
+        self.log_warning(message);
+    }
+
+    /// Once the thumbnail failures stop (an interval with none) after some went unlogged, say how
+    /// many: the next warning would have, and none comes. The host calls [`Self::poll`] every
+    /// frame, which is where it is noticed.
+    fn warn_held_back(&mut self) {
+        let Some(held_back) = self.thumb_warnings.settle(crate::monotonic_ms()) else { return };
+        self.log_warning(format!("thumbnail failures not logged since the last warning: {held_back}; LIGHTCRAFT_LOG=debug logs each one"));
+    }
+
+    fn log_warning(&mut self, message: String) {
         #[cfg(test)]
         self.failure_messages.push(message.clone());
         log::warn!("{message}");
