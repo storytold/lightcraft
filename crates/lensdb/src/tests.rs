@@ -202,6 +202,37 @@ fn a_stretching_profile_is_zoomed_in_to_fill_the_frame() {
     }
 }
 
+/// The fill zoom keeps each colour plane's TCA: red and blue read where the model puts them for the zoomed frame
+/// (made-up linear TCA on the [`STRETCH`] distortion), not where green reads.
+#[test]
+fn the_fill_zoom_keeps_red_and_blue_on_their_tca() {
+    let xml = STRETCH.replace("</calibration>", r#"<tca model="linear" focal="70" kr="1.001" kb="0.999"/></calibration>"#);
+    let db = LensDb::parse(&xml).unwrap();
+    let lens = &db.lenses[0];
+    let (w, h) = (6000.0, 4000.0);
+    let shot = Shot { focal: 70.0, aperture: None, distance: None, crop_factor: Some(1.5), width: w, height: h };
+    let wp = lens.correction(&shot).unwrap().warp.unwrap();
+    // the calibration's own crop factor and aspect: r = 1 at half the shorter side
+    let n = h / 2.0;
+    let z = model_fill_zoom(lens, 70.0, w, h, n);
+    assert!(z > 1.01, "zoom {z}");
+    for ch in 0..3 {
+        let mut worst: f64 = 0.0;
+        for gy in 0..=20 {
+            for gx in 0..=30 {
+                let (x, y) = (gx as f64 * w / 30.0, gy as f64 * h / 20.0);
+                let (sx, sy) = dng_source(&wp, ch, x, y, w, h);
+                let (dx, dy) = ((x - w / 2.0) / n / z, (y - h / 2.0) / n / z);
+                let r = dx.hypot(dy);
+                let d = lens.distortion_ratio(70.0, r);
+                let k = d * lens.tca_ratio(70.0, ch, r * d);
+                worst = worst.max((sx - (w / 2.0 + dx * k * n)).hypot(sy - (h / 2.0 + dy * k * n)));
+            }
+        }
+        assert!(worst < 0.5, "plane {ch}: {worst} px from the model");
+    }
+}
+
 #[test]
 fn straight_lines_stay_straight_after_correction() {
     // A synthetic barrel-distorted chart: the camera recorded straight scene lines at r_d = r_u·ratio(r_u).
