@@ -80,6 +80,26 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
     }
 }
 
+/// The bounded JPEG preview inside a Fujifilm RAF, if its header range is complete.
+pub(crate) fn raf_embedded_jpeg(bytes: &[u8]) -> Option<&[u8]> {
+    if !bytes.starts_with(b"FUJIFILMCCD-RAW") {
+        return None;
+    }
+    let read_be32 = |at: usize| {
+        let end = at.checked_add(4)?;
+        let value: [u8; 4] = bytes.get(at..end)?.try_into().ok()?;
+        Some(u32::from_be_bytes(value) as usize)
+    };
+    let offset = read_be32(84)?;
+    let length = read_be32(88)?;
+    if offset == 0 || length == 0 {
+        return None;
+    }
+    let end = offset.checked_add(length)?;
+    let jpeg = bytes.get(offset..end)?;
+    jpeg.starts_with(&[0xff, 0xd8]).then_some(jpeg)
+}
+
 /// Check every PNG/WebP EXIF chunk for location tags. Malformed recognized containers or EXIF blocks
 /// fail closed because an Original copy cannot establish that location data is absent.
 pub(crate) fn png_webp_embeds_exif_gps_location(bytes: &[u8]) -> Option<bool> {
@@ -152,6 +172,11 @@ const XMP_EXT_SIG: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
 
 /// Walk JPEG markers up to SOS and collect APP1 Exif / XMP, APP2 ICC and APP13 IPTC.
 pub fn jpeg_segments(b: &[u8]) -> Embedded {
+    jpeg_segments_with_exif(b, |_| {})
+}
+
+/// Collect JPEG metadata while visiting every EXIF APP1 block for GPS fallback.
+fn jpeg_segments_with_exif(b: &[u8], mut visit_exif: impl FnMut(&[u8])) -> Embedded {
     let mut out = Embedded::default();
     if !b.starts_with(&[0xff, 0xd8]) {
         return out;
@@ -187,7 +212,13 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
         let end = declared_end.min(b.len());
         let Some(payload) = b.get(start..end) else { break };
         match marker {
-            0xe1 if payload.starts_with(b"Exif\0") && out.exif.is_none() => out.exif = Some(payload.get(6..).unwrap_or(&[]).to_vec()),
+            0xe1 if payload.starts_with(b"Exif\0") => {
+                let exif = payload.get(6..).unwrap_or(&[]);
+                visit_exif(exif);
+                if out.exif.is_none() {
+                    out.exif = Some(exif.to_vec());
+                }
+            }
             0xe1 if payload.starts_with(XMP_SIG) && out.xmp.is_none() => {
                 out.xmp = Some(String::from_utf8_lossy(&payload[XMP_SIG.len()..]).into_owned());
             }
@@ -265,9 +296,39 @@ pub fn jpeg_segments(b: &[u8]) -> Embedded {
     out
 }
 
+/// GPS from the first EXIF APP1 block in a JPEG preview that projects a valid position.
+pub(crate) fn jpeg_exif_gps(bytes: &[u8]) -> Option<crate::Gps> {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
+        return None;
+    }
+    let mut gps = None;
+    jpeg_segments_with_exif(bytes, |exif| {
+        if gps.is_none() {
+            gps = crate::read_exif(exif).gps;
+        }
+    });
+    gps
+}
+
+/// GPS from every EXIF APP1 packet in a JPEG source or a RAF's embedded JPEG preview.
+pub(crate) fn source_jpeg_exif_gps(bytes: &[u8]) -> Option<crate::Gps> {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        return jpeg_exif_gps(bytes);
+    }
+    raf_embedded_jpeg(bytes).and_then(jpeg_exif_gps)
+}
+
 /// Check JPEG Exif APP1 packets for location tags. MPF multi-picture JPEGs and truncated or
 /// unparseable Exif packets fail closed because an Original copy cannot establish that location data is absent.
 pub(crate) fn jpeg_embeds_exif_gps_location(bytes: &[u8]) -> bool {
+    jpeg_embeds_exif_gps_location_at_depth(bytes, 0)
+}
+
+/// Nested TIFF thumbnails are untrusted; cap recursive JPEG/EXIF traversal and fail closed.
+pub(crate) fn jpeg_embeds_exif_gps_location_at_depth(bytes: &[u8], depth: usize) -> bool {
+    if depth >= crate::exif::MAX_GPS_NESTING {
+        return true;
+    }
     if !bytes.starts_with(&[0xff, 0xd8]) {
         return false;
     }
@@ -311,7 +372,7 @@ pub(crate) fn jpeg_embeds_exif_gps_location(bytes: &[u8]) -> bool {
         }
         if marker == 0xe1 && payload.starts_with(b"Exif\0") {
             let Some(exif) = payload.get(6..) else { return true };
-            if crate::exif::exif_gps_tag_presence(exif) != Some(false) {
+            if crate::exif::exif_gps_tag_presence_at_depth(exif, depth.saturating_add(1)) != Some(false) {
                 return true;
             }
         }
@@ -849,6 +910,52 @@ mod tests {
         for n in 0..raf.len() {
             let _ = crate::extract(&raf[..n]);
         }
+    }
+
+    /// Build a RAF preview with a GPS-free EXIF APP1 followed by a GPS-bearing one.
+    fn raf_with_later_gps_exif() -> Vec<u8> {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let exif = |with_gps: bool| {
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set(t::MAKE, Value::Ascii("Procedural camera".into()));
+            if with_gps {
+                let mut gps = IfdBuilder::new();
+                gps.set(t::GPS_LATITUDE_REF, Value::Ascii("N".into()));
+                gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+                gps.set(t::GPS_LONGITUDE_REF, Value::Ascii("W".into()));
+                gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(10, 1), (30, 1), (0, 1)]));
+                ifd0.set_child(t::GPS_IFD, gps);
+            }
+            TiffWriter::default().write(&[ifd0]).unwrap()
+        };
+        let mut jpeg = vec![0xff, 0xd8];
+        for block in [exif(false), exif(true)] {
+            let mut payload = b"Exif\0\0".to_vec();
+            payload.extend_from_slice(&block);
+            let length = u16::try_from(payload.len().saturating_add(2)).unwrap();
+            jpeg.extend_from_slice(&[0xff, 0xe1]);
+            jpeg.extend_from_slice(&length.to_be_bytes());
+            jpeg.extend_from_slice(&payload);
+        }
+        jpeg.extend_from_slice(&[0xff, 0xda, 0, 2, 0x11, 0xff, 0xd9]);
+
+        let mut raf = b"FUJIFILMCCD-RAW 0201FF000000TEST".to_vec();
+        raf.resize(120, 0);
+        raf[84..88].copy_from_slice(&120u32.to_be_bytes());
+        raf[88..92].copy_from_slice(&u32::try_from(jpeg.len()).unwrap().to_be_bytes());
+        raf.extend_from_slice(&jpeg);
+        raf
+    }
+
+    /// The privacy scan and metadata projection include GPS in later RAF preview EXIF packets.
+    #[test]
+    fn raf_checks_every_embedded_jpeg_exif_app1_for_gps() {
+        let raf = raf_with_later_gps_exif();
+        assert!(crate::source_embeds_exif_gps_location(&raf));
+        let preview = raf_embedded_jpeg(&raf).unwrap();
+        assert_eq!(crate::extract(preview).gps, Some(crate::Gps { latitude: 45.5, longitude: -10.5, altitude: None }));
+        assert_eq!(crate::try_extract(&raf).unwrap().gps, Some(crate::Gps { latitude: 45.5, longitude: -10.5, altitude: None }));
     }
 
     #[test]

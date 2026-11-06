@@ -32,8 +32,10 @@ typed location, while the source tags remain available in All Metadata. Original
 refuses files with location-bearing EXIF tags, a GPS IFD pointer whose child could not be read, or an embedded EXIF
 block that could not be parsed. CR3 `CMT4` GPS metadata is checked directly as well as through merged EXIF, and an
 unreadable `CMT4` fails closed. PNG `eXIf` and WebP `EXIF` chunks are all checked, not just the one exposed by
-`embedded()`. Containers without a separate EXIF block retain the whole-file TIFF fallback.
-MPF multi-picture JPEGs are refused for Original copying because secondary-image EXIF is not scanned.
+`embedded()`. Every JPEG EXIF APP1 before SOS is checked, including all EXIF packets in a RAF preview, and TIFF
+JPEG-thumbnail EXIF is checked recursively with a depth bound. Containers without a separate EXIF block retain the
+whole-file TIFF fallback. MPF multi-picture JPEGs are refused for Original copying because secondary-image EXIF is
+not scanned.
 
 ## XMP namespaces
 
