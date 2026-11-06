@@ -8,31 +8,210 @@ use lightcraft_develop::{ControlSpec, Track};
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 
+/// Standard dropdown chevrons, including settings, import/export and rule editors.
+pub fn combo_box(id: impl egui::AsIdSalt) -> craft_ui::ComboBox<'static> {
+    craft_ui::ComboBox::from_id_salt(id)
+        .icon(|ui, rect, visuals, _| {
+            paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, visuals.fg_stroke.color);
+        })
+        .popup_style(list_style.into())
+}
+
+/// Name a dropdown for screen readers. egui 0.37's `ComboBox::from_id_salt` publishes only the
+/// selected text as the node's value, so an otherwise unlabelled combo has no accessible name and
+/// the strict kittest check rejects it. Call this on the response returned by `show_ui`.
+pub fn name_combo(response: &egui::Response, label: &str) {
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, response.enabled(), label));
+}
+
+/// A dropdown's list and its submenus: items without the resting border of a button, as egui's
+/// own menus draw them. An unhovered item gives up its border's width of padding, so with one it
+/// grew 2 points when hovered, and the longest name of a list sized to it wrapped (#2354).
+fn list_style(style: &mut egui::Style) {
+    style.visuals.widgets.inactive.bg_stroke = Stroke::NONE;
+}
+
+/// A native button with a vector arrow beside its text; egui reserves the icon's space.
+pub fn arrow_button<'a>(ui: &mut Ui, text: impl egui::IntoAtoms<'a>, icon: Icon, leading: bool) -> Response {
+    // 0.37 atoms take a local `IdSalt` (not a root `Id`); the button reports the custom atom's
+    // rect under the same salt.
+    let id = egui::IdSalt::new(("lc-arrow", ui.next_auto_id()));
+    let mut atoms = text.into_atoms();
+    let arrow = egui::Atom::custom(id, vec2(16.0, 16.0));
+    if leading {
+        atoms.push_left(arrow);
+    } else {
+        atoms.push_right(arrow);
+    }
+    let r = egui::Button::new(atoms).atom_ui(ui);
+    if let Some(rect) = r.rect(id) {
+        paint(ui.painter(), rect, icon, ui.style().interact(&r.response).fg_stroke.color);
+    }
+    r.response
+}
+
+/// Keep egui's submenu interaction and layout, using our vector chevron instead of a font glyph.
+pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
+    if !egui::containers::menu::is_in_menu(ui) {
+        return ui.menu_button(atoms, contents);
+    }
+    let button = egui::Button::new(atoms.into_atoms()).right_text("    ");
+    let (response, inner) = egui::containers::menu::SubMenuButton::from_button(button).ui(ui, contents);
+    let center = pos2(response.rect.right() - ui.spacing().button_padding.x - 8.0, response.rect.center().y);
+    paint(ui.painter(), Rect::from_center_size(center, vec2(16.0, 16.0)), Icon::ChevronRight, ui.style().interact(&response).fg_stroke.color);
+    egui::InnerResponse::new(inner.map(|r| r.inner), response)
+}
+
+/// A context menu on `response`, as `Response::context_menu` gives, that a right-click moves
+/// (#1877). egui closes a menu on any click once it was open on the previous frame, and judges
+/// that by the menu's id: a right-click elsewhere on the same widget while its menu is open
+/// reopened the menu at the pointer and closed it again on the same frame, a one-frame flash.
+/// The click that opens (or moves) the menu is not the one that closes it.
+///
+/// While photos are carried (dragged from the grid, the primary button still held) a right-click
+/// opens nothing here: a menu is not what the person is doing with the pointer.
+pub fn context_menu(response: &Response, add_contents: impl FnOnce(&mut Ui)) -> Option<egui::InnerResponse<()>> {
+    if response.secondary_clicked() && carrying(&response.ctx) {
+        return None;
+    }
+    egui::Popup::context_menu(response).close_behavior(context_menu_close(response, egui::PopupCloseBehavior::CloseOnClick)).show(add_contents)
+}
+
+/// Record whether photos are being carried as the frame starts, for [`context_menu`] to read. A
+/// drag left over without its button (full screen skips the code that ends it) is not carrying.
+pub fn set_carrying(ctx: &egui::Context, carrying: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("lc-carrying"), carrying));
+}
+
+pub(crate) fn carrying(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("lc-carrying"))).unwrap_or(false)
+}
+
+/// How a context menu on `response` closes this frame: `default`, except on the frame of the
+/// right-click that opens or moves it, which must not close it (see [`context_menu`]).
+pub fn context_menu_close(response: &Response, default: egui::PopupCloseBehavior) -> egui::PopupCloseBehavior {
+    if response.secondary_clicked() { egui::PopupCloseBehavior::IgnoreClicks } else { default }
+}
+
 // ------------------------------------------------------------------ automation registry
 
-#[derive(Clone, Default)]
-pub struct Registry(pub Vec<(String, Rect)>);
+/// The real egui widget that owns a registered automation rectangle.
+///
+/// Automation ids are names for scripts; egui hit-tests widget [`egui::Id`]s in a [`egui::LayerId`].
+/// [`register`] records a small non-interactive probe with the registered rect so the control
+/// channel can ask egui itself whether that rectangle owns the pointer, rather than guessing from
+/// unrelated interactive rectangles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WidgetHit {
+    pub id: egui::Id,
+    pub layer_id: egui::LayerId,
+    /// The widget's clipped interaction rectangle in its layer's local coordinates, recorded in
+    /// the same pass as the registration. Delivery checks this instead of calling
+    /// `Context::read_response` before the next pass: at that point `read_response` can still see
+    /// the pass before the registry that was just published.
+    pub interact_rect: Rect,
+}
 
-/// Record a widget's automation id and screen rect for this frame.
-pub fn register(ctx: &egui::Context, id: impl Into<String>, rect: Rect) {
+#[derive(Clone, Default)]
+pub struct Registry {
+    pub rects: Vec<(String, Rect)>,
+    pub hits: Vec<(String, WidgetHit)>,
+    /// How many times each automation id was registered in this pass (for stable duplicate probe
+    /// ids). A map keeps registration linear; scanning `rects` would make a pass O(N²).
+    occurrences: std::collections::HashMap<String, usize>,
+}
+
+/// Record a widget's automation id and screen rect for this frame, and register a hover probe at
+/// the same rectangle in the current UI layer.
+///
+/// The probe senses hover only (no click or drag), so it never takes a click from the widget it
+/// describes. It records the current UI layer and its clipped `Response::interact_rect` in the
+/// same pass, and the control channel asks egui for the top-most interactable layer at the point.
+/// A probe below a non-modal foreground/dim overlay is therefore refused without ever pressing the
+/// overlay. A point below the top modal dialog is instead left to egui's modal routing: the dialog
+/// consumes it, or a click on the backdrop closes the dialog, and no background widget is pressed.
+pub fn register(ui: &egui::Ui, id: impl Into<String>, rect: Rect) {
+    let ctx = ui.ctx();
+    let registry = egui::Id::unique("lc-registry");
     let id = id.into();
-    ctx.data_mut(|d| d.get_temp_mut_or_default::<Registry>(egui::Id::new("lc-registry")).0.push((id, rect)));
+    // Stable across frames even when unrelated widgets come and go: the probe id names the
+    // automation id (and a duplicate occurrence of the same id in this pass), not its position.
+    let duplicate = ctx.data_mut(|d| {
+        let registry = d.get_temp_mut_or_default::<Registry>(registry);
+        let occurrence = registry.occurrences.entry(id.clone()).or_insert(0);
+        let duplicate = *occurrence;
+        *occurrence = occurrence.saturating_add(1);
+        duplicate
+    });
+    let hit = rect.is_finite().then(|| {
+        let id = egui::Id::unique(("lc-automation-hit", id.as_str(), duplicate));
+        let response = ui.interact(rect, id, egui::Sense::hover());
+        WidgetHit { id, layer_id: response.layer_id, interact_rect: response.interact_rect }
+    });
+    ctx.data_mut(|d| {
+        let registry = d.get_temp_mut_or_default::<Registry>(registry);
+        registry.rects.push((id.clone(), rect));
+        if let Some(hit) = hit {
+            registry.hits.push((id, hit));
+        }
+    });
+}
+
+/// Record a widget whose real egui [`egui::Response`] is available. More precise than
+/// [`register`]'s hover probe: the response carries the widget's own id, layer and clipped
+/// geometry, and remains a valid automation target when disabled (`ui.clickWidget` on a disabled
+/// control is a successful no-op, which is the documented automation semantics).
+pub fn register_response(id: impl Into<String>, rect: Rect, response: &egui::Response) {
+    let id = id.into();
+    let ctx = response.ctx.clone();
+    ctx.data_mut(|d| {
+        let registry = d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry"));
+        registry.rects.push((id.clone(), rect));
+        registry.hits.push((id, WidgetHit { id: response.id, layer_id: response.layer_id, interact_rect: response.interact_rect }));
+    });
+}
+
+/// Record painted geometry that has no interactive egui widget of its own (a preview image, a
+/// drop card). `ui.clickWidget` will not press it: there is no widget hit to own the press.
+pub fn register_geometry(ctx: &egui::Context, id: impl Into<String>, rect: Rect) {
+    let id = id.into();
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry")).rects.push((id, rect)));
+}
+
+/// The keyboard-focus ring, drawn on top of whatever the control paints so a focused control reads
+/// as focused whether it is idle, hovered or selected. It is drawn inside `rect`, so it survives a
+/// painter clipped to the control. [`crate::check`] draws the same stroke around its box.
+pub fn focus_ring(p: &egui::Painter, rect: Rect, t: &Tokens) {
+    p.rect_stroke(rect, CornerRadius::same(4), focus_stroke(t), StrokeKind::Inside);
+}
+
+/// The stroke of every focus ring: 2 px in the accent colour.
+pub fn focus_stroke(t: &Tokens) -> Stroke {
+    Stroke::new(2.0, t.accent)
 }
 
 /// Esc was handled this frame by something nested (an open popup closed on it): containers such
 /// as dialogs shouldn't close too. Keyed to the frame, so it lapses by itself on the next one.
 pub fn take_escape(ctx: &egui::Context) {
     let frame = ctx.cumulative_frame_nr();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("lc-escape-taken"), frame));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("lc-escape-taken"), frame));
 }
 
 /// Whether [`take_escape`] was called this frame.
 pub fn escape_taken(ctx: &egui::Context) -> bool {
-    ctx.data(|d| d.get_temp::<u64>(egui::Id::new("lc-escape-taken"))) == Some(ctx.cumulative_frame_nr())
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::unique("lc-escape-taken"))) == Some(ctx.cumulative_frame_nr())
 }
 
+/// Take this pass's registered rectangles and their egui hit owners. The app publishes both only
+/// for a completed, nondiscarded pass.
+pub fn take_registries(ctx: &egui::Context) -> (Vec<(String, Rect)>, Vec<(String, WidgetHit)>) {
+    let registry = ctx.data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Registry>(egui::Id::unique("lc-registry"))));
+    (registry.rects, registry.hits)
+}
+
+/// Take only the registered rectangles (for unit tests that inspect layout).
 pub fn take_registry(ctx: &egui::Context) -> Vec<(String, Rect)> {
-    ctx.data_mut(|d| std::mem::take(&mut d.get_temp_mut_or_default::<Registry>(egui::Id::new("lc-registry")).0))
+    take_registries(ctx).0
 }
 
 // ------------------------------------------------------------------ preview-only raws
@@ -45,6 +224,12 @@ pub fn preview_only_variant(reason: &str) -> &str {
 
 /// What a preview-only raw means for the user (see `Photo::preview_only`).
 pub fn preview_only_explanation(reason: &str) -> String {
+    if reason.starts_with("Nikon High Efficiency NEF (") {
+        return crate::i18n::tr(
+            "Nikon High Efficiency NEF (HE / HE★) uses intoPIX TicoRAW compression. LightCraft does not currently have a license for this codec, so only the camera's embedded JPEG preview is available, not the raw sensor data. To edit raw data, shoot Lossless compressed NEF or convert existing HE files to DNG using a licensed converter.",
+        )
+        .to_string();
+    }
     crate::i18n::tr_format!(
         "LightCraft can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.",
         preview_only_variant(reason)
@@ -52,8 +237,11 @@ pub fn preview_only_explanation(reason: &str) -> String {
 }
 
 /// A panel notice for a raw shown from its embedded preview (Edit, Info): an amber info icon,
-/// "Preview only" and the explanation. Registered as `notice:previewOnly:{key}`.
-pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) {
+/// "Preview only", the explanation and a Reload from Disk button (`button:reloadPreviewOnly:{key}`:
+/// for a file a newer version can decode that was offline when its library opened). Registered as
+/// `notice:previewOnly:{key}`. `true` when the button was clicked.
+pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
+    let mut reload = false;
     let t = Tokens::get(ui.ctx());
     let r = egui::Frame::NONE
         .fill(t.canvas)
@@ -69,11 +257,14 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) {
             });
             ui.add_space(2.0);
             ui.label(egui::RichText::new(preview_only_explanation(reason)).size(11.5).color(t.text_label));
+            ui.add_space(6.0);
+            reload = text_button(ui, &format!("reloadPreviewOnly:{key}"), "Reload from Disk", false).clicked();
         })
         .response;
     let r = r.on_hover_text(crate::i18n::tr_format!("Decoder: {reason}", reason = reason));
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, crate::i18n::tr("Preview only: editing the camera's embedded JPEG")));
-    register(ui.ctx(), format!("notice:previewOnly:{key}"), r.rect);
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, crate::i18n::tr("Preview only: editing the camera's embedded JPEG")));
+    register(ui, format!("notice:previewOnly:{key}"), r.rect);
+    reload
 }
 
 // ------------------------------------------------------------------ colour helpers
@@ -170,9 +361,63 @@ pub(crate) fn shown_value(spec: &ControlSpec, v: f64) -> String {
     if shown == "+0" || shown == "-0" { "0".to_string() } else { shown }
 }
 
+/// Pointer travel (points, sideways from the press) that turns a press on a slider's value into a
+/// scrub rather than a click that types a value.
+const SCRUB_START: f32 = 3.0;
+
+/// Which slider the vertical wheel edits: clicking or dragging a slider arms it (and disarms the others), leaving
+/// its row or its focus disarms it. Returns whether this slider is armed, and whether the pointer is in its row.
+fn update_wheel_arming(ui: &mut Ui, id: egui::Id, resp: &egui::Response, row: Rect, enabled: bool) -> (bool, bool) {
+    // Keyboard focus survives leaving the row; vertical wheel edits need a fresh click or drag
+    // in it (at most one slider is armed: `wheel_slider_key`).
+    let wheel_id = id.with("wheel-rem");
+    let mut wheel_armed = ui.data(|d| d.get_temp::<egui::Id>(wheel_slider_key())) == Some(id);
+    let pointer_in_row = ui.rect_contains_pointer(row);
+    // Every move this frame counts, not only where the pointer ended up: a slow frame (a slider
+    // drag, soft proofing) can merge leaving the row and coming back into one.
+    let left_row = wheel_armed
+        && ui.input(|i| {
+            i.events.iter().any(|e| match e {
+                egui::Event::PointerMoved(p) => !row.contains(*p),
+                egui::Event::PointerGone => true,
+                _ => false,
+            })
+        });
+    // Tab reaching the slider selects it for arrow keys, not vertical wheel edits.
+    if enabled && resp.gained_focus() {
+        ui.data_mut(|d| d.insert_temp(focused_slider_key(), id));
+    }
+    let selected = enabled && (resp.clicked() || resp.drag_started());
+    if selected {
+        resp.request_focus();
+        ui.data_mut(|d| d.insert_temp(focused_slider_key(), id));
+    }
+    // A drag that leaves the row disarms too (it keeps dragging: that needs no wheel selection),
+    // and one that only starts once the pointer is outside doesn't arm it again.
+    if selected && pointer_in_row && !left_row {
+        ui.data_mut(|d| {
+            d.insert_temp(wheel_slider_key(), id);
+            d.remove::<f32>(wheel_id);
+        });
+        wheel_armed = true;
+    } else if wheel_armed && (!enabled || !resp.has_focus() || !pointer_in_row || left_row) {
+        ui.data_mut(|d| {
+            d.remove::<egui::Id>(wheel_slider_key());
+            d.remove::<f32>(wheel_id);
+        });
+        wheel_armed = false;
+    }
+    (wheel_armed, pointer_in_row)
+}
+
+/// The radius of a slider's hollow ring thumb.
+const THUMB_RING: f32 = 7.0;
+
 /// A Lightroom slider row (label + value above a track with a hollow ring thumb).
-/// Double-click the label or thumb to reset. Shift-drag = fine adjustment. Click the value to
-/// type one: Return or clicking away applies it, Esc keeps the old one.
+/// Double-click the label or thumb to reset (hovering either says so). Shift-drag = fine adjustment.
+/// Scroll sideways over it to nudge it. Click the value to type one: Return or clicking away applies it,
+/// Esc keeps the old one. Drag the value sideways to scrub it, as if dragging the thumb (Shift: a tenth
+/// as far).
 pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>) -> SliderOut {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
@@ -181,163 +426,61 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let pad_r = 22.0;
     let label_rect = Rect::from_min_size(pos2(row.left() + pad_l, row.top() + 4.0), vec2(w - pad_l - pad_r, 18.0));
     let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
-    let id = ui.id().with(spec.id);
+    let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+    let id = ui.scope_id().with(spec.id);
+    let g = SliderLayout { spec, value, enabled, id, track_rect, value_rect };
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
-    // A click selects the slider for arrow/wheel adjustments. Keep scroll-to-adjust
-    // opt-in so hovering an unfocused slider still scrolls the containing panel.
-    if enabled && (resp.clicked() || resp.drag_started()) {
-        resp.request_focus();
-        ui.data_mut(|d| d.insert_temp(focused_slider_key(), id));
-    }
+    let (wheel_armed, pointer_in_row) = update_wheel_arming(ui, id, &resp, row, enabled);
     // screen readers: a slider named after its control, with its value
     let label_text = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
     resp.widget_info(|| egui::WidgetInfo::slider(enabled, value, label_text.clone()));
-    let label_resp = ui.interact(label_rect, id.with("label"), Sense::click());
-    register(ui.ctx(), format!("slider:{}", spec.id), track_rect);
-    // the value: click it to type an exact one (over the label, so it takes the click)
-    let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
-    let value_resp = ui.interact(value_rect, id.with("value"), if enabled { Sense::click() } else { Sense::hover() });
-    register(ui.ctx(), format!("sliderValue:{}", spec.id), value_rect);
+    describe_slider(ui, &g, &resp);
+    // the name: double-click it to reset, as the thumb (a disabled slider's name is only text)
+    let label_resp = ui.interact(label_rect, id.with("label"), if enabled { Sense::click() } else { Sense::hover() });
+    // say how to reset (issue #1436: the double-click was hard to discover), as the curve channels do
+    let reset_hint = crate::i18n::tr_format!("{name} — double-click to reset it", name = label_text);
+    let label_resp = if enabled { label_resp.on_hover_text(reset_hint.as_str()) } else { label_resp };
+    crate::widgets::announce(&label_resp, crate::i18n::tr_format!("Reset {name}", name = label_text.clone()));
+    register(ui, format!("sliderLabel:{}", spec.id), label_rect);
+    register(ui, format!("slider:{}", spec.id), track_rect);
+    // the value: click it to type an exact one, drag it sideways to scrub (over the label, so it
+    // takes the click)
+    let value_resp = ui.interact(value_rect, id.with("value"), if enabled { Sense::click_and_drag() } else { Sense::hover() });
+    // the name is short ("Exposure value"); how to use it is the description the hover text below gives
+    crate::widgets::announce(&value_resp, crate::i18n::tr_format!("{name} value", name = label_text.clone()));
+    register(ui, format!("sliderValue:{}", spec.id), value_rect);
     // say that an exact value can be typed here (issue #534: an exact crop angle was hard to find)
-    let value_resp = if enabled { value_resp.on_hover_text(crate::i18n::tr("Click to type a value")) } else { value_resp };
-    let typing_id = id.with("typing");
+    let value_resp = if enabled { value_resp.on_hover_text(crate::i18n::tr("Click to type a value, drag to change it")) } else { value_resp };
     // Keep the short focus-acquisition guard, but let an explicit Return/Escape end the edit.
-    let mut typing: Option<(String, u8, bool)> = ui.data(|m| m.get_temp(typing_id));
-    let value_pressed = value_resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
-    // Focus on the owned primary press before fast typing; retain the readout's click activation.
-    if enabled && typing.is_none() && (value_resp.clicked() || value_pressed) {
-        typing = Some((shown_value(spec, value).trim_start_matches('+').to_string(), 0, value_pressed));
+    let mut typing: Option<Draft> = ui.data(|m| m.get_temp(g.typing_id()));
+    // A scrub: the unrounded track position (0..1) it has reached, so a slow drag adds up instead
+    // of rounding back to the same step every frame.
+    let mut scrub: Option<f64> = if value_resp.dragged() || value_resp.drag_stopped() { ui.data(|m| m.get_temp(g.scrub_id())) } else { None };
+    let scrub_started = begin_scrub(ui, &g, &value_resp, &mut scrub, &mut typing);
+    if scrub.is_none() {
+        ui.data_mut(|m| m.remove::<f64>(g.scrub_id()));
     }
-    let value_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
-    // The opening press must complete the readout's original click before the edit continues.
-    if value_released && typing.as_ref().is_some_and(|(_, _, pressed)| *pressed) && !value_resp.clicked() {
-        typing = None;
-        ui.data_mut(|m| m.remove::<(String, u8, bool)>(typing_id));
-        ui.memory_mut(|m| m.surrender_focus(crate::text_field::id(&format!("sliderField:{}", spec.id))));
-    }
+    update_typing_gesture(ui, &g, &value_resp, &mut typing);
     let mut out = SliderOut::default();
-    let span = (spec.max - spec.min).max(1e-9);
-    let to_x = |v: f64| track_rect.left() + ((v - spec.min) / span).clamp(0.0, 1.0) as f32 * track_rect.width();
-    let from_x = |x: f32| spec.min + ((x - track_rect.left()) / track_rect.width()).clamp(0.0, 1.0) as f64 * span;
-    let mut v = value;
-    if let Some((mut text, frames, pressed)) = typing.take() {
-        // Keep the owned opening release focused without restarting its draft or selection.
-        if pressed && value_released {
-            ui.memory_mut(|m| m.request_focus(crate::text_field::id(&format!("sliderField:{}", spec.id))));
-        }
-        let pressed = pressed && !value_released;
-        // a child over the value, so the field never moves the rows around it
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(value_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-        // the old value is selected when the field takes the focus, so typing replaces it
-        let field = crate::text_field::TextField::singleline(&format!("sliderField:{}", spec.id), &mut text)
-            .font(t.font(12.5))
-            .horizontal_align(egui::Align::RIGHT)
-            .width(value_rect.width())
-            .margin(egui::Margin::ZERO)
-            .select_on_focus(true)
-            .begin_edit(frames == 0)
-            .show(&mut child);
-        if frames < 2 && !matches!(field.ending, Some(crate::text_field::Ending::Return | crate::text_field::Ending::Escape)) {
-            field.response.request_focus();
-            typing = Some((text.clone(), frames + 1, pressed));
-            ui.data_mut(|m| m.insert_temp(typing_id, (text, frames + 1, pressed)));
-        } else if field.ending.is_some() || !field.editing || !enabled {
-            // Esc (or the slider turning off) keeps the old value; Return or clicking away applies
-            let cancelled = !enabled || field.cancelled();
-            if let Some(nv) = typed_value(spec, &text).filter(|nv| !cancelled && (nv - value).abs() > 1e-12) {
-                out.value = Some(nv);
-                out.drag_started = true;
-                out.drag_stopped = true;
-                v = nv;
-            }
-            ui.data_mut(|m| m.remove::<(String, u8, bool)>(typing_id));
-        } else {
-            typing = Some((text.clone(), frames, pressed));
-            ui.data_mut(|m| m.insert_temp(typing_id, (text, frames, pressed)));
-        }
+    // the thumb: a click there doesn't move the value, and resting on it says how to reset (the rest
+    // of the track, which is clicked and dragged, gets no tooltip)
+    if enabled && !resp.dragged() && resp.hover_pos().is_some_and(|p| g.on_thumb(p)) {
+        resp.clone().on_hover_text(reset_hint.as_str());
+    }
+    if let Some(pos) = scrub {
+        scrub_value(ui, &g, &value_resp, pos, scrub_started, &mut out);
+    } else if let Some(draft) = typing.take() {
+        typing = edit_value(ui, &t, &g, draft, &mut out);
     } else if resp.double_clicked() || label_resp.double_clicked() {
         out.reset = true;
         out.value = Some(spec.default);
-        v = spec.default;
     } else {
-        if resp.drag_started() {
-            out.drag_started = true;
-        }
-        if (resp.dragged() || resp.drag_started())
-            && let Some(p) = resp.interact_pointer_pos()
-        {
-            let fine = ui.input(|i| i.modifiers.shift);
-            let nv = if fine {
-                let dx = ui.input(|i| i.pointer.delta().x);
-                value + dx as f64 * span / track_rect.width() as f64 * 0.1
-            } else {
-                from_x(p.x)
-            };
-            let step = spec.step.max(1e-9);
-            let nv = ((nv / step).round() * step).clamp(spec.min, spec.max);
-            if (nv - value).abs() > 1e-12 {
-                out.value = Some(nv);
-                v = nv;
-            }
-        } else if resp.clicked()
-            && let Some(p) = resp.interact_pointer_pos()
-        {
-            let step = spec.step.max(1e-9);
-            let nv = ((from_x(p.x) / step).round() * step).clamp(spec.min, spec.max);
-            out.value = Some(nv);
-            v = nv;
-            out.drag_started = true;
-            out.drag_stopped = true;
-        }
-        if resp.drag_stopped() {
-            out.drag_stopped = true;
-        }
-        // Arrow keys work with either a hovered or a focused slider.
-        if enabled && out.value.is_none() && typing.is_none() && (ui.rect_contains_pointer(row) || resp.has_focus()) {
-            let (up, down, shift) = ui.input_mut(|i| {
-                let shift = i.modifiers.shift;
-                let m = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
-                (i.consume_key(m, egui::Key::ArrowUp), i.consume_key(m, egui::Key::ArrowDown), shift)
-            });
-            if up || down {
-                let nv = nudged(spec, value, if up { 1.0 } else { -1.0 } * if shift { 5.0 } else { 1.0 });
-                if (nv - value).abs() > 1e-12 {
-                    out.value = Some(nv);
-                    out.drag_started = true;
-                    out.drag_stopped = true;
-                    v = nv;
-                }
-            }
-        }
-        // Wheel nudges require an explicitly selected slider, unlike regular panel scrolling.
-        // Consume only the vertical component so a trackpad's horizontal scroll still works.
-        let wheel_id = id.with("wheel-rem");
-        if !resp.has_focus() {
-            ui.data_mut(|m| m.remove::<f32>(wheel_id));
-        } else if enabled && typing.is_none() && out.value.is_none() && ui.rect_contains_pointer(row) {
-            let delta = ui.input_mut(|i| {
-                let dy = i.smooth_scroll_delta.y;
-                if dy != 0.0 {
-                    i.smooth_scroll_delta.y = 0.0;
-                }
-                dy
-            });
-            if delta != 0.0 {
-                let mut remainder = ui.data(|m| m.get_temp::<f32>(wheel_id)).unwrap_or(0.0);
-                let steps = wheel_nudges(&mut remainder, delta);
-                ui.data_mut(|m| m.insert_temp(wheel_id, remainder));
-                if steps != 0.0 {
-                    let nv = nudged(spec, value, steps);
-                    if (nv - value).abs() > 1e-12 {
-                        out.value = Some(nv);
-                        out.drag_started = true;
-                        out.drag_stopped = true;
-                        v = nv;
-                    }
-                }
-            }
-        }
+        pointer_edit(ui, &g, &resp, &mut out);
+        nudge_edit(ui, &g, &resp, pointer_in_row, &mut out);
+        side_scroll_edit(ui, &g, pointer_in_row, &mut out);
+        wheel_edit(ui, &g, wheel_armed, pointer_in_row, &mut out);
     }
+    let v = out.value.unwrap_or(value);
     // paint
     let hovered = resp.hovered() || resp.dragged();
     let text_c = if enabled { t.text_label } else { t.text_disabled };
@@ -345,12 +488,13 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     p.text(label_rect.left_center(), Align2::LEFT_CENTER, crate::i18n::tr(label_override.unwrap_or(spec.label)), t.font(12.5), text_c);
     if typing.is_none() {
         p.text(label_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), t.font(12.5), text_c);
-        if enabled && value_resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        // the scrub pointer, as over Lightroom's values: a drag here changes the value
+        if enabled && (value_resp.hovered() || scrub.is_some()) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
     }
-    let ring = 7.0;
-    let tx = to_x(v);
+    let ring = THUMB_RING;
+    let tx = g.to_x(v);
     paint_track(ui, track_rect, &spec.track, &t, tx, ring);
     let p = ui.painter();
     let ring_c = if !enabled {
@@ -368,11 +512,319 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     out
 }
 
+/// A value being typed into a slider: the text, the frames it has been open, and whether the press that opened it is
+/// still down.
+type Draft = (String, u8, bool);
+
+/// What a slider is, as its interaction code needs it.
+struct SliderLayout<'a> {
+    spec: &'a ControlSpec,
+    value: f64,
+    enabled: bool,
+    id: egui::Id,
+    /// where the thumb moves
+    track_rect: Rect,
+    /// the readout, where a value is typed or scrubbed
+    value_rect: Rect,
+}
+
+impl SliderLayout<'_> {
+    fn typing_id(&self) -> egui::Id {
+        self.id.with("typing")
+    }
+
+    fn scrub_id(&self) -> egui::Id {
+        self.id.with("scrub-pos")
+    }
+
+    /// The text field a value is typed in.
+    fn field_id(&self) -> egui::Id {
+        crate::text_field::id(&format!("sliderField:{}", self.spec.id))
+    }
+
+    fn step(&self) -> f64 {
+        self.spec.step.max(1e-9)
+    }
+
+    /// `v` on the control's steps and within its range.
+    fn snap(&self, v: f64) -> f64 {
+        ((v / self.step()).round() * self.step()).clamp(self.spec.min, self.spec.max)
+    }
+
+    /// Whether `nv` is a different value from the one shown.
+    fn differs(&self, nv: f64) -> bool {
+        (nv - self.value).abs() > 1e-12
+    }
+
+    /// value ↔ track position: linear, except for the Kelvin temperature (`ControlSpec::position`)
+    fn to_x(&self, v: f64) -> f32 {
+        self.track_rect.left() + self.spec.position(v) as f32 * self.track_rect.width()
+    }
+
+    fn value_at_x(&self, x: f32) -> f64 {
+        self.spec.value_at(f64::from((x - self.track_rect.left()) / self.track_rect.width()))
+    }
+
+    /// Whether `p` is on the thumb.
+    fn on_thumb(&self, p: egui::Pos2) -> bool {
+        (p.x - self.to_x(self.value)).abs() <= THUMB_RING + 1.0
+    }
+
+    /// A change made in one go (a click, a key, a wheel step): it starts and stops the drag at once.
+    fn set_whole(&self, out: &mut SliderOut, nv: f64) {
+        out.value = Some(nv);
+        out.drag_started = true;
+        out.drag_stopped = true;
+    }
+
+    /// Move to `nv` as a whole change, when it is a different value.
+    fn set_whole_if_changed(&self, out: &mut SliderOut, nv: f64) {
+        if self.differs(nv) {
+            self.set_whole(out, nv);
+        }
+    }
+}
+
+/// Tell screen readers the slider's range, step and the value as shown ("+0.50", "5600").
+fn describe_slider(ui: &Ui, g: &SliderLayout, resp: &Response) {
+    let shown = shown_value(g.spec, g.value);
+    ui.ctx().accesskit_node_builder(resp.id, |node| {
+        node.set_min_numeric_value(g.spec.min);
+        node.set_max_numeric_value(g.spec.max);
+        node.set_numeric_value_step(g.spec.step);
+        node.set_value(shown);
+        if g.enabled {
+            node.add_action(egui::accesskit::Action::Increment);
+            node.add_action(egui::accesskit::Action::Decrement);
+        }
+    });
+}
+
+/// A press on the readout that moves sideways starts a scrub: the edit the press opened is dropped. Returns whether
+/// a scrub started this frame (`scrub` then holds its first position).
+fn begin_scrub(ui: &mut Ui, g: &SliderLayout, value_resp: &Response, scrub: &mut Option<f64>, typing: &mut Option<Draft>) -> bool {
+    if !g.enabled || scrub.is_some() || !value_resp.dragged() {
+        return false;
+    }
+    let (Some(origin), Some(p)) = ui.input(|i| (i.pointer.press_origin(), i.pointer.interact_pos())) else { return false };
+    if (p.x - origin.x).abs() < SCRUB_START {
+        return false;
+    }
+    *typing = None;
+    ui.data_mut(|m| m.remove::<Draft>(g.typing_id()));
+    ui.memory_mut(|m| m.surrender_focus(g.field_id()));
+    // the travel so far counts, so the value doesn't lag the pointer by the start distance
+    let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+    *scrub = Some((g.spec.position(g.value) + f64::from((p.x - origin.x) / g.track_rect.width()) * fine).clamp(0.0, 1.0));
+    true
+}
+
+/// Open the typed edit on a press or click of the readout; drop it when the press ends elsewhere.
+fn update_typing_gesture(ui: &mut Ui, g: &SliderLayout, value_resp: &Response, typing: &mut Option<Draft>) {
+    let value_pressed = value_resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
+    // Focus on the owned primary press before fast typing; retain the readout's click activation.
+    if g.enabled && typing.is_none() && (value_resp.clicked() || value_pressed) {
+        *typing = Some((shown_value(g.spec, g.value).trim_start_matches('+').to_string(), 0, value_pressed));
+    }
+    let value_released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
+    // A release over the value keeps the field the press opened, however long the button was held
+    // (a press held past egui's click time ends without a click). A release elsewhere cancels the
+    // gesture, and a press that scrubs already dropped the field above.
+    let released_over_value = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| g.value_rect.contains(p));
+    if value_released && !released_over_value && typing.as_ref().is_some_and(|(_, _, pressed)| *pressed) && !value_resp.clicked() {
+        *typing = None;
+        ui.data_mut(|m| m.remove::<Draft>(g.typing_id()));
+        ui.memory_mut(|m| m.surrender_focus(g.field_id()));
+    }
+}
+
+/// Scrubbing the value moves it as dragging the thumb would: the pointer's sideways travel over the track's width (a
+/// tenth with Shift), on the control's steps. `pos` is the unrounded track position reached so far.
+fn scrub_value(ui: &mut Ui, g: &SliderLayout, value_resp: &Response, mut pos: f64, started: bool, out: &mut SliderOut) {
+    if !started && value_resp.dragged() {
+        let fine = if ui.input(|i| i.modifiers.shift) { 0.1 } else { 1.0 };
+        let dx = ui.input(|i| i.pointer.delta().x);
+        pos = (pos + f64::from(dx / g.track_rect.width()) * fine).clamp(0.0, 1.0);
+    }
+    let nv = g.snap(g.spec.value_at(pos));
+    if g.differs(nv) {
+        out.value = Some(nv);
+    }
+    out.drag_started = started;
+    if value_resp.drag_stopped() {
+        out.drag_stopped = true;
+        ui.data_mut(|m| m.remove::<f64>(g.scrub_id()));
+    } else {
+        ui.data_mut(|m| m.insert_temp(g.scrub_id(), pos));
+    }
+}
+
+/// The text field over the readout while a value is typed. Returns the draft to keep, if the edit goes on.
+fn edit_value(ui: &mut Ui, t: &Tokens, g: &SliderLayout, draft: Draft, out: &mut SliderOut) -> Option<Draft> {
+    let (mut text, frames, pressed) = draft;
+    // Keep the owned opening release focused without restarting its draft or selection.
+    // egui gives that release's click to the readout, so the field under it gives up the focus
+    // whatever frame it lands on (issue #1362): the field takes it back after drawing too.
+    let released = ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary));
+    let opening_release = pressed && released;
+    if opening_release {
+        ui.memory_mut(|m| m.request_focus(g.field_id()));
+    }
+    let pressed = pressed && !released;
+    // a child over the value, so the field never moves the rows around it
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(g.value_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    // the old value is selected when the field takes the focus, so typing replaces it
+    let field = crate::text_field::TextField::singleline(&format!("sliderField:{}", g.spec.id), &mut text)
+        .font(t.font(12.5))
+        .horizontal_align(egui::Align::RIGHT)
+        .width(g.value_rect.width())
+        .margin(egui::Margin::ZERO)
+        .select_on_focus(true)
+        .begin_edit(frames == 0)
+        .show(&mut child);
+    if (frames < 2 || opening_release) && !matches!(field.ending, Some(crate::text_field::Ending::Return | crate::text_field::Ending::Escape)) {
+        field.response.request_focus();
+        let draft = (text, frames.saturating_add(1), pressed);
+        ui.data_mut(|m| m.insert_temp(g.typing_id(), draft.clone()));
+        return Some(draft);
+    }
+    if field.ending.is_some() || !field.editing || !g.enabled {
+        // Esc (or the slider turning off) keeps the old value; Return or clicking away applies
+        let cancelled = !g.enabled || field.cancelled();
+        if field.cancelled() {
+            take_escape(ui.ctx());
+        }
+        if let Some(nv) = typed_value(g.spec, &text).filter(|nv| !cancelled && g.differs(*nv)) {
+            g.set_whole(out, nv);
+        }
+        ui.data_mut(|m| m.remove::<Draft>(g.typing_id()));
+        return None;
+    }
+    let draft = (text, frames, pressed);
+    ui.data_mut(|m| m.insert_temp(g.typing_id(), draft.clone()));
+    Some(draft)
+}
+
+/// Dragging the thumb or the track, or clicking the track.
+fn pointer_edit(ui: &mut Ui, g: &SliderLayout, resp: &Response, out: &mut SliderOut) {
+    if resp.drag_started() {
+        out.drag_started = true;
+    }
+    if (resp.dragged() || resp.drag_started())
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let raw = if ui.input(|i| i.modifiers.shift) { fine_drag_value(ui, g) } else { g.value_at_x(p.x) };
+        let nv = g.snap(raw);
+        if g.differs(nv) {
+            out.value = Some(nv);
+        }
+    } else if resp.clicked()
+        && let Some(p) = resp.interact_pointer_pos()
+        // a click on the thumb leaves it there, so the first click of a double-click on it isn't a
+        // history step of its own before the reset
+        && !g.on_thumb(p)
+    {
+        g.set_whole(out, g.snap(g.value_at_x(p.x)));
+    }
+    if resp.drag_stopped() {
+        out.drag_stopped = true;
+    }
+}
+
+/// A tenth of the pointer's movement along the track; the unrounded position is kept, so a slow drag adds up instead
+/// of rounding back to the same step every frame.
+fn fine_drag_value(ui: &mut Ui, g: &SliderLayout) -> f64 {
+    let step = g.step();
+    let fine_id = g.id.with("fine-pos");
+    let dx = ui.input(|i| i.pointer.delta().x);
+    let kept = ui.data(|m| m.get_temp::<f64>(fine_id)).filter(|&p| ((g.spec.value_at(p) / step).round() * step - g.value).abs() < step / 2.0);
+    let pos = (kept.unwrap_or_else(|| g.spec.position(g.value)) + f64::from(dx / g.track_rect.width()) * 0.1).clamp(0.0, 1.0);
+    ui.data_mut(|m| m.insert_temp(fine_id, pos));
+    g.spec.value_at(pos)
+}
+
+/// A screen reader's increment / decrement (VoiceOver: Ctrl-Option-Up / Down) as `(increment, decrement)`.
+pub(crate) fn accessibility_nudge(ui: &Ui, resp: &Response) -> (bool, bool) {
+    ui.input(|i| {
+        i.events.iter().fold((false, false), |(inc, dec), e| match e {
+            egui::Event::AccessKitActionRequest(r) if r.target_node == resp.id.accesskit_id() => {
+                (inc || r.action == egui::accesskit::Action::Increment, dec || r.action == egui::accesskit::Action::Decrement)
+            }
+            _ => (inc, dec),
+        })
+    })
+}
+
+/// The arrow keys (with either a hovered or a focused slider; Shift: five steps) and a screen reader's actions.
+fn nudge_edit(ui: &mut Ui, g: &SliderLayout, resp: &Response, pointer_in_row: bool, out: &mut SliderOut) {
+    let (inc, dec) = accessibility_nudge(ui, resp);
+    if !g.enabled || out.value.is_some() || !(pointer_in_row || resp.has_focus() || inc || dec) {
+        return;
+    }
+    let (up, down, shift) = ui.input_mut(|i| {
+        let shift = i.modifiers.shift;
+        let m = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+        (i.consume_key(m, egui::Key::ArrowUp), i.consume_key(m, egui::Key::ArrowDown), shift)
+    });
+    let (up, down) = (up || inc, down || dec);
+    if up || down {
+        let nv = nudged(g.spec, g.value, if up { 1.0 } else { -1.0 } * if shift { 5.0 } else { 1.0 });
+        g.set_whole_if_changed(out, nv);
+    }
+}
+
+/// Sideways scrolling (a trackpad swipe, a tilting wheel, Shift+wheel) adjusts the slider under
+/// the pointer, selected or not: the panel only scrolls vertically, so nothing else wants it.
+/// Only a mostly sideways movement counts, so a slightly diagonal swipe that scrolls the panel
+/// leaves the sliders it passes alone. Right raises the value, as dragging the thumb right does.
+fn side_scroll_edit(ui: &mut Ui, g: &SliderLayout, pointer_in_row: bool, out: &mut SliderOut) {
+    let side_id = g.id.with("side-rem");
+    let (dx, dy) = ui.input(|i| (i.smooth_scroll_delta.x, i.smooth_scroll_delta.y));
+    if !g.enabled || out.value.is_some() || !pointer_in_row || dx.abs() <= dy.abs() {
+        ui.data_mut(|m| m.remove::<f32>(side_id));
+        return;
+    }
+    // the vertical part would scroll the panel and move the slider out from under the pointer
+    ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+    let mut remainder = ui.data(|m| m.get_temp::<f32>(side_id)).unwrap_or(0.0);
+    let steps = wheel_nudges(&mut remainder, dx);
+    ui.data_mut(|m| m.insert_temp(side_id, remainder));
+    if steps != 0.0 {
+        g.set_whole_if_changed(out, nudged(g.spec, g.value, steps));
+    }
+}
+
+/// Wheel nudges require an explicitly selected (armed) slider, unlike regular panel scrolling.
+/// Consume only the vertical component so a trackpad's horizontal scroll still works.
+fn wheel_edit(ui: &mut Ui, g: &SliderLayout, armed: bool, pointer_in_row: bool, out: &mut SliderOut) {
+    if !armed || !g.enabled || out.value.is_some() || !pointer_in_row {
+        return;
+    }
+    let delta = ui.input_mut(|i| {
+        let dy = i.smooth_scroll_delta.y;
+        if dy != 0.0 {
+            i.smooth_scroll_delta.y = 0.0;
+        }
+        dy
+    });
+    if delta == 0.0 {
+        return;
+    }
+    let wheel_id = g.id.with("wheel-rem");
+    let mut remainder = ui.data(|m| m.get_temp::<f32>(wheel_id)).unwrap_or(0.0);
+    let steps = wheel_nudges(&mut remainder, delta);
+    ui.data_mut(|m| m.insert_temp(wheel_id, remainder));
+    if steps != 0.0 {
+        g.set_whole_if_changed(out, nudged(g.spec, g.value, steps));
+    }
+}
+
 /// Convert vertical wheel movement to bounded slider steps, keeping sub-notch
-/// trackpad movement between frames without amplifying a single large event.
+/// trackpad movement between frames without amplifying a single large event. One mouse-wheel
+/// notch ([`crate::theme::WHEEL_LINE_POINTS`]) is one step.
 fn wheel_nudges(remainder: &mut f32, delta: f32) -> f64 {
-    const POINTS_PER_STEP: f32 = 40.0;
-    let total = (*remainder + delta).clamp(-400.0, 400.0);
+    const POINTS_PER_STEP: f32 = crate::theme::WHEEL_LINE_POINTS;
+    let total = (*remainder + delta).clamp(-10.0 * POINTS_PER_STEP, 10.0 * POINTS_PER_STEP);
     let steps = (total / POINTS_PER_STEP).trunc();
     *remainder = total - steps * POINTS_PER_STEP;
     f64::from(steps)
@@ -386,19 +838,29 @@ pub fn nudged(spec: &ControlSpec, value: f64, steps: f64) -> f64 {
     (((value + unit * steps) / step).round() * step).clamp(spec.min, spec.max)
 }
 
+/// Announce a disclosure row with AccessKit's real `Expanded` state.
+///
+/// egui 0.37's `WidgetInfo::selected` maps to AccessKit `Toggled`; a custom disclosure row must
+/// publish `Expanded` instead (the built-in `CollapsingHeader` does this through
+/// `accesskit_node_builder`). Use one helper so section headers, flyouts and fold titles agree.
+pub(crate) fn announce_disclosure(resp: &egui::Response, enabled: bool, expanded: bool, label: impl ToString) {
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DisclosureTriangle, enabled, label.to_string()));
+    resp.ctx.accesskit_node_builder(resp.id, |node| node.set_expanded(expanded));
+}
+
 /// Collapsible section header ("› Light"). Returns the response (click toggles).
 pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: Option<bool>) -> (Response, Option<bool>) {
     let title = crate::i18n::tr(title);
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, 52.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
-    register(ui.ctx(), format!("section:{id}"), r);
+    announce_disclosure(&resp, true, open, title);
+    register(ui, format!("section:{id}"), r);
     let p = ui.painter();
     if ui.rect_contains_pointer(r) {
         p.rect_filled(r, 0.0, t.chrome.gamma_multiply(1.06));
     }
-    let chev = Rect::from_center_size(pos2(r.left() + 30.0, r.center().y), vec2(14.0, 14.0));
+    let chev = Rect::from_center_size(pos2(r.left() + 30.0, r.center().y), vec2(16.0, 16.0));
     paint(p, chev, if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.text_label);
     p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(14.0), t.text);
     let mut toggled = None;
@@ -409,8 +871,9 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
         && (ui.rect_contains_pointer(r) || !on)
     {
         let eye = Rect::from_center_size(pos2(r.right() - 34.0, r.center().y), vec2(18.0, 18.0));
-        let er = ui.interact(eye, ui.id().with(("eye", id)), Sense::click());
-        register(ui.ctx(), format!("sectionEye:{id}"), eye);
+        let er = ui.interact(eye, ui.scope_id().with(("eye", id)), Sense::click());
+        crate::widgets::announce_selected(&er, crate::i18n::tr("Show / hide"), on);
+        register(ui, format!("sectionEye:{id}"), eye);
         paint(ui.painter(), eye, Icon::Eye, if on { t.icon } else { t.text_disabled });
         if !on {
             ui.painter().line_segment([eye.left_bottom(), eye.right_top()], Stroke::new(1.5, t.text_disabled));
@@ -437,9 +900,9 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
     let w = ui.available_width();
     let (outer, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
     let r = Rect::from_min_max(pos2(outer.left() + 16.0, outer.top() + 4.0), pos2(outer.right() - 16.0, outer.bottom() - 4.0));
-    let resp = ui.interact(r, ui.id().with(("flyout", id)), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
-    register(ui.ctx(), format!("flyout:{id}"), r);
+    let resp = ui.interact(r, ui.scope_id().with(("flyout", id)), Sense::click());
+    announce_disclosure(&resp, true, open, title);
+    register(ui, format!("flyout:{id}"), r);
     let p = ui.painter();
     p.rect_filled(r, 4.0, if resp.hovered() { t.hover.gamma_multiply(0.8) } else { t.inset });
     let tile = Rect::from_min_size(pos2(r.left() + 4.0, r.top() + 4.0), vec2(r.height() - 8.0, r.height() - 8.0));
@@ -448,8 +911,8 @@ pub fn flyout_row(ui: &mut Ui, id: &str, title: &str, icon: Icon, open: bool) ->
     p.text(pos2(tile.right() + 10.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(13.0), t.text_label);
     paint(
         p,
-        Rect::from_center_size(pos2(r.right() - 14.0, r.center().y), vec2(12.0, 12.0)),
-        if open { Icon::ChevronDown } else { Icon::TriangleLeft },
+        Rect::from_center_size(pos2(r.right() - 14.0, r.center().y), vec2(16.0, 16.0)),
+        if open { Icon::ChevronDown } else { Icon::ChevronLeft },
         t.text_label,
     );
     resp
@@ -461,10 +924,10 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     let t = Tokens::get(ui.ctx());
     let font = t.semibold(11.5);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, t.text);
-    let size = vec2((galley.size().x + 18.0).max(37.0), 24.0);
+    let size = vec2(text_button_width(galley.size().x), 24.0);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label));
-    register(ui.ctx(), format!("button:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
+    register(ui, format!("button:{id}"), r);
     let fill = if active {
         t.pressed
     } else if resp.hovered() {
@@ -476,6 +939,18 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
     resp
+}
+
+/// The width of a [`text_button`] whose label is `text_width` wide.
+fn text_button_width(text_width: f32) -> f32 {
+    (text_width + 18.0).max(37.0)
+}
+
+/// The width [`text_button`] takes for `label` (translated as it would be), to plan a row before drawing it.
+pub fn text_button_size(ui: &Ui, label: &str) -> f32 {
+    let t = Tokens::get(ui.ctx());
+    let galley = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.semibold(11.5), t.text);
+    text_button_width(galley.size().x)
 }
 
 /// A segmented control: `labels` share the available width equally, `per_row` per row. Each segment is
@@ -494,7 +969,8 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 let label = crate::i18n::tr(label);
                 let i = row_i * per_row + j;
                 let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
-                register(ui.ctx(), format!("button:{id}-{key}"), r);
+                crate::widgets::announce_selected(&resp, label.to_string(), active == Some(i));
+                register(ui, format!("button:{id}-{key}"), r);
                 let fill = if active == Some(i) {
                     t.pressed
                 } else if resp.hovered() {
@@ -514,13 +990,38 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
     clicked
 }
 
+/// Splits a tooltip that ends in its key hint ("Edit (E)", "Import Photos… (⌘⇧I)") into the label
+/// and the hint: `("Edit", Some("E"))`. A tooltip without one is all label. The Japanese and
+/// Traditional Chinese catalogs write the hint in full-width brackets without a space ("編集（E）").
+fn split_key_hint(tip: &str) -> (&str, Option<&str>) {
+    let split =
+        tip.strip_suffix(')').and_then(|body| body.rsplit_once(" (")).or_else(|| tip.strip_suffix('）').and_then(|body| body.rsplit_once('（')));
+    let Some((label, hint)) = split else { return (tip, None) };
+    let label = label.trim_end();
+    if label.is_empty() || hint.is_empty() { (tip, None) } else { (label, Some(hint)) }
+}
+
+/// The accessible name for an icon-only control whose tooltip is `tip`, and the one place the key
+/// hint leaves it. The name is the bare label, because a screen reader reads it every time it
+/// lands on the control; the hint goes into the description (macOS `AXHelp`, read after a pause).
+/// Sighted users keep the whole tooltip. Call it before `on_hover_text`, which would otherwise make
+/// the description the whole tooltip.
+pub(crate) fn accessible_label<'a>(resp: &egui::Response, tip: &'a str) -> &'a str {
+    let (label, hint) = split_key_hint(tip);
+    if let Some(hint) = hint {
+        resp.ctx.accesskit_node_builder(resp.id, |node| node.set_description(hint.to_string()));
+    }
+    label
+}
+
 /// An icon-only button. `active` draws the selected background (tool strip).
 pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, tooltip: &str) -> Response {
     let tooltip = crate::i18n::tr(tooltip);
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, tooltip));
-    register(ui.ctx(), format!("icon:{id}"), r);
+    let name = accessible_label(&resp, tooltip);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, name));
+    register(ui, format!("icon:{id}"), r);
     let p = ui.painter();
     let sq = Rect::from_center_size(r.center(), vec2(32.0f32.min(size.x), 32.0f32.min(size.y)));
     if active {
@@ -542,66 +1043,70 @@ pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: 
     if !tooltip.is_empty() { resp.on_hover_text(tooltip) } else { resp }
 }
 
-/// Star rating row (5 stars); returns a new rating when clicked (clicking the current rating clears).
-pub fn stars(ui: &mut Ui, id: &str, rating: u8, size: f32) -> Option<u8> {
-    let t = Tokens::get(ui.ctx());
-    let mut out = None;
-    let mut hover_n = None;
-    let mut rects = [Rect::NOTHING; 5];
-    for (i, slot) in (0..5u8).zip(rects.iter_mut()) {
-        let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
-        register(ui.ctx(), format!("star:{id}:{}", i + 1), r);
-        if resp.hovered() {
-            hover_n = Some(i + 1);
-        }
-        if resp.clicked() {
-            out = Some(if rating == i + 1 { 0 } else { i + 1 });
-        }
-        *slot = r;
-    }
-    // Hover previews the rating a click would set: stars 1..=hovered light up. The hovered star also gets the
-    // icon_button hover square, so hovering the current rating (where the preview looks the same) still shows feedback.
-    for (i, r) in (0..5u8).zip(rects) {
-        if hover_n == Some(i + 1) {
-            ui.painter().rect_filled(r, 4.0, t.hover.gamma_multiply(0.7));
-        }
-        let filled = star_lit(i, rating, hover_n);
-        paint(ui.painter(), r.shrink(size * 0.12), if filled { Icon::StarFilled } else { Icon::Star }, if filled { t.star } else { t.icon });
-    }
-    out
-}
-
-/// Whether the star at zero-based index `i` is drawn filled: the hovered star's rating previews over the current one.
-fn star_lit(i: u8, rating: u8, hover: Option<u8>) -> bool {
-    i < hover.unwrap_or(rating)
-}
-
 /// A borderless dropdown button: `text` followed by a painted chevron (no font glyph needed).
 pub fn dropdown(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32) -> Response {
+    dropdown_within(ui, id, text, font, color, f32::INFINITY)
+}
+
+/// [`dropdown`] at most `max` wide, chevron included: a longer `text` is cut short with …, and
+/// shown in full on hover.
+pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32, max: f32) -> Response {
     let t = Tokens::get(ui.ctx());
-    let galley = ui.painter().layout_no_wrap(text.to_string(), font, color);
+    let galley = one_line(ui.painter(), text, font, color, max - 20.0);
+    let elided = galley.elided;
     let size = vec2(galley.size().x + 20.0, galley.size().y.max(20.0));
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, text));
-    register(ui.ctx(), format!("dropdown:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, text));
+    register(ui, format!("dropdown:{id}"), r);
     let c = if resp.hovered() { t.text } else { color };
     ui.painter().galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, c);
-    paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 7.0, r.center().y + 1.0), vec2(12.0, 12.0)), Icon::ChevronDown, c);
-    resp
+    paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 10.0, r.center().y), vec2(16.0, 16.0)), Icon::ChevronDown, c);
+    if elided { resp.on_hover_text(text) } else { resp }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Issue #647: hovering a star previews the rating a click would set.
     #[test]
-    fn hovered_star_previews_its_rating() {
-        let lit = |rating, hover| (0..5u8).filter(|&i| star_lit(i, rating, hover)).count();
-        assert_eq!(lit(2, None), 2, "no hover shows the rating");
-        assert_eq!(lit(2, Some(4)), 4);
-        assert_eq!(lit(5, Some(1)), 1);
-        assert_eq!(lit(0, Some(3)), 3);
+    fn high_efficiency_nef_explains_the_codec_limit_and_workarounds() {
+        let reason = "Nikon High Efficiency NEF (HE / HE★, a JPEG XS-based codec with no public specification; shoot RAW Lossless compressed to edit the raw data)";
+        let explanation = preview_only_explanation(reason);
+        assert!(explanation.contains("TicoRAW"), "{explanation}");
+        assert!(explanation.contains("does not currently have a license"), "{explanation}");
+        assert!(!explanation.contains("cannot decode"), "{explanation}");
+        assert!(explanation.contains("Lossless compressed NEF"), "{explanation}");
+        assert!(explanation.contains("DNG"), "{explanation}");
+        assert!(!explanation.contains("yet"), "{explanation}");
+        assert!(preview_only_explanation("unsupported CR3").contains("unsupported CR3"));
+    }
+
+    #[test]
+    fn a_trailing_key_hint_leaves_the_name() {
+        assert_eq!(split_key_hint("Edit (E)"), ("Edit", Some("E")));
+        assert_eq!(split_key_hint("Presets (Shift+P)"), ("Presets", Some("Shift+P")));
+        assert_eq!(split_key_hint("Import Photos… (⌘⇧I)"), ("Import Photos…", Some("⌘⇧I")));
+        assert_eq!(split_key_hint("Filmstrip (/)"), ("Filmstrip", Some("/")));
+        assert_eq!(split_key_hint("Square Grid (G toggles)"), ("Square Grid", Some("G toggles")));
+        // nothing to split: no hint, an empty hint, no label before it, the hint not at the end
+        for tip in ["Export", "Edit ()", "(E)", " (E)", "Edit (E) now", "Edit(E)", ""] {
+            assert_eq!(split_key_hint(tip), (tip, None), "{tip:?}");
+        }
+    }
+
+    /// Every language's tooltip for an icon-only button splits into the bare label and its hint,
+    /// whatever brackets the catalog writes it in (Japanese and Traditional Chinese use full-width ones).
+    #[test]
+    fn every_language_names_an_icon_button_by_its_label() {
+        assert_eq!(split_key_hint("編集（E）"), ("編集", Some("E")));
+        for locale in crate::i18n::Locale::ALL {
+            for tip in ["Edit (E)", "Presets (Shift+P)", "Photo Grid (G)", "Filmstrip (/)"] {
+                let translated = locale.tr(tip);
+                let (label, hint) = split_key_hint(translated);
+                assert!(hint.is_some_and(|h| !h.is_empty()), "{locale:?}: {translated:?} keeps its hint in the name");
+                assert!(!label.contains(['(', ')', '（', '）']), "{locale:?}: {label:?} is the bare label");
+            }
+        }
     }
 
     #[test]
@@ -625,13 +1130,56 @@ mod tests {
 
     #[test]
     fn wheel_steps_accumulate_small_movements_and_preserve_direction() {
+        // one mouse-wheel notch is one step, whatever a notch scrolls
+        let notch = crate::theme::WHEEL_LINE_POINTS;
         let mut remainder = 0.0;
-        assert_eq!(wheel_nudges(&mut remainder, 15.0), 0.0);
-        assert_eq!(wheel_nudges(&mut remainder, 25.0), 1.0);
+        assert_eq!(wheel_nudges(&mut remainder, notch * 0.375), 0.0);
+        assert_eq!(wheel_nudges(&mut remainder, notch * 0.625), 1.0);
         assert_eq!(remainder, 0.0);
-        assert_eq!(wheel_nudges(&mut remainder, -100.0), -2.0);
-        assert_eq!(wheel_nudges(&mut remainder, -20.0), -1.0);
+        assert_eq!(wheel_nudges(&mut remainder, -notch * 2.5), -2.0);
+        assert_eq!(wheel_nudges(&mut remainder, -notch * 0.5), -1.0);
         assert_eq!(remainder, 0.0);
+        assert_eq!(wheel_nudges(&mut remainder, notch), 1.0, "a single notch is a single nudge");
+        assert_eq!(remainder, 0.0);
+        assert_eq!(wheel_nudges(&mut remainder, notch * 50.0), 10.0, "a single huge event is capped");
+    }
+
+    /// Shift-drag moves a tenth of the pointer's way along the track, also on the Kelvin track (where a pixel of
+    /// fine drag near the centre is about 4 K): a pointer creeping a pixel a frame still adds up to steps.
+    #[test]
+    fn a_slow_shift_drag_adds_up() {
+        let ctx = egui::Context::default();
+        let temp = lightcraft_develop::controls::find("wb.temp").unwrap();
+        let mut value = 7000.0;
+        let frame = |time: f64, events: Vec<egui::Event>, value: f64| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(320.0, 120.0))),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let mut out = SliderOut::default();
+            ctx.run_ui(input, |ui| out = slider(ui, temp, value, true, None)).textures_delta.clear();
+            let track = take_registry(&ctx).into_iter().find(|(id, _)| id == "slider:wb.temp").unwrap().1;
+            (out, track)
+        };
+        // Shift is held from the start (the modifiers stay until they change)
+        let (_, track) = frame(0.0, vec![egui::Event::ModifiersChanged(egui::Modifiers::SHIFT)], value);
+        let mut at = pos2(track.left() + temp.position(value) as f32 * track.width(), track.center().y);
+        let press =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::SHIFT };
+        frame(0.1, vec![egui::Event::PointerMoved(at), press(at, true)], value);
+        let moves = 60;
+        for i in 0..moves {
+            at.x += 1.0;
+            let (out, _) = frame(0.2 + f64::from(i) * 0.02, vec![egui::Event::PointerMoved(at)], value);
+            value = out.value.unwrap_or(value);
+        }
+        frame(2.0, vec![press(at, false)], value);
+        // the drag starts once the pointer has moved a few pixels; every pixel after that counts
+        let lo = temp.value_at(temp.position(7000.0) + f64::from(moves - 10) / f64::from(track.width()) * 0.1);
+        let hi = temp.value_at(temp.position(7000.0) + f64::from(moves) / f64::from(track.width()) * 0.1);
+        assert!(value >= lo - 50.0 && value <= hi + 50.0 && value > 7000.0, "{value} K, expected {lo:.0}–{hi:.0} K");
     }
 
     /// Typed values (issue #322): signs, a decimal comma, units; on the control's steps, in range.
@@ -665,6 +1213,7 @@ mod access_tests {
         ctx.enable_accesskit();
         let spec = lightcraft_develop::controls::find("light.exposure").unwrap();
         let mut found = Vec::new();
+        let mut ranges = Vec::new();
         for _ in 0..3 {
             let out = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let _ = slider(ui, spec, 0.5, true, None);
@@ -674,6 +1223,12 @@ mod access_tests {
             let mut out = out;
             out.textures_delta.clear();
             if let Some(update) = out.platform_output.accesskit_update.take() {
+                ranges = update
+                    .nodes
+                    .iter()
+                    .filter(|(_, n)| n.role() == egui::accesskit::Role::Slider)
+                    .map(|(_, n)| (n.min_numeric_value(), n.max_numeric_value()))
+                    .collect();
                 found = update
                     .nodes
                     .iter()
@@ -684,9 +1239,82 @@ mod access_tests {
         let has = |role: &str, label: &str| found.iter().any(|(r, l, _)| r == role && l == label);
         assert!(has("Slider", "Exposure"), "{found:?}");
         assert!(found.iter().any(|(r, l, v)| r == "Slider" && l == "Exposure" && *v == Some(0.5)), "the slider's value: {found:?}");
+        assert!(ranges.contains(&(Some(spec.min), Some(spec.max))), "the slider's range: {ranges:?}");
         assert!(has("Button", "Auto"), "{found:?}");
         assert!(has("Button", "Delete mask"), "{found:?}");
     }
+}
+
+/// Names a widget for screen readers (`name` replaces what egui gave it): for a plain egui field
+/// whose caption is a separate label beside it.
+pub(crate) fn screen_reader_name(ctx: &egui::Context, id: egui::Id, name: &str) {
+    ctx.accesskit_node_builder(id, |node| node.set_label(name.to_string()));
+}
+
+/// Names the part of the window `ui` draws for screen readers: a toolbar, or a landmark (VoiceOver's
+/// rotor lists the landmarks and jumps to one). Set on the node the `Ui` already has, so nothing is
+/// laid out differently. The node gets the `Ui`'s area as its bounds, so a screen reader's cursor
+/// lands on the part and not on an empty spot.
+pub(crate) fn announce_region(ui: &Ui, role: egui::accesskit::Role, name: impl Into<String>) {
+    let name = name.into();
+    let r = ui.max_rect();
+    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+        node.set_role(role);
+        node.set_label(name);
+        node.set_bounds(egui::accesskit::Rect { x0: f64::from(r.min.x), y0: f64::from(r.min.y), x1: f64::from(r.max.x), y1: f64::from(r.max.y) });
+    });
+}
+
+/// A hand-drawn clickable area (an icon, a tile, a row) announced as a button named `name`.
+pub(crate) fn announce(resp: &egui::Response, name: impl Into<String>) {
+    let name = name.into();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, resp.enabled(), name.clone()));
+}
+
+/// What a window with its own title and buttons is, to a screen reader.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Modal {
+    /// A dialog with a task (Export, Settings, a name prompt) that stops the rest of the application.
+    Dialog,
+    /// One that interrupts to say something that needs an answer (the quit prompt, a library that
+    /// couldn't be opened) and stops the rest of the application: an alert dialog (AT-SPI and
+    /// Windows tell it from a dialog; macOS reads both alike).
+    Alert,
+    /// A dialog that leaves the rest of the application reachable (the update check's answer).
+    Window,
+}
+
+/// Announces the window `response` drew as a dialog (an alert dialog for [`Modal::Alert`]), and for
+/// [`Modal::Dialog`] and [`Modal::Alert`] as modal, instead of as a group that carries the title:
+/// the platform's accessibility layer then sees a dialog and that the rest of the application is
+/// blocked while it is open.
+pub(crate) fn announce_dialog(ctx: &egui::Context, response: &Response, kind: Modal) {
+    ctx.accesskit_node_builder(response.id, |node| {
+        node.set_role(if kind == Modal::Alert { egui::accesskit::Role::AlertDialog } else { egui::accesskit::Role::Dialog });
+        if kind != Modal::Window {
+            node.set_modal();
+        }
+    });
+}
+
+/// Gives the dialog `response` drew the words it says as its accessible description, for an alert
+/// whose content (the task names, the error) is drawn as separate labels: a screen reader then
+/// has what the alert is about when it announces the alert, not only its title.
+pub(crate) fn describe_dialog(ctx: &egui::Context, response: &Response, text: &str) {
+    ctx.accesskit_node_builder(response.id, |node| node.set_description(text));
+}
+
+/// The same for one that is on or off (a toggle, a selected row or swatch).
+pub(crate) fn announce_selected(resp: &egui::Response, name: impl Into<String>, selected: bool) {
+    let name = name.into();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, resp.enabled(), selected, name.clone()));
+}
+
+/// `r`, named `name` for screen readers: a plain egui field or slider whose caption is drawn
+/// beside it, or whose hint is all it shows.
+pub(crate) fn named(r: egui::Response, name: &str) -> egui::Response {
+    screen_reader_name(&r.ctx, r.id, name);
+    r
 }
 
 /// `text` laid out on one line, cut short with … when it is wider than `max` (the galley's
@@ -724,16 +1352,31 @@ pub(crate) fn elide_head(text: &str, max: f32, width: impl Fn(&str) -> f32) -> S
     "…".to_string()
 }
 
+pub mod album_picker;
+pub mod button;
+pub mod date_picker;
 #[cfg(test)]
 #[path = "widgets/tests_numeric_entry.rs"]
 mod numeric_entry_tests;
+pub mod progress;
+pub mod rating;
+pub mod text_field;
+
+#[cfg(test)]
+#[path = "widgets/tests_slider_reset.rs"]
+mod slider_reset_tests;
 
 fn focused_slider_key() -> egui::Id {
-    egui::Id::new("lightcraft-focused-slider")
+    egui::Id::unique("lightcraft-focused-slider")
 }
 
-/// Whether the widget with keyboard focus is a develop slider a click selected. It owns only the
-/// arrow keys (and the wheel): every other shortcut still works, as in Lightroom after a drag.
+/// The slider a click or drag armed for vertical wheel edits, if any.
+fn wheel_slider_key() -> egui::Id {
+    egui::Id::unique("lightcraft-wheel-slider")
+}
+
+/// Whether the widget with keyboard focus is a develop slider selected by a click, drag or Tab.
+/// It owns only the arrow keys: every other shortcut still works. Wheel selection is separate.
 pub fn slider_has_focus(ctx: &egui::Context) -> bool {
     let focused = ctx.memory(|m| m.focused());
     focused.is_some() && focused == ctx.data(|d| d.get_temp::<egui::Id>(focused_slider_key()))

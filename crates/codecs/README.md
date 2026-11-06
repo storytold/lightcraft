@@ -11,7 +11,7 @@ let fmt: Option<Format> = sniff(&bytes);                 // JPEG/PNG/TIFF/WebP/A
 let d: Decoded = decode(&bytes, DecodeOptions::default())?;
 // d.image: Rgb32f, linear light in the source primaries (d.space: SourceSpace)
 // d.alpha, d.bit_depth, d.float, d.orientation (EXIF value, NOT applied), d.exif/xmp/icc (raw blobs)
-let working: Rgb32f = to_working(&d);                    // linear Rec.2020 D65 (Bradford)
+let working: Rgb32f = to_working(&d);                    // linear Rec.2020 D65 (Bradford), alpha flattened onto white
 let fast = decode(&bytes, DecodeOptions::fit(2048, 2048))?; // JPEG: DCT-domain 1/2..1/8 scaling
 let t: Thumbnail = decode_thumbnail(&bytes, 256)?;       // embedded EXIF/MPF preview or scaled decode
 let h: Header = read_header(&bytes)?;                    // stored width/height + orientation, no pixels decoded
@@ -46,14 +46,14 @@ CRW, MRW, X3F) are detected so the engine can route them to `lightcraft-raw`; `d
 
 | Format | Decode | Encode | Notes |
 |---|---|---|---|
-| JPEG | yes (zune-jpeg; jpeg-decoder for DCT scaling, CMYK/YCCK, 12-bit, non-interleaved scans) | yes (jpeg-encoder, baseline, 4:4:4/4:2:2/4:2:0) | EXIF (APP1), XMP (APP1, ≤ 64 KiB), ICC (APP2, multi-chunk), Adobe APP14, MPF previews |
+| JPEG | yes (zune-jpeg; jpeg-decoder for DCT scaling, CMYK/YCCK, 12-bit, non-interleaved scans) | yes (jpeg-encoder, baseline, 4:4:4/4:2:2/4:2:0) | EXIF (APP1), XMP (APP1, ≤ 64 KiB), ICC (APP2; only complete, consistently counted, uniquely numbered chunk sequences are assembled; malformed profiles use the existing unsupported-profile fallback), Adobe APP14, MPF previews |
 | PNG | yes, 1–16-bit, palette, tRNS, interlaced | 8/16-bit, gray/GA/RGB/RGBA | iCCP, eXIf, iTXt XMP; sRGB/cICP/cHRM/gAMA honoured when no ICC |
 | TIFF | 8/16-bit int (32/64-bit int kept to 16 bits), 16/32/64-bit float, gray/RGB/CMYK/palette, alpha (assoc./unassoc.), planar, LZW/Deflate/PackBits/JPEG | 8/16-bit, 32-bit float; none/LZW/Deflate/PackBits | ICC (34675), XMP (700), Orientation; first IFD only; EXIF not written (use `lightcraft-tiff`) |
 | WebP | lossy + lossless, alpha, first frame of animations | lossless only | ICCP/EXIF/XMP chunks |
 | GIF / BMP | yes (first GIF frame) | — | via `image` |
 | PSD / PSB | merged composite: 8/16/32-bit gray, RGB, CMYK, indexed, duotone (as gray); raw/RLE | — | ICC (1039), EXIF (1058), XMP (1060); ZIP-compressed composite, Lab and 1-bit unsupported |
 | JPEG XL | yes (jxl-oxide, feature `jxl`, default on) | yes (jixel, `encode_jxl`, feature `jxl`, native only): lossy VarDCT / lossless Modular, 8/16-bit, effort (fast / normal), progressive; HDR as 16-bit Rec. 2020 PQ | decode: enum colour → rendered straight to linear Rec.2020 (XYB via linear sRGB primaries); ICC → our ICC path; orientation applied by the decoder (reported as 1). Encode: lossy files declare an enum encoding (sRGB, Display P3, Rec. 2020 BT.709 curve, Rec. 2020 PQ), lossless ones embed the ICC profile; EXIF / XMP in `Exif` / `xml ` boxes |
-| AVIF | **no** | yes (ravif/rav1e, native only, feature `avif`) | 8/10-bit sRGB, EXIF; no ICC in the muxer. HDR: `encode_avif_pq` writes 10-bit BT.2020 PQ (SDR white at 203 cd/m², CICP `nclx` + `clli`) |
+| AVIF | **no** | yes (ravif/rav1e, native only, feature `avif`) | 8/10-bit sRGB, EXIF; no ICC in the muxer. HDR: `encode_avif_hdr` writes 10-bit BT.2020 PQ (SDR white at 203 cd/m², CICP `nclx` + `clli`) or HLG (`hlg_signal`, SDR white at 0.75) |
 | HEIC/HEIF | yes with feature `heif` (lightcraft-heif: heic-rs + libheif-matching colour; 4:2:0/mono, 8–10-bit, grids, irot/imir/clap, ICC/nclx/VUI, EXIF/XMP, thumbnail item) | — | 4:2:2/4:4:4 (Canon/Sony HIF) unsupported |
 | Gain map JPEG (HDR) | gain map found and decoded (`gainmap::read_jpeg`): ISO 21496-1 metadata, else Adobe `hdrgm` XMP | yes (`gainmap::encode_jpeg`) | CIPA DC-007 MPF index (gain map typed `0x050000`), ISO 21496-1 APP2 on both images, `hdrgm` + Container XMP for Android/Chrome, Apple `HDRGainMap`/`HDRToneMap` XMP; gain maps are never used as thumbnails |
 
@@ -72,6 +72,10 @@ resizing; a JPEG carrying its own metadata retains its existing interpretation.
 ICC profiles are parsed with `moxcms` (v2/v4, `curv`/`para` TRCs, `chad`); sRGB, Display P3,
 Adobe RGB (1998), ProPhoto (ROMM) and Rec.2020 are recognised by colorants. `icc::write_matrix_trc`
 emits v4 display profiles (D50 PCS, Bradford `chad`) for export embedding.
+
+Before colour conversion, positive-infinity float samples become 1.0; NaN and negative infinity
+become 0.0. This also applies to alpha. Finite samples keep their existing range: matrix/TRC paths
+preserve values above 1.0 and below 0.0, while CMS inputs and alpha remain bounded to 0..1.
 
 ## Dependencies and licences
 
@@ -96,7 +100,7 @@ jpegxl-rs / imagequant (GPL / C), dav1d / libheif (C).
 
 ## Performance (Apple M-series, release, synthetic 24 MP JPEG q90 4:2:0)
 
-Run `cargo test --release -p lightcraft-codecs --test bench -- --ignored --nocapture`.
+Run `cargo test --release -p lightcraft-codecs --test it bench:: -- --ignored --nocapture`.
 
 | Operation | Time |
 |---|---|

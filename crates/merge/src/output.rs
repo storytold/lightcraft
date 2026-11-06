@@ -4,16 +4,19 @@
 //! - Pixel values are scaled so the brightest pixel sits just below 1.0 (the white level); the
 //!   scale is carried in `BaselineExposure`, so a default rendering looks like the reference frame.
 //! - Raw sources: the reference frame's DNG colour tags (`ColorMatrix*`, `ForwardMatrix*`,
-//!   `CameraCalibration*`, `AsShotNeutral`, illuminants) are carried over unchanged — the data is
-//!   still camera RGB.
+//!   `CameraCalibration*`, `AsShotNeutral`, illuminants) are carried over — the data is still camera
+//!   RGB. A raw with its white balance only in vendor multipliers (CR2, NEF…) has none of its own: the
+//!   result's `AsShotNeutral` comes from the frames' multipliers ([`FrameColor::set_as_shot_multipliers`]).
 //! - Other sources: the "camera" is the file's linear RGB space; `ColorMatrix1` = XYZ(D65) → RGB,
 //!   `ForwardMatrix1` = RGB → XYZ(D50), `AsShotNeutral` = (1, 1, 1).
+//! - Lens corrections (an HDR merge's: the reference frame's, [`crate::Frame::lens`]) go in `OpcodeList3`, where the
+//!   develop settings' profile corrections find them as they do in the sources.
 
 use lightcraft_color::{D50, D65, Mat3, bradford};
 use lightcraft_geom::Orientation;
 use lightcraft_meta::Metadata;
 use lightcraft_raster::Rgb32f;
-use lightcraft_raw::{BlackLevel, ColorData, DngCompression, DngWriteOptions, OpcodeLists, RawData, RawFormat, RawImage, Rect};
+use lightcraft_raw::{BlackLevel, ColorData, DngCompression, DngWriteOptions, Opcode, OpcodeLists, RawData, RawFormat, RawImage, Rect};
 
 use crate::frame::FrameColor;
 use crate::{MergeError, Result};
@@ -53,12 +56,14 @@ pub fn color_data(color: &FrameColor) -> ColorData {
                 baseline_exposure: 0.0,
                 baseline_sharpness: None,
                 profile: Default::default(),
+                kelvin_presets: None,
             }
         }
     }
 }
 
-/// Encode `img` (scene-linear, 1.0 = source white) as a LinearRaw DNG.
+/// Encode `img` (scene-linear, 1.0 = source white) as a LinearRaw DNG, with `lens` (lens corrections for `img`, not
+/// yet turned by `orientation`) as its `OpcodeList3`.
 pub fn write_linear_dng(
     img: &Rgb32f,
     color: &FrameColor,
@@ -66,6 +71,7 @@ pub fn write_linear_dng(
     metadata: &Metadata,
     baseline_exposure: f64,
     samples: DngSamples,
+    lens: &[Opcode],
 ) -> Result<Vec<u8>> {
     let (w, h) = (img.width, img.height);
     if w == 0 || h == 0 {
@@ -106,8 +112,10 @@ pub fn write_linear_dng(
         color: cd,
         wb_multipliers: None,
         linearized: false,
-        opcodes: OpcodeLists::default(),
+        pixel_aspect: 1.0,
+        opcodes: OpcodeLists { list3: lens.to_vec(), ..Default::default() },
         metadata: meta,
+        lens_metadata: Default::default(),
     };
     let compression = DngCompression::Deflate { tile: 256, half: samples == DngSamples::Half };
     lightcraft_raw::write_dng(&raw, &DngWriteOptions { compression, ..Default::default() }).map_err(|e| MergeError::Output(e.to_string()))
@@ -121,7 +129,7 @@ mod tests {
     fn linear_dng_round_trips_through_the_raw_decoder() {
         let img = Rgb32f::from_fn(80, 60, |x, y| [x as f32 / 20.0, y as f32 / 30.0, 0.3]);
         let color = FrameColor::Linear { to_xyz_d50: bradford(D65, D50).mul(&lightcraft_color::SRGB.to_xyz()) };
-        let bytes = write_linear_dng(&img, &color, Orientation::Normal, &Metadata::default(), 0.0, DngSamples::Half).unwrap();
+        let bytes = write_linear_dng(&img, &color, Orientation::Normal, &Metadata::default(), 0.0, DngSamples::Half, &[]).unwrap();
         let raw = lightcraft_raw::decode(&bytes).unwrap();
         assert_eq!((raw.width, raw.height, raw.cpp), (80, 60, 3));
         let gain = 2f32.powf(raw.color.baseline_exposure as f32);
@@ -144,7 +152,7 @@ mod tests {
         for c in 0..3 {
             assert!((red[c] / k - want[c]).abs() < 5e-3, "{red:?} vs {want:?}");
         }
-        let u16 = write_linear_dng(&img, &color, Orientation::Normal, &Metadata::default(), 0.0, DngSamples::U16).unwrap();
+        let u16 = write_linear_dng(&img, &color, Orientation::Normal, &Metadata::default(), 0.0, DngSamples::U16, &[]).unwrap();
         assert!(lightcraft_raw::decode(&u16).is_ok());
     }
 }

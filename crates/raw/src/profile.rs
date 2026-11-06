@@ -123,6 +123,177 @@ impl HsvTable {
         };
         hsv_to_rgb(hue + shift, s2, v2)
     }
+
+    /// [`Self::apply`] to `N` colours at once (`rgb[channel][lane]`), bit for bit: the same operations, with the
+    /// branches on the data (largest channel, hue sector, wrap-around) turned into selects so the compiler
+    /// vectorises them. The table reads, `powf` and the rare `rem_euclid` run lane by lane.
+    pub fn apply_lanes<const N: usize>(&self, rgb: [[f32; N]; 3]) -> [[f32; N]; 3] {
+        let [r, g, b] = rgb;
+        if !self.fits_lanes() {
+            let mut out = rgb;
+            for l in 0..N {
+                [out[0][l], out[1][l], out[2][l]] = self.apply([r[l], g[l], b[l]]);
+            }
+            return out;
+        }
+        // `active`: the colours the table applies to (`apply` returns black, NaN and infinite ones as they are)
+        let (mut max, mut active, mut first) = ([0.0f32; N], [true; N], [false; N]);
+        let (mut d, mut ratio, mut second, mut third) = ([0.0f32; N], [0.0f32; N], [0.0f32; N], [0.0f32; N]);
+        for l in 0..N {
+            let m = r[l].max(g[l]).max(b[l]);
+            active[l] = !(m.is_nan() | (m <= 0.0) | !m.is_finite());
+            d[l] = m - r[l].min(g[l]).min(b[l]);
+            // hue_of, for each largest channel
+            ratio[l] = (g[l] - b[l]) / d[l];
+            second[l] = (b[l] - r[l]) / d[l] + 2.0;
+            third[l] = (r[l] - g[l]) / d[l] + 4.0;
+            first[l] = active[l] & (d[l] > 0.0) & (m == r[l]);
+            max[l] = m;
+        }
+        let ratio = wrap_lanes(ratio, 6.0, first);
+        let (mut hue, mut sat) = ([0.0f32; N], [0.0f32; N]);
+        for l in 0..N {
+            let h = if max[l] == r[l] {
+                ratio[l]
+            } else if max[l] == g[l] {
+                second[l]
+            } else {
+                third[l]
+            };
+            let h = h * 60.0;
+            hue[l] = if d[l] <= 0.0 { 0.0 } else { h };
+            sat[l] = d[l] / max[l];
+        }
+        let mut v_index = max;
+        if self.srgb_value {
+            for l in 0..N {
+                if active[l] {
+                    v_index[l] = linear_to_srgb(max[l].min(1.0));
+                }
+            }
+        }
+        let [shift, ss, vs] = self.lookup_lanes(&hue, &sat, &v_index, active);
+        let (mut s2, mut v2, mut curve) = ([0.0f32; N], [0.0f32; N], [false; N]);
+        for l in 0..N {
+            s2[l] = limited_select(sat[l], ss[l]);
+            v2[l] = if self.srgb_value { max[l] } else { limited_select(max[l], vs[l]) };
+            curve[l] = self.srgb_value & active[l] & !((max[l] <= 1.0) & (vs[l] == 1.0));
+        }
+        for l in 0..N {
+            if curve[l] {
+                v2[l] = if max[l] <= 1.0 { srgb_to_linear((v_index[l] * vs[l]).min(1.0)) } else { max[l] * srgb_to_linear(vs[l].min(1.0)).min(1.0) };
+            }
+        }
+        // hsv_to_rgb
+        let hue = wrap_lanes(std::array::from_fn(|l| hue[l] + shift[l]), 360.0, active);
+        let mut out = rgb;
+        for l in 0..N {
+            let hp = hue[l] / 60.0;
+            // `(hp as u32).min(5) as f32` for every `hp`, NaN included
+            let step = |k: f32| if hp >= k { 1.0 } else { 0.0 };
+            let sector = step(1.0) + step(2.0) + step(3.0) + step(4.0) + step(5.0);
+            let f = hp - sector;
+            let (s, v) = (s2[l], v2[l]);
+            let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
+            let red = if (sector == 0.0) | (sector == 5.0) {
+                v
+            } else if sector == 1.0 {
+                q
+            } else if sector == 4.0 {
+                t
+            } else {
+                p
+            };
+            let green = if sector == 0.0 {
+                t
+            } else if sector <= 2.0 {
+                v
+            } else if sector == 3.0 {
+                q
+            } else {
+                p
+            };
+            let blue = if sector <= 1.0 {
+                p
+            } else if sector == 2.0 {
+                t
+            } else if sector == 5.0 {
+                q
+            } else {
+                v
+            };
+            out[0][l] = if active[l] { red } else { r[l] };
+            out[1][l] = if active[l] { green } else { g[l] };
+            out[2][l] = if active[l] { blue } else { b[l] };
+        }
+        out
+    }
+
+    /// Whether [`Self::lookup_lanes`] can do this table's index arithmetic in `f32`: every index below 2²³.
+    fn fits_lanes(&self) -> bool {
+        let entries = self.hue_divisions.checked_mul(self.sat_divisions).and_then(|n| n.checked_mul(self.val_divisions.max(1)));
+        self.hue_divisions >= 1 && self.sat_divisions >= 1 && entries.is_some_and(|n| n <= 1 << 23)
+    }
+
+    /// [`Self::lookup`] at `N` points (`(shift, saturation scale, value scale)[lane]`), bit for bit for the lanes
+    /// `wanted`, on a table that [`Self::fits_lanes`]. The indices are computed as `f32` (exact integers below 2²³:
+    /// `x as usize` is a saturating conversion that doesn't vectorise).
+    fn lookup_lanes<const N: usize>(&self, h: &[f32; N], s: &[f32; N], v: &[f32; N], wanted: [bool; N]) -> [[f32; N]; 3] {
+        const EXACT: f32 = 8_388_608.0; // 2²³: ulp 1 from here
+        // `x as usize` for `0 ≤ x < 2²³`: rounded to an integer, minus 1 if it rounded up; NaN is 0
+        let floor = |x: f32| {
+            let nearest = (x + EXACT) - EXACT;
+            let floor = if nearest > x { nearest - 1.0 } else { nearest };
+            if x.is_nan() { 0.0 } else { floor }
+        };
+        let (hn, sn, vn) = (self.hue_divisions as f32, self.sat_divisions as f32, self.val_divisions as f32);
+        let axis = |x: f32, n: f32| {
+            let f = x.clamp(0.0, 1.0) * (n - 1.0);
+            let i0 = floor(f).min((n - 2.0).max(0.0));
+            let i1 = (i0 + 1.0).min(n - 1.0);
+            (i0, i1, (f - i0).clamp(0.0, 1.0))
+        };
+        let h = wrap_lanes(*h, 360.0, wanted);
+        // the corners' indices (v, h, s), s fastest, and the weights between them
+        let (mut at, mut t) = ([[0u32; N]; 8], [[0.0f32; N]; 3]);
+        for l in 0..N {
+            let hf = (h[l] / 360.0 * hn).clamp(0.0, hn);
+            let h0 = floor(hf).min(hn - 1.0);
+            // (h0 + 1) % hn
+            let h1 = if h0 + 1.0 == hn { 0.0 } else { h0 + 1.0 };
+            let (s0, s1, ts) = axis(s[l], sn);
+            let (v0, v1, tv) = axis(v[l], vn);
+            let (v0, v1, tv) = if self.val_divisions > 1 { (v0, v1, tv) } else { (0.0, 0.0, 0.0) };
+            for (k, (vi, hi)) in [(v0, h0), (v0, h1), (v1, h0), (v1, h1)].into_iter().enumerate() {
+                let row = (vi * hn + hi) * sn;
+                // an exact integer below 2²³ plus 2²³ has it as its mantissa
+                at[2 * k][l] = (row + s0 + EXACT).to_bits().wrapping_sub(EXACT.to_bits());
+                at[2 * k + 1][l] = (row + s1 + EXACT).to_bits().wrapping_sub(EXACT.to_bits());
+            }
+            [t[0][l], t[1][l], t[2][l]] = [(hf - h0).clamp(0.0, 1.0), ts, tv];
+        }
+        let mut corner = [[[0.0f32; N]; 3]; 8];
+        for l in 0..N {
+            for (corner, at) in corner.iter_mut().zip(&at) {
+                [corner[0][l], corner[1][l], corner[2][l]] = self.data.get(at[l] as usize).copied().unwrap_or([0.0, 1.0, 1.0]);
+            }
+        }
+        let lerp = |a: &[f32; N], b: &[f32; N], t: &[f32; N]| {
+            let mut out = [0.0f32; N];
+            for l in 0..N {
+                out[l] = a[l] + (b[l] - a[l]) * t[l];
+            }
+            out
+        };
+        let [th, ts, tv] = &t;
+        let mut out = [[0.0f32; N]; 3];
+        for (c, out) in out.iter_mut().enumerate() {
+            let plane = |k: usize| lerp(&lerp(&corner[k][c], &corner[k + 1][c], ts), &lerp(&corner[k + 2][c], &corner[k + 3][c], ts), th);
+            // `lookup`'s `v0 == v1` for every lane: `axis` gives `v1 = v0 + 1` whenever there are two values or more
+            *out = if self.val_divisions > 1 { lerp(&plane(0), &plane(4), tv) } else { plane(0) };
+        }
+        out
+    }
 }
 
 /// `x · k` clipped to 1, for `x ≤ 1`; above 1, only scale factors below 1 apply (continuous at 1).
@@ -143,6 +314,37 @@ fn wrap(x: f32, p: f32) -> f32 {
     } else {
         x.rem_euclid(p)
     }
+}
+
+/// [`wrap`] of `N` values, bit for bit for the lanes `wanted`: branch-free but for the `rem_euclid` fallback.
+#[inline]
+fn wrap_lanes<const N: usize>(x: [f32; N], p: f32, wanted: [bool; N]) -> [f32; N] {
+    let (mut out, mut slow) = ([0.0f32; N], [false; N]);
+    for l in 0..N {
+        let (first, below, second) = ((x[l] >= 0.0) & (x[l] < p), (x[l] > -p) & (x[l] < 0.0), (x[l] >= p) & (x[l] < 2.0 * p));
+        let (up, down) = (x[l] + p, x[l] - p);
+        out[l] = if first {
+            x[l]
+        } else if below {
+            up
+        } else {
+            down
+        };
+        slow[l] = wanted[l] & !(first | below | second);
+    }
+    for l in 0..N {
+        if slow[l] {
+            out[l] = x[l].rem_euclid(p);
+        }
+    }
+    out
+}
+
+/// [`limited`] without a branch.
+#[inline]
+fn limited_select(x: f32, k: f32) -> f32 {
+    let (below, above) = ((x * k).min(1.0), x * k.min(1.0));
+    if x <= 1.0 { below } else { above }
 }
 
 fn hue_of(c: [f32; 3], max: f32, d: f32) -> f32 {
@@ -327,6 +529,81 @@ mod tests {
             let out = t.apply(c);
             let got = out[0].max(out[1]).max(out[2]);
             assert!((got - max).abs() <= 1e-6 * max.max(1.0), "{c:?} -> {out:?}");
+        }
+    }
+
+    /// Every combination of awkward components (zero, negative, tiny, around 1, huge, NaN, ±infinity), and random
+    /// colours from black to above 1: grey, each channel largest, hues either side of the wrap-around at 0°.
+    fn awkward_colours() -> Vec<[f32; 3]> {
+        let special = [0.0, -0.0, 1e-30, -1e-30, 1e-45, 0.003_130_8, 0.5, -0.5, 1.0, 1.0f32.next_up(), 2.0, 1e30, -1e30];
+        let special = [&special[..], &[f32::MAX, f32::INFINITY, f32::NEG_INFINITY, f32::NAN]].concat();
+        let mut out = Vec::new();
+        for a in &special {
+            for b in &special {
+                out.extend(special.iter().map(|c| [*a, *b, *c]));
+            }
+        }
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for _ in 0..40_000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let scale = [1.0, 1e-4, 8.0, 1e-38][(seed >> 56) as usize & 3];
+            let c: [f32; 3] = std::array::from_fn(|i| (((seed >> (16 * i)) & 0xffff) as f32 / 65535.0 * 1.6 - 0.2) * scale);
+            out.push(match seed >> 60 {
+                0 => [c[0]; 3],
+                1 => [c[0].abs() + 0.1, c[1], c[1].next_up()],
+                2 => [c[0].abs() + 0.1, c[1], c[1].next_down()],
+                _ => c,
+            });
+        }
+        out
+    }
+
+    /// `apply_lanes` against `apply`, bit for bit, `N` colours at a time (the last batch padded).
+    fn assert_lanes_match<const N: usize>(t: &HsvTable, colours: &[[f32; 3]]) {
+        for chunk in colours.chunks(N) {
+            let rgb: [[f32; N]; 3] = std::array::from_fn(|c| std::array::from_fn(|l| chunk.get(l).map_or(0.25, |p| p[c])));
+            let out = t.apply_lanes(rgb);
+            for (l, p) in chunk.iter().enumerate() {
+                let (got, want) = ([out[0][l], out[1][l], out[2][l]], t.apply(*p));
+                assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits), "{p:?}: {got:?} vs {want:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn lanes_match_one_by_one_bit_for_bit() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut table = |h: usize, s: usize, v: usize, srgb_value: bool, shift: f32, value_scale: bool| {
+            let data = (0..h * s * v)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    let x = |k: u64| ((seed >> k) & 0xffff) as f32 / 65535.0;
+                    [(x(0) * 2.0 - 1.0) * shift, 0.5 + x(16), if value_scale { 0.5 + x(32) } else { 1.0 }]
+                })
+                .collect();
+            HsvTable { hue_divisions: h, sat_divisions: s, val_divisions: v, data, srgb_value }
+        };
+        let colours = awkward_colours();
+        // a fitted camera look's shape; with value scales; a 2D DNG map turning hues by up to 5 turns; one hue and
+        // one saturation
+        for t in [
+            table(72, 5, 5, true, 30.0, false),
+            table(72, 5, 5, true, 30.0, true),
+            table(90, 30, 1, false, 1800.0, true),
+            table(1, 1, 3, true, 30.0, true),
+        ] {
+            assert_lanes_match::<16>(&t, &colours);
+            assert_lanes_match::<5>(&t, &colours);
+        }
+        // entries missing (the identity fallback); too big for the lanes' index arithmetic (one by one)
+        let short = HsvTable { data: vec![[10.0, 1.5, 0.8]; 7], ..identity(4, 3, 2) };
+        let huge = HsvTable { data: Vec::new(), ..identity(4096, 4096, 1) };
+        for t in [short, huge] {
+            assert_lanes_match::<16>(&t, &colours);
         }
     }
 

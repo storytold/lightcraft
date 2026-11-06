@@ -27,23 +27,31 @@ pub mod auto;
 pub mod blemish;
 pub mod colorops;
 pub mod cull;
+pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod light_v3;
+// generated (`light_v3_params.rs`), kept in its own compact layout
+#[rustfmt::skip]
+pub mod light_v3_params;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
+pub mod mask_space;
 pub mod masks;
 pub mod optics;
 pub mod output;
 pub mod profiles;
 pub mod redeye;
 pub mod spots;
+pub mod straighten;
 pub mod tone;
 pub mod transform;
 pub mod upright;
 pub mod visualize;
 
+pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 
@@ -59,7 +67,7 @@ pub use tone::ToneMap;
 /// A raw source's own colour model, for white balance: like Lightroom, a white balance
 /// re-evaluates the camera's colour matrices at the chosen white (camera-space white balance, DNG
 /// spec ch. 6) instead of adapting the as-shot rendering ([`local::wb_matrix_for`]).
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CameraColor {
     /// The file's colour tags (its profile look left out: it is applied at load).
     pub tags: lightcraft_raw::ColorData,
@@ -92,6 +100,11 @@ pub struct SourceInfo {
     /// The raw's own local tone mapping (DNG `ProfileGainTableMap`), rendered only when the
     /// photo's Profile option asks for it ([`local_tone`]).
     pub local_tone: Option<Arc<local_tone::LocalTone>>,
+    /// Long edge (px) of the original photo, when the source handed to the renderer is a smaller
+    /// copy of it (the app's thumbnail and preview levels); `None`: the source is the original.
+    /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
+    /// preview looks like the full-size render scaled down (issue #960).
+    pub native_long: Option<usize>,
 }
 
 impl Default for SourceInfo {
@@ -107,6 +120,7 @@ impl Default for SourceInfo {
             camera_tone: None,
             mattes: None,
             local_tone: None,
+            native_long: None,
         }
     }
 }
@@ -124,6 +138,9 @@ pub struct RenderRequest {
     /// Output must fit in `max_w × max_h` (aspect preserved).
     pub max_w: usize,
     pub max_h: usize,
+    /// The box is the final export size, already fitted against the full-resolution photo.
+    /// Reduced decode proxies must not fit it a second time.
+    pub exact_size: bool,
     pub quality: Quality,
     /// Show the crop frame's content only (true) or the whole uncropped image (crop tool active).
     pub apply_crop: bool,
@@ -133,7 +150,7 @@ pub struct RenderRequest {
     pub space: OutputSpace,
     /// Sample format: 8-bit only, or also a 16-bit / linear float [`Rendered::deep`] (exports).
     pub depth: OutputDepth,
-    /// Soft proofing (CPU only; see [`Proof`]).
+    /// Soft proofing (a proof against an output-device profile renders on the CPU; see [`Proof`]).
     pub proof: Option<Proof>,
     /// Render only this window of the output that `max_w × max_h` describes (a zoomed view):
     /// the result is that window's pixels, as in the whole render. See [`PixelWindow`].
@@ -165,11 +182,27 @@ impl PixelWindow {
     }
 }
 
+/// The longest output side a render may be asked for (TIFF/PNG/JPEG all fit within it).
+pub const MAX_OUTPUT_SIDE: usize = 65_535;
+/// The most output pixels a render may be asked for (the box it fits into, ≈ 1.07 Gpx).
+pub const MAX_OUTPUT_PIXELS: usize = 1 << 30;
+
+/// Rejects an output box past [`MAX_OUTPUT_SIDE`] or [`MAX_OUTPUT_PIXELS`] before anything is
+/// sized from it.
+pub fn check_output_size(max_w: usize, max_h: usize) -> Result<(), String> {
+    let pixels = max_w.checked_mul(max_h);
+    if max_w > MAX_OUTPUT_SIDE || max_h > MAX_OUTPUT_SIDE || pixels.is_none_or(|n| n > MAX_OUTPUT_PIXELS) {
+        return Err(format!("output size {max_w}×{max_h} is too large (at most {MAX_OUTPUT_SIDE} px per side and {MAX_OUTPUT_PIXELS} pixels)"));
+    }
+    Ok(())
+}
+
 impl RenderRequest {
     pub fn fit(max_w: usize, max_h: usize) -> Self {
         Self {
             max_w,
             max_h,
+            exact_size: false,
             quality: Quality::Full,
             apply_crop: true,
             overlay: Overlay::None,
@@ -179,6 +212,20 @@ impl RenderRequest {
             window: None,
             display: None,
         }
+    }
+
+    /// Render to a final size calculated from the original photo, even from a rounded proxy.
+    pub fn exact(width: usize, height: usize) -> Self {
+        Self { exact_size: true, ..Self::fit(width, height) }
+    }
+
+    /// The output size for `frame`. An exact box stands against a proxy that only rounds the photo's
+    /// shape differently; a source of another shape (a raw's embedded preview) is fitted, not stretched.
+    fn size(&self, frame: &geometry::Frame) -> (usize, usize) {
+        let fitted = frame.fit(self.max_w, self.max_h);
+        let exact = (self.max_w.max(1), self.max_h.max(1));
+        let near = |a: usize, b: usize| a.abs_diff(b) <= b / 64 + 1;
+        if self.exact_size && near(fitted.0, exact.0) && near(fitted.1, exact.1) { exact } else { fitted }
     }
 }
 
@@ -202,6 +249,8 @@ pub(crate) struct Prepared {
     pub base: Arc<Plane>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
+    /// Log luminance blurred at the sharpen radius (the pixel-scale band sharpening boosts).
+    pub sharpen_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
@@ -214,7 +263,7 @@ pub(crate) struct Prepared {
 
 /// Output size for a source of `src_w × src_h` under `s`, fitting `max_w × max_h`.
 pub fn output_size(src_w: usize, src_h: usize, s: &DevelopSettings, req: &RenderRequest) -> (usize, usize) {
-    geometry::Frame::new(src_w, src_h, s, req.apply_crop).fit(req.max_w, req.max_h)
+    req.size(&geometry::Frame::new(src_w, src_h, s, req.apply_crop))
 }
 
 /// Size of the cropped output of a `src_w × src_h` source under `s` at the source's own resolution
@@ -228,6 +277,10 @@ pub fn frame_for(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, apply_cro
     let mut frame = geometry::Frame::with_lens(src.width, src.height, s, apply_crop, info.lens.as_ref());
     if s.optics.remove_ca && s.section_enabled("optics") {
         frame.add_lateral_ca(optics::estimate_lateral_ca(src));
+        if apply_crop {
+            // The estimated CA moves the colour planes too: keep the crop inside every one of them.
+            frame.constrain_to_image(s.geometry.constrain_crop);
+        }
     }
     frame
 }
@@ -300,7 +353,7 @@ impl StageCache {
             }
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
-            for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
+            for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
                 add(Arc::as_ptr(p) as usize, size(p));
             }
         }
@@ -360,6 +413,11 @@ pub struct Plan<'a> {
     pub px_per_long: f64,
     /// Long edge of the source buffer (px).
     pub src_long: usize,
+    /// Long edge of the original photo, shared by sharpening and noise reduction.
+    pub native_long: usize,
+    /// Output pixels per pixel of the original photo ([`SourceInfo::native_long`], else the source
+    /// buffer), at most 1: the scale of noise reduction, whose radii are in the original's pixels.
+    pub detail_scale: f32,
     /// Key of the resampled source (together with the source buffer's identity).
     pub geo: u64,
     /// Key of the white-balanced, retouched, denoised image (and of the planes computed from it).
@@ -400,7 +458,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     }
     let s = &*settings;
     let frame = frame_for(src, info, s, req.apply_crop);
-    let (full_w, full_h) = frame.fit(req.max_w, req.max_h);
+    let (full_w, full_h) = req.size(&frame);
     // sizes and scale are those of the whole output; a window only narrows what is drawn
     let px_per_long = frame.px_per_long(full_w);
     let mut fixed_air = None;
@@ -423,6 +481,9 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         None => (frame, full_w, full_h),
     };
     let src_long = src.width.max(src.height);
+    // (an original reported smaller than the source is the source)
+    let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
+    let detail_scale = local::detail_scale(px_per_long, native_long);
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
@@ -438,8 +499,28 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         local_tone::enabled(info, s),
         src_long,
     ));
-    let lin_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits)));
-    Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
+    let lin_key = hash_of((
+        pre_nr_key,
+        [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
+        detail_scale.to_bits(),
+    ));
+    Plan {
+        settings,
+        frame,
+        w,
+        h,
+        px_per_long,
+        src_long,
+        native_long,
+        detail_scale,
+        geo,
+        lin_key,
+        pre_nr_key,
+        eyes,
+        fixed_air,
+        keep,
+        mattes: info.mattes.clone(),
+    }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -470,6 +551,10 @@ pub fn settings_for<'a>(s: &'a DevelopSettings, req: &RenderRequest) -> std::bor
 
 /// Long edge (pixels) of the small HDR render [`hdr_histogram`] measures.
 pub const HDR_HISTOGRAM_EDGE: usize = 384;
+
+/// Long edge of the render that gives a slider drag its live HDR histogram (drafts have none: a
+/// second render per tick would slow them down), run beside the drafts by the UI.
+pub const HDR_HISTOGRAM_DRAG_EDGE: usize = 192;
 
 /// The histogram of an HDR edit's HDR rendition for a preview request `req`: a small float HDR
 /// render of the same framing ([`HDR_HISTOGRAM_EDGE`]), binned with SDR on the left half and the
@@ -534,7 +619,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Src::Shared(a) => a,
     };
     let plan = plan(src_img, info, s, req);
-    let Plan { ref frame, w, h, px_per_long, src_long, geo, lin_key, .. } = plan;
+    let Plan { ref frame, w, h, px_per_long, detail_scale, geo, lin_key, .. } = plan;
     let s = &*plan.settings;
 
     let shared = match (&src, cache) {
@@ -554,7 +639,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             // Without a cache the resampled buffer is ours: work on it in place.
             let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
             lin_cpu(&mut img, info, &plan);
-            local::denoise(&mut img, s, src_long, frame.output_long(w, h));
+            local::denoise(&mut img, s, detail_scale);
             Arc::new(img)
         }
     };
@@ -568,7 +653,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if req.quality == Quality::Draft && p.pre_nr == plan.pre_nr_key => p.for_other_nr(),
         _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
     };
-    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes, plan.mattes.as_deref());
+    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, plan.native_long as f64, req.quality, &mut planes, plan.mattes.as_deref());
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
@@ -596,7 +681,8 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     lap("histogram", &mut t);
     let mut image = image;
     let mask = overlay_alpha(req.overlay, &plan, &prep);
-    visualize::apply(&mut image, req.overlay, &plan, mask.as_ref());
+    let masks = overlay_alphas_all(req.overlay, &plan, &prep);
+    visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
     if req.overlay == Overlay::HdrRange && edit.hdr.enabled {
         // the HDR rendition of the same request says how far above SDR white each pixel goes
@@ -613,7 +699,11 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
 /// exposed scene colours, as [`MaskShape::ColorRange`](lightcraft_develop::MaskShape) compares
 /// them), averaged over 3 × 3 pixels of a render fitting `req`. `None` outside the image.
 pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, p: lightcraft_geom::Point) -> Option<[f64; 3]> {
-    let plan = plan(src, info, s, req);
+    // Pick from the same settings as the render: disabled panels contribute nothing, and an
+    // SDR preview of an HDR edit includes the SDR rendition's exposure offset.
+    let effective = s.effective();
+    let rendition = settings_for(&effective, req);
+    let plan = plan(src, info, &rendition, req);
     let mut img = plan.frame.sample(src, plan.w, plan.h);
     lin_cpu(&mut img, info, &plan);
     let o = plan.frame.norm_to_out(plan.w, plan.h).apply(p);
@@ -621,7 +711,7 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
     if cx < 0 || cy < 0 || cx >= plan.w as i64 || cy >= plan.h as i64 {
         return None;
     }
-    let gain = (s.light.exposure as f32).exp2();
+    let gain = (plan.settings.light.exposure as f32).exp2();
     let mut acc = [0f64; 3];
     let mut n = 0.0;
     for y in (cy - 1).max(0)..=(cy + 1).min(plan.h as i64 - 1) {
@@ -637,15 +727,37 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
     Some(acc.map(|v| v / n))
 }
 
-/// The alpha plane a mask overlay shows: the one the render evaluated, or (for a hidden mask) a
-/// fresh evaluation.
+/// The plane an overlay shows: a sharpening view's detail plane, or the alpha of a mask overlay
+/// (the one the render evaluated, or for a hidden mask a fresh evaluation).
 fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> {
+    if o.reads_detail() {
+        let band = if local::pixel_sharpen(&plan.settings) { &prep.sharpen_blur } else { &prep.texture_blur };
+        return visualize::sharpen_plane(o, &plan.settings, &prep.log_l, band.as_deref(), plan.px_per_long, plan.native_long as f64);
+    }
     let m = o.mask(&plan.settings)?;
     if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
         return Some(e.alpha.clone());
     }
     let ev = plan.settings.light.exposure as f32;
     Some(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref()))
+}
+
+/// The alpha planes an `Overlay::AllMasks` shows: one per visible mask that has components,
+/// reusing the render's own evaluation where available (a fresh evaluation otherwise).
+fn overlay_alphas_all(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Vec<Plane>> {
+    if !matches!(o, Overlay::AllMasks { .. }) {
+        return None;
+    }
+    let ev = plan.settings.light.exposure as f32;
+    let mut out = Vec::new();
+    for m in plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()) {
+        if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
+            out.push(e.alpha.clone());
+        } else {
+            out.push(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref()));
+        }
+    }
+    Some(out)
 }
 
 /// Convenience: render a before/after pair side by side is up to the UI; this renders "before"
@@ -681,6 +793,28 @@ pub(crate) fn for_rows<T: Send>(data: &mut [T], w: usize, f: impl Fn(usize, &mut
     par_rows(data, w, f)
 }
 
+/// `plan` must keep the output box the caller (export) already decided instead of
+/// re-fitting it: `Frame::fit` passes a box through unchanged only when it matches
+/// the *decoded* frame's aspect within rounding slack (geometry.rs:189-191), so a
+/// reduced source whose aspect rounds differently (a 149 x 100 proxy of a 240 x 160
+/// photo) makes `plan` return a size a pixel off from the box (issue #1042).
+#[cfg(test)]
+#[test]
+fn plan_preserves_matching_box_size() {
+    let src = Rgb32f::from_fn(149, 100, |_, _| [0.5; 3]);
+    let info = SourceInfo { native_long: Some(240), ..SourceInfo::default() };
+    let s = DevelopSettings::default();
+    let fitted = plan(&src, &info, &s, &RenderRequest::fit(240, 160));
+    assert_eq!((fitted.w, fitted.h), (238, 160));
+    let req = RenderRequest::exact(240, 160);
+    let p = plan(&src, &info, &s, &req);
+    assert_eq!((p.w, p.h), (240, 160));
+    // an embedded preview of another shape keeps its shape: an exact box must not stretch it
+    let preview = Rgb32f::from_fn(120, 100, |_, _| [0.5; 3]);
+    let p = plan(&preview, &info, &s, &req);
+    assert_eq!((p.w, p.h), (192, 160));
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -688,7 +822,17 @@ mod tests_geometry;
 #[cfg(test)]
 mod tests_hdr;
 #[cfg(test)]
+mod tests_legacy;
+#[cfg(test)]
+mod tests_light;
+#[cfg(test)]
 mod tests_local;
+#[cfg(test)]
+mod tests_mask_geometry;
+#[cfg(test)]
+mod tests_nr_scale;
+#[cfg(test)]
+mod tests_sharpen;
 #[cfg(test)]
 mod tests_tone;
 #[cfg(test)]

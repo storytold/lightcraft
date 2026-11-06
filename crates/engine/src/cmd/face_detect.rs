@@ -17,8 +17,8 @@ use lightcraft_faces::yunet::{Detector, Face, Options};
 use lightcraft_meta::{Region, RegionKind};
 use serde_json::{Value, json};
 
-use super::{CommandSpec, bad, cmd, has_selection};
-use crate::{Result, Session};
+use super::{CommandSpec, always, bad, cmd, has_selection};
+use crate::{AiModel, EngineError, Result, Session};
 
 const C: &str = "faces.detect";
 /// Regions made by this command say so in their description; only those are replaced on a new run.
@@ -34,15 +34,41 @@ const EXISTING_IOU: f64 = 0.3;
 /// What to tell someone who has not downloaded the detector yet.
 const NOT_INSTALLED: &str = "finding faces needs the YuNet face detector (232 KB, MIT): download it in Settings > Faces";
 
+/// Why [`detector`] has no detector to give.
+#[derive(Debug)]
+pub(crate) enum NoDetector {
+    /// Not downloaded yet: a frontend offers the download ([`crate::ErrorKind::ModelMissing`]).
+    NotInstalled,
+    /// Nowhere to keep it, or there but unusable: says what to do.
+    Unusable(String),
+}
+
+impl NoDetector {
+    /// Command `cmd`'s error for it. The message reads as before kinds existed (an invalid-parameters
+    /// error), so control-channel and MCP clients see the same `error` text.
+    pub(crate) fn into_error(self, cmd: &str) -> EngineError {
+        match self {
+            Self::NotInstalled => EngineError::ModelMissing { model: AiModel::FaceDetector, msg: bad(cmd, NOT_INSTALLED).to_string() },
+            Self::Unusable(why) => bad(cmd, why),
+        }
+    }
+}
+
+/// The YuNet loaded last, and from where.
+static LOADED: Mutex<Option<(PathBuf, Arc<Detector>)>> = Mutex::new(None);
+
 /// The installed YuNet, loaded once and kept (a new one is loaded when the model folder changes).
 /// (also used by the background scan, which aligns faces by the detector's landmarks and finds faces in photos that have none)
-pub(crate) fn detector(s: &Session) -> std::result::Result<Arc<Detector>, String> {
-    static LOADED: Mutex<Option<(PathBuf, Arc<Detector>)>> = Mutex::new(None);
-    let home = s.face_models_dir.as_deref().ok_or("this build has nowhere to keep face models (the desktop app does)")?.join(YUNET_ID);
+pub(crate) fn detector(s: &Session) -> std::result::Result<Arc<Detector>, NoDetector> {
+    let home = s
+        .face_models_dir
+        .as_deref()
+        .ok_or_else(|| NoDetector::Unusable("this build has nowhere to keep face models (the desktop app does)".into()))?
+        .join(YUNET_ID);
     let path = home.join("model.onnx");
     // installing writes the manifest last, so a folder without one is not (yet) a model
     if !path.is_file() || !home.join("face-model.json").is_file() {
-        return Err(NOT_INSTALLED.into());
+        return Err(NoDetector::NotInstalled);
     }
     let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some((p, d)) = loaded.as_ref()
@@ -50,14 +76,139 @@ pub(crate) fn detector(s: &Session) -> std::result::Result<Arc<Detector>, String
     {
         return Ok(d.clone());
     }
-    let len = std::fs::metadata(&path).map_err(|e| format!("could not read the detector: {e}"))?.len();
+    let len = std::fs::metadata(&path).map_err(|e| NoDetector::Unusable(format!("could not read the detector: {e}")))?.len();
     if len > MAX_MODEL_BYTES {
-        return Err("the detector's file is far bigger than YuNet: remove it in Settings > Faces and download it again".into());
+        return Err(NoDetector::Unusable("the detector's file is far bigger than YuNet: remove it in Settings > Faces and download it again".into()));
     }
-    let bytes = std::fs::read(&path).map_err(|e| format!("could not read the detector: {e}"))?;
-    let d = Arc::new(Detector::new(&bytes).map_err(|e| format!("{e}: remove the detector in Settings > Faces and download it again"))?);
+    let bytes = std::fs::read(&path).map_err(|e| NoDetector::Unusable(format!("could not read the detector: {e}")))?;
+    let d = Arc::new(
+        Detector::new(&bytes).map_err(|e| NoDetector::Unusable(format!("{e}: remove the detector in Settings > Faces and download it again")))?,
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let net = d.clone();
+        offer_gpu(s, "detection", move |gpu| net.accelerate(gpu, true));
+    }
     *loaded = Some((path, d.clone()));
     Ok(d)
+}
+
+/// Where a face model runs, for Settings ▸ Faces and `faces.gpu`.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GpuState {
+    /// The background check is still running.
+    pub checking: bool,
+    /// The GPU it runs on; `None` when it runs on the CPU.
+    pub device: Option<String>,
+    /// Why it runs on the CPU.
+    pub why: Option<String>,
+}
+
+/// Each model's [`GpuState`], by what it does ("detection", "recognition").
+static GPU_STATE: Mutex<Vec<(&'static str, GpuState)>> = Mutex::new(Vec::new());
+
+pub(crate) fn gpu_state(what: &str) -> Option<GpuState> {
+    GPU_STATE.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(w, _)| *w == what).map(|(_, st)| st.clone())
+}
+
+fn set_gpu_state(what: &'static str, st: GpuState) {
+    let mut all = GPU_STATE.lock().unwrap_or_else(PoisonError::into_inner);
+    match all.iter_mut().find(|(w, _)| *w == what) {
+        Some((_, old)) => *old = st,
+        None => all.push((what, st)),
+    }
+}
+
+/// The user chose the CPU for face models (Settings ▸ Faces).
+pub(crate) fn cpu_only(s: &Session) -> bool {
+    s.face_models_dir.as_deref().is_some_and(|d| super::face_models::read_settings(d).cpu_only)
+}
+
+/// Check in the background whether the GPU runs a face model faster than the CPU and gives its results; the model
+/// runs on the CPU meanwhile, and stays there when the GPU is off, missing, wrong or slower, or the user chose the CPU.
+/// The check shows in the activity stack while it runs.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn offer_gpu(
+    s: &Session,
+    what: &'static str,
+    attach: impl FnOnce(Arc<dyn lightcraft_faces::net::Accelerator>) -> std::result::Result<(), String> + Send + 'static,
+) {
+    if cpu_only(s) {
+        set_gpu_state(what, GpuState { why: Some("the CPU is chosen in Settings".into()), ..GpuState::default() });
+        return;
+    }
+    let task = s.activity.start("facesGpu", "Checking the GPU for faces", crate::activity::Cancel::No);
+    task.detail(what);
+    set_gpu_state(what, GpuState { checking: true, ..GpuState::default() });
+    let spawned = std::thread::Builder::new().name(format!("faces-gpu-{what}")).spawn(move || {
+        let _task = task;
+        let gpu = match lightcraft_gpu::faces::accelerator() {
+            Ok(gpu) => gpu,
+            Err(why) => {
+                log::info!("faces: {what} runs on the CPU ({why})");
+                return set_gpu_state(what, GpuState { why: Some(why), ..GpuState::default() });
+            }
+        };
+        let device = lightcraft_faces::net::Accelerator::device(&*gpu);
+        match attach(gpu) {
+            Ok(()) => {
+                log::info!("faces: {what} runs on {device}");
+                set_gpu_state(what, GpuState { device: Some(device), ..GpuState::default() });
+            }
+            Err(why) => {
+                log::info!("faces: {what} stays on the CPU: {why}");
+                set_gpu_state(what, GpuState { why: Some(why), ..GpuState::default() });
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("faces: could not check the GPU for {what}: {e}");
+        set_gpu_state(what, GpuState { why: Some(format!("could not check the GPU: {e}")), ..GpuState::default() });
+    }
+}
+
+/// `faces.gpu`: where the face models run, and the switch that keeps them on the CPU.
+fn gpu(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.gpu";
+    if let Some(cpu) = p.get("cpuOnly") {
+        let cpu = cpu.as_bool().ok_or_else(|| bad(C, "`cpuOnly` is true or false"))?;
+        let dir = s.face_models_dir.clone().ok_or_else(|| bad(C, "this build has nowhere to keep face models (the desktop app does)"))?;
+        super::face_models::set_cpu_only(&dir, cpu)?;
+        let detector = LOADED.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|(_, d)| d.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let embedder = s.faces.embedder.as_ref().map(|(_, e)| e.clone());
+        #[cfg(target_arch = "wasm32")]
+        let embedder: Option<Arc<lightcraft_faces::runtime::Embedder>> = None;
+        if cpu {
+            for (what, net) in [("detection", detector.as_ref().map(|d| d.net())), ("recognition", embedder.as_ref().map(|e| e.net()))] {
+                if let Some(net) = net {
+                    net.detach();
+                }
+                set_gpu_state(what, GpuState { why: Some("the CPU is chosen in Settings".into()), ..GpuState::default() });
+            }
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if let Some(d) = detector {
+                    offer_gpu(s, "detection", move |gpu| d.accelerate(gpu, true));
+                }
+                if let Some(e) = embedder {
+                    offer_gpu(s, "recognition", move |gpu| e.accelerate(gpu, true).map_err(|e| e.to_string()));
+                }
+            }
+        }
+    }
+    Ok(gpu_json(s))
+}
+
+/// What `faces.gpu` and `faces.models.list` say about the GPU.
+pub(crate) fn gpu_json(s: &Session) -> Value {
+    json!({
+        "cpuOnly": cpu_only(s),
+        "detection": gpu_state("detection"),
+        "recognition": gpu_state("recognition"),
+    })
 }
 
 fn face_json(f: &Face) -> Value {
@@ -103,10 +254,10 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
         nms_iou: p.get("nmsIou").and_then(Value::as_f64).map_or(defaults.nms_iou, |v| v as f32),
         max_faces: p.get("maxFaces").and_then(Value::as_u64).map_or(defaults.max_faces, |v| usize::try_from(v).unwrap_or(defaults.max_faces)),
     };
-    let detector = detector(s).map_err(|e| bad(C, e))?;
+    let detector = detector(s).map_err(|e| e.into_error(C))?;
     let started = Instant::now();
     let (mut results, mut ops) = (Vec::new(), Vec::new());
-    for id in s.targets(p) {
+    for id in s.targets(p)? {
         let (rgb, width, height) = match render_rgb(s, id, LOOK_EDGE) {
             Ok(r) => r,
             Err(e) => {
@@ -147,15 +298,26 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![cmd!(
-        "faces.detect",
-        "Detect Faces",
-        ["Photo"],
-        None,
-        "{ids?, apply?: bool (default true), score?: 0.6, nmsIou?: 0.3, maxFaces?} → {photos: [{id, faces: [{rect, score, landmarks}]}]}. Finds faces with the YuNet detector (download it first: `faces.models.download {id: \"yunet-2023mar\"}`) and, unless `apply` is false, adds them as unnamed face regions (one undo step), replacing earlier detections but never regions from XMP or ones you named; the sidecar is not touched",
-        has_selection,
-        detect
-    )]
+    vec![
+        cmd!(
+            "faces.detect",
+            "Detect Faces",
+            ["Photo"],
+            None,
+            "{ids?, apply?: bool (default true), score?: 0.6, nmsIou?: 0.3, maxFaces?} → {photos: [{id, faces: [{rect, score, landmarks}]}]}. Finds faces with the YuNet detector (download it first: `faces.models.download {id: \"yunet-2023mar\"}`) and, unless `apply` is false, adds them as unnamed face regions (one undo step), replacing earlier detections but never regions from XMP or ones you named; the sidecar is not touched",
+            has_selection,
+            detect
+        ),
+        cmd!(
+            query "faces.gpu",
+            "Face Models on the GPU",
+            [],
+            None,
+            "{cpuOnly?: bool} → {cpuOnly, detection, recognition}: where the face models run, each as {checking, device, why} (null until it is loaded). The GPU is used only after a background check shows it gives the CPU's results faster; `cpuOnly: true` keeps every face model on the CPU (Settings ▸ Faces), `false` checks the GPU again",
+            always,
+            gpu
+        ),
+    ]
 }
 
 #[cfg(test)]

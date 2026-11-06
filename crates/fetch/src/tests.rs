@@ -86,6 +86,9 @@ fn handle(mut s: TcpStream, hits: &AtomicUsize) {
             b.extend_from_slice(&[7u8; 5000]);
             send(&mut s, "200 OK", "", &b)
         }
+        "signedchunk" => {
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n+5\r\nhello\r\n0\r\n\r\n");
+        }
         "chunked" => {
             let _ = s.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
             for c in body.chunks(70_001) {
@@ -210,6 +213,28 @@ fn resumes_partial_files_and_restarts_bad_ones() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A link planted at the partial download's name is removed, never written or appended through: the file it points
+/// to keeps its bytes and the download completes (issue #1502).
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_partial_name_is_never_written_through() {
+    let srv = server();
+    let dir = tmp("part-link");
+    std::fs::create_dir_all(&dir).unwrap();
+    let victim = dir.join("victim.txt");
+    for target_len in [10usize, 0] {
+        std::fs::write(&victim, vec![b'k'; target_len.max(1)]).unwrap();
+        let before = std::fs::read(&victim).unwrap();
+        let _ = std::fs::remove_file(dir.join("model.bin"));
+        let _ = std::fs::remove_file(part_path(&dir, "model.bin"));
+        std::os::unix::fs::symlink(&victim, part_path(&dir, "model.bin")).unwrap();
+        run(&[pinned()], &[format!("{}/good", srv.base)], &dir, &AtomicBool::new(false)).0.unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), before, "the linked file is untouched");
+        assert_eq!(std::fs::read(dir.join("model.bin")).unwrap(), payload());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_416_or_a_bad_complete_part_starts_over() {
     let srv = server();
@@ -224,6 +249,16 @@ fn a_416_or_a_bad_complete_part_starts_over() {
     std::fs::write(part_path(&dir, "model.bin"), vec![1u8; 300_000]).unwrap();
     run(&[pinned()], &[format!("{}/good", srv.base)], &dir, &AtomicBool::new(false)).0.unwrap();
     assert_eq!(std::fs::read(dir.join("model.bin")).unwrap(), payload());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn signed_chunk_size_is_rejected() {
+    let srv = server();
+    let dir = tmp("signedchunk");
+    let f = FileSpec { name: "vocab.json", size: None, sha256: None, max: 1 << 20 };
+    let r = run(&[f], &[format!("{}/signedchunk", srv.base)], &dir, &AtomicBool::new(false)).0;
+    assert!(r.is_err(), "a chunk size of `+5` was accepted");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -313,6 +348,10 @@ fn content_ranges() {
     assert_eq!(parse_content_range("bytes 0-0/*"), Some((0, None)));
     assert_eq!(parse_content_range("bytes 9-1/300"), None);
     assert_eq!(parse_content_range("items 1-2/3"), None);
+    assert_eq!(parse_content_range("bytes +100-+299/+300"), None);
+    assert_eq!(parse_content_range("bytes 100-+299/300"), None);
+    assert_eq!(parse_content_range("bytes 100-299/+300"), None);
+    assert_eq!(parse_content_range("bytes 1-/3"), None);
 }
 
 /// A bearer token goes only to https, only to the host the download began at, and only when there is one.

@@ -1,0 +1,18 @@
+{
+  "format": "lightcraft.slideshowTemplate",
+  "version": 1,
+  "name": "Shooting Data",
+  "description": "A dark slate backdrop with the exposure, ISO and focal length, then the camera and lens, under each photo.",
+  "playback": {"slideDuration": 5, "fadeDuration": 0.8, "fadeColor": null, "randomOrder": false, "repeat": true},
+  "layout": {
+    "linkMargins": false, "marginLeft": 0.05, "marginRight": 0.05, "marginTop": 0.05, "marginBottom": 0.15,
+    "backdropColor": "#1d2126", "colorWash": true, "washColor": "#3a4550", "washOpacity": 0.7, "washAngle": 90
+  },
+  "overlays": {
+    "texts": [
+      {"text": "{exposure}   ISO {iso}   {focal}", "size": 0.034, "color": "#e6e8ea", "opacity": 1, "anchor": "bottom", "offsetX": 0, "offsetY": -0.062, "relativeTo": "slide", "shadow": false},
+      {"text": "{camera}   {lens}", "size": 0.026, "color": "#9aa4ae", "opacity": 1, "anchor": "bottom", "offsetX": 0, "offsetY": -0.024, "relativeTo": "slide", "shadow": false}
+    ]
+  },
+  "titles": {}
+}

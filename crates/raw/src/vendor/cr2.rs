@@ -19,11 +19,13 @@
 //! - `ColorBalance` (maker note `0x4001`): as-shot `RGGB` levels at a model-dependent offset; we probe the known
 //!   offsets and accept the first plausible quadruple. The array is 16-bit words; some models store it as UNDEFINED
 //!   bytes (ColorData versions -3 and -4), which are paired up in the maker note's byte order first.
+//! - The same array lists the levels of the camera's white-balance presets, each with the colour temperature Canon
+//!   gives it ([`kelvin_presets_from_color_data`]): a Kelvin scale for a body without colour matrices.
 //! - sRAW / mRAW (raw IFD tag `0xc6c5` = 4) hold subsampled YCbCr instead of a mosaic: see [`sraw`].
 
 mod sraw;
 
-use super::{black_from_columns, white_from_data};
+use super::{active_rows, black_from_columns, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::image::chunk_bytes;
@@ -37,6 +39,10 @@ const SRAW_YCC: u32 = 4;
 const CR2_CFA_PATTERN: u16 = 0xc5e0;
 const SENSOR_INFO: u16 = 0x00e0;
 const COLOR_BALANCE: u16 = 0x4001;
+/// ShotInfo, whose value 7 is the white-balance setting.
+const SHOT_INFO: u16 = 0x0004;
+/// WBInfo, the PowerShot G9's preset levels (it writes no `ColorData`).
+const WB_INFO: u16 = 0x0029;
 
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
     tiff.ifds.get(3).or_else(|| tiff.ifds.iter().rev().find(|i| i.contains(CR2_SLICE)))
@@ -65,21 +71,84 @@ fn words(v: &Value, order: ByteOrder) -> Vec<u64> {
     }
 }
 
+/// WB multipliers (R, G, B; G = 1) from one set of levels, when they are plausible.
+fn wb_from_levels(r: f32, g1: f32, g2: f32, b: f32) -> Option<[f32; 3]> {
+    if g1 < 256.0 || g2 < 256.0 || r < 64.0 || b < 64.0 || g1 > 16384.0 || (g1 - g2).abs() > 0.05 * g1 {
+        return None;
+    }
+    let g = (g1 + g2) / 2.0;
+    let (mr, mb) = (r / g, b / g);
+    ((0.25..6.0).contains(&mr) && (0.25..6.0).contains(&mb)).then_some([mr, 1.0, mb])
+}
+
 /// As-shot WB multipliers (R, G, B; G = 1) from the ColorBalance array.
 fn wb_from_color_balance(v: &[u64]) -> Option<[f32; 3]> {
     for off in [63usize, 25, 24, 34, 71, 85, 105, 69, 77] {
         let q = v.get(off..off + 4)?;
-        let (r, g1, g2, b) = (q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32);
-        if g1 < 256.0 || g2 < 256.0 || r < 64.0 || b < 64.0 || g1 > 16384.0 || (g1 - g2).abs() > 0.05 * g1 {
-            continue;
-        }
-        let g = (g1 + g2) / 2.0;
-        let (mr, mb) = (r / g, b / g);
-        if (0.25..6.0).contains(&mr) && (0.25..6.0).contains(&mb) {
-            return Some([mr, 1.0, mb]);
+        if let Some(wb) = wb_from_levels(q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32) {
+            return Some(wb);
         }
     }
     None
+}
+
+/// Where the planckian white-balance presets sit in `ColorData`, by `ColorDataVersion` (word 0, signed): the word
+/// index of each preset's `R G G B` levels and of its colour temperature. Daylight, Shade, Cloudy, Tungsten and
+/// Flash, in that order. Fluorescent is left out (a green light off the locus) and so is the Kelvin row (it holds the
+/// dial's last setting, and on some bodies a temperature that doesn't match its own levels: 6036 K with the camera at
+/// 5500 K on the PowerShot G1 X Mark III, Daylight's levels at 5213 K on the EOS 2000D). Positions from the ExifTool
+/// Canon tag-name documentation's `ColorData5` / `ColorData8` tables, confirmed with ExifTool run as a black-box tool
+/// on files of each version: -4 on a PowerShot G1 X Mark III (`ColorData5`: 8-word records, the second record after
+/// Daylight a repeat of it), 13, 14 and 15 on the CC0 corpus samples of the EOS 5D Mark IV, 2000D and 6D Mark II
+/// (`ColorData8`: 5-word records). Other versions give no presets.
+fn preset_rows(version: i16) -> Option<[(usize, usize); 5]> {
+    match version {
+        -4 => Some([(95, 102), (111, 118), (119, 126), (127, 134), (151, 158)]),
+        13..=15 => Some([(133, 137), (138, 142), (143, 147), (148, 152), (163, 167)]),
+        _ => None,
+    }
+}
+
+/// The camera's planckian white-balance presets from the `ColorData` words ([`preset_rows`]) as a Kelvin curve;
+/// `None` for an unknown version, a short array or presets that don't make a curve.
+fn kelvin_presets_from_color_data(v: &[u64]) -> Option<crate::kelvin_presets::KelvinPresets> {
+    let version = *v.first()? as u16 as i16;
+    let rows = preset_rows(version)?;
+    let mut points = Vec::with_capacity(rows.len());
+    for (at, temp_at) in rows {
+        let q = v.get(at..at + 4)?;
+        let temp = *v.get(temp_at)? as f32;
+        if let Some(wb) = wb_from_levels(q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32)
+            && (1000.0..=20000.0).contains(&temp)
+        {
+            points.push((temp, wb));
+        }
+    }
+    crate::kelvin_presets::KelvinPresets::from_unordered(points)
+}
+
+/// As-shot WB multipliers of a body without `ColorData` (the PowerShot G9): the WBInfo row of the preset that
+/// ShotInfo's white-balance value names. WBInfo is int32 values in the maker note's byte order, four per preset in
+/// G R B G order, at the rows the ExifTool Canon tag-name documentation gives (2 Auto, 10 Daylight, 18 Cloudy,
+/// 26 Tungsten, 34 Fluorescent, 50 Flash, 58 Underwater, 66 Custom 1, 74 Custom 2); other settings (14, Daylight
+/// Fluorescent, has no documented row) give none. Measured on the CC0 file IMG_1188.CR2 (Custom 1, row 66:
+/// 848 1747 1676 848), whose camera JPEG's neutral areas imply the same gains within 0.1 %.
+fn wb_from_wb_info(m: &makernote::MakerNote) -> Option<[f32; 3]> {
+    let row = match m.ifd.u64s(SHOT_INFO)?.get(7)? {
+        0 => 2,
+        1 => 10,
+        2 => 18,
+        3 => 26,
+        4 => 34,
+        5 => 50,
+        15 => 66,
+        16 => 74,
+        17 => 58,
+        _ => return None,
+    };
+    let b = m.ifd.bytes(WB_INFO)?;
+    let level = |i: usize| Some(m.order.u32(b.get(4 * (row + i)..4 * (row + i + 1))?.try_into().ok()?) as i32 as f32);
+    wb_from_levels(level(1)?, level(0)?, level(3)?, level(2)?)
 }
 
 /// The optically black columns left of the image area: from column 2 up to two columns before the first column
@@ -129,7 +198,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let src = chunk_bytes(bytes, &chunk).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
     let (fw, fh, nc, prec) = ljpeg::frame_info(src)?;
     let frame = match mode {
-        Mode::Full => Some(ljpeg::decode(src, (fw * fh * nc).min(crate::MAX_SAMPLES))?),
+        Mode::Full => {
+            let total = (fw as u64)
+                .checked_mul(fh as u64)
+                .and_then(|v| v.checked_mul(nc as u64))
+                .filter(|t| *t > 0 && *t <= crate::MAX_SAMPLES as u64)
+                .ok_or_else(|| RawError::Corrupt("bad CR2 frame size".into()))?;
+            Some(ljpeg::decode(src, total as usize)?)
+        }
         Mode::Header => None,
     };
     let total = match &frame {
@@ -154,7 +230,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             v.push(s[2] as usize);
             v
         }
-        None => vec![fw * nc],
+        None => {
+            let w = (fw as u64).checked_mul(nc as u64).ok_or_else(|| RawError::Corrupt("bad CR2 frame size".into()))?;
+            vec![w as usize]
+        }
     };
     let width: usize = widths.iter().sum();
     if width == 0 || total % width != 0 {
@@ -187,9 +266,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             active = Rect::new(l, tp, r - l + 1, b - tp + 1);
         }
     }
-    let wb = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order))).and_then(|v| wb_from_color_balance(&v));
+    let color_data = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order)));
+    let kelvin_presets = color_data.as_deref().and_then(kelvin_presets_from_color_data);
+    let wb = color_data.as_deref().and_then(wb_from_color_balance).or_else(|| wb_from_wb_info(mn.as_ref()?));
     let cfa = cfa_from_tag(raw.u64(CR2_CFA_PATTERN)).unwrap_or_else(|| Cfa::bayer_static("RGGB"));
-    let white = white_from_data(&data, prec as u32);
+    let white = white_from_data(&active_rows(&data, width, active), prec as u32);
     let black = match masked_columns(&data, width, active, white) {
         cols if cols.len() >= 2 => black_from_columns(&data, width, cols, active.y..active.y + active.height, active),
         _ => BlackLevel::uniform(0.0),
@@ -210,11 +291,13 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area: active,
         crop: Rect::new(0, 0, active.width, active.height),
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets, ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
+        pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         metadata,
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -233,6 +316,11 @@ pub(crate) mod tests {
     /// Like [`synthetic_cr2`], with `note` as the Exif maker note (bytes as stored).
     fn synthetic_cr2_note(w: usize, h: usize, slices: Option<[u16; 3]>, note: Option<Vec<u8>>) -> (Vec<u8>, Vec<u16>) {
         let img: Vec<u16> = (0..w * h).map(|i| 1024 + ((i * 7919) % 12000) as u16).collect();
+        (synthetic_cr2_of(&img, w, h, slices, note), img)
+    }
+
+    /// A synthetic CR2 whose sensor samples are `img` (`w`×`h`, 14-bit), with `note` as the Exif maker note.
+    fn synthetic_cr2_of(img: &[u16], w: usize, h: usize, slices: Option<[u16; 3]>, note: Option<Vec<u8>>) -> Vec<u8> {
         let widths: Vec<usize> = match slices {
             Some([n, sw, last]) => {
                 let mut v = vec![sw as usize; n as usize];
@@ -269,10 +357,9 @@ pub(crate) mod tests {
         }
         ifd3.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![enc] });
         // (real files also carry a "CR\x02\0" signature at offset 8; probe recognises the structure without it)
-        let bytes = TiffWriter::new(ByteOrder::Little, false)
+        TiffWriter::new(ByteOrder::Little, false)
             .write(&[ifd0, IfdBuilder::new().with(1, Value::Short(vec![0])), IfdBuilder::new().with(1, Value::Short(vec![0])), ifd3])
-            .unwrap();
-        (bytes, img)
+            .unwrap()
     }
 
     #[test]
@@ -352,13 +439,13 @@ pub(crate) mod tests {
         assert!(masked_columns(&[], w, active, 15000.0).is_empty());
     }
 
-    /// A maker note holding only `ColorData` (`0x4001`) as `ty` (3 = SHORT, 7 = UNDEFINED) with `n` values, a plain
-    /// IFD whose value offset is relative to the TIFF header (patched once the note's position is known).
-    fn note_with_color_data(ty: u16, data: &[u8]) -> Vec<u8> {
+    /// A maker note holding only `tag` as `ty` (3 = SHORT, 7 = UNDEFINED) with `data`, a plain IFD whose value
+    /// offset is relative to the TIFF header (patched by [`patch_note`] once the note's position is known).
+    fn note_with(tag: u16, ty: u16, data: &[u8]) -> Vec<u8> {
         let count = if ty == 3 { data.len() / 2 } else { data.len() } as u32;
         let mut note = Vec::new();
         note.extend_from_slice(&1u16.to_le_bytes());
-        note.extend_from_slice(&COLOR_BALANCE.to_le_bytes());
+        note.extend_from_slice(&tag.to_le_bytes());
         note.extend_from_slice(&ty.to_le_bytes());
         note.extend_from_slice(&count.to_le_bytes());
         note.extend_from_slice(&0u32.to_le_bytes()); // value offset, patched below
@@ -367,13 +454,79 @@ pub(crate) mod tests {
         note
     }
 
-    fn decode_with_color_data(ty: u16, data: &[u8]) -> RawImage {
-        let (mut bytes, _) = synthetic_cr2_note(64, 10, None, Some(note_with_color_data(ty, data)));
-        let tiff = Tiff::parse(&bytes).unwrap();
+    fn patch_note(bytes: &mut [u8]) {
+        let tiff = Tiff::parse(bytes).unwrap();
         let e = tiff.exif().unwrap().get(t::MAKER_NOTE).unwrap();
         let off = e.offset as usize;
         bytes[off + 10..off + 14].copy_from_slice(&(e.offset as u32 + 18).to_le_bytes());
+    }
+
+    fn decode_with_color_data(ty: u16, data: &[u8]) -> RawImage {
+        let (mut bytes, _) = synthetic_cr2_note(64, 10, None, Some(note_with(COLOR_BALANCE, ty, data)));
+        patch_note(&mut bytes);
         crate::decode(&bytes).unwrap()
+    }
+
+    /// A maker note of `entries` (tag, TIFF type, value bytes), each value stored after the IFD, decoded; the value
+    /// offsets (relative to the TIFF header) are patched once the note's position is known.
+    fn decode_with_note(entries: &[(u16, u16, Vec<u8>)]) -> RawImage {
+        let ifd_len = 2 + 12 * entries.len() + 4;
+        let (mut note, mut data, mut at) = (Vec::new(), Vec::new(), Vec::new());
+        note.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, ty, value) in entries {
+            let count = if *ty == 3 { value.len() / 2 } else { value.len() } as u32;
+            note.extend_from_slice(&tag.to_le_bytes());
+            note.extend_from_slice(&ty.to_le_bytes());
+            note.extend_from_slice(&count.to_le_bytes());
+            at.push((note.len(), ifd_len + data.len()));
+            note.extend_from_slice(&0u32.to_le_bytes());
+            data.extend_from_slice(value);
+        }
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.extend_from_slice(&data);
+        let (mut bytes, _) = synthetic_cr2_note(64, 10, None, Some(note));
+        let tiff = Tiff::parse(&bytes).unwrap();
+        let off = tiff.exif().unwrap().get(t::MAKER_NOTE).unwrap().offset as usize;
+        for (field, value) in at {
+            bytes[off + field..off + field + 4].copy_from_slice(&((off + value) as u32).to_le_bytes());
+        }
+        crate::decode(&bytes).unwrap()
+    }
+
+    /// Issue #1273: the PowerShot G9 has no `ColorData`; its preset levels are WBInfo (`0x0029`: BYTE, int32 values,
+    /// four per preset in G R B G order), and ShotInfo (`0x0004`) value 7 says which preset was used (15 = Custom 1,
+    /// row 66: 848 1747 1676 848 on the CC0 file IMG_1188.CR2).
+    #[test]
+    fn white_balance_from_wb_info_when_there_is_no_color_data() {
+        let shot_info = |wb: u16| {
+            let mut v = [0u16; 34];
+            v[7] = wb;
+            v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()
+        };
+        let mut rows = vec![0i32; 512];
+        rows[2..6].copy_from_slice(&[850, 1805, 1684, 850]);
+        rows[66..70].copy_from_slice(&[848, 1747, 1676, 848]);
+        rows[74..78].copy_from_slice(&[820, 1901, 4000, 820]);
+        rows[18..22].copy_from_slice(&[850, 1805, 6000, 850]);
+        let wb_info: Vec<u8> = rows.iter().flat_map(|x| x.to_le_bytes()).collect();
+        let wb = |si: u16| decode_with_note(&[(0x0004, 3, shot_info(si)), (0x0029, 1, wb_info.clone())]).wb_multipliers;
+        assert_eq!(wb(15), Some([1747.0 / 848.0, 1.0, 1676.0 / 848.0]));
+        assert_eq!(wb(0), Some([1805.0 / 850.0, 1.0, 1684.0 / 850.0]));
+        // each preset its own row (Custom 2: row 74); an empty row (Daylight here), an implausible one (Cloudy:
+        // B 7.1) or a value without a documented row (14) gives none
+        assert_eq!(wb(16), Some([1901.0 / 820.0, 1.0, 4000.0 / 820.0]));
+        assert_eq!(wb(1), None);
+        assert_eq!(wb(2), None);
+        assert_eq!(wb(14), None);
+        // without ShotInfo, or with WBInfo too short for the row
+        assert_eq!(decode_with_note(&[(0x0029, 1, wb_info.clone())]).wb_multipliers, None);
+        assert_eq!(decode_with_note(&[(0x0004, 3, shot_info(15)), (0x0029, 1, wb_info[..4 * 68].to_vec())]).wb_multipliers, None);
+        // ColorData, when it gives levels, wins
+        let mut color_data = vec![0u8; 2 * 120];
+        color_data[0..2].copy_from_slice(&[0xfd, 0xff]);
+        color_data[142..150].copy_from_slice(&[0xc4, 0x07, 0xe9, 0x02, 0xe9, 0x02, 0x69, 0x06]);
+        let both = decode_with_note(&[(0x0004, 3, shot_info(15)), (0x0029, 1, wb_info.clone()), (COLOR_BALANCE, 7, color_data)]);
+        assert_eq!(both.wb_multipliers, Some([1988.0 / 745.0, 1.0, 1641.0 / 745.0]));
     }
 
     /// `ColorData` stored as UNDEFINED bytes (versions -3 / -4: PowerShot, EOS M) gives the as-shot WB from word 71,
@@ -387,5 +540,99 @@ pub(crate) mod tests {
             let wb = decode_with_color_data(ty, &bytes).wb_multipliers.unwrap_or_else(|| panic!("type {ty}: no WB"));
             assert!((wb[0] - 1988.0 / 745.0).abs() < 1e-5 && wb[1] == 1.0 && (wb[2] - 1641.0 / 745.0).abs() < 1e-5, "type {ty}: {wb:?}");
         }
+    }
+
+    /// `ColorData` words of `version` with the planckian presets (R, B over G = 1024, Kelvin) at its
+    /// [`preset_rows`], a Fluorescent-like green row between them, and the as-shot levels at word 71 / 63.
+    fn color_data_with_presets(version: i16, presets: &[(u16, u16, u16)]) -> Vec<u64> {
+        let mut v = vec![0u64; 400];
+        v[0] = u64::from(version as u16);
+        for ((at, temp_at), &(r, b, k)) in preset_rows(version).unwrap().into_iter().zip(presets) {
+            v[at..at + 4].copy_from_slice(&[r.into(), 1024, 1024, b.into()]);
+            v[temp_at] = k.into();
+        }
+        v
+    }
+
+    /// Issue #157 of a downstream fork: the PowerShot G1 X Mark III (`ColorData` -4) gets a Kelvin curve from its
+    /// Daylight, Shade, Cloudy, Tungsten and Flash presets (levels and temperatures as its files carry them), which
+    /// puts a preset's own levels at the preset's temperature; the EOS bodies of versions 13–15 likewise.
+    #[test]
+    fn kelvin_presets_from_color_data_presets() {
+        let g1x3 = [(1418, 1357, 5651), (1653, 1171, 7505), (1533, 1259, 6594), (963, 2016, 3174), (1807, 1080, 8529)];
+        let v = color_data_with_presets(-4, &g1x3);
+        let p = kelvin_presets_from_color_data(&v).unwrap();
+        for (r, b, k) in g1x3 {
+            let (t, tint) = p.temp_tint([r as f32 / 1024.0, 1.0, b as f32 / 1024.0]).unwrap();
+            assert!((t - k as f64).abs() < 1.0 && tint.abs() < 0.1, "{k}: {t} {tint}");
+        }
+        // levels between Tungsten and Daylight: a temperature between them
+        let (t, _) = p.temp_tint([1264.0 / 1024.0, 1.0, 1537.0 / 1024.0]).unwrap();
+        assert!((3174.0..5651.0).contains(&t), "{t}");
+        let eos = [(2013, 1479, 5200), (2300, 1280, 7000), (2153, 1374, 6000), (1442, 2089, 3200), (2203, 1371, 6156)];
+        for version in [13, 14, 15] {
+            assert!(kelvin_presets_from_color_data(&color_data_with_presets(version, &eos)).is_some(), "{version}");
+        }
+        // a preset that would turn the curve back (Flash cooler than Shade's levels say) is dropped, not fatal
+        let mut odd = g1x3;
+        odd[4] = (1500, 1300, 9000);
+        assert!(kelvin_presets_from_color_data(&color_data_with_presets(-4, &odd)).is_some());
+    }
+
+    /// Unknown versions, short or garbled arrays give no presets and never panic.
+    #[test]
+    fn kelvin_presets_from_hostile_color_data() {
+        let g1x3 = [(1418, 1357, 5651), (1653, 1171, 7505), (1533, 1259, 6594), (963, 2016, 3174), (1807, 1080, 8529)];
+        let good = color_data_with_presets(-4, &g1x3);
+        let mut other = good.clone();
+        other[0] = u64::from(-3i16 as u16);
+        assert!(kelvin_presets_from_color_data(&other).is_none(), "unverified version");
+        assert!(kelvin_presets_from_color_data(&[]).is_none());
+        for len in [1, 96, 120, 157, 158] {
+            assert!(kelvin_presets_from_color_data(&good[..len]).is_none(), "{len}");
+        }
+        let mut zeros = good.clone();
+        for at in [102, 118, 126] {
+            zeros[at] = 0;
+        }
+        assert!(kelvin_presets_from_color_data(&zeros).is_none(), "two points left");
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for _ in 0..2000 {
+            let v: Vec<u64> = (0..200)
+                .map(|i| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    if i == 0 { [0xfffc, 13, 14, 15][(seed % 4) as usize] } else { seed % 70000 }
+                })
+                .collect();
+            let _ = kelvin_presets_from_color_data(&v);
+        }
+        // through a whole decode, ColorData as UNDEFINED bytes
+        let bytes: Vec<u8> = good.iter().flat_map(|&w| (w as u16).to_le_bytes()).collect();
+        assert!(decode_with_color_data(7, &bytes).color.kelvin_presets.is_some());
+        assert!(decode_with_color_data(7, &bytes[..200]).color.kelvin_presets.is_none());
+    }
+
+    /// Masked rows above the image full of samples at 16383 (EOS 50D, issue #1272): the white level is the image's
+    /// own saturation plateau, not the edge of that strip, so clipped highlights still reach 1.0.
+    #[test]
+    fn white_from_active_area_only() {
+        let (w, h, top, left) = (64, 40, 4, 8);
+        let img: Vec<u16> = (0..w * h)
+            .map(|i| match (i % w, i / w) {
+                (_, y) if y < top => 16383,
+                (x, _) if x < left => 1024,
+                _ if i % 7 == 0 => 13433,
+                _ => 1024 + ((i * 7919) % 11000) as u16,
+            })
+            .collect();
+        // SensorInfo: width, height, three unused words, then the inclusive left/top/right/bottom borders
+        let si: Vec<u8> = [w, h, 0, 0, 0, left, top, w - 1, h - 1].iter().flat_map(|&v| (v as u16).to_le_bytes()).collect();
+        let mut bytes = synthetic_cr2_of(&img, w, h, None, Some(note_with(SENSOR_INFO, 3, &si)));
+        patch_note(&mut bytes);
+        let r = crate::decode(&bytes).unwrap();
+        assert_eq!(r.active_area, Rect::new(left, top, w - left, h - top));
+        assert!((13300.0..=13433.0).contains(&r.white[0]), "{:?}", r.white);
     }
 }

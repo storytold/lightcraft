@@ -1,4 +1,4 @@
-//! Olympus ORF — uncompressed variants.
+//! Olympus ORF — uncompressed and compressed variants.
 //!
 //! Sources: TIFF 6.0 (the `IIRO`/`MMOR` container is a TIFF with a different magic number), Exif 2.3 (`CFAPattern`,
 //! tag `0xa302`), the ExifTool Olympus tag-name documentation (maker-note sub-directories `0x2020` CameraSettings —
@@ -28,8 +28,9 @@
 //!   (last), the bit order and the pixel order were fixed by measurement on the CC0 files 2878 (E-300), 3540 (E-500)
 //!   and 3624 (E-330), as was the sensor-origin RGGB anchoring (the maker-note crop offsets are odd). The E-M5 Mark II
 //!   and PEN-F files were only checked for smoothness, not for CFA anchoring or black level.
-//! - Olympus's compressed ORF (most interchangeable-lens bodies since ~2008) is not decoded: no permissively
-//!   licensed description exists. It reports [`RawError::Unsupported`]; the embedded preview still works.
+//! - Olympus's compressed ORF (interchangeable-lens bodies and compacts using the 12/14-bit entropy coding stream):
+//!   decoded clean-room in `orfc.rs` from Olympus patents US7333035B2 and US7715639B2 (Takashi Ishikawa) and black-box
+//!   CC0 samples (OM-D E-M1, E-M10 Mark III). No GPL/LibRaw code was consulted. See `docs/orf-compression.md`.
 //! - The colour-filter layout is the file's Exif `CFAPattern`: GRBG on the E-1 and E-400, RGGB on the XZ-2, where
 //!   the colours of the decoded mosaic follow the embedded JPEG best with exactly that layout
 //!   (`corpus_orf_cfa_patterns`). The samples' active areas start at even offsets, so they can't tell whether the
@@ -54,6 +55,8 @@ const WB_RB: u16 = 0x0100;
 const BLACK: u16 = 0x0600;
 const MN_WB_RED: u16 = 0x1017;
 const MN_WB_BLUE: u16 = 0x1018;
+const MN_BLACK: u16 = 0x1012;
+const MN_VALID_BITS: u16 = 0x102c;
 const CROP: [u16; 4] = [0x0612, 0x0613, 0x0614, 0x0615];
 
 /// The Olympus maker note.
@@ -73,6 +76,17 @@ pub(crate) fn sub_ifd(bytes: &[u8], mn: &MakerNote, tag: u16) -> Option<Ifd> {
     };
     let opts = lightcraft_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
     lightcraft_tiff::parse_ifd_at(bytes, at, mn.order, mn.base, false, &opts).ok().map(|(i, _)| i)
+}
+
+/// Black level of a body without ImageProcessing: the main note's `0x1012` BlackLevel (the mean of its four values)
+/// in `0x102c` ValidBits units, scaled to the decoded `bits`. The E-10 states 32 at 10 bits, and its 12-bit samples
+/// bottom out at 124 to 132; the two-field compacts state 0 at 12 bits.
+fn maker_note_black(m: &MakerNote, bits: u32) -> Option<f32> {
+    let bits = bits.min(16);
+    let v = m.ifd.f64s(MN_BLACK).filter(|v| v.len() == 4)?;
+    let valid = m.ifd.u64(MN_VALID_BITS).and_then(|b| u32::try_from(b).ok()).filter(|b| (8..=bits).contains(b))?;
+    let level = v.iter().sum::<f64>() / 4.0 * f64::from(1u32 << (bits - valid));
+    (level >= 0.0 && level < f64::from(1u32 << bits) / 4.0).then_some(level as f32)
 }
 
 /// Unpack one row of 12-bit samples stored as little-endian 32-bit words read MSB-first.
@@ -186,6 +200,7 @@ fn field_rows(strips: &[(u64, u64)], w: usize, h: usize, file_len: usize) -> Opt
     Some(rows)
 }
 
+/// Decode an Olympus ORF container into a mosaic raw image, supporting uncompressed 16-bit, packed 12-bit, and compressed formats.
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
@@ -193,14 +208,16 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let (w, h) = (info.width as usize, info.height as usize);
     let n = w.checked_mul(h).filter(|n| *n > 0 && *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
     let chunks = info.chunks(bytes.len() as u64);
-    let total: u64 = chunks.iter().map(|c| c.len).sum();
+    let total = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len));
     let stated = cfa_from_exif(&tiff);
     let mut two_field = false;
-    let (mut data, bits) = if info.compression != 1 {
+    let mn = maker_note(bytes, &tiff);
+    let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
+    let (mut data, bits, from_word16) = if info.compression != 1 {
         return Err(RawError::Unsupported(format!("ORF compression {}", info.compression)));
     } else if total >= (n as u64) * 2 {
         let d = read_image(bytes, &info, tiff.order, Packing::Word16)?;
-        (d, 16)
+        (d, 16, true)
     } else if is_block16(w, n, total, chunks.len()) {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
         let stride = w / 10 * 16;
@@ -214,9 +231,26 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         } else {
             Vec::new()
         };
-        (RawData::U16(d), 12)
+        (RawData::U16(d), 12, false)
+    } else if let Some((params, stream)) = (|| {
+        let params = super::orfc::CompressionParameters::from_ifd(ip.as_ref()?, mn.as_ref())?;
+        let chunk = chunks.first()?;
+        let src = chunk_bytes(bytes, chunk)?;
+        if !super::orfc::validate_stream_header(src, params.header_prefix_len) {
+            return None;
+        }
+        let stream = src.get(params.header_prefix_len.saturating_add(2)..)?;
+        Some((params, stream))
+    })() {
+        let d = if mode == Mode::Full || stated.is_none() { super::orfc::decompress_stream(stream, w, h, &params)? } else { Vec::new() };
+        (RawData::U16(d), params.valid_bits, false)
     } else if total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+        // the strip as it is in the file (clipped at its end), not as its tag states it: one too short
+        // for the samples is a truncated file, refused before they are allocated
+        if (src.len() as u64).saturating_mul(8) < (n as u64).saturating_mul(12) {
+            return Err(RawError::Corrupt("ORF strip shorter than its samples".into()));
+        }
         // the depth is fixed here, so a header-only probe needs the samples only when the file doesn't state its
         // colour-filter layout
         let d = if mode == Mode::Full || stated.is_none() {
@@ -227,7 +261,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         } else {
             Vec::new()
         };
-        (RawData::U16(d), 12)
+        (RawData::U16(d), 12, false)
     } else if let Some(rows) = (info.bits() == 12 && info.samples_per_pixel == 1 && info.planar != 2 && info.offsets.len() == info.byte_counts.len())
         .then(|| field_rows(&info.offsets.iter().copied().zip(info.byte_counts.iter().copied()).collect::<Vec<_>>(), w, h, bytes.len()))
         .flatten()
@@ -247,16 +281,16 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         } else {
             Vec::new()
         };
-        (RawData::U16(d), 12)
+        (RawData::U16(d), 12, false)
     } else {
         return Err(RawError::Unsupported("Olympus compressed ORF".into()));
     };
     let RawData::U16(ref mut samples) = data else { return Err(RawError::Unsupported("float ORF".into())) };
-    let bits = if bits == 16 && samples.iter().step_by(7).filter(|v| *v & 15 != 0).count() * 700 <= n {
+    let bits = if from_word16 && bits == 16 && samples.iter().step_by(7).filter(|v| *v & 15 != 0).count() * 700 <= n {
         // 12-bit values stored in the top bits
         samples.par_iter_mut().for_each(|v| *v >>= 4);
         12
-    } else if bits == 16 {
+    } else if from_word16 && bits == 16 {
         let mx = samples.iter().step_by(31).max().copied().unwrap_or(0);
         if mx < 4096 {
             12
@@ -269,10 +303,13 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         bits
     };
 
-    let mn = maker_note(bytes, &tiff);
-    let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
     let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).map(|v| v as usize))) {
-        Some([Some(x), Some(y), Some(cw), Some(ch)]) if cw > 0 && ch > 0 && x + cw <= w && y + ch <= h => Rect::new(x, y, cw, ch),
+        // checked: the tags are file data; `x + cw` on a hostile value would wrap past the bounds
+        Some([Some(x), Some(y), Some(cw), Some(ch)])
+            if cw > 0 && ch > 0 && x.checked_add(cw).is_some_and(|end| end <= w) && y.checked_add(ch).is_some_and(|end| end <= h) =>
+        {
+            Rect::new(x, y, cw, ch)
+        }
         _ => Rect::new(0, 0, w, h),
     };
     let cfa = stated.unwrap_or_else(|| cfa_from_data(samples, w, active));
@@ -282,7 +319,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             let values = a.pattern.iter().map(|&c| [v[0], (v[1] + v[2]) / 2.0, v[3]][c as usize] as f32).collect();
             BlackLevel { repeat_rows: 2, repeat_cols: 2, values, ..Default::default() }
         }
-        _ => BlackLevel::uniform(0.0),
+        _ => BlackLevel::uniform(mn.as_ref().filter(|_| ip.is_none()).and_then(|m| maker_note_black(m, bits)).unwrap_or(0.0)),
     };
     let wb = ip
         .as_ref()
@@ -290,9 +327,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         .filter(|v| v.len() >= 2 && v[0] > 0.0 && v[1] > 0.0)
         .map(|v| [(v[0] / 256.0) as f32, 1.0, (v[1] / 256.0) as f32])
         .or_else(|| {
-            // two-field bodies: the red and blue gains lead the entries of the main maker note
-            let m = mn.as_ref().filter(|_| two_field)?;
-            let g = |tag| m.ifd.f64s(tag).and_then(|v| v.first().copied()).filter(|g| *g > 0.0);
+            // the red and blue gains lead the main note's entries 0x1017/0x1018 on the two-field compacts and on
+            // the E-10 (16-bit words, no ImageProcessing; 384 and 406 on its CC0 file 5424)
+            let m = mn.as_ref().filter(|_| two_field || ip.is_none())?;
+            let g = |tag| m.ifd.f64s(tag).and_then(|v| v.first().copied()).filter(|g| *g > 25.6 && *g < 2560.0);
             Some([(g(MN_WB_RED)? / 256.0) as f32, 1.0, (g(MN_WB_BLUE)? / 256.0) as f32])
         });
     let white = white_from_data(samples, bits);
@@ -315,8 +353,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         metadata,
+        lens_metadata: Default::default(),
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -344,6 +384,11 @@ mod tests {
 
     /// A minimal ORF with one strip in IFD0 and, optionally, an Exif `CFAPattern`.
     fn orf_with(w: u32, h: u32, bits: u16, strip: Vec<u8>, cfa_pattern: Option<&[u8]>) -> Vec<u8> {
+        orf_with_note(w, h, bits, strip, cfa_pattern, None)
+    }
+
+    /// [`orf_with`] plus an optional maker note blob in the Exif IFD.
+    fn orf_with_note(w: u32, h: u32, bits: u16, strip: Vec<u8>, cfa_pattern: Option<&[u8]>, note: Option<Vec<u8>>) -> Vec<u8> {
         let mut ifd = IfdBuilder::new();
         ifd.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
         ifd.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
@@ -352,15 +397,127 @@ mod tests {
         ifd.set(t::PHOTOMETRIC, Value::Short(vec![1]));
         ifd.set(t::MAKE, Value::Ascii("OLYMPUS IMAGING CORP.".into()));
         ifd.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![strip] });
-        if let Some(p) = cfa_pattern {
+        if cfa_pattern.is_some() || note.is_some() {
             let mut exif = IfdBuilder::new();
-            exif.set(EXIF_CFA_PATTERN, Value::Undefined(p.to_vec()));
+            if let Some(p) = cfa_pattern {
+                exif.set(EXIF_CFA_PATTERN, Value::Undefined(p.to_vec()));
+            }
+            if let Some(n) = note {
+                exif.set(t::MAKER_NOTE, Value::Undefined(n));
+            }
             ifd.set_child(t::EXIF_IFD, exif);
         }
         let mut b = TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap();
         b[2] = b'R';
         b[3] = b'O';
         b
+    }
+
+    /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow.
+    #[test]
+    fn strip_byte_counts_past_u64_max_do_not_overflow() {
+        let file = crate::vendor::tests::huge_strip_counts(orf(4, 2, 16, vec![0; 16]));
+        for mode in [Mode::Header, Mode::Full] {
+            let _ = super::decode(&file, mode);
+        }
+    }
+
+    /// An old-style little-endian Olympus maker note (`OLYMP\0`, version 1, then the IFD) of SHORT (type 3) or
+    /// UNDEFINED (type 7) entries. Values longer than four bytes follow the IFD; their offsets count from the TIFF
+    /// header, so `at` is where the note sits in the file.
+    fn olymp_note(at: usize, entries: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
+        let ifd_end = 8 + 2 + 12 * entries.len() + 4;
+        let (mut b, mut extra) = (b"OLYMP\0\x01\0".to_vec(), Vec::new());
+        b.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, typ, value) in entries {
+            b.extend_from_slice(&tag.to_le_bytes());
+            b.extend_from_slice(&typ.to_le_bytes());
+            b.extend_from_slice(&(if *typ == 3 { value.len() / 2 } else { value.len() } as u32).to_le_bytes());
+            if value.len() <= 4 {
+                let mut v = value.clone();
+                v.resize(4, 0);
+                b.extend_from_slice(&v);
+            } else {
+                b.extend_from_slice(&((at + ifd_end + extra.len()) as u32).to_le_bytes());
+                extra.extend_from_slice(value);
+            }
+        }
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&extra);
+        b
+    }
+
+    /// SHORT values, little-endian.
+    fn shorts(v: &[u16]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    /// A 16 × 4 ORF of 12-bit samples in 16-bit words with an [`olymp_note`] of `entries`, decoded.
+    fn decode_noted(entries: &[(u16, u16, Vec<u8>)]) -> RawImage {
+        let (w, h) = (16u32, 4u32);
+        let words: Vec<u8> = (0..w * h).flat_map(|i| (((200 + i * 37) % 4096) as u16).to_le_bytes()).collect();
+        let file = |at| orf_with_note(w, h, 16, words.clone(), Some(RGGB), Some(olymp_note(at, entries)));
+        let at = file(0).windows(6).position(|b| b == b"OLYMP\0").unwrap();
+        let bytes = file(at);
+        assert_eq!(bytes.windows(6).position(|b| b == b"OLYMP\0"), Some(at));
+        crate::decode(&bytes).unwrap()
+    }
+
+    /// An ImageProcessing sub-directory stored inline (old-style note) with one unrelated entry and no levels.
+    fn bare_image_processing() -> (u16, u16, Vec<u8>) {
+        let mut ifd = 1u16.to_le_bytes().to_vec();
+        ifd.extend_from_slice(&[0, 0, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+        ifd.extend_from_slice(&0u32.to_le_bytes());
+        (IMAGE_PROCESSING, 7, ifd)
+    }
+
+    /// Issue #1273: the E-10 (16-bit words, no ImageProcessing sub-directory) keeps its red and blue gains in
+    /// maker-note entries `0x1017`/`0x1018`, as the two-field compacts do.
+    #[test]
+    fn as_shot_white_balance_from_the_main_maker_note() {
+        let wb = |red: u16, blue: Option<u16>| {
+            let mut e = vec![(MN_WB_RED, 3, shorts(&[red, 64]))];
+            e.extend(blue.map(|b| (MN_WB_BLUE, 3, shorts(&[b, 64]))));
+            decode_noted(&e).wb_multipliers
+        };
+        assert_eq!(wb(384, Some(406)), Some([1.5, 1.0, 406.0 / 256.0]));
+        // both gains are needed, within 0.1 to 10 (25.6 to 2560 in 256 units)
+        assert_eq!(wb(384, None), None);
+        assert_eq!(wb(0, Some(406)), None);
+        assert_eq!(wb(25, Some(406)), None);
+        assert_eq!(wb(384, Some(2560)), None);
+        assert_eq!(wb(27, Some(2559)), Some([27.0 / 256.0, 1.0, 2559.0 / 256.0]));
+        assert_eq!(decode_noted(&[]).wb_multipliers, None);
+        // a body with ImageProcessing but without its levels doesn't fall back to these entries
+        let e = [bare_image_processing(), (MN_WB_RED, 3, shorts(&[384, 64])), (MN_WB_BLUE, 3, shorts(&[406, 64]))];
+        assert_eq!(decode_noted(&e).wb_multipliers, None);
+    }
+
+    /// Issue #1273: a body without ImageProcessing states its black level in the main note, `0x1012` (four
+    /// values) in `0x102c` ValidBits units: the E-10's 32 at 10 bits is 128 on its 12-bit samples. The two-field
+    /// compacts state 0 at 12 bits.
+    #[test]
+    fn black_level_from_the_main_maker_note() {
+        let black = |level: u16, valid: Option<u16>| {
+            let mut e = vec![(MN_BLACK, 3, shorts(&[level; 4]))];
+            e.extend(valid.map(|v| (MN_VALID_BITS, 3, shorts(&[v, 0]))));
+            let r = decode_noted(&e);
+            assert_eq!(r.bits, 12);
+            r.black.values
+        };
+        assert_eq!(black(32, Some(10)), vec![128.0]);
+        assert_eq!(black(0, Some(12)), vec![0.0]);
+        assert_eq!(black(32, Some(12)), vec![32.0]);
+        // the four values are averaged
+        let e = [(MN_BLACK, 3, shorts(&[30, 32, 32, 34])), (MN_VALID_BITS, 3, shorts(&[10, 0]))];
+        assert_eq!(decode_noted(&e).black.values, vec![128.0]);
+        // no ValidBits, ValidBits above the samples' depth, a level of a quarter of the range or more: no black
+        assert_eq!(black(32, None), vec![0.0]);
+        assert_eq!(black(32, Some(14)), vec![0.0]);
+        assert_eq!(black(256, Some(10)), vec![0.0]);
+        // ImageProcessing present (without BlackLevel2): the main note isn't read
+        let e = [bare_image_processing(), (MN_BLACK, 3, shorts(&[32; 4])), (MN_VALID_BITS, 3, shorts(&[10, 0]))];
+        assert_eq!(decode_noted(&e).black.values, vec![0.0]);
     }
 
     /// A 12-bit mosaic stored as 16-bit words: `site(cx, cy)` gives the four values of the 2×2 cell at (cx, cy).

@@ -34,6 +34,15 @@ use serde::Serialize;
 
 use crate::{Catalog, Op, Photo, PhotoId, Source};
 
+/// The Local records of some files ([`Catalog::local_records_of`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalRecords {
+    /// Only a record of having looked: nothing was changed on them and nothing refers to them.
+    pub untouched: Vec<PhotoId>,
+    /// Holding something of the person's, with their files.
+    pub kept: Vec<(PhotoId, String)>,
+}
+
 /// Default for how long a Local folder may go unbrowsed before its untouched records are
 /// forgotten (days).
 pub const DEFAULT_FORGET_DAYS: u32 = 30;
@@ -64,7 +73,8 @@ pub fn folder_of(p: &Photo) -> Option<String> {
         // `/` and `\` are both separators whatever the platform (a catalog can move between them)
         Source::File { path } => {
             let key = crate::query::folder_key(path);
-            key.rsplit_once('/').map(|(dir, _)| if dir.is_empty() { "/".to_string() } else { dir.to_string() })
+            // a drive or share root keeps its trailing `/` in its key (`c:/`, `//srv/share/`)
+            key.rsplit_once('/').map(|(dir, _)| if dir.is_empty() { "/".to_string() } else { crate::query::folder_key(&format!("{dir}/")) })
         }
         Source::Demo { .. } => None,
     }
@@ -176,6 +186,34 @@ impl Catalog {
         &self.browsed
     }
 
+    /// The Local records of `files` (paths as stored), for library photos about to point at
+    /// those files (a folder located where it was browsed, `folder.updateLocation`): a file has one
+    /// record, so the Local one gives way. Told apart: those that are only a record of having
+    /// looked (untouched, see the module docs, and nothing refers to them), which can go, and
+    /// those that hold something of the person's (a rating, an edit, a place in an album), with
+    /// their files. Records in Recently Deleted are not Local records to this.
+    pub fn local_records_of(&self, files: &HashSet<String>) -> LocalRecords {
+        let mut out = LocalRecords::default();
+        if files.is_empty() {
+            return out;
+        }
+        let referenced = self.referenced();
+        for p in self.photos.values().filter(|p| p.local && !p.deleted) {
+            let Source::File { path } = &p.source else { continue };
+            if !files.contains(path) {
+                continue;
+            }
+            if p.untouched_local() && !referenced.contains(&p.id) {
+                out.untouched.push(p.id);
+            } else {
+                out.kept.push((p.id, path.clone()));
+            }
+        }
+        out.untouched.sort_unstable();
+        out.kept.sort_unstable();
+        out
+    }
+
     /// Plan forgetting untouched Local records whose folder wasn't browsed for `days` days (as of
     /// `now`, ISO 8601). `in_use` keeps records the caller still needs. `days == 0` (never) or an
     /// unreadable `now` forgets nothing. See the module docs.
@@ -183,15 +221,7 @@ impl Catalog {
         let mut plan = ForgetPlan { now: now.to_string(), ..Default::default() };
         let now_s = crate::stacks::iso_seconds(now);
         let max_age = i64::from(days) * 86_400;
-        let mut referenced: HashSet<PhotoId> = HashSet::new();
-        for a in self.albums.values() {
-            referenced.extend(a.photos.iter().copied());
-            referenced.extend(a.cover);
-        }
-        for s in self.stacks.values() {
-            referenced.extend(s.photos.iter().copied());
-        }
-        referenced.extend(self.photos.values().filter_map(|p| p.copy_of));
+        let referenced = self.referenced();
         // the fingerprints are the costly part: work them out for the candidates in parallel
         let candidates: Vec<&Photo> = self
             .photos
@@ -237,6 +267,30 @@ impl Catalog {
         plan.unstamp = self.browsed.keys().filter(|f| !remaining.contains(*f)).cloned().collect();
         plan
     }
+
+    /// Of `ids`, the untouched Local records nothing refers to (no album, stack or virtual copy):
+    /// the ones [`Catalog::forget_local_plan`] could forget, whatever their folder's time.
+    pub fn forgettable_local(&self, ids: &[PhotoId]) -> Vec<PhotoId> {
+        let referenced = self.referenced();
+        let candidates: Vec<&Photo> =
+            ids.iter().filter(|id| !referenced.contains(id)).filter_map(|id| self.photos.get(id)).filter(|p| p.local).map(|p| &**p).collect();
+        let untouched = untouched_of(&candidates);
+        ids.iter().copied().filter(|id| untouched.contains(id)).collect()
+    }
+
+    /// Photos an album (as a member or its cover), a stack or a virtual copy refers to.
+    fn referenced(&self) -> HashSet<PhotoId> {
+        let mut referenced: HashSet<PhotoId> = HashSet::new();
+        for a in self.albums.values() {
+            referenced.extend(a.photos.iter().copied());
+            referenced.extend(a.cover);
+        }
+        for s in self.stacks.values() {
+            referenced.extend(s.photos.iter().copied());
+        }
+        referenced.extend(self.photos.values().filter_map(|p| p.copy_of));
+        referenced
+    }
 }
 
 /// A folder browsed at `at` is past the period (never when `days` is 0 or a time is unreadable).
@@ -279,6 +333,7 @@ impl Op {
             | Op::SetVersions { id, .. }
             | Op::SetHistory { id, .. }
             | Op::PushHistory { id, .. }
+            | Op::SetHistoryCursor { id, .. }
             | Op::SetCaptured { id, .. }
             | Op::SetAnalysis { id, .. }
             | Op::SetFile { id, .. }
