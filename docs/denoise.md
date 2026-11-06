@@ -223,7 +223,9 @@ One idle CPU workspace is retained, and cache costs reserve room for the blended
 
 The GPU executor uses our WGSL kernels through wgpu. It checks a real model's output
 against the CPU and falls back on errors, unsupported networks or a slower device.
-Setup has a time limit and a crash marker. Automatic selection estimates throughput
+Setup has a time limit and a crash marker that holds an operating-system lock while a set-up runs,
+so a second LightCraft process waits for that set-up instead of taking its marker for a crash.
+Automatic selection estimates throughput
 from a check tile; this estimate can choose imperfectly on unmeasured hardware.
 Settings offers Automatic, Graphics card and Processor. GPU tests cover supported
 synthetic networks against the scalar executor; a real-model test compares CPU/GPU.
