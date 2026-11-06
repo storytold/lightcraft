@@ -945,9 +945,7 @@ fn metadata_none_in_any_case_exports_no_metadata() {
     assert!(m.gps.is_none() && m.city.is_none(), "{m:?}");
 }
 
-/// A raw carries separate EXIF Make and LensMake, but import folds make + model into a single
-/// `camera` string and `export_metadata` writes only that string as Model: Make and LensMake are
-/// silently dropped from an exported JPEG.
+/// A raw's Exif Make, Model and LensMake reach an exported JPEG apart, as stitching tools read them.
 #[test]
 fn export_writes_camera_make_and_lens_make_to_exif() {
     let dir = temp_dir("export-raw-exif");
@@ -966,6 +964,7 @@ fn export_writes_camera_make_and_lens_make_to_exif() {
     let e = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "jpeg", "longEdge": 64, "metadata": "all"})), 1).unwrap();
     let back = lightcraft_meta::extract(&e.bytes);
     assert_eq!(back.make.as_deref(), Some("Canon"), "EXIF Make is missing: {back:?}");
+    assert_eq!(back.model.as_deref(), Some("EOS R5"), "EXIF Model holds the model alone: {back:?}");
     assert_eq!(back.lens_make.as_deref(), Some("Sigma"), "EXIF LensMake is missing: {back:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

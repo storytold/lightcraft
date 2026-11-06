@@ -7,6 +7,8 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
     let camera = [m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" ").trim().to_string();
     let meta = Meta {
         camera,
+        make: m.make.clone().unwrap_or_default(),
+        lens_make: m.lens_make.clone().unwrap_or_default(),
         // (a camera that writes no lens name, like Nikon's DSLRs, still says what range the lens covers)
         lens: m.lens_model.clone().or_else(|| m.lens_spec.and_then(lightcraft_meta::lens_spec_name)).unwrap_or_default(),
         focal_mm: m.focal_length.map(|f| f as f32),
