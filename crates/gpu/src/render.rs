@@ -870,12 +870,7 @@ pub fn render(
         .or_else(|| cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == plan.lin_key))
     {
         Some((_, b)) => b,
-        None => {
-            if colour_noise.is_none() {
-                colour_noise = lightcraft_pipeline::colour_noise(src, info, &plan).map(|n| (plan.noise_key, n));
-            }
-            Arc::new(linear(&mut cx, &sampled, info, &plan, &mut host, colour_noise.as_ref().map(|c| &c.1)))
-        }
+        None => linear_with_noise(&mut cx, (src, &sampled), info, &plan, &mut host, &mut colour_noise),
     };
     lap("wb/nr", &mut t, &mut cx);
 
@@ -1113,6 +1108,22 @@ fn to_texture(cx: &mut Cx<'_>, out: &Buf, w: usize, h: usize) -> Option<(Display
 /// Pixels whose alpha is not 255 (cheap: no early exit, so it vectorizes).
 fn unwritten(data: &[[u8; 4]]) -> usize {
     data.chunks(4096).filter(|c| c.iter().fold(255u8, |a, p| a & p[3]) != 255).map(|c| c.iter().filter(|p| p[3] != 255).count()).sum()
+}
+
+/// [`linear`], with the whole frame's noise model for the joint colour NR: `colour_noise` as
+/// cached, else measured now (`lightcraft_pipeline::colour_noise`) and kept there for the cache.
+fn linear_with_noise(
+    cx: &mut Cx<'_>,
+    (src, sampled): (&Arc<Rgb32f>, &Buf),
+    info: &SourceInfo,
+    plan: &Plan<'_>,
+    host: &mut Host,
+    colour_noise: &mut Option<(u64, JointNoise)>,
+) -> Arc<Buf> {
+    if colour_noise.is_none() {
+        *colour_noise = lightcraft_pipeline::colour_noise(src, info, plan).map(|n| (plan.noise_key, n));
+    }
+    Arc::new(linear(cx, sampled, info, plan, host, colour_noise.as_ref().map(|c| &c.1)))
 }
 
 /// The white-balanced, retouched, denoised image (`colour_noise`: see `denoise`).
