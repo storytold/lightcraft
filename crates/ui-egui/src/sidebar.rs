@@ -21,7 +21,7 @@ pub enum SidebarSection {
 impl SidebarSection {
     /// Every section, in the order a new library shows them.
     pub const ALL: [SidebarSection; 5] =
-        [SidebarSection::Albums, SidebarSection::Local, SidebarSection::ByDate, SidebarSection::Folders, SidebarSection::Keywords];
+        [SidebarSection::Albums, SidebarSection::Folders, SidebarSection::Local, SidebarSection::ByDate, SidebarSection::Keywords];
 
     /// The name commands, the saved UI state and widget ids (`sidebarSection:<id>`) use.
     pub const fn id(self) -> &'static str {
@@ -267,7 +267,30 @@ impl SidebarLayout {
             self.set_collapsed(section, true);
         }
     }
+
+    /// Bring an arrangement saved in order generation `saved` up to [`ORDER_VERSION`], once: a
+    /// layout that is exactly generation 0's usual order (whatever is hidden or folded) gets
+    /// Folders put just above Local; one the person arranged is left as it is. Callers record
+    /// [`ORDER_VERSION`] afterwards, so a Folders dragged back below Local stays there.
+    pub fn adopt_order_version(&mut self, saved: u32) {
+        if saved >= 1 || !self.0.iter().map(|s| s.id).eq(ORDER_0) {
+            return;
+        }
+        let Some(from) = self.0.iter().position(|s| s.id == SidebarSection::Folders) else { return };
+        let folders = self.0.remove(from);
+        let at = self.0.iter().position(|s| s.id == SidebarSection::Local).unwrap_or(from);
+        self.0.insert(at, folders);
+    }
 }
+
+/// The generation of the section order, saved as `UiState::sidebar_order_version`. Settings
+/// without it are generation 0, whose usual order had Folders below By Date; generation 1 lists
+/// Folders right under Albums, ahead of Local.
+pub const ORDER_VERSION: u32 = 1;
+
+/// The usual order of generation 0 (see [`ORDER_VERSION`]).
+const ORDER_0: [SidebarSection; 5] =
+    [SidebarSection::Albums, SidebarSection::Local, SidebarSection::ByDate, SidebarSection::Folders, SidebarSection::Keywords];
 
 #[cfg(test)]
 mod tests {
@@ -287,7 +310,7 @@ mod tests {
     #[test]
     fn a_new_sidebar_shows_every_section_open_in_the_usual_order() {
         let layout = SidebarLayout::default();
-        assert_eq!(order(&layout), [Albums, Local, ByDate, Folders, Keywords]);
+        assert_eq!(order(&layout), [Albums, Folders, Local, ByDate, Keywords]);
         assert!(layout.sections().iter().all(|s| !s.hidden && !s.collapsed));
         assert!(layout.is_default());
     }
@@ -339,10 +362,10 @@ mod tests {
         let mut layout = SidebarLayout::default();
         layout.set_collapsed(ByDate, true);
         layout.set_hidden(ByDate, true);
-        assert_eq!(layout.shown().collect::<Vec<_>>(), [Albums, Local, Folders, Keywords]);
+        assert_eq!(layout.shown().collect::<Vec<_>>(), [Albums, Folders, Local, Keywords]);
         assert!(!layout.is_default());
         layout.set_hidden(ByDate, false);
-        assert_eq!(layout.shown().collect::<Vec<_>>(), [Albums, Local, ByDate, Folders, Keywords]);
+        assert_eq!(layout.shown().collect::<Vec<_>>(), [Albums, Folders, Local, ByDate, Keywords]);
         assert!(layout.is_collapsed(ByDate));
     }
 
@@ -361,14 +384,14 @@ mod tests {
     fn a_section_moves_above_another_or_to_the_end() {
         let mut layout = SidebarLayout::default();
         assert!(layout.move_before(Keywords, Some(Local)));
-        assert_eq!(order(&layout), [Albums, Keywords, Local, ByDate, Folders]);
+        assert_eq!(order(&layout), [Albums, Folders, Keywords, Local, ByDate]);
         assert!(layout.move_before(Albums, None));
-        assert_eq!(order(&layout), [Keywords, Local, ByDate, Folders, Albums]);
+        assert_eq!(order(&layout), [Folders, Keywords, Local, ByDate, Albums]);
         // nothing to do: above itself, where it already is
         assert!(!layout.move_before(Local, Some(Local)));
         assert!(!layout.move_before(Local, Some(ByDate)));
         assert!(!layout.move_before(Albums, None));
-        assert_eq!(order(&layout), [Keywords, Local, ByDate, Folders, Albums]);
+        assert_eq!(order(&layout), [Folders, Keywords, Local, ByDate, Albums]);
     }
 
     /// Given a hidden section between two shown ones, when the upper one is dropped right where
@@ -378,11 +401,11 @@ mod tests {
         let mut layout = SidebarLayout::default();
         layout.set_hidden(Local, true);
         let was = layout.clone();
-        assert!(!layout.move_before(Albums, Some(ByDate)), "Albums is already right above By Date, as far as anyone can see");
+        assert!(!layout.move_before(Folders, Some(ByDate)), "Folders is already right above By Date, as far as anyone can see");
         assert_eq!(layout, was);
         // a hidden section can still be put elsewhere (it shows there when it is shown again)
         assert!(layout.move_before(Local, None));
-        assert_eq!(order(&layout), [Albums, ByDate, Folders, Keywords, Local]);
+        assert_eq!(order(&layout), [Albums, Folders, ByDate, Keywords, Local]);
     }
 
     /// Moving a section keeps whether it is hidden or folded.
@@ -398,18 +421,18 @@ mod tests {
     #[test]
     fn a_section_moves_one_place_among_the_shown_ones() {
         let mut layout = SidebarLayout::default();
-        layout.set_hidden(ByDate, true);
-        // down past the hidden By Date in one step
-        assert!(layout.can_move(Local, false));
-        assert!(layout.move_by(Local, false));
-        assert_eq!(layout.shown().collect::<Vec<_>>(), [Albums, Folders, Local, Keywords]);
-        assert!(layout.move_by(Local, false));
-        assert_eq!(layout.shown().collect::<Vec<_>>(), [Albums, Folders, Keywords, Local]);
-        assert!(!layout.can_move(Local, false) && !layout.move_by(Local, false), "the last can't go down");
-        assert!(layout.move_by(Folders, true));
-        assert_eq!(layout.shown().collect::<Vec<_>>(), [Folders, Albums, Keywords, Local]);
-        assert!(!layout.can_move(Folders, true) && !layout.move_by(Folders, true), "the first can't go up");
-        assert!(!layout.can_move(ByDate, true) && !layout.move_by(ByDate, true), "a hidden section doesn't move");
+        layout.set_hidden(Local, true);
+        // down past the hidden Local and the By Date after it in one step
+        assert!(layout.can_move(Folders, false));
+        assert!(layout.move_by(Folders, false));
+        assert_eq!(layout.shown().collect::<Vec<_>>(), [Albums, ByDate, Folders, Keywords]);
+        assert!(layout.move_by(Folders, false));
+        assert_eq!(layout.shown().collect::<Vec<_>>(), [Albums, ByDate, Keywords, Folders]);
+        assert!(!layout.can_move(Folders, false) && !layout.move_by(Folders, false), "the last can't go down");
+        assert!(layout.move_by(ByDate, true));
+        assert_eq!(layout.shown().collect::<Vec<_>>(), [ByDate, Albums, Keywords, Folders]);
+        assert!(!layout.can_move(ByDate, true) && !layout.move_by(ByDate, true), "the first can't go up");
+        assert!(!layout.can_move(Local, true) && !layout.move_by(Local, true), "a hidden section doesn't move");
     }
 
     /// Sections an older settings file listed as collapsed are folded; names it got wrong are ignored.
@@ -426,7 +449,7 @@ mod tests {
     #[test]
     fn an_arrangement_that_is_asked_for_is_read_strictly() {
         let layout = SidebarLayout::parse(&json!(["keywords", {"id": "albums", "hidden": true, "collapsed": null}])).unwrap();
-        assert_eq!(order(&layout), [Keywords, Albums, Local, ByDate, Folders]);
+        assert_eq!(order(&layout), [Keywords, Albums, Folders, Local, ByDate]);
         assert!(layout.is_hidden(Albums) && !layout.is_collapsed(Albums));
         assert!(SidebarLayout::parse(&json!([])).unwrap().is_default());
         for (asked, says) in [
@@ -443,6 +466,79 @@ mod tests {
         }
     }
 
+    /// The sidebar as saved before Folders moved up: the old usual order, with some flags set.
+    fn old_default_with_flags() -> SidebarLayout {
+        read(json!([
+            {"id": "albums"},
+            {"id": "local", "hidden": true},
+            {"id": "byDate", "collapsed": true},
+            {"id": "folders", "collapsed": true},
+            {"id": "keywords", "hidden": true, "collapsed": true}
+        ]))
+    }
+
+    /// Given a sidebar saved in the old usual order, when it is brought up to the current
+    /// generation, then Folders sits just above Local with every hidden and folded flag as it
+    /// was; and once the person drags Folders back down and the generation is recorded, it stays.
+    #[test]
+    fn an_old_default_order_moves_once() {
+        let mut layout = old_default_with_flags();
+        layout.adopt_order_version(0);
+        assert_eq!(order(&layout), [Albums, Folders, Local, ByDate, Keywords]);
+        assert!(layout.is_collapsed(Folders) && !layout.is_hidden(Folders));
+        assert!(layout.is_hidden(Local) && !layout.is_collapsed(Local));
+        assert!(layout.is_collapsed(ByDate) && !layout.is_hidden(ByDate));
+        assert!(layout.is_hidden(Keywords) && layout.is_collapsed(Keywords));
+        // the person puts Folders back below By Date; the version is now recorded, so it stays
+        assert!(layout.move_before(Folders, Some(Keywords)));
+        let moved_back = layout.clone();
+        assert_eq!(order(&moved_back), [Albums, Local, ByDate, Folders, Keywords]);
+        layout.adopt_order_version(ORDER_VERSION);
+        assert_eq!(layout, moved_back);
+    }
+
+    /// Given a sidebar the person arranged (any order but the old usual one), or one already
+    /// listing Folders above Local, when it is brought up to the current generation, then it is
+    /// left alone. A partial list is made whole first, so it counts as what it reads as.
+    #[test]
+    fn a_custom_order_is_left_alone() {
+        for saved in [
+            json!(["keywords", "albums", "local", "byDate", "folders"]),
+            json!(["albums", "byDate", "local", "folders", "keywords"]),
+            json!(["albums", "folders", "local", "byDate", "keywords"]),
+            json!(["albums", "local"]),
+            json!(["folders", "local"]),
+        ] {
+            let layout = read(saved.clone());
+            let mut adopted = layout.clone();
+            adopted.adopt_order_version(0);
+            assert_eq!(adopted, layout, "{saved}");
+        }
+    }
+
+    /// A saved list that is partial or damaged is first made whole; when that reads as the old
+    /// usual order it moves like one, and nothing panics for the rest.
+    #[test]
+    fn a_partial_or_damaged_list_does_not_panic_and_still_lists_every_section_once() {
+        for saved in [
+            json!(["albums", "local", "byDate", "folders"]),
+            json!([{"id": "map"}, "albums", "albums", 7, null, "local", "byDate", "folders", "keywords"]),
+            json!(["folders"]),
+            json!([]),
+            json!(null),
+            json!("albums"),
+            json!({"albums": true}),
+        ] {
+            let mut layout = read(saved.clone());
+            layout.adopt_order_version(0);
+            assert_eq!(layout.sections().len(), SidebarSection::ALL.len(), "{saved}");
+            assert!(SidebarSection::ALL.iter().all(|s| layout.sections().iter().filter(|e| e.id == *s).count() == 1), "{saved}");
+        }
+        let mut partial = read(json!(["albums", "local", "byDate", "folders"]));
+        partial.adopt_order_version(0);
+        assert_eq!(order(&partial), [Albums, Folders, Local, ByDate, Keywords]);
+    }
+
     #[test]
     fn sections_are_named_by_their_ids() {
         for s in SidebarSection::ALL {
@@ -450,6 +546,6 @@ mod tests {
             assert_eq!(serde_json::to_value(s).unwrap(), json!(s.id()));
         }
         assert_eq!(SidebarSection::from_id("Albums"), None);
-        assert_eq!(SidebarSection::ids(), "albums|local|byDate|folders|keywords");
+        assert_eq!(SidebarSection::ids(), "albums|folders|local|byDate|keywords");
     }
 }
