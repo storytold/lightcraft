@@ -78,7 +78,9 @@ const MODULES: &[Module] = &[
             "nrcj_links",
             "nrcj_dh",
             "nrcj_dv",
+            "nrcj_dvh",
             "nrcj_recon",
+            "nrcj_recon_in",
         ],
     },
     Module {
