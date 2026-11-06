@@ -845,6 +845,11 @@ impl Session {
             if let Err(e) = lib.journal.wait() {
                 log::error!("library: compaction: {e}");
             }
+            // and what the log's thread was handed is written first: a write it can't make leaves
+            // the records held, which only a snapshot saves (it decides below)
+            if let Err(e) = lib.journal.flush() {
+                log::error!("library: the log's records aren't all written: {e}");
+            }
         }
         let snapshot = if !saved || lib.journal.wants_snapshot_on_close() {
             lib.journal.snapshot_with_unlogged(&self.catalog, unlogged)
