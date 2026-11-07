@@ -668,6 +668,143 @@ fn a_background_build_plans_a_slice_of_photos_a_frame() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// Steps through the first photos of a view in `mode` until its build's photos are being planned, a slice
+/// (two photos) a frame.
+fn start_planning(s: &mut Session, ids: &[PhotoId], mode: crate::prep::Mode) {
+    s.prep.slice = Some(2);
+    s.prep_tick(mode, None, false);
+    for id in &ids[..3] {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    assert_eq!(s.prep.planned, 2, "the first slice, not the view");
+    assert!(s.preview_build.is_none() && s.prep_planning(), "still planning");
+}
+
+/// Ticks on (the user at the third photo) until the plan is done and the build starts.
+fn finish_planning(s: &mut Session, ids: &[PhotoId], mode: crate::prep::Mode) -> std::sync::Arc<crate::cmd::previews::PreviewBuild> {
+    for _ in 0..30 {
+        s.prep_tick(mode, Some(ids[2]), false);
+        if let Some(b) = &s.preview_build {
+            return b.clone();
+        }
+    }
+    panic!("the build never started");
+}
+
+/// Every photo's view and grid previews are there under the keys its settings make now.
+fn all_built(s: &mut Session, ids: &[PhotoId]) -> bool {
+    let edge = crate::cmd::previews::standard_edge(s);
+    ids.iter().all(|id| crate::cmd::previews::already_built(&crate::cmd::previews::jobs_for(s, *id, Some(edge))))
+}
+
+/// CodeRabbit on #3936: a preview cache cleared between planning slices isn't saved into by the jobs of the slices
+/// before (they would fail, and the photos not be built): the plan begins again against the cache as it is now.
+#[test]
+fn a_cache_cleared_while_planning_is_planned_again() {
+    let (mut s, root, ids) = library("prep-plan-clear", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    s.execute("library.clearPreviews", &json!({})).unwrap();
+    let b = finish_planning(&mut s, &ids, mode);
+    drop(hold);
+    assert!(wait_finished(&b), "the build ends");
+    assert_eq!((b.total, b.failed.load(Ordering::Relaxed)), (7, 0), "no photo is lost to the cache it was planned for");
+    assert!(all_built(&mut s, &ids), "every photo is built into the cache as it is now");
+    assert_eq!(s.prep.planned, 2 + 7, "the two photos planned before the clear are planned again");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// CodeRabbit on #3936: another library that shows the same photo ids (and as many photos) is not the one whose
+/// photos were being planned: the plan of the library before is dropped, not resumed against it.
+#[test]
+fn a_library_opened_while_planning_is_planned_afresh() {
+    let (mut s, root, ids) = library("prep-plan-lib-a", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    let other = temp_dir("prep-plan-lib-b");
+    let paths: Vec<String> = (0..7)
+        .map(|i| {
+            let p = other.join("shoot").join(format!("p{i:02}.png"));
+            png(&p, (i * 20 + 7) as u8);
+            p.to_string_lossy().to_string()
+        })
+        .collect();
+    s.open_library(other.join("lib"), false).unwrap();
+    s.execute("library.import", &json!({"paths": paths})).unwrap();
+    let mut now: Vec<(String, PhotoId)> = s.catalog.photos().map(|p| (p.file_name.clone(), p.id)).collect();
+    now.sort();
+    let now: Vec<PhotoId> = now.into_iter().map(|(_, id)| id).collect();
+    assert_eq!(now, ids, "the same photo ids, and as many photos: a view that looks the same");
+    let b = finish_planning(&mut s, &now, mode);
+    drop(hold);
+    assert!(wait_finished(&b), "the build ends");
+    assert_eq!((b.total, b.failed.load(Ordering::Relaxed)), (7, 0), "no photo is rendered for the library before");
+    assert!(all_built(&mut s, &now), "every photo of the library now open is built");
+    assert_eq!(s.prep.planned, 2 + 7);
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&other).unwrap();
+}
+
+/// CodeRabbit on #3936: `library.cancelPreviews` while the photos are still being planned (no build runs yet) ends
+/// the plan, and its view is not planned again; another view is.
+#[test]
+fn cancelling_previews_while_planning_ends_the_plan() {
+    let (mut s, root, ids) = library("prep-plan-cancel", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    s.execute("library.cancelPreviews", &json!({})).unwrap();
+    assert!(!s.prep_planning(), "nothing left to plan");
+    for _ in 0..30 {
+        s.prep_tick(mode, Some(ids[2]), false);
+    }
+    assert!(s.preview_build.is_none(), "no build for the view that was stopped");
+    assert_eq!(s.prep.planned, 2, "and no planning of it");
+    // another view is prepared, once the user has stepped through a few of its photos
+    s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id: ids[6] }).unwrap();
+    for id in &ids[..3] {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    let b = finish_planning(&mut s, &ids, mode);
+    assert_eq!(b.total, 6);
+    drop(hold);
+    b.cancel.store(true, Ordering::Relaxed);
+    assert!(wait_finished(&b), "a cancelled build stops");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// CodeRabbit on #3936: a photo edited after its slice was planned is planned again, so its build renders (and keys)
+/// it as it is now; a rating changes nothing a render is made from, and the plan goes on.
+#[test]
+fn an_edit_while_planning_plans_the_photos_again_but_a_rating_does_not() {
+    let (mut s, root, ids) = library("prep-plan-edit", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    // (the view's first photo is planned in the first slice: whichever order the view shows them in)
+    let planned_first = s.visible_cloned()[0];
+    s.execute("photo.rate", &json!({"ids": [planned_first.0], "rating": 3})).unwrap();
+    s.prep_tick(mode, Some(ids[2]), false);
+    assert_eq!(s.prep.planned, 4, "a rating: the plan went on with the next slice");
+    s.selection = crate::Selection::single(planned_first);
+    let before = s.catalog.photo(planned_first).unwrap().develop.hash64();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.5})).unwrap();
+    assert_ne!(s.catalog.photo(planned_first).unwrap().develop.hash64(), before, "the photo was edited");
+    let b = finish_planning(&mut s, &ids, mode);
+    drop(hold);
+    assert!(wait_finished(&b), "the build ends");
+    assert_eq!((b.total, b.failed.load(Ordering::Relaxed)), (7, 0));
+    assert!(all_built(&mut s, &ids), "the edited photo is built as it is now");
+    assert_eq!(s.prep.planned, 4 + 7, "the edit began the plan again");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// A tick with the loupe open over a view that did not change neither copies the visible list nor
 /// hashes it again: a frame asks every time, and a view of millions made every frame cost seconds.
 #[test]

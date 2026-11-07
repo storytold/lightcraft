@@ -243,10 +243,15 @@ pub struct PrepState {
 }
 
 /// A background build whose photos are being planned ([`crate::cmd::previews::BuildPlan`]): the
-/// view it is for (its signature), and the plan.
+/// view it is for (its signature), the plan, and what the jobs planned so far were made against: the
+/// library's preview cache (as it was: its `generation`) and the catalog at `revision`.
+/// A plan that no longer matches them ([`Session::plan_outdated`]) is planned again.
 struct Planning {
     sig: u64,
     plan: crate::cmd::previews::BuildPlan,
+    cache: Arc<lightcraft_preview::PreviewCache>,
+    generation: u64,
+    revision: u64,
 }
 
 impl std::fmt::Debug for PrepState {
@@ -417,8 +422,9 @@ impl Session {
             return;
         };
         let (sig, ids) = self.view_signature(want.scope);
-        if self.prep.plan.as_ref().is_some_and(|p| p.sig != sig) {
-            // the view changed while its photos were being planned: the plan is of another view
+        if self.prep.plan.as_ref().is_some_and(|p| p.sig != sig || self.plan_outdated(p)) {
+            // the view changed while its photos were being planned (or the library, its preview cache or what a
+            // photo is rendered from did): the plan is of another view, or its jobs are out of date
             self.drop_plan();
         }
         if self.prep.steps_in != Some(sig) {
@@ -452,7 +458,9 @@ impl Session {
         self.prep.started_for = Some(sig);
         let edge = Some(crate::cmd::previews::standard_edge(self));
         let plan = crate::cmd::previews::BuildPlan::new(ids, want.scope == Scope::Marked, edge);
-        self.prep.plan = Some(Planning { sig, plan });
+        let (cache, revision) = (self.media.rendered.clone(), self.catalog.revision);
+        let generation = cache.generation();
+        self.prep.plan = Some(Planning { sig, plan, cache, generation, revision });
         self.advance_plan(at, backward);
     }
 
@@ -481,6 +489,20 @@ impl Session {
         (sig, ids)
     }
 
+    /// Whether the jobs `p` has planned are out of date: another library's preview cache is in use (the plan is of
+    /// the library before, though its view looks the same), the cache was cleared (the jobs would save into the
+    /// cache as it was and fail), or a photo's settings, file or analysis changed since the plan began (its jobs
+    /// would render, and be keyed, as it was). A rating or a keyword changes none of them.
+    fn plan_outdated(&self, p: &Planning) -> bool {
+        const RENDERED_FROM: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::DEVELOP
+            .with(lightcraft_catalog::Aspects::FILE)
+            .with(lightcraft_catalog::Aspects::ANALYSIS)
+            .with(lightcraft_catalog::Aspects::PRESENCE);
+        !Arc::ptr_eq(&p.cache, &self.media.rendered)
+            || p.cache.generation() != p.generation
+            || self.catalog.aspects_since(p.revision).is_none_or(|changed| changed.any_of(RENDERED_FROM))
+    }
+
     /// Give up the plan under way; its view is prepared afresh when it is next due.
     fn drop_plan(&mut self) {
         if self.prep.plan.take().is_some() {
@@ -489,9 +511,22 @@ impl Session {
         self.prep.advancing = false;
     }
 
+    /// `library.cancelPreviews` while the photos of a build are being planned (nothing runs yet, so no row to stop
+    /// it from): the plan is dropped, and its view not prepared again, as if its build had been stopped from its
+    /// row. A build that is running is the one cancelled instead.
+    pub(crate) fn cancel_prep_plan(&mut self) {
+        if self.preview_build.as_ref().is_some_and(|b| b.running()) {
+            return;
+        }
+        if let Some(p) = &self.prep.plan {
+            self.prep.declined_for = Some(p.sig);
+        }
+        self.drop_plan();
+    }
+
     /// Plan one more slice of the build's photos; once all are planned, start the build.
     fn advance_plan(&mut self, at: PhotoId, backward: bool) {
-        let Some(Planning { sig, mut plan }) = self.prep.plan.take() else { return };
+        let Some(Planning { sig, mut plan, cache, generation, revision }) = self.prep.plan.take() else { return };
         #[cfg(test)]
         let slice = self.prep.slice.unwrap_or(crate::cmd::previews::PLAN_SLICE);
         #[cfg(not(test))]
@@ -500,7 +535,7 @@ impl Session {
         self.prep.advancing = matches!(done, Ok(false));
         let started = match done {
             Ok(false) => {
-                self.prep.plan = Some(Planning { sig, plan });
+                self.prep.plan = Some(Planning { sig, plan, cache, generation, revision });
                 return;
             }
             Ok(true) if plan.selected == 0 => return,

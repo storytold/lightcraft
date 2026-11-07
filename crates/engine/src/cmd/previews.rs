@@ -1101,6 +1101,8 @@ pub fn specs() -> Vec<CommandSpec> {
             if let Some(b) = &s.preview_build {
                 b.cancel.store(true, Ordering::Relaxed);
             }
+            // (photos still being planned for a background build have no build to stop: that plan ends)
+            s.cancel_prep_plan();
             Ok(s.preview_build.as_ref().map_or(Value::Null, |b| b.json()))
         }),
     ]
