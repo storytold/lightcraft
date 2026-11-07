@@ -46,6 +46,7 @@
   "Import photos with File → Import Photos…, or drop them here": "「ファイル → 写真を読み込む…」から読み込むか、ここに写真をドロップしてください",
   "This row covers more than one disk: drop on a folder inside it": "この行は複数のディスクにまたがっています。中のフォルダにドロップしてください",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "ローカルの写真はまだライブラリにありません。先に「マイフォトに追加」してから移動してください",
+  "Demo photos have no file on disk, so they can't be moved": "デモの写真にはディスク上のファイルがないため、移動できません",
   "Add to Selected Photos": "選択した写真に追加",
   "Add to Target Album": "追加先アルバムに追加",
   "Add to this mask": "このマスクに追加",
@@ -2424,5 +2425,13 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "アプリを --control 7980 (または LIGHTCRAFT_CONTROL_PORT) で起動してから、lightcraft-cli mcp --connect でエージェントを接続できます。",
   "Welcome": "ようこそ",
   "Next": "次へ",
-  "Get Started": "始める"
+  "Get Started": "始める",
+  "Can't add to an album folder": "アルバムフォルダには追加できません",
+  "An album folder holds albums, not photos: drop on an album inside it": "アルバムフォルダに入れられるのはアルバムだけです：中のアルバムにドロップしてください",
+  "Can't add to a smart album": "スマートアルバムには追加できません",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "スマートアルバムの写真はルールで決まります：「スマートアルバムを編集…」で変更してください",
+  "Add keywords in the Keyword List": "キーワードはキーワードリストで追加します",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "写真にキーワードを付けるには、キーワードリスト（ウィンドウ → キーワード、K）で、そのキーワードにドロップしてください",
+  "Already on these photos": "すでにこの写真にあります",
+  "Can't go inside itself": "自分の中には入れられません"
 }

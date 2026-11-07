@@ -130,10 +130,10 @@
   "Making the denoised picture… {}%": "Đang tạo ảnh đã khử nhiễu… {}%",
   "Matches: {}": "Khớp: {}",
   "Merging… {stage} {:.0}%": "Đang ghép… {stage} {:.0}%",
-  "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
-  "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
+  "Move {n} file{} to “{}”": "Move {n} file{} to “{}”",
+  "Move {n} file{} to “{}”?": "Move {n} file{} to “{}”?",
   "Move {what} to Recently Deleted?": "Chuyển {what} vào Đã xóa gần đây?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "Moved {n} file{} to “{}”. Edit → Undo moves them back.",
   "Moved {} photo(s)": "Đã di chuyển {} ảnh",
   "Moved; {} photo(s) relinked": "Đã di chuyển; liên kết lại {} ảnh",
   "Named ({named_n})": "Có tên ({named_n})",
@@ -322,5 +322,8 @@
   "View › Detail View ({keys}).": "Xem › Chế độ xem chi tiết ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Tệp › Xuất… · Tệp › In… ({keys}).",
   "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}",
+  "Add {n} photo{} to “{}”": "Thêm {n} ảnh{0:.0} vào “{1}”",
+  "Add “{keyword}” to {n} photo{}": "Thêm “{keyword}” vào {n} ảnh{:.0}",
+  "{n} already there": "{n} đã có sẵn"
 }

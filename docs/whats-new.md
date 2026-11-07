@@ -364,6 +364,19 @@
   Denoise ▸ Run on chooses; Automatic times both). Photos
   denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
 
+### Drag and drop says what a drop will do
+- Photos dragged over an album now say how many a drop adds ("Add 2 photos to “Garden”"), or "Already in “Garden”"
+  when it holds them all, in which case letting go does nothing at all (no undo step, no message). When some are there
+  already, the message after the drop says how many. Over the Keyword List, the label says how many photos get the
+  keyword, or that they all have it.
+- Rows that can't take photos now show it instead of staying silent: a smart album, an album folder and the Keywords
+  in the sidebar show the not-allowed cursor while photos are over them, and letting go says why and where to drop
+  instead (Edit Smart Album…, an album inside the folder, the Keyword List).
+- A keyword dragged over itself or over a keyword inside it shows the not-allowed cursor and says "Can't go inside
+  itself".
+- Esc gives up a drag of photos, as it already did for albums, sidebar sections and keywords: that press ends the drag and does nothing else
+  (it does not also close a dialog, leave full screen or light back on). A drag started before entering full screen or a slideshow now ends with the mouse button, so Esc works there again.
+
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
@@ -407,7 +420,6 @@
   names in `dc:subject` and the paths in `lr:hierarchicalSubject`, as Lightroom Classic writes them, and LightCraft
   reads them back as the same keywords. A sidecar written by an earlier version is put right the next time it is
   saved.
-
 
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new

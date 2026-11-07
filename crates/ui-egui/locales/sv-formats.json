@@ -298,9 +298,9 @@
   "…and {more} more": "…och {more} till",
   "Already in “{}”": "Already in “{}”",
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Color space: Rec. 2020 {curve} (HDR AVIF)",
-  "Move {n} photo{} to “{}”": "Move {n} photo{} to “{}”",
-  "Move {n} photo{} to “{}”?": "Move {n} photo{} to “{}”?",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Moved {n} photo{} to “{}”. Edit → Undo moves them back.",
+  "Move {n} file{} to “{}”": "Move {n} file{} to “{}”",
+  "Move {n} file{} to “{}”?": "Move {n} file{} to “{}”?",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "Moved {n} file{} to “{}”. Edit → Undo moves them back.",
   "{n} selected photos · {pages} pages": "{n} selected photos · {pages} pages",
   "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "{in_trash} katalogfoton finns i Nyligen raderade i det här biblioteket och ligger kvar där; återställ dem från Nyligen raderade för att se dem.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "{skipped} catalog images were not imported because their records in the catalog are incomplete.",
@@ -325,5 +325,8 @@
   "View › Detail View ({keys}).": "Visa › Detaljvy ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fil › Exportera… · Fil › Skriv ut… ({keys}).",
   "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}",
+  "Add {n} photo{} to “{}”": "Lägg till foton i ”{1}”: {n}{0:.0}",
+  "Add “{keyword}” to {n} photo{}": "Lägg till ”{keyword}” på foton: {n}{:.0}",
+  "{n} already there": "redan i albumet: {n}"
 }

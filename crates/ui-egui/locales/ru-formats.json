@@ -305,10 +305,10 @@
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "{what}: слияние добавлено в размере {mp}: для полного размера ({full}) не хватает памяти этого компьютера",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "{what}: слияние добавлено в размере {mp} — это наибольший размер панорамы (полный размер: {full})",
   "Already in “{}”": "Уже в «{}»",
-  "Move {n} photo{} to “{}”": "Переместить в «{1}» фото: {n}{0:.0}",
-  "Move {n} photo{} to “{}”?": "Переместить в «{1}» фото: {n}{0:.0}?",
+  "Move {n} file{} to “{}”": "Переместить в «{1}» файлов: {n}{0:.0}",
+  "Move {n} file{} to “{}”?": "Переместить в «{1}» файлов: {n}{0:.0}?",
   "Listing folders — folders: {folders}, files: {files}": "Просмотр папок — папок: {folders}, файлов: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено фото: {n}{0:.0}. Правка → Отменить вернёт их.",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "В «{1}» перемещено файлов: {n}{0:.0}. Правка → Отменить вернёт их.",
   "Drop to review {n} item{} for import": "Отпустите для проверки перед импортом (элементов: {n}){:.0}",
   "Drop to import {n} item{}": "Отпустите для импорта (элементов: {n}){:.0}",
   "Drop to import {n} preset{}": "Отпустите для импорта пресетов: {n}{:.0}",
@@ -326,5 +326,8 @@
   "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографии добавляются через Файл › Импорт фото… ({keys}).",
   "View › Detail View ({keys}).": "Вид › Режим детализации ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys}).",
+  "Add {n} photo{} to “{}”": "Добавить в «{1}» фото: {n}{0:.0}",
+  "{n} already there": "{n} уже там",
+  "Add “{keyword}” to {n} photo{}": "Добавить «{keyword}» к фото: {n}{:.0}"
 }

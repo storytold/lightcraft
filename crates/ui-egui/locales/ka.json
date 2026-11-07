@@ -3692,5 +3692,14 @@
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
   "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
-  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის"
+  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "Can't add to an album folder": "ალბომების საქაღალდეში დამატება შეუძლებელია",
+  "An album folder holds albums, not photos: drop on an album inside it": "ალბომების საქაღალდეში ალბომებია, არა ფოტოები: ჩააგდეთ მასში არსებულ ალბომზე",
+  "Can't add to a smart album": "სმარტ-ალბომში დამატება შეუძლებელია",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "სმარტ-ალბომის ფოტოებს მისი წესები ირჩევს: შეცვალეთ „სმარტ-ალბომის რედაქტირება…“-ით",
+  "Add keywords in the Keyword List": "საკვანძო სიტყვები დაამატეთ საკვანძო სიტყვების სიაში",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "ფოტოებისთვის საკვანძო სიტყვის მისაცემად გამოიყენეთ საკვანძო სიტყვების სია (ფანჯარა → საკვანძო სიტყვები, K): ჩააგდეთ იქ სასურველ სიტყვაზე",
+  "Already on these photos": "ამ ფოტოებს უკვე აქვთ",
+  "Can't go inside itself": "საკუთარ თავში ვერ მოხვდება",
+  "Demo photos have no file on disk, so they can't be moved": "სადემონსტრაციო ფოტოებს დისკზე ფაილი არ აქვთ, ამიტომ მათი გადატანა შეუძლებელია"
 }
