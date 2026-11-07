@@ -932,7 +932,8 @@ mod tests {
 
     /// The empty-order fallback must not yield an empty backend set, and on Linux it must
     /// not load Vulkan automatically to do so (issue #136): with GL not compiled in and
-    /// glow unavailable it falls back to glow rather than to the Vulkan backend.
+    /// glow unavailable it falls back to an empty non-Vulkan set rather than to the
+    /// Vulkan backend; with glow available it falls back to glow.
     #[test]
     fn empty_order_fallback_is_usable_when_gl_not_compiled() {
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN, false);
