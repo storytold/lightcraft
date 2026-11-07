@@ -97,6 +97,10 @@ fn j_paints_clipped_highlights_red_and_clipped_shadows_blue() {
     assert!(h.app.ui.show_clipping);
     assert!(share_of(&h, red) > 0.5, "blown highlights shown in red: {}", share_of(&h, red));
     set(&mut h, -5.0);
+    // the demo photo's shadows don't reach black on Exposure alone: Blacks crushes them
+    let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.blacks", "value": -100.0}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
     assert!(share_of(&h, blue) > 0.01, "crushed shadows shown in blue: {}", share_of(&h, blue));
     assert!(share_of(&h, red) < 0.01, "nothing blown at -5 EV: {}", share_of(&h, red));
 }
