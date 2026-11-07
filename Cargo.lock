@@ -3591,6 +3591,7 @@ version = "0.18.0"
 dependencies = [
  "chrono",
  "craft-update",
+ "dispatch2",
  "eframe",
  "egui",
  "lightcraft-codecs",
@@ -3604,6 +3605,7 @@ dependencies = [
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "pollster 1.0.1",
  "raw-window-handle",
