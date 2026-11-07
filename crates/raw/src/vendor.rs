@@ -29,6 +29,7 @@ mod rafc;
 pub mod rw2;
 mod sr2;
 pub mod srw;
+mod srwc;
 
 use crate::{BlackLevel, Cfa, Rect};
 use lightcraft_tiff::Tiff;
