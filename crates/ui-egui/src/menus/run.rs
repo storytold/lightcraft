@@ -600,6 +600,17 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             app.ui.left_panel = !app.ui.left_panel;
             Ok(Value::Null)
         }
+        "view.cropMaskOpacity" => {
+            // {opacity: 0 | 20 | 50 | 60 | 80 | 100}: how dark the area outside the crop is (0 = off)
+            let Some(opacity) = p.get("opacity").and_then(Value::as_u64).and_then(|value| u8::try_from(value).ok()) else {
+                return Some(Err("view.cropMaskOpacity: opacity must be 0, 20, 50, 60, 80, or 100".into()));
+            };
+            if !crate::state::CROP_MASK_OPACITY_LEVELS.contains(&opacity) {
+                return Some(Err("view.cropMaskOpacity: opacity must be 0, 20, 50, 60, 80, or 100".into()));
+            }
+            app.ui.crop_mask_opacity = opacity;
+            Ok(json!({"opacity": opacity}))
+        }
         "view.rightPanel" => {
             // Classic's F8: hide the right panel, and bring back the same one next time (Edit when
             // none was hidden). Hiding a tool ends it, as closing its panel does.

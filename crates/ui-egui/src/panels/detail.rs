@@ -384,9 +384,21 @@ fn announce_photo(app: &LightcraftApp, resp: &egui::Response, photo: &lightcraft
     crate::widgets::announce(resp, crate::i18n::tr_format!("Photo: {name}", name = super::grid::cell_description(app, photo)));
 }
 
-/// The loupe's right-click menu: zoom commands and the grid's photo menu.
+/// The loupe's right-click menu: the crop mask's darkness while cropping, zoom commands and the
+/// grid's photo menu.
 fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId) {
     crate::widgets::context_menu(resp, |ui| {
+        if app.ui.right == crate::state::RightPanel::Crop && !matches!(app.ui.tool.as_str(), "guidedUpright" | "straighten") {
+            crate::widgets::menu_button(ui, crate::i18n::tr("Crop Mask"), |ui| {
+                for opacity in crate::state::CROP_MASK_OPACITY_LEVELS {
+                    let label = if opacity == 0 { crate::i18n::tr("Off").to_owned() } else { format!("{opacity}%") };
+                    if ui.radio(app.ui.crop_mask_opacity == opacity, label).clicked() {
+                        let _ = app.run("view.cropMaskOpacity", json!({"opacity": opacity}));
+                    }
+                }
+            });
+            ui.separator();
+        }
         crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {
                 if ui.button(crate::i18n::tr(label)).clicked() {

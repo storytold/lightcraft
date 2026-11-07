@@ -51,8 +51,11 @@ pub(super) fn crop_overlay(
     // darken outside the crop (the box's corners in screen order: a flipped photo shows its
     // top-left corner elsewhere)
     let quad = flipped_corners(&pts, frame.flip_h, frame.flip_v);
-    if pts.len() == 4 {
-        p.add(outside_crop_mesh(map.rect, &quad, Color32::from_black_alpha(150)));
+    // at the opacity chosen in the photo's context menu (0 = no dimming; 60 %, the default, is
+    // about the 150 alpha it always was)
+    if pts.len() == 4 && app.ui.crop_mask_opacity > 0 {
+        let alpha = ((u16::from(app.ui.crop_mask_opacity) * 255 + 50) / 100) as u8;
+        p.add(outside_crop_mesh(map.rect, &quad, Color32::from_black_alpha(alpha)));
     }
     p.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, Color32::WHITE)));
     // overlay guides
