@@ -248,8 +248,10 @@ pub fn specs() -> Vec<CommandSpec> {
                         continue;
                     };
                     out.push(json!(new));
-                    if s.catalog.photo(*id).and_then(|p| p.captured.as_deref()) != Some(new.as_str()) {
-                        ops.push(Op::SetCaptured { id: *id, captured: Some(new) });
+                    if s.catalog.photo(*id).and_then(|p| p.captured.as_deref()) != Some(new.as_str())
+                        || s.catalog.photo(*id).is_some_and(|p| !p.captured_manual)
+                    {
+                        ops.push(Op::SetCaptured { id: *id, captured: Some(new), manual: true });
                     }
                 }
                 if out_of_range > 0 {

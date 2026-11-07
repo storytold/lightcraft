@@ -79,10 +79,10 @@ fn a_tally_kept_through_an_edit_is_the_tally_made_from_every_photo() {
                     let source = Source::File { path: format!("/elsewhere/{}/{name}", n % 3) };
                     Some(a.session.commit("Locate", Op::Relink { id: PhotoId(id), file_name: name, source, format: None }))
                 }
-                1 => Some(
-                    a.session
-                        .commit("Capture time", Op::SetCaptured { id: PhotoId(id), captured: Some(format!("2024-{:02}-03T10:00:00", 1 + n % 12)) }),
-                ),
+                1 => Some(a.session.commit(
+                    "Capture time",
+                    Op::SetCaptured { id: PhotoId(id), captured: Some(format!("2024-{:02}-03T10:00:00", 1 + n % 12)), manual: false },
+                )),
                 2 if n.is_multiple_of(3) => Some(a.session.commit("Remove", Op::RemovePhoto { id: PhotoId(id) })),
                 2 if n % 3 == 1 => {
                     let new = a.session.catalog.alloc_photo_id();

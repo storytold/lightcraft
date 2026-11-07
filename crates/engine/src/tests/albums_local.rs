@@ -97,3 +97,35 @@ fn a_mixed_selection_skips_the_local_photos_and_says_how_many() {
     assert_eq!(r["added"], false, "{r}");
     assert!(s.catalog.album(quick).unwrap().photos.is_empty());
 }
+
+#[test]
+fn local_folder_file_changed_twice_quickly_reloads_latest_state() {
+    let dir = temp_dir("twice-quick");
+    let file = dir.join("rapid.png");
+    let write_png = |w: usize, h: usize| {
+        let img = lightcraft_raster::Rgba8::from_fn(w, h, |x, y| [(x * 9) as u8, (y * 11) as u8, 1, 255]);
+        let b = crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() }).unwrap();
+        std::fs::write(&file, b).unwrap();
+    };
+
+    write_png(16, 12);
+    let mut s = Session::new().with_fs();
+    s.execute("library.browse", &json!({"path": dir.to_string_lossy()})).unwrap();
+    let id = s.catalog.photos().find(|p| p.local).unwrap().id;
+    let size0 = s.catalog.photo(id).unwrap().file_size;
+    assert_eq!(s.catalog.photo(id).unwrap().width, 16);
+
+    // First rapid change on disk
+    write_png(20, 15);
+    // Second rapid change on disk
+    write_png(24, 18);
+    let size2 = std::fs::metadata(&file).unwrap().len();
+    assert_ne!(size2, size0);
+
+    // Re-browsing the folder reloads and reflects the latest change
+    s.execute("library.browse", &json!({"path": dir.to_string_lossy()})).unwrap();
+    let updated = s.catalog.photo(id).unwrap();
+    assert_eq!(updated.file_size, size2);
+    assert_eq!(updated.width, 24);
+    assert_eq!(updated.height, 18);
+}

@@ -91,7 +91,11 @@ fn op_for(c: &mut Catalog, kind: u8, a: u8, b: u8) -> Op {
         9 if b.is_multiple_of(2) => {
             Op::SetFile { id: pid, file_name: format!("Renamed_{b}.jpg"), source: Source::File { path: format!("/p/Renamed_{b}.jpg") } }
         }
-        9 => Op::SetCaptured { id: pid, captured: (!b.is_multiple_of(3)).then(|| format!("2026-0{}-1{}T10:{:02}:00", 1 + b % 9, b % 10, a % 60)) },
+        9 => Op::SetCaptured {
+            id: pid,
+            captured: (!b.is_multiple_of(3)).then(|| format!("2026-0{}-1{}T10:{:02}:00", 1 + b % 9, b % 10, a % 60)),
+            manual: false,
+        },
         15 => match c.photo(pid).cloned() {
             // a virtual copy: same source, own id, copy_of/copy_name set
             Some(src) => {
