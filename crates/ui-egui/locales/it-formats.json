@@ -229,6 +229,7 @@
   "Added “{keyword}” to {n} photo{}": "Aggiunta “{keyword}” a {n} foto{:.0}",
   "Add Keyword “{keywords}”": "Aggiungi parola chiave “{keywords}”",
   "On {have} of {of} selected photos": "Su {have} di {of} foto selezionate",
+  "A keyword name can't end with an asterisk: “{name}”": "Il nome di una parola chiave non può terminare con un asterisco: “{name}”",
   "Remove “{name}”": "Rimuovi “{name}”",
   "There is a keyword set “{name}” already": "Esiste già un set di parole chiave “{name}”",
   "Added {n} keyword{}": "Parole chiave aggiunte: {n}{:.0}",

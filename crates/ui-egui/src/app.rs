@@ -56,6 +56,7 @@ impl LightcraftApp {
             max_texture_side: MAX_TEXTURE_SIDE,
             clock: AppClock::new(),
             accesskit_language: None,
+            selection_seen: (0, 0),
             slideshow_hidden_at: None,
             slideshow_auto_paused: false,
             dropped_files: vec![],
@@ -202,6 +203,26 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        // (seen before and after each command, so a selection changed and changed back between two
+        // UI passes still counts as changed)
+        self.selection_changes();
+        let r = self.run_command(id, params);
+        self.selection_changes();
+        r
+    }
+
+    /// How many times the selection has been seen to change, counting a change to other photos and
+    /// back as two. Each command and each finished UI pass looks at the selection.
+    pub(crate) fn selection_changes(&mut self) -> u64 {
+        let s = &self.session.selection;
+        let key = if s.ids.is_empty() { crate::key_of(s.active.as_slice()) } else { crate::key_of(s.ids.as_slice()) };
+        if key != self.selection_seen.0 {
+            self.selection_seen = (key, self.selection_seen.1.wrapping_add(1));
+        }
+        self.selection_seen.1
+    }
+
+    fn run_command(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             if r.is_ok() {
                 docking::reveal_command(self, id)?;
@@ -655,6 +676,7 @@ impl LightcraftApp {
             frame_rate::forget(ctx);
         }
         panels::edit::wheel_pointer_frame_end(ctx);
+        panels::right::forget_stale_enter_keywords(self, ctx);
         ctx.output(|o| {
             for c in &o.commands {
                 if let egui::OutputCommand::CopyText(text) = c {

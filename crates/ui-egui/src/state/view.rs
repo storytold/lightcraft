@@ -367,11 +367,13 @@ pub const RIGHT_WIDTH: PanelWidth = PanelWidth { min: 250.0, default: 270.0, max
 /// The photo area the side panels always leave free (as far as their minimum widths allow).
 pub const MIN_PHOTO_WIDTH: f32 = 360.0;
 
-/// What the Keywording box shows: the keywords (chips to edit), them with the keywords containing
-/// them, or what exported files will carry (read only).
+/// What the Keywording box shows: the keywords as text to edit (Enter Keywords), the keywords
+/// (chips to edit), them with the keywords containing them, or what exported files will carry
+/// (read only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum KeywordingView {
+    Enter,
     #[default]
     Keywords,
     Containing,
