@@ -1160,6 +1160,21 @@ fn measured_band_budget(free: u64, pooled: u64, renders: usize, shares_system_me
     if shares_system_memory { budget.min(FIXED_BAND_BUDGET) } else { budget }
 }
 
+/// Take the band plan's `lock` and `ask` for the free memory. A driver is asked before the lock: the first
+/// question for a device waits for it, and no other plan should wait with it. System memory is read under the
+/// lock: the read is quick, and a render that waited for the lock must not plan from a figure older than what
+/// the render before it allocated.
+fn lock_and_measure<'a>(
+    lock: &'a Mutex<()>,
+    shares_system_memory: bool,
+    ask: impl Fn() -> Option<u64>,
+) -> (std::sync::MutexGuard<'a, ()>, Option<u64>) {
+    let asked = if shares_system_memory { None } else { ask() };
+    let guard = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let free = if shares_system_memory { ask() } else { asked };
+    (guard, free)
+}
+
 /// The joint colour noise reduction (`lightcraft_pipeline::nrc_joint`) on the GPU, the same steps as the
 /// CPU: only the noise samples are read back (the noise model is fitted on the CPU, by the same code).
 /// Large images are filtered in horizontal bands whose halo covers every step's reach, so each kept pixel
@@ -1226,12 +1241,10 @@ fn color_nr_joint(
     // buffers 2 + 2, paths 3 (the transformed band's buffer, see `joint_band`), weights 2). The budget for
     // both together is `measured_band_budget` from the memory free right now (where it can be asked, `crate::vram`); else a fixed 2 GB. One band plan at a
     // time (`BANDS`), held until the bands are done. PROTOTYPE: `NRV2_GPU_BAND_MB` overrides it.
-    // (free memory asked before the lock: the first question for a device waits for the driver)
-    let free = crate::vram::free_bytes(&cx.gpu.info);
-    let _bands = BANDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let shared = crate::vram::shares_system_memory(cx.gpu.info.device_type);
+    let (_bands, free) = lock_and_measure(&BANDS, shared, || crate::vram::free_bytes(&cx.gpu.info));
     let fixed = std::env::var("NRV2_GPU_BAND_MB").ok().and_then(|v| v.parse::<usize>().ok()).map(|mb| mb << 20);
     let renders = RENDERS.load(std::sync::atomic::Ordering::Relaxed);
-    let shared = crate::vram::shares_system_memory(cx.gpu.info.device_type);
     let measured = free.map(|free| measured_band_budget(free, crate::ctx::memory().pooled, renders, shared));
     let budget = fixed.or(measured).unwrap_or(FIXED_BAND_BUDGET);
     if profiling() {
@@ -1712,6 +1725,22 @@ mod tests {
         assert_eq!(measured_band_budget(mb(300), 0, 1, true), 0);
         // a discrete card has no such ceiling
         assert_eq!(measured_band_budget(mb(8000), 0, 1, false), (8000usize << 20) - VRAM_RESERVE as usize);
+    }
+
+    /// A render waiting for the band lock must read system memory after the render before it has allocated,
+    /// and a slow driver query must not hold the lock.
+    #[test]
+    fn system_memory_is_read_under_the_band_lock_and_a_driver_is_asked_before_it() {
+        let lock = Mutex::new(());
+        let held = || lock.try_lock().is_err();
+        let (guard, free) = lock_and_measure(&lock, true, || held().then_some(1));
+        assert_eq!(free, Some(1), "system memory was read without the lock");
+        drop(guard);
+        let (guard, free) = lock_and_measure(&lock, false, || (!held()).then_some(2));
+        assert_eq!(free, Some(2), "the driver was asked with the lock held");
+        assert!(held(), "the lock is held until the bands are done");
+        drop(guard);
+        assert!(!held());
     }
 
     #[test]
