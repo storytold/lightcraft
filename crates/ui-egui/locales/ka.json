@@ -706,6 +706,10 @@
   "Export": "ექსპორტი",
   "Export Album with Preset": "ალბომის ექსპორტი პრესეტით",
   "Export Album…": "ალბომის ექსპორტი…",
+  "Export Folder…": "საქაღალდის ექსპორტი…",
+  "Export Folder with Preset": "საქაღალდის ექსპორტი პრესეტით",
+  "This row covers more than one disk: export a folder inside it": "ეს მწკრივი ერთზე მეტ დისკს მოიცავს: გააექსპორტეთ მასში არსებული საქაღალდე",
+  "Exports this folder's photos and those in the folders inside it": "აექსპორტებს ამ საქაღალდისა და მასში არსებული საქაღალდეების ფოტოებს",
   "Export As…": "ექსპორტი სხვა ფორმატით…",
   "Export Contact Sheet PDF": "საკონტაქტო ფურცლის PDF-ად ექსპორტი",
   "Export Containing Keywords": "მშობელი საკვანძო სიტყვების ექსპორტი",
@@ -3692,5 +3696,9 @@
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
   "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
-  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის"
+  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "No photo in this folder is in the library yet": "ამ საქაღალდის არცერთი ფოტო ჯერ ბიბლიოთეკაში არ არის",
+  "Select the photos to move in the grid first": "ჯერ ბადეში მონიშნეთ გადასატანი ფოტოები",
+  "This place is kept in Local already": "ეს ადგილი უკვე დატოვებულია ლოკალურში",
+  "Only a place at the top of Local can be removed from it": "ლოკალურიდან ამოშლა მხოლოდ მის ზედა დონეზე მყოფ ადგილს შეუძლია"
 }

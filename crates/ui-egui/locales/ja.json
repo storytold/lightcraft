@@ -456,6 +456,10 @@
   "Export": "書き出し",
   "Export Album with Preset": "プリセットでアルバムを書き出す",
   "Export Album…": "アルバムを書き出す…",
+  "Export Folder…": "フォルダを書き出す…",
+  "Export Folder with Preset": "プリセットでフォルダを書き出す",
+  "This row covers more than one disk: export a folder inside it": "この行は複数のディスクにまたがっています。中のフォルダを書き出してください",
+  "Exports this folder's photos and those in the folders inside it": "このフォルダと中のフォルダにある写真を書き出します",
   "Export Group…": "グループを書き出す…",
   "Export Now": "今すぐ書き出す",
   "Export Point Curve Presets": "ポイントカーブのプリセットを書き出す",
@@ -2424,5 +2428,9 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "アプリを --control 7980 (または LIGHTCRAFT_CONTROL_PORT) で起動してから、lightcraft-cli mcp --connect でエージェントを接続できます。",
   "Welcome": "ようこそ",
   "Next": "次へ",
-  "Get Started": "始める"
+  "Get Started": "始める",
+  "No photo in this folder is in the library yet": "このフォルダの写真はまだライブラリにありません",
+  "Select the photos to move in the grid first": "先にグリッドで移動する写真を選択してください",
+  "This place is kept in Local already": "この場所はすでにローカルに残されています",
+  "Only a place at the top of Local can be removed from it": "ローカルから除けるのは、ローカルの最上位にある場所だけです"
 }
