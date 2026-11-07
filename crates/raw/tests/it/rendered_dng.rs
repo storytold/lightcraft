@@ -18,6 +18,8 @@ fn rendered_dng_round_trips_pixels_and_colour() {
     for space in [SRGB, PROPHOTO] {
         let meta = lightcraft_meta::Metadata { make: Some("Maker".into()), model: Some("Model".into()), ..Default::default() };
         let bytes = write_rendered_dng(w, h, &rgb, &space, &meta, None).unwrap();
+        let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+        assert_eq!(tiff.ifds[0].value(lightcraft_tiff::tags::WHITE_LEVEL), Some(&lightcraft_tiff::Value::Long(vec![1, 1, 1])));
         let raw = lightcraft_raw::decode(&bytes).unwrap();
         assert_eq!((raw.width, raw.height, raw.cpp, raw.cfa.is_none()), (w, h, 3, true));
         assert_eq!(raw.metadata.model.as_deref(), Some("Model"));
