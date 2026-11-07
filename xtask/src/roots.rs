@@ -16,7 +16,7 @@ const DENY_LINTS: &[&str] =
     &["clippy::unwrap_used", "clippy::expect_used", "clippy::panic", "clippy::unimplemented", "clippy::todo", "clippy::unreachable"];
 
 /// Crate roots exempt from `forbid(unsafe_code)` (they still need the deny list).
-const UNSAFE_EXCEPTION: &[&str] = &["lightcraft-sysmem", "lightcraft-wincolor"];
+const UNSAFE_EXCEPTION: &[&str] = &["lightcraft-sysmem", "lightcraft-wincolor", "lightcraft-file-identity-sys"];
 
 #[derive(Debug, Clone)]
 pub struct CrateRoot {
