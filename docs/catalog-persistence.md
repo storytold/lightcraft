@@ -1,8 +1,8 @@
 # Catalog persistence
 
 The catalog is two files in the library folder (`crates/catalog/src/journal.rs`): `catalog.snap`, a JSON snapshot of
-the whole catalog, and `catalog.log`, one JSON line per change made since. Every change is appended to the log before
-its command returns; natively the log's own thread fsyncs it right after, so a command never waits for the drive (a
+the whole catalog, and `catalog.log`, one JSON line per change made since. Every change is handed to the log before
+its command returns; natively the log's own thread writes and fsyncs it right after, so a command never waits for the drive (a
 write that fails is held and retried, and switching the library or quitting waits for it). Now and then the log is
 compacted into a new snapshot. This page covers what happens to a library's files when a newer version opens it.
 
@@ -17,13 +17,13 @@ one-way step, the upgrade first keeps the files the library was, byte for byte, 
   later snapshot, when the library was opened; a library that had no log, or only a log, has only the one file). `Journal::open` reports their names (`LoadReport::kept`) and logs them.
   A file already there under such a name is never replaced or removed (a library restored from an older backup can reach
   the same format and change as a set kept before): if it holds other bytes, the new files are kept as `…-2` (then
-  `-3`, and so on) instead, both alike; if it holds the same bytes, it is the copy already.
+  `-3`, and so on, up to 100 sets, after which the upgrade is refused) instead, both alike; if it holds the same bytes, it is the copy already.
 - The files kept at open stay unless the library is known to be in its old format still, because the upgrade at open
-  did not happen (then they keep nothing, and are removed again): once the upgrade is written, nothing that fails
+  did not happen (then the files that open wrote are removed again; a copy kept earlier stays): once the upgrade is written, nothing that fails
   after it takes them away. The files a later snapshot keeps (below) stay too, even if that snapshot then fails and
   the library is still in its old format.
 - A library whose files can't be kept, or whose upgrade can't be written (a full disk, a folder that can't be written
-  to), is not upgraded: it opens as it is, with no copy left lying about, and the next open tries again. If what is on
+  to), is not upgraded: it opens as it is, with no copy of this attempt left lying about, and the next open tries again. If what is on
   disk after a failed write can't be read back to say whether the upgrade was written, the library is refused instead
   (its way back stays). A library left like that is upgraded by its next snapshot, during the session or when it is
   closed, and that snapshot keeps the files first too (and is not written when they can't be kept). When a snapshot

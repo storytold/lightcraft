@@ -360,14 +360,14 @@ fn a_library_that_cannot_be_kept_is_not_upgraded() {
     assert_eq!((c.photos().count(), r.upgraded_from, r.kept.len()), (3, Some(6), 2));
 }
 
-/// Given an older library on disk whose files can't be kept (the name of one is taken by a directory), when it is
-/// opened, then it is not upgraded, and no copy or half-written staging file of the files it tried to keep is left
-/// lying about in the library's folder.
+/// Given an older library on disk whose files can't be kept (the staging name of the second is taken by a directory,
+/// so the first was written and must be removed again), when it is opened, then it is not upgraded, and no copy or
+/// half-written staging file of the files it tried to keep is left lying about in the library's folder.
 #[test]
 fn a_library_on_disk_that_cannot_be_kept_leaves_nothing_lying_about() {
     let dir = std::env::temp_dir().join(format!("lc-keep-fails-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join("catalog.log.v6-8")).unwrap();
+    std::fs::create_dir_all(dir.join("catalog.log.v6-8.tmp")).unwrap();
     let (snap, log) = fixture(6).unwrap();
     std::fs::write(dir.join(SNAPSHOT), snap).unwrap();
     std::fs::write(dir.join(LOG), log).unwrap();
@@ -376,7 +376,7 @@ fn a_library_on_disk_that_cannot_be_kept_leaves_nothing_lying_about() {
     assert_eq!((c.photos().count(), r.upgraded_from, r.kept.len()), (3, None, 0));
     let mut names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     names.sort();
-    assert_eq!(names, [LOG, "catalog.log.v6-8", SNAPSHOT], "nothing but the library and the name that was taken");
+    assert_eq!(names, [LOG, "catalog.log.v6-8.tmp", SNAPSHOT], "nothing but the library and the name that was taken");
     assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), snap.as_bytes());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -705,6 +705,35 @@ fn kept_files_that_are_there_already_are_reused() {
     let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!(r.kept, ["catalog.snap.v6-8", "catalog.log.v6-8"]);
     assert!(!m.files.lock().unwrap().keys().any(|k| k.ends_with("-2")));
+}
+
+/// Given a set kept before whose snapshot is this very one but whose log holds other bytes, when the library is
+/// upgraded, then both files of the new set take the next name, and the set kept before is left as it was.
+#[test]
+fn a_set_with_the_same_snapshot_and_another_log_is_not_reused_in_part() {
+    let (m, snap, log) = v6_library();
+    m.set("catalog.snap.v6-8", snap.clone());
+    m.set("catalog.log.v6-8", b"another log".to_vec());
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.kept, ["catalog.snap.v6-8-2", "catalog.log.v6-8-2"]);
+    assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(snap.clone()), Some(b"another log".to_vec())));
+    assert_eq!((m.get("catalog.snap.v6-8-2"), m.get("catalog.log.v6-8-2")), (Some(snap), Some(log)));
+}
+
+/// Given a hundred sets kept before under every name the upgrade may take, when the library is opened, then it is not
+/// upgraded, nothing is written and nothing is removed: an upgrade that can't keep its files is not done.
+#[test]
+fn an_upgrade_is_refused_when_a_hundred_kept_sets_are_in_the_way() {
+    let (m, snap, log) = v6_library();
+    m.set("catalog.snap.v6-8", b"earlier".to_vec());
+    for copy in 2..=100 {
+        m.set(&format!("catalog.snap.v6-8-{copy}"), b"earlier".to_vec());
+    }
+    let before = m.files.lock().unwrap().clone();
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, r.kept.len()), (None, 0));
+    assert_eq!(*m.files.lock().unwrap(), before, "nothing written or removed");
+    assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(log)));
 }
 
 /// Given kept files that were there before and an upgrade that is then not written (a full disk), when the library is

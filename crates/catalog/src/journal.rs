@@ -80,15 +80,16 @@
 //! - **An upgrade keeps what it replaces**: older builds can't read the upgraded library, so the
 //!   files it was are first kept beside it as `catalog.snap.v<format>-<seq>` and
 //!   `catalog.log.v<format>-<seq>` (`seq`: the last change they hold), byte for byte
-//!   ([`LoadReport::kept`]; a damaged log is kept under its own name instead). A file already
-//!   there under that name is never replaced or removed (a library restored from an older
-//!   backup can reach the same format and change as a set kept before): other bytes make both
-//!   names end `-2` (then `-3`, …), the same bytes are the copy already. Put back under
+//!   ([`LoadReport::kept`]; a damaged log is kept under its own name instead, as it always was).
+//!   A file already there under one of the names above is never replaced or removed (a library
+//!   restored from an older backup can reach the same format and change as a set kept before):
+//!   other bytes make both names end `-2` (then `-3`, … up to 100 sets, then the upgrade is
+//!   refused), the same bytes are the copy already. Put back under
 //!   their own names, they are the library as the older build left it (what a later snapshot
 //!   keeps is the library as it was at open: a torn tail already cut, and what a session of this
 //!   build appended while it stayed in its old format, which an older build may refuse). They stay unless the
 //!   library on disk is known to be in its old format still: an upgrade at open that did not
-//!   happen leaves no copy, and one that was written keeps its copy whatever fails after it.
+//!   happen leaves none of the copies it wrote (one that was there before stays), and one that was written keeps its copy whatever fails after it.
 //!   Nothing removes them afterwards: they are the user's to delete. (Not where the store says
 //!   there is no going back, [`Store::keeps_replaced_formats`].) A library left in its old format
 //!   at open (its files couldn't be kept, or the upgrade couldn't be written) is upgraded by a
@@ -698,8 +699,8 @@ impl Journal {
                 Some(Some(VERSION)) => return Err(refused("was upgraded, but its damaged log is still in place", e.to_string())),
                 // what is on disk can't be read to say: the way back stays
                 None => return Err(refused("it can't be told whether its upgrade was written", e.to_string())),
-                // Nothing lost: the old files are intact and still load. No copy of them stays:
-                // there is nothing to go back from.
+                // Nothing lost: the old files are intact and still load. No copy of them from this
+                // attempt stays: there is nothing to go back from.
                 Some(_) => {
                     self.forget_kept(&kept.created);
                     if how != Upgrade::May {
@@ -788,8 +789,8 @@ impl Journal {
     /// they were then, before a snapshot upgrades it: the snapshot as it is (nothing writes it
     /// until the upgrade) and the log up to its length at open (what was appended since is this
     /// build's, which an older build may refuse). The names are those the open would have kept
-    /// them under, so files kept for an upgrade that did not land are never left behind under
-    /// other names. Kept once: when a snapshot failed and is tried again, they stay as they are
+    /// them under (a name taken since ends `-2`, … as there), so files kept for an upgrade that
+    /// did not land are not left behind under other names. Kept once: when a snapshot failed and is tried again, they stay as they are
     /// (the failed one may have landed all the same, and the snapshot is then no longer what
     /// could be kept). A snapshot that is already in this build's format (that landed after its
     /// files were kept, or before them, reporting a failure) is the upgrade done, with nothing
