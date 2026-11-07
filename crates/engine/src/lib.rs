@@ -25,6 +25,7 @@ pub mod cmd;
 pub mod config;
 pub mod contact_sheet;
 pub mod crs;
+pub mod crs_mask_table;
 pub mod crs_masks;
 pub mod demo;
 pub mod denoise;
