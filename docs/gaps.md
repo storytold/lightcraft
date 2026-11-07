@@ -63,6 +63,8 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 - 2026-11-04: Gap 6 closed: compressed Olympus ORF decodes from sensor data (`crates/raw/src/vendor/orfc.rs`); OM-D E-M1 (r=0.995) and E-M10 Mark III (r=0.929) verified; 58 bodies newly unlocked (78 total across Olympus and OM).
 
+- 2026-10-31: [Fujifilm in-camera recipe inspection](fujifilm-recipes.md) in Info, Copy recipe and `photo.fujiRecipe` (#1209). Reading metadata does not apply a simulation or reproduce the camera JPEG; camera colour and rendering gaps remain. No ranked gap or readiness estimate changes.
+
 - 2026-10-29: the import review has a remembered 80–320 pt thumbnail-size slider, density-aware previews and bounded visible retention (#2237, part of #2056). Small sources do not reconstruct the same preview job every frame. The pre-import loupe and keyboard culling remain open in #2056; no ranked gap or headline feature count closes.
 
 - 2026-10-22: saving XMP preserves foreign namespaces even when they use `lc:` or `xmp:` prefixes; importing them no longer interprets their properties as native settings or ratings. Parser, merge and save-command regressions cover the correction; no ranked gap or readiness estimate changes.
@@ -99,6 +101,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-11-02 | minor | PERF-STEP-STALL: the catalog log is written and synced off the UI thread, so stepping and flagging never wait for the drive (a 300 ms sync: slowest flag 0.2 ms, was 305 ms); a failed write is held and retried, counted as unsaved, never dropped; gap 26 not closed |
 | 2026-10-28 | minor | Gap 8 shrinks: the desktop app offers lensfun's lens database (CC BY-SA, pinned) once on the first launch and downloads it on request and looks the library's raws up when it arrives; validation, a profile picker and own calibration remain |
 | 2026-10-23 | patch | Gap 8: the Sigma 10–18 mm on the ILCE-6700 gets a measured lens exception at 10–10.5 mm (0.55 px worst over 99 photos, was about 1.4 px) |
+| 2026-10-31 | minor | Fujifilm recipe inspection recorded; camera-colour and simulation-rendering gaps remain; rankings and estimates unchanged |
 | 2026-10-29 | minor | Import thumbnails render when the camera JPEG is too small, retaining preview-only/error fallbacks; import review: remembered thumbnail size and density-aware previews (#2237, part of #2056); pre-import loupe/keyboard culling remains open; no ranked gap closes |
 | 2026-10-24 | minor | Gap 8: lens profile work is tracked in #329; hours unchanged |
 | 2026-10-25 | patch | Import Copy and Move report rename-sequence exhaustion per file without losing earlier transfers; no ranked gap or readiness changes |

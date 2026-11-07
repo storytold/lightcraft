@@ -6,6 +6,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
         camera_card(ui, &p);
+        recipe_card(app, ui, id);
         ui.add_space(6.0);
         if let Some(why) = &p.preview_only {
             if crate::widgets::preview_only_notice(ui, "info", why) {
@@ -464,4 +465,72 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
         let _ = app.run("photo.setMeta", json!({"ids": edit.ids, key: edit.text}));
     }
     ui.add_space(6.0);
+}
+
+/// In-camera Fujifilm film settings. A recipe stored at import is shown as it is. A photo from
+/// before that, which might be one, is read on a worker thread: the read is not part of drawing,
+/// and a Nikon or Canon raw is not opened at all.
+fn recipe_card(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    let now = ui.input(|i| i.time);
+    let running = app.tasks.is_running(crate::fuji_recipe::TASK);
+    app.recipes.abandon_idle(running, now);
+    let generation = app.session.library_generation();
+    let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
+    match app.recipes.plan(generation, &photo, now) {
+        crate::fuji_recipe::Plan::Hidden => {}
+        // a read is in flight, or a failed one is waiting to be tried again
+        crate::fuji_recipe::Plan::Wait => ui.ctx().request_repaint_after(std::time::Duration::from_secs(1)),
+        crate::fuji_recipe::Plan::Show(view) => draw_recipe(ui, &view),
+        crate::fuji_recipe::Plan::Start(key) => begin_recipe_read(app, key, now),
+    }
+}
+
+fn begin_recipe_read(app: &mut LightcraftApp, key: crate::fuji_recipe::RecipeKey, now: f64) {
+    if !app.recipes.reserve(&key) {
+        return;
+    }
+    let path = key.path.clone();
+    let reader = app.session.media.file_bytes.clone();
+    let tracked = key.clone();
+    match crate::tasks::spawn(
+        app,
+        crate::fuji_recipe::TASK,
+        None,
+        move || crate::fuji_recipe::read_path(reader, &path),
+        move |app, ctx, result| {
+            let now = ctx.input(|i| i.time);
+            let library = app.session.library_generation();
+            if let Some(next) = app.recipes.finish(&tracked, result, library, now) {
+                begin_recipe_read(app, next, now);
+            }
+        },
+    ) {
+        Ok(()) => {}
+        Err(_) => app.recipes.fail_reserve(&key, now),
+    }
+}
+
+fn draw_recipe(ui: &mut egui::Ui, view: &crate::fuji_recipe::RecipeView) {
+    if view.lines.is_empty() {
+        return;
+    }
+    ui.add_space(6.0);
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(egui::RichText::new(crate::i18n::tr("Film recipe")).size(12.0).color(t.text_label));
+        ui.add_space(4.0);
+        let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
+        egui::Grid::new("info-fuji-recipe").num_columns(2).spacing([24.0, 3.0]).show(ui, |ui| {
+            for (label, value) in &view.lines {
+                ui.label(dim(crate::i18n::tr(label)));
+                ui.label(dim(crate::i18n::tr(value)));
+                ui.end_row();
+            }
+        });
+        ui.add_space(6.0);
+        if text_button(ui, "copyRecipe", "Copy recipe", false).clicked() {
+            ui.ctx().copy_text(view.text.clone());
+        }
+    });
 }

@@ -27,6 +27,7 @@ pub mod export_task;
 mod find_similar;
 mod focus_scan;
 mod frame_rate;
+mod fuji_recipe;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
@@ -351,6 +352,8 @@ pub struct LightcraftApp {
     pub export: Option<export_task::ExportTask>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
+    /// Recipes read off the UI thread for photos imported before they were stored.
+    pub(crate) recipes: fuji_recipe::Recipes,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
     pub last_export_result: Option<Value>,
     /// The last slideshow export's end has been told (a toast).
