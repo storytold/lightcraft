@@ -162,6 +162,12 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
         (Value::Object(b), Value::Object(p)) => {
             let mut out = Map::new();
             for (k, pv) in p {
+                // a field the settings leave out (a default skipped when serialising, e.g. an
+                // option that is off) keeps its default below the halfway point: a `null`
+                // would fail to deserialize and drop the whole preset
+                if t < 0.5 && !b.contains_key(k) {
+                    continue;
+                }
                 let bv = b.get(k).unwrap_or(&Value::Null);
                 out.insert(k.clone(), scale_patch(bv, pv, t));
             }
@@ -250,6 +256,20 @@ mod tests {
         assert_eq!(b.light.exposure, 1.0);
         assert_eq!(b.effects.clarity, 30.0);
         assert_eq!(b.crop.geometry.angle, 0.0);
+    }
+
+    /// A preset turning on an option the photo's settings leave out (`camera_local_tone` is
+    /// omitted while off) still applies at a low amount: the option stays off, the rest scales.
+    #[test]
+    fn amount_keeps_fields_the_settings_leave_out() {
+        let base = DevelopSettings::default();
+        let partial = json!({"profile": {"camera_local_tone": true}, "light": {"exposure": 1.0}});
+        let low = apply_partial(&base, &partial, 0.3);
+        assert!(!low.profile.camera_local_tone);
+        assert!((low.light.exposure - 0.3).abs() < 1e-9, "{}", low.light.exposure);
+        let half = apply_partial(&base, &partial, 0.5);
+        assert!(half.profile.camera_local_tone);
+        assert!((half.light.exposure - 0.5).abs() < 1e-9);
     }
 
     #[test]
