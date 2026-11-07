@@ -156,14 +156,16 @@ pub(super) fn flattened_segments(tone: &CameraTone, sensor: &Rgb32f, reference: 
         let scene = luma(colour(x.map(f64::from)).map(|v| v.max(0.0)));
         ((0.0003..0.85).contains(&jpeg) && scene.is_finite() && scene > 0.0).then_some((scene, jpeg))
     };
+    // once per pixel: each one is a centre and the right or below neighbour of up to two others
+    let levels: Vec<Option<(f64, f64)>> = (0..sensor.data.len().min(w * h)).map(level).collect();
     // per segment: Σ du·dv, Σ du², neighbouring pairs
     let mut sums = [(0.0, 0.0, 0usize); 31];
-    for i in 0..sensor.data.len().min(w * h) {
-        let Some((s0, j0)) = level(i) else { continue };
+    for (i, here) in levels.iter().enumerate() {
+        let Some((s0, j0)) = *here else { continue };
         let right = (i % w + 1 < w).then_some(i + 1);
         let below = (i / w + 1 < h).then_some(i + w);
         for j in [right, below].into_iter().flatten() {
-            let Some((s1, j1)) = level(j) else { continue };
+            let Some(&Some((s1, j1))) = levels.get(j) else { continue };
             let du = (s1 / s0).ln();
             if !LOCAL_STEP.contains(&du.abs()) {
                 continue;
