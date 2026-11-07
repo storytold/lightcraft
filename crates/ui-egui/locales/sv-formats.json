@@ -325,5 +325,10 @@
   "View › Detail View ({keys}).": "Visa › Detaljvy ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fil › Exportera… · Fil › Skriv ut… ({keys}).",
   "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}",
+  "· {n} copies of library photos": "· {n} kopior av bibliotekets foton",
+  "· {n} repeated in this import": "· {n} upprepade i denna import",
+  "Same content as {path} in the library": "Samma innehåll som {path} i biblioteket",
+  "Same file as {path} earlier in this import": "Samma fil som {path} tidigare i denna import",
+  " · {n} imported although another photo has the same content": " · {n} importerade fastän ett annat foto har samma innehåll"
 }

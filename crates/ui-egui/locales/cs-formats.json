@@ -325,5 +325,10 @@
   "View › Detail View ({keys}).": "Zobrazení › Zobrazení detailu ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Soubor › Exportovat… · Soubor › Tisk… ({keys}).",
   "{n} folder{} could not be read": "Složky, které se nepodařilo přečíst: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}",
+  " · {n} imported although another photo has the same content": " · importováno {n}, přestože jiná fotografie má stejný obsah",
+  "Same content as {path} in the library": "Stejný obsah jako {path} v knihovně",
+  "Same file as {path} earlier in this import": "Stejný soubor jako {path} dříve v tomto importu",
+  "· {n} copies of library photos": "· kopie fotografií z knihovny: {n}",
+  "· {n} repeated in this import": "· opakování v tomto importu: {n}"
 }
