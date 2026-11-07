@@ -11,7 +11,8 @@
 //!    source stays as it was.
 //! 2. Only after the catalog records pointing at the destinations were committed and saved
 //!    does [`finish`] remove each source — after checking once more that its destination is
-//!    still there with the same size. A source that can't be removed (a read-only card, a
+//!    still the same file as the source (the same open file, or the same bytes, checked again with
+//!    neither changing meanwhile). A source that can't be removed (a read-only card, a
 //!    locked file) stays and is reported; the photo is then imported from the copy.
 //!
 //! A `IMG_1.xmp` sidecar is shared by `IMG_1.CR3` and `IMG_1.JPG`: it is copied along with each,

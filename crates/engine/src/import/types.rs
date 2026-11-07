@@ -67,10 +67,11 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
-    /// Add: raws are described from their headers ([`crate::media::MediaCache::header_probe`]), their
-    /// pixel data never read: an import of many files from a slow drive (a Lightroom catalog's
-    /// originals) reads a few percent of their bytes. Such files get no content hash, so a copy of
-    /// one elsewhere is found by its content only when it is hashed on demand.
+    /// Raws are described from their headers ([`crate::media::MediaCache::header_probe`]), their
+    /// pixel data not read before any transfer: an import of many files from a slow drive (a
+    /// Lightroom catalog's originals) reads a few percent of their bytes. Copy and Move hash each
+    /// file while copying it; a file added in place gets no content hash, and a copy of it is found
+    /// by size and dimensions, then the first 512 KiB, then both full hashes (`import/dupes.rs`).
     pub headers_only: bool,
     /// A batch-edit recipe: develop control id / value pairs (e.g. `light.exposure` → 0.5),
     /// applied to every imported photo *after* its XMP sidecar, camera default and import preset,

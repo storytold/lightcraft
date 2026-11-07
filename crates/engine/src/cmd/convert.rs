@@ -23,8 +23,9 @@ fn dng_names(path: &str) -> impl Iterator<Item = std::path::PathBuf> {
 ///
 /// The DNG is checked before anyone relies on it (Convert to DNG relinks the photo to it, Copy as
 /// DNG deletes the raw copy): the encoded file must decode to the same raw data, and it is
-/// written to a temp file, synced, read back identical and only then given its name — never
-/// replacing an existing file. On any failure no DNG is left behind and the raw stays in use.
+/// written to a synced temp file and then given a name no other file has (never replacing one);
+/// the named file is read back and checked before any catalog change or removal of the raw copy.
+/// On any failure the raw stays in use, and only a DNG that is still the one written is removed.
 pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::result::Result<String, String> {
     let reader = s.media.file_bytes.clone().unwrap_or_else(|| s.originals.reader());
     write_dng_with(Some(&reader), path, packet)
@@ -337,7 +338,7 @@ pub(crate) fn reload_ops(
         ops.append(&mut mine);
         changed.push(id);
     }
-    // virtual copies share the file
+    // every record of this file (virtual copies, other records of the same path) shares its content
     for c in cat.photos().filter(|c| c.id != id && c.source == ph.source) {
         let theirs: Vec<Op> =
             content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
