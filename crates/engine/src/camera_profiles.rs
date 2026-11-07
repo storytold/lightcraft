@@ -119,6 +119,8 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     // a fresh temp file renamed over the profile: never a fixed `.tmp` name, which a planted link
     // would have written through
     lightcraft_catalog::safe_file::write_atomic(&path, &json).map_err(|e| format!("{}: {e}", path.display()))?;
+    // Drop any cached lookup for this model: an earlier miss must not hide the profile just saved.
+    cache().lock().unwrap_or_else(PoisonError::into_inner).remove(profile.model.trim());
     Ok(path)
 }
 
@@ -331,6 +333,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
 
         assert_ne!(before_key, after_key, "a changed profile must not reuse the previous render cache");
+    }
+
+    #[test]
+    fn saved_profile_is_found_after_earlier_miss() {
+        let model = format!(
+            "TESTMISS-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default()
+        );
+        let mut saved = profile();
+        saved.model = model.clone();
+
+        // A lookup before anything is saved caches the miss.
+        assert!(get(&model).is_none(), "no profile saved yet");
+
+        // Saving replaces the on-disk file that `get` reads.
+        let saved_path = dir().map(|d| save(&saved, &d).unwrap());
+
+        assert_eq!(get(&model).as_deref(), Some(&saved), "a profile saved after the first lookup must be returned");
+        if let Some(path) = saved_path {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     #[test]
