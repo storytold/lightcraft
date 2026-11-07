@@ -324,6 +324,10 @@
   "Panel move was not applied: {error}": "Das Verschieben des Bereichs wurde nicht ausgeführt: {error}",
   "{name} is installed": "{name} ist installiert",
   "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet",
+  "Couldn't read {name}: {error}": "{name} konnte nicht gelesen werden: {error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}: {n} Foto{s} nicht lesbar",
+  "No new photos on {name} ({n} already in the library)": "Keine neuen Fotos auf {name} ({n} bereits in der Bibliothek)",
+  "No photos found on {name}": "Keine Fotos auf {name} gefunden",
   "Bring photos in with File › Import Photos… ({keys}).": "Fotos holen Sie mit Datei › Fotos importieren… ({keys}) in die Bibliothek.",
   "View › Detail View ({keys}).": "Ansicht › Detailansicht ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys})."

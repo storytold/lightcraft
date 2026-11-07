@@ -341,6 +341,64 @@ fn collisions_are_numbered_and_files_in_the_destination_stay() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// CodeRabbit on #1635: a camera's staged file is moved even when the destination holds the temp
+/// folder (a home folder on Windows does), so the library's original is never left there for the
+/// system to clear.
+#[test]
+fn a_staged_camera_file_leaves_the_temp_folder() {
+    let name = unique("staged");
+    let staging = crate::camera_import::staging_dir(&name);
+    // the destination holds the staging folder: the temp folder itself (under a name of its own)
+    let dest = std::env::temp_dir();
+    let moved = dest.join(format!("{name}.png"));
+    let _cleanup = Cleanup(vec![staging.clone(), moved.clone()]);
+    write_png(&staging.join("DCIM/100/a.png"), 1);
+    let mut s = session();
+    let r = import_move(&mut s, &[&staging.join("DCIM")], &dest, json!({"organize": "flat", "rename": name}));
+    assert_eq!((len(&r, "moved"), len(&r, "kept")), (1, 0), "{r}");
+    assert!(moved.is_file() && files_under(&staging).is_empty(), "{r}");
+    assert_eq!(photo_paths(&s), [moved.to_string_lossy().to_string()]);
+}
+
+/// CodeRabbit on #1635: a path that only passes through the staging folder (`…/staging/../x`) is
+/// judged by where the file really is: outside staging but inside the destination, it is added
+/// where it is, not moved.
+#[test]
+fn a_path_through_the_staging_folder_is_not_staged() {
+    let name = unique("dotdot");
+    let staging = crate::camera_import::staging_dir(&name);
+    let outside = std::env::temp_dir().join(&name);
+    let moved_by_mistake = std::env::temp_dir().join(format!("{name}.png"));
+    let _cleanup = Cleanup(vec![staging.clone(), outside.clone(), moved_by_mistake]);
+    // a file in it makes the staging root exist, so `..` from there resolves
+    write_png(&staging.join("keep.png"), 2);
+    write_png(&outside.join("a.png"), 1);
+    let root = staging.parent().unwrap();
+    let through = root.join("..").join(&name).join("a.png");
+    let mut s = session();
+    let r = import_move(&mut s, &[&through], &std::env::temp_dir(), json!({"organize": "flat", "rename": name}));
+    assert_eq!((len(&r, "moved"), len(&r, "kept")), (0, 1), "{r}");
+    assert!(outside.join("a.png").is_file(), "{r}");
+}
+
+/// A name no other test or run uses: the process, the time and the tag.
+fn unique(tag: &str) -> String {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    format!("lc-move-{tag}-{}-{nanos}", std::process::id())
+}
+
+/// Removes its files and folders when the test ends, also when an assertion fails.
+struct Cleanup(Vec<PathBuf>);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            let _ = std::fs::remove_dir_all(p);
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
 /// A stem-named sidecar shared with a photo that isn't moved is copied along but stays beside
 /// that photo.
 #[test]

@@ -377,8 +377,10 @@ impl ImportJob {
             }
             let stored = match (mode, &self.copy_root) {
                 (ImportMode::Copy | ImportMode::Move, Some(root))
-                    if !crate::import_move::inside(Path::new(&path), root)
-                        && !self.lib_dir.as_ref().is_some_and(|l| crate::import_move::inside(Path::new(&path), l)) =>
+                    if (!crate::import_move::inside(Path::new(&path), root)
+                        && !self.lib_dir.as_ref().is_some_and(|l| crate::import_move::inside(Path::new(&path), l)))
+                        // a camera's staged file never stays in the temp folder (even under a home-folder destination)
+                        || crate::camera_import::is_staged(Path::new(&path)) =>
                 {
                     // the templates see the photo as it will be catalogued (undated: the import time)
                     let own = Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
