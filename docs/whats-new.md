@@ -443,6 +443,14 @@
   left out of a new album made from the selection, out of Add to Album, and out of the target album (B), which does
   nothing and says nothing when none of them is left, and counts only the photos it changed.
 
+### Big libraries take less memory
+- Photos whose develop settings are equal now hold them once in memory: every unedited JPEG, PNG or other rendered
+  file, every raw on the same import look, and the equal history steps, versions and import looks of one photo. (A
+  raw's unedited Kelvin settings carry its own as-shot white balance, so those share only with raws of the very same
+  white balance.) On a test library of 100,000 photos, 90 % unedited JPEGs, 8 % raws with one as-shot white balance
+  and 2 % edited, a photo takes about 2.8 kB where it took 4.4 kB (285 MB instead of 441 MB). Nothing changes on
+  screen, and the library's files are byte for byte what they were, so earlier versions open them as before.
+
 ## 2026-10-23
 
 ### AI Denoise works out of the box
