@@ -489,13 +489,14 @@ impl crate::Session {
     }
 
     /// Accept a finished job's loaded source into the cache. What the decode learnt about the file that the catalog
-    /// has wrong is corrected too ([`Self::learn_as_shot_wb`]).
+    /// has wrong is corrected too ([`Self::learn_as_shot_wb`], [`Self::learn_file_lens`]).
     pub fn accept(&mut self, r: &RenderResult) {
         if let Some(src) = &r.loaded
             && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| super::quick::source_identity(p) == key))
         {
             if let Some(info) = &src.info {
                 self.learn_as_shot_wb(r.photo, info);
+                self.learn_file_lens(r.photo, info);
             }
             self.media.insert_source(r.photo, r.level, src.clone());
         }
@@ -517,6 +518,21 @@ impl crate::Session {
         }
         if let Err(e) = self.apply_system(Op::SetAsShotWb { id, wb: Some(read) }) {
             log::warn!("photo {}: as-shot white balance not recorded: {e}", id.0);
+        }
+    }
+
+    /// Record the file's own lens correction a decode of photo `id` read (`info`) when the catalog holds another: a raw
+    /// imported before LightCraft read its camera's in-file correction renders with it ([`super::source::pinned_lens`]
+    /// prefers the decode's), while the Optics panel reads the catalog's copy and said there was no profile until Reload
+    /// (issue #3764). Bookkeeping, not an undo step. A decode without a file correction changes nothing.
+    fn learn_file_lens(&mut self, id: PhotoId, info: &SourceInfo) {
+        let Some(lens) = info.lens.filter(|l| l.source.is_file()) else { return };
+        let Some(p) = self.catalog.photo(id) else { return };
+        if p.embedded_lens == Some(lens) {
+            return;
+        }
+        if let Err(e) = self.apply_system(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens)) }) {
+            log::warn!("photo {}: lens correction not recorded: {e}", id.0);
         }
     }
 
@@ -605,6 +621,7 @@ impl crate::Session {
         let image = r.image.clone();
         if let Some(info) = &r.info {
             self.learn_as_shot_wb(id, info);
+            self.learn_file_lens(id, info);
         }
         self.media.insert_source(id, level, r);
         Ok(image)
