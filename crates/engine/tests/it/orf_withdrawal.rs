@@ -23,6 +23,7 @@ impl Drop for OrfLibrary {
     }
 }
 
+/// A fixed original and settings isolate decoder status from every other render-key input.
 fn decoder_session(format: &str) -> Session {
     let mut s = Session::new();
     let mut p = Photo::new(PhotoId(1), Source::File { path: "same-original.orf".into() }, "same-original.orf", format, 6000, 4000, "2026-01-01");
@@ -52,6 +53,7 @@ fn decoder_keys(s: &mut Session) -> (Vec<u64>, Vec<Hash128>, String) {
     )
 }
 
+/// Old ORF renders cannot stand in after withdrawal; other formats and original-file identities stay stable.
 #[test]
 fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity() {
     // Before the withdrawal, format was not part of any of these keys: an otherwise identical
@@ -69,6 +71,7 @@ fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity
     assert_eq!(orf, decoder_keys(&mut decoder_session("orf")));
 }
 
+/// Apply the same-byte capability transition that Reload or the background recheck records.
 fn mark_orf_preview_only(s: &mut Session) {
     let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
     s.catalog
@@ -85,6 +88,7 @@ fn mark_orf_preview_only(s: &mut Session) {
     s.media.forget(p.id);
 }
 
+/// A support-status change invalidates every render family, even when a resize happens at the same time.
 #[test]
 fn orf_preview_transition_changes_render_keys_with_identical_bytes_and_settings() {
     let mut s = decoder_session("ORF");
@@ -103,6 +107,7 @@ fn orf_preview_transition_changes_render_keys_with_identical_bytes_and_settings(
     assert_ne!(before.0[2], s.preview_job(p.id, 648, 480, true, &p.develop).unwrap().key, "a hover resize must not cancel the status salt");
 }
 
+/// An in-flight sensor decode must not refill a source cache cleared by the preview-only transition.
 #[test]
 fn source_from_before_orf_preview_transition_is_not_accepted() {
     let mut s = decoder_session("ORF");
@@ -144,6 +149,7 @@ fn legacy_orf(name: &str, preview_only: Option<String>) -> OrfLibrary {
     OrfLibrary { s, dir, lib, id }
 }
 
+/// Previously supported compressed ORFs and their copies migrate without losing edits, history or persistence.
 #[test]
 fn legacy_compressed_orf_and_copies_become_preview_only_without_losing_edits() {
     let mut x = legacy_orf("compressed", Some("Olympus compressed ORF".into()));
@@ -170,6 +176,7 @@ fn legacy_compressed_orf_and_copies_become_preview_only_without_losing_edits() {
     assert!(recheck::stale(&x.s.catalog, false).is_empty());
 }
 
+/// Supported uncompressed ORF is checked once and never reported as newly recovered sensor support.
 #[test]
 fn legacy_uncompressed_orf_is_stamped_once_without_a_false_recovery_notice() {
     let mut x = legacy_orf("supported", None);
@@ -187,6 +194,7 @@ fn legacy_uncompressed_orf_is_stamped_once_without_a_false_recovery_notice() {
     assert!(x.s.catalog.photo(x.id).unwrap().develops_raw());
 }
 
+/// An offline original keeps its catalog state and remains eligible for a later recheck.
 #[test]
 fn unavailable_legacy_orf_is_unchanged_and_retried() {
     let mut x = legacy_orf("offline", None);
