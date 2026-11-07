@@ -307,6 +307,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::Welcome { .. } => 460.0,
             Dialog::LensDatabase { .. } => 440.0,
             Dialog::ManageEffects { .. } => 560.0,
+            Dialog::ReportBug { .. } => 560.0,
             _ => 380.0,
         })
         .show(ctx, |ui| {
@@ -455,6 +456,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::NewSmartAlbum { .. } => "Create Smart Album",
         Dialog::AllMetadata { .. } => "All Metadata",
         Dialog::SystemInfo { .. } => "System Info",
+        Dialog::ReportBug { .. } => "Report a Bug",
         Dialog::DenoiseModel { .. } => "AI Denoise Model",
         Dialog::FaceModel { info, .. } if info["download"].is_string() => "Download Face Model",
         Dialog::FaceModel { .. } => "Add Face Model",
@@ -606,6 +608,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
         Dialog::Welcome { .. } => "",
         Dialog::LensDatabase { .. } => "Download",
+        Dialog::ReportBug { .. } => "Create Report",
         Dialog::SynchronizeFolder { .. } if informational => "Close",
         Dialog::SynchronizeFolder { .. } => "Synchronize",
         Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
@@ -733,6 +736,8 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::SaveEffect { .. }
                     | Dialog::CaptureTime { .. }
                     | Dialog::LensDatabase { .. }
+                    // a report that can't be written or opened keeps what was typed (#1128 review)
+                    | Dialog::ReportBug { .. }
             ) =>
         {
             app.toast(ctx, e)
@@ -2086,6 +2091,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::FaceModel { info, accepted, .. } => crate::panels::faces::model_dialog(app, ui, t, info, accepted),
         Dialog::LightroomResult { .. } => lightroom_result_body(ui, dlg),
         Dialog::SystemInfo { .. } => system_info_body(ui, t, dlg),
+        Dialog::ReportBug { opts, rows, logs } => crate::bug_report::dialog_body(ui, t, opts, rows, logs),
         Dialog::AllMetadata { .. } => all_metadata_body(ui, t, dlg),
         Dialog::SmartRules { .. } => smart_rules_body(app, ui, t, dlg),
         Dialog::NewSmartAlbum { .. } => new_smart_album_body(app, ui, t, confirm, dlg),
