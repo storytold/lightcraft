@@ -200,6 +200,21 @@ fn lightroom_radial_mask_inverted_is_outside() {
     assert_eq!(radial_of(&s), (true, 25.0, false));
 }
 
+/// Issue #3592: Lightroom Classic 15.6 (Camera Raw 18.7) writes an inverted radial with
+/// `MaskInverted="true"` and `Flipped="false"`. Both read as "outside" cancelled out, so the mask
+/// imported not inverted; the inversion is the component's, and the radial stays "inside".
+#[test]
+fn lightroom_15_inverted_radial_with_flipped_false_is_outside() {
+    // the reporter's mask, as Lightroom 15.6 saved it to the XMP
+    let s = radial_settings(
+        "MaskGroupBasedCorrections",
+        r#"crs:MaskInverted="true" crs:Midpoint="50" crs:Roundness="0" crs:Feather="38" crs:Flipped="false" crs:Version="2""#,
+    );
+    assert_eq!(radial_of(&s), (false, 38.0, true), "the inversion is the component's alone");
+    let (inside, outside) = lift_inside_outside(&s);
+    assert!(inside == 0 && outside > 20, "the effect is outside the circle: {inside} {outside}");
+}
+
 #[test]
 fn versionless_group_radial_is_inside_with_half_the_feather() {
     // Lightroom renders both inside and rewrites them Flipped="true", Feather halved, Version="2"
