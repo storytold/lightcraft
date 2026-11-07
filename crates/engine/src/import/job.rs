@@ -1,5 +1,5 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{Seen, expand, probe_all, reusable_probes, sidecars_of};
+use super::files::{BrowsedFile, Seen, browsed_files_changed, expand, probe_all, reusable_probes, sidecars_of};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -38,7 +38,10 @@ pub struct ImportJob {
     /// as the options said when the import was set up).
     pub(super) library: Option<(lightcraft_catalog::Catalog, bool)>,
     /// path → (photo, a Local browse record?)
-    pub(super) by_path: HashMap<String, (PhotoId, bool)>,
+    pub(super) by_path: HashMap<String, (PhotoId, bool, Option<String>)>,
+    /// path → the size the record of a browsed (Local) file has: a file of another size has been replaced since
+    /// it was browsed ([`super::files::browsed_files_changed`])
+    local_sizes: HashMap<String, u64>,
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
     pub(super) probe: Option<crate::media::FileProbe>,
@@ -67,8 +70,9 @@ pub struct Prepared {
 
 #[derive(Debug)]
 pub(super) enum PreparedItem {
-    /// A Local (browsed) record imported for real.
-    Promote(PhotoId),
+    /// A Local (browsed) record imported for real; with what its file is now when the file was replaced since it was
+    /// browsed (the record is brought up to date).
+    Promote(PhotoId, Option<Box<ProbeInfo>>),
     Duplicate {
         path: String,
         existing: Option<PhotoId>,
@@ -193,6 +197,7 @@ impl ImportJob {
             copy_root,
             library: Some((s.catalog.clone(), fresh)),
             by_path: HashMap::new(),
+            local_sizes: HashMap::new(),
             by_hash: HashMap::new(),
             probe: s.media.file_probe.clone(),
             file_bytes: s.media.file_bytes.clone(),
@@ -240,9 +245,15 @@ impl ImportJob {
                 continue;
             }
             if let Source::File { path } = &p.source {
-                self.by_path.insert(path.clone(), (p.id, p.local));
+                self.by_path.insert(path.clone(), (p.id, p.local, p.content_hash.clone()));
+                if p.local {
+                    self.local_sizes.insert(path.clone(), p.file_size);
+                }
             }
-            if let Some(h) = &p.content_hash {
+            // (a copy that was only browsed in Local isn't in the library)
+            if !p.local
+                && let Some(h) = &p.content_hash
+            {
                 self.by_hash.insert(h.clone(), Some(p.id));
             }
         }
@@ -258,15 +269,44 @@ impl ImportJob {
         let mode = self.mode;
         let mut out = Prepared { scanned: files.len(), items: Vec::new() };
         let mut todo = Vec::new();
-        for f in files {
-            match self.by_path.get(f.as_str()).copied() {
-                Some((id, true)) if !opts.local => {
+        // browsed files replaced since: probed again with `todo`, their records brought up to date as they join the library
+        let mut changed: HashMap<String, PhotoId> = HashMap::new();
+        // the sizes of the browsed files this import would promote, looked at together before they are decided one by one
+        // (a file promoted in an earlier batch isn't asked about again; one path twice in a batch is, and its second answer is unused)
+        let is_browsed = |f: &String| !opts.local && matches!(self.by_path.get(f.as_str()), Some((_, true, _)));
+        let browsed: Vec<(&str, u64)> =
+            files.iter().filter(|f| is_browsed(f)).map(|f| (f.as_str(), self.local_sizes.get(f.as_str()).copied().unwrap_or(0))).collect();
+        let mut looked_at = browsed_files_changed(&browsed, cancel).into_iter();
+        let verdicts: Vec<Option<BrowsedFile>> = files.iter().map(|f| is_browsed(f).then(|| looked_at.next()).flatten()).collect();
+        for (f, verdict) in files.into_iter().zip(verdicts) {
+            match self.by_path.get(f.as_str()).cloned() {
+                Some((id, true, hash)) if !opts.local => {
+                    match verdict {
+                        // ✕ before its size was looked at: nothing is decided about it, so it isn't promoted
+                        Some(BrowsedFile::Unchecked) => continue,
+                        Some(BrowsedFile::Changed) => {
+                            changed.insert(f.clone(), id);
+                            todo.push(f);
+                            continue;
+                        }
+                        Some(BrowsedFile::Unchanged) | None => {}
+                    }
+                    // a library photo with the same content comes first, and a file promoted earlier
+                    // (here or in a previous batch) counts as the library's from then on
+                    if let Some(h) = &hash {
+                        if let Some(existing) = self.by_hash.get(h) {
+                            out.items.push(PreparedItem::Duplicate { path: f, existing: *existing, reason: "content", hash, file: None });
+                            self.done.fetch_add(1, Relaxed);
+                            continue;
+                        }
+                        self.by_hash.insert(h.clone(), Some(id));
+                    }
                     // a file that was only browsed (Local) joins the library when it is imported for real
-                    self.by_path.insert(f, (id, false));
-                    out.items.push(PreparedItem::Promote(id));
+                    self.by_path.insert(f, (id, false, hash));
+                    out.items.push(PreparedItem::Promote(id, None));
                     self.done.fetch_add(1, Relaxed);
                 }
-                Some((id, _)) => {
+                Some((id, _, _)) => {
                     out.items.push(PreparedItem::Duplicate { path: f, existing: Some(id), reason: "path", hash: None, file: None });
                     self.done.fetch_add(1, Relaxed);
                 }
@@ -341,6 +381,19 @@ impl ImportJob {
             // same bytes as a library photo: skipped below, once its capture time is known
             let duplicate_of =
                 info.content_hash.as_ref().filter(|_| !opts.local).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
+            // a browsed file replaced since it was browsed, and not a copy of what the library has: its record takes what the
+            // file is now (size, dimensions, content) as it joins the library
+            if duplicate_of.is_none()
+                && let Some(id) = changed.remove(&path)
+            {
+                if let Some(h) = &info.content_hash {
+                    self.by_hash.insert(h.clone(), Some(id));
+                }
+                self.by_path.insert(path, (id, false, info.content_hash.clone()));
+                self.done.fetch_add(1, Relaxed);
+                plan.slots.push(Slot::Item(PreparedItem::Promote(id, Some(Box::new(info)))));
+                continue;
+            }
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none (a duplicate needs only that time)
             let raw = info.kind == MediaKind::Raw;

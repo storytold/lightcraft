@@ -2711,5 +2711,6 @@
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
   "Bottom bar": "Thanh dưới cùng",
-  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Từ khóa và cài đặt sẵn chỉ áp dụng cho tệp mới, không áp dụng cho ảnh đã có trong Cục bộ"
 }
