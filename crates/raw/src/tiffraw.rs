@@ -82,11 +82,13 @@ pub fn check_image(data: &[u8], info: &ImageInfo) -> Result<usize> {
     }
     // Lossless JPEG codes every sample in a bit at least: ljpeg's per-frame check allows 8 samples per entropy byte plus
     // 64 bytes of slack, which a frame's own headers (over 32 bytes with its Huffman table) cover twice over, so 16
-    // coded samples per byte, and twice that for 4:2:0 YCbCr (half the samples it fills are coded). Without this,
-    // tiles sharing one small payload each pass the per-frame check while the grid claims ~2000 samples per byte
-    // (issue #2554).
-    if info.compression == 7 && available.saturating_mul(32) < total as u64 {
-        return Err(RawError::Corrupt(format!("{available} bytes of lossless JPEG data cannot hold {total} samples")));
+    // coded samples per byte, and twice that for 4:2:0 YCbCr (half the samples it fills are coded) (issue #2554). The
+    // bytes are counted once per chunk that points at them here: tiles may legitimately share one payload (identical
+    // tiles written once), and each copy is decoded in full, so every reference brings its payload's samples. The
+    // unique-byte bound above still caps what a small payload shared by a large grid can make the output reserve.
+    let referenced = chunks.iter().fold(0u64, |sum, c| sum.saturating_add(chunk_bytes(data, c).map_or(0, |b| b.len() as u64)));
+    if info.compression == 7 && referenced.saturating_mul(32) < total as u64 {
+        return Err(RawError::Corrupt(format!("{referenced} bytes of lossless JPEG data cannot hold {total} samples")));
     }
     Ok(total)
 }
@@ -786,6 +788,32 @@ mod budget_tests {
         // the same grid declared as Deflate (~2000 samples per byte at most) still passes this check
         let deflate = ImageInfo { compression: 8, ..info };
         assert!(check_image(&data, &deflate).is_ok());
+    }
+
+    /// Tiles may share one payload (a writer storing identical tiles once): each reference decodes its payload in full,
+    /// so 32 constant 256×256 lossless-JPEG tiles pointing at one tile's bytes decode (header check and full decode),
+    /// though the shared bytes alone are far fewer than one bit per sample of the image.
+    #[test]
+    fn lossless_jpeg_tiles_sharing_a_real_tile_decode() {
+        let tile = ljpeg::encode(&vec![300u16; 256 * 256], 256, 256, 1, 12, 1, 0);
+        let info = ImageInfo { bits_per_sample: vec![12], byte_counts: vec![tile.len() as u64; 32], ..aliased(2048, 1024, 256, 0) };
+        // one copy of the bytes holds fewer than 32 samples per byte of the whole grid: a unique-byte bound refused it
+        assert!((tile.len() as u64) * 32 < 2048 * 1024, "{} bytes", tile.len());
+        assert!(read_image_in(crate::Mode::Header, &tile, &info, ByteOrder::Little, Packing::Msb).is_ok());
+        assert_eq!(read_image(&tile, &info, ByteOrder::Little, Packing::Msb), Ok(RawData::U16(vec![300; 2048 * 1024])));
+    }
+
+    /// The unique-byte bound still caps a large grid of tiles sharing a small payload: 256 tiles of 256×256 (16 Mi
+    /// samples) referencing the same 8000 bytes pass the per-reference lossless-JPEG bound (2 MB referenced) but those
+    /// 8000 bytes cannot hold 16 Mi samples, so nothing is reserved.
+    #[test]
+    fn a_huge_grid_sharing_a_small_payload_is_still_refused() {
+        let data = vec![0u8; 8000];
+        let info = aliased(4096, 4096, 256, 8000);
+        for mode in [crate::Mode::Header, crate::Mode::Full] {
+            let err = read_image_in(mode, &data, &info, ByteOrder::Little, Packing::Msb).unwrap_err();
+            assert!(matches!(&err, RawError::Corrupt(m) if m.contains("8000 bytes of image data")), "{err:?}");
+        }
     }
 
     /// #2554: tiled decoders decode the grid in groups of at most a quarter of the image (1 Mi samples at least),

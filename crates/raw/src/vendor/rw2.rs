@@ -1289,6 +1289,19 @@ mod tests {
         let short_bits = format8_file(w, h, &px, &[32, 32], &TABLE14, &|t| replace(t, STRIP_BITS, undefined(&[2, 959, 0, 959, 0])));
         assert!(matches!(crate::probe_info(&short_bits), Err(RawError::Corrupt(_))));
         assert!(matches!(crate::decode(&short_bits), Err(RawError::Corrupt(_))));
+        // only the second strip short (the first keeps its real length), by one bit or entirely: still refused, naming it
+        let second_strip_bits = |stated: u32| {
+            format8_file(w, h, &px, &[32, 32], &TABLE14, &|t| {
+                let Some((_, Value::Undefined(b))) = t.iter_mut().find(|(tag, _)| *tag == STRIP_BITS) else { panic!("strip bits tag") };
+                b[6..10].copy_from_slice(&[stated as u8, (stated >> 8) as u8, (stated >> 16) as u8, (stated >> 24) as u8]);
+            })
+        };
+        for stated in [959, 0] {
+            let file = second_strip_bits(stated);
+            for got in [crate::probe_info(&file).map(|_| ()), crate::decode(&file).map(|_| ())] {
+                assert!(matches!(&got, Err(RawError::Corrupt(m)) if m.contains("strip 1 states")), "{stated} bits: {got:?}");
+            }
+        }
         // code tables: two categories with the same code, a code longer than its length, missing entries
         let table: Vec<u16> = std::iter::once(17).chain(TABLE14.iter().flat_map(|&(l, c)| [l as u16, c as u16])).collect();
         let mut dup = table.clone();

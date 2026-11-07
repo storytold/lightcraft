@@ -379,7 +379,8 @@ mod tests {
     fn a_tiny_stripe_with_a_huge_height_is_corrupt() {
         let stripe = Stripe { bytes: &[0], quantizers: None, width: BLOCK };
         for xtrans in [false, true] {
-            assert!(decode_stripe(&stripe, 65532, 14, xtrans).is_err());
+            let got = decode_stripe(&stripe, 65532, 14, xtrans);
+            assert!(matches!(got, Err(RawError::Corrupt(_))), "xtrans {xtrans}: {got:?}");
         }
     }
 

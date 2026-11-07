@@ -81,15 +81,13 @@ pub(crate) fn rgb_preview(tiff: &Tiff, bytes: &[u8]) -> Option<Vec<u8>> {
                 && matches!(i.layout, Layout::Strips { .. })
                 && i.width > 0
                 && i.height > 0
+                // uncompressed: a preview larger than the whole file is not in it, and is passed over before any buffer
+                // is reserved (strips sharing one offset would otherwise copy a few bytes up to MAX_PREVIEW_BYTES); a
+                // smaller complete one elsewhere in the file is still taken
+                && (u64::from(i.width) * u64::from(i.height)).saturating_mul(3) <= MAX_PREVIEW_BYTES.min(bytes.len()) as u64
         })
         .max_by_key(|i| u64::from(i.width) * u64::from(i.height))?;
-    let (w, h) = (info.width as usize, info.height as usize);
-    let size = w.checked_mul(h)?.checked_mul(3)?;
-    // uncompressed: a preview larger than the whole file is not in it, and is refused before the buffer is reserved
-    // (strips sharing one offset would otherwise copy a few bytes up to MAX_PREVIEW_BYTES)
-    if size > MAX_PREVIEW_BYTES || size > bytes.len() {
-        return None;
-    }
+    let size = info.width as usize * info.height as usize * 3;
     let mut pixels = Vec::with_capacity(size);
     for chunk in info.chunks(bytes.len() as u64) {
         pixels.extend_from_slice(chunk_bytes(bytes, &chunk)?);
@@ -317,5 +315,24 @@ mod tests {
         let tall = aliased(2000);
         assert!(tall.len() < 8 * 2000 * 3);
         assert_eq!(rgb_preview(&Tiff::parse(&tall).unwrap(), &tall), None);
+    }
+
+    /// An oversized RGB IFD is passed over, not the end of the search: beside a 2000-row aliased one (more pixel bytes
+    /// than the file), the file's complete 4 × 3 RGB image is still the preview.
+    #[test]
+    fn an_oversized_rgb_ifd_does_not_hide_a_smaller_complete_one() {
+        let mut huge = rgb_ifd();
+        huge.image = None;
+        huge.set(t::IMAGE_WIDTH, Value::Long(vec![8]));
+        huge.set(t::IMAGE_LENGTH, Value::Long(vec![2000]));
+        huge.set(t::ROWS_PER_STRIP, Value::Long(vec![1]));
+        huge.set(t::STRIP_OFFSETS, Value::Long(vec![0; 2000]));
+        huge.set(t::STRIP_BYTE_COUNTS, Value::Long(vec![24; 2000]));
+        let mut ifd0 = rgb_ifd();
+        ifd0.add_sub_ifd(huge);
+        let bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        assert!(bytes.len() < 8 * 2000 * 3);
+        let preview = rgb_preview(&Tiff::parse(&bytes).unwrap(), &bytes).expect("the complete 4 x 3 preview");
+        assert_eq!(wrapped(&preview), (4, 3, (0..36).collect(), false));
     }
 }
