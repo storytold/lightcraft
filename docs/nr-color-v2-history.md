@@ -137,7 +137,7 @@ GPU samples; at most 1/255 from the CPU):
 | two ping-pong buffers + `flush` | still out of memory: **3950 MiB real use** (nvidia-smi) while lightcraft counted 1.9 GB – the driver frees dropped buffers only when the GPU is done with them |
 | **`sync` after large drops** | fixes it (3.27 GB one piece, 2.4 GB in bands) |
 | bands with halo 4·Σδ + 8 | correct but slow at small budgets; now 2·Σδ + δmax + 8 (bands vs one piece: ≤ 1/255 in a few dozen pixels, from the box blur's running sums) |
-| band budget | free device memory where it can be asked without `unsafe` (nvidia-smi; amdgpu sysfs) + own pooled buffers − 384 MB, else 2 GB; integrated GPUs always 2 GB (an AMD APU's sysfs counts only its carve-out, see the third round) |
+| band budget | free device memory where it can be asked without `unsafe` (nvidia-smi; amdgpu sysfs) + own pooled buffers − 384 MB, else 2 GB; integrated GPUs at most 2 GB, less where the system has less available (`MemAvailable` on Linux, − 384 MB; an AMD APU's sysfs counts only its carve-out, see the third round) |
 
 Measured (white balance + noise reduction stage on the GPU, median of 3; CPU: colour NR only):
 
@@ -187,7 +187,7 @@ CPU output is bit for bit the same as before; GPU output agrees with the previou
 | CPU: next-scale weights without branches; skipping `exp` where the result is certainly 0 | no measurable gain: these passes are memory-bound (~36 bytes per pixel), not `exp`-bound; the second dropped |
 | GPU: `nrcj_pilot` sums the 3-px box itself instead of reading a two-pass `gaussian` in a new buffer | blur + pilot 70 → 22 ms |
 | GPU: `nrcj_dvh`, the middle vertical + horizontal step of each scale in one dispatch (a row segment and its reach in workgroup memory) | diffusion 251 → 203 ms; same result as the two kernels (`fused_diffusion_steps_match_the_separate_ones`) |
-| GPU: integrated GPUs keep the fixed 2 GB budget (`vram::free_bytes` is `None` for them, as its doc said) | the APU's sysfs reported its 2 GB carve-out less what the render held: 468 MB, so 16 bands of 267 kept rows in 603 (2.3× the work, a `sync` each). Now one piece: WB + NR stage 931 → 560 ms on its own |
+| GPU: integrated GPUs plan with up to the fixed 2 GB, less where the system has less available (`vram::free_bytes` answers with `MemAvailable` for them on Linux, not sysfs) | the APU's sysfs reported its 2 GB carve-out less what the render held: 468 MB, so 16 bands of 267 kept rows in 603 (2.3× the work, a `sync` each). Now one piece: WB + NR stage 931 → 560 ms on its own. Overdrawing shared memory can bring the kernel's out-of-memory killer rather than an error to fall back from, so the plan does not assume the 2 GB is there |
 
 Totals (median of 3, JPEG export of the whole photo; main = the colour NR of processes V1 to V5, measured on main of 2 November):
 

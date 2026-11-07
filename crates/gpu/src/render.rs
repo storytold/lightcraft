@@ -1148,6 +1148,18 @@ fn band_budget_from(free: u64, pooled: u64, renders: usize) -> usize {
     free.saturating_add(pooled).saturating_sub(reserve) as usize
 }
 
+/// The band budget where memory cannot be asked, and the most a device that shares system memory plans with.
+const FIXED_BAND_BUDGET: usize = 2048 << 20;
+
+/// [`band_budget_from`], at most [`FIXED_BAND_BUDGET`] on a device that shares system memory. There `free` is
+/// what the system has left: overdrawing it does not fail an allocation we could fall back from, it can bring
+/// the kernel's out-of-memory killer, so a short system gets bands or the CPU. A roomy one still gets no more
+/// than the fixed budget, as other programs want that memory too.
+fn measured_band_budget(free: u64, pooled: u64, renders: usize, shares_system_memory: bool) -> usize {
+    let budget = band_budget_from(free, pooled, renders);
+    if shares_system_memory { budget.min(FIXED_BAND_BUDGET) } else { budget }
+}
+
 /// The joint colour noise reduction (`lightcraft_pipeline::nrc_joint`) on the GPU, the same steps as the
 /// CPU: only the noise samples are read back (the noise model is fitted on the CPU, by the same code).
 /// Large images are filtered in horizontal bands whose halo covers every step's reach, so each kept pixel
@@ -1212,21 +1224,24 @@ fn color_nr_joint(
     // Memory: with more than one band the whole output (3 values per pixel) is held besides the input (one
     // band is written over the input); a band then holds about 12 values per pixel (guide 3, two chroma
     // buffers 2 + 2, paths 3 (the transformed band's buffer, see `joint_band`), weights 2). The budget for
-    // both together is `band_budget_from` the device memory free right now (where the driver can be asked, `crate::vram`); else a fixed 2 GB. One band plan at a
+    // both together is `measured_band_budget` from the memory free right now (where it can be asked, `crate::vram`); else a fixed 2 GB. One band plan at a
     // time (`BANDS`), held until the bands are done. PROTOTYPE: `NRV2_GPU_BAND_MB` overrides it.
     // (free memory asked before the lock: the first question for a device waits for the driver)
     let free = crate::vram::free_bytes(&cx.gpu.info);
     let _bands = BANDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let fixed = std::env::var("NRV2_GPU_BAND_MB").ok().and_then(|v| v.parse::<usize>().ok()).map(|mb| mb << 20);
     let renders = RENDERS.load(std::sync::atomic::Ordering::Relaxed);
-    let measured = free.map(|free| band_budget_from(free, crate::ctx::memory().pooled, renders));
-    let budget = fixed.or(measured).unwrap_or(2048 << 20);
+    let shared = crate::vram::shares_system_memory(cx.gpu.info.device_type);
+    let measured = free.map(|free| measured_band_budget(free, crate::ctx::memory().pooled, renders, shared));
+    let budget = fixed.or(measured).unwrap_or(FIXED_BAND_BUDGET);
     if profiling() {
         eprintln!(
             "  gpu joint budget: {} MB ({}, {renders} render(s) on the device)",
             budget >> 20,
             if fixed.is_some() {
                 "NRV2_GPU_BAND_MB"
+            } else if measured.is_some() && shared {
+                "available system memory, at most the fixed budget"
             } else if measured.is_some() {
                 "free device memory"
             } else {
@@ -1678,6 +1693,25 @@ mod tests {
             assert!(RENDERS.load(std::sync::atomic::Ordering::Relaxed) >= before + 2);
         }
         assert!(RENDERS.load(std::sync::atomic::Ordering::Relaxed) < before + 2, "a finished render no longer counts");
+    }
+
+    /// A device that shares system memory plans with what the system has left, at most the fixed budget: a
+    /// short laptop must not overdraw it (the kernel's out-of-memory killer, not an error to fall back from).
+    #[test]
+    fn shared_memory_band_budget_follows_the_system_up_to_the_fixed_budget() {
+        let mb = |x: u64| x << 20;
+        // plenty free: the fixed budget, so a 24 MP frame still runs in one band
+        assert_eq!(measured_band_budget(mb(27000), 0, 1, true), FIXED_BAND_BUDGET);
+        // short of memory: what is there less the reserve, which `color_nr_joint` turns into bands
+        assert_eq!(measured_band_budget(mb(1500), 0, 1, true), (1500usize << 20) - VRAM_RESERVE as usize);
+        assert!(measured_band_budget(mb(1500), 0, 1, true) < FIXED_BAND_BUDGET);
+        // our own pooled buffers are reused, and each other render is left its reserve
+        assert_eq!(measured_band_budget(mb(1000), mb(500), 1, true), (1500usize << 20) - VRAM_RESERVE as usize);
+        assert_eq!(measured_band_budget(mb(1500), 0, 2, true), (1500usize << 20) - 2 * VRAM_RESERVE as usize);
+        // nothing left: no band fits, the CPU runs the step
+        assert_eq!(measured_band_budget(mb(300), 0, 1, true), 0);
+        // a discrete card has no such ceiling
+        assert_eq!(measured_band_budget(mb(8000), 0, 1, false), (8000usize << 20) - VRAM_RESERVE as usize);
     }
 
     #[test]
