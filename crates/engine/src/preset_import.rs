@@ -400,6 +400,22 @@ pub(crate) fn lua_settings_props(settings: &Lua) -> Result<(Props, crate::crs_ma
             && let Lua::Table(_, look) = v
         {
             for (f, fv) in look {
+                // the look's own settings (`Parameters`), as XMP's nested struct
+                // (`crs:Look/crs:Parameters/crs:ProfileGainTableMap`…)
+                if f == "Parameters"
+                    && let Lua::Table(_, params) = fv
+                {
+                    for (pf, pv) in params {
+                        let val = match pv {
+                            Lua::Num(n) => format!("{n}"),
+                            Lua::Str(s) => delocalize(s),
+                            Lua::Bool(b) => if *b { "True" } else { "False" }.to_string(),
+                            _ => continue,
+                        };
+                        props.insert(format!("crs:Look/crs:Parameters/crs:{pf}"), vec![val]);
+                    }
+                    continue;
+                }
                 let val = match fv {
                     Lua::Num(n) => format!("{n}"),
                     Lua::Str(s) => delocalize(s),
@@ -519,7 +535,13 @@ pub(crate) fn build(props: &Props, values: &crate::crs_masks::Values, name: Stri
     if let Some(look) = crate::profile_refs::look_ref(props)
         && let Some(o) = settings.as_object_mut()
     {
-        o.insert("profile".into(), serde_json::json!({"look": look}));
+        // next to the profile settings the preset already sets (`camera_local_tone`)
+        let profile = o.entry("profile").or_insert_with(|| serde_json::json!({}));
+        if let Some(p) = profile.as_object_mut() {
+            p.insert("look".into(), look);
+        } else {
+            *profile = serde_json::json!({"look": look});
+        }
     }
     if settings.as_object().is_none_or(Map::is_empty) {
         return None;
@@ -706,6 +728,19 @@ text]], z = ZSTR "loc" }"#,
         // it parses into real develop settings
         let d = lightcraft_develop::DevelopSettings::default().merged(&p.settings).expect("valid develop settings");
         assert_eq!(d.light.exposure, 0.35);
+    }
+
+    /// A ProRAW preset keeps the camera local tone mapping its "Apple ProRaw" look turns on, next
+    /// to the look it names (the look used to replace the whole `profile`).
+    #[test]
+    fn apple_proraw_preset_keeps_the_local_tone_mapping_with_its_look() {
+        let t = r#"s = { title = "ProRaw", value = { settings = { Exposure2012 = 0.2,
+            Look = { Name = "Apple ProRaw", Amount = 1, UUID = "D866CAE82BD24C3F896B6762BDDA6C50",
+                     Parameters = { Version = "18.5.1", ProfileGainTableMap = 100 } } } } }"#;
+        let v = read_presets("ProRaw.lrtemplate", t.as_bytes(), None).unwrap();
+        let profile = &v[0].preset.settings["profile"];
+        assert_eq!(profile["camera_local_tone"], true, "{profile}");
+        assert_eq!(profile["look"]["name"], "Apple ProRaw", "{profile}");
     }
 
     #[test]
