@@ -2155,3 +2155,45 @@ fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     assert_eq!((a.exposure, a.shadows, a.clarity, a.amount), (0.7, 25.0, 0.0, 50.0));
     assert_eq!(exec(&mut h, "mask.effects", json!({}))["current"], "Lift");
 }
+
+/// A slider selected by a click keeps the Up / Down arrows, which step it, while Left and Right
+/// still step through the photos: nothing in the slider reads them. Before this they were kept
+/// from the shortcuts and egui moved the focus on them, so after a slider edit the arrow keys
+/// neither moved the photo nor the slider (LightCraft Classic issue 880).
+#[test]
+fn a_selected_develop_slider_leaves_left_and_right_to_the_photos() {
+    let mut h = detail("panel.edit");
+    // the demo may open on the Edit panel already, which `panel.edit` then toggles shut
+    let r = h.request("ui.set", json!({"right": "edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let name = "slider:light.exposure";
+    let result = h.request("ui.clickWidget", json!({"id": name, "fx": 0.5}), T);
+    assert_eq!(result["ok"], true, "{result}");
+    h.step();
+    assert!(crate::widgets::slider_has_focus(&h.view.ctx), "the click selects the slider");
+    let first = h.app.session.active().expect("active photo");
+
+    let r = h.request("ui.key", json!({"key": "ArrowRight"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let second = h.app.session.active().expect("active photo");
+    assert_ne!(second, first, "Right steps to the next photo while a slider is selected");
+    assert!(crate::widgets::slider_has_focus(&h.view.ctx), "the slider stays selected: Right is not a focus move");
+
+    let r = h.request("ui.key", json!({"key": "ArrowLeft"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.session.active(), Some(first), "Left steps back");
+
+    // Up still steps the selected slider, and only that one, press after press
+    let before = develop(&h).light.exposure;
+    for _ in 0..3 {
+        let r = h.request("ui.key", json!({"key": "ArrowUp"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    }
+    let d = develop(&h);
+    assert!((d.light.exposure - before - 0.15).abs() < 1e-6, "three Up presses step exposure three times: {before} -> {}", d.light.exposure);
+    assert_eq!(h.app.session.active(), Some(first), "Up never leaves the photo");
+}
