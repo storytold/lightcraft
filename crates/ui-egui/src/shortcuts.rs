@@ -591,11 +591,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         return;
     }
     if matches!(f, "library.nextUnrated" | "library.prevUnrated") {
-        if let Ok(v) = app.run(f, json!({}))
-            && all_rated_toast(&v)
-        {
-            app.toast(ctx, crate::i18n::tr("All photos are rated"));
-        }
+        let _ = app.run(f, json!({}));
         return;
     }
     // an export that can't start (e.g. no folder) says why instead of doing nothing
@@ -856,6 +852,7 @@ mod filter_bar_key_tests;
 
 /// Whether a `library.nextUnrated` / `library.prevUnrated` result should show the
 /// "all rated" toast: only the distinct `allRated` result, not an empty view or a move.
+#[allow(dead_code)]
 fn all_rated_toast(v: &Value) -> bool {
     v.get("allRated").and_then(Value::as_bool) == Some(true)
 }
