@@ -2763,6 +2763,7 @@
   "Import dropped files without review": "ჩაგდებული ფაილების იმპორტი გადახედვის გარეშე",
   "An import is running": "იმპორტი მიმდინარეობს",
   "The photos are imported once it ends": "ფოტოები ამის შემდეგ შემოიტანება",
+  "A folder is already being chosen for an import": "იმპორტისთვის საქაღალდე უკვე ირჩევა",
   "An import is running. Drop photos when it has finished": "იმპორტი მიმდინარეობს. ფოტოები ჩააგდეთ, როცა დასრულდება",
   "Finish Lightroom catalog import before adding photos": "ფოტოების დამატებამდე დაასრულეთ Lightroom-ის კატალოგის იმპორტი",
   "Profile: from the file (the camera's own correction)": "პროფილი: ფაილიდან (კამერის საკუთარი კორექცია)",
@@ -3692,5 +3693,14 @@
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
   "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
-  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის"
+  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "No photo in this folder is in the library yet": "ამ საქაღალდის არცერთი ფოტო ჯერ ბიბლიოთეკაში არ არის",
+  "Select the photos to move in the grid first": "ჯერ ბადეში მონიშნეთ გადასატანი ფოტოები",
+  "This place is kept in Local already": "ეს ადგილი უკვე დატოვებულია ლოკალურში",
+  "Only a place at the top of Local can be removed from it": "ლოკალურიდან ამოშლა მხოლოდ მის ზედა დონეზე მყოფ ადგილს შეუძლია",
+  "Import to This Folder…": "ამ საქაღალდეში იმპორტი…",
+  "Copies the photos of a folder you choose into this folder; the review lets you change that": "ირჩევ საქაღალდეს და მისი ფოტოები ამ საქაღალდეში კოპირდება; განხილვაში ამის შეცვლა შეგიძლია",
+  "Add to My Photos…": "ჩემს ფოტოებში დამატება…",
+  "Reviews the photos in this folder, then adds them to the library where they are; no file is touched": "ამ საქაღალდის ფოტოებს გადაამოწმებ და ბიბლიოთეკაში იქვე დაამატებ; არცერთ ფაილს არ ეხება",
+  "Keywords and presets apply to new files only, not to photos already in Local": "საკვანძო სიტყვები და პრესეტები მხოლოდ ახალ ფაილებზე მოქმედებს და არა იმ ფოტოებზე, რომლებიც უკვე ლოკალშია"
 }

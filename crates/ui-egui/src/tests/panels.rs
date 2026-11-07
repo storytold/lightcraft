@@ -1817,6 +1817,40 @@ fn a_folder_that_holds_other_disks_only_opens() {
     assert_eq!(h.app.session.visible().len(), 1, "a disk's own row does choose");
 }
 
+/// Dropping photos on a folder row that holds other disks is refused (it would put them in a folder that
+/// covers several disks), so its menu doesn't offer Move Selected Photos Here either; the rest of its menu
+/// and the same item on a folder inside a disk stay.
+#[test]
+fn a_folder_that_holds_other_disks_offers_no_move_selected_photos_here() {
+    let mut h = folders_app(&["/Volumes/1.jpg", "/Volumes/tokyo/p/x.jpg"]);
+    let photo = h.app.session.catalog.photos().next().map(|p| p.id.0).unwrap();
+    h.app.run("library.select", json!({"ids": [photo], "active": photo})).unwrap();
+    h.step();
+    right_click(&mut h, "source:libfolder:/Volumes");
+    assert!(has(&h, "folderSynchronize"), "the rest of its menu is there");
+    assert!(!has(&h, "folderMovePhotosHere"), "the drop on this row is refused, so the menu can't move photos into it");
+    h.request("ui.key", json!({"key": "escape"}), T);
+    h.step();
+    h.step();
+    right_click(&mut h, "source:libfolder:/Volumes/tokyo/p");
+    assert!(has(&h, "folderMovePhotosHere"), "a folder inside a disk is a place to move photos to");
+}
+
+/// Import to This Folder… copies photos into the row's folder, so a row that holds other disks, which a drop
+/// refuses, doesn't offer it either; a folder inside a disk does.
+#[test]
+fn a_folder_that_holds_other_disks_offers_no_import_to_this_folder() {
+    let mut h = folders_app_with_services(&["/Volumes/1.jpg", "/Volumes/tokyo/p/x.jpg"], [1400.0, 900.0], reveal_and_pick_services(Ok(())));
+    right_click(&mut h, "source:libfolder:/Volumes");
+    assert!(has(&h, "folderSynchronize"), "the rest of its menu is there");
+    assert!(!has(&h, "folderImportHere"), "the drop on this row is refused, so the menu can't copy photos into it");
+    h.request("ui.key", json!({"key": "escape"}), T);
+    h.step();
+    h.step();
+    right_click(&mut h, "source:libfolder:/Volumes/tokyo/p");
+    assert!(has(&h, "folderImportHere"), "a folder inside a disk is a place to import to");
+}
+
 /// Whatever sets the chosen folder (a click, an agent, a rename, undo), its row is on screen.
 #[test]
 fn the_chosen_folder_is_always_in_view() {
@@ -2107,6 +2141,119 @@ fn a_folder_takes_a_colour_label_from_its_menu() {
     assert_eq!(h.app.session.catalog.folder_color_label("/pics/trip"), None);
     h.step();
     assert!(!has(&h, "labelMark:libfolder:/pics/trip"));
+}
+
+/// Asserts the open menu's rows `ids` are drawn top to bottom in that order.
+fn in_order(h: &Headless, ids: &[&str]) {
+    let ys: Vec<f32> = ids.iter().map(|id| widget(h, id).center().y).collect();
+    for (pair, y) in ids.windows(2).zip(ys.windows(2)) {
+        assert!(y[0] < y[1], "{} should come above {}: {ys:?}", pair[0], pair[1]);
+    }
+}
+
+fn reveal_and_pick_services(reveal: Result<(), String>) -> Services {
+    Services { pick_folder: Some(Box::new(|| None)), reveal: Some(Box::new(move |_| reveal.clone())), png: None, ..Default::default() }
+}
+
+/// A folder's menu goes from what it does with the library's photos, through reorganizing the
+/// disk, to how the row looks and the way out to the file manager, with removal last; a disk's
+/// row keeps the same order with what applies to a disk.
+#[test]
+fn a_folders_menu_goes_from_the_library_to_the_disk_and_ends_with_removal() {
+    let services = reveal_and_pick_services(Ok(()));
+    let mut h = folders_app_with_services(&["/pics/trip/a.jpg", "/pics/home/b.jpg", "/Volumes/nas/c.jpg"], [1400.0, 900.0], services);
+    click(&mut h, "libraryFolderToggle:/pics");
+    right_click(&mut h, "source:libfolder:/pics/trip");
+    in_order(
+        &h,
+        &[
+            "folderImportHere",
+            "folderSynchronize",
+            "folderLocateMissing",
+            "folderNewFolder",
+            "folderRename",
+            "folderMoveTo",
+            "folderMovePhotosHere",
+            "folderLabelMenu",
+            "folderReveal",
+            "folderRemove",
+        ],
+    );
+    h.request("ui.key", json!({"key": "escape"}), T);
+    h.step();
+    h.step();
+    right_click(&mut h, "source:libfolder:/Volumes/nas");
+    assert!(!has(&h, "folderImportHere"), "a disk's row doesn't import into its root");
+    in_order(&h, &["folderSynchronize", "folderLocateMissing", "folderLabelMenu", "folderRemove"]);
+}
+
+/// Show in Finder on a folder says why when the file manager can't show it, instead of nothing.
+#[test]
+fn a_folder_that_cant_be_shown_in_the_file_manager_says_why() {
+    let services = reveal_and_pick_services(Err("no file manager".into()));
+    let mut h = folders_app_with_services(&["/pics/trip/a.jpg", "/pics/home/b.jpg"], [1400.0, 900.0], services);
+    click(&mut h, "libraryFolderToggle:/pics");
+    right_click(&mut h, "source:libfolder:/pics/trip");
+    h.app.ui.toast = None;
+    click(&mut h, "folderReveal");
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("no file manager")), "{:?}", h.app.ui.toast);
+}
+
+/// A Local place's menu takes the Folders order: Add to My Photos… and Synchronize first, then the disk, the file
+/// manager, and last what lists it in Local. A folder inside a place lists Remove from Local
+/// grayed out, since only a place can be removed, while its Add to Local makes it a place.
+#[test]
+fn a_local_folders_menu_takes_the_folders_order_and_grays_out_remove_inside_a_place() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-local-menu-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("place/inner")).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let place = dir.join("place").to_string_lossy().to_string();
+    let inner = dir.join("place").join("inner").to_string_lossy().to_string();
+    let mut h = folders_app_with_services(&["/pics/trip/a.jpg"], [1400.0, 900.0], reveal_and_pick_services(Ok(())));
+    h.app.run("local.addRoot", json!({"path": place})).unwrap();
+    assert!(h.step_until(T, |h| h.app.widgets.iter().any(|(w, _)| *w == format!("source:local:{place}"))));
+    right_click(&mut h, &format!("source:local:{place}"));
+    in_order(
+        &h,
+        &["folderAddToMyPhotos", "folderSynchronize", "folderRename", "folderMoveTo", "folderReveal", "folderKeepInLocal", "folderRemoveFromLocal"],
+    );
+    // Rename starts from the folder's own name on disk, not what dialogs call it ("parent/name")
+    click(&mut h, "folderRename");
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::TextPrompt { value, .. }) if value == "place"), "{:?}", h.app.ui.dialog);
+    h.app.ui.dialog = None;
+    h.step();
+    h.step();
+    click(&mut h, &format!("folderToggle:{place}"));
+    assert!(h.step_until(T, |h| h.app.widgets.iter().any(|(w, _)| *w == format!("source:local:{inner}"))));
+    right_click(&mut h, &format!("source:local:{inner}"));
+    click(&mut h, "folderRemoveFromLocal");
+    assert!(h.app.ui.hidden_locations.is_empty(), "a folder inside a place can't be removed from Local: {:?}", h.app.ui.hidden_locations);
+    // the same row's Add to Local does act: the folder becomes a place of its own
+    right_click(&mut h, &format!("source:local:{inner}"));
+    click(&mut h, "folderKeepInLocal");
+    assert!(h.app.ui.local_roots.contains(&inner), "{:?}", h.app.ui.local_roots);
+}
+
+/// Where the host has no file manager, Show in Finder's group is left out with its separator:
+/// Set Color Label and Remove from Library are one separator apart, as the groups above are.
+#[test]
+fn a_folders_menu_without_a_file_manager_leaves_out_that_group_and_its_separator() {
+    let services = Services { pick_folder: Some(Box::new(|| None)), png: None, ..Default::default() };
+    let mut h = folders_app_with_services(&["/pics/trip/a.jpg", "/pics/home/b.jpg"], [1400.0, 900.0], services);
+    click(&mut h, "libraryFolderToggle:/pics");
+    right_click(&mut h, "source:libfolder:/pics/trip");
+    assert!(!has(&h, "folderReveal"), "no file manager here");
+    let gap = |above: &str, below: &str| widget(&h, below).top() - widget(&h, above).bottom();
+    let one_separator = gap("folderMovePhotosHere", "folderLabelMenu");
+    let here = gap("folderLabelMenu", "folderRemove");
+    assert!((here - one_separator).abs() < 1.0, "one separator is {one_separator}, Set Color Label to Remove is {here}");
 }
 
 #[test]
