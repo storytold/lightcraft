@@ -203,3 +203,15 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
     assert_eq!(only_plain.asked.load(std::sync::atomic::Ordering::Relaxed), 0, "every answer came from the listing");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_hash_names_its_content_without_its_duplicate_suffixes_and_nothing_else() {
+    use super::base_hash;
+    assert_eq!(base_hash("0123abcd"), "0123abcd");
+    assert_eq!(base_hash("0123abcd:dup7"), "0123abcd");
+    assert_eq!(base_hash("0123abcd:dup7:dup12"), "0123abcd");
+    assert_eq!(base_hash(r"C:\photos\a.jpg"), r"C:\photos\a.jpg");
+    assert_ne!(base_hash(r"C:\photos\a.jpg"), base_hash(r"C:\photos\b.jpg"));
+    assert_eq!(base_hash("0123abcd:dup"), "0123abcd:dup");
+    assert_eq!(base_hash("0123abcd:dupx"), "0123abcd:dupx");
+}
