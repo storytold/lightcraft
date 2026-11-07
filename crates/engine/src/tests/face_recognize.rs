@@ -401,6 +401,21 @@ fn faces_person_lists_a_persons_faces_and_looks_for_more_only_while_recognition_
     let more = r["more"].as_array().unwrap();
     assert_eq!((more.len(), more[0]["photo"].clone(), more[0]["index"].clone()), (1, json!(b.0), json!(0)), "{r}");
     assert!(more[0]["score"].as_f64().unwrap() > 0.9);
+    // set aside as "not Ann" (#3249), it is no longer offered for her, still could be for Bob, and comes back on request;
+    // the catalog is not touched
+    let (revision, undo) = (s.catalog.revision, s.undo.len());
+    assert_eq!(s.execute("faces.dismiss", &json!({"name": "ann", "photo": b.0, "index": 0})).unwrap()["dismissed"], 1);
+    assert_eq!(s.execute("faces.dismiss", &json!({"name": "Ann", "photo": b.0, "index": 0})).unwrap()["dismissed"], 1, "once");
+    let r = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();
+    assert_eq!((r["more"].as_array().unwrap().len(), r["dismissed"].clone()), (0, json!(1)), "{r}");
+    assert_eq!(s.person_dismissed.get("bob").map(Vec::len), None);
+    assert_eq!((s.catalog.revision, s.undo.len()), (revision, undo));
+    assert!(s.journal.iter().any(|(id, _)| id == "faces.dismiss"), "recorded in the command journal");
+    for bad in [json!({"name": "Ann", "photo": b.0, "index": 9}), json!({"name": "Ann", "photo": b.0}), json!({"photo": b.0, "index": 0})] {
+        assert!(s.execute("faces.dismiss", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.execute("faces.dismiss", &json!({"name": "Ann", "restore": true})).unwrap()["restored"], 1);
+    assert_eq!(s.execute("faces.person", &json!({"name": "Ann"})).unwrap()["more"].as_array().unwrap().len(), 1);
     // confirming it moves it from one list to the other (and is one undo step)
     s.execute("faces.setName", &json!({"id": b.0, "index": 0, "name": "Ann"})).unwrap();
     let r = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();
@@ -416,6 +431,49 @@ fn faces_person_lists_a_persons_faces_and_looks_for_more_only_while_recognition_
         assert!(s.execute("faces.person", &bad).is_err(), "{bad}");
     }
     assert!(s.execute("faces.person", &json!({"name": "Ann", "more": u64::MAX})).is_ok());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// #3249: a face set aside for a person is a counter-example: the faces more like it than like them move down, for
+/// them only; and a merge undone gives the other person back the faces they had set aside.
+#[test]
+fn faces_set_aside_move_their_look_alikes_down_and_a_merge_undone_gives_them_back() {
+    let d = temp("person-counter");
+    let (mut s, _) = setup(&d, 64);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    let mut ids = s.catalog.photos().map(|p| p.id).collect::<Vec<_>>();
+    ids.sort();
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, Some("Bob"))]);
+    set_regions(&mut s, b, vec![region(0.1, None), region(0.5, None)]);
+    set_regions(&mut s, c, vec![region(0.1, None)]);
+    for (id, x, v) in [
+        (a, 0.1, unit64(&[(0, 1.0)])),
+        (a, 0.5, unit64(&[(0, 1.0), (1, 0.6)])),
+        (b, 0.1, unit64(&[(0, 1.0), (1, 0.3)])),
+        (b, 0.5, unit64(&[(0, 1.0), (2, 0.5)])),
+        (c, 0.1, unit64(&[(0, 1.0), (1, 0.6)])),
+    ] {
+        s.faces.index.insert(id.0, &region(x, None).rect, v);
+    }
+    let more = |s: &mut Session, name: &str| -> Vec<(u64, u64)> {
+        let r = s.execute("faces.person", &json!({"name": name})).unwrap();
+        r["more"].as_array().unwrap().iter().map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap())).collect()
+    };
+    assert_eq!(more(&mut s, "Ann"), vec![(b.0, 0), (b.0, 1), (c.0, 0)], "best first");
+    // the face on c is not Ann: b's first face, more like it than like Ann, goes after the other one
+    s.execute("faces.dismiss", &json!({"name": "Ann", "photo": c.0, "index": 0})).unwrap();
+    assert_eq!(more(&mut s, "Ann"), vec![(b.0, 1), (b.0, 0)]);
+    // for Bob, whose face it may be, nothing moves
+    assert_eq!(more(&mut s, "Bob")[0], (c.0, 0), "still offered to Bob, first");
+    // Ann merged into Bob: her set-aside face is his too while merged; undone, Bob has none again, and Ann keeps hers
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Bob", "merge": true})).unwrap();
+    assert_eq!(s.person_dismissed.get("bob").map(Vec::len), Some(1));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((s.person_dismissed.get("bob"), s.person_dismissed.get("ann").map(Vec::len)), (None, Some(1)));
+    assert_eq!(more(&mut s, "Bob")[0], (c.0, 0), "offered to Bob again");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.person_dismissed.get("bob").map(Vec::len), Some(1), "redone, merged again");
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -690,4 +748,220 @@ fn rename_person_covers_more_than_the_person_query_and_rejects_bad_input() {
     assert_eq!(r["photos"], 1, "the browsed photo is not another person and is not renamed");
     assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Bea"));
     assert_eq!(s.catalog.photo(local).unwrap().meta.regions[0].name.as_deref(), Some("Ada"));
+}
+
+/// What people.json cannot take: a chosen picture is undone, so is a face set aside or brought back, and a rename
+/// stands, its picture written as soon as people.json can be.
+fn people_json_in_the_way(s: &mut Session, lib: &std::path::Path, a: PhotoId, b: PhotoId) {
+    let picture = |s: &Session, name: &str| {
+        s.catalog
+            .people_in_with(&lightcraft_catalog::Filter::default(), &s.person_covers)
+            .into_iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .map(|p| p.photo)
+    };
+    // a choice that cannot be saved is not made either
+    std::fs::remove_file(lib.join("people.json")).ok();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    assert!(s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).is_err());
+    assert_eq!(picture(s, "Ann"), Some(b), "unchanged in the session too");
+    let set_aside = s.person_dismissed.get("ann").cloned();
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "photo": a.0, "index": 0})).is_err());
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "restore": true})).is_err());
+    assert_eq!(s.person_dismissed.get("ann").cloned(), set_aside, "nor a face set aside, nor one brought back");
+    assert_eq!(s.unsaved(), None, "and nothing is left unsaved");
+    // a rename while people.json cannot be written stands; the picture follows it in memory, counts as unsaved, and is
+    // written as soon as it can be
+    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": b.0, "index": 0})).unwrap();
+    std::fs::remove_file(lib.join("people.json")).unwrap();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    assert_eq!(picture(s, "Ada"), Some(b));
+    assert!(s.unsaved().is_some_and(|(_, why)| why.starts_with("people")), "{:?}", s.unsaved());
+    assert!(s.close_library().is_err(), "the library stays open (and the picture kept) while it can still be written");
+    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
+    s.persist().unwrap();
+    assert_eq!(s.unsaved(), None);
+    let file: Value = serde_json::from_slice(&std::fs::read(lib.join("people.json")).unwrap()).unwrap();
+    assert_eq!(file["covers"]["ada"]["photo"], b.0, "{file}");
+    s.execute("faces.setCover", &json!({"name": "Ada", "photo": null})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
+}
+
+/// A person's picture in People can be one of their faces chosen by the user instead of their largest (#3246). It is
+/// kept in the library's people.json, not in the catalog (no op, no undo step, no new catalog format), survives
+/// reopening, follows a rename, and goes back to the largest face on request.
+#[test]
+fn a_persons_picture_is_chosen_kept_beside_the_catalog_and_follows_a_rename() {
+    use lightcraft_catalog::{Filter, Photo, Source};
+    let d = temp("cover");
+    let lib = d.join("lib");
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let add = |s: &mut Session, name: &str, regions: Vec<Region>| {
+        let id = s.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+        p.meta.regions = regions;
+        s.commit("add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    let a = add(&mut s, "a.jpg", vec![region(0.1, Some("Bea")), region(0.5, Some("Ann"))]);
+    let big = Region { rect: Rect { x0: 0.05, y0: 0.05, x1: 0.95, y1: 0.95 }, ..region(0.0, Some("ann")) };
+    let b = add(&mut s, "b.jpg", vec![big]);
+    let picture = |s: &Session, name: &str| {
+        s.catalog.people_in_with(&Filter::default(), &s.person_covers).into_iter().find(|p| p.name.eq_ignore_ascii_case(name)).map(|p| p.photo)
+    };
+    assert_eq!(picture(&s, "Ann"), Some(b), "the largest face by default");
+    let (revision, undo, generation) = (s.catalog.revision, s.undo.len(), s.people_gen);
+    let r = s.execute("faces.setCover", &json!({"name": " ANN ", "photo": a.0, "index": 1})).unwrap();
+    assert_eq!(r["cover"]["photo"], a.0, "{r}");
+    assert_eq!(picture(&s, "Ann"), Some(a));
+    assert_eq!((s.catalog.revision, s.undo.len()), (revision, undo), "the catalog is not touched");
+    assert!(s.journal.iter().any(|(id, p)| id == "faces.setCover" && p["photo"] == a.0), "recorded in the command journal");
+    assert_ne!(s.people_gen, generation, "the People view is told");
+    assert_eq!(s.execute("faces.person", &json!({"name": "ann"})).unwrap()["cover"], json!({"photo": a.0, "index": 1}));
+    assert_eq!(s.execute("faces.person", &json!({"name": "Bea"})).unwrap()["cover"], Value::Null);
+    let file: Value = serde_json::from_slice(&std::fs::read(lib.join("people.json")).unwrap()).unwrap();
+    assert_eq!(file["covers"]["ann"]["photo"], a.0, "{file}");
+    // only a face of theirs: someone else's, a missing one, or no photo at all is refused and changes nothing
+    for bad in [
+        json!({"name": "Ann", "photo": a.0, "index": 0}),
+        json!({"name": "Ann", "photo": a.0, "index": 9}),
+        json!({"name": "Ann", "photo": 999_999, "index": 0}),
+        json!({"name": "Ann", "photo": "a", "index": 0}),
+        json!({"name": "Ann"}),
+        json!({"photo": a.0, "index": 1}),
+    ] {
+        assert!(s.execute("faces.setCover", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(picture(&s, "Ann"), Some(a));
+    // kept with the library
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(picture(&s, "Ann"), Some(a), "{:?}", s.person_covers);
+    // the faces set aside for them are kept with the library too, and follow a rename
+    let c = add(&mut s, "c.jpg", vec![region(0.5, None)]);
+    s.execute("faces.dismiss", &json!({"name": "Ann", "photo": c.0, "index": 0})).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(s.person_dismissed.get("ann").map(|v| v[0].photo), Some(c));
+    // a renamed person keeps their picture; going back to the largest face is a choice too
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    assert_eq!(picture(&s, "Ada"), Some(a));
+    assert_eq!(s.person_dismissed.get("ada").map(|v| v[0].photo), Some(c));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(picture(&s, "Ann"), Some(a), "and after an undo of the rename");
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": null})).unwrap();
+    assert_eq!(picture(&s, "Ann"), Some(b));
+    // a name left over from an earlier rename does not hold on to its old picture: Ann → Ada, a new picture for Ada,
+    // back to Ann shows the new one; and with no picture of their own, the old one under the new name goes
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": b.0, "index": 0})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    s.execute("faces.setCover", &json!({"name": "Ada", "photo": a.0, "index": 1})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
+    assert_eq!(picture(&s, "Ann"), Some(a), "the picture chosen under the last name, not the one left under this one");
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": null})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    assert_eq!(picture(&s, "Ada"), Some(b), "no stale picture under the new name");
+    assert_eq!(s.person_dismissed.get("ada"), s.person_dismissed.get("ann"), "the faces set aside follow, nothing left over");
+    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
+    people_json_in_the_way(&mut s, &lib, a, b);
+    // a face that loses the name no longer stands for the person
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 1})).unwrap();
+    s.execute("faces.setName", &json!({"id": a.0, "index": 1, "name": null})).unwrap();
+    assert_eq!(picture(&s, "Ann"), Some(b));
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// A people.json that couldn't be read when the library opened is never overwritten that session (#3246): a picture
+/// can't be chosen nor a face set aside, and a rename carrying one counts as unsaved, without the frame loop trying to write the file.
+#[test]
+fn undoing_a_merge_gives_the_other_person_back_their_picture_and_a_switch_waits_for_people_json() {
+    use lightcraft_catalog::{Filter, Photo, Source};
+    let d = temp("cover-merge");
+    let lib = d.join("lib");
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let add = |s: &mut Session, name: &str, regions: Vec<Region>| {
+        let id = s.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, name, "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+        p.meta.regions = regions;
+        s.commit("add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        id
+    };
+    let a = add(&mut s, "a.jpg", vec![region(0.1, Some("Ann"))]);
+    let big = Region { rect: Rect { x0: 0.05, y0: 0.05, x1: 0.95, y1: 0.95 }, ..region(0.0, Some("Bea")) };
+    let b = add(&mut s, "b.jpg", vec![big]);
+    let picture = |s: &Session, name: &str| {
+        s.catalog.people_in_with(&Filter::default(), &s.person_covers).into_iter().find(|p| p.name.eq_ignore_ascii_case(name)).map(|p| p.photo)
+    };
+    let saved = |lib: &std::path::Path| -> Value { serde_json::from_slice(&std::fs::read(lib.join("people.json")).unwrap()).unwrap() };
+    s.execute("faces.setCover", &json!({"name": "Ann", "photo": a.0, "index": 0})).unwrap();
+    // Bea has no picture of her own: merged, she takes Ann's; undone, she has none again, and Ann keeps hers
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Bea", "merge": true})).unwrap();
+    assert_eq!(s.person_covers.get("bea").map(|c| c.photo), Some(a));
+    let generation = s.people_gen;
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((s.person_covers.get("bea"), picture(&s, "Bea"), picture(&s, "Ann")), (None, Some(b), Some(a)), "{:?}", s.person_covers);
+    assert_ne!(s.people_gen, generation, "the People view is told");
+    assert_eq!(saved(&lib)["covers"].get("bea"), None, "and people.json says so");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.person_covers.get("bea").map(|c| c.photo), Some(a), "redone, she has it again");
+    assert_eq!(saved(&lib)["covers"]["bea"]["photo"], a.0);
+    s.execute("edit.undo", &json!({})).unwrap();
+    // a rename people.json can't take keeps the library open when another one is opened, as when it is closed
+    std::fs::remove_file(lib.join("people.json")).unwrap();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    let other = d.join("other");
+    let e = s.open_library(&other, false).map(|_| ()).unwrap_err();
+    assert!(matches!(e, crate::EngineError::NotSaved(_)), "{e}");
+    assert_eq!((picture(&s, "Ada"), s.person_covers.get("ada").map(|c| c.photo)), (Some(a), Some(a)), "still open, the choice kept");
+    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
+    s.open_library(&other, false).unwrap();
+    assert_eq!(saved(&lib)["covers"]["ada"]["photo"], a.0, "written before the switch");
+    assert!(s.person_covers.is_empty(), "and the other library has its own");
+    let _ = std::fs::remove_dir_all(d);
+}
+
+#[test]
+fn a_rename_counts_as_unsaved_when_people_json_was_unreadable_at_opening() {
+    use lightcraft_catalog::{Filter, Photo, Source};
+    let d = temp("cover-blocked");
+    let lib = d.join("lib");
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(id, Source::Demo { scene: 1 }, "a.jpg", "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+    p.meta.regions = vec![region(0.1, Some("Bea")), region(0.5, Some("Ann"))];
+    s.commit("add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    std::fs::remove_file(lib.join("people.json")).ok();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.take_library_warnings().iter().any(|w| w.starts_with("people.json")));
+    assert!(s.execute("faces.setCover", &json!({"name": "Ann", "photo": id.0, "index": 1})).is_err(), "nothing chosen that can't be kept");
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "photo": id.0, "index": 0})).is_err(), "nor a face set aside");
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "restore": true})).is_err(), "nor any brought back");
+    assert!(s.person_dismissed.is_empty());
+    assert_eq!(s.unsaved(), None, "and nothing left unsaved");
+    // a picture held in the session (as no command can set it then) still follows a rename, and is reported unsaved
+    let cover = lightcraft_catalog::PersonCover { photo: id, face: s.catalog.photo(id).unwrap().meta.regions[1].rect };
+    s.person_covers.insert("ann".into(), cover);
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    let ada = s.catalog.people_in_with(&Filter::default(), &s.person_covers).into_iter().find(|p| p.name == "Ada").map(|p| p.photo);
+    assert_eq!(ada, Some(id));
+    assert!(s.unsaved().is_some_and(|(n, why)| n == 1 && why.contains("people.json")), "{:?}", s.unsaved());
+    s.persist_if_dirty();
+    s.persist().unwrap();
+    assert!(s.unsaved().is_some(), "still unsaved: the file is not written this session");
+    assert!(lib.join("people.json").join("in-the-way").is_dir(), "the unreadable people.json is left alone");
+    let _ = std::fs::remove_dir_all(d);
 }
