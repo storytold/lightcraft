@@ -578,10 +578,13 @@ pub fn initial_window_renderer(
     {
         return WindowRenderer::Glow;
     }
-    window_renderer_order(forced, remembered, failed, os, compiled, glow)
-        .first()
-        .copied()
-        .unwrap_or_else(|| if glow { WindowRenderer::Glow } else { WindowRenderer::Wgpu(default_window_backends(os) & compiled) })
+    // `window_renderer_order` never returns an empty list, so the first
+    // renderer is always there; the fallback only keeps this total.
+    match window_renderer_order(forced, remembered, failed, os, compiled, glow).first().copied() {
+        Some(r) => r,
+        None if glow => WindowRenderer::Glow,
+        None => WindowRenderer::Wgpu(default_window_backends(os) & compiled),
+    }
 }
 
 #[cfg(test)]
