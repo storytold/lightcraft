@@ -135,6 +135,8 @@ pub fn clean_album_name(album: &str) -> String {
 /// - `now`: the UTC timestamp for `{date}` (YYYYMMDD) and `{hour}` (HHMM); `None` uses current UTC time.
 /// - Unknown tokens are left unchanged. The result passes through [`clean_subfolder`].
 ///
+/// E.g. `"{album}/{date}_{hour}"` with album `"Vacation"` produces `"Vacation/20261107_0230"`.
+///
 /// Returns immediately without timestamp formatting or album lookup if `template` is empty or has no `{`.
 pub fn expand_subfolder(template: &str, album: Option<&str>, now: Option<chrono::NaiveDateTime>) -> String {
     if template.is_empty() || !template.contains('{') {

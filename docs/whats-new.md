@@ -3,10 +3,7 @@
 ## Unreleased
 
 ### Export subfolder variables
-- The Export dialog's Subfolder field now supports `{album}` (the active album's name, empty outside an album view),
-  `{date}` (export date in YYYYMMDD, UTC), and `{hour}` (export time in HHMM, UTC). An **Insert…** dropdown next to 
-  the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset 
-  produces dated subfolders on every use.
+- The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, UTC), and `{hour}` (batch export time in `HHMM`, UTC). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
