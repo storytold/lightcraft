@@ -1805,7 +1805,8 @@ pub(crate) fn verification_hash(path: &str) -> io::Result<Hash128> {
     current_reader()?.copy_stream(path, &mut io::sink(), false).map(|fp| fp.hash)
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
+#[cfg(windows)]
 mod windows_tests {
     use super::*;
     fn source(tag: &str) -> (Originals, std::path::PathBuf, String) {
