@@ -360,21 +360,26 @@ fn step_as_shot_white(step: &SqlValue) -> Option<(f64, f64)> {
         }
         _ => return None,
     };
-    if !text.contains("As Shot") {
+    let props = settings_with_white_balance(text, "As Shot")?;
+    let number = |k: &str| props.get(k)?.first()?.parse::<f64>().ok().filter(|v| v.is_finite());
+    Some((number("crs:Temperature").filter(|t| *t > 0.0)?, number("crs:Tint")?))
+}
+
+/// The parsed develop settings in `text` when their white balance is `mode`; `None` for another mode or text
+/// that does not parse. The substring test only skips parsing text that cannot match.
+fn settings_with_white_balance(text: &str, mode: &str) -> Option<crate::crs::Props> {
+    if !text.contains(mode) {
         return None;
     }
     let root = crate::preset_import::parse_lua(text).ok()?;
     let (props, _) = crate::preset_import::lua_settings_props(&root).ok()?;
-    let field = |k: &str| props.get(k).and_then(|v| v.first());
-    let number = |k: &str| field(k)?.parse::<f64>().ok().filter(|v| v.is_finite());
-    (field("crs:WhiteBalance")?.as_str() == "As Shot").then_some(())?;
-    Some((number("crs:Temperature").filter(|t| *t > 0.0)?, number("crs:Tint")?))
+    (props.get("crs:WhiteBalance")?.first()?.as_str() == mode).then_some(props)
 }
 
 /// The as-shot white of each photo with a Custom white balance (issue #510: without it a raw developed relative
 /// to its as-shot look can't take the Kelvin). Optional: what was read before a failure is kept.
 fn custom_as_shot(reader: &Reader, develops: &HashMap<i64, String>, cancel: &AtomicBool, warnings: &mut Vec<String>) -> HashMap<i64, (f64, f64)> {
-    let wanted: HashSet<i64> = develops.iter().filter(|(_, t)| t.contains("WhiteBalance = \"Custom\"")).map(|(id, _)| *id).collect();
+    let wanted: HashSet<i64> = develops.iter().filter(|(_, t)| settings_with_white_balance(t, "Custom").is_some()).map(|(id, _)| *id).collect();
     let mut found = HashMap::new();
     if !wanted.is_empty()
         && let Err(error) = reader.as_shot_whites(&wanted, cancel, &mut found)

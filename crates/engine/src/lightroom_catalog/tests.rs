@@ -734,7 +734,8 @@ fn a_custom_white_balance_is_shifted_from_the_as_shot_white_in_its_history() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("custom.lrcat");
-    let custom = "s = { WhiteBalance = \"Custom\", Temperature = 11250, Tint = 103 }";
+    // written without the spaces Lightroom puts around `=`: the white balance is read, not matched as text
+    let custom = "s = { WhiteBalance=\"Custom\", Temperature = 11250, Tint = 103 }";
     let mut tables: Vec<_> = photo_tables((dir.to_str().unwrap(), "")).into_iter().map(|(name, columns, row)| (name, columns, vec![row])).collect();
     tables.push(("Adobe_imageDevelopSettings", "id_local INTEGER PRIMARY KEY, image, text", vec![vec![N, I(1), T(custom.into())]]));
     tables.push((
@@ -743,6 +744,8 @@ fn a_custom_white_balance_is_shifted_from_the_as_shot_white_in_its_history() {
         vec![
             // the first steps say As Shot without its values
             vec![N, I(1), compressed_step("s = { WhiteBalance = \"As Shot\" }")],
+            // the last As Shot step with values wins over an earlier one
+            vec![N, I(1), compressed_step("s = { WhiteBalance = \"As Shot\", Temperature = 5000, Tint = 10 }")],
             vec![N, I(1), compressed_step("s = { WhiteBalance = \"As Shot\", Temperature = 6350, Tint = 73 }")],
             vec![N, I(1), compressed_step(custom)],
             // another photo's as-shot white is not this photo's

@@ -268,7 +268,9 @@ impl Database {
     }
 
     /// Hand each record of a table B-tree to `visit`, keeping none: for a table over the size [`Self::read_table`]
-    /// holds in memory. The row and per-record limits still apply; an error from `visit` stops the walk.
+    /// holds in memory. The row and per-record limits still apply; an error from `visit` stops the walk, as does a
+    /// payload total over the database's size. A real table's payloads sit on pages of their own, so they never
+    /// reach it; records that share overflow pages would otherwise read the same bytes again and again.
     pub fn for_each_record(&self, rootpage: u32, ncols: usize, visit: &mut dyn FnMut(Record) -> Result<(), String>) -> Result<(), String> {
         if !(1..=MAX_PAGE_ID).contains(&rootpage) || rootpage > self.page_count {
             return Err("table root page is outside database".into());
@@ -277,7 +279,8 @@ impl Database {
             return Err("table has too many columns".into());
         }
         let alias = self.rowid_aliases.get(&rootpage).copied();
-        let mut state = WalkState { payload_limit: usize::MAX, sink: Some(visit), ..WalkState::new() };
+        let database_bytes = usize::try_from(self.page_count).unwrap_or(usize::MAX).saturating_mul(self.page_size);
+        let mut state = WalkState { payload_limit: database_bytes, sink: Some(visit), ..WalkState::new() };
         self.visit_table(rootpage, ncols, alias, 0, &mut state)
     }
 

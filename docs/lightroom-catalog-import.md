@@ -122,7 +122,9 @@ A Custom white balance on a raw LightCraft develops relative to its as-shot look
 RAF, CR3, CR2, PEF, SRW; Lightroom names them all `RAW`) can't be taken as Kelvin. A Custom photo's
 develop settings keep no as-shot white, but its history does: the last `Adobe_libraryImageDevelopHistoryStep`
 that says As Shot with a `Temperature` gives the white the edit is the same mired shift from (read
-record by record, so a history table over the import's size limit still gives it). With no such step the
+record by record, so a history table over the import's size limit still gives it; the walk stops with a
+warning once its records add up to more than the catalog file holds, which only records sharing pages can
+do, and keeps the whites read so far). With no such step the
 photo stays As Shot and `Temperature, Tint` are reported
 (issue #510; a DNG keeps the Kelvin value, and an XMP packet with `crs:AsShotTemperature` is
 shifted by the same mired difference, see [xmp-interop.md](xmp-interop.md)). A raw whose camera has
