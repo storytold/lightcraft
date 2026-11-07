@@ -78,6 +78,10 @@ pub struct UiState {
     pub open_flyouts: Vec<String>,
     /// Solo Mode (`view.soloSections`): opening one Edit section closes the others.
     pub single_panel: bool,
+    /// Clipping warnings (J, the histogram's corner buttons): clipped pixels painted over the
+    /// photo. For this session only, never saved: a settings file from before #3638 kept it on
+    /// when it only drew a frame, and every photo opened painted after the update (#3888).
+    #[serde(skip)]
     pub show_clipping: bool,
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
@@ -680,5 +684,23 @@ impl egui::DroppedFile for InjectedDrop {
     #[cfg(target_arch = "wasm32")]
     fn bytes_async(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + '_>> {
         Box::pin(async { Err("the web build has no files to read".to_string()) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UiState;
+
+    /// Issue #3888: a settings file saved with the clipping warnings on (as one from before #3638,
+    /// when J only drew a frame) opens with them off, and a save never writes them.
+    #[test]
+    fn clipping_warnings_are_not_saved_or_restored() {
+        let saved = serde_json::json!({"showClipping": true, "histogram": false});
+        let ui: UiState = serde_json::from_value(saved).expect("deserialize");
+        assert!(!ui.show_clipping, "a saved showClipping must not turn the warnings on");
+        assert!(!ui.histogram, "the other saved view settings still load");
+        let on = UiState { show_clipping: true, ..UiState::default() };
+        let written = serde_json::to_value(&on).expect("serialize");
+        assert!(written.get("showClipping").is_none(), "showClipping is never written: {written}");
     }
 }
