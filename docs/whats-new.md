@@ -68,6 +68,11 @@
 
 ## 2026-10-30
 
+### The update prompt's What's new link opens the release notes
+- In the window that offers a new version, the What's new link (and Download, where the update can't install itself)
+  did nothing on the desktop app: they asked egui to open the page, which this build of the app can't do on its own.
+  They now open in your browser, as LightCraft's other links do (issue #3689).
+
 ### Lightroom catalogs with a print inside a collection import their collections
 - Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
   LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an

@@ -662,9 +662,35 @@ impl LightcraftApp {
                 }
             }
         });
+        self.open_requested_links(ctx);
         self.perf.frame_ms = monotonic_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
+    }
+
+    /// Links opened through egui this pass (`Context::open_url`: the update prompt's What's New and
+    /// Download) go to the host's `open_url`, as LightCraft's own links do: the desktop build
+    /// leaves out egui's own link opener (eframe without default features), so egui drops them
+    /// (issue #3689). A host without `open_url` keeps them for its own integration.
+    fn open_requested_links(&mut self, ctx: &egui::Context) {
+        if self.services.open_url.is_none() {
+            return;
+        }
+        let mut urls = Vec::new();
+        ctx.output_mut(|o| {
+            o.commands.retain(|c| match c {
+                egui::OutputCommand::OpenUrl(open) => {
+                    urls.push(open.url.clone());
+                    false
+                }
+                _ => true,
+            });
+        });
+        for url in urls {
+            if let Err(e) = crate::links::open(self, &url) {
+                self.toast_error(ctx, format!("{url}: {e}"));
+            }
+        }
     }
 
     /// Lay out the whole window: input/setup for the known UI phase, then presentation, then the
