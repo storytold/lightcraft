@@ -56,6 +56,9 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
     let Some(id) = next else {
         return ok();
     };
+    if active == Some(id) {
+        return Ok(json!({"active": id.0}));
+    }
     s.end_interaction()?;
     s.selection = Selection::single(id);
     s.active_mask = None;
@@ -122,5 +125,20 @@ mod next_unrated_tests {
         let result = s.execute("library.nextUnrated", &json!({}));
         assert!(result.is_ok(), "library.nextUnrated command should exist");
         assert_eq!(s.active(), Some(PhotoId(3)), "next unrated photo in view order");
+    }
+
+    #[test]
+    fn next_unrated_preserves_selection_and_mask_spot_when_staying() {
+        let mut s = session().unwrap();
+        s.execute("photo.rate", &json!({"ids": [4], "rating": 5})).unwrap();
+        s.execute("library.select", &json!({"ids": [1, 2, 3], "active": 3})).unwrap();
+        s.active_mask = Some(7);
+        s.active_spot = Some(2);
+        let result = s.execute("library.nextUnrated", &json!({}));
+        assert!(result.is_ok(), "library.nextUnrated command should exist");
+        assert_eq!(s.active(), Some(PhotoId(3)), "the only unrated photo stays active");
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(3)], "staying must preserve the multi-photo selection");
+        assert_eq!(s.active_mask, Some(7), "staying must preserve the mask state");
+        assert_eq!(s.active_spot, Some(2), "staying must preserve the spot state");
     }
 }
