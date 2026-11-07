@@ -13,7 +13,7 @@ const SETTLE: Duration = Duration::from_secs(10);
 fn app(size: [f32; 2]) -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, size, 1.0);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new session");
     h
 }
 
@@ -59,7 +59,7 @@ fn no_menu_or_submenu_covers_the_menu_bar() {
             assert!(widget(&h, "menu-level:1").is_none(), "{what}: a menu is open before any click");
             let r = h.request("ui.clickWidget", json!({"id": format!("menu:{top}")}), T);
             assert_eq!(r["ok"], true, "{what}: {r}");
-            h.settle(SETTLE);
+            h.settled(SETTLE, "after ui.clickWidget");
             check_bar_clear(&h, "menu-level:1", &what);
             // Hover each submenu row in view, top to bottom: rows low in the menu open upward.
             let level = widget(&h, "menu-level:1").unwrap_or_else(|| panic!("{what}: menu"));
@@ -76,7 +76,7 @@ fn no_menu_or_submenu_covers_the_menu_bar() {
                 let fy = (at.y - full.top()) / full.height();
                 let r = h.request("ui.hoverWidget", json!({"id": row, "fx": fx, "fy": fy}), T);
                 assert_eq!(r["ok"], true, "{what}: {r}");
-                h.settle(SETTLE);
+                h.settled(SETTLE, "after ui.hoverWidget");
                 if widget(&h, "menu-level:2").is_none() {
                     continue;
                 }
@@ -94,7 +94,7 @@ fn a_tall_menu_scrolls_instead_of_growing_past_the_window() {
     let mut h = app([1160.0, 420.0]);
     let r = h.request("ui.clickWidget", json!({"id": "menu:Photo"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking menu:Photo");
     check_bar_clear(&h, "menu-level:1", "420 pt window");
     let level = widget(&h, "menu-level:1").expect("Photo menu");
     // Not every row fits: some are scrolled out of view, none drawn outside the menu.
@@ -114,7 +114,7 @@ fn open_menu(h: &Headless) -> Option<String> {
 fn go(h: &mut Headless, method: &str, id: &str) {
     let r = h.request(method, json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{method} {id}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn clicking_another_title_opens_it_in_one_click() {
     // move away from the titles first so only the click can be what switches
     let r = h.request("ui.move", json!({"x": 640.0, "y": 400.0}), T);
     assert_eq!(r["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.move");
     go(&mut h, "ui.clickWidget", "menu:View");
     assert_eq!(open_menu(&h).as_deref(), Some("menu:View"));
     // clicking the open title closes it
@@ -155,13 +155,13 @@ fn click_outside_and_escape_close_the_open_menu() {
     assert!(open_menu(&h).is_some());
     let r = h.request("ui.click", json!({"x": 640.0, "y": 600.0}), T);
     assert_eq!(r["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert_eq!(open_menu(&h), None, "click outside");
     go(&mut h, "ui.clickWidget", "menu:Photo");
     assert!(open_menu(&h).is_some());
     let r = h.request("ui.key", json!({"key": "Escape"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     assert_eq!(open_menu(&h), None, "Escape");
 }
 

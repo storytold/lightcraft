@@ -236,7 +236,7 @@ mod tests {
         let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
         let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["light"]}), Duration::from_secs(20));
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(Duration::from_secs(120));
+        h.settled(Duration::from_secs(120), "after ui.set");
         let (sdr_h, sdr_y) = (widget(&h, "histogram").expect("histogram").height(), widget(&h, "slider:light.exposure").expect("exposure").top());
 
         let on = run(&mut h, true, Some(sdr_h + 26.0));

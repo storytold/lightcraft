@@ -20,7 +20,7 @@ fn widget(h: &Headless, id: &str) -> Option<egui::Rect> {
 fn go(h: &mut Headless, method: &str, id: &str) {
     let r = h.request(method, json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{method} {id}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after the request");
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn a_folder_of_many_imported_profiles_scrolls_inside_the_window() {
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.app.ui.right = crate::state::RightPanel::Edit;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.right");
     go(&mut h, "ui.clickWidget", "dropdown:profile");
     let menu = widget(&h, "menu-level:1").expect("the profile menu is open");
     assert!(menu.bottom() <= h.size.y + 0.5, "the profile menu {menu:?} runs past the window's bottom {}", h.size.y);

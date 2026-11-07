@@ -38,7 +38,7 @@ fn review(tag: &str) -> (Headless, PathBuf) {
     let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.to_string_lossy()]}}), T);
     assert_eq!(r["result"]["scanning"], true, "{r}");
     assert!(h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(Dialog::Import { .. }))), "the review opens");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     (h, dir)
 }
 
@@ -62,6 +62,7 @@ fn rects(h: &mut Headless, id: &str) -> ([f64; 4], [f64; 4]) {
 
 /// Click a widget of the review, scrolling the review first when the widget is below its window
 /// (the review's content scrolls; the Batch edits section is at the bottom of it).
+#[track_caller]
 fn click(h: &mut Headless, id: &str) {
     for _ in 0..40 {
         let (w, win) = rects(h, id);
@@ -70,13 +71,13 @@ fn click(h: &mut Headless, id: &str) {
         }
         h.request("ui.move", json!({"x": win[0] + win[2] / 2.0, "y": win[1] + win[3] / 2.0}), T);
         h.request("ui.scroll", json!({"dy": -400.0}), T);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.scroll");
     }
     let (w, win) = rects(h, id);
     assert!(w[1] >= win[1] && w[1] + w[3] <= win[1] + win[3], "{id} {w:?} is inside the window {win:?}");
     let r = h.request("ui.clickWidget", json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, &format!("after clicking {id}"));
 }
 
 fn toast(h: &Headless) -> String {
@@ -90,7 +91,7 @@ fn finish_import(h: &mut Headless) {
         h.step();
     }
     assert!(h.app.import.is_none(), "the import finished");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
 }
 
 /// "Save as Preset" saves nothing without a name or without a recipe, and with both saves exactly
@@ -137,10 +138,10 @@ fn cancelling_the_review_discards_the_recipe() {
     let d = dialog(&mut h);
     d.recipe.insert("light.exposure".into(), 0.5);
     d.recipe_name = "Never saved".into();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting the review's recipe");
     let r = h.request("ui.dialog.cancel", json!({}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.cancel");
     assert!(h.app.ui.dialog.is_none() && h.app.import.is_none());
     assert_eq!((h.app.session.catalog.len(), h.app.session.presets.len(), h.app.session.undo.len()), (0, presets0, undo0));
     let _ = std::fs::remove_dir_all(&dir);

@@ -27,7 +27,7 @@ fn detail_offers_ai_denoise_for_raw_photos_without_any_set_up() {
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0]}}), t);
     h.request("ui.set", json!({"view": "detail"}), t);
     h.app.ui.open_sections = vec!["detail".to_string()];
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.open_sections");
     h.step();
     h.step();
     let w = widgets(&mut h);
@@ -42,7 +42,7 @@ fn detail_offers_ai_denoise_for_raw_photos_without_any_set_up() {
     assert_eq!(h.app.session.execute("denoise.status", &json!({})).unwrap()["model"]["id"], "builtin");
     // Settings still offers installing a model of one's own.
     h.app.ui.dialog = Some(Dialog::Settings { tab: "denoise".into() });
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.dialog");
     let listed = h.app.session.execute("denoise.models.list", &json!({})).unwrap();
     assert_eq!(listed["models"].as_array().unwrap().len(), lightcraft_denoise::known::all().len(), "{listed}");
     assert!(widgets(&mut h).contains("\"denoise:installFile\""));
@@ -53,7 +53,7 @@ fn detail_offers_ai_denoise_for_raw_photos_without_any_set_up() {
         json!({"command": "library.select", "params": {"ids": [h.app.session.catalog.photos().find(|p| p.id != id).unwrap().id.0]}}),
         t,
     );
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     h.step();
     h.step();
     assert_eq!(h.app.session.denoise_photo_state(h.app.session.active().unwrap()), lightcraft_engine::denoise::PhotoState::NotApplicable);
@@ -83,7 +83,7 @@ fn a_rejected_model_file_says_why_in_settings() {
     let picked = onnx.to_string_lossy().into_owned();
     h.app.services.pick_denoise_model = Some(Box::new(move || vec![picked.clone()]));
     h.app.ui.dialog = Some(Dialog::Settings { tab: "denoise".into() });
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.dialog");
     let r = h.request("ui.clickWidget", json!({"id": "denoise:installFile"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -287,6 +287,69 @@ fn demo(size: [f32; 2]) -> Headless {
     Headless::new(app, size, 1.0)
 }
 
+/// An empty session with a background task that runs until `release` is dropped.
+fn stuck(release: &mut Option<std::sync::mpsc::Sender<()>>) -> Headless {
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default()), [640.0, 480.0], 1.0);
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    *release = Some(tx);
+    let started = crate::tasks::spawn(&mut h.app, "stuck", None, move || rx.recv().is_ok(), |_, _, _| {});
+    assert_eq!(started, Ok(()));
+    h
+}
+
+/// A settle that times out fails the test at once and says what it waited for and what was
+/// still busy (issue #3063), instead of letting the test carry on with an unsettled app.
+#[test]
+fn settled_fails_with_what_is_still_busy() {
+    let mut release = None;
+    let mut h = stuck(&mut release);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.settled_within(Duration::from_millis(200), "the stuck task")));
+    let message = failed.expect_err("a task that never ends can't settle");
+    let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(message.starts_with("did not settle within 200ms (the stuck task); busy at the limit: "), "{message}");
+    assert!(message.contains("background tasks: [\"stuck\"]"), "{message}");
+}
+
+/// `settled` waits at least 120 s whatever timeout a test passes: tests passed short timeouts
+/// back when a timeout was ignored, and a slow runner must not turn them into failures (#3063).
+#[test]
+fn settled_waits_past_a_short_timeout() {
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default()), [640.0, 480.0], 1.0);
+    let started = crate::tasks::spawn(&mut h.app, "slow", None, || std::thread::sleep(Duration::from_secs(1)), |_, _, _| {});
+    assert_eq!(started, Ok(()));
+    assert!(h.busy());
+    h.settled(Duration::from_millis(100), "a task that ends after a second");
+    assert!(!h.busy(), "{}", h.busy_description());
+}
+
+/// The description lists what `busy` reads, and an idle session says so and settles.
+#[test]
+fn busy_description_names_pending_work() {
+    let mut release = None;
+    let mut h = stuck(&mut release);
+    h.events.push(egui::Event::PointerGone);
+    assert!(h.busy());
+    assert_eq!(h.busy_description(), "background tasks: [\"stuck\"], queued input events");
+    drop(release.take());
+    h.settled(SETTLE, "the released task");
+    assert!(!h.busy());
+    assert_eq!(h.busy_description(), "nothing");
+}
+
+/// A running Lightroom catalog task keeps the session busy, so a settle waits for it instead of
+/// reporting the app settled while the task still owns the catalog.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_lightroom_task_keeps_the_session_busy() {
+    let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default()), [640.0, 480.0], 1.0);
+    let task = crate::lightroom_import::stall_import(&mut h.app);
+    assert!(h.busy());
+    assert_eq!(h.busy_description(), "Lightroom catalog task");
+    drop(task);
+    h.settled(SETTLE, "the Lightroom task, its sender dropped");
+    assert!(h.app.lightroom.is_none() && !h.busy(), "{}", h.busy_description());
+}
+
 /// Agents cut, copy and paste in a text field as the system does for ⌘X / ⌘C / ⌘V
 /// (`ui.clipboard`), and `ui.inspect` → `copied` says what the UI last copied.
 #[test]
@@ -300,7 +363,7 @@ fn agents_cut_copy_and_paste_in_text_fields() {
         h.step();
         r
     };
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     ask(&mut h, "ui.clickWidget", json!({"id": "field:search"}));
     ask(&mut h, "ui.text", json!({"text": "wedding"}));
     ask(&mut h, "ui.key", json!({"key": "a", "cmd": true}));
@@ -320,14 +383,14 @@ fn agents_cut_copy_and_paste_in_text_fields() {
 fn the_clipboard_method_needs_a_text_field() {
     let mut h = demo([1200.0, 760.0]);
     let t = Duration::from_secs(10);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new demo session");
     let undo = h.app.session.undo.len();
     for action in ["copy", "paste"] {
         let r = h.request("ui.clipboard", json!({"action": action, "text": "travel"}), t);
         assert_eq!(r["ok"], false, "{action}: {r}");
         assert!(r["error"].as_str().is_some_and(|e| e.contains("text field")), "{r}");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clipboard");
     assert_eq!(h.app.session.undo.len(), undo, "nothing was pasted");
 }
 
@@ -338,12 +401,12 @@ fn click_widget_right_clicks() {
     let mut h = demo([1200.0, 760.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let cell = h.app.widgets.iter().find(|(w, _)| w.starts_with("film:")).map(|(w, _)| w.clone()).expect("a filmstrip photo");
     assert!(!egui::Popup::is_any_open(&h.view.ctx));
     let r = h.request("ui.clickWidget", json!({"id": cell, "button": "right"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
     assert!(egui::Popup::is_any_open(&h.view.ctx), "its context menu");
 }
 
@@ -353,7 +416,7 @@ fn click_widget_right_clicks() {
 fn right_clicking_elsewhere_moves_the_context_menu() {
     let mut h = demo([1200.0, 760.0]);
     let t = Duration::from_secs(10);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new demo session");
     let thumbs: Vec<String> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("thumb:")).map(|(w, _)| w.clone()).collect();
     let (Some(a), Some(b)) = (thumbs.first().cloned(), thumbs.get(1).cloned()) else { panic!("two grid photos: {thumbs:?}") };
     let popup = |w: &str| {
@@ -363,7 +426,7 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
     assert!(!egui::Popup::is_any_open(&h.view.ctx));
     let r = h.request("ui.clickWidget", json!({"id": a, "button": "right"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
     assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&a)), "the first photo's menu is open");
     // A real click: the press and the release reach the UI on different frames, with the
     // pointer resting on the photo in between (`ui.clickWidget` sends both on one frame).
@@ -386,7 +449,7 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
             assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "frame {frame}: the second photo's menu is open");
         }
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "the second photo's menu stays open");
     // The same photo again, elsewhere on it (the menu that is open belongs to this very
     // widget): the menu moves to the pointer and stays.
@@ -405,7 +468,7 @@ fn right_clicking_elsewhere_moves_the_context_menu() {
             assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "frame {frame}: the menu is open after a right-click on the same photo");
         }
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     assert!(egui::Popup::is_id_open(&h.view.ctx, popup(&b)), "the menu stays open");
     let after = h.view.ctx.read_response(popup(&b)).map(|r| r.rect).expect("the menu's area");
     assert!((after.left() - at.x).abs() < 4.0, "the menu moved to the pointer: {after:?} vs {at:?} (was {before:?})");
@@ -417,17 +480,17 @@ fn up_and_down_move_through_the_grid_rows() {
     let mut h = demo([1200.0, 760.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "grid"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let first = h.app.session.visible_cloned()[0];
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [first.0]}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     let rect = |h: &Headless| {
         let a = h.app.session.selection.active.unwrap();
         h.app.widgets.iter().find(|(w, _)| *w == format!("thumb:{}", a.0)).map(|(_, r)| *r).expect("grid cell")
     };
     let top = rect(&h);
     h.request("ui.key", json!({"key": "down"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key down");
     let below = rect(&h);
     let pos = {
         let a = h.app.session.selection.active;
@@ -437,16 +500,16 @@ fn up_and_down_move_through_the_grid_rows() {
     assert!(below.top() > top.bottom(), "the next row, at {pos}: {top:?} -> {below:?}");
     assert!(below.left() < top.right() && below.right() > top.left(), "overlapping horizontally");
     h.request("ui.key", json!({"key": "up"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key up");
     assert_eq!(h.app.session.selection.active, Some(first), "back up");
     h.request("ui.key", json!({"key": "up"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key up");
     assert_eq!(h.app.session.selection.active, Some(first), "the top row stays put");
     // the filmstrip (one row): Down is the next photo
     h.request("ui.set", json!({"view": "detail"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h.request("ui.key", json!({"key": "down"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key down");
     assert_eq!(
         {
             let a = h.app.session.selection.active;
@@ -462,12 +525,12 @@ fn up_and_down_move_through_the_grid_rows() {
 fn the_search_field_pastes_from_its_menu() {
     let mut h = demo([1200.0, 760.0]);
     let t = Duration::from_secs(10);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new demo session");
     h.view.clipboard = "wedding".into();
     for (id, button) in [("field:search", "right"), ("field:search:paste", "left")] {
         let r = h.request("ui.clickWidget", json!({"id": id, "button": button}), t);
         assert_eq!(r["ok"], true, "{id}: {r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.clickWidget");
     }
     assert_eq!(h.app.ui.search, "wedding");
     assert_eq!(h.app.session.filter.text, "wedding", "and the library is filtered by it");
@@ -479,19 +542,19 @@ fn the_search_field_pastes_from_its_menu() {
 fn clearing_the_loupe_filters_empties_the_search_field() {
     let mut h = demo([1200.0, 760.0]);
     let t = Duration::from_secs(10);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new demo session");
     for (method, params) in [("ui.clickWidget", json!({"id": "field:search"})), ("ui.text", json!({"text": "a"}))] {
         let r = h.request(method, params, t);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after the request");
     }
     assert_eq!(h.app.session.filter.text, "a", "filtered while typing");
     assert!(!h.app.session.visible_cloned().is_empty(), "the search finds photos, so the loupe has one to show");
     h.request("engine.execute", json!({"command": "view.detail"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.detail");
     let r = h.request("ui.clickWidget", json!({"id": "loupe:filters"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking loupe:filters");
     assert_eq!((h.app.ui.search.as_str(), h.app.session.filter.text.as_str()), ("", ""));
 }
 
@@ -500,16 +563,16 @@ fn clearing_the_loupe_filters_empties_the_search_field() {
 fn escape_in_the_search_field_gives_back_the_search() {
     let mut h = demo([1200.0, 760.0]);
     let t = Duration::from_secs(10);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new demo session");
     for (method, params) in [("ui.clickWidget", json!({"id": "field:search"})), ("ui.text", json!({"text": "travel"}))] {
         let r = h.request(method, params, t);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after the request");
     }
     assert_eq!(h.app.session.filter.text, "travel", "filtered while typing");
     let r = h.request("ui.key", json!({"key": "Escape"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     assert_eq!((h.app.ui.search.as_str(), h.app.session.filter.text.as_str()), ("", ""));
 }
 
@@ -547,7 +610,7 @@ fn snapshots_are_deterministic_and_control_requests_work() {
         assert_eq!(r["ok"], true, "{r}");
         // Compare only fully settled frames: a timed-out settle would compare half-rendered
         // pictures and fail as a misleading pixel diff (seen on loaded CI machines).
-        assert!(h.settle(Duration::from_secs(300)), "the demo detail view did not settle within 300 s");
+        h.settled(Duration::from_secs(300), "the demo detail view");
         h.paint()
     };
     let (a, b) = (shot(), shot());
@@ -611,7 +674,7 @@ fn compare_survey_and_auto_advance_by_keyboard() {
     h.request("ui.key", json!({"key": "escape"}), t);
     assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail);
     // let in-flight renders finish: worker threads must not outlive the test process' TLS
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key escape");
 }
 
 /// Naming a face in the loupe: point at an unnamed face, click its "Add name" label, type, Enter. Needs the
@@ -632,7 +695,7 @@ fn naming_a_face_in_the_loupe() {
     }];
     h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     // pointing at the box shows the invitation; clicking it opens the name box
     h.request("ui.pointer", json!({"events": [{"kind": "move", "x": 0.42, "y": 0.4}]}), t);
     h.step();
@@ -685,7 +748,7 @@ fn adding_a_face_model_shows_its_terms_and_installs_only_once_accepted() {
 
     // the dialog opens for the chosen file, with nothing accepted and nothing installed
     assert_eq!(open(&mut h, &model)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after open");
     h.step();
     let Some(dlg) = h.app.ui.dialog.clone() else { panic!("no dialog") };
     let Dialog::FaceModel { info, accepted, .. } = &dlg else { panic!("{dlg:?}") };
@@ -778,7 +841,7 @@ fn download_shows_the_terms_first_and_fetches_nothing_until_accepted() {
     std::fs::create_dir_all(&dir).unwrap();
     h.app.session.face_models_dir = Some(dir.join("models"));
     h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "faces"}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after app.settings");
     h.step();
     let runtime = h.app.session.execute("faces.models.list", &json!({})).unwrap()["runtime"] == true;
     let r = h.request("ui.clickWidget", json!({"id": "faces:download:sface-2021dec"}), t);
@@ -836,7 +899,7 @@ fn people_and_the_name_box_offer_to_set_face_recognition_up() {
     let offers = |h: &mut Headless| h.request("ui.widgets", json!({}), t).to_string().contains("\"faces:setup\"");
 
     h.request("engine.execute", json!({"command": "view.people"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.people");
     h.step();
     assert_eq!(h.app.ui.view, ViewMode::People);
     if !runtime {
@@ -855,7 +918,7 @@ fn people_and_the_name_box_offer_to_set_face_recognition_up() {
 
     // the loupe's name box offers it too, and its button leaves for Settings with the box closed
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h.request("ui.pointer", json!({"events": [{"kind": "move", "x": 0.42, "y": 0.4}]}), t);
     h.step();
     h.step();
@@ -878,7 +941,7 @@ fn people_and_the_name_box_offer_to_set_face_recognition_up() {
     h.app.run("faces.models.select", json!({"id": installed["installed"]["id"]})).unwrap();
     h.app.caches.faces_epoch += 1;
     h.request("engine.execute", json!({"command": "view.people"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.people");
     h.step();
     assert!(offers(&mut h));
     assert_eq!(h.app.session.execute("faces.models.list", &json!({})).unwrap()["enabled"], false);
@@ -902,7 +965,7 @@ fn people_and_the_name_box_offer_to_set_face_recognition_up() {
     assert_eq!(h.app.ui.dialog, None, "nothing to go to Settings for");
     h.step();
     assert!(!offers(&mut h), "once it is on the offer is gone");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after offers");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -931,7 +994,7 @@ fn a_persons_page_shows_their_faces_and_back_returns_to_everyone() {
     }
     let open_people = |h: &mut Headless| {
         h.request("engine.execute", json!({"command": "view.people"}), t);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after view.people");
         h.step();
     };
     open_people(&mut h);
@@ -1014,7 +1077,7 @@ fn person_more_confirms_all_above_with_one_undo_step() {
         h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
     }
     h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.person");
     let page = crate::panels::person::PersonPage {
         name: "Jane Doe".into(),
         total: 1,
@@ -1116,7 +1179,7 @@ fn unnamed_faces_are_selected_and_named_together() {
         h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
     }
     h.request("engine.execute", json!({"command": "view.people"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.people");
     h.step();
     h.step();
     let tiles = |h: &mut Headless| h.request("ui.widgets", json!({"filter": "unnamed-face:"}), t)["result"].as_array().map_or(0, Vec::len);
@@ -1150,7 +1213,7 @@ fn unnamed_faces_are_selected_and_named_together() {
     assert_eq!(named(&h, ids[1], 1), None, "a face that was not selected stays unnamed");
     assert_eq!(h.app.session.undo.len(), undo + 1, "one step for both");
     assert!(h.app.ui.unnamed_selected.is_empty() && h.app.ui.unnamed_name.is_empty());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     h.step();
     assert_eq!(tiles(&mut h), 2, "the named faces left the unnamed list");
     assert_eq!(h.app.session.catalog.people().len(), 2, "and the new person is among the named");
@@ -1189,7 +1252,7 @@ fn double_clicking_an_unnamed_face_opens_its_photo() {
     }
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [ids[0].0]}}), t);
     h.request("engine.execute", json!({"command": "view.people"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.people");
     h.step();
     h.step();
     let tile = format!("unnamed-face:{}:0", ids[1].0);
@@ -1235,7 +1298,7 @@ fn the_unnamed_faces_name_field_pastes_and_escape_clears() {
     }];
     h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
     h.request("engine.execute", json!({"command": "view.people"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.people");
     h.view.clipboard = "Wedding Guest".into();
     for (widget, button) in [
         (format!("unnamed-face:{}:0", id.0), "left"),
@@ -1321,7 +1384,7 @@ fn a_screenful_of_small_faces_is_not_evicted_and_left_blank() {
 fn inspect_reports_the_face_scan_pace() {
     let mut h = demo([1000.0, 700.0]);
     let t = Duration::from_secs(10);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new demo session");
     h.step();
     let r = h.request("ui.inspect", json!({}), t);
     let scan = &r["result"]["faceScan"];
@@ -1338,7 +1401,7 @@ fn profile_browser_previews_on_hover_and_applies_on_click() {
     h.request("ui.set", json!({"view": "detail"}), t);
     let r = h.request("engine.execute", json!({"command": "panel.profiles"}), t);
     assert_eq!(r["result"]["open"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after panel.profiles");
     let id = h.app.session.active().unwrap();
     let photo = |h: &Headless| h.app.session.catalog.photo(id).unwrap().clone();
     let before = photo(&h);
@@ -1347,7 +1410,7 @@ fn profile_browser_previews_on_hover_and_applies_on_click() {
     // hover: the loupe shows the look, nothing is committed
     let r = h.request("ui.hoverWidget", json!({"id": "profileCell:lc.vivid"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.hoverWidget");
     // the hover render can land after a quiet spell on a loaded machine (FreeBSD CI): wait for it
     h.step_until(SETTLE, |h| h.app.loupe_shown.map(|l| l.1) == Some("hover"));
     assert_eq!(h.app.hover_preview.as_ref().map(|p| p.label.as_str()), Some("Profile: Vivid"));
@@ -1368,7 +1431,7 @@ fn profile_browser_previews_on_hover_and_applies_on_click() {
     h.request("ui.clickWidget", json!({"id": "profileStar:lc.portrait"}), t);
     assert_eq!(h.app.session.profile_favorites, ["lc.portrait"]);
     assert_eq!(photo(&h).develop.profile.id, "lc.vivid", "the star doesn't apply");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking profileStar:lc.portrait");
 }
 
 /// Hovering the applied profile shows the applied look (no preview), not the last other profile hovered.
@@ -1378,7 +1441,7 @@ fn hovering_the_applied_profile_drops_the_last_hover() {
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail"}), t);
     h.request("engine.execute", json!({"command": "panel.profiles"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after panel.profiles");
     h.request("ui.clickWidget", json!({"id": "profileCell:lc.vivid"}), t);
     h.request("ui.hoverWidget", json!({"id": "profileCell:lc.portrait"}), t);
     h.step();
@@ -1396,7 +1459,7 @@ fn applied_preset_is_marked_again_on_returning_to_the_photo() {
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail"}), t);
     h.request("engine.execute", json!({"command": "panel.presets"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after panel.presets");
     let a = h.app.session.active().unwrap();
     let b = h.app.session.visible_cloned().into_iter().find(|id| *id != a).unwrap();
     let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
@@ -1406,18 +1469,18 @@ fn applied_preset_is_marked_again_on_returning_to_the_photo() {
     };
     let r = h.request("ui.clickWidget", json!({"id": "preset:lc.warm-glow"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking preset:lc.warm-glow");
     assert_eq!(marked(&h).as_deref(), Some("preset:lc.warm-glow"));
     assert!(has(&h, "slider:presetAmount"));
     for (photo, want) in [(b, None), (a, Some("preset:lc.warm-glow"))] {
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [photo.0]}}), t);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after library.select");
         h.step();
         assert_eq!(marked(&h).as_deref(), want, "on photo {photo:?}");
         assert_eq!(has(&h, "slider:presetAmount"), want.is_some(), "the Amount slider follows the mark");
     }
     h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after develop.set");
     h.step();
     assert_eq!(marked(&h), None, "an edit after the preset drops the mark");
 }
@@ -1430,7 +1493,7 @@ fn applied_preset_is_not_marked_on_an_active_photo_outside_the_selection() {
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail"}), t);
     h.request("engine.execute", json!({"command": "panel.presets"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after panel.presets");
     let a = h.app.session.active().unwrap();
     let b = h.app.session.visible_cloned().into_iter().find(|id| *id != a).unwrap();
     h.app.session.selection.ids = vec![b];
@@ -1438,13 +1501,13 @@ fn applied_preset_is_not_marked_on_an_active_photo_outside_the_selection() {
     let before = h.app.session.develop_of(a).unwrap();
     let r = h.request("ui.clickWidget", json!({"id": "preset:lc.warm-glow"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking preset:lc.warm-glow");
     h.step();
     assert_eq!(h.app.session.active(), Some(a));
     assert!(*h.app.session.develop_of(a).unwrap() == *before, "the active photo wasn't changed");
     assert!(!h.app.widgets.iter().any(|(id, _)| id == "presetApplied"), "nor marked");
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [b.0]}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     h.step();
     assert!(h.app.widgets.iter().any(|(id, _)| id == "presetApplied"), "the selected photo is");
 }
@@ -1457,12 +1520,12 @@ fn preset_hover_previews_and_create_preset_groups() {
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail"}), t);
     h.request("engine.execute", json!({"command": "panel.presets"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after panel.presets");
     let id = h.app.session.active().unwrap();
     let photo = |h: &Headless| h.app.session.catalog.photo(id).unwrap().clone();
     let before = photo(&h);
     h.request("ui.hoverWidget", json!({"id": "preset:lc.bw-high-contrast"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.hoverWidget");
     h.step_until(SETTLE, |h| h.app.loupe_shown.map(|l| l.1) == Some("hover"));
     assert_eq!(h.app.hover_preview.as_ref().map(|p| p.label.as_str()), Some("Preset: High Contrast B&W"));
     assert_eq!(h.app.loupe_shown.map(|l| l.1), Some("hover"));
@@ -1476,13 +1539,13 @@ fn preset_hover_previews_and_create_preset_groups() {
     assert_eq!(h.app.hover_preview.as_ref().map(|p| p.label.as_str()), Some("Preset: High Contrast B&W"));
     // hovering another preset switches smoothly to it
     h.request("ui.hoverWidget", json!({"id": "preset:lc.warm-glow"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.hoverWidget");
     h.step();
     assert_eq!(h.app.hover_preview.as_ref().map(|p| p.label.as_str()), Some("Preset: Warm Glow"));
     // thumbnails: variant textures for the visible presets
     h.app.ui.preset_thumbs = true;
     h.request("ui.move", json!({"x": 5, "y": 500}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.move");
     h.step();
     assert!(h.app.hover_preview.is_none());
     assert!(h.app.renderer.variant_textures() >= 5, "{}", h.app.renderer.variant_textures());
@@ -1505,7 +1568,7 @@ fn preset_hover_previews_and_create_preset_groups() {
     assert_eq!(r["ok"], true, "{r}");
     let p = h.app.session.presets.iter().find(|p| !p.builtin).expect("created").clone();
     assert!(p.settings.get("light").is_none() && p.settings["effects"]["clarity"] == 25.0, "{}", p.settings);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.confirm");
 }
 
 /// A collection of thousands of presets (a Lightroom library imported whole) lists only the
@@ -1529,7 +1592,7 @@ fn presets_panel_with_thousands_of_presets_builds_only_visible_rows() {
     h.request("ui.set", json!({"view": "detail"}), t);
     h.request("engine.execute", json!({"command": "panel.presets"}), t);
     h.app.ui.preset_thumbs = true;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.preset_thumbs");
     h.step();
     let rows = |h: &Headless| h.app.widgets.iter().filter(|(w, _)| w.starts_with("preset:")).map(|(w, _)| w.clone()).collect::<Vec<_>>();
     let first = rows(&h);
@@ -1574,7 +1637,7 @@ fn filter_bar_labels_from_label_and_labels() {
     h.request("ui.clickWidget", json!({"id": "filter:label-green"}), t);
     let f = h.app.session.filter.clone();
     assert_eq!((f.label, f.labels), (None, vec![ColorLabel::Green]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking filter:label-green");
 }
 
 /// The filter bar drives `library.filter` and saves the view as a smart album.
@@ -1602,7 +1665,7 @@ fn filter_bar_filters_and_saves_a_smart_album() {
     h.request("ui.clickWidget", json!({"id": "button:filterClear"}), t);
     assert_eq!(h.app.session.filter, Default::default());
     assert_eq!(h.app.session.visible_cloned().len(), all);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking button:filterClear");
 }
 
 /// The filter bar's flag buttons toggle on and off together, as Lightroom Classic's do (#2588):
@@ -1638,7 +1701,7 @@ fn filter_bar_flags_combine() {
     h.request("ui.clickWidget", json!({"id": "filter:none"}), t);
     let f = h.app.session.filter.clone();
     assert_eq!((f.flag, f.flags), (None, vec![Flag::Pick, Flag::None]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking filter:none");
 }
 
 /// The photo grid shows date headers (registered as `group:<date>` widgets); clicking one
@@ -1647,7 +1710,7 @@ fn filter_bar_flags_combine() {
 fn grid_groups_by_capture_date() {
     let mut h = demo([1300.0, 800.0]);
     let t = Duration::from_secs(10);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new demo session");
     let groups = h.app.session.execute("library.groups", &json!({})).unwrap();
     let first = groups[0].clone();
     let key = first["key"].as_str().unwrap().to_string();
@@ -1656,7 +1719,7 @@ fn grid_groups_by_capture_date() {
     assert_eq!(h.app.session.selection.ids.len() as u64, first["count"].as_u64().unwrap());
     // zoomed out: month headers
     h.app.ui.thumb_size = 120.0;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.thumb_size");
     let vis = h.app.session.visible_cloned();
     let month = h.app.session.catalog.date_runs(&vis, h.app.session.sort.key, lightcraft_catalog::GroupBy::Month);
     let r = h.request("ui.clickWidget", json!({"id": format!("group:{}", month[0].key)}), t);
@@ -1664,7 +1727,7 @@ fn grid_groups_by_capture_date() {
     h.request("engine.execute", json!({"command": "library.sort", "params": {"group": "none"}}), t);
     let r = h.request("ui.clickWidget", json!({"id": format!("group:{}", month[0].key)}), t);
     assert_eq!(r["ok"], false, "no headers: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
 }
 
 /// Keywords: the left-panel tree filters (children included), opens levels, the rename dialog
@@ -1689,19 +1752,19 @@ fn keyword_list_filters_renames_and_suggests() {
     h.request("ui.set", json!({"leftPanel": true}), t);
     // clicks land on last frame's layout: let the keyword list settle first (on a loaded machine a
     // row could still move, and the click then hit its neighbour, e.g. "sunrise")
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let r = h.request("ui.clickWidget", json!({"id": "source:keyword:travel"}), t);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.session.filter.keyword.as_deref(), Some("travel"));
     assert_eq!(h.app.session.visible_cloned().len(), 3);
     // open the level, filter by the child
     h.request("ui.clickWidget", json!({"id": "keywordToggle:travel"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking keywordToggle:travel");
     let r = h.request("ui.clickWidget", json!({"id": "source:keyword:travel|italy"}), t);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.session.visible_cloned().len(), 2);
     h.app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: "travel".into(), to: "trips".into() });
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.dialog");
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.session.filter.keyword.as_deref(), Some("trips|italy"));
@@ -1711,11 +1774,11 @@ fn keyword_list_filters_renames_and_suggests() {
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[1]]}}), t);
     ex(&mut h, "photo.setMeta", json!({"ids": [vis[0]], "addKeywords": ["gelato"]}));
     h.request("ui.set", json!({"right": "keywords"}), t);
-    assert!(h.settle(SETTLE), "keyword suggestions did not settle");
+    h.settled(SETTLE, "keyword suggestions");
     let r = h.request("ui.clickWidget", json!({"id": "kwSuggest:gelato"}), t);
     assert_eq!(r["ok"], true, "{r}");
     assert!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(vis[1])).unwrap().meta.keywords.contains(&"gelato".to_string()));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking kwSuggest:gelato");
 }
 
 /// Rename Keyword's name field is a shared text field. It opens with the name selected, so
@@ -1730,12 +1793,12 @@ fn the_rename_keyword_field_selects_pastes_and_cancels() {
     let keywords = |h: &Headless| h.app.session.catalog.photo(lightcraft_catalog::PhotoId(first)).unwrap().meta.keywords.clone();
     let open = |h: &mut Headless, name: &str| {
         h.app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: name.into(), to: name.into() });
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.dialog");
     };
     let ask = |h: &mut Headless, method: &str, params: serde_json::Value| {
         let r = h.request(method, params.clone(), t);
         assert_eq!(r["ok"], true, "{method} {params}: {r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after the request");
     };
     // typing replaces the selected name
     open(&mut h, "travel");
@@ -1773,11 +1836,11 @@ fn return_confirms_the_one_field_dialogs() {
     let garden = album(&h, "Garden").expect("the demo's Garden album");
     let confirm = |h: &mut Headless, dialog: Dialog, typed: &str| {
         h.app.ui.dialog = Some(dialog);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after setting ui.dialog");
         for (method, params) in [("ui.text", json!({"text": typed})), ("ui.key", json!({"key": "Enter"}))] {
             let r = h.request(method, params, t);
             assert_eq!(r["ok"], true, "{r}");
-            h.settle(SETTLE);
+            h.settled(SETTLE, "after the request");
         }
         assert_eq!(h.app.ui.dialog, None, "Return confirmed the dialog ({typed})");
     };
@@ -1817,7 +1880,7 @@ fn settle_waits_for_file_system_checks() {
         true
     }
     let mut h = demo([800.0, 600.0]);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the new demo session");
     let check = |h: &mut Headless| {
         let raw = HeadlessView::raw_input(h.size, 1.0, 0.0, vec![]);
         let mut got = None;
@@ -1827,7 +1890,7 @@ fn settle_waits_for_file_system_checks() {
     assert_eq!(check(&mut h), None, "the answer is worked out off the UI thread");
     assert!(h.busy(), "a pending file-system check is pending work");
     RELEASE.store(true, Ordering::Release);
-    assert!(h.settle(SETTLE));
+    h.settled(SETTLE, "after check");
     assert!(!h.busy());
     assert_eq!(check(&mut h), Some(true));
 }
@@ -1842,13 +1905,13 @@ fn rename_dialog_renames_the_selection() {
     let tree = h.request("ui.menu.tree", json!({}), t);
     assert!(tree.to_string().contains("Rename 2 Photos…"), "live menu label");
     h.request("engine.execute", json!({"command": "dialog.rename", "params": {"template": "Trip-{seq:2}", "start": 5}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after dialog.rename");
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
     let name = |id: u64| h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().file_name.clone();
     assert!(name(vis[0]).starts_with("Trip-05."), "{}", name(vis[0]));
     assert!(name(vis[1]).starts_with("Trip-06."), "{}", name(vis[1]));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.confirm");
 }
 
 /// The Export dialog hands its batch to a worker thread: the UI keeps drawing frames, shows
@@ -1898,7 +1961,7 @@ fn export_dialog_previews_the_watermark() {
         let r = h.request("ui.widgets", json!({}), t);
         r["result"].as_array().and_then(|a| a.iter().find(|w| w["id"] == "image:exportWatermarkPreview")).map(|w| w["rect"].clone())
     };
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.widgets");
     assert!(preview(&mut h).is_none(), "no preview without a watermark");
     if let Some(crate::state::Dialog::Export { opts, .. }) = &mut h.app.ui.dialog {
         opts.watermark = Some(lightcraft_engine::export::Watermark { text: "© LightCraft".into(), ..Default::default() });
@@ -1973,7 +2036,7 @@ fn export_dialog_runs_in_the_background() {
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), t);
     h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after dialog.export");
     if let Some(crate::state::Dialog::Export { full_size, resize, dir, .. }) = &mut h.app.ui.dialog {
         *full_size = false;
         *resize = lightcraft_engine::export::Resize::long_edge(64);
@@ -2020,14 +2083,14 @@ fn export_dialog_adds_to_apple_photos_on_macos() {
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": ids}}), t);
     h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after dialog.export");
     let shown = h.request("ui.widgets", json!({"filter": "exportAddToPhotos"}), t)["result"].as_array().map_or(0, Vec::len);
     assert_eq!(shown > 0, cfg!(target_os = "macos"), "the option is offered where Photos is");
     if !cfg!(target_os = "macos") {
         return;
     }
     h.request("ui.clickWidget", json!({"id": "exportAddToPhotos"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking exportAddToPhotos");
     if let Some(crate::state::Dialog::Export { opts, full_size, resize, dir, .. }) = &mut h.app.ui.dialog {
         assert!(opts.add_to_photos, "the checkbox turns it on");
         opts.photos_album = "Trip “2026”".into();
@@ -2277,7 +2340,7 @@ fn drag_photos_onto_an_album() {
     h.request("engine.execute", json!({"command": "view.leftPanel"}), t);
     let r = h.request("engine.execute", json!({"command": "album.create", "params": {"name": "Dropped"}}), t);
     let album = r["result"]["id"].as_u64().unwrap_or_else(|| panic!("{r}"));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after album.create");
     let rect = |h: &mut Headless, id: &str| {
         let w = h.request("ui.widgets", json!({"filter": id}), t);
         let r =
@@ -2290,7 +2353,7 @@ fn drag_photos_onto_an_album() {
     let (tx, ty) = rect(&mut h, &format!("source:album:{album}"));
     let r = h.request("ui.drag", json!({"x": x, "y": y, "toX": tx, "toY": ty, "steps": 12}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.drag");
     let members = h.app.session.catalog.album(lightcraft_catalog::AlbumId(album)).unwrap().photos.clone();
     assert_eq!(members, vec![lightcraft_catalog::PhotoId(first)]);
     assert!(h.app.ui.dragging_photos.is_none(), "the drag ended");
@@ -2319,7 +2382,7 @@ fn preview_only_raw_shows_badge_and_notices() {
             preview_checked: lightcraft_catalog::APP_VERSION.into(),
         })
         .unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let ids = |h: &mut Headless, filter: &str| -> Vec<String> {
         let w = h.request("ui.widgets", json!({"filter": filter}), t);
         w["result"].as_array().unwrap_or_else(|| panic!("{w}")).iter().filter_map(|x| x["id"].as_str().map(str::to_string)).collect()
@@ -2330,25 +2393,25 @@ fn preview_only_raw_shows_badge_and_notices() {
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [po.0]}}), t);
     h.request("ui.set", json!({"view": "detail"}), t);
     h.app.ui.right = crate::state::RightPanel::Edit;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.right");
     let n = ids(&mut h, "notice:previewOnly:");
     assert!(n.contains(&"notice:previewOnly:loupe".to_string()) && n.contains(&"notice:previewOnly:edit".to_string()), "{n:?}");
     // with a Reload from Disk button (issue #662)
     assert_eq!(ids(&mut h, "button:reloadPreviewOnly:"), vec!["button:reloadPreviewOnly:edit".to_string()]);
     // Info
     h.app.ui.right = crate::state::RightPanel::Info;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.right");
     assert!(ids(&mut h, "notice:previewOnly:").contains(&"notice:previewOnly:info".to_string()));
     assert_eq!(ids(&mut h, "button:reloadPreviewOnly:"), vec!["button:reloadPreviewOnly:info".to_string()]);
     // …which re-reads the file and says what came of it (a demo photo has none to re-read)
     let r = h.request("ui.clickWidget", json!({"id": "button:reloadPreviewOnly:info"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking button:reloadPreviewOnly:info");
     assert_eq!(h.app.ui.toast.clone().map(|x| x.0).as_deref(), Some("This raw variant still can't be decoded"));
     // a regular photo: no notice
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [other.0]}}), t);
     h.app.ui.right = crate::state::RightPanel::Edit;
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.right");
     assert!(ids(&mut h, "notice:previewOnly:").is_empty());
 }
 
@@ -2364,7 +2427,7 @@ fn crop_default_browsing_is_read_only_and_drag_is_one_edit() {
         h.app.run("library.select", json!({"ids": [photo.0]})).unwrap();
         let before = h.app.session.catalog.photo(photo).unwrap().clone();
         let undo = h.app.session.undo.len();
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after library.select");
         let after = h.app.session.catalog.photo(photo).unwrap();
         assert_eq!(after.develop, before.develop);
         assert_eq!(after.history.len(), before.history.len());
@@ -2391,7 +2454,7 @@ fn crop_default_browsing_is_read_only_and_drag_is_one_edit() {
     h.app.ui.crop_default_aspect = Some(json!("original"));
     let p = h.app.session.catalog.photo(photo).unwrap();
     assert_eq!(h.app.crop_tool_aspect(), Some((p.width * 100, p.height * 100)));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting ui.crop_default_aspect");
     assert_eq!(h.app.session.develop_of(photo).unwrap(), before);
 }
 
@@ -2408,13 +2471,13 @@ fn crop_box_on_the_next_photo_shows_the_remembered_ratio() {
     h.request("engine.execute", json!({"command": "panel.crop"}), t);
     h.app.run("crop.aspect", json!({"aspect": "4x5"})).unwrap();
     h.app.run("tool.done", json!({})).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after tool.done");
     let photo = photos[1];
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [photo.0]}}), t);
     let before = h.app.session.catalog.photo(photo).unwrap().clone();
     let undo = h.app.session.undo.len();
     h.request("engine.execute", json!({"command": "panel.crop"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after panel.crop");
     let after = h.app.session.catalog.photo(photo).unwrap();
     assert_eq!(after.develop, before.develop, "browsing doesn't edit the photo");
     assert_eq!(after.history.len(), before.history.len());
@@ -2430,7 +2493,7 @@ fn crop_box_on_the_next_photo_shows_the_remembered_ratio() {
     assert!(same(shown, drawn), "the dropdown says {shown:.3} but the crop box is {drawn:.3}");
     // Return crops to the box shown
     h.request("engine.execute", json!({"command": "tool.done"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after tool.done");
     let p = h.app.session.catalog.photo(photo).unwrap();
     let r = p.develop.crop.geometry.rect;
     let cropped = r.width() * f64::from(p.width) / (r.height() * f64::from(p.height));
@@ -2473,7 +2536,7 @@ fn click_field_in_view(h: &mut Headless, key: &str, timeout: Duration) {
         let dy = (panel.center().y - rect.center().y).clamp(-4000.0, 4000.0);
         assert_eq!(h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), timeout)["ok"], true);
         assert_eq!(h.request("ui.scroll", json!({"dy": dy}), timeout)["ok"], true);
-        h.settle(timeout);
+        h.settled(timeout, "after ui.scroll");
     }
     let rect = h.app.widgets.iter().find(|(w, _)| *w == id).map(|(_, r)| *r).expect("the field is laid out");
     assert!(panel.contains(rect.center()), "the field must be scrolled into view before clicking: {rect:?} in {panel:?}");
@@ -2488,7 +2551,7 @@ fn info_fields_keep_typing_and_save() {
     let mut h = demo([1300.0, 1000.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     for (key, text) in [("altText", "A lake at dawn"), ("usageTerms", "Editorial use only"), ("city", "Zermatt")] {
         click_field_in_view(&mut h, key, t);
         h.request("ui.key", json!({"key": "A", "cmd": true}), t);
@@ -2497,7 +2560,7 @@ fn info_fields_keep_typing_and_save() {
         h.step();
         // still being edited: not saved yet, not lost either
         h.request("ui.key", json!({"key": "Tab"}), t);
-        h.settle(Duration::from_secs(5));
+        h.settled(Duration::from_secs(5), "after key Tab");
     }
     let m = &h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap().meta;
     assert_eq!((m.alt_text.as_str(), m.city.as_str()), ("A lake at dawn", "Zermatt"));
@@ -2515,7 +2578,7 @@ fn info_fields_take_lines_esc_and_the_menu() {
     let mut h = demo([1300.0, 1000.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let meta = |h: &Headless| h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap().meta.clone();
     let ask = |h: &mut Headless, method: &str, params: serde_json::Value| {
         let r = h.request(method, params.clone(), t);
@@ -2538,7 +2601,7 @@ fn info_fields_take_lines_esc_and_the_menu() {
     ask(&mut h, "ui.clickWidget", json!({"id": "field:title"}));
     ask(&mut h, "ui.text", json!({"text": " (draft)"}));
     ask(&mut h, "ui.key", json!({"key": "Escape"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Escape");
     assert_eq!((meta(&h).title, h.app.session.undo.len()), (title, undo), "Esc saved nothing");
     // the menu
     h.view.clipboard = "Wedding in Sintra".into();
@@ -2576,7 +2639,7 @@ fn info_shows_metadata_for_the_selected_photos() {
     exec(&mut h, "photo.setMeta", json!({"ids": ids, "creator": "Ana"}));
     h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
     exec(&mut h, "library.select", json!({"ids": ids, "active": ids[0]}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     let buttons = |h: &mut Headless| h.request("ui.widgets", json!({"filter": "infoFor"}), t)["result"].to_string();
     assert!(buttons(&mut h).contains("button:infoFor-selected"), "the choice shows with two photos selected");
     assert!(h.app.ui.settings.info_selected_photos, "Selected Photos by default");
@@ -2590,14 +2653,14 @@ fn info_shows_metadata_for_the_selected_photos() {
     let undo = h.app.session.undo.len();
     click_field_in_view(&mut h, "title", t);
     ask(&mut h, "ui.key", json!({"key": "Tab"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Tab");
     assert_eq!((meta(&h, a).title, meta(&h, b).title, h.app.session.undo.len()), ("Dawn!".into(), "Dusk".into(), undo));
     // neither does switching the choice while a field is being edited, either way
     for on in [false, true] {
         click_field_in_view(&mut h, "title", t);
         exec(&mut h, "view.infoSelectedPhotos", json!({"on": on}));
         ask(&mut h, "ui.key", json!({"key": "Tab"}));
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after key Tab");
         assert_eq!((meta(&h, a).title, meta(&h, b).title, h.app.session.undo.len()), ("Dawn!".into(), "Dusk".into(), undo), "{on}");
     }
     // the mixed title starts empty; the shared creator keeps its value
@@ -2606,28 +2669,28 @@ fn info_shows_metadata_for_the_selected_photos() {
         ask(&mut h, "ui.key", json!({"key": "End"}));
         ask(&mut h, "ui.text", json!({"text": typed}));
         ask(&mut h, "ui.key", json!({"key": "Tab"}));
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after key Tab");
         let got = |h: &Headless, id| if key == "title" { meta(h, id).title } else { meta(h, id).creator };
         assert_eq!((got(&h, a), got(&h, b)), (want.to_string(), want.to_string()), "{key}");
     }
     // a mixed field typed in and left empty clears it on every selected photo
     exec(&mut h, "photo.setMeta", json!({"ids": [ids[0]], "caption": "Old"}));
     exec(&mut h, "photo.setMeta", json!({"ids": [ids[1]], "caption": "Other"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.setMeta");
     click_field_in_view(&mut h, "caption", t);
     ask(&mut h, "ui.text", json!({"text": "x"}));
     ask(&mut h, "ui.key", json!({"key": "Backspace"}));
     ask(&mut h, "ui.key", json!({"key": "Tab"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Tab");
     assert_eq!((meta(&h, a).caption, meta(&h, b).caption), (String::new(), String::new()));
     // GPS: one photo's place and Show on Map only while the selected photos share it
     let map = |h: &mut Headless| h.request("ui.widgets", json!({"filter": "showOnMap"}), t)["result"].to_string().contains("showOnMap");
     exec(&mut h, "photo.setMeta", json!({"ids": [ids[0]], "gps": [41.15, -8.61]}));
     exec(&mut h, "photo.setMeta", json!({"ids": [ids[1]], "gps": [38.72, -9.14]}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.setMeta");
     assert!(!map(&mut h), "places differ");
     exec(&mut h, "photo.setMeta", json!({"ids": ids, "gps": [41.15, -8.61]}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after photo.setMeta");
     assert!(map(&mut h), "a shared place");
     // the command: refuses a value that isn't true or false, and turns Target Photo back on
     let r = h.request("engine.execute", json!({"command": "view.infoSelectedPhotos", "params": {"on": "yes"}}), t);
@@ -2646,7 +2709,7 @@ fn info_shows_metadata_for_the_selected_photos() {
     assert!(old.info_selected_photos);
     // one photo selected: no choice to make
     exec(&mut h, "library.select", json!({"ids": [ids[0]]}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     assert!(!buttons(&mut h).contains("infoFor-"), "{}", buttons(&mut h));
 }
 
@@ -2672,12 +2735,12 @@ fn info_edits_of_a_multi_selection_start_from_mixed_fields_by_default() {
     exec(&mut h, "photo.setMeta", json!({"ids": [ids[1]], "caption": "Dusk"}));
     h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
     exec(&mut h, "library.select", json!({"ids": ids, "active": ids[0]}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     click_field_in_view(&mut h, "caption", t);
     ask(&mut h, "ui.key", json!({"key": "End"}));
     ask(&mut h, "ui.text", json!({"text": "Harbor"}));
     ask(&mut h, "ui.key", json!({"key": "Tab"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Tab");
     assert_eq!((caption(&h, 0), caption(&h, 1)), ("Harbor".into(), "Harbor".into()));
 }
 
@@ -2703,12 +2766,12 @@ fn info_target_photo_edits_only_the_photo_it_shows() {
     h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
     exec(&mut h, "library.select", json!({"ids": ids, "active": ids[0]}));
     exec(&mut h, "view.infoSelectedPhotos", json!({"on": false}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.infoSelectedPhotos");
     click_field_in_view(&mut h, "caption", t);
     ask(&mut h, "ui.key", json!({"key": "End"}));
     ask(&mut h, "ui.text", json!({"text": "!"}));
     ask(&mut h, "ui.key", json!({"key": "Tab"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Tab");
     assert_eq!((caption(&h, 0), caption(&h, 1)), ("Dawn!".into(), "Dusk".into()));
 }
 
@@ -2761,12 +2824,12 @@ fn info_selected_photos_ignore_an_active_photo_outside_the_selection() {
     h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
     exec(&mut h, "library.select", json!({"ids": [ids[0], ids[1]], "active": ids[2]}));
     exec(&mut h, "view.infoSelectedPhotos", json!({"on": true}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.infoSelectedPhotos");
     click_field_in_view(&mut h, "title", t);
     ask(&mut h, "ui.key", json!({"key": "End"}));
     ask(&mut h, "ui.text", json!({"text": "!"}));
     ask(&mut h, "ui.key", json!({"key": "Tab"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Tab");
     assert_eq!((title(&h, 0), title(&h, 1), title(&h, 2)), ("Same!".into(), "Same!".into(), "Other".into()));
 }
 
@@ -2791,34 +2854,34 @@ fn info_field_saves_to_the_photos_selected_when_the_edit_started() {
     exec(&mut h, "photo.setMeta", json!({"ids": ids, "title": "Same", "gps": ""}));
     h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
     exec(&mut h, "library.select", json!({"ids": [ids[0], ids[1]], "active": ids[0]}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     click_field_in_view(&mut h, "title", t);
     ask(&mut h, "ui.key", json!({"key": "End"}));
     ask(&mut h, "ui.text", json!({"text": "!"}));
     exec(&mut h, "library.select", json!({"ids": [ids[2]]}));
     ask(&mut h, "ui.key", json!({"key": "Tab"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Tab");
     assert_eq!((meta(&h, 0).title, meta(&h, 1).title, meta(&h, 2).title), ("Same!".into(), "Same!".into(), "Same".into()));
     // GPS too (the new selection is two photos as well, so the panel keeps its layout)
     exec(&mut h, "library.select", json!({"ids": [ids[0], ids[1]], "active": ids[0]}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     click_field_in_view(&mut h, "gps", t);
     ask(&mut h, "ui.text", json!({"text": "41.15, -8.61"}));
     exec(&mut h, "library.select", json!({"ids": [ids[2], ids[3]], "active": ids[2]}));
     ask(&mut h, "ui.key", json!({"key": "Tab"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Tab");
     let gps: Vec<bool> = (0..4).map(|i| meta(&h, i).gps.is_some()).collect();
     assert_eq!(gps, [true, true, false, false]);
     // Esc gives a GPS edit up
     exec(&mut h, "library.select", json!({"ids": [ids[0], ids[1]], "active": ids[0]}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     let before = meta(&h, 0).gps;
     click_field_in_view(&mut h, "gps", t);
     ask(&mut h, "ui.key", json!({"key": "End"}));
     ask(&mut h, "ui.text", json!({"text": "5"}));
     ask(&mut h, "ui.key", json!({"key": "Escape"}));
     ask(&mut h, "ui.key", json!({"key": "Tab"}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Tab");
     assert_eq!((meta(&h, 0).gps, meta(&h, 1).gps), (before, before));
 }
 
@@ -2843,10 +2906,10 @@ fn browse_a_local_folder() {
     // the folder is read in the background: the view switches at once, the photos follow
     assert_eq!(r["result"]["scanning"], true, "{r}");
     assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::Folder);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.browse");
     assert!(h.app.scan.is_none() && h.app.import.is_none());
     assert_eq!(h.app.session.visible_cloned().len(), 1);
-    assert!(h.settle(SETTLE), "a thumbnail that can't load must not keep the renderer busy");
+    h.settled(SETTLE, "a thumbnail that can't load must not keep the renderer busy");
     // this test session has no file hooks: the thumbnail fails once, is remembered, and isn't retried
     let id = h.app.session.visible_cloned()[0];
     assert!(h.app.renderer.failure(crate::render::Slot::Thumb(id)).is_some());
@@ -2858,18 +2921,18 @@ fn browse_a_local_folder() {
     let w = h.request("ui.widgets", json!({"filter": "crumb:"}), t);
     assert!(w["result"].as_array().is_some_and(|a| !a.is_empty()), "breadcrumb: {w}");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "check:includeSubfolders"}), t)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking check:includeSubfolders");
     assert_eq!(h.app.session.visible_cloned().len(), 2);
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:addToLibrary"}), t)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking button:addToLibrary");
     assert_eq!(h.app.session.catalog.photos().filter(|p| !p.local).count(), library_before + 2);
     // Truncated ancestors remain clickable and still open the original, unabridged path.
     let inner = dir.join("inner");
     h.request("engine.execute", json!({"command": "library.browse", "params": {"path": inner.to_string_lossy()}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.browse");
     let parent_index = dir.to_string_lossy().split(['/', '\\']).filter(|p| !p.is_empty()).count() - 1;
     assert_eq!(h.request("ui.clickWidget", json!({"id": format!("crumb:{parent_index}")}), t)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
     // the same folder, whatever the platform's separators (issue #538)
     assert_eq!(std::path::Path::new(&h.app.session.browse.as_ref().unwrap().path), dir.as_path());
     let _ = std::fs::remove_dir_all(&dir);
@@ -2898,7 +2961,7 @@ fn hide_menu(h: &mut Headless) -> Vec<String> {
 fn hide_path(h: &mut Headless, path: &str) {
     let r = h.request("engine.execute", json!({"command": "local.hide", "params": {"path": path}}), Duration::from_secs(10));
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after local.hide");
 }
 
 /// Keeps and browses `path` the way Browse Folder… does; returns whether anything was hidden before.
@@ -2910,7 +2973,7 @@ fn hide_browse_and_hide(h: &mut Headless, path: &str, size: [f32; 2]) -> bool {
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": path}}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.browse");
     let row = format!("source:local:{path}");
     assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == row)), "the browsed folder is listed: {:?}", hide_ids(h));
     // the "Show hidden locations" row appears only while something is hidden
@@ -2923,7 +2986,7 @@ fn hide_browse_and_hide(h: &mut Headless, path: &str, size: [f32; 2]) -> bool {
         h.step();
         std::thread::sleep(Duration::from_millis(5));
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let after = hide_rects(h);
     let after_ids: Vec<&str> = after.iter().map(|(id, _)| id.as_str()).collect();
     assert!(!after_ids.contains(&format!("source:local:{path}").as_str()), "{after_ids:?}");
@@ -2942,14 +3005,14 @@ fn hide_second_place_restores_alone(h: &mut Headless, path: &str, path2: &str) {
         let r = h.request("engine.execute", json!({"command": command, "params": params}), t);
         assert_eq!(r["ok"], true, "{r}");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after engine.execute");
     assert!(hide_menu(h).is_empty(), "the list opens from the row");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking source:local:restoreHidden");
     let items = hide_menu(h);
     assert!(items.contains(&format!("local:restoreHidden:{path}")) && items.contains(&"local:restoreHidden:all".to_string()), "{items:?}");
     assert_eq!(h.request("ui.clickWidget", json!({"id": format!("local:restoreHidden:{path}")}), t)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
     assert!(!h.app.ui.hidden_locations.iter().any(|x| x == path), "{:?}", h.app.ui.hidden_locations);
     assert!(h.app.ui.hidden_locations.iter().any(|x| x == path2), "the other place stays hidden");
     assert!(hide_ids(h).iter().any(|i| i == "source:local:restoreHidden"), "still something to restore");
@@ -2961,15 +3024,15 @@ fn hide_restore_all_then_single(h: &mut Headless, path: &str, path2: &str, hidde
     hide_path(h, path);
     assert!(h.app.ui.hidden_locations.len() >= 2, "{:?}", h.app.ui.hidden_locations);
     assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking source:local:restoreHidden");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "local:restoreHidden:all"}), t)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking local:restoreHidden:all");
     assert!(h.app.ui.hidden_locations.is_empty(), "{:?}", h.app.ui.hidden_locations);
     assert!(!hide_ids(h).iter().any(|i| i == "source:local:restoreHidden"), "nothing left to restore");
     // one hidden: the row brings it back itself, no list
     hide_path(h, path2);
     assert_eq!(h.request("ui.clickWidget", json!({"id": "source:local:restoreHidden"}), t)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking source:local:restoreHidden");
     assert!(hide_menu(h).is_empty(), "no list for a single hidden place");
     assert!(h.app.ui.hidden_locations.is_empty(), "{:?}", h.app.ui.hidden_locations);
     if !hidden_before {
@@ -3036,7 +3099,7 @@ fn kept_local_root_stays_while_browsing_below_and_elsewhere() {
     assert_eq!(exec(&mut h, "local.addRoot", json!({"path": photos}))["ok"], true);
     assert_eq!(exec(&mut h, "local.addRoot", json!({"path": format!("{photos}/")}))["result"]["roots"].as_array().map(Vec::len), Some(1));
     exec(&mut h, "library.browse", json!({"path": day1}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.browse");
     h.step();
     let row = format!("source:local:{day2}");
     assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == row)), "the sibling listing did not arrive");
@@ -3046,11 +3109,11 @@ fn kept_local_root_stays_while_browsing_below_and_elsewhere() {
     let (root_x, child_x) = (r[&format!("folderToggle:{photos}")], r[&format!("folderToggle:{day1}")]);
     assert!(child_x > root_x, "the browsed folder is inside the root's tree, not a root of its own ({child_x} vs {root_x})");
     assert_eq!(h.request("ui.clickWidget", json!({"id": format!("source:local:{day2}")}), t)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget");
     assert_eq!(h.app.session.browse.as_ref().map(|b| b.path.clone()), Some(day2.clone()), "the sibling is browsed");
     // another location: the kept root stays listed
     assert_eq!(exec(&mut h, "library.browse", json!({"path": other}))["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.browse");
     h.step();
     let row = format!("source:local:{other}");
     assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == row)), "the other location did not arrive");
@@ -3061,7 +3124,7 @@ fn kept_local_root_stays_while_browsing_below_and_elsewhere() {
     let back: crate::state::UiState = serde_json::from_str(&saved).unwrap();
     assert_eq!(back.local_roots, vec![photos.clone()]);
     let _ = std::fs::remove_dir_all(&base);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after rects");
 }
 
 /// Versions panel: resting on a version previews it in the loupe without changing the photo;
@@ -3075,14 +3138,14 @@ fn versions_preview_on_hover_and_restore_on_click() {
     exec(&mut h, "develop.set", json!({"values": {"light.exposure": 1.0}}));
     exec(&mut h, "version.create", json!({"name": "Bright"}));
     exec(&mut h, "develop.set", json!({"values": {"light.exposure": -1.0}}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after develop.set");
     let exposure = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().light.exposure;
     assert_eq!(h.request("ui.hoverWidget", json!({"id": "version:0"}), t)["ok"], true);
     h.step();
     assert_eq!(h.app.hover_preview.as_ref().map(|p| p.settings.light.exposure), Some(1.0));
     assert_eq!(exposure(&h), -1.0, "hovering changes nothing");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "version:0"}), t)["ok"], true);
-    h.settle(Duration::from_secs(5));
+    h.settled(Duration::from_secs(5), "after clicking version:0");
     assert_eq!(exposure(&h), 1.0);
 }
 
@@ -3092,7 +3155,7 @@ fn slider_nudge_and_pick_advance() {
     let mut h = demo([1300.0, 900.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let exposure = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().light.exposure;
     assert_eq!(h.request("ui.hoverWidget", json!({"id": "slider:light.exposure"}), t)["ok"], true);
     h.request("ui.key", json!({"key": "Up"}), t);
@@ -3113,7 +3176,7 @@ fn slider_values_can_be_typed() {
     let mut h = demo([1300.0, 900.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let active = h.app.session.active().unwrap();
     let exposure = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().light.exposure;
     let rating = |h: &Headless| h.app.session.catalog.photo(active).unwrap().rating;
@@ -3188,17 +3251,17 @@ fn a_slider_value_pastes_from_its_menu() {
     let mut h = demo([1300.0, 900.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h.view.clipboard = "0.75".into();
     for (id, button) in
         [("sliderValue:light.exposure", "left"), ("sliderField:light.exposure", "right"), ("sliderField:light.exposure:paste", "left")]
     {
         let r = h.request("ui.clickWidget", json!({"id": id, "button": button}), t);
         assert_eq!(r["ok"], true, "{id}: {r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.clickWidget");
     }
     h.request("ui.key", json!({"key": "Enter"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key Enter");
     let exposure = h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().light.exposure;
     assert!((exposure - 0.75).abs() < 1e-9, "{exposure}");
 }
@@ -3210,7 +3273,7 @@ fn section_eye_switches_a_section_off() {
     let mut h = demo([1300.0, 900.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let light_on = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().section_enabled("light");
     for expected in [false, true] {
         // the eye shows while the pointer is on the header
@@ -3264,7 +3327,7 @@ fn add_folder_opens_the_import_review() {
     std::fs::write(sub.join("b.png"), &png).unwrap();
     let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.to_string_lossy()}}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after file.addFolder");
     let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import review: {:?}", h.app.ui.dialog) };
     assert_eq!(opts.candidates.len(), 2, "both files, the subfolder's too");
     assert!(!opts.copy, "a folder is added in place by default");
@@ -3278,7 +3341,7 @@ fn add_folder_opens_the_import_review() {
     // The source facts were cached by a worker with the source-language default. They must
     // still be rendered in German after switching, with the folder name kept verbatim.
     assert_eq!(h.request("engine.execute", json!({"command": "app.language.german"}), t)["ok"], true);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after app.language.german");
     fn texts(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
         match shape {
             egui::epaint::Shape::Text(shape) => out.push(shape.galley.job.text.clone()),
@@ -3299,7 +3362,7 @@ fn add_folder_opens_the_import_review() {
     h.app.ui.dialog = None;
     let r = h.request("engine.execute", json!({"command": "file.addFromDevice", "params": {"path": sub.to_string_lossy()}}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after file.addFromDevice");
     h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
     let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import review") };
     assert!(opts.copy);
@@ -3315,12 +3378,12 @@ fn settings_tabs_keep_the_window_in_place() {
     let window = |h: &Headless| h.app.widgets.iter().find(|(w, _)| w == "dialog:window").map(|(_, r)| *r).expect("the dialog");
     let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "general"}}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after app.settings");
     let first = window(&h);
     let mut heights = Vec::new();
     for tab in ["display", "import", "performance", "general", "interface", "display"] {
         h.request("ui.clickWidget", json!({"id": format!("button:settingsTab-{tab}")}), t);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after ui.clickWidget");
         let now = window(&h);
         assert!((now.top() - first.top()).abs() < 1.0, "{tab}: top {} → {}", first.top(), now.top());
         assert!(now.width() >= first.width() - 1.0, "{tab}: width {} → {}", first.width(), now.width());
@@ -3400,7 +3463,7 @@ fn browsing_the_same_folder_again_does_not_restart() {
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(started.load(std::sync::atomic::Ordering::Relaxed), 1, "the second click must not start another read");
     gate.store(true, std::sync::atomic::Ordering::Relaxed);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after browse");
     assert_eq!(h.app.session.visible_cloned().len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3422,7 +3485,7 @@ fn browsing_from_the_ui_records_the_folder() {
     assert!(h.app.session.catalog.last_browsed(&root).is_none());
     let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": root, "subfolders": true}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.browse");
     assert_eq!(h.app.session.visible_cloned().len(), 1);
     assert!(h.app.session.catalog.last_browsed(&root).is_some(), "the browsed folder");
     assert!(h.app.session.catalog.last_browsed(&day_s).is_some(), "the folder its photo is in");
@@ -3432,7 +3495,7 @@ fn browsing_from_the_ui_records_the_folder() {
     assert!(h.app.session.catalog.last_browsed(&day_s).is_none());
     let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": root, "subfolders": true}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.browse");
     assert_eq!(h.app.session.visible_cloned().len(), 1);
     assert!(h.app.session.catalog.last_browsed(&day_s).is_some(), "a folder of known photos only");
     let _ = std::fs::remove_dir_all(&dir);
@@ -3455,7 +3518,7 @@ fn browsing_again_from_the_ui_forgets_deleted_files() {
     let browse = |h: &mut Headless| {
         let r = h.request("engine.execute", json!({"command": "library.browse", "params": {"path": path}}), t);
         assert_eq!(r["result"]["scanning"], true, "{r}");
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after library.browse");
     };
     browse(&mut h);
     assert_eq!(h.app.session.visible_cloned().len(), 2);
@@ -3491,7 +3554,7 @@ fn add_folder_scans_in_the_background() {
     let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.to_string_lossy()}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");
     assert!(h.app.scan.is_some() || h.app.ui.dialog.is_some());
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after file.addFolder");
     assert!(h.app.scan.is_none());
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
     let _ = std::fs::remove_dir_all(&dir);
@@ -3537,7 +3600,7 @@ fn folder_scan_cancel_and_busy() {
     h.step();
     assert!(h.app.scan.is_none(), "✕ closes the scan at once");
     gate.store(true, std::sync::atomic::Ordering::Relaxed);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     assert!(h.app.ui.dialog.is_none(), "a cancelled scan opens no review");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3555,21 +3618,21 @@ fn paste_selected_settings_and_find() {
     exec(&mut h, "develop.copy", json!({"groups": ["light", "color"]}));
     exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
     h.request("ui.key", json!({"key": "V", "cmd": true, "shift": true}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key V");
     let Some(crate::state::Dialog::PasteSettings { groups }) = &h.app.ui.dialog else { panic!("dialog not open: {:?}", h.app.ui.dialog) };
     assert_eq!(groups, &["light", "color"]);
     let r = h.request("ui.clickWidget", json!({"id": "pasteGroup:color"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking pasteGroup:color");
     assert_eq!(h.request("ui.dialog.confirm", json!({}), t)["ok"], true);
     let d = h.app.session.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
     assert_eq!((d.light.exposure, d.color.vibrance), (1.0, 0.0));
     // ⌘F, then typing filters the grid by text
     h.request("ui.set", json!({"view": "grid"}), t);
     h.request("ui.key", json!({"key": "F", "cmd": true}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key F");
     h.request("ui.text", json!({"text": "zz-no-such-photo"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.text");
     assert_eq!(h.app.ui.search, "zz-no-such-photo");
     assert!(h.app.session.visible_cloned().is_empty());
 }
@@ -3589,7 +3652,7 @@ fn capture_time_dialog_shifts_time_zone() {
     assert!(!panel.contains_rect(clipped_action), "the capture-time action starts below the visible panel: {clipped_action:?}");
     h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), t);
     h.request("ui.scroll", json!({"dy": -160.0}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.scroll");
     let action = h.app.widgets.iter().find(|(id, _)| id == "icon:editCaptureTime").unwrap().1;
     assert!(panel.contains_rect(action), "capture-time action must be visible before clicking: {action:?} in {panel:?}");
     let r = h.request("ui.clickWidget", json!({"id": "icon:editCaptureTime"}), t);
@@ -3601,13 +3664,13 @@ fn capture_time_dialog_shifts_time_zone() {
     } else {
         panic!("dialog not open: {:?}", h.app.ui.dialog);
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
     let after = h.app.session.catalog.photo(id).unwrap().captured.clone().unwrap();
     let secs = lightcraft_catalog::dates::iso_seconds;
     assert_eq!(secs(&after).unwrap() - secs(&before).unwrap(), -3 * 3600);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.confirm");
 }
 
 /// Colour labels: Info-panel swatches set/clear the label, the names dialog renames them and
@@ -3628,14 +3691,14 @@ fn label_swatches_and_names() {
     } else {
         panic!("no dialog");
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
     let tree = h.request("ui.menu.tree", json!({}), t).to_string();
     assert!(tree.contains("Approved (Green)"), "menu shows the name");
     h.request("ui.clickWidget", json!({"id": "label:green"}), t);
     assert_eq!(h.app.session.catalog.photo(id).unwrap().label, None, "clicking the current label clears it");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking label:green");
 }
 
 /// File → Import Photos… opens the import review: candidates with thumbnails, the duplicate is
@@ -3663,7 +3726,7 @@ fn import_review_dialog() {
     let undo0 = h.app.session.undo.len();
     let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.to_string_lossy()]}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after file.addPhotos");
     h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
     h.step_until(SETTLE, |h| h.app.renderer.textures.keys().filter(|s| matches!(s, crate::render::Slot::Import(_))).count() >= 5);
     let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import review") };
@@ -3682,7 +3745,7 @@ fn import_review_dialog() {
     }
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.confirm");
     assert!(h.app.import.is_none(), "finished");
     assert_eq!(h.app.session.catalog.len(), n0 + 4);
     let album = h.app.session.catalog.albums().find(|a| a.name == "Card 1").expect("album").id;
@@ -3691,7 +3754,7 @@ fn import_review_dialog() {
     assert_eq!(h.app.session.undo.len(), undo0 + 1, "one undo step");
     h.request("engine.execute", json!({"command": "edit.undo"}), t);
     assert_eq!(h.app.session.catalog.len(), n0);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after edit.undo");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3789,7 +3852,7 @@ fn import_review_checks_a_recently_deleted_file_by_hand() {
     let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog else { panic!("no import review") };
     let trashed = (0..opts.candidates.len()).find(|i| opts.is_trashed(*i)).expect("a file in Recently Deleted");
     opts.set_on_deleted("");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let checked = |h: &Headless| matches!(&h.app.ui.dialog, Some(crate::state::Dialog::Import { opts }) if opts.checked[trashed]);
     assert!(!checked(&h), "Leave them: unchecked");
     let cell = |h: &mut Headless| {
@@ -3800,16 +3863,16 @@ fn import_review_checks_a_recently_deleted_file_by_hand() {
     // the checkbox: 16 pt, 6 pt in from the cell's top-left corner
     let [x, y, ..] = cell(&mut h);
     h.request("ui.click", json!({"x": x + 14.0, "y": y + 14.0}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert!(checked(&h), "a click on the checkbox checks the file");
     // the badges ("Will be restored" at the top right, "In Recently Deleted" under the
     // checkbox) don't swallow the click either
     let [x, y, w, _] = cell(&mut h);
     h.request("ui.click", json!({"x": x + w - 14.0, "y": y + 12.0}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert!(!checked(&h), "a click on the badge unchecks it again");
     h.request("ui.click", json!({"x": x + w - 14.0, "y": y + 34.0}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert!(checked(&h));
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
@@ -3904,7 +3967,7 @@ fn readding_a_deleted_photo_shows_it_in_recently_deleted() {
         assert!(h.app.import.is_none(), "import finished");
     };
     crate::import::start_paths(&mut h.app, paths.clone()).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after start_paths");
     let id = h.app.session.selection.active.expect("imported photo selected");
     let n0 = h.app.session.catalog.len();
     h.request("engine.execute", json!({"command": "photo.delete", "params": {"ids": [id.0]}}), t);
@@ -3930,19 +3993,19 @@ fn readding_a_deleted_photo_shows_it_in_recently_deleted() {
     assert!(h.app.session.catalog.photo(id).unwrap().deleted, "one undo step");
     h.request("engine.execute", json!({"command": "library.source", "params": {"kind": "recentlyDeleted"}}), t);
     h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0]}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::RecentlyDeleted);
     let items = photo_items(&h.app);
     assert!(items.contains(&"photo.restore".to_string()) && items.contains(&"photo.deletePermanently".to_string()), "{items:?}");
     assert!(!items.contains(&"photo.delete".to_string()), "{items:?}");
     // a right-click on its filmstrip thumbnail opens the photo menu
     h.request("ui.set", json!({"view": "detail"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let cell = h.app.widgets.iter().find(|(w, _)| *w == format!("film:{}", id.0)).map(|(_, r)| *r).expect("filmstrip cell");
     assert!(!egui::Popup::is_any_open(&h.view.ctx));
     let r = h.request("ui.click", json!({"x": cell.center().x, "y": cell.center().y, "button": "right"}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.click");
     assert!(egui::Popup::is_any_open(&h.view.ctx), "filmstrip context menu");
 
     // Empty Recently Deleted is offered while the trash is the source
@@ -3963,7 +4026,7 @@ fn readding_a_deleted_photo_shows_it_in_recently_deleted() {
     h.request("engine.execute", json!({"command": "photo.deletePermanently", "params": {"ids": [id.0]}}), t);
     assert!(h.app.session.catalog.photo(id).is_none());
     crate::import::start_paths(&mut h.app, vec![file.to_string_lossy().to_string()]).unwrap();
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after start_paths");
     let fresh = h.app.session.selection.active.expect("re-imported photo selected");
     assert_ne!(fresh, id);
     assert!(!h.app.session.catalog.photo(fresh).unwrap().deleted);
@@ -3988,14 +4051,14 @@ fn an_import_from_an_album_view_shows_the_first_new_photo() {
     let album = h.app.session.catalog.albums().find(|a| !a.folder && !a.is_smart()).map(|a| a.id.0).expect("a demo album");
     let r = h.request("engine.execute", json!({"command": "library.source", "params": {"kind": "album", "id": album}}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.source");
     let before: Vec<lightcraft_catalog::PhotoId> = h.app.session.catalog.photos().map(|p| p.id).collect();
     let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.to_string_lossy()]}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");
     h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.confirm");
     assert!(h.app.import.is_none(), "finished");
     let active = h.app.session.selection.active.expect("a photo is active");
     assert!(!before.contains(&active), "the active photo is a new one: {active:?}");
@@ -4026,7 +4089,7 @@ fn import_copy_renames_into_destination() {
     let t = Duration::from_secs(10);
     let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [src.to_string_lossy()]}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after file.addPhotos");
     h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. })));
     let Some(crate::state::Dialog::Import { opts }) = &h.app.ui.dialog else { panic!("no import review") };
     assert_eq!(opts.candidates.len(), 20);
@@ -4044,7 +4107,7 @@ fn import_copy_renames_into_destination() {
     }
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.confirm");
     assert!(h.app.import.is_none(), "finished");
     let mut names: Vec<String> = std::fs::read_dir(&dest).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
     names.sort();
@@ -4082,7 +4145,7 @@ fn import_copy_into_a_custom_folder_template() {
     let t = Duration::from_secs(10);
     let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [src.to_string_lossy()]}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after file.addPhotos");
     for id in ["button:importCopy", "button:importDest"] {
         let r = h.request("ui.clickWidget", json!({"id": id}), t);
         assert_eq!(r["ok"], true, "{id}: {r}");
@@ -4107,7 +4170,7 @@ fn import_copy_into_a_custom_folder_template() {
     assert!(r.to_string().contains("label:importExample"), "example shown");
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.confirm");
     assert!(dest.join("2026").join("20260114").join("IMG_01.png").is_file());
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -4141,7 +4204,7 @@ fn import_move_into_a_folder_template() {
     let t = Duration::from_secs(10);
     let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [src.to_string_lossy()]}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after file.addPhotos");
     for id in ["button:importMove", "button:importDest"] {
         let r = h.request("ui.clickWidget", json!({"id": id}), t);
         assert_eq!(r["ok"], true, "{id}: {r}");
@@ -4161,7 +4224,7 @@ fn import_move_into_a_folder_template() {
     assert!(!r.to_string().contains("check:importDng"), "no Copy as DNG when moving");
     let r = h.request("ui.dialog.confirm", json!({}), t);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.confirm");
     assert!(h.app.import.is_none(), "finished");
     let day = dest.join("2026").join("20260114");
     assert!(day.join("20260114_001.png").is_file() && day.join("20260114_002.png").is_file());
@@ -4188,14 +4251,14 @@ fn import_rename_tags_insert_at_the_cursor() {
     let t = Duration::from_secs(10);
     let r = h.request("engine.execute", json!({"command": "file.addPhotos", "params": {"paths": [dir.join("IMG_0007.png").to_string_lossy()]}}), t);
     assert_eq!(r["result"]["scanning"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after file.addPhotos");
     let r = h.request("ui.clickWidget", json!({"id": "button:importCopy"}), t);
     assert_eq!(r["ok"], true, "{r}");
     if let Some(crate::state::Dialog::Import { opts }) = &mut h.app.ui.dialog {
         opts.rename = "Trip-_x".into();
     }
     // Paint the edited template before locating the Tags button in the resized dialog.
-    assert!(h.settle(SETTLE), "Copy dialog layout should settle before locating Tags");
+    h.settled(SETTLE, "Copy dialog layout should settle before locating Tags");
     // the cursor sits after "Trip-"
     let id = egui::Id::unique("import-rename");
     let mut st = egui::text_edit::TextEditState::default();
@@ -4268,7 +4331,7 @@ fn display_profile_converts_previews() {
             && !h.app.renderer.is_pending(Slot::Main)
     };
     assert!(h.step_until(SETTLE, ready));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let rgba = |c: &egui::ColorImage| lightcraft_raster::Rgba8 {
         width: c.size[0],
         height: c.size[1],
@@ -4286,7 +4349,7 @@ fn display_profile_converts_previews() {
     assert_eq!(h.app.ui.settings.display_profile, p3);
     let d = h.app.renderer.display().cloned().unwrap();
     assert!(h.step_until(SETTLE, |h| ready(h) && h.app.renderer.textures.contains_key(&thumb)));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     let (main1, thumb1) = (tex(&h, Slot::Main), tex(&h, thumb));
     let mut want = thumb0.clone();
     d.profile.from_srgb(&mut want).unwrap();
@@ -4328,7 +4391,7 @@ fn display_profile_converts_previews() {
     assert!(r["result"]["path"].is_null());
     assert!(h.app.ui.settings.display_profile.is_empty() && h.app.display_error.is_none());
     assert!(h.step_until(SETTLE, |h| ready(h) && h.app.renderer.textures.contains_key(&thumb)));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     assert_eq!(tex(&h, thumb), thumb0, "back to the sRGB thumbnail");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -4469,7 +4532,7 @@ fn settings_dialog_by_keyboard_and_clicks() {
     let back = serde_json::from_str::<crate::UiState>(&saved).unwrap().sanitized();
     assert_eq!(back.settings, h.app.ui.settings);
     assert_eq!(back.view, crate::state::ViewMode::Detail, "startup view applied on load");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.dialog.confirm");
 }
 
 /// F: full-screen preview (arrows step, I cycles the info overlay, Esc exits); ⌘I cycles the
@@ -4508,7 +4571,7 @@ fn full_screen_preview_and_info_overlay_by_keyboard() {
     assert!(h.app.window_is_fullscreen);
     h.request("ui.key", json!({"key": "f", "cmd": true, "shift": true}), t);
     assert!(!h.app.window_is_fullscreen);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key f");
 }
 
 /// #911 (toast labels only): cycling the overlay announces each mode in the UI language.
@@ -4626,7 +4689,7 @@ fn click_zoom_ratio_animates() {
     let mut h = demo([1000.0, 700.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     assert_eq!(h.app.ui.click_zoom, 100, "1:1 by default");
     let r = h.request("engine.execute", json!({"command": "view.clickZoom", "params": {"ratio": 3}}), t);
     assert_eq!(r["result"]["ratio"], 3, "{r}");
@@ -4646,7 +4709,7 @@ fn click_zoom_ratio_animates() {
         }
     }
     assert_eq!(keys.len(), 1, "one render for the whole animation: {keys:?}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     assert!(!h.app.ui.zoom_anim, "animation finished");
     assert!(h.app.image_rect.unwrap().width() > fit.width());
     h.request("ui.clickWidget", json!({"id": "canvas:image", "fx": 0.5, "fy": 0.5}), t);
@@ -4656,7 +4719,7 @@ fn click_zoom_ratio_animates() {
     assert_eq!(h.app.ui.zoom, Zoom::Percent(300.0));
     h.request("ui.key", json!({"key": "z"}), t);
     assert_eq!(h.app.ui.zoom, Zoom::Fit);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after key z");
 }
 
 /// A hover preview gets the loupe's display fit: it is the size the photo is drawn at, as the
@@ -4668,7 +4731,7 @@ fn a_hover_preview_is_fitted_to_the_drawn_size() {
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail"}), t);
     h.request("engine.execute", json!({"command": "panel.profiles"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after panel.profiles");
     h.step_until(SETTLE, |h| !h.app.renderer.is_pending(Slot::Main));
     let r = h.request("ui.hoverWidget", json!({"id": "profileCell:lc.vivid"}), t);
     assert_eq!(r["ok"], true, "{r}");
@@ -4687,9 +4750,9 @@ fn a_zoomed_view_keeps_its_whole_frame_render_canvas_sized() {
     let mut h = demo([1000.0, 700.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     h.request("ui.clickWidget", json!({"id": "canvas:image", "fx": 0.5, "fy": 0.5}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking canvas:image");
     assert_eq!(h.app.ui.zoom, crate::state::Zoom::Percent(100.0));
     h.step_until(SETTLE, |h| !h.app.renderer.is_pending(Slot::Main));
     let main = h.app.renderer.textures.get(&Slot::Main).expect("whole-frame render").size;
@@ -4702,7 +4765,7 @@ fn trackpad_navigation_keeps_the_image_cursor_between_events() {
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), t);
     h.request("engine.execute", json!({"command": "view.zoom100"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.zoom100");
     let anchor = h.app.canvas_rect.unwrap().center();
     h.request("ui.move", json!({"x": anchor.x, "y": anchor.y}), t);
     for (tool, expected) in [
@@ -4748,7 +4811,7 @@ fn trackpad_pinch_anchors_fractional_zoom_and_scroll_pans() {
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "none", "leftPanel": false, "filmstrip": false}), t);
     h.request("engine.execute", json!({"command": "view.zoom100"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.zoom100");
     let before = h.app.image_rect.unwrap();
     let anchor = h.app.canvas_rect.unwrap().center() + egui::vec2(30.0, -20.0);
     h.request("ui.move", json!({"x": anchor.x, "y": anchor.y}), t);
@@ -4793,7 +4856,7 @@ fn mouse_wheel_zooms_the_loupe_with_and_without_ctrl() {
     let mut h = demo([1000.0, 700.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "none", "leftPanel": false, "filmstrip": false}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     for (unit, y, modifiers) in [
         (egui::MouseWheelUnit::Line, 1.0, egui::Modifiers::NONE),
         (egui::MouseWheelUnit::Line, 1.0, egui::Modifiers::CTRL),
@@ -4821,7 +4884,7 @@ fn trackpad_navigation_works_in_tools_compare_reference_and_before_after() {
     let mut h = demo([1000.0, 700.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "leftPanel": false, "filmstrip": false}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let active = h.app.session.active().unwrap();
     let settings = h.app.session.catalog.photo(active).unwrap().develop.clone();
     for right in ["crop", "masking", "remove", "redEye", "none"] {
@@ -4904,23 +4967,23 @@ fn navigator_pans_the_zoomed_loupe() {
     let mut h = demo([1000.0, 700.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     assert!(!h.app.widgets.iter().any(|(w, _)| w == "canvas:navigator"), "hidden at Fit");
     h.request("engine.execute", json!({"command": "view.zoom100"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.zoom100");
     assert!(h.app.widgets.iter().any(|(w, _)| w == "canvas:navigator"), "navigator shown when zoomed");
     h.request("ui.clickWidget", json!({"id": "canvas:navigator", "fx": 0.1, "fy": 0.2}), t);
     let (u, v) = h.app.ui.pan;
     assert!((u - 0.1).abs() < 0.03 && (v - 0.2).abs() < 0.03, "pan {:?}", h.app.ui.pan);
     assert_eq!(h.app.ui.zoom, crate::state::Zoom::Percent(100.0), "the click didn't reach the loupe (which would zoom out)");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking canvas:navigator");
     let nav = h.app.widgets.iter().rev().find(|(w, _)| w == "canvas:navigator").map(|(_, r)| *r).unwrap();
     let to = nav.min + egui::vec2(nav.width() * 0.8, nav.height() * 0.7);
     h.request("ui.dragWidget", json!({"id": "canvas:navigator", "fx": 0.5, "fy": 0.5, "toX": to.x, "toY": to.y}), t);
     let (u, v) = h.app.ui.pan;
     assert!((u - 0.8).abs() < 0.03 && (v - 0.7).abs() < 0.03, "drag pan {:?}", h.app.ui.pan);
     h.request("engine.execute", json!({"command": "view.navigator"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after view.navigator");
     assert!(!h.app.widgets.iter().any(|(w, _)| w == "canvas:navigator"), "toggled off");
 }
 
@@ -4935,7 +4998,7 @@ fn the_loupe_says_rendering_while_an_edit_renders() {
     let mut h = demo([1000.0, 700.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     assert!(!pill(&h), "a finished render");
     let open = Rc::new(Cell::new(false));
     h.app.renderer.set_offload(Box::new(super::RenderGate::new(open.clone())));
@@ -4971,7 +5034,7 @@ fn view_options_turn_the_rendering_message_off() {
     let mut h = demo([1000.0, 700.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     assert!(h.app.ui.settings.loupe_messages, "on by default");
     assert_eq!(h.request("ui.key", json!({"key": "j", "cmd": true}), t)["ok"], true);
     h.step();
@@ -5034,7 +5097,7 @@ fn the_loupe_says_so_when_the_render_behind_a_stand_in_fails() {
     let mut h = demo([1000.0, 700.0]);
     let t = Duration::from_secs(10);
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     assert!(!has(&h, "loupe:renderFailed"));
     let first = h.app.session.active().expect("a photo is open").0;
     // every loupe render fails, as an undecodable raw's would; the rest render
@@ -5091,7 +5154,7 @@ fn the_loupe_shows_built_previews_without_rendering_again() {
         t,
     );
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let edge = h.app.session.loupe_edge;
     assert!(edge > 100, "the loupe said its size: {edge}");
     let ids = h.app.session.visible_cloned();
@@ -5122,7 +5185,7 @@ fn editing_renders_the_loupe_from_its_source_not_a_built_preview() {
         t,
     );
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     let edge = h.app.session.loupe_edge;
     let ids = h.app.session.visible_cloned();
     let all: Vec<u64> = ids.iter().map(|i| i.0).collect();
@@ -5187,11 +5250,11 @@ fn the_loupe_prepares_the_photos_ahead_the_settings_ask_for() {
     assert!(n >= 4, "the demo has photos to step through");
     h.request("engine.execute", json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"ahead": 3}}}}), t);
     h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.set");
     for _ in 0..40 {
         h.step();
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     // the first photo: three ahead (no photo behind it)
     assert_eq!(h.app.renderer.prefetch_slots_asked(), 3.min(n - 1));
     h.app.renderer.forget_all();
@@ -5199,7 +5262,7 @@ fn the_loupe_prepares_the_photos_ahead_the_settings_ask_for() {
     for _ in 0..40 {
         h.step();
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after prefs.setBackgroundPrep");
     assert_eq!(h.app.renderer.prefetch_slots_asked(), 0, "off: nothing prepared ahead");
 }
 
@@ -5210,13 +5273,13 @@ fn export_sizes_keep_the_pixels_typed() {
     let mut h = demo([1400.0, 900.0]);
     let t = Duration::from_secs(10);
     h.request("engine.execute", json!({"command": "dialog.export", "params": {}}), t);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after dialog.export");
     let type_value = |h: &mut Headless, id: &str, text: &str| {
         let r = h.request("ui.clickWidget", json!({"id": id}), t);
         assert_eq!(r["ok"], true, "{id}: {r}");
         h.request("ui.text", json!({"text": text}), t);
         h.request("ui.key", json!({"key": "Enter"}), t);
-        h.settle(SETTLE);
+        h.settled(SETTLE, "after typing a size and Enter");
     };
     let resize = |h: &Headless| match &h.app.ui.dialog {
         Some(crate::state::Dialog::Export { resize, .. }) => *resize,
@@ -5226,14 +5289,14 @@ fn export_sizes_keep_the_pixels_typed() {
         *full_size = false;
         *resize = lightcraft_engine::export::Resize::long_edge(2048);
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting a 2048 px long edge");
     type_value(&mut h, "sliderValue:export.sizePx", "3000");
     assert_eq!(resize(&h).value, 3000.0);
     if let Some(crate::state::Dialog::Export { resize, .. }) = &mut h.app.ui.dialog {
         resize.mode = lightcraft_engine::export::ResizeMode::WidthHeight;
         resize.height = 2048;
     }
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after setting width and height");
     type_value(&mut h, "sliderValue:export.sizeW", "1080");
     type_value(&mut h, "sliderValue:export.sizeH", "1350");
     assert_eq!((resize(&h).value, resize(&h).height), (1080.0, 1350));
