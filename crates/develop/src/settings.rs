@@ -96,7 +96,7 @@ pub enum Process {
     /// V5, with colour noise reduction on the linear colour differences R−Y and B−Y, leaving Y alone, with
     /// edge-aware weights from a denoised guide and a brake for isolated colour specks (issue #815).
     V6,
-    /// V6, calibrated against Lightroom exports of real edits: global Highlights and Shadows answer large amounts
+    /// V6, calibrated against Lightroom exports of real edits: global Shadows answers large amounts
     /// compressively (`lightcraft_pipeline::finish::tone_slider`), a negative Texture smooths less
     /// (`finish::texture_slider`) and the Global grading wheel tints less (`colorops::global_wheel`).
     V7,

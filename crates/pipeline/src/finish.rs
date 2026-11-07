@@ -284,7 +284,7 @@ impl FinishParams {
             out_luma: space.luma(),
             out_trc: space.trc(),
             proof: None,
-            hl: tone_slider(s.light.highlights, HIGHLIGHTS_EASE, s.process.process()),
+            hl: (s.light.highlights / 100.0) as f32,
             sh: tone_slider(s.light.shadows, SHADOWS_EASE, s.process.process()),
             clar,
             tex,
@@ -323,21 +323,21 @@ impl FinishParams {
     }
 }
 
-/// How much a full global Highlights (−100 or +100) eases off from V6's strength under V7: it acts at
-/// `1 / (1 + HIGHLIGHTS_EASE)` of it.
-pub const HIGHLIGHTS_EASE: f64 = 0.92;
-/// The same for global Shadows.
+/// How much a full global Shadows (−100 or +100) eases off from V6's strength under V7: it acts at
+/// `1 / (1 + SHADOWS_EASE)` of it.
 pub const SHADOWS_EASE: f64 = 1.33;
 
-/// A global Highlights or Shadows slider (−100..100) as the strength the local tone operator takes (−1..1).
+/// A global Shadows slider (−100..100) as the strength the local tone operator takes (−1..1), with `ease` =
+/// [`SHADOWS_EASE`].
 ///
 /// Up to V6 the strength is the slider's, linearly. From V7 it eases off as the amount grows, `a / (1 + ease·|a|)`
 /// for `a` = slider / 100: slope 1 at 0, so small amounts change least (Shadows +10 acts at 0.88 of V6's), and
 /// `1 / (1 + ease)` of V6's at ±100.
-/// Fitted to 56 Lightroom exports of real portrait edits (Canon raws, Highlights −48 to −100, Shadows +40 to +100):
-/// V6 left their darkest tones about 6 L* above the exports and their brightest about 5 below; the amounts that
-/// cancel that are about 0.6 of V6's at Shadows +52 and 0.43 at +100, and 0.52 at Highlights −100. Masks keep
-/// their linear amounts.
+/// Fitted to 56 Lightroom exports of real portrait edits (Canon raws, Shadows +40 to +100): V6 left their darkest
+/// tones about 6 L* above the exports; the amounts that cancel that are about 0.6 of V6's at +52 and 0.43 at +100.
+/// Global Highlights stays linear in every process: on the same edits V6 renders their brightest tones about 5 L*
+/// too dark, but Lightroom's response to Highlights alone is close to linear and depends on the frame's content
+/// (single-slider exports, #3923), which a fixed easing would not follow. Masks keep their linear amounts.
 pub fn tone_slider(value: f64, ease: f64, process: lightcraft_develop::Process) -> f32 {
     if process < lightcraft_develop::Process::V7 {
         return (value / 100.0) as f32;
@@ -957,12 +957,12 @@ mod tests {
         assert!((v7(10.0, SHADOWS_EASE) / 0.1 - 0.883).abs() < 0.005, "Shadows +10 eases off by about 12 %");
         assert!((v7(100.0, SHADOWS_EASE) - 0.43).abs() < 0.005);
         assert!((v7(52.0, SHADOWS_EASE) - 0.307).abs() < 0.005);
-        assert!((v7(-100.0, HIGHLIGHTS_EASE) + 0.52).abs() < 0.005);
+        assert!((v7(-100.0, SHADOWS_EASE) + 0.43).abs() < 0.005, "symmetric");
         assert_eq!(v7(250.0, SHADOWS_EASE), v7(100.0, SHADOWS_EASE), "clamped to the slider's range");
         assert_eq!(v7(f64::NAN, SHADOWS_EASE), 0.0);
         let mut last = -1.0;
         for i in -100..=100 {
-            let y = v7(i as f64, HIGHLIGHTS_EASE);
+            let y = v7(i as f64, SHADOWS_EASE);
             assert!(y > last, "monotonic at {i}");
             last = y;
         }
@@ -998,8 +998,8 @@ mod tests {
 
     #[test]
     fn a_render_takes_the_calibrated_tone_strengths() {
-        // the strengths that matched the Lightroom exports: Shadows +52 → ~0.31 (0.6 of V6's), +100 → 0.43,
-        // Highlights −100 → −0.52; V6 takes the slider's
+        // the strengths that matched the Lightroom exports: Shadows +52 → ~0.31 (0.6 of V6's), +100 → 0.43;
+        // Highlights stays the slider's, and V6 takes the slider's for both
         let params = |p: Process, highlights: f64, shadows: f64| {
             let mut s = DevelopSettings { process: p.version(), ..Default::default() };
             (s.light.highlights, s.light.shadows) = (highlights, shadows);
@@ -1016,7 +1016,7 @@ mod tests {
             });
             (fp.hl, fp.sh)
         };
-        for (highlights, shadows, hl, sh) in [(0.0, 52.0, 0.0, 0.307), (-100.0, 100.0, -0.521, 0.429)] {
+        for (highlights, shadows, hl, sh) in [(0.0, 52.0, 0.0, 0.307), (-100.0, 100.0, -1.0, 0.429), (-48.0, 0.0, -0.48, 0.0)] {
             let (got_hl, got_sh) = params(Process::V7, highlights, shadows);
             assert!((got_hl - hl).abs() < 0.002 && (got_sh - sh).abs() < 0.002, "V7 {highlights}/{shadows}: {got_hl}, {got_sh}");
             assert_eq!(params(Process::V6, highlights, shadows), ((highlights / 100.0) as f32, (shadows / 100.0) as f32));

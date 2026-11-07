@@ -2,11 +2,10 @@
 
 ## Unreleased
 
-### Highlights and Shadows closer to Lightroom (process V7)
-- Global Highlights and Shadows ease off at large amounts as Lightroom's do (issue #523): ±100 acts at about half of
-  what it did (0.52 of it for Highlights, 0.43 for Shadows), +52 Shadows at 0.6, and small amounts less so (about 12 % less at +10 Shadows, 8 % at −10 Highlights).
-  Strong Shadows no longer lift the darkest tones about 6 L* above Lightroom's render of the same edit, nor strong
-  Highlights pull the brightest about 5 L* below it. Masks keep their amounts. New photos get it; photos edited before
+### Shadows, Texture and the Global wheel closer to Lightroom (process V7)
+- Global Shadows eases off at large amounts as Lightroom's does (issue #523): +100 acts at 0.43 of what it did, +52 at
+  0.6, and small amounts less so (about 12 % less at +10). Strong Shadows no longer lift the darkest tones about 6 L*
+  above Lightroom's render of the same edit. Highlights keeps its amounts, and masks keep theirs. New photos get it; photos edited before
   keep their look until Update to Current Process.
 - A negative Texture smooths at two thirds of what it did: at −27 it took about 8 % more fine detail than Lightroom
   does. The global colour-grading wheel tints at 0.45 of what it did: a Global tint of 16 made a photo visibly pinker
