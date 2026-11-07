@@ -157,6 +157,9 @@ fn all_metadata_reading_several_photos_shows_in_the_activity_stack() {
 
     let r = h.request("ui.menu.invoke", json!({"id": "dialog.allMetadata"}), T);
     assert_eq!(r["ok"], true, "{r}");
+    // the worker reports its total as it starts (before the gated first read)
+    let metadata_total = |h: &Headless| h.app.session.activity.list().iter().find(|r| r.kind == "metadata").map(|r| r.total);
+    assert!(h.step_until(T, |h| metadata_total(h) == Some(2)), "the row counts the photos: {:?}", metadata_total(&h));
     let rows = h.app.session.activity.list();
     let row = rows
         .iter()
