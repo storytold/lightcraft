@@ -2472,5 +2472,8 @@
   "Welcome": "Vítejte",
   "Next": "Další",
   "Get Started": "Začít",
-  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "Drag to move, or use the arrow keys": "Přetažením přesunete, nebo použijte šipky",
+  "A group can't go inside itself": "Skupinu nelze vložit do sebe samé",
+  "Groups can't nest any deeper": "Skupiny nelze vnořovat hlouběji"
 }

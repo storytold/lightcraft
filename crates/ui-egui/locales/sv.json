@@ -2486,5 +2486,8 @@
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
   "Bottom bar": "Nedre fältet",
-  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "Drag to move, or use the arrow keys": "Dra för att flytta, eller använd piltangenterna",
+  "A group can't go inside itself": "En grupp kan inte läggas inuti sig själv",
+  "Groups can't nest any deeper": "Grupper kan inte nästlas djupare"
 }

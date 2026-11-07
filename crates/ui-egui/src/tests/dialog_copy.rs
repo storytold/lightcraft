@@ -80,7 +80,7 @@ fn confirm_buttons_name_their_action() {
     }
     // a new smart album's rules are created; an existing one's are saved
     for (id, want) in [(None, "Create"), (Some(1), "Save")] {
-        let d = Dialog::SmartRules { id, name: "A".into(), rules: Default::default(), parent: None };
+        let d = Dialog::smart_rules(id, "A".into(), Default::default(), None);
         show(&mut h, d);
         assert_eq!(confirm_label(&h), want, "smart album rules {id:?}");
     }

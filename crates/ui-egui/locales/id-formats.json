@@ -325,5 +325,7 @@
   "View › Detail View ({keys}).": "Tampilan › Tampilan Detail ({keys}).",
   "File › Export… · File › Print… ({keys}).": "File › Ekspor… · File › Cetak… ({keys}).",
   "{n} folder{} could not be read": "Folder yang tidak bisa dibaca: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Aturan {n} dari {m}: {what}. Pindahkan dengan tombol panah",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Grup {n} dari {m}: cocokkan {mode}, isi: {count}. Pindahkan dengan tombol panah"
 }

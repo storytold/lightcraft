@@ -1126,7 +1126,7 @@ fn album_dialogs_without_a_parent_still_deserialize() {
     assert!(matches!(d, Dialog::NewAlbum { parent: None, .. }));
     let d: Dialog = serde_json::from_value(json!({"kind": "newSmartAlbum", "name": "x"})).unwrap();
     assert!(matches!(d, Dialog::NewSmartAlbum { parent: None, .. }));
-    let mut v = serde_json::to_value(Dialog::SmartRules { id: None, name: "x".into(), rules: Default::default(), parent: Some(3) }).unwrap();
+    let mut v = serde_json::to_value(Dialog::smart_rules(None, "x".into(), Default::default(), Some(3))).unwrap();
     assert_eq!(v["parent"], 3);
     v.as_object_mut().unwrap().remove("parent");
     let d: Dialog = serde_json::from_value(v).unwrap();

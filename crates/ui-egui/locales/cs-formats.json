@@ -325,5 +325,7 @@
   "View › Detail View ({keys}).": "Zobrazení › Zobrazení detailu ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Soubor › Exportovat… · Soubor › Tisk… ({keys}).",
   "{n} folder{} could not be read": "Složky, které se nepodařilo přečíst: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Pravidlo {n} z {m}: {what}. Přesun pomocí šipek",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Skupina {n} z {m}: shoda {mode}, uvnitř {count}. Přesun pomocí šipek"
 }
