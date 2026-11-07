@@ -285,6 +285,86 @@ fn deleting_the_pinned_reference_stops_drawing_it_and_reentry_uses_a_live_photo(
     assert!(h.app.renderer.textures.get(&crate::render::Slot::Compare(0)).is_some_and(|t| t.photo == reference));
 }
 
+/// The zoom window is checked against the reference frame the request was made for: a window is a
+/// part of the frame, so its bounds are the window's pixels laid over that frame, not over whatever
+/// rect the whole-frame texture happens to be fitted into. In the candidate pane that frame is the
+/// one recorded for the pane: the tile is laid over it, so any other frame rect is the texture's.
+#[test]
+fn compare_zoom_window_tracks_the_zoomed_pane() {
+    use crate::render::Slot;
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.zoom = Zoom::Percent(100.0);
+    h.settle(SETTLE);
+    let candidate = vis[1];
+    let photo = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(candidate)).cloned().expect("photo");
+    let frame = lightcraft_pipeline::geometry::Frame::with_lens(
+        photo.width.max(1) as usize,
+        photo.height.max(1) as usize,
+        &photo.develop,
+        true,
+        photo.embedded_lens.as_ref(),
+    );
+    let aspect = frame.aspect() as f32;
+    let native = crate::panels::detail::output_px(&frame);
+    let view = h.app.compare_windows[1].expect("a zoom window");
+    assert_eq!(view.photo, lightcraft_catalog::PhotoId(candidate));
+    let tex = h.app.renderer.textures.get(&Slot::CompareRegion(1)).expect("window texture");
+    assert_eq!(tex.photo, lightcraft_catalog::PhotoId(candidate));
+    let tex_id = tex.tex.id();
+    // Lay the whole-frame texture over the same reference frame with an aspect just inside the
+    // same-frame tolerance: the drawn rect moves, the request stays valid, and the window is
+    // drawn over the moved texture rect. Hold the replacement renders so the existing window is
+    // the one drawn, magnified, over the texture.
+    let texture_size = {
+        let whole = h.app.renderer.textures.get_mut(&Slot::Compare(1)).expect("whole-frame texture");
+        let target_aspect = aspect * 1.015;
+        whole.size[1] = (whole.size[0] as f32 / target_aspect).round().max(8.0) as usize;
+        whole.size
+    };
+    let texture_aspect = texture_size[0].max(1) as f32 / texture_size[1].max(1) as f32;
+    assert!(crate::region::same_aspect(texture_aspect, aspect), "a trace off the frame's aspect stays in tolerance: {texture_aspect} {}", aspect);
+    let open = std::rc::Rc::new(std::cell::Cell::new(false));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
+    h.app.session.begin_interaction("Exposure").unwrap();
+    h.step();
+    let pane_img = h.app.image_rect.expect("the candidate pane's frame");
+    let img_area = egui::Rect::from_min_max(pane_img.min, egui::pos2(pane_img.right(), pane_img.bottom()));
+    let img = pane_img;
+    let display = crate::panels::detail::fit_rect(img_area, texture_aspect, h.app.ui.zoom, native, 1.0, h.app.ui.pan);
+    let expected = egui::Rect::from_min_size(
+        img.min + egui::vec2(view.window.x as f32 / view.full.0 as f32 * img.width(), view.window.y as f32 / view.full.1 as f32 * img.height()),
+        egui::vec2(view.window.w as f32 / view.full.0 as f32 * img.width(), view.window.h as f32 / view.full.1 as f32 * img.height()),
+    );
+    let wrong = egui::Rect::from_min_size(
+        display.min
+            + egui::vec2(view.window.x as f32 / view.full.0 as f32 * display.width(), view.window.y as f32 / view.full.1 as f32 * display.height()),
+        egui::vec2(view.window.w as f32 / view.full.0 as f32 * display.width(), view.window.h as f32 / view.full.1 as f32 * display.height()),
+    );
+    assert!(
+        (wrong.min - expected.min).abs().max_elem() > 3.0,
+        "the frame rect and the texture rect must differ for this check: {img:?} vs {display:?}"
+    );
+    let drawn: Vec<egui::Rect> = h
+        .view
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::epaint::Shape::Mesh(m) if m.texture_id == tex_id => Some(m.calc_bounds()),
+            _ => None,
+        })
+        .collect();
+    let bounds = drawn.iter().copied().find(|b| (b.min - wrong.min).abs().max_elem() < 1.0).or_else(|| drawn.first().copied());
+    let bounds = bounds.expect("the window tile is painted");
+    assert!(
+        (bounds.min - expected.min).abs().max_elem() < 1.0 && (bounds.max - expected.max).abs().max_elem() < 1.0,
+        "the tile {bounds:?} must sit in the zoomed pane's frame {expected:?}, not in the texture's rect {wrong:?}"
+    );
+}
+
 /// Clicking a colour label (or stars) in the Info panel while culling labels the active photo
 /// only, as the label keys and the bottom bar's stars and flags do, and the label shows under that
 /// photo in Compare (#2398: "Can't assign color to photo when culling").
