@@ -38,6 +38,12 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+## 2026-11-03
+
+### Every rating, flag and label change says what it did
+- `Shift+X`, `Shift+Z`, `Shift+U` and `Shift+P` (in the grids) flagged the photo and moved on, and `[` / `]` changed its rating, without a word, so with the photo gone from the screen nothing confirmed it. They now show the same bottom toast as `X`, `U`, `P` and the number keys, naming the photo that changed, not the one you moved on to. The toast now comes from the change itself, so the Photo menu and the rating and flag buttons show it too.
+- When a change reaches several photos the toast says how many: "Rated ★★★ · 12 photos". The count is the photos the key acted on, including any that already had that value. A `[` / `]` or backtick step that leaves a mixed selection with different values says "Rating changed · 12 photos" or "Flag changed · 12 photos". A key that is refused no longer shows a success toast; the reason stays in the status line.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
