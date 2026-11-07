@@ -107,6 +107,62 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
     })
 }
 
+/// The vignette's frame ([`Frame::vignette_frame`]) as the kernels read it, in f32, for a `w × h`
+/// render: the whole output's without a vignette (nothing reads it), or where the f32 kernels
+/// can't evaluate the crop's, as for a crop far below a pixel (#3621 review). A window decides
+/// that on the whole output's frame and size, as the whole render does, so both show the same
+/// vignette; the guard's headroom covers the window's own translated frame.
+fn vig_frame(frame: &Frame, s: &DevelopSettings, (w, h): (usize, usize), vig: Option<&Vig>) -> ([f32; 6], [f32; 2]) {
+    let f32s = |(a, (vw, vh)): (lightcraft_geom::Affine, (f64, f64))| (a.0.map(|v| v as f32), [vw as f32, vh as f32]);
+    let (offset, full) = frame.output_vignette_frame(w, h);
+    let whole = f32s((offset, full));
+    let Some(v) = vig else { return whole };
+    let Some((to_crop, size)) = frame.crop_vignette_frame(s, full) else { return whole };
+    let (fw, fh) = (full.0 as usize, full.1 as usize);
+    let (aff, size32) = f32s((to_crop, size));
+    if !vig_frame_fits_f32(aff, size32, (fw, fh), v.power) {
+        return whole;
+    }
+    let a = to_crop * offset;
+    if a.0.iter().any(|v| !v.is_finite()) {
+        return whole;
+    }
+    f32s((a, size))
+}
+
+/// Whether the vignette kernels (CPU and GPU, in f32) stay finite and place every pixel in the
+/// frame to within a small part of its size over a `w × h` render with this frame and power. A
+/// coefficient that fits f32 can still overflow at the far edge, and a position that fits can
+/// overflow when raised to the power (up to 8): WGSL leaves what overflow gives undefined. So this
+/// bounds every value the kernels compute, in f64, from the f32 parameters:
+/// - the affine's products and sums are at most `S = |a|·X + |c|·Y + |e|` over the pixel centres
+///   (X, Y: the last ones), whatever their order or cancellation, so `|u| ≤ U = S / vw · 2 + 1`,
+///   and `V` alike;
+/// - one of `sx`, `sy` is at least 1 and neither exceeds `k = max(aspect, 1 / aspect)`: so the
+///   scaled `u · max(sx, 1) ≤ U · k`, the axis `|u| · max(sx, 1) / max(sx, sy) ≤ U`, and the
+///   powered sum `≤ U^p + V^p`;
+/// - rounding the coefficients to f32, the products, the sums and the division (the GPU's to 2.5
+///   ULP) errs by about ten unit roundoffs (2^-24) of `S`, also where they cancel, as for a tiny
+///   crop far from the origin: `S / vw ≤ 2^16` keeps that within 1/25 of `vw`, and 1/12 for a
+///   window, whose own translation can bring its sums to up to twice the whole output's. An
+///   unturned crop of 2 pixels or more passes on any photo up to 65535 pixels; a smaller one far
+///   from the origin of a large photo falls back.
+///
+/// Each overflow bound must stay 16× below `f32::MAX`, which covers the kernels' rounding, fused
+/// multiply-adds and the GPU's approximate `pow`.
+pub(crate) fn vig_frame_fits_f32(aff: [f32; 6], size: [f32; 2], (w, h): (usize, usize), power: f32) -> bool {
+    const LIMIT: f64 = f32::MAX as f64 / 16.0;
+    const PRECISE: f64 = 65536.0;
+    let [a, b, c, d, e, f] = aff.map(f64::from);
+    let [vw, vh, p] = [size[0], size[1], power].map(f64::from);
+    let (x, y) = (w.saturating_sub(1) as f64 + 0.5, h.saturating_sub(1) as f64 + 0.5);
+    let (su, sv) = (a.abs() * x + c.abs() * y + e.abs(), b.abs() * x + d.abs() * y + f.abs());
+    let (u, v) = (su / vw * 2.0 + 1.0, sv / vh * 2.0 + 1.0);
+    let k = (vw / vh).max(vh / vw);
+    // (every comparison is false for NaN)
+    vw > 0.0 && vh > 0.0 && su / vw <= PRECISE && sv / vh <= PRECISE && [su, sv, u * k, v * k, u.powf(p) + v.powf(p)].iter().all(|&m| m <= LIMIT)
+}
+
 /// Hash constants of [`grain_noise`] (shared with the GPU kernel).
 pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
 
@@ -226,7 +282,11 @@ pub struct FinishParams {
     pub w: usize,
     pub h: usize,
     pub px_per_long: f64,
-    /// The window's offset and the whole output's size (pixels): `(0, 0, w, h)` unless windowed.
+    /// The post-crop vignette's frame ([`Frame::vignette_frame`]): an affine from this render's
+    /// pixels (centres at +0.5) to that frame's pixels, and the frame's size in them.
+    pub vig_aff: [f32; 6],
+    pub vig_size: [f32; 2],
+    /// The window offset and whole-output size for pixel-aligned dithering, independent of the crop vignette.
     pub view: [f32; 4],
     /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
     /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
@@ -269,6 +329,8 @@ impl FinishParams {
         });
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
+        let vig = if effects { vignette(s) } else { None };
+        let (vig_aff, vig_size) = vig_frame(frame, s, (w, h), vig.as_ref());
         FinishParams {
             peak,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
@@ -279,7 +341,7 @@ impl FinishParams {
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
-            vig: if effects { vignette(s) } else { None },
+            vig,
             to_out: space.from_working(),
             out_luma: space.luma(),
             out_trc: space.trc(),
@@ -309,6 +371,8 @@ impl FinishParams {
             w,
             h,
             px_per_long,
+            vig_aff,
+            vig_size,
             view: frame.view.map_or([0.0, 0.0, w as f32, h as f32], |v| [v.x as f32, v.y as f32, v.full_w as f32, v.full_h as f32]),
         }
     }
@@ -442,9 +506,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
-    let [vx, vy, vw, vh] = fp.view;
+    // Pixel-aligned dithering keeps the output origin; only the vignette follows the crop.
+    let [vx, vy, _, _] = fp.view;
     let (vx_u, vy_u) = (vx.round() as usize, vy.round() as usize);
-    // the vignette belongs to the whole output frame, not to the window being drawn
+    let [va, vb, vc, vd, ve, vf] = fp.vig_aff;
+    let [vw, vh] = fp.vig_size;
     let aspect = vw / vh;
 
     let srgb = srgb_lut();
@@ -503,8 +569,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {
-                let u = (vx + x as f32 + 0.5) / vw * 2.0 - 1.0;
-                let vv = (vy + y as f32 + 0.5) / vh * 2.0 - 1.0;
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let u = (va * px + vc * py + ve) / vw * 2.0 - 1.0;
+                let vv = (vb * px + vd * py + vf) / vh * 2.0 - 1.0;
                 let sx = 1.0 + (aspect - 1.0) * v.aspect_mix;
                 let sy = 1.0 + (1.0 / aspect - 1.0) * v.aspect_mix;
                 let (ax, ay) = ((u * sx.max(1.0) / sx.max(sy)).abs(), (vv * sy.max(1.0) / sx.max(sy)).abs());
