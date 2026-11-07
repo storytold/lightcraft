@@ -128,6 +128,42 @@ Every stdio MCP client takes the same shape: a `command` plus `args`. For exampl
 During development you can also point the client at `cargo run --release -p lightcraft-cli -- mcp`
 (with `"cwd"` set to the repository), at the cost of a slower start.
 
+## Policy
+
+`--compact` only changes what `tools/list` shows. What an agent may actually run is decided at `tools/call`, by a
+policy read from the environment, so put the variables in the client's `env` block. Every route to a command is
+checked: the helper tools, `run_command`, `command_run`, each step of `command_batch`, and the `cmd_*` tools. A
+refusal is a tool result with `isError: true` whose text starts `refused by policy:`, so the model can read why.
+With none of the variables set nothing is refused.
+
+| Variable | Effect |
+|---|---|
+| `LIGHTCRAFT_MCP_SAFE=1` | Refuses `export.addToPhotos`, `ui.clipboard`, `ui.dropFiles`, `app.quit`, `folder.move` and the `clipboard` tool; refuses `import` with `mode: "move"` and `export` with `addToPhotos: true`. |
+| `LIGHTCRAFT_MCP_EXPORT_ROOT=DIR` | Every export `path` / `dir` must be absolute and resolve inside DIR. `destinationMode: "sameAsOriginal"`, an export with no `dir` / `path` (the app's remembered folder), and a `subfolder` containing `..`, a root or `\` are refused. |
+| `LIGHTCRAFT_MCP_DENY=a.b,c.*,tool` | Extra command ids (exact, or `prefix.*`) or tool names to refuse. An entry with a dot is a command id. |
+| `LIGHTCRAFT_MCP_ALLOW_TOOLS=x,y` | When set, only these tool names are listed and callable. |
+
+```json
+{
+  "mcpServers": {
+    "lightcraft": {
+      "command": "/path/to/lightcraft/target/release/lightcraft-cli",
+      "args": ["mcp", "--connect", "127.0.0.1:7980"],
+      "env": {
+        "LIGHTCRAFT_MCP_SAFE": "1",
+        "LIGHTCRAFT_MCP_EXPORT_ROOT": "/Users/me/Exports",
+        "LIGHTCRAFT_MCP_DENY": "folder.*,photo.deletePermanently"
+      }
+    }
+  }
+}
+```
+
+Argument checks cover `library.import` and `app.export`, the two commands that delete or write outside the library;
+use the deny list for anything else. The export root is resolved when the call is made, so it does not stop a symlink
+swapped in between the check and the write. The photo's own metadata (file names, titles, keywords) reaches the
+model as plain text; treat it as untrusted.
+
 ## Shared core tools
 
 These follow the same conventions as [filmcraft #28](https://github.com/storytold/filmcraft/pull/28).

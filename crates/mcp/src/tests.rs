@@ -602,3 +602,45 @@ fn render_and_screenshot_pngs_go_through_a_private_folder() {
         folders.push(dir);
     }
 }
+
+/// A backend that records each call where the test can still read it after the server owns it.
+struct SharedRecorder(std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>);
+
+impl Backend for SharedRecorder {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.0.lock().unwrap().push((method.to_string(), params));
+        Ok(Value::Null)
+    }
+    fn has_ui(&self) -> bool {
+        true
+    }
+    fn describe(&self) -> String {
+        "shared recorder".into()
+    }
+}
+
+/// Safe mode runs the export with the arguments the policy rewrote, so a preset that sets
+/// `addToPhotos` cannot hand the files to Apple Photos.
+#[test]
+fn the_server_runs_exports_with_the_arguments_the_policy_rewrote() {
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = Server::new(Box::new(SharedRecorder(calls.clone()))).with_policy(crate::Policy { safe: true, ..crate::Policy::default() });
+    let r = rpc(&mut s, 1, "tools/call", json!({"name": "export", "arguments": {"preset": "web", "dir": "/tmp/out"}}));
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let calls = calls.lock().unwrap();
+    let export = calls.iter().find(|(_, p)| p["command"] == "app.export").expect("the export ran");
+    assert_eq!(export.1["params"]["addToPhotos"], false, "{export:?}");
+    assert_eq!(export.1["params"]["preset"], "web");
+}
+
+/// Reading a resource runs a command, so a denied command's resource is refused too.
+#[test]
+fn a_denied_command_makes_its_resource_unreadable() {
+    let mut policy = crate::Policy::default();
+    policy.deny.insert("catalog.query".into());
+    let mut s = Server::new(Box::new(Headless::demo())).with_policy(policy);
+    let r = rpc(&mut s, 1, "resources/read", json!({"uri": crate::server::PHOTOS_URI}));
+    assert!(r["error"]["message"].as_str().is_some_and(|m| m.contains("denied by policy")), "{r}");
+    assert!(rpc(&mut s, 2, "resources/read", json!({"uri": crate::server::LIBRARY_URI}))["result"]["contents"][0]["text"].is_string());
+    assert!(rpc(&mut s, 3, "resources/read", json!({"uri": crate::server::COMMANDS_URI}))["result"]["contents"][0]["text"].is_string());
+}
