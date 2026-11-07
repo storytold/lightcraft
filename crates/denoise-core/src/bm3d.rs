@@ -263,10 +263,8 @@ pub(crate) fn gather(plane: &[f32], t: usize, n: usize, members: &[u32], out: &m
 /// Where a plane's blocks start along one side: every `step` cells, and the last one too, so the edge is covered.
 pub fn starts(blocks: usize, step: usize) -> Vec<usize> {
     let mut v: Vec<usize> = (0..blocks).step_by(step.max(1)).collect();
-    if let Some(last) = blocks.checked_sub(1) {
-        if v.last() != Some(&last) {
-            v.push(last);
-        }
+    if let Some(last) = blocks.checked_sub(1).filter(|last| v.last() != Some(last)) {
+        v.push(last);
     }
     v
 }
