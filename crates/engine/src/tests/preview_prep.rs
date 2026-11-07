@@ -903,6 +903,58 @@ fn an_edit_while_planning_plans_the_photos_again_but_a_rating_does_not() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// CodeRabbit on #3936: no preview job reads a photo's analysis (focus and exposure scores, kept by assisted culling
+/// in the background), so one stored while the photos are being planned doesn't begin the plan again.
+#[test]
+fn an_analysis_stored_while_planning_does_not_begin_the_plan_again() {
+    let (mut s, root, ids) = library("prep-plan-analysis", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    let planned_first = s.visible_cloned()[0];
+    s.catalog.apply(lightcraft_catalog::Op::SetAnalysis { id: planned_first, analysis: Some(lightcraft_catalog::Analysis::default()) }).unwrap();
+    let b = finish_planning(&mut s, &ids, mode);
+    drop(hold);
+    assert!(wait_finished(&b), "the build ends");
+    assert_eq!((b.total, b.failed.load(Ordering::Relaxed)), (7, 0));
+    assert_eq!(s.prep.planned, 7, "each photo planned once: the plan went on");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// CodeRabbit on #3936: a flood of changes that touch nothing a render is made from (more than the catalog remembers
+/// photo by photo, over the ticks of one plan) doesn't begin the plan again: each tick looks only at what changed
+/// since the tick before.
+#[test]
+fn many_unrelated_changes_over_a_plan_do_not_begin_it_again() {
+    let (mut s, root, ids) = library("prep-plan-flood", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    let rate = |s: &mut Session, n: usize| {
+        for k in 0..n {
+            s.catalog.apply(lightcraft_catalog::Op::SetRating { id: ids[k % ids.len()], rating: (k % 5) as u8 }).unwrap();
+        }
+    };
+    let mut started = None;
+    for _ in 0..30 {
+        // (more than 8,192 over the plan, far fewer than that between two ticks)
+        rate(&mut s, 3000);
+        s.prep_tick(mode, Some(ids[2]), false);
+        if let Some(b) = &s.preview_build {
+            started = Some(b.clone());
+            break;
+        }
+    }
+    let b = started.expect("the build started");
+    drop(hold);
+    assert!(wait_finished(&b), "the build ends");
+    assert_eq!((b.total, b.failed.load(Ordering::Relaxed)), (7, 0));
+    assert_eq!(s.prep.planned, 7, "each photo planned once: the plan went on");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// A tick with the loupe open over a view that did not change neither copies the visible list nor
 /// hashes it again: a frame asks every time, and a view of millions made every frame cost seconds.
 #[test]

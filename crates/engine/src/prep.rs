@@ -248,7 +248,8 @@ pub struct PrepState {
 
 /// A background build whose photos are being planned ([`crate::cmd::previews::BuildPlan`]): the
 /// view it is for (its signature), the plan, and what the jobs planned so far were made against: the
-/// library's preview cache (as it was: its `generation`) and the catalog at `revision`.
+/// library's preview cache (as it was: its `generation`) and the catalog at `revision` (as of the last tick that found
+/// the plan current).
 /// A plan that no longer matches them ([`Session::plan_outdated`]) is planned again.
 struct Planning {
     sig: u64,
@@ -432,6 +433,12 @@ impl Session {
             // photo is rendered from did): the plan is of another view, or its jobs are out of date
             self.drop_plan();
         }
+        // (a plan that is still current is current as of this catalog: the next tick looks only at what changes from
+        // here, so many unrelated changes over a long plan never outrun what the catalog remembers photo by photo)
+        let revision = self.catalog.revision;
+        if let Some(p) = self.prep.plan.as_mut() {
+            p.revision = revision;
+        }
         if self.prep.steps_in != Some(sig) {
             self.prep.steps_in = Some(sig);
             self.prep.steps = 0;
@@ -496,14 +503,13 @@ impl Session {
 
     /// Whether the jobs `p` has planned are out of date: another library's preview cache is in use (the plan is of
     /// the library before, though its view looks the same), the cache was cleared (the jobs would save into the
-    /// cache as it was and fail), or a photo's settings, file or analysis changed since the plan began (its jobs
-    /// would render, and be keyed, as it was). A rating or a keyword changes none of them. (A catalog the library
-    /// has just loaded doesn't know what changed since its revision, but nothing has when the revision is the same.)
+    /// cache as it was and fail), or a photo's settings, file or presence changed since the plan was last found
+    /// current (its jobs would render, and be keyed, as it was). A rating, a keyword or a photo's analysis (which no
+    /// job reads) changes none of them. (A catalog the library has just loaded doesn't know what changed since its
+    /// revision, but nothing has when the revision is the same.)
     fn plan_outdated(&self, p: &Planning) -> bool {
-        const RENDERED_FROM: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::DEVELOP
-            .with(lightcraft_catalog::Aspects::FILE)
-            .with(lightcraft_catalog::Aspects::ANALYSIS)
-            .with(lightcraft_catalog::Aspects::PRESENCE);
+        const RENDERED_FROM: lightcraft_catalog::Aspects =
+            lightcraft_catalog::Aspects::DEVELOP.with(lightcraft_catalog::Aspects::FILE).with(lightcraft_catalog::Aspects::PRESENCE);
         !Arc::ptr_eq(&p.cache, &self.media.rendered)
             || p.cache.generation() != p.generation
             || (self.catalog.revision != p.revision && self.catalog.aspects_since(p.revision).is_none_or(|changed| changed.any_of(RENDERED_FROM)))
