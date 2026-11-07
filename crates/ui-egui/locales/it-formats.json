@@ -324,5 +324,10 @@
   "Couldn't read {name}: {error}": "Impossibile leggere {name}: {error}",
   "Couldn't read {n} photo{s} from {name}": "{name}: impossibile leggere {n} foto{s:.0}",
   "No new photos on {name} ({n} already in the library)": "Nessuna foto nuova su {name} (già nella libreria: {n})",
-  "No photos found on {name}": "Nessuna foto trovata su {name}"
+  "No photos found on {name}": "Nessuna foto trovata su {name}",
+  "Bring photos in with File › Import Photos… ({keys}).": "Importa le foto con File › Importa foto… ({keys}).",
+  "View › Detail View ({keys}).": "Visualizza › Vista dettaglio ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
+  "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
 }

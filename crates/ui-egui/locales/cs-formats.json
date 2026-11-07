@@ -324,5 +324,10 @@
   "Couldn't read {name}: {error}": "{name} se nepodařilo přečíst: {error}",
   "Couldn't read {n} photo{s} from {name}": "{name}: nepodařilo se přečíst fotografie ({n}){s:.0}",
   "No new photos on {name} ({n} already in the library)": "Na {name} nejsou žádné nové fotografie ({n} již v knihovně)",
-  "No photos found on {name}": "Na {name} nebyly nalezeny fotografie"
+  "No photos found on {name}": "Na {name} nebyly nalezeny fotografie",
+  "Bring photos in with File › Import Photos… ({keys}).": "Fotografie importujete přes Soubor › Importovat fotografie… ({keys}).",
+  "View › Detail View ({keys}).": "Zobrazení › Zobrazení detailu ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Soubor › Exportovat… · Soubor › Tisk… ({keys}).",
+  "{n} folder{} could not be read": "Složky, které se nepodařilo přečíst: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}"
 }

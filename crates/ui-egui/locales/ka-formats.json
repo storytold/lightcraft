@@ -327,5 +327,10 @@
   "Couldn't read {name}: {error}": "{name} ვერ წაიკითხა: {error}",
   "Couldn't read {n} photo{s} from {name}": "{name}: {n} ფოტოს წაკითხვა ვერ მოხერხდა{s:.0}",
   "No new photos on {name} ({n} already in the library)": "{name}: ახალი ფოტოები არ არის (უკვე ბიბლიოთეკაშია: {n})",
-  "No photos found on {name}": "{name}: ფოტოები ვერ მოიძებნა"
+  "No photos found on {name}": "{name}: ფოტოები ვერ მოიძებნა",
+  "Bring photos in with File › Import Photos… ({keys}).": "ფოტოების შემოსატანად გამოიყენეთ ფაილი › ფოტოების იმპორტი… ({keys}).",
+  "View › Detail View ({keys}).": "ხედი › დეტალური ხედი ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "ფაილი › ექსპორტი… · ფაილი › დაბეჭდვა… ({keys}).",
+  "{n} folder{} could not be read": "საქაღალდეები, რომლებიც ვერ წაიკითხა: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}"
 }
