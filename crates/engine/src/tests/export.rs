@@ -281,10 +281,9 @@ fn a_subfolder_never_leaves_the_destination_folder() {
 }
 
 #[test]
-fn subfolder_variables_expansion_and_presets() {
-    use crate::export::{Destination, clean_album_name, expand_subfolder, export_batch};
+fn clean_album_name_sanitizes_reserved_names_and_illegal_chars() {
+    use crate::export::clean_album_name;
 
-    // Album name cleaning
     assert_eq!(clean_album_name("Summer 2026"), "Summer 2026");
     assert_eq!(clean_album_name("Trip: Tokyo / Kyoto * 2026?"), "Trip_ Tokyo _ Kyoto _ 2026_");
     assert_eq!(clean_album_name("..hidden.."), "hidden");
@@ -306,8 +305,12 @@ fn subfolder_variables_expansion_and_presets() {
     assert_eq!(clean_album_name("com²"), "com²_");
     assert_eq!(clean_album_name("lpt³"), "lpt³_");
     assert_eq!(clean_album_name("com¹.backup"), "com¹_.backup");
+}
 
-    // Expand variables with fixed date/time: 2026-11-05 14:30
+#[test]
+fn expand_subfolder_variables_and_ordering() {
+    use crate::export::expand_subfolder;
+
     let fixed_time = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap().and_hms_opt(14, 30, 0);
     assert_eq!(expand_subfolder("{album}", Some("Vacation"), fixed_time), "Vacation");
     assert_eq!(expand_subfolder("{album}", None, fixed_time), "");
@@ -320,8 +323,10 @@ fn subfolder_variables_expansion_and_presets() {
     assert_eq!(expand_subfolder("{album}", Some("{date}"), fixed_time), "{date}");
     assert_eq!(expand_subfolder("{album}/{date}", Some("{date}"), fixed_time), "{date}/20261105");
     assert_eq!(expand_subfolder("{album}/{hour}", Some("{hour}"), fixed_time), "{hour}/1430");
+}
 
-    // Presets save and restore subfolder with variables intact
+#[test]
+fn export_presets_persist_subfolder_variables() {
     let mut s = Session::with_demo();
     s.execute(
         "export.savePreset",
@@ -338,6 +343,17 @@ fn subfolder_variables_expansion_and_presets() {
     assert_eq!(loaded["subfolder"], "{album}/{date}_{hour}");
     let opts = ExportOptions::from_json(&loaded);
     assert_eq!(opts.subfolder, "{album}/{date}_{hour}");
+}
+
+#[test]
+fn export_batch_subfolder_expansion_in_and_outside_album_view() {
+    use crate::export::{Destination, export_batch};
+
+    let mut s = Session::with_demo();
+    let opts = ExportOptions::from_json(&json!({
+        "format": "jpeg",
+        "subfolder": "{album}/{date}_{hour}"
+    }));
 
     // Export batch with active album view
     let id = s.active().unwrap();
