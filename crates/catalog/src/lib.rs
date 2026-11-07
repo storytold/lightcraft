@@ -225,6 +225,9 @@ pub enum Op {
         /// when it is `None`.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         preview_checked: String,
+        /// The file's own orientation as the probe read it now (see [`Photo::file_orientation`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_orientation: Option<lightcraft_geom::Orientation>,
     },
     /// The lens data a photo's file carries (what Reload finds when it was read after import).
     SetEmbeddedLens {
@@ -1073,7 +1076,7 @@ impl Catalog {
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
                 Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format }
             }
-            Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked } => {
+            Op::SetContent { id, width, height, file_size, content_hash, preview_only, preview_checked, file_orientation } => {
                 let p = self.photo_mut(id)?;
                 Op::SetContent {
                     id,
@@ -1083,6 +1086,7 @@ impl Catalog {
                     content_hash: std::mem::replace(&mut p.content_hash, content_hash),
                     preview_only: std::mem::replace(&mut p.preview_only, preview_only),
                     preview_checked: std::mem::replace(&mut p.preview_checked, preview_checked),
+                    file_orientation: std::mem::replace(&mut p.file_orientation, file_orientation),
                 }
             }
             Op::SetEmbeddedLens { id, lens } => {

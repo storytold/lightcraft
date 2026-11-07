@@ -229,8 +229,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         content_hash,
         embedded_lens: None,
         xmp: None,
-        orientation: m.orientation,
         preview_only: None,
+        orientation: Some(o),
     })
 }
 
