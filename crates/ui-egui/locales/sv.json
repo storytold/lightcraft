@@ -2486,5 +2486,7 @@
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
   "Bottom bar": "Nedre fältet",
-  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "By Keyword": "Efter nyckelord",
+  "Select photos to tick": "Markera foton för att kryssa i"
 }
