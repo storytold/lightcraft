@@ -105,7 +105,12 @@ fn a_failed_write_is_held_reported_and_retried() {
     store.flush().unwrap();
     let fail = Arc::new(AtomicBool::new(true));
     let f = fail.clone();
-    fault::install(&dir, Arc::new(move |_| if f.load(Ordering::SeqCst) { Err(std::io::Error::other("disk full (test)")) } else { Ok(()) }));
+    fault::install(
+        &dir,
+        Arc::new(
+            move |step| if f.load(Ordering::SeqCst) && step == fault::Step::Sync { Err(std::io::Error::other("disk full (test)")) } else { Ok(()) },
+        ),
+    );
     // (one append: the log thread can fail the first before a second arrives, and then refuses it)
     store.append(LOG, b"1\n2\n").unwrap();
     wait_until("the failure is published", || store.unwritten().is_some());
@@ -131,6 +136,35 @@ fn a_failed_write_is_held_reported_and_retried() {
     store.append(LOG, b"3\n").unwrap();
     store.flush().unwrap();
     assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"0\n1\n2\n3\n");
+    fault::remove(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A log longer than the thread wrote is cut back only when a write of its own failed (that
+/// fragment is its own). A failure that never touched the file (here the write step, as a folder
+/// refused while another is put at the path) leaves the log it finds alone: it may be another
+/// folder's, and cutting it would corrupt it.
+#[test]
+fn a_log_longer_than_the_thread_wrote_is_not_cut_unless_its_own_write_failed() {
+    let dir = temp_dir("not-torn");
+    let mut store = FsStore::open(&dir).unwrap();
+    store.append(LOG, b"0\n").unwrap();
+    store.flush().unwrap();
+    let fail = Arc::new(AtomicBool::new(true));
+    let f = fail.clone();
+    fault::install(
+        &dir,
+        Arc::new(
+            move |step| if f.load(Ordering::SeqCst) && step == fault::Step::Write { Err(std::io::Error::other("refused (test)")) } else { Ok(()) },
+        ),
+    );
+    store.append(LOG, b"1\n").unwrap();
+    wait_until("the failure is published", || store.unwritten().is_some());
+    let theirs = b"0\nrecords of another log\n";
+    std::fs::write(dir.join(LOG), theirs).unwrap();
+    fail.store(false, Ordering::SeqCst);
+    wait_until("looked at again", || store.unwritten().is_some_and(|(_, why)| why.contains("another file")));
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), theirs, "left as it was found");
     fault::remove(&dir);
     let _ = std::fs::remove_dir_all(&dir);
 }

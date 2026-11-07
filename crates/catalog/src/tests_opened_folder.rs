@@ -1,0 +1,307 @@
+//! Issue #3240: a library's files are written to the folder it was opened from, not to whatever its
+//! path leads to later (a share mounted over the folder, or the folder moved away and another put
+//! at its path). A folder's identity is its device and inode number, so the tests that move a
+//! folder run on Unix; the rest hold everywhere.
+
+use std::path::{Path, PathBuf};
+
+use crate::journal::{LOG, SNAPSHOT};
+use crate::lock::OWNER;
+use crate::*;
+
+/// The start of the sentence a refused write ends with.
+const REFUSED: &str = "is no longer the folder this library was opened from";
+
+fn scratch(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("lc-opened-folder-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// The files in `dir` with their bytes, by name.
+#[cfg(unix)]
+fn files_in(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            (e.file_name().to_string_lossy().into_owned(), std::fs::read(e.path()).unwrap())
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// Another library's folder where `dir` was, and the folder that was there moved to the path
+/// returned: what a share mounted over `dir` looks like (the path leads somewhere else, and the
+/// folder that was opened is out of reach).
+#[cfg(unix)]
+fn put_another_folder_at(dir: &Path) -> PathBuf {
+    let away = dir.with_extension("away");
+    std::fs::rename(dir, &away).unwrap();
+    std::fs::create_dir(dir).unwrap();
+    std::fs::write(dir.join(SNAPSHOT), b"their snapshot").unwrap();
+    std::fs::write(dir.join(LOG), b"their log\n").unwrap();
+    std::fs::write(dir.join(OWNER), b"their note").unwrap();
+    away
+}
+
+/// Every way a store writes is refused in a folder that replaced the opened one, whether or not
+/// the log's own thread has started, and nothing is written in either folder.
+#[cfg(unix)]
+#[test]
+fn a_store_writes_nothing_into_a_folder_that_replaced_the_one_it_opened() {
+    for log_running in [false, true] {
+        let base = scratch(&format!("store-{log_running}"));
+        let dir = base.join("lib");
+        let mut store = FsStore::open(&dir).unwrap();
+        store.write_atomic(SNAPSHOT, b"ours").unwrap();
+        if log_running {
+            store.append(LOG, b"1\n").unwrap();
+            store.flush().unwrap();
+        }
+        let away = put_another_folder_at(&dir);
+        let (theirs, ours) = (files_in(&dir), files_in(&away));
+
+        let results = [
+            ("write_atomic", store.write_atomic(SNAPSHOT, b"x")),
+            ("write_atomic_with", store.write_atomic_with(SNAPSHOT, &mut |w| w.write_all(b"x")).map(|_| ())),
+            ("write_atomic of the log", store.write_atomic(LOG, b"")),
+            ("write_atomic of a settings file", store.write_atomic("prefs.json", b"{}")),
+            ("truncate", store.truncate(LOG, 0)),
+        ];
+        let appended = store.append(LOG, b"2\n");
+        let flushed = store.flush();
+
+        // what matters most: nothing was written, in either folder
+        assert_eq!(files_in(&dir), theirs, "the folder at the path now is untouched (log thread running: {log_running})");
+        assert_eq!(files_in(&away), ours, "and so is the folder that was opened: saving stops (log thread running: {log_running})");
+
+        // and each write was refused, with the reason
+        for (what, r) in results {
+            let e = r.expect_err(what);
+            assert!(e.to_string().contains(REFUSED), "{what}: {e}");
+        }
+        if log_running {
+            // handed over to the log's thread, which refuses to write it: held, and said so
+            appended.expect("the thread takes it");
+            let e = flushed.expect_err("the thread can't write it");
+            assert!(e.to_string().contains(REFUSED), "{e}");
+            let (held, why) = store.unwritten().expect("held, not dropped");
+            assert!(held == 1 && why.contains(REFUSED), "{held}: {why}");
+        } else {
+            let e = appended.expect_err("the first append");
+            assert!(e.to_string().contains(REFUSED), "{e}");
+        }
+
+        if log_running {
+            // the folder that was opened is back at the path: what was held is written, into it
+            std::fs::rename(&dir, base.join("lib.theirs")).unwrap();
+            std::fs::rename(&away, &dir).unwrap();
+            store.flush().expect("saving resumes");
+            assert_eq!(store.unwritten(), None);
+            assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"1\n2\n");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// A compaction that starts after the folder was replaced writes through a second handle on the
+/// same files: it is bound to the folder the store opened too.
+#[cfg(unix)]
+#[test]
+fn the_snapshot_writer_of_a_store_is_bound_to_the_folder_the_store_opened() {
+    let base = scratch("worker");
+    let dir = base.join("lib");
+    let store = FsStore::open(&dir).unwrap();
+    let _away = put_another_folder_at(&dir);
+    let theirs = files_in(&dir);
+    let mut worker = store.background_writer().expect("a store on disk has one");
+    let e = worker.write_atomic_with(SNAPSHOT, &mut |w| w.write_all(b"ours")).expect_err("refused");
+    assert!(e.to_string().contains(REFUSED), "{e}");
+    assert_eq!(files_in(&dir), theirs);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A journal's save (the closing snapshot) in a folder that replaced the opened one fails with the
+/// reason and writes nothing; with the folder back, the same call saves.
+#[cfg(unix)]
+#[test]
+fn a_journal_cannot_snapshot_into_a_folder_that_replaced_the_one_it_opened() {
+    let base = scratch("journal");
+    let dir = base.join("lib");
+    let (mut journal, catalog, _) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
+    let away = put_another_folder_at(&dir);
+    let theirs = files_in(&dir);
+    let e = journal.snapshot(&catalog).expect_err("the path leads to another library's folder");
+    assert!(e.to_string().contains(REFUSED), "{e}");
+    assert_eq!(files_in(&dir), theirs);
+
+    std::fs::rename(&dir, base.join("lib.theirs")).unwrap();
+    std::fs::rename(&away, &dir).unwrap();
+    journal.snapshot(&catalog).expect("the folder is back");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A file system that numbers its folders anew at every mount (FAT and exFAT on Linux, sshfs) gives
+/// the folder other numbers: it is the opened folder again while it holds the note this session's
+/// lock wrote, for every way a store writes, the log's thread included. (A mount can't be faked in
+/// a test: the numbers the store recorded at open are made different from the folder's.)
+#[cfg(unix)]
+#[test]
+fn a_store_writes_into_a_folder_with_other_numbers_while_the_folder_holds_this_sessions_note() {
+    let dir = scratch("renumbered");
+    let note = b"the note this session's lock wrote";
+    let folder = OpenedFolder::recorded_under_other_numbers(&dir);
+    folder.vouch(note);
+    let mut store = FsStore::in_folder(folder);
+
+    let e = store.write_atomic(SNAPSHOT, b"x").expect_err("other numbers, and no note in the folder");
+    assert!(e.to_string().contains(REFUSED), "{e}");
+    assert!(files_in(&dir).is_empty(), "nothing was written");
+
+    std::fs::write(dir.join(OWNER), note).unwrap();
+    store.write_atomic(SNAPSHOT, b"one").expect("the note vouches for the folder");
+    store.write_atomic_with(SNAPSHOT, &mut |w| w.write_all(b"two")).expect("a snapshot written in pieces too");
+    assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), b"two");
+    store.append(LOG, b"1\n").expect("the first append starts the log's thread");
+    store.flush().unwrap();
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"1\n");
+
+    // another program's note over this session's: what the thread is handed is held, not written
+    std::fs::write(dir.join(OWNER), b"theirs").unwrap();
+    store.append(LOG, b"2\n").expect("the thread takes it");
+    let e = store.flush().expect_err("the thread can't write it");
+    assert!(e.to_string().contains(REFUSED), "{e}");
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"1\n");
+
+    std::fs::write(dir.join(OWNER), note).unwrap();
+    store.flush().expect("this session's note is back: what was held is written");
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"1\n2\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A copy of the library's folder (the note in it too) put at the path counts as the opened folder,
+/// but its log is not the one the log's thread wrote: the thread opens the log by its path for each
+/// batch and appends only while it is the length the thread left. A log that isn't is refused like a
+/// failed write (held, reported): not written on through a file kept open in the folder that was
+/// moved away, where the copy would never get it, and not appended to at its end, where it would
+/// have a gap. The log reset of a snapshot replaces it and takes what was held.
+#[cfg(unix)]
+#[test]
+fn a_log_that_is_not_the_one_the_thread_wrote_is_not_appended_to() {
+    let base = scratch("log-copy");
+    let dir = base.join("lib");
+    let note = b"the note this session's lock wrote";
+    let mut store = FsStore::open(&dir).unwrap();
+    store.folder().vouch(note);
+    std::fs::write(dir.join(OWNER), note).unwrap();
+    store.append(LOG, b"1\n").unwrap();
+    store.flush().unwrap();
+
+    // a copy made now, which the folder that was opened outgrows, put in its place
+    let copy = base.join("copy");
+    std::fs::create_dir(&copy).unwrap();
+    for (name, bytes) in files_in(&dir) {
+        std::fs::write(copy.join(name), bytes).unwrap();
+    }
+    store.append(LOG, b"2\n").unwrap();
+    store.flush().unwrap();
+    let away = base.join("away");
+    std::fs::rename(&dir, &away).unwrap();
+    std::fs::rename(&copy, &dir).unwrap();
+    let (theirs, ours) = (files_in(&dir), files_in(&away));
+
+    store.append(LOG, b"3\n").unwrap();
+    let e = store.flush().expect_err("the log at the path is not the one this session wrote");
+    assert!(e.to_string().contains("holds 2 bytes, the log this session wrote has 4"), "{e}");
+    assert_eq!(files_in(&dir), theirs, "nothing is appended to it");
+    assert_eq!(files_in(&away), ours, "and nothing is written on through a file kept open in the folder that was moved away");
+    assert_eq!(store.unwritten().map(|(n, _)| n), Some(1), "held, not dropped");
+    store.append(LOG, b"4\n").expect("later records are taken: retrying can't heal this, only a replace of the log does");
+    assert_eq!(files_in(&dir), theirs, "and not written either");
+
+    store.write_atomic(LOG, b"tail\n").unwrap();
+    assert_eq!(store.unwritten(), None, "the snapshot's log holds what was held");
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"tail\n");
+    store.append(LOG, b"5\n").unwrap();
+    store.flush().unwrap();
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"tail\n5\n", "and appending goes on");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_folder_is_the_opened_one_while_its_path_leads_to_it() {
+    let dir = scratch("same");
+    let folder = OpenedFolder::at(&dir).unwrap();
+    folder.check().unwrap();
+    std::fs::write(dir.join("catalog.snap"), b"x").unwrap();
+    std::fs::create_dir(dir.join("thumbs")).unwrap();
+    folder.check().expect("what is written in it changes nothing");
+    assert!(folder.same_folder(&folder.clone()));
+    assert_eq!(folder.path(), dir);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_path_that_is_not_a_folder_cannot_be_opened() {
+    let dir = scratch("not-a-folder");
+    let file = dir.join("file");
+    std::fs::write(&file, b"x").unwrap();
+    assert!(OpenedFolder::at(&file).expect_err("a file").to_string().contains("is not a folder"));
+    assert!(OpenedFolder::at(&dir.join("missing")).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A folder that is gone is said to be gone, on every system.
+#[test]
+fn a_folder_that_is_gone_is_reported_as_gone() {
+    let base = scratch("gone");
+    let dir = base.join("lib");
+    std::fs::create_dir(&dir).unwrap();
+    let folder = OpenedFolder::at(&dir).unwrap();
+    std::fs::remove_dir(&dir).unwrap();
+    let e = folder.check().expect_err("nothing is there");
+    let msg = e.to_string();
+    assert!(msg.contains(REFUSED) && msg.contains("nothing is there now") && msg.contains(&dir.display().to_string()), "{msg}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The reason names the path and what to do; a folder moved and replaced is told from a gone one.
+#[cfg(unix)]
+#[test]
+fn a_replaced_folder_is_refused_until_the_opened_one_is_back() {
+    let base = scratch("replaced");
+    let dir = base.join("lib");
+    std::fs::create_dir(&dir).unwrap();
+    let folder = OpenedFolder::at(&dir).unwrap();
+    let away = put_another_folder_at(&dir);
+    let msg = folder.check().expect_err("another folder is at the path").to_string();
+    assert!(msg.contains(REFUSED) && msg.contains("moved or replaced") && msg.contains(&dir.display().to_string()), "{msg}");
+    assert!(msg.contains("put the original folder back"), "{msg}");
+    assert!(!folder.same_folder(&OpenedFolder::at(&dir).unwrap()), "the other folder is another folder");
+
+    std::fs::rename(&dir, base.join("lib.theirs")).unwrap();
+    std::fs::rename(&away, &dir).unwrap();
+    folder.check().expect("the opened folder is back");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A library reached through a link is the folder the link leads to: a link that stays is no
+/// reason to refuse, and one pointed at another folder is.
+#[cfg(unix)]
+#[test]
+fn a_link_to_the_folder_is_followed() {
+    let base = scratch("link");
+    let (one, two, link) = (base.join("one"), base.join("two"), base.join("link"));
+    std::fs::create_dir(&one).unwrap();
+    std::fs::create_dir(&two).unwrap();
+    std::os::unix::fs::symlink(&one, &link).unwrap();
+    let folder = OpenedFolder::at(&link).unwrap();
+    folder.check().expect("the link still leads to it");
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&two, &link).unwrap();
+    assert!(folder.check().is_err(), "the link leads to another folder now");
+    let _ = std::fs::remove_dir_all(&base);
+}
