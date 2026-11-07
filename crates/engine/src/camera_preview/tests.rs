@@ -361,6 +361,25 @@ fn dark_pairs_are_related_only_from_32_pairs() {
 }
 
 #[test]
+fn dark_pairs_are_related_only_from_a_rank_correlation_of_a_half() {
+    // Reversing the first `k` of 1000 ranks gives a correlation of 1 - 2k(k² - 1) / (1000(1000² - 1)).
+    let first_reversed = |k: usize| -> Pairs {
+        (0..1000)
+            .map(|i| {
+                let shown = if i < k { k - 1 - i } else { i };
+                ([i as f64; 3], [shown as f64; 3])
+            })
+            .collect()
+    };
+    let (above, below) = (first_reversed(629), first_reversed(630));
+    let (r_above, r_below) = (rank_correlation_ties(&above), rank_correlation_ties(&below));
+    assert!((0.5..0.503).contains(&r_above), "{r_above}");
+    assert!((0.499..0.5).contains(&r_below), "{r_below}");
+    assert!(dark_pairs_related(&above));
+    assert!(!dark_pairs_related(&below));
+}
+
+#[test]
 fn camera_jpeg_matches_the_sensor_proxy_size_exactly() {
     // An ILCE-7RM4 ARW (9504×6336 crop) embeds a 1616×1080 preview; for the camera-profile proxy
     // it is decoded at 384×257 (`proxies`: twice the proxy edge) next to a 192×128 sensor proxy.
