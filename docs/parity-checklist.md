@@ -31,7 +31,7 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 41 | 5 | 3 | 1 | 25/28 (89%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 42 | 5 | 3 | 1 | 25/28 (89%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -51,11 +51,11 @@ cited here still exists. Formerly docs/parity.md.
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
-| Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
+| Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 417 | 70 | 57 | 35 | 192/203 (95%) | 146/162 (90%) |
+| **Total** | 419 | 70 | 57 | 35 | 193/203 (95%) | 147/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.1%** of 544 in-scope rows — P0 97.3% of 203 · P1 94.1% of 162 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 56.7% of 179.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -185,9 +185,9 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-LIGHT-SHADOWS | Shadows | P0 | ✅ | `ctl:light.shadows` | From process V2, the same base as Highlights: dark areas keep their local contrast when lifted (#632). Alt/Option-drag shows shadow clipping (white, clipped channels in colour) |
 | LR-EDIT-LIGHT-WHITES | Whites | P0 | 🟡 | `ctl:light.whites`, `crates/pipeline/src/visualize.rs` | V4 preserves V2 Whites for both signs. Calibration is a planned follow-up; measured V2 check response error is 0.075 stops on the Sony test photos (`docs/light-v3.md`). Alt/Option-drag shows highlight clipping (black, clipped channels in colour) |
 | LR-EDIT-LIGHT-BLACKS | Blacks | P0 | 🟡 | `ctl:light.blacks`, `crates/pipeline/src/visualize.rs` | From process V4, global Blacks on the camera-look path uses a fitted per-channel/luminance mix. Check response error 0.424 to 0.077 stops on six held-out Sony photos; deepest tones still differ. Other sources and local adjustments retain V2 (`docs/light-v3.md`). Alt/Option-drag shows shadow clipping (white, clipped channels in colour) |
-| LR-EDIT-LIGHT-CURVE-PARAM | Parametric curve | P0 | ✅ | `ctl:curve.highlights`, `ctl:curve.lights`, `ctl:curve.darks`, `ctl:curve.shadows`, `ctl:curve.split*`, `crates/pipeline/src/curve.rs` | the graph draws the renderer's own curve model; dragging the line moves the region under the pointer (one undo step) |
-| LR-EDIT-LIGHT-CURVE-POINT | Point curve | P0 | ✅ | `cmd:develop.curve`, `cmd:curve.reset`, `cmd:curve.presets`, `cmd:curve.applyPreset`, `cmd:curve.savePreset`, `cmd:curve.deletePreset`, `cmd:curve.importPresets`, `cmd:curve.exportPresets`, `cmd:file.importCurvePresets`, `cmd:file.exportCurvePresets`, `crates/engine/src/cmd/curves.rs`, `crates/ui-egui/src/panels/edit.rs` | click to add a point; drag a point in both axes (between its neighbours, input / output readout, one undo step per drag; ⌥-drag moves it a tenth as far for fine adjustment, issue #1363); drag empty space to add and drag; double-click removes; reset: double-click a channel selector (that channel), the Reset button under the graph (every curve incl. parametric) or right-click the graph (channel / all); Point Curve preset dropdown: own Linear / Medium Contrast / Strong Contrast, user presets (save the current point curves, delete by right-click; saved with the library), import / export as `.lccurve` JSON |
-| LR-EDIT-LIGHT-CURVE-RGB | Per-channel curves | P0 | ✅ | `cmd:develop.curve` (`channel`) | |
+| LR-EDIT-LIGHT-CURVE-PARAM | Parametric curve | P0 | ✅ | `ctl:curve.highlights`, `ctl:curve.lights`, `ctl:curve.darks`, `ctl:curve.shadows`, `ctl:curve.split*`, `crates/pipeline/src/curve.rs` | the graph draws the renderer's own curve model; dragging the line moves the region under the pointer (one undo step); sampled selected-curve input backdrop (#987); [stage and sampling limits](tone-curve-input.md) |
+| LR-EDIT-LIGHT-CURVE-POINT | Point curve | P0 | ✅ | `cmd:develop.curve`, `cmd:curve.reset`, `cmd:curve.presets`, `cmd:curve.applyPreset`, `cmd:curve.savePreset`, `cmd:curve.deletePreset`, `cmd:curve.importPresets`, `cmd:curve.exportPresets`, `cmd:file.importCurvePresets`, `cmd:file.exportCurvePresets`, `crates/engine/src/cmd/curves.rs`, `crates/ui-egui/src/panels/edit.rs` | click to add a point; drag a point in both axes (between its neighbours, input / output readout, one undo step per drag; ⌥-drag moves it a tenth as far for fine adjustment, issue #1363); drag empty space to add and drag; double-click removes; reset: double-click a channel selector (that channel), the Reset button under the graph (every curve incl. parametric) or right-click the graph (channel / all); Point Curve preset dropdown: own Linear / Medium Contrast / Strong Contrast, user presets (save the current point curves, delete by right-click; saved with the library), import / export as `.lccurve` JSON; sampled input after Parametric, independent of this curve (#987); [stage and sampling limits](tone-curve-input.md) |
+| LR-EDIT-LIGHT-CURVE-RGB | Per-channel curves | P0 | ✅ | `cmd:develop.curve` (`channel`) | sampled selected-curve input backdrop (#987); [stage and sampling limits](tone-curve-input.md) |
 | LR-EDIT-LIGHT-CURVE-REFINESAT | Curve saturation compensation | P1 | ✅ | `ctl:curve.refineSaturation` | |
 | LR-EDIT-LIGHT-CURVE-TAT | Drag-on-image curve adjust | P1 | ✅ | `cmd:develop.targeted` (`target: curve`) | |
 | LR-EDIT-COLOR-WB-PRESET | White-balance presets | P0 | ✅ | `cmd:develop.wb` | |
@@ -855,6 +855,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-22 | patch | LR-EXP-PSD, LR-META-EXIF-FULL: PSD/PSB imports and image resources 1058/1060 now supply EXIF and XMP to metadata readers and All Metadata; Original with Remove Location Info refuses detected PSD/PSB GPS; statuses and feature counts unchanged |
 | 2026-10-21 | patch | LR-LIB-CAPTURETIME: a capture time that doesn't fully read is left as it is and counted (`unreadable`) instead of shifted into a wrong one; it can't anchor a set that moves other photos; status unchanged |
 | 2026-10-22 | patch | LR-MAP-TRACKLOG: character references in GPX coordinate attributes and point text decode correctly; malformed / unknown references fail cleanly; CDATA stays literal; command dry-run, tagging and undo covered |
+| 2026-10-22 | minor | Curve backdrop samples the selected curve input (#987); row statuses unchanged. See [the stage contract](tone-curve-input.md). |
 | 2026-10-21 | patch | LR-IMP-ADD-DIALOG: reconcile #2362 with current main; deleted-album guard and hierarchical picker retained; counts unchanged |
 | 2026-10-21 | patch | KEY-SLIDER-NUDGE: vertical wheel nudges need a click or drag in the slider's row; leaving it (even between two frames) or Tab focus alone does not arm them (issue #1355); status unchanged |
 | 2026-10-21 | minor | KEYC-PANELS: F8 shows / hides the right panel (`view.rightPanel`), with F6 / F7 already bound; ⬜ → 🟡 |

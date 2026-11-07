@@ -73,6 +73,10 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
   element text before parsing. Malformed or undeclared references return an error; CDATA stays
   literal. Track positions and timestamps no longer silently change or lose points.
 
+- 2026-10-22: Tone Curve backdrop samples the selected curve input (#987). RGB follows Parametric
+  and Point; Point follows Parametric. The output Histogram panel stays separate. The sample uses
+  a bounded thumbnail rendition, including SDR preview adjustments for HDR edits. This was not a
+  separate ranked gap; readiness estimates stay unchanged. See [the contract](tone-curve-input.md).
 - 2026-10-20: the import review album picker follows the sidebar folder hierarchy and searches album paths (#2362, LR-IMP-ADD-DIALOG), retaining None/New album and existing destination IDs. This closes a usability subgap; no ranked gap or headline feature count closes.
 
 - 2026-10-12: original-pixel detail at 100% (gap 4, LR-VIEW-ZOOM, #323): soft proofing gets zoom windows like
@@ -127,6 +131,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-22 | patch | Issue #2519: PSD/PSB EXIF resource 1058 and XMP resource 1060 now use the common metadata extractor, and `.psb` files are accepted by import; no ranked gap or readiness count changes |
 | 2026-10-22 | minor | Gap 30 added: multi-select metadata editing — Info panel and All Metadata dialog show one photo's values with no mixed-value indication |
 | 2026-10-22 | patch | LR-MAP-TRACKLOG: GPX coordinate attributes and point text decode XML references; malformed / unknown references return errors; CDATA remains literal; ranked gaps unchanged |
+| 2026-10-22 | minor | Tone Curve input histogram (#987); no ranked gap or readiness estimate changes. See [the stage contract](tone-curve-input.md). |
 | 2026-10-21 | minor | Gap 28 shrinks: F8 shows / hides the right panel (`view.rightPanel`); rating `[` `]`, flag cycling and F1 help were already bound, so the entry lists only filter-bar keys, Tab / ⇧Tab and F5; 2–4 h (was 4–8) |
 | 2026-10-20 | minor | Gap 22 shrinks (11–22 → 9–18 h): on Windows, previews follow the profile Windows Color System assigns to the window's monitor (sRGB while Windows colour-manages the desktop: HDR, Auto Color Management) |
 | 2026-10-20 | minor | #2362: import destination albums use the shared hierarchy/search picker instead of a flat name list; existing import workflows retained; ranked gaps/readiness counts unchanged |
