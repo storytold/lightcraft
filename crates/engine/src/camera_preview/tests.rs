@@ -432,6 +432,17 @@ fn chroma_curve_follows_highlight_bleaching() {
     assert!(b < 0.5 * a, "highlight error {a:.4} -> {b:.4}");
 }
 
+/// A synthetic camera JPEG pixel `d` of display luminance `o` brought within `white` as the finish
+/// stage does (toward `o`, keeping luminance and hue), so a fit can match it exactly.
+fn within_white(d: [f32; 3], o: f32, white: f32) -> [f32; 3] {
+    let mx = d[0].max(d[1]).max(d[2]);
+    if mx <= white {
+        return d;
+    }
+    let t = ((mx - white) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+    d.map(|v| v + (o - v) * t)
+}
+
 /// Issue #2022: a camera that bleaches bright near-neutrals toward white but keeps bright saturated
 /// yellows. One chroma curve for every colour, fitted mostly on the many near-neutrals, bleached the
 /// yellows as much; the chroma table keys on colourfulness too, so the yellows keep the camera's
@@ -454,7 +465,7 @@ fn chroma_table_keeps_saturated_yellows_and_bleaches_near_neutrals() {
         let y = luminance_2020(p);
         let o = 1.0 - (-2.5 * y).exp();
         let k = if yellow { 1.0 } else { near_neutral_chroma(o) };
-        *dst = p.map(|v| (o + (v * o / y - o) * k).clamp(0.0, 0.999));
+        *dst = within_white(p.map(|v| o + (v * o / y - o) * k), o, 0.999).map(|v| v.max(0.0));
     }
     let fit = fit_pairs(&sensor, &reference).unwrap();
     assert!(fit.tone.chroma_sat().is_some(), "a chroma table: {:?}", fit.tone);
@@ -475,8 +486,11 @@ fn chroma_table_keeps_saturated_yellows_and_bleaches_near_neutrals() {
         got / want
     };
     let (yellow_single, yellow_table) = (ratio(&single, true), ratio(&table, true));
-    assert!(yellow_single < 0.9, "one curve bleaches the bright yellows: {yellow_single:.3}");
+    // rendered within SDR white (the camera's brightest yellows lose some colour to it too, so one
+    // curve falls about 10% short here, not more)
+    assert!(yellow_single < 0.93, "one curve bleaches the bright yellows: {yellow_single:.3}");
     assert!((0.95..1.05).contains(&yellow_table), "the table keeps them: {yellow_single:.3} -> {yellow_table:.3}");
+    assert!(yellow_table - yellow_single > 0.05, "the table is clearly closer: {yellow_single:.3} -> {yellow_table:.3}");
     let neutral = ratio(&table, false);
     assert!((0.93..1.07).contains(&neutral), "bright near-neutrals bleach like the camera's: {neutral:.3}");
     // greys get no colour from any chroma scale, and render as without the table
@@ -485,6 +499,53 @@ fn chroma_table_keeps_saturated_yellows_and_bleaches_near_neutrals() {
         assert_eq!(displayed(grey, &table), displayed(grey, &single), "grey {v}");
         let p = displayed(grey, &table);
         assert!(p.iter().all(|c| (c - p[1]).abs() < 1e-12), "grey {v} stays grey: {p:?}");
+    }
+}
+
+/// Review of #3570: the fits score [`displayed`], so it applies the finish stage's SDR peak clamp.
+/// A chroma table that lifts bright saturated colours pushes a channel past white; the render
+/// pulls that colour toward its luminance until it fits, and `displayed` does the same, so a
+/// table's held-out score is that of the rendered pixels. Colours that stay in range are unchanged.
+#[test]
+fn displayed_applies_the_finish_peak_clamp() {
+    let tone = CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.5 * x).exp()]
+    }))
+    .unwrap();
+    let lift = [1.0, 1.0, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0];
+    let tone = tone.with_chroma_sat(std::array::from_fn(|s| if s < 2 { [1.0; 8] } else { lift })).unwrap();
+    let map = ToneMap::camera(&tone, 0.0, 0.0, 0.0);
+    assert!(map.chroma_by_sat());
+    // the pipeline's finish stage in f32 (`lightcraft_pipeline::finish`), without its peak clamp
+    let unclamped = |x: [f64; 3]| -> ([f64; 3], f64) {
+        let c = x.map(|v| v as f32);
+        let y = luminance_2020(c);
+        let o = map.apply(y);
+        let k = map.chroma_scale(o, lightcraft_pipeline::tone::chroma_key(c, y));
+        (c.map(|v| f64::from(o + (v * o / y - o) * k)), f64::from(o))
+    };
+    // a bright saturated red: the table lifts it past SDR white
+    let red = [2.4, 0.55, 0.25];
+    let (raw, o) = unclamped(red);
+    assert!(raw.iter().any(|c| *c > 1.05), "the fixture must push a channel past white: {raw:?}");
+    let p = displayed(red, &map);
+    assert!(p.iter().all(|c| *c <= 1.0 + 1e-9), "clamped to SDR white: {p:?} (unclamped {raw:?})");
+    assert!((luma(p) - o).abs() < 1e-5, "luminance kept: {} vs {o}", luma(p));
+    let hue = |d: [f64; 3]| (d[1] - o) / (d[0] - o);
+    assert!((hue(p) - hue(raw)).abs() < 1e-4, "hue kept: {p:?} vs {raw:?}");
+    assert!(p[0] > p[1] && p[0] > p[2] && p[0] > o, "still a red, only less colourful: {p:?}");
+    // the finish stage's clamp on its own f32 values gives the same pixel
+    let mx = raw[0].max(raw[1]).max(raw[2]);
+    let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+    let rendered = raw.map(|v| v + (o - v) * t);
+    assert!(p.iter().zip(&rendered).all(|(a, b)| (a - b).abs() < 1e-5), "as rendered: {p:?} vs {rendered:?}");
+    // in range: no change
+    for x in [[0.1, 0.08, 0.05], [0.3, 0.3, 0.3], [0.3, 0.15, 0.08]] {
+        let (raw, _) = unclamped(x);
+        assert!(raw.iter().all(|c| *c < 1.0), "fixture {x:?} in range: {raw:?}");
+        let p = displayed(x, &map);
+        assert!(p.iter().zip(&raw).all(|(a, b)| (a - b).abs() < 1e-5), "{x:?}: {p:?} vs {raw:?}");
     }
 }
 
@@ -547,8 +608,9 @@ fn profile_colour_is_pooled_and_then_used_as_given() {
             *src = [ev * (0.7 + (i % 11) as f32 * 0.05), ev, ev * (0.7 + (i % 13) as f32 * 0.05)];
             let p = known.apply_f32(*src);
             let y = luminance_2020(p);
-            // each photo has its own tone (DRO, picture style)
-            *dst = p.map(|v| v * (1.0 - (-strength * y).exp()) / y);
+            // each photo has its own tone (DRO, picture style), within SDR white as in a JPEG
+            let o = 1.0 - (-strength * y).exp();
+            *dst = within_white(p.map(|v| v * o / y), o, 1.0);
         }
         (sensor, reference)
     };

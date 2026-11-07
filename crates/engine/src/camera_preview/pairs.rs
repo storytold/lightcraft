@@ -26,7 +26,9 @@ pub(super) fn chroma_key(p: [f64; 3], y: f64) -> f64 {
     p.iter().map(|v| (v / y - 1.0).powi(2)).sum::<f64>().sqrt()
 }
 
-/// The finish stage's tone map and chroma curve (`lightcraft_pipeline::finish`).
+/// The finish stage's tone map, chroma curve and SDR peak clamp (`lightcraft_pipeline::finish`):
+/// a channel the chroma scale pushes past SDR white pulls the colour toward its display luminance
+/// until it fits, as the render does, so the fits score what renders.
 pub(super) fn displayed(scene: [f64; 3], tone: &ToneMap) -> [f64; 3] {
     let scene = scene.map(|v| v.max(0.0));
     let y = luma(scene);
@@ -36,7 +38,22 @@ pub(super) fn displayed(scene: [f64; 3], tone: &ToneMap) -> [f64; 3] {
     let o = f64::from(tone.apply(y as f32));
     let key = if tone.chroma_by_sat() { chroma_key(scene, y) as f32 } else { 0.0 };
     let k = f64::from(tone.chroma_scale(o as f32, key));
-    scene.map(|v| o + (v * o / y - o) * k)
+    let d = scene.map(|v| o + (v * o / y - o) * k);
+    peak_clamp(d, o, SDR_PEAK)
+}
+
+/// SDR white in display-linear light, the peak of the tone maps the fits use (`ToneMap::camera`).
+const SDR_PEAK: f64 = 1.0;
+
+/// The finish stage's peak clamp: when a channel of `d` is above `peak`, move `d` toward its
+/// display luminance `o` just far enough that it is not (luminance and hue stay).
+fn peak_clamp(d: [f64; 3], o: f64, peak: f64) -> [f64; 3] {
+    let mx = d[0].max(d[1]).max(d[2]);
+    if mx <= peak {
+        return d;
+    }
+    let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+    d.map(|v| v + (o - v) * t)
 }
 
 #[cfg(test)]
