@@ -69,6 +69,9 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             &mut app.ui.settings.startup_view,
         );
     });
+    // the web build has no update check (updates_ui), so no row there either
+    #[cfg(not(target_arch = "wasm32"))]
+    check(ui, "settings.updateCheckAtStart", &mut app.ui.settings.check_for_updates_at_start, "Check for updates at start");
     heading(ui, t, crate::i18n::tr("Culling"));
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");

@@ -259,6 +259,12 @@
   drag to change it" is its description. It was named "Exposure: Click to type a value, drag to change it", so
   VoiceOver read the whole sentence each time it reached the field, once for every slider in the Edit panel.
 
+### The update check at start can be turned off
+- Settings ▸ General ▸ Startup has a new "Check for updates at start" switch, on until you turn it off, for the people
+  who don't use the command line. Starting LightCraft with `--no-update-check` skips the look for a newer release for
+  that run whatever the setting says, so a throwaway copy (a test or scripted run) makes no request to GitHub and never
+  opens the update prompt. Help ▸ Check for Updates… still checks when you ask.
+
 ## 2026-10-29
 
 ### A dialog no longer dims the macOS title bar
