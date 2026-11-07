@@ -10,6 +10,10 @@ use crate::ctx::{FailKind, fail};
 /// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
 pub const CURVE_N: u32 = 1024;
 
+/// Set on every word of a float render's output: the values are at least 0, so the sign bit is
+/// free, and it tells a written 0 from a word the kernel never reached.
+pub const DEEP_WRITTEN: u32 = 1 << 31;
+
 /// Field name and number of 32-bit words.
 const FIELDS: &[(&str, usize)] = &[
     ("W", 1),
@@ -103,6 +107,11 @@ const FIELDS: &[(&str, usize)] = &[
     ("LIGHT_MODE", 2),
     ("LIGHT_W", 2),
     ("LIGHT_OFF", 1),
+    // the render's peak over SDR white (`FinishParams::peak`; above 1: an HDR render)
+    ("PEAK", 1),
+    // a float render (`finish_deep`): the exact sRGB curve, and three words per pixel in `out`, each
+    // a linear value with `DEEP_WRITTEN` set
+    ("DEEP", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -171,9 +180,11 @@ pub struct Present {
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
 /// mask terms | light operator tables) for `fp` with `masks` (their local adjustments' terms).
 ///
+/// `deep`: the kernel writes float samples, as the pipeline's `finish_deep` does.
+///
 /// A curve whose length is not [`CURVE_N`] fails the render ([`FailKind::Fatal`]) and returns an
 /// empty parameter block with a truncated aux table, which the caller discards (CPU fallback).
-pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
+pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present, deep: bool) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
     let srgb_off = aux.len();
@@ -221,6 +232,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         }
     }
     p.fs("LIGHT_W", &light.iter().map(|op| op.weight).collect::<Vec<f32>>());
+    p.f("PEAK", fp.peak);
+    p.b("DEEP", deep);
     p.u("W", fp.w as u32);
     p.u("H", fp.h as u32);
     p.u("NMASK", masks.len() as u32);
