@@ -55,9 +55,9 @@
   Photos added or removed (an import, an undone import) go into or out of that order, even after more changes than
   LightCraft remembers one by one, instead of sorting the whole library again.
   Once the import-date order is kept, Recently Added is read from its end, so showing it, and following an import that
-  is going on while it is shown, no longer passes over every photo of the library (the first time it is shown without
-  that order, it still does, once). Photos an import adds are merged into each kept order in one step instead of
-  making the order again.
+  is going on while it is shown, no longer passes over every photo of the library (until that order is made it still
+  does; the first time Recently Added is shown it is made, in the background in a library of 50,000 photos or more).
+  Photos an import adds are merged into each kept order in one step instead of making the order again.
 
 ## 2026-11-02
 

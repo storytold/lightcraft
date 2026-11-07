@@ -10,7 +10,7 @@
 //! whether the photo is in the catalog), so a rating edit moves a photo only in the rating order. Up to
 //! `IN_PLACE` such photos are moved in the list itself (a search for each, a shift of the part between); more,
 //! or a photo that came or went, are taken out and put back in one pass over the list (photos that only came, all
-//! after the others in id, are merged in without a pass over the old list). When that is not known
+//! after the others in id, are merged in: a search for each and one shift of the list). When that is not known
 //! (too long ago, the catalog was loaded) the photos that came or went are found by comparing ids and the list is
 //! sorted again from where it was ([`Catalog::remade`]: nearly in order, so about one pass), or dropped when the
 //! query is of a small part of the library. A catalog copy starts without them, like the other [`crate::index`]
