@@ -150,6 +150,32 @@ fn run(files: &[FileSpec<'_>], mirrors: &[String], dir: &Path, cancel: &AtomicBo
 }
 
 #[test]
+fn early_hints_are_followed_by_the_final_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/early", listener.local_addr().unwrap());
+    let body = payload();
+    let served = body.clone();
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        while request.read_line(&mut line).unwrap_or(0) > 0 && !line.trim().is_empty() {
+            line.clear();
+        }
+        stream.write_all(b"HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n").unwrap();
+        stream.flush().unwrap();
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", served.len()).as_bytes()).unwrap();
+        stream.write_all(&served).unwrap();
+    });
+    let dir = tmp("early-hints");
+    let (result, _) = run(&[pinned()], &[url], &dir, &AtomicBool::new(false));
+    worker.join().unwrap();
+    result.unwrap();
+    assert_eq!(std::fs::read(dir.join("model.bin")).unwrap(), body);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn falls_back_to_the_next_mirror_and_verifies() {
     let srv = server();
     let dir = tmp("fallback");

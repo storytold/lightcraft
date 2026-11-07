@@ -569,28 +569,34 @@ pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Res
     let mut stream = Stream::connect(url, limits)?;
     stream.write_all(req.as_bytes(), limits)?;
     let mut conn = Conn { stream, buf: Vec::new(), pos: 0 };
-    let status_line = conn.line(MAX_HEAD, limits)?;
-    let mut parts = status_line.split_whitespace();
-    let version = parts.next().unwrap_or_default();
-    if !version.starts_with("HTTP/1.") {
-        return Err(HttpError::Protocol(format!("not an HTTP/1.x response: {}", status_line.chars().take(60).collect::<String>())));
-    }
-    let status = parts.next().and_then(|s| s.parse::<u16>().ok()).ok_or_else(|| HttpError::Protocol("bad status line".into()))?;
-    let mut headers = Vec::new();
-    let mut total = status_line.len();
-    loop {
-        let line = conn.line(MAX_HEAD, limits)?;
-        if line.is_empty() {
-            break;
+    let (status, headers) = loop {
+        let status_line = conn.line(MAX_HEAD, limits)?;
+        let mut parts = status_line.split_whitespace();
+        let version = parts.next().unwrap_or_default();
+        if !version.starts_with("HTTP/1.") {
+            return Err(HttpError::Protocol(format!("not an HTTP/1.x response: {}", status_line.chars().take(60).collect::<String>())));
         }
-        total = total.saturating_add(line.len());
-        if total > MAX_HEAD || headers.len() > 200 {
-            return Err(HttpError::Protocol("response headers too large".into()));
+        let status = parts.next().and_then(|s| s.parse::<u16>().ok()).ok_or_else(|| HttpError::Protocol("bad status line".into()))?;
+        let mut headers = Vec::new();
+        let mut total = status_line.len();
+        loop {
+            let line = conn.line(MAX_HEAD, limits)?;
+            if line.is_empty() {
+                break;
+            }
+            total = total.saturating_add(line.len());
+            if total > MAX_HEAD || headers.len() > 200 {
+                return Err(HttpError::Protocol("response headers too large".into()));
+            }
+            if let Some((k, v)) = line.split_once(':') {
+                headers.push((k.trim().to_string(), v.trim().to_string()));
+            }
         }
-        if let Some((k, v)) = line.split_once(':') {
-            headers.push((k.trim().to_string(), v.trim().to_string()));
+        if (100..200).contains(&status) && status != 101 {
+            continue;
         }
-    }
+        break (status, headers);
+    };
     let find = |name: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str());
     let body = if status == 204 || status == 304 || (100..200).contains(&status) {
         BodyMode::Done
