@@ -43,13 +43,13 @@ In the Masking panel (M):
   so small objects get 5–10× finer edges than one pass over the whole photo gives.
 
 The first Object or Describe on a photo analyzes it (the image encoder runs once per photo and
-look: ~3 s on an Apple M4 Pro, plus a one-time ~6 s for compiling GPU kernels and loading the
-model after launch). That starts in the background as soon as you pick Object; after it, each
-click takes ~35 ms and each description ~0.6 s. Everything the model does runs on its own worker
-thread: the window stays responsive, a click shows its dot at once and the selection follows
-when it's computed ("Selecting…" / "Analyzing the photo…" under the mask tiles). The model is
-unloaded after 10 minutes without use (it takes several GB of memory) and loaded again when
-needed.
+look: ~3 s on an Apple M4 Pro, ~11 s on the CPU of a 12-core Ryzen 9 3900X, plus a one-time ~6 s
+for compiling GPU kernels and loading the model after launch). That starts in the background as
+soon as you pick Object; after it, each click takes ~35 ms and each description ~0.6 s (~0.15 s
+and ~2 s on that CPU). Everything the model does runs on its own worker thread: the window stays
+responsive, a click shows its dot at once and the selection follows when it's computed
+("Selecting…" / "Analyzing the photo…" under the mask tiles). The model is unloaded after 10
+minutes without use (it takes several GB of memory) and loaded again when needed.
 
 The result is stored with the mask: the model's 288 × 288 mask logits over the uncropped photo
 (quantized, compressed, ~10–30 KB). Renders and exports sample them at any resolution and never
@@ -253,6 +253,18 @@ wait and return the result (when built with the `sam` feature; the default CLI h
 - Accuracy: `crates/segment/tests/it/reference.rs` compares every stage against the Python
   reference (`tools/sam3_reference.py`); on Metal the backbone matches to 7e-5 relative error
   and masks to ~5e-5. f16 was tried and rejected (overflow, ~7 % faster).
+- Speed on the CPU: candle runs elementwise operations and layout copies on one thread, batched
+  matrix products one pair after another and transposed convolutions one output channel at a
+  time. `cpu.rs` fuses the bias adds, activations, rotary encoding, window partitioning, head
+  split/merge, the detector's box bias and the pixel decoder's GroupNorm into parallel kernels
+  (the same operations in the same order: bit-identical), runs attention as one task per batch,
+  head and block of query rows (256 KB of scores, so they stay in the core's cache), and the
+  necks' 2 × 2 transposed convolutions as one matrix product each. Those two change how gemm
+  blocks its sums, so results move by float rounding only, as they do between two CPUs (gemm
+  picks its blocking from the cache sizes): against the tensor operations the backbone differs
+  by 1e-5 relative and the masks by at most 7e-4, and fewer than 4e-7 of the mask pixels change
+  side. On a 12-core Ryzen 9 3900X: encode ~37 → ~11 s, a description ~6 → ~2 s, getting ready
+  for clicks ~2.3 → ~0.8 s.
 - The engine feature `sam` (on in the desktop app, off for web and CLI) gates the model; without
   it the commands report that the build has no AI masks.
 
