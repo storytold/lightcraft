@@ -277,6 +277,10 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
     })
 }
 
+/// How many times `max_pixels` the coded pictures of one item may hold together: a grid's tiles
+/// cover its canvas rounded up to whole tiles, so legitimate grids sit near 1.
+const GRID_BUDGET: u64 = 2;
+
 /// The decoded pictures of an item: one, or a grid's tiles in `dimg` order.
 struct Coded<'a> {
     frames: Vec<Frame>,
@@ -297,6 +301,24 @@ impl<'a> Coded<'a> {
         let first = *ids.first().ok_or_else(|| Error::Malformed("grid lists no tiles".into()))?;
         let first_props = if first == id { p.clone() } else { ctx.props(first).map_err(err)? };
         let chroma_format = first_props.hvcc.as_ref().map_or(1, |c| c.chroma_format);
+        // #1518: the decoder allocates each picture at its SPS's uncropped size, which a
+        // conformance window (or a slice picking another SPS) can make far larger than the
+        // declared one, and a grid holds all its tiles at once. Both are refused before decoding.
+        let mut total = 0u64;
+        for t in &ids {
+            let tp = ctx.props(*t).map_err(err)?;
+            let hvcc = tp.hvcc.as_ref().ok_or(heic_rs::Error::MissingBox("hvcC")).map_err(err)?;
+            let sizes = vui::coded_sizes(&hvcc.parameter_sets()).ok_or_else(|| Error::Malformed("unreadable sequence parameter set".into()))?;
+            let mut largest = 0u64;
+            for (w, h) in sizes {
+                heic_rs::image::check_pixels(w, h, limit).map_err(err)?;
+                largest = largest.max(u64::from(w) * u64::from(h));
+            }
+            total = total.saturating_add(largest);
+        }
+        if total > limit.saturating_mul(GRID_BUDGET) {
+            return Err(Error::Limit(format!("the coded pictures hold {total} pixels, over the {limit}-pixel limit")));
+        }
         let decode_one = |t: &u32| -> Result<Frame, Error> {
             let tp = ctx.props(*t).map_err(err)?;
             let hvcc = tp.hvcc.as_ref().ok_or(heic_rs::Error::MissingBox("hvcC")).map_err(err)?;

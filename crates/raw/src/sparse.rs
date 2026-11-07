@@ -29,6 +29,13 @@ use crate::RawFormat;
 const HEAD: u64 = 64 * 1024;
 /// An image whose chunks hold fewer bytes than this is read (thumbnails, small previews).
 const BULK: u64 = 256 * 1024;
+/// At most this many bytes between two of an image's chunks are alignment padding.
+const PAD: u64 = 16;
+/// [`reads`]' defaults for a drive where each read costs a round trip: on the raw.pixls.us corpus
+/// they take a RAF from 7 reads in 5 rounds to 4 in 2, and a CR3 from 4.1 to 3.5 reads, for
+/// 0.2–0.3 % more of the file.
+pub const READ_MIN: u64 = 64 * 1024;
+pub const READ_GAP: u64 = 16 * 1024;
 /// The same bounds as `lightcraft_tiff`'s reader.
 const MAX_IFDS: usize = 1024;
 const MAX_ENTRIES: u64 = 8192;
@@ -72,6 +79,13 @@ impl Ranges {
             }
         }
         Self(out)
+    }
+
+    /// Add every `[start, end)` of `spans` in one sort and merge (empty ones add nothing).
+    pub fn extend(&mut self, spans: impl IntoIterator<Item = (u64, u64)>) {
+        let mut all = std::mem::take(&mut self.0);
+        all.extend(spans);
+        *self = Self::from_spans(all);
     }
 
     /// Whether all of `[start, end)` is covered (an empty range always is).
@@ -129,6 +143,31 @@ impl Ranges {
         }
         out
     }
+
+    /// These ranges with the gaps of at most `gap` bytes between them filled in.
+    pub fn bridged(&self, gap: u64) -> Ranges {
+        let mut out: Vec<(u64, u64)> = Vec::with_capacity(self.0.len());
+        for &(a, b) in &self.0 {
+            match out.last_mut() {
+                Some(last) if a.saturating_sub(last.1) <= gap => last.1 = b,
+                _ => out.push((a, b)),
+            }
+        }
+        Ranges(out)
+    }
+}
+
+/// The reads that load what a plan says it `need`s on a file of `len` bytes with `loaded` read,
+/// for a drive where every read costs a round trip (a network share, a hard disk): each range is
+/// read at least `min` bytes long, since the plan's next round usually asks for what follows a
+/// header; ranges at most `gap` apart are read as one; and the bytes already loaded are left out
+/// (unless they sit in such a gap). Everything in `need` is covered.
+pub fn reads(need: &Ranges, loaded: &Ranges, len: u64, min: u64, gap: u64) -> Ranges {
+    let mut wide = Ranges::new();
+    for &(a, b) in need.spans() {
+        wide.insert(a, b.max(a.saturating_add(min).min(len)));
+    }
+    wide.minus(loaded).bridged(gap)
 }
 
 /// What [`header_plan`] says about a partly loaded file.
@@ -230,7 +269,7 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         return HeaderPlan::Whole("its header probe reads samples");
     }
     let Ok(tiff) = Tiff::parse(bytes) else { return HeaderPlan::Whole("TIFF structure") };
-    let mut holes = Vec::new();
+    let mut spans = Vec::new();
     for ifd in tiff.all_ifds() {
         let chunks: Vec<(u64, u64)> = match ifd.image() {
             // a preview's strips are read when the preview is wanted: only the raw image is skipped
@@ -248,15 +287,27 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         if total < BULK {
             continue;
         }
-        if holes.len().saturating_add(chunks.len()) > MAX_SKIPPED_CHUNKS {
+        if spans.len().saturating_add(chunks.len()) > MAX_SKIPPED_CHUNKS {
             return HeaderPlan::Whole("too many strips or tiles");
         }
-        for (i, &(offset, size)) in chunks.iter().enumerate() {
-            let start = if i == 0 { offset.saturating_add(HEAD) } else { offset };
-            holes.push((start, offset.saturating_add(size).min(len)));
+        // (offset, where the skipped part starts, end) of each chunk
+        let mut skipped: Vec<(u64, u64, u64)> = chunks
+            .iter()
+            .enumerate()
+            .map(|(i, &(offset, size))| (offset, if i == 0 { offset.saturating_add(HEAD) } else { offset }, offset.saturating_add(size).min(len)))
+            .collect();
+        spans.extend(skipped.iter().map(|&(_, start, end)| (start, end)));
+        // the padding between two skipped chunks (a writer aligns each chunk to a word) is skipped
+        // too: a tiled DNG would otherwise be hundreds of one-byte reads
+        skipped.sort_unstable();
+        for pair in skipped.windows(2) {
+            let &[(_, start, end), (next, next_start, next_end)] = pair else { continue };
+            if start < end && next_start == next && next < next_end && next > end && next - end <= PAD {
+                spans.push((end, next));
+            }
         }
     }
-    let mut holes = Ranges::from_spans(holes);
+    let mut holes = Ranges::from_spans(spans);
     // A Panasonic RW2 keeps its raw data from `RawDataOffset` to the end, outside any TIFF image.
     if holes.is_empty()
         && bytes.starts_with(b"IIU\0")
@@ -522,6 +573,34 @@ mod tests {
         assert_eq!(r.total(), 20);
     }
 
+    /// Reads cover what is needed, at least `min` long (not past the file's end), close ones as one,
+    /// without the loaded bytes unless they sit in a bridged gap.
+    #[test]
+    fn reads_cover_the_need_in_fewer_larger_reads() {
+        let mut need = Ranges::new();
+        need.insert(100, 110);
+        need.insert(150, 160);
+        need.insert(1000, 1010);
+        need.insert(1040, 1045);
+        need.insert(1990, 1995);
+        let mut loaded = Ranges::new();
+        loaded.insert(0, 100);
+        loaded.insert(1020, 1030);
+        // no widening, no bridging: the need itself
+        assert_eq!(reads(&need, &loaded, 2000, 0, 0), need);
+        // close ranges as one (over loaded bytes too); the far one stays apart
+        assert_eq!(reads(&need, &loaded, 2000, 0, 50).spans(), &[(100, 160), (1000, 1045), (1990, 1995)]);
+        // at least 100 bytes, clipped to the file; the loaded 1020..1030 left out
+        assert_eq!(reads(&need, &loaded, 2000, 100, 0).spans(), &[(100, 250), (1000, 1020), (1030, 1140), (1990, 2000)]);
+        // ... unless it sits in a bridged gap
+        assert_eq!(reads(&need, &loaded, 2000, 100, 64).spans(), &[(100, 250), (1000, 1140), (1990, 2000)]);
+        for (min, gap) in [(0, 0), (100, 0), (0, 50), (100, 64), (u64::MAX, u64::MAX)] {
+            let r = reads(&need, &loaded, 2000, min, gap);
+            assert!(need.spans().iter().all(|&(a, b)| r.contains(a, b)), "{min} {gap}");
+            assert!(r.spans().iter().all(|&(_, b)| b <= 2000), "{min} {gap}");
+        }
+    }
+
     #[test]
     fn hostile_input_never_panics_and_ends() {
         let mut loaded = Ranges::new();
@@ -592,6 +671,53 @@ mod tests {
         assert_eq!(r.gaps(0, u64::from(n) * 2).total(), u64::from(n));
     }
 
+    /// A writer that word-aligns its tiles leaves a pad byte after each odd-length one. The pad is
+    /// skipped with the tiles, not asked for one byte at a time: Adobe-converted DNGs on raw.pixls.us
+    /// made the plan ask for up to 240 one-byte ranges, each a read of its own (issue #832, SMB).
+    #[test]
+    fn padding_between_tiles_is_skipped_with_them() {
+        use crate::dngwrite::{DngCompression, DngWriteOptions, write_dng};
+        use crate::{BlackLevel, Cfa, ColorData, Metadata, OpcodeLists, Orientation, RawData, RawImage, Rect};
+        let (w, h) = (512, 512);
+        let mut seed = 1u32;
+        let data = (0..w * h)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                528 + (seed >> 20) as u16 % 3500
+            })
+            .collect();
+        let raw = RawImage {
+            format: RawFormat::Dng,
+            width: w,
+            height: h,
+            cpp: 1,
+            data: RawData::U16(data),
+            cfa: Cfa::bayer("RGGB"),
+            bits: 12,
+            black: BlackLevel::uniform(528.0),
+            white: vec![4095.0],
+            active_area: Rect::new(0, 0, w, h),
+            crop: Rect::new(0, 0, w, h),
+            orientation: Orientation::Normal,
+            color: ColorData::default(),
+            wb_multipliers: None,
+            linearized: false,
+            pixel_aspect: 1.0,
+            opcodes: OpcodeLists::default(),
+            metadata: Metadata::default(),
+            lens_metadata: Default::default(),
+        };
+        let file = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Lj92 { tile: 64 }, ..Default::default() }).unwrap();
+        let tiff = Tiff::parse(&file).unwrap();
+        let counts = tiff.all_ifds().into_iter().find_map(|ifd| ifd.u64s(t::TILE_BYTE_COUNTS)).unwrap();
+        assert!(counts.iter().filter(|&&n| n % 2 == 1).count() > 8, "the tiles are padded");
+        let (plan, buf, loaded) = run(&file, 16, 0);
+        assert_eq!(plan, HeaderPlan::Ready);
+        assert!(loaded.spans().len() <= 3, "{} ranges read", loaded.spans().len());
+        assert!(loaded.total() * 4 < file.len() as u64, "{} of {} bytes", loaded.total(), file.len());
+        assert_eq!(format!("{:?}", crate::probe_info(&buf)), format!("{:?}", crate::probe_info(&file)));
+    }
+
     /// An ARW6 header probe reads every tile's headers and the first lines of its data, which lie in the strip a
     /// plan would skip: here the second tile, past a first one of bulk size.
     #[test]
@@ -603,5 +729,41 @@ mod tests {
         let file = arw6_file(&[(0, 0, 64, 48, first), (64, 0, 64, 48, tile)], 128, 48);
         assert!(crate::probe_info(&file).is_ok());
         assert_eq!(run(&file, 16, 0).0, HeaderPlan::Whole("an ARW6 header probe reads its tiles"));
+    }
+
+    /// A TIFF with a million one-byte strips listed in descending order and all byte counts 0: the plan is
+    /// built in one sort and merge, not one pass over all strips (or all holes) per strip.
+    #[test]
+    fn many_strips_without_byte_counts_plan_fast() {
+        let n = 1_000_000u32;
+        let (offsets_at, counts_at) = (8 + 2 + 5 * 12 + 4, 8 + 2 + 5 * 12 + 4 + 4 * n);
+        let data = counts_at + 4 * n;
+        let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&5u16.to_le_bytes());
+        let entry = |tiff: &mut Vec<u8>, tag: u16, typ: u16, count: u32, value: u32| {
+            tiff.extend_from_slice(&tag.to_le_bytes());
+            tiff.extend_from_slice(&typ.to_le_bytes());
+            tiff.extend_from_slice(&count.to_le_bytes());
+            tiff.extend_from_slice(&value.to_le_bytes());
+        };
+        entry(&mut tiff, 256, 4, 1, 1);
+        entry(&mut tiff, 257, 4, 1, n);
+        entry(&mut tiff, 273, 4, n, offsets_at);
+        entry(&mut tiff, 278, 4, 1, 1);
+        entry(&mut tiff, 279, 4, n, counts_at);
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        for i in (0..n).rev() {
+            tiff.extend_from_slice(&(data + i).to_le_bytes());
+        }
+        tiff.resize(data as usize + n as usize, 0);
+        let len = tiff.len() as u64;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut loaded = Ranges::new();
+            loaded.insert(0, len);
+            let _ = tx.send(header_plan(&tiff, &loaded));
+        });
+        let plan = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("header_plan took longer than 20 s");
+        assert!(!matches!(plan, HeaderPlan::Need(_)), "{plan:?}");
     }
 }

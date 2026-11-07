@@ -184,17 +184,11 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
 }
 
 /// Apply a partial settings object with an amount (1.0 = 100 %). Out-of-range values are clamped
-/// through the control specs.
+/// through the control specs, as every merge does ([`DevelopSettings::merged`]).
 pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> DevelopSettings {
     let patch = if (amount - 1.0).abs() < 1e-9 { Cow::Borrowed(partial) } else { Cow::Owned(scale_patch(&s.to_json(), partial, amount)) };
     // (a white balance without a scale keeps its old meaning: `DevelopSettings::merged`)
-    let mut out = s.merged(&patch).unwrap_or_else(|_| s.clone());
-    for c in crate::controls::CONTROLS {
-        if let Some(v) = crate::controls::get(&out, c.id) {
-            crate::controls::set(&mut out, c.id, v);
-        }
-    }
-    out
+    s.merged(&patch).unwrap_or_else(|_| s.clone())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

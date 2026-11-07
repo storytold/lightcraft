@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use lightcraft_catalog::{Photo, PhotoId, Source};
 
@@ -80,7 +81,7 @@ impl Duplicates {
         }
     }
 
-    pub(crate) fn find(&mut self, path: &str, info: &mut ProbeInfo) -> Option<Option<PhotoId>> {
+    pub(crate) fn find(&mut self, path: &str, info: &mut ProbeInfo, cancel: &AtomicBool) -> Option<Option<PhotoId>> {
         if let Some(existing) = info.content_hash.as_deref().and_then(|h| self.by_hash.get(base_hash(h))) {
             return Some(*existing);
         }
@@ -93,6 +94,9 @@ impl Duplicates {
         let twins = twins.clone();
         let probed_hash = info.content_hash.is_some();
         for twin in twins {
+            if cancel.load(Relaxed) {
+                return None;
+            }
             if twin.path == path || (probed_hash && twin.hash.is_some()) {
                 continue;
             }
@@ -100,12 +104,12 @@ impl Duplicates {
             if twin.head.clone().or_else(|| self.head(&twin.path)) != Some(head) {
                 continue;
             }
-            let Some(whole) = info.content_hash.clone().or_else(|| self.whole(path)) else { continue };
+            let Some(whole) = info.content_hash.clone().or_else(|| self.whole(path, k.0, cancel)) else { continue };
             info.content_hash.get_or_insert_with(|| whole.clone());
             if let Some(existing) = self.by_hash.get(base_hash(&whole)) {
                 return Some(*existing);
             }
-            let Some(theirs) = twin.hash.clone().or_else(|| self.whole(&twin.path)) else { continue };
+            let Some(theirs) = twin.hash.clone().or_else(|| self.whole(&twin.path, k.0, cancel)) else { continue };
             if twin.hash.is_none() {
                 self.learn(&twin, &theirs);
             }
@@ -152,8 +156,15 @@ impl Duplicates {
         self.heads.entry(path.to_string()).or_insert_with(|| read_head(path)).clone()
     }
 
-    fn whole(&mut self, path: &str) -> Option<String> {
-        self.wholes.entry(path.to_string()).or_insert_with(|| read_whole(path)).clone()
+    fn whole(&mut self, path: &str, size: u64, cancel: &AtomicBool) -> Option<String> {
+        if let Some(known) = self.wholes.get(path) {
+            return known.clone();
+        }
+        let hash = read_whole(path, size, cancel);
+        if !cancel.load(Relaxed) {
+            self.wholes.insert(path.to_string(), hash.clone());
+        }
+        hash
     }
 }
 
@@ -176,15 +187,15 @@ fn read_head(_path: &str) -> Option<String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_whole(path: &str) -> Option<String> {
-    let hash = super::hash_file(path);
-    if hash.is_none() {
+fn read_whole(path: &str, size: u64, cancel: &AtomicBool) -> Option<String> {
+    let hash = super::hash_file(path, size, cancel);
+    if hash.is_none() && !cancel.load(Relaxed) {
         log::warn!("import: {path} could not be read; not compared as a duplicate");
     }
     hash
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_whole(_path: &str) -> Option<String> {
+fn read_whole(_path: &str, _size: u64, _cancel: &AtomicBool) -> Option<String> {
     None
 }

@@ -9,8 +9,13 @@ use crate::Result;
 
 fn rename_args(s: &crate::Session, p: &Value, c: &str) -> Result<(Vec<lightcraft_catalog::PhotoId>, String, usize)> {
     let template = str_param(p, "template").ok_or_else(|| bad(c, "missing `template`"))?.to_string();
-    let start = p.get("start").and_then(Value::as_u64).unwrap_or(1) as usize;
-    Ok((s.targets(p)?, template, start))
+    let start = p.get("start").and_then(Value::as_u64).unwrap_or(1);
+    let ids = s.targets(p)?;
+    // every number of the sequence `start..start + n` must fit
+    let last = start.checked_add((ids.len() as u64).saturating_sub(1));
+    let start = last.and_then(|l| usize::try_from(l).ok()).and_then(|_| usize::try_from(start).ok());
+    let start = start.ok_or_else(|| bad(c, "start out of range"))?;
+    Ok((ids, template, start))
 }
 
 /// A named set of colour-label names (red, yellow, green, blue, purple; empty = the colour's name).

@@ -643,6 +643,7 @@ mod edited_tests {
             ("NIKON CORPORATION NIKON D850", "NEF", false),
             ("Canon Canon EOS 5D Mark III", "CR2", false),
             ("Canon Canon EOS R6m2", "CR3", false),
+            ("Canon Canon EOS R6 Mark II", "CR3", false),
             ("Canon Canon EOS R7", "CR3", true),
             ("FUJIFILM X-T4", "RAF", false),
             ("ILCE-7M3", "ARW", false),

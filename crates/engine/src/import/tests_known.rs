@@ -91,10 +91,10 @@ fn a_scan_knows_who_has_the_contents_it_probed() {
     known.add_library_matching(c.photos(), &[&with_shared, &with_nobody], |_| true);
     assert_eq!(known.hash_count(), 1);
     let whole: HashMap<String, PhotoId> = c.photos().filter_map(|p| p.content_hash.clone().map(|h| (h, p.id))).collect();
-    let found = known.find("/elsewhere/a.jpg", &mut with_shared).flatten();
+    let found = known.find("/elsewhere/a.jpg", &mut with_shared, &std::sync::atomic::AtomicBool::new(false)).flatten();
     assert_eq!(found.as_ref(), whole.get(&shared));
     assert!(matches!(&c.photo(found.unwrap()).unwrap().source, Source::File { path } if path == "/pics/007/c.jpg"));
-    assert_eq!(known.find("/elsewhere/b.jpg", &mut with_nobody), None);
+    assert_eq!(known.find("/elsewhere/b.jpg", &mut with_nobody, &std::sync::atomic::AtomicBool::new(false)), None);
 }
 
 /// Given a session with a library, when an import is set up, then no table of the library is

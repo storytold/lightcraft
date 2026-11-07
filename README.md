@@ -129,7 +129,7 @@ Split-tone shadows, midtones and highlights independently with drag-anywhere col
 
 ## Before & after
 
-Hold <kbd>\\</kbd> to peek at the original, press <kbd>Y</kbd> for side by side, or <kbd>Shift</kbd>+<kbd>Y</kbd> for a
+Press <kbd>\\</kbd> to toggle the Before view, <kbd>Y</kbd> for side by side, or <kbd>Shift</kbd>+<kbd>Y</kbd> for a
 split view. Every image below is a real screenshot of LightCraft, captured automatically by an agent through the
 [control channel](#built-for-agents).
 
@@ -150,9 +150,13 @@ split view. Every image below is a real screenshot of LightCraft, captured autom
 
 Paint with a **Brush** (size, feather, flow, density, erase), drop **Linear** and **Radial Gradients** with draggable
 pins, or select by **Luminance Range**, **Color Range**, **Sky**, **Subject** and **Background**. Combine components
-with **Add / Subtract / Intersect**, invert any of them, and dial in 15 local adjustments per mask (Temp, Tint,
-Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Texture, Clarity, Dehaze, Hue, Saturation, Sharpness, Noise)
-plus an overall Amount.
+with **Add / Subtract / Intersect**, invert any of them, and dial in 17 local adjustments per mask (Temp, Tint,
+Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Texture, Clarity, Dehaze, Hue, Saturation, Sharpness, Noise,
+Moiré, Defringe), plus an overall Amount.
+
+Desktop **Object** and **Describe** masks use SAM 3 for click-based and text-prompt selection, with a separately
+installed model; see [model setup and terms](docs/ai-masks.md). Subject, Sky and Background selections still use
+classical heuristics. Existing model-generated masks render and export without the model installed.
 
 <p align="center">
   <img src="docs/images/masking.jpg" alt="Masking panel with a linear Sky mask and a radial Sun glow mask; the radial gradient is drawn as a red overlay around the sun on a lake scene" width="100%">
@@ -164,7 +168,7 @@ plus an overall Amount.
 
 ## Presets, profiles & the Color Mixer
 
-Eighteen hand-built presets ship in the box (*Golden Hour, Teal & Orange, Faded Matte, Selenium Tone, Crisp
+Forty-one hand-built presets ship in the box (*Golden Hour, Teal & Orange, Faded Matte, Selenium Tone, Crisp
 Landscape* and more), each with an **Amount** slider from 0 to 200 %. Save your own from any group of settings, mark
 favourites, and copy, paste or sync edits across a whole selection with exactly the groups you choose.
 
@@ -208,6 +212,10 @@ A library that stays out of your way: **All Photos**, **Recently Added**, **Pick
 `rating:>3 flag:pick iso:>800 camera:x2 date:2026-04 keyword:mountains`. Every view sorts by capture date,
 import date, edit date, name, rating, size or at random (a stable shuffle; View → Sort → Reshuffle for a new one). The justified **Photo Grid** and **Square Grid** views are virtualized,
 so they stay smooth whether you have forty photos or forty thousand.
+
+The **People** view groups named faces, including names read from XMP; face boxes can be edited in the loupe.
+On desktop, automatic detection and recognition use optional models installed through **Settings → Faces**; no weights are
+bundled. See [face models and setup](docs/faces.md).
 
 <table>
 <tr>
@@ -281,7 +289,13 @@ lightcraft --control 7980 ~/Pictures/trip
       print.cell.add width=5 height=7 print.cell.add width=2.5 height=3.5 print.layout.autoLayout print.exportPdf path=Package.pdf
   ```
 
-  Printer colour management and page overlays (identity plate, watermark, page numbers) are not there yet.
+  The Print Job panel supports printer/paper ICC profiles, rendering intent, black point compensation,
+  print adjustment, sharpening and 8/16-bit PDF output. Direct printing through an OS print dialog and page
+  overlays (identity plate, watermark, page numbers) are not there yet.
+- **Slideshows:** **View → Slideshow** plays the photos in view full screen, with fades, repeat and random order.
+  **Settings → Slideshow** configures layouts, templates, backgrounds, overlays and title screens. Native exports
+  support PDF, JPEG sequences and AV1 video in MP4 or WebM; music and a dedicated Slideshow module editor remain
+  missing. See [docs/slideshow.md](docs/slideshow.md).
 - **Every widget is addressable** (`ui.widgets`) and clickable by name, so agents operate the real UI, not a
   side door.
 - The screenshots in this README were produced end to end by the [`docs/showcase/`](docs/showcase/) scripts.
@@ -293,7 +307,7 @@ lightcraft --control 7980 ~/Pictures/trip
 
 - **Pure Rust, no C.** Our own RAW decoders (DNG, Canon CR2/CR3, Sony ARW, Nikon NEF, Fujifilm RAF incl. X-Trans,
   Panasonic RW2 / Leica RWL, Pentax PEF, Olympus ORF), our own colour science, our own pipeline. JPEG, PNG, TIFF, WebP,
-  PSD composites and JPEG XL open today; HEIC/HEIF photos too with `--features heif` (HEVC is a build-time choice,
+  PSD composites, JPEG XL, GIF (first frame) and BMP open today; HEIC/HEIF photos too with `--features heif` (HEVC is a build-time choice,
   as in PhotoCraft).
 - **Scene-referred & wide-gamut.** Linear Rec.2020 float internally, Bradford-adapted white balance, gamut mapping
   instead of clipping, a filmic shoulder for raw and pixel-exact pass-through for JPEGs you haven't touched.
@@ -319,7 +333,7 @@ lightcraft --control 7980 ~/Pictures/trip
 LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (details in the [roadmap](ROADMAP.md) and
 [docs/target-app-parity.md](docs/target-app-parity.md)):
 
-- **By feature count we're at ~81%** of Lightroom (core features 98%), tracked row by row in
+- **By feature count we're at ~82%** of Lightroom (core features 98%), tracked row by row in
   [docs/parity-checklist.md](docs/parity-checklist.md).
 - **As a day-to-day Lightroom replacement we're nearer 61% for the whole product, ~51% for a typical working photographer and ~65% for
   casual use.** It's great for JPEG/DNG and most Sony / Panasonic /
@@ -327,9 +341,13 @@ LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (det
 - **The biggest gaps:**
   - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 raws have guarded estimates from their camera JPEGs, with built-in ILCA-99M2, ILCE-7CR, ILCE-7M4, X-H2S, X-T4, Nikon Z 6II, Z 8 and D5300 profiles; measured calibration is missing, and other raws or rejected fits retain a neutral matrix;
   - **compressed Olympus raws and unsupported CR3 variants:** these use embedded JPEG previews when present. Fujifilm lossless/lossy compressed RAF now decodes sensor data; [verification and existing-library reload instructions](docs/raf-compression.md);
-  - **AI masks and denoise:** subject and sky selection are classical heuristics;
+  - **AI quality and model setup:** Subject and Sky selection are classical heuristics; Object/Describe use an
+    optional SAM 3 model. AI Denoise supports Bayer RAW with separately installed weights, while X-Trans and
+    linear-RGB denoise and Super Resolution remain missing; see [AI masks](docs/ai-masks.md) and [AI Denoise](docs/denoise.md);
   - **network libraries:** a preview reads the raw's header — or, for a CR3 or a TIFF raw whose preview tag sits past it, exactly the ranges the sparse planner names — and its embedded JPEG only (56.5 MB → 5.9 MB, 10 s → 1 s on the test share), but the *developed* picture still needs the sensor data over the wire; see [docs/raw-preview-reads.md](docs/raw-preview-reads.md);
-  - **on-screen HDR display, video and the Classic Print / Book / Map modules.**
+  - **on-screen HDR display, video import/editing, and the Book / Map module views.** Print layouts and
+    colour-managed PDF output work; direct printer output and page overlays remain missing. Slideshow playback
+    and export work, with a dedicated module editor and music still missing.
 - **What's next:** see [the ranked gaps](docs/gaps.md) and [the roadmap](docs/roadmap.md).
 
 | Area | Status |
@@ -337,16 +355,16 @@ LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (det
 | Library: albums, folders, smart albums, stacks (incl. auto-stack), virtual copies, ratings, flags, labels, filter bar, search, sort, grids, filmstrip | ✅ |
 | Culling: Compare (synced zoom) and Survey views, auto-advance, instant previews | ✅ |
 | Light, Color, Effects (vignette styles), Tone Curve (+ refine saturation, targeted adjustment), Color Mixer (+ targeted), Point Color, Color Grading, Calibration, B&W | ✅ |
-| Masking: brush, linear, radial, luminance/colour range, add/subtract/intersect | ✅ (AI subject/sky use classical heuristics for now) |
+| Masking: brush, linear, radial, luminance/colour range, add/subtract/intersect; Object and Describe selections | ✅ · Object/Describe require optional SAM 3; Subject/Sky remain heuristic ([details](docs/ai-masks.md)) |
 | Crop, straighten tool + auto straighten, flip, rotate, aspect ratios, overlays | ✅ |
 | Profiles (Color, Neutral, Vivid, Landscape, Portrait, Monochrome: our own looks), presets, versions, history, copy/paste/sync settings | ✅ |
-| Camera colour: DNG files use their own matrices | ✅ DNG · 🚧 own Sony/Fujifilm profiles; measured calibration database missing |
+| Camera colour: DNG matrices, guarded camera-JPEG look fits and built-in profiles for selected cameras | 🚧 measured calibration and per-model coverage remain incomplete ([raw parity](docs/raw-parity.md)) |
 | Native macOS menu bar (generated from the command registry), control channel + every widget addressable, headless UI snapshots | ✅ |
 | RAW: DNG, CR2, CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), ARW, NEF (uncompressed + lossless/lossy compressed, incl. lossy after split), Fujifilm RAF (uncompressed + lossless/lossy compressed, Bayer + X-Trans), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format, DMC-LX1 to DC-S1RM2), Pentax PEF, Olympus ORF (uncompressed, 12.8 bpp), Samsung SRW (uncompressed); embedded previews for every format incl. CR3 | 🚧 · other CR3 variants, compressed ORF / SRW and Nikon HE NEF decode ⬜ ([raw parity](docs/raw-parity.md)) |
-| Detail: sharpening, luminance + colour noise reduction | ✅ · AI Denoise 🚧 (Bayer, user-installed weights), Super Resolution ⬜ |
-| Remove / Heal / Clone spots (auto source), Visualize Spots, Red Eye and Pet Eye (auto pupil detection, catchlight) | ✅ · content-aware fill, spot pin editing 🚧 |
-| Export: JPEG / PNG / TIFF / WebP / AVIF / DNG / original, sizing, file-size limit, output sharpening, naming templates, batch, metadata policy, text or image watermark | ✅ |
-| HDR: HDR editing with a headroom limit, SDR rendition, Visualize HDR; export as ISO 21496-1 gain map JPEG, PQ AVIF or 32-bit float TIFF | ✅ · HDR display ⬜ |
+| Detail: sharpening, luminance + colour noise reduction | ✅ · AI Denoise 🚧 (Bayer, user-installed weights; [setup](docs/denoise.md)), Super Resolution ⬜ |
+| Remove / Heal / Clone spots (auto source), non-generative Fill, editable spot pins, Visualize Spots, Red Eye and Pet Eye | ✅ · Fill uses PatchMatch; no generative fill |
+| Export: JPEG / PNG / TIFF / flat PSD / WebP / AVIF / JPEG XL / raw or rendered DNG / original, sizing, file-size limit, output sharpening, naming templates, batch, metadata policy, text or image watermark | ✅ |
+| HDR: HDR editing with a headroom limit, SDR rendition, Visualize HDR; gain map JPEG, PQ/HLG AVIF, PQ PNG/JPEG XL and float TIFF export | ✅ · HDR display ⬜ |
 | Library persistence (crash-safe op log + snapshots, background compaction, failed saves reported), disk thumbnail cache | ✅ |
 | Import: Add in place / Copy / Move, rename and folder templates, devices, duplicate detection, watched folders; Local folder browsing | ✅ |
 | MCP server (headless or live app, persistent libraries), CLI, control channel | ✅ |
@@ -354,7 +372,11 @@ LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (det
 | Optics (distortion, vignetting, auto + manual CA, defringe, lens corrections embedded in DNG files, Panasonic / Leica RW2 / RWL distortion data and Nikon Z 6II / Z 8 / Z f distortion data), Geometry (transforms, Constrain Crop), Upright (Auto/Level/Vertical/Full/Guided) | ✅ · camera lens profiles (our own) ⬜ |
 | Photo Merge: HDR (auto-align, deghost), Panorama (spherical/cylindrical/perspective, boundary warp, auto crop), HDR Panorama → DNG | ✅ |
 | GPU pipeline (wgpu compute, CPU-exact within 1/255), CPU fallback on device limits / errors | ✅ · WebGPU in the browser 🚧 |
-| AI: segmentation masks, AI denoise, super resolution, faces; video | 🚧 (see [gaps](docs/gaps.md)) |
+| People view, XMP face names and editable face boxes; automatic face detection and recognition | ✅ · detection/recognition require optional models ([setup](docs/faces.md)) |
+| GPX tracklog auto-tagging and offline reverse geocoding | ✅ · place names require the GeoNames dataset; Map view ⬜ |
+| Print layouts, picture packages, templates and colour-managed PDF export | ✅ layouts/PDF · 🚧 direct printer output and page overlays |
+| Slideshow playback, layouts, overlays, templates and PDF/JPEG/AV1 export | ✅ playback · 🚧 dedicated module editor and music ([details](docs/slideshow.md)) |
+| Video import/editing and Book module | ⬜ |
 | Web build (same UI in the browser via WASM): persistent library in OPFS/IndexedDB, Web Worker rendering, export downloads | ✅ · WebGPU, Safari/Firefox testing 🚧 |
 
 <sub>✅ works today · 🚧 in progress · ⬜ not started</sub>
@@ -373,7 +395,7 @@ cargo run --release -p lightcraft -- --memory           # a throwaway in-memory 
 cargo run --release -p lightcraft -- --control 7980     # with the automation channel
 cargo xtask web --serve                                 # the same app in the browser: http://127.0.0.1:8080/
 cargo run --release -p lightcraft-cli -- render photo.jpg -o out.jpg --set light.exposure=0.5
-cargo xtask ci                                          # fmt, clippy, tests, layering, wasm checks
+cargo xtask ci                                          # fmt, clippy, HEIF, tests, parity, layers, assets, WASM
 ```
 
 CI defaults to line-table debug information and one build job per 1.5 GB of RAM
@@ -426,7 +448,7 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 Without it LightCraft builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
 repo — the standard for what goes there lives with it: see the [craft-fonts README](https://github.com/storytold/craft-fonts#readme).
 
-**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Čeština, ქართული) or **Settings → General →
+**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Polski, Čeština, Italiano, ქართული) or **Settings → General →
 Language**; the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).
 
 **Logs:** the desktop app writes its log to standard error and to `logs/lightcraft.log` in its settings folder
@@ -536,7 +558,7 @@ option to start it. For unattended installs: `msiexec /i lightcraft-<ver>-window
 
 | Format | x86_64 | aarch64 (ARM64) | Notes |
 |---|---|---|---|
-| AppImage | `lightcraft-<ver>-linux-x86_64.AppImage` | `lightcraft-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
+| AppImage | `lightcraft-<ver>-linux-x86_64.AppImage` | `lightcraft-<ver>-linux-aarch64.AppImage` | Portable; updates with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
 | Flatpak | `lightcraft-<ver>-linux-x86_64.flatpak` | `lightcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
 | Debian/Ubuntu | `lightcraft-<ver>-linux-x86_64.deb` | `lightcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `lightcraft-<ver>-linux-x86_64.rpm` | `lightcraft-<ver>-linux-aarch64.rpm` | |
