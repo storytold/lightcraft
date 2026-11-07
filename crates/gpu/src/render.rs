@@ -1160,6 +1160,15 @@ fn measured_band_budget(free: u64, pooled: u64, renders: usize, shares_system_me
     if shares_system_memory { budget.min(FIXED_BAND_BUDGET) } else { budget }
 }
 
+/// The band budget: `NRV2_GPU_BAND_MB` (`fixed`) first, then the `measured` one, else [`FIXED_BAND_BUDGET`].
+/// `None` (the CPU runs the stage) for a device that shares system memory on a system that can say how much
+/// is available (`system_can_say`, Linux) but did not: there an overdraw brings the kernel's out-of-memory
+/// killer rather than an error to fall back from, so the fixed budget is not a safe guess. Where the system
+/// cannot be asked at all (macOS, Windows), the fixed budget stays.
+fn band_budget(fixed: Option<usize>, measured: Option<usize>, shared: bool, system_can_say: bool) -> Option<usize> {
+    fixed.or(measured).or_else(|| (!(shared && system_can_say)).then_some(FIXED_BAND_BUDGET))
+}
+
 /// Take the band plan's `lock` and `ask` for the free memory. A driver is asked before the lock: the first
 /// question for a device waits for it, and no other plan should wait with it. System memory is read under the
 /// lock: the read is quick, and a render that waited for the lock must not plan from a figure older than what
@@ -1239,14 +1248,21 @@ fn color_nr_joint(
     // Memory: with more than one band the whole output (3 values per pixel) is held besides the input (one
     // band is written over the input); a band then holds about 12 values per pixel (guide 3, two chroma
     // buffers 2 + 2, paths 3 (the transformed band's buffer, see `joint_band`), weights 2). The budget for
-    // both together is `measured_band_budget` from the memory free right now (where it can be asked, `crate::vram`); else a fixed 2 GB. One band plan at a
-    // time (`BANDS`), held until the bands are done. PROTOTYPE: `NRV2_GPU_BAND_MB` overrides it.
+    // both together is `band_budget`: from the memory free right now where it can be asked (`crate::vram`),
+    // else a fixed 2 GB, or none (the CPU) for a shared-memory device whose system memory could not be read
+    // on Linux. One band plan at a time (`BANDS`), held until the bands are done. PROTOTYPE:
+    // `NRV2_GPU_BAND_MB` overrides it.
     let shared = crate::vram::shares_system_memory(cx.gpu.info.device_type);
     let (_bands, free) = lock_and_measure(&BANDS, shared, || crate::vram::free_bytes(&cx.gpu.info));
     let fixed = std::env::var("NRV2_GPU_BAND_MB").ok().and_then(|v| v.parse::<usize>().ok()).map(|mb| mb << 20);
     let renders = RENDERS.load(std::sync::atomic::Ordering::Relaxed);
     let measured = free.map(|free| measured_band_budget(free, crate::ctx::memory().pooled, renders, shared));
-    let budget = fixed.or(measured).unwrap_or(FIXED_BAND_BUDGET);
+    let Some(budget) = band_budget(fixed, measured, shared, cfg!(target_os = "linux")) else {
+        if profiling() {
+            eprintln!("  gpu joint budget: none (system memory could not be read): this stage runs on the CPU");
+        }
+        return Err(img);
+    };
     if profiling() {
         eprintln!(
             "  gpu joint budget: {} MB ({}, {renders} render(s) on the device)",
@@ -1725,6 +1741,20 @@ mod tests {
         assert_eq!(measured_band_budget(mb(300), 0, 1, true), 0);
         // a discrete card has no such ceiling
         assert_eq!(measured_band_budget(mb(8000), 0, 1, false), (8000usize << 20) - VRAM_RESERVE as usize);
+    }
+
+    /// Where a shared-memory device's system can say how much memory is available (Linux) but did not, the
+    /// stage goes to the CPU rather than guess the fixed budget; an explicit override and the other cases keep
+    /// what they had.
+    #[test]
+    fn an_unreadable_system_memory_reading_sends_the_stage_to_the_cpu() {
+        let mb = |x: usize| x << 20;
+        assert_eq!(band_budget(None, None, true, true), None, "Linux could not say: the CPU runs the stage");
+        assert_eq!(band_budget(Some(mb(512)), None, true, true), Some(mb(512)), "NRV2_GPU_BAND_MB still wins");
+        assert_eq!(band_budget(None, Some(mb(900)), true, true), Some(mb(900)));
+        assert_eq!(band_budget(None, None, true, false), Some(FIXED_BAND_BUDGET), "macOS / Windows: fixed budget");
+        assert_eq!(band_budget(None, None, false, true), Some(FIXED_BAND_BUDGET), "a discrete card: fixed budget");
+        assert_eq!(band_budget(Some(mb(512)), Some(mb(900)), false, true), Some(mb(512)));
     }
 
     /// A render waiting for the band lock must read system memory after the render before it has allocated,
