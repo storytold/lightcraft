@@ -453,8 +453,9 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   and retired), and beside them the `catalog`: how many photos it holds and the least their
   records take, which no share of the budget limits. `ui.inspect` → `memory` adds the loupe's
   stage caches (CPU images, GPU buffers), the textures, and the grid's `thumbnails`: how many
-  pictures, their bytes, the limit they are held to (a quarter of the memory budget) and the
-  failures remembered (past 1,024 those of photos off screen are dropped).
+  pictures, their bytes, the budget (a quarter of the memory budget) past which the ones off
+  screen are dropped (those on screen or asked for in the last two frames stay, over it if need
+  be) and the failures remembered (past 1,024 those of photos off screen are dropped).
 - Heap profile: build `lightcraft-cli` with `--features dhat-heap`; `library.memory` then also
   reports live/peak heap bytes and the run writes `dhat-heap.json` (`LIGHTCRAFT_DHAT_FILE`), whose
   allocation sites at the peak (`t-gmax`) show who holds the memory.
