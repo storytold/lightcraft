@@ -2,9 +2,9 @@
 //! responding for as long as that took (issue #3468): the photos are read on a worker thread under a
 //! row of the activity stack.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use lightcraft_catalog::{Op, Photo, PhotoId, Source};
@@ -27,6 +27,8 @@ const FRAMES: Duration = Duration::from_secs(15);
 struct Drive {
     open: Arc<AtomicBool>,
     reads: Arc<AtomicUsize>,
+    /// The files the search read, in order.
+    read: Arc<Mutex<Vec<String>>>,
     on_ui: Arc<AtomicUsize>,
 }
 
@@ -37,14 +39,21 @@ fn app_on_a_slow_drive(guard: Duration) -> (Headless, Drive) {
         let p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:04}.arw"), "ARW", 64, 64, "2026-01-01T00:00:00");
         app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let drive = Drive { open: Arc::new(AtomicBool::new(false)), reads: Arc::new(AtomicUsize::new(0)), on_ui: Arc::new(AtomicUsize::new(0)) };
-    let (ui, open, reads, on_ui) = (std::thread::current().id(), drive.open.clone(), drive.reads.clone(), drive.on_ui.clone());
+    let drive = Drive {
+        open: Arc::new(AtomicBool::new(false)),
+        reads: Arc::new(AtomicUsize::new(0)),
+        read: Arc::new(Mutex::new(Vec::new())),
+        on_ui: Arc::new(AtomicUsize::new(0)),
+    };
+    let (ui, open, reads, read, on_ui) =
+        (std::thread::current().id(), drive.open.clone(), drive.reads.clone(), drive.read.clone(), drive.on_ui.clone());
     let deadline = Instant::now() + guard;
     app.session.media.file_loader = Some(Arc::new(move |path: &str, _, _| {
         // (the grid reads the photos for its thumbnails too, on threads of its own)
         let thread = std::thread::current();
         if thread.name().is_some_and(|n| n.starts_with("similar-") || n.contains(LABEL)) {
             reads.fetch_add(1, Ordering::SeqCst);
+            read.lock().unwrap().push(path.to_string());
         }
         if thread.id() == ui {
             on_ui.fetch_add(1, Ordering::SeqCst);
@@ -167,7 +176,17 @@ fn stopping_leaves_the_view_alone_and_the_next_search_reads_only_the_rest() {
     let r = h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
     assert_eq!(r["count"], PHOTOS - 1, "what was read isn't read again");
     until_done(&mut h);
-    assert_eq!(drive.reads.load(Ordering::SeqCst), PHOTOS as usize);
+    // A photo the loupe or the filmstrip decoded meanwhile is measured from memory, without a read
+    // (issue #3823: 10 or 11 reads of 12 on a loaded machine), so what is checked is that no file
+    // was read twice, the searched photo's above all; the answer below needs every photo.
+    let read = drive.read.lock().unwrap().clone();
+    let mut once = read.clone();
+    once.sort();
+    once.dedup();
+    assert_eq!(once.len(), read.len(), "a file was read twice: {read:?}");
+    assert_eq!(read.iter().filter(|p| p.ends_with("IMG_0000.arw")).count(), 1, "the searched photo was read again: {read:?}");
+    // and every photo was measured, from a read or from memory, not only the ones alike
+    assert_eq!(h.app.session.signatures.len(), PHOTOS as usize, "a photo was not measured");
     assert_eq!(h.app.session.filter.only.len(), PHOTOS as usize / 2);
 }
 
