@@ -24,6 +24,34 @@ All algorithms are our own implementations from published papers (cited in the m
   among the files, e.g. a whole folder);
   `lightcraft-cli synth-merge hdr|panorama -o DIR` writes synthetic inputs (procedural scene).
 
+## Panorama inclusion diagnostics
+
+Panorama and HDR panorama results include `used` (source photo IDs, in source order),
+`omitted` (`{id, path, reason: "notRegistered"}`), and `pairs`. Each pair has `a` and `b`
+(source photo ID arrays), `matches`, `inliers` (null if no fit was returned), and `status`:
+`insufficientMatches`, `noModel`, `rejected`, or `accepted`. HDR panorama expands each
+stitched bracket to all of its source photos. These fields describe this run; a preview
+and a full merge can use different photos because they run at different resolutions.
+
+The preview lists omitted filenames and the included count. The completion message uses
+the final merge's count. Pair measurements also appear at debug log level, including when
+registration fails entirely. An accepted pair can belong to a component that is not used.
+`notRegistered` means the photo has no camera in the final registered set. It does not
+establish missing overlap, moving water, or parallax as the cause.
+
+Issue [#1765](https://github.com/storytold/lightcraft/issues/1765) and @aterveus's
+[logging prototype](https://github.com/aterveus/lightcraft/commit/49054c2b94) prompted these
+diagnostics. Their [lower-slope experiment](https://github.com/aterveus/lightcraft/commit/e7ed794c72)
+identified a useful test regime. The verification threshold remains `inliers > 8 + 0.3 * matches`:
+original procedural correspondence tests recover known homographies with 30 to 36 inliers
+among 100 to 140 matches, then reproduce their rejection. A slope of 0.15 also accepts the
+tests' coherent wrong panel match and translated-camera parallax. Spatial spread and a
+small reprojection error alone do not distinguish all of these cases.
+
+This is a diagnostic improvement, not a fix for the reporter's waterfall registration.
+The original waterfall photos were unavailable. A three-frame, 800 by 600 moving-texture
+experiment fails registration, while its clean control registers all three frames.
+
 ## What it does
 
 **HDR** (`hdr.rs`): frames ordered by EXIF exposure (or median luminance); the middle one is the
@@ -74,6 +102,9 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   BA RMS ≈ 0.35 px; median log error vs ground truth < 0.02; no seam steps.
 
 ## Limits (known gaps)
+
+- Pair verification can reject genuine overlaps in moving scenes (#1765). Omitted photos are
+  reported, but a safer acceptance policy still needs validation on real inputs.
 
 - No lens-distortion model in the panorama bundle adjustment (rectilinear lenses assumed); no
   360° wrap-around; flat (translating-camera) scans are fitted with the rotation model. Panoramas and HDR
