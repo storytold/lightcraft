@@ -18,6 +18,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(not(target_arch = "wasm32"))]
+mod avif;
 mod convert;
 pub mod display;
 pub mod encode;
@@ -196,7 +198,7 @@ pub struct Header {
 }
 
 /// Read the stored dimensions and orientation of any format [`decode`] supports, agreeing with
-/// what a decode reports, without decoding pixels: JPEG, PNG, TIFF, WebP, PSD and HEIF are read
+/// what a decode reports, without decoding pixels: JPEG, PNG, TIFF, WebP, PSD, HEIF and AVIF are read
 /// from their headers (markers, chunks, IFD, resources, boxes). GIF, BMP and JPEG XL fall back to
 /// a small decode.
 ///
@@ -222,6 +224,8 @@ pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
         Format::WebP => webp::header(bytes)?,
         Format::Psd => psd::header(bytes)?,
         Format::Heif => heif::header(bytes)?,
+        #[cfg(not(target_arch = "wasm32"))]
+        Format::Avif => avif::header(bytes)?,
         Format::Gif | Format::Bmp => other::header(bytes, format)?,
         // rare here (or, for JPEG XL, without a header reader yet): a small decode, as before
         _ => {
@@ -258,7 +262,11 @@ pub fn decode_unguarded(bytes: &[u8], format: Format, opts: &DecodeOptions) -> R
         #[cfg(not(feature = "jxl"))]
         Format::Jxl => unsupported(),
         Format::Heif => heif::decode(bytes, &opts),
-        Format::Avif | Format::RawTiffLike | Format::RawOther => unsupported(),
+        #[cfg(not(target_arch = "wasm32"))]
+        Format::Avif => avif::decode(bytes, &opts),
+        #[cfg(target_arch = "wasm32")]
+        Format::Avif => unsupported(),
+        Format::RawTiffLike | Format::RawOther => unsupported(),
     }
 }
 
