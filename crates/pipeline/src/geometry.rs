@@ -316,7 +316,9 @@ impl Frame {
     pub fn sample_plan(&self, src_w: usize, src_h: usize, w: usize, h: usize) -> SamplePlan {
         let (ow, oh) = if self.orient.swaps_axes() { (src_h, src_w) } else { (src_w, src_h) };
         let crop_px = self.crop.rect_px(self.ow, self.oh);
-        let k = crop_px.width() / w as f64;
+        // the larger of the two axes' reductions: the prefilter then takes every axis at least as small
+        // as its output needs, so the bilinear pass after it never minifies (and aliases) either one
+        let k = (crop_px.width() / w as f64).max(crop_px.height() / h as f64);
         // Sharp exports use their selected filter for every downscale; keep smooth previews' threshold.
         let threshold = if self.downscale == Filter::Lanczos3 { 1.0 } else { 1.25 };
         let prefilter = (k > threshold).then(|| (((ow as f64 / k).round() as usize).max(1), ((oh as f64 / k).round() as usize).max(1)));
