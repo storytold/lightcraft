@@ -285,6 +285,44 @@ fn two_collapsed_stacks_and_loose_photos_plan_separate_jobs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Two collapsed stacks merge via the command (through `merge_now`/`plan_merges`), and a valid stack
+/// still merges when a loose photo alone is too few to merge: the undersized group is reported as
+/// `skipped` instead of refusing the whole selection.
+#[test]
+fn two_stacks_merge_via_command_and_undersized_loose_is_skipped() {
+    let dir = temp_dir("multi-stack-cmd");
+    let mut paths = Vec::new();
+    for (set, evs) in [("A", &[-2.0, 0.0, 2.0][..]), ("B", &[-1.5, 0.5, 2.5][..]), ("C", &[-1.0, 1.0][..])] {
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, &evs).unwrap().into_iter().enumerate() {
+            let p = dir.join(format!("{set}_{i}.dng"));
+            std::fs::write(&p, b).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    assert_eq!(ids.len(), 8);
+    s.execute("stack.group", &json!({"ids": ids[..3]})).unwrap();
+    s.execute("stack.group", &json!({"ids": ids[3..6]})).unwrap();
+    // plan_merges skips the single loose photo and keeps the valid stack.
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    let mixed: Vec<lightcraft_catalog::PhotoId> = [ids[6], ids[0]].iter().map(|id| lightcraft_catalog::PhotoId(*id)).collect();
+    let jobs = s.plan_merges(kind.clone(), finish.clone(), &mixed, true).unwrap();
+    assert_eq!(jobs.len(), 1, "undersized loose group is skipped, valid stack is kept");
+    assert_eq!(jobs[0].sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), ids[..3].to_vec());
+    // The command merges the valid stack and reports the loose photo as skipped.
+    let r = s.execute("merge.hdr", &json!({"ids": [ids[0], ids[6]], "autoSettings": false})).unwrap();
+    assert_eq!(r["skipped"], json!([[ids[6]]]), "{r}");
+    assert!(r["path"].as_str().unwrap().ends_with("A_0-HDR.dng"), "{r}");
+    // Two collapsed stacks via the command produce two outputs.
+    let r = s.execute("merge.hdr", &json!({"ids": [ids[0], ids[3]], "autoSettings": false})).unwrap();
+    let merged = r["merged"].as_array().unwrap();
+    assert_eq!(merged.len(), 2, "{r}");
+    let names: Vec<&str> = merged.iter().map(|m| m["path"].as_str().unwrap()).collect();
+    assert!(names[0].ends_with("A_0-HDR-2.dng") && names[1].ends_with("B_0-HDR.dng"), "{names:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A collapsed stack contributes all its members to a merge, not just its visible top photo:
 /// naming the top of a collapsed bracket stack plans the merge of its members.
 #[test]

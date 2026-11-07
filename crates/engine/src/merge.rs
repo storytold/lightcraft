@@ -435,11 +435,18 @@ impl Session {
 
     /// Plan one merge job per collapsed stack in `ids`, plus one job for the photos that are not in a collapsed
     /// stack (kept together, as before). Each stack's members are in capture order, once per stack, and a photo
-    /// named more than once is merged once.
+    /// named more than once is merged once. A group with fewer than the merge needs is skipped (reported by
+    /// [`Session::merge_now`] as `skipped`) so one undersized loose photo does not stop a valid stack merging;
+    /// if every group is undersized the selection is refused.
     pub fn plan_merges(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<Vec<MergeJob>> {
+        Ok(self.plan_merges_inner(kind, finish, ids, preview)?.0)
+    }
+
+    fn plan_merges_inner(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
         let groups = self.merge_groups(ids);
         let read = self.merge_reader();
         let mut jobs = Vec::new();
+        let mut skipped = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for group in groups {
             let sources = self.merge_sources(&group, &mut seen)?;
@@ -447,14 +454,15 @@ impl Session {
                 continue;
             }
             if sources.len() < kind.min_photos() {
-                return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
+                skipped.push(group);
+                continue;
             }
             jobs.push(MergeJob { kind: kind.clone(), finish: finish.clone(), sources, preview: preview.then_some(PREVIEW_EDGE), read: read.clone() });
         }
         if jobs.is_empty() {
             return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
         }
-        Ok(jobs)
+        Ok((jobs, skipped))
     }
 
     fn merge_reader(&self) -> ByteReader {
@@ -484,13 +492,13 @@ impl Session {
         for id in ids {
             // Check whether this stack was already expanded using only its id, before cloning its members:
             // naming every member of a large stack must not clone the stack once per member.
-            let stack_id = self.catalog.stack_of(*id).filter(|st| st.collapsed).map(|st| st.id);
-            match stack_id {
-                Some(stack_id) => {
-                    if !expanded_stacks.insert(stack_id) {
+            let stack = self.catalog.stack_of(*id).filter(|st| st.collapsed);
+            match stack {
+                Some(st) => {
+                    if !expanded_stacks.insert(st.id) {
                         continue;
                     }
-                    let members = self.catalog.stack_of(*id).map(|st| st.photos.clone()).unwrap_or_default();
+                    let members = st.photos.clone();
                     // Capture order, not stack order (top first): an HDR panorama's bracket
                     // detection expects the periodic exposure sequence from the earliest capture.
                     // File names do not reflect capture sequence (renamed files, several cameras), so
@@ -569,7 +577,7 @@ impl Session {
     /// `merged`, the authoritative list of every job's result in order (`merged[0]` duplicates the
     /// top-level fields). Consumers should read `merged` when present rather than counting both.
     pub fn merge_now(&mut self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId]) -> Result<Value> {
-        let jobs = self.plan_merges(kind, finish, ids, false)?;
+        let (jobs, skipped) = self.plan_merges_inner(kind, finish, ids, false)?;
         let mut merged = Vec::new();
         for job in &jobs {
             let out = job.run(&|_, _| true).map_err(EngineError::Other)?;
@@ -577,6 +585,11 @@ impl Session {
         }
         let first_id = merged.first().and_then(|v| v.get("id")).and_then(Value::as_u64).map(PhotoId);
         let mut first = merged.first().cloned().unwrap_or(Value::Null);
+        if !skipped.is_empty()
+            && let Some(obj) = first.as_object_mut()
+        {
+            obj.insert("skipped".into(), json!(skipped.iter().map(|g| g.iter().map(|p| p.0).collect::<Vec<_>>()).collect::<Vec<_>>()));
+        }
         if merged.len() > 1 {
             // finish_merge selected each result in turn; leave the selection on the returned (first) result.
             if let Some(id) = first_id {
