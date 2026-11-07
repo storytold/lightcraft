@@ -147,27 +147,39 @@ fn summary(dir: &Path, whose: &str, db: &LensDb) -> (log::Level, String) {
     }
 }
 
+/// The database's camera for `camera`, the make and model as the library shows them ("Canon PowerShot G7 X").
+fn camera_named<'a>(db: &'a LensDb, camera: &str) -> Option<&'a lightcraft_lensdb::Camera> {
+    camera.split_once(' ').and_then(|(make, model)| db.find_camera(make, model).or_else(|| db.find_camera(make, camera)))
+}
+
+/// Whether the database has the built-in lens of `camera` (the make and model as the library shows them), which
+/// [`lookup`] gives a photo whose file names no lens.
+pub fn has_built_in_lens(db: &LensDb, camera: &str) -> bool {
+    camera_named(db, camera).is_some_and(|cam| db.find_built_in_lens("", cam).is_some())
+}
+
 /// The database's name for the lens a photo's file calls `lens` (taken with `camera`, the make and model as the
 /// library shows them): "Canon EF 70-200mm f/2.8L IS II USM". `None` without a database or a match.
 pub fn profile_name(db: &LensDb, camera: &str, lens: &str) -> Option<String> {
-    let cam = camera.split_once(' ').and_then(|(make, model)| db.find_camera(make, model).or_else(|| db.find_camera(make, camera)));
-    let p = db.find_lens(None, lens, cam)?;
+    let p = db.find_lens(None, lens, camera_named(db, camera))?;
     let model = p.models.first()?;
     Some(if model.to_lowercase().starts_with(&p.maker.to_lowercase()) || p.maker.is_empty() { model.clone() } else { format!("{} {model}", p.maker) })
 }
 
 /// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,
-/// re-expressed after `orientation`. `None` without a database, lens name, focal length or matching profile.
+/// re-expressed after `orientation`. `None` without a database, focal length or matching profile, and without a lens
+/// name unless the camera's lens is built in.
 pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orientation: lightcraft_geom::Orientation) -> Option<EmbeddedLens> {
     let focal = m.focal_length.filter(|f| f.is_finite() && *f > 0.0)?;
     let camera = db.find_camera(m.make.as_deref().unwrap_or_default(), m.model.as_deref().unwrap_or_default());
     let lens = match m.lens_model.as_deref() {
         Some(model) => db.find_lens(m.lens_make.as_deref(), model, camera)?,
         // Nikon DSLRs record only the lens specification ("24-70mm f/2.8"); a profile must be named exactly that
-        // (a user's alias), since the specification fits other makers' lenses too
+        // (a user's alias), since the specification fits other makers' lenses too. A compact may record not even
+        // that (a PowerShot G7 X CR2): its lens can't be changed, so its camera's own mount pins the profile down.
         None => {
-            let name = lightcraft_lensdb::spec_name(m.lens_spec?);
-            db.find_lens_named(m.lens_make.as_deref(), &name, camera)?
+            let name = m.lens_spec.map(lightcraft_lensdb::spec_name).unwrap_or_default();
+            db.find_lens_named(m.lens_make.as_deref(), &name, camera).or_else(|| db.find_built_in_lens(&name, camera?))?
         }
     };
     let crop = frame_crop_factor(camera.and_then(|c| c.crop_factor), focal, m.focal_length_35mm);
@@ -271,6 +283,56 @@ mod tests {
         // a lens model, when the file has one, still decides
         let named_other = lightcraft_meta::Metadata { lens_model: Some("70-200mm F4".into()), ..nikon.clone() };
         assert!(lookup(&aliased, &named_other, 6000.0, 4000.0, Orientation::Normal).is_none());
+    }
+
+    /// A compact's raw may name no lens at all: a PowerShot G7 X CR2 has neither a lens model nor a lens
+    /// specification. The database gives the built-in lens the camera's own mount, and that is enough to find it
+    /// (issue #3855). A specification, when the file has one, picks among several profiles on that mount.
+    #[test]
+    fn a_compact_that_names_no_lens_gets_its_built_in_lens() {
+        const COMPACT: &str = r#"<lensdatabase>
+          <camera><maker>Testcam</maker><model>Testcam Compact C1</model><mount>testcamC1</mount><cropfactor>2.7</cropfactor></camera>
+          <camera><maker>Testcam</maker><model>TC-1</model><mount>T</mount><cropfactor>1.5</cropfactor></camera>
+          <lens><maker>Testcam</maker><model>Testcam Compact C1 &amp; compatibles</model><model lang="en">fixed lens</model>
+            <mount>testcamC1</mount><cropfactor>2.7</cropfactor>
+            <calibration>
+              <distortion model="poly3" focal="8.8" k1="-0.03" />
+              <distortion model="poly3" focal="36.8" k1="0.004" />
+            </calibration>
+          </lens>
+          <lens><maker>Testcam</maker><model>Testcam 18-55mm f/3.5-5.6</model><mount>T</mount><cropfactor>1.5</cropfactor>
+            <calibration><distortion model="poly3" focal="18" k1="-0.03" /></calibration>
+          </lens></lensdatabase>"#;
+        let db = LensDb::parse(COMPACT).unwrap();
+        let compact = lightcraft_meta::Metadata {
+            make: Some("Testcam".into()),
+            model: Some("Testcam Compact C1".into()),
+            lens_model: None,
+            lens_spec: None,
+            focal_length: Some(8.8),
+            f_number: Some(4.0),
+            ..Default::default()
+        };
+        let at = |db: &LensDb, m: &lightcraft_meta::Metadata| lookup(db, m, 5472.0, 3648.0, Orientation::Normal);
+        let lens = at(&db, &compact).expect("the camera's built-in lens");
+        assert!(lens.warp.is_some());
+        assert_eq!(lens.source, LensSource::Database);
+        // the same profile when the file records only the lens's specification
+        let with_spec = lightcraft_meta::Metadata { lens_spec: Some([8.8, 36.8, 1.8, 2.8]), ..compact.clone() };
+        assert_eq!(at(&db, &with_spec), Some(lens));
+        // a body with interchangeable lenses that names none still gets nothing: any of its mount's lenses could be on it
+        let body = lightcraft_meta::Metadata { model: Some("TC-1".into()), focal_length: Some(18.0), ..compact.clone() };
+        assert!(at(&db, &body).is_none());
+        // nor does a camera the database doesn't list
+        let unknown = lightcraft_meta::Metadata { model: Some("Testcam Compact C9".into()), ..compact.clone() };
+        assert!(at(&db, &unknown).is_none());
+        // two profiles on the compact's mount: the specification's focal range decides, and without one neither is taken
+        let second = r#"<lens><maker>Testcam</maker><model>Testcam Compact C1 with tele converter</model><mount>testcamC1</mount>
+            <cropfactor>2.7</cropfactor><calibration><distortion model="poly3" focal="62" k1="0.01" /></calibration></lens></lensdatabase>"#;
+        let two = LensDb::parse(&COMPACT.replace("</lensdatabase>", second)).unwrap();
+        assert_eq!(two.lenses.len(), 3);
+        assert_eq!(at(&two, &with_spec), at(&db, &with_spec));
+        assert!(at(&two, &compact).is_none());
     }
 
     /// A full-frame body in APS-C / Super 35 mode (an ILCE-1M2 at 70 mm records 105 mm equivalent) frames only the

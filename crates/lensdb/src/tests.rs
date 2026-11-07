@@ -456,6 +456,37 @@ fn built_in_lens_matches_by_camera_mount_and_focal_range() {
     assert_eq!(exif_focal_range(&tokens(&huge)), Some((6.0, 6.0)));
 }
 
+/// A file that names no lens gets its camera's built-in lens, and only a camera with a fixed lens has one: on a
+/// body's mount a lone profile whose name the fixed-lens match accepts (no "mm") is some lens, not the lens (#3855).
+#[test]
+fn a_built_in_lens_needs_a_fixed_lens_camera() {
+    let xml = r#"<lensdatabase>
+  <camera><maker>Testcam</maker><model>Testcam Compact C1</model><mount>testcamC1</mount><cropfactor>2.7</cropfactor></camera>
+  <camera><maker>Testcam</maker><model>TC-K</model><mount>Testcam K</mount><cropfactor>1</cropfactor></camera>
+  <camera><maker>Testcam</maker><model>TC-0</model><cropfactor>1</cropfactor></camera>
+  <lens><maker>Testcam</maker><model>Testcam Compact C1 &amp; compatibles</model><model lang="en">fixed lens</model>
+    <mount>testcamC1</mount><cropfactor>2.7</cropfactor>
+    <calibration><distortion model="poly3" focal="8.8" k1="-0.03" /><distortion model="poly3" focal="36.8" k1="0.004" /></calibration></lens>
+  <lens><maker>Otherlens</maker><model>Otherlens Makro 2/100</model><mount>Testcam K</mount><cropfactor>1</cropfactor>
+    <calibration><distortion model="poly3" focal="100" k1="0.002" /></calibration></lens>
+</lensdatabase>"#;
+    let mut db = LensDb::parse(xml).unwrap();
+    let cam = |model: &str| db.find_camera("Testcam", model).cloned().unwrap();
+    let (compact, body, mountless) = (cam("Testcam Compact C1"), cam("TC-K"), cam("TC-0"));
+    assert_eq!(db.find_built_in_lens("", &compact).unwrap().mounts, ["testcamC1"]);
+    assert_eq!(db.find_built_in_lens("8.8-36.8mm f/1.8-2.8", &compact).unwrap().mounts, ["testcamC1"]);
+    assert!(db.find_built_in_lens("", &body).is_none(), "any lens of the mount could be on a body");
+    assert!(db.find_built_in_lens("100mm f/2", &body).is_none());
+    assert!(db.find_built_in_lens("", &mountless).is_none());
+    // a second profile on the compact's mount (the lens with a converter): the focal range picks, and nothing does without it
+    let mut converter = db.lenses[0].clone();
+    converter.models = vec!["Testcam Compact C1 with tele converter".into()];
+    converter.distortion = vec![(62.0, converter.distortion[0].1)];
+    db.lenses.push(converter);
+    assert_eq!(db.find_built_in_lens("8.8-36.8mm f/1.8-2.8", &compact).unwrap().models[0], "Testcam Compact C1 & compatibles");
+    assert!(db.find_built_in_lens("", &compact).is_none());
+}
+
 #[test]
 fn tied_built_in_lens_matches_prefer_a_known_calibration_crop() {
     let mut db = db();

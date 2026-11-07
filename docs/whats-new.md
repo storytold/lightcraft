@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Lens profiles for compact cameras that name no lens
+- Raws from compact cameras that record no lens name, such as the Canon PowerShot G7 X, now get their lens profile
+  from the lens database (issue #3855). The lens is built in, so the camera is enough to find it. Photos already in
+  the library pick it up when Enable Lens Corrections is ticked or the database is downloaded. A camera body with an
+  unnamed lens still gets no profile, since any lens could have been on it.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

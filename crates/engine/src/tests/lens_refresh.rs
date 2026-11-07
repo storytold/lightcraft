@@ -156,6 +156,31 @@ fn photos_get_their_profile_when_the_database_arrives() {
     assert!(s.execute("library.refreshLensProfiles", &json!({"ids": "x"})).is_err());
 }
 
+/// A compact's raw that names no lens is looked up too, by its camera's built-in lens; a body's isn't, since any
+/// lens could have been on it (issue #3855).
+#[test]
+fn an_unnamed_lens_is_looked_up_when_the_camera_has_a_built_in_lens() {
+    let db = lightcraft_lensdb::LensDb::parse(&DB.replace(
+        "</lensdatabase>",
+        r#"<camera><maker>Testcam</maker><model>Testcam Compact C1</model><mount>testcamC1</mount><cropfactor>2.7</cropfactor></camera>
+  <lens><maker>Testcam</maker><model>Testcam Compact C1 &amp; compatibles</model><mount>testcamC1</mount><cropfactor>2.7</cropfactor>
+    <calibration><distortion model="poly3" focal="8.8" k1="-0.03" /></calibration></lens></lensdatabase>"#,
+    ))
+    .unwrap();
+    let mut s = Session::new();
+    let mut compact = raw(1, "", false);
+    compact.meta.camera = "Testcam Compact C1".into();
+    let mut profiled = with_lens(raw(3, "", false), Some(lens(-0.03)), true);
+    profiled.meta.camera = "Testcam Compact C1".into();
+    for p in [compact, raw(2, "", false), profiled] {
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let listed = crate::cmd::lens_refresh::missing(&s.catalog, &db, None, false);
+    assert_eq!(listed.iter().map(|m| m.id.0).collect::<Vec<_>>(), [1], "the compact without a profile, not the body");
+    assert!(crate::lens_profiles::has_built_in_lens(&db, "Testcam Compact C1"));
+    assert!(!crate::lens_profiles::has_built_in_lens(&db, "Testcam TC-1") && !crate::lens_profiles::has_built_in_lens(&db, ""));
+}
+
 fn with_lens(mut p: Photo, l: Option<EmbeddedLens>, on: bool) -> Photo {
     p.embedded_lens = l;
     let mut d = (*p.develop).clone();
