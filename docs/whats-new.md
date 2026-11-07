@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Lightroom's AI masks come in as Lightroom made them
+- A Lightroom edit's Subject, Sky, Object or People selection is read from the sidecar, where Lightroom stores the
+  selection itself, instead of being guessed: a mask that leaves the subject out now leaves out exactly what Lightroom
+  did. On a portrait whose softening radial subtracts the subject, LightCraft's own stand-in left part of the couple
+  in the radial, and its Clarity −36 smoothed the knit of a sweater that Lightroom keeps crisp. Read Metadata from File
+  brings it to photos imported before. No model is needed.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

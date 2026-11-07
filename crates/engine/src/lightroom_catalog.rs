@@ -836,6 +836,13 @@ fn catalog_masks(partial: &mut Value, orientation: Orientation) {
         for points in strokes.filter_map(|s| s.get_mut("points").and_then(Value::as_array_mut)) {
             points.iter_mut().for_each(|p| point(Some(p)));
         }
+        // a selection Lightroom stored (`crate::crs_mask_table`): its grid is on the stored image too
+        if let Some(seg) = shape.get_mut("seg").filter(|s| s.is_object()) {
+            crate::crs_mask_table::turn_seg(seg, orientation);
+        }
+        for seg in shape.get_mut("detail").and_then(Value::as_array_mut).into_iter().flatten() {
+            crate::crs_mask_table::turn_seg(seg, orientation);
+        }
         if shape.get("kind").and_then(Value::as_str) == Some("radial") {
             if orientation.swaps_axes()
                 && let (Some(rx), Some(ry)) = (shape.get("rx").cloned(), shape.get("ry").cloned())
