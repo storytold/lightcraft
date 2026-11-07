@@ -120,6 +120,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if ui.add_enabled(any_user, egui::Button::new(crate::i18n::tr("Export User Presets…"))).clicked() {
                 let _ = app.run("file.exportPresets", json!({}));
             }
+            ui.separator();
+            let r = ui.button(crate::i18n::tr("New Group…"));
+            register(ui, "presetMenu:newGroup", r.rect);
+            if r.clicked() {
+                crate::panels::dialogs::prompt(app, "New Preset Group", "Group name", "", "preset.createGroup", json!({}), "name");
+            }
         });
         divider(ui);
         // amount slider (applies to the last applied preset)
@@ -188,17 +194,32 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     t.semibold(13.0),
                     t.text_label,
                 );
+                if grp.pinned {
+                    crate::rating::paint_star(
+                        ui.painter(),
+                        Rect::from_center_size(pos2(r.right() - 20.0, r.center().y), vec2(16.0, 16.0)),
+                        true,
+                        t.star,
+                    );
+                }
                 if resp.clicked() {
                     ui.data_mut(|d| d.insert_temp(open_id, !open));
                 }
                 if !favorites {
-                    crate::widgets::context_menu(&resp, |ui| {
-                        if ui.button(crate::i18n::tr("Export Group…")).clicked() {
-                            let _ = app.run("file.exportPresets", json!({"group": g}));
-                        }
-                    });
+                    crate::widgets::context_menu(&resp, |ui| group_menu(app, ui, grp));
                 }
                 if !open {
+                    continue;
+                }
+                if grp.items.is_empty() {
+                    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+                    ui.painter().text(
+                        pos2(r.left() + 40.0, r.center().y),
+                        Align2::LEFT_CENTER,
+                        crate::i18n::tr("No presets in this group"),
+                        t.font(13.0),
+                        t.text_dim,
+                    );
                     continue;
                 }
                 let (first, end) = rows_in_view(ui.cursor().top(), row_h, grp.items.len(), visible);
@@ -326,16 +347,63 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// A group header's menu.
+fn group_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, group: &Group) {
+    let empty = group.items.is_empty();
+    if ui.add_enabled(!empty, egui::Button::new(crate::i18n::tr("Export Group…"))).clicked() {
+        let _ = app.run("file.exportPresets", json!({"group": group.name}));
+    }
+    let r = ui.button(crate::i18n::tr(if group.pinned { "Remove from Favorites" } else { "Add to Favorites" }));
+    register(ui, "presetGroupMenu:favorite", r.rect);
+    if r.clicked() {
+        let _ = app.run("preset.favoriteGroup", json!({"name": group.name, "favorite": !group.pinned}));
+    }
+    if group.builtin {
+        return;
+    }
+    ui.separator();
+    let r = ui.button(crate::i18n::tr("Rename…"));
+    register(ui, "presetGroupMenu:rename", r.rect);
+    if r.clicked() {
+        crate::panels::dialogs::prompt(
+            app,
+            "Rename Preset Group",
+            "Group name",
+            &group.name,
+            "preset.renameGroup",
+            json!({"name": group.name}),
+            "to",
+        );
+    }
+    let r = ui.button(crate::i18n::tr("Delete Group…"));
+    register(ui, "presetGroupMenu:delete", r.rect);
+    if r.clicked() {
+        if empty {
+            if let Err(e) = app.run("preset.deleteGroup", json!({"name": group.name})) {
+                app.toast(ui.ctx(), e);
+            }
+        } else {
+            app.ui.dialog = Some(crate::state::Dialog::DeletePresetGroup {
+                name: group.name.clone(),
+                count: group.items.len(),
+                library: app.session.library_generation(),
+            });
+        }
+    }
+}
+
 /// A preset group as the panel lists it: indices into the session's presets.
 struct Group {
     name: String,
     /// Holds a stock preset: a stock group (shown in the UI language), even when user presets
     /// share its name; a group of user presets keeps its name.
     builtin: bool,
-    /// Holds a user preset (a Move to Group target).
+    /// Holds a user preset or was made by name (a Move to Group target).
     user: bool,
     /// The Favorites section on top (issue #1999): the starred presets, each also in its own group.
     favorites: bool,
+    /// Starred as a group: listed right after that section, before the other groups.
+    pinned: bool,
     items: Vec<usize>,
 }
 
@@ -355,16 +423,31 @@ fn grouped(ctx: &egui::Context, presets: &PresetList) -> Arc<Vec<Group>> {
             builtin: false,
             user: false,
             favorites: false,
+            pinned: presets.favorite_groups().contains(&p.group),
             items: Vec::new(),
         });
         g.builtin |= p.builtin;
         g.user |= !p.builtin;
         g.items.push(i);
     }
+    // the groups made by name are listed even with no preset naming them
+    for name in presets.created_groups() {
+        let g = by_name.entry(name).or_insert_with(|| Group {
+            name: name.clone(),
+            builtin: false,
+            user: true,
+            favorites: false,
+            pinned: presets.favorite_groups().contains(name),
+            items: Vec::new(),
+        });
+        g.user = true;
+    }
     // starred presets first, in their own section, as Profiles does
     let starred: Vec<usize> = presets.iter().enumerate().filter(|(_, p)| p.favorite).map(|(i, _)| i).collect();
-    let favorites = (!starred.is_empty()).then(|| Group { name: "Favorites".into(), builtin: true, user: false, favorites: true, items: starred });
-    let groups = Arc::new(favorites.into_iter().chain(by_name.into_values()).collect::<Vec<_>>());
+    let favorites =
+        (!starred.is_empty()).then(|| Group { name: "Favorites".into(), builtin: true, user: false, favorites: true, pinned: false, items: starred });
+    let (pinned, others): (Vec<Group>, Vec<Group>) = by_name.into_values().partition(|g| g.pinned);
+    let groups = Arc::new(favorites.into_iter().chain(pinned).chain(others).collect::<Vec<_>>());
     ctx.data_mut(|d| d.insert_temp(id, (presets.generation(), groups.clone())));
     groups
 }
