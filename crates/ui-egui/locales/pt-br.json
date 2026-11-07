@@ -2272,5 +2272,6 @@
   "Next": "Próximo",
   "Get Started": "Começar",
   "Mixed": "Misto",
-  "Reading metadata": "Lendo metadados"
+  "Reading metadata": "Lendo metadados",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "Todos os metadados não foi exibido porque outra caixa de diálogo está aberta. Escolha Todos os metadados novamente."
 }

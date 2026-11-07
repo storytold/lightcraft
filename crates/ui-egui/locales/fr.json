@@ -3611,5 +3611,6 @@
   "Next": "Suivant",
   "Get Started": "Commencer",
   "Mixed": "Mixte",
-  "Reading metadata": "Lecture des métadonnées"
+  "Reading metadata": "Lecture des métadonnées",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "Toutes les métadonnées n'a pas été affiché, car une autre boîte de dialogue est ouverte. Choisissez à nouveau Toutes les métadonnées."
 }

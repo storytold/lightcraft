@@ -2428,5 +2428,6 @@
   "Next": "下一步",
   "Get Started": "開始使用",
   "Mixed": "混合",
-  "Reading metadata": "正在讀取中繼資料"
+  "Reading metadata": "正在讀取中繼資料",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "另一個對話框已開啟，未顯示所有中繼資料。請再次選擇所有中繼資料。"
 }

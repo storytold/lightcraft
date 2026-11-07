@@ -2634,5 +2634,6 @@
   "Next": "Далее",
   "Get Started": "Начать",
   "Mixed": "Разные",
-  "Reading metadata": "Чтение метаданных"
+  "Reading metadata": "Чтение метаданных",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "«Все метаданные» не показаны, потому что открыто другое окно. Выберите «Все метаданные» снова."
 }

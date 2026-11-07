@@ -2,6 +2,7 @@
 //! Close, like About, instead of a Cancel / OK pair that both just close them.
 
 use crate::headless::Headless;
+use crate::state::Dialog;
 use crate::{LightcraftApp, Services};
 use serde_json::json;
 use std::time::Duration;
@@ -173,6 +174,18 @@ fn all_metadata_reading_several_photos_shows_in_the_activity_stack() {
     h.step();
     assert!(h.app.ui.dialog.is_none(), "a cancelled read opens no dialog");
     assert!(!h.app.session.activity.list().iter().any(|r| r.kind == "metadata"), "the row is gone");
+
+    // another dialog opened while the files are read stays; the read says to ask again
+    *gate.0.lock().unwrap() = false;
+    let r = h.request("ui.menu.invoke", json!({"id": "dialog.allMetadata"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.dialog = Some(Dialog::AllMetadata { title: "other".into(), rows: json!({}), search: String::new() });
+    release();
+    assert!(h.step_until(T, |h| !h.app.tasks.is_running("Reading metadata")), "the read ends");
+    h.step();
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::AllMetadata { title, .. }) if title == "other"), "the open dialog is kept");
+    h.app.ui.dialog = None;
+    h.step();
 
     // read to the end: the dialog opens and the row goes
     open_several(&mut h);

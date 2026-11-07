@@ -2592,5 +2592,6 @@
   "Get Started": "Inizia",
   "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto",
   "Mixed": "Valori misti",
-  "Reading metadata": "Lettura dei metadati"
+  "Reading metadata": "Lettura dei metadati",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "Tutti i metadati non è stato mostrato perché è aperta un'altra finestra. Scegli di nuovo Tutti i metadati."
 }

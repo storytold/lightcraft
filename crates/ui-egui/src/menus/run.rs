@@ -1193,6 +1193,10 @@ fn open_all_metadata(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
         (r.map_err(|e| e.to_string()), flag.load(std::sync::atomic::Ordering::Relaxed))
     };
     let done = move |app: &mut LightcraftApp, ctx: &egui::Context, (r, cancelled): (Result<Value, String>, bool)| match r {
+        // another dialog opened while the files were read: leave it, and say so
+        Ok(_) if app.ui.dialog.is_some() => {
+            app.toast(ctx, crate::i18n::tr("All Metadata was not shown because another dialog is open. Choose All Metadata again."))
+        }
         Ok(rows) => show_all_metadata(app, rows, too_many),
         Err(_) if cancelled => {}
         Err(e) => app.toast(ctx, e),

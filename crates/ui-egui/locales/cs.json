@@ -2474,5 +2474,6 @@
   "Get Started": "Začít",
   "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
   "Mixed": "Různé",
-  "Reading metadata": "Čtení metadat"
+  "Reading metadata": "Čtení metadat",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "Všechna metadata se nezobrazila, protože je otevřené jiné okno. Zvolte Všechna metadata znovu."
 }

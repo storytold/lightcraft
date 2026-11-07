@@ -2424,5 +2424,6 @@
   "Next": "Далі",
   "Get Started": "Почати",
   "Mixed": "Різні",
-  "Reading metadata": "Читання метаданих"
+  "Reading metadata": "Читання метаданих",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "«Усі метадані» не показано, бо відкрито інше вікно. Виберіть «Усі метадані» знову."
 }

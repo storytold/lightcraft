@@ -2385,5 +2385,6 @@
   "Bottom bar": "Alapalkki",
   "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
   "Mixed": "Vaihtelee",
-  "Reading metadata": "Luetaan metatietoja"
+  "Reading metadata": "Luetaan metatietoja",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "Kaikki metatiedot ei näkynyt, koska toinen ikkuna on auki. Valitse Kaikki metatiedot uudelleen."
 }
