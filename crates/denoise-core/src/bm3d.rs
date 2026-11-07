@@ -263,10 +263,10 @@ pub(crate) fn gather(plane: &[f32], t: usize, n: usize, members: &[u32], out: &m
 /// Where a plane's blocks start along one side: every `step` cells, and the last one too, so the edge is covered.
 pub fn starts(blocks: usize, step: usize) -> Vec<usize> {
     let mut v: Vec<usize> = (0..blocks).step_by(step.max(1)).collect();
-    if let Some(last) = blocks.checked_sub(1)
-        && v.last() != Some(&last)
-    {
-        v.push(last);
+    if let Some(last) = blocks.checked_sub(1) {
+        if v.last() != Some(&last) {
+            v.push(last);
+        }
     }
     v
 }
@@ -369,31 +369,36 @@ fn match_blocks(plane: &[f32], t: usize, p: &Params, tau: f32) -> Vec<Vec<u32>> 
 }
 
 /// The noise of a plane, read from the median absolute difference of neighbouring cells (a median, so edges and
-/// texture do not raise it; a neighbour difference has `√2` times the noise of one cell). 0 for a plane with no
+/// texture do not raise it; a neighbour difference has `√2` times the noise of one cell). Both directions are
+/// read and the smaller is taken, so texture that varies in only one direction (for example horizontal colour
+/// texture, which varies along a row but not down a column) does not raise the estimate. 0 for a plane with no
 /// neighbours, no finite difference, or no measurable difference.
 fn plane_noise(plane: &[f32], t: usize) -> f32 {
     if t < 2 {
         return 0.0;
     }
-    let mut diffs = Vec::with_capacity(t * (t - 1));
-    for row in 0..t {
-        for col in 0..t - 1 {
-            let i = row * t + col;
-            if let (Some(&a), Some(&b)) = (plane.get(i), plane.get(i + 1)) {
-                let d = (a - b).abs();
-                if d.is_finite() {
-                    diffs.push(d);
+    let median = |vertical: bool| -> f32 {
+        let mut diffs = Vec::with_capacity(t * (t - 1));
+        for row in 0..t {
+            for col in 0..t - 1 {
+                let (i, j) = if vertical { (col * t + row, (col + 1) * t + row) } else { (row * t + col, row * t + col + 1) };
+                if let (Some(&a), Some(&b)) = (plane.get(i), plane.get(j)) {
+                    let d = (a - b).abs();
+                    if d.is_finite() {
+                        diffs.push(d);
+                    }
                 }
             }
         }
-    }
-    if diffs.is_empty() {
-        return 0.0;
-    }
-    let mid = diffs.len() / 2;
-    diffs.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
-    // the median of |N(0, √2 σ)| is 0.6745 · √2 σ, so σ is the median times 1 / (0.6745 · √2)
-    diffs.get(mid).copied().unwrap_or(0.0) * 1.048_358
+        if diffs.is_empty() {
+            return 0.0;
+        }
+        let mid = diffs.len() / 2;
+        diffs.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
+        // the median of |N(0, √2 σ)| is 0.6745 · √2 σ, so σ is the median times 1 / (0.6745 · √2)
+        diffs.get(mid).copied().unwrap_or(0.0) * 1.048_358
+    };
+    median(false).min(median(true))
 }
 
 /// `lambda` (the reference plane's absolute threshold) scaled for a plane whose noise is `sigma` where the reference
@@ -419,8 +424,10 @@ fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], 
     let n = tf.n;
     let sigma = p.sigma.max(1e-3);
     let lambda = lambda * sigma;
-    // the first plane is the reference; a plane whose noise is read as larger is shrunk with its own level
-    let sigma_ref = y.first().map_or(sigma, |pl| plane_noise(pl, t).max(sigma));
+    // the tile-independent sigma (the stabilised planes have unit noise, scaled by `p.sigma`) is the basis;
+    // a plane is only shrunk harder when its own robust noise, relative to the reference plane's, is larger
+    let sigma_ref = sigma;
+    let ref_noise = y.first().map_or(0.0, |pl| plane_noise(pl, t));
     let mut s = Scratch::default();
     let (mut buf, mut pbuf) = (Vec::new(), Vec::new());
     let mut out = Vec::with_capacity(y.len());
@@ -429,7 +436,7 @@ fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], 
         let mut den = vec![0f32; t * t];
         let c = out.len();
         let pilot_plane = pilot.and_then(|pl| pl.get(c));
-        let plane_sigma = plane_noise(plane, t).max(sigma);
+        let plane_sigma = if ref_noise > 0.0 { sigma * (plane_noise(plane, t) / ref_noise).max(1.0) } else { sigma };
         // a colour-difference plane noisier than the brightness plane is shrunk a little harder than its scaled
         // level, as the brightness plane is the one the groups were matched on; one no noisier keeps its scaled level
         let plane_lambda = scaled_lambda(lambda, sigma_ref, plane_sigma)
@@ -669,6 +676,26 @@ mod tests {
         let wild = Params { block: 0, step: 0, search: 1000, group: 0, ..Params::default() };
         assert!(filter(&noisy(16, 2.0, 1), 16, &wild, 0.5).iter().flatten().all(|v| v.is_finite()));
         assert!(filter(&[], 8, &Params::default(), 0.5).iter().all(|p| p.is_empty()));
+    }
+
+    /// Horizontal colour texture does not raise the noise estimate: a plane of unit noise with texture that
+    /// varies along each row but not down a column still reads as unit noise, so the threshold and Wiener
+    /// sigma are not raised and the texture is not removed as if it were noise.
+    #[test]
+    fn horizontal_texture_does_not_raise_the_noise_estimate() {
+        let t = 32;
+        let planes = noisy(t, 5.0, 13);
+        let Some(mut plane) = planes.into_iter().next() else { return };
+        for row in 0..t {
+            for col in 0..t {
+                if let Some(v) = plane.get_mut(row * t + col) {
+                    *v += if col % 2 == 0 { 2.0 } else { -2.0 };
+                }
+            }
+        }
+        let read = plane_noise(&plane, t);
+        assert!(read < 1.5, "horizontal texture read as noise {read}");
+        assert!(read > 0.5, "unit noise read as {read}");
     }
 
     /// A colour-difference plane whose noise is no higher than the brightness plane's keeps a coefficient between
