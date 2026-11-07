@@ -287,7 +287,7 @@ fn sharpen_deep_survives_non_finite_samples() {
     for target in [SharpenFor::Screen, SharpenFor::Glossy, SharpenFor::Matte] {
         let mut img = DeepImage { width: 3, height: 3, space: OutputSpace::Srgb, samples: DeepSamples::F32(samples.clone()) };
         output_sharpen_deep(&mut img, target, SharpenAmount::High);
-        let DeepSamples::F32(out) = &img.samples else { unreachable!() };
+        let DeepSamples::F32(out) = &img.samples else { panic!("expected F32 samples") };
         assert!(out.iter().all(|v| v.is_finite() && *v >= 0.0), "{target:?}: {out:?}");
     }
     let mut all_nan = DeepImage { width: 3, height: 3, space: OutputSpace::Srgb, samples: DeepSamples::F32(vec![nan; 27]) };
