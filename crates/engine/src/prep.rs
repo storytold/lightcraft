@@ -385,6 +385,10 @@ impl Session {
     /// `at`: the photo in the loupe (`None` in the grid), `backward`: stepping back.
     pub fn prep_tick(&mut self, mode: Mode, at: Option<PhotoId>, backward: bool) {
         self.follow_library();
+        // the ✕ of the row the plan holds: its photos are not planned any further, nor that view again
+        if self.prep.plan.as_ref().is_some_and(|p| p.plan.cancelled()) {
+            self.decline_plan();
+        }
         let settings = self.prep.settings();
         let want = settings.mode(mode);
         // the whole view's build follows its own row (Culling, or Library also while editing): its
@@ -469,7 +473,7 @@ impl Session {
         }
         self.prep.started_for = Some(sig);
         let edge = Some(crate::cmd::previews::standard_edge(self));
-        let plan = crate::cmd::previews::BuildPlan::new(ids, want.scope == Scope::Marked, edge);
+        let plan = crate::cmd::previews::BuildPlan::new(self, ids, want.scope == Scope::Marked, edge);
         let (cache, revision) = (self.media.rendered.clone(), self.catalog.revision);
         let generation = cache.generation();
         self.prep.plan = Some(Planning { sig, plan, cache, generation, revision });
@@ -542,13 +546,17 @@ impl Session {
         self.prep.advancing = false;
     }
 
-    /// `library.cancelPreviews` while the photos of a build are being planned (nothing runs yet, so no row to stop
-    /// it from): the plan is dropped, and its view not prepared again, as if its build had been stopped from its
-    /// row. A build that is running is the one cancelled instead.
+    /// `library.cancelPreviews` while the photos of a build are being planned (nothing runs yet to cancel): the plan
+    /// is ended like its row's ✕ ends it ([`Self::decline_plan`]). A build that is running is the one cancelled instead.
     pub(crate) fn cancel_prep_plan(&mut self) {
         if self.preview_build.as_ref().is_some_and(|b| b.running()) {
             return;
         }
+        self.decline_plan();
+    }
+
+    /// The plan under way is dropped, and its view not prepared again, as if its build had been stopped from its row.
+    fn decline_plan(&mut self) {
         if let Some(p) = &self.prep.plan {
             self.prep.declined_for = Some(p.sig);
         }

@@ -194,10 +194,13 @@ impl Drop for Building {
     }
 }
 
+/// The label of the background preparation's row (its plan holds it, then its build).
+const BACKGROUND_LABEL: &str = "Preparing photos in the background";
+
 /// The build's row in the activity stack (`what` as in [`PreviewBuild::what`]).
 fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
     let (kind, label) = match state.what {
-        "" if state.background => ("previews", "Preparing photos in the background"),
+        "" if state.background => ("previews", BACKGROUND_LABEL),
         "" => ("previews", "Building previews"),
         "smart previews" => ("smartPreviews", "Building smart previews"),
         _ => ("smartPreviews", "Discarding smart previews"),
@@ -498,7 +501,10 @@ pub(crate) struct Launch {
 
 /// The photos of a background build whose jobs are planned a slice at a time ([`jobs_for`] costs
 /// each photo a settings hash and a cache key: all of a big view in one frame is seconds), by
-/// [`Session::prep_tick`], which starts the build once every photo is planned.
+/// [`Session::prep_tick`], which starts the build once every photo is planned. The plan holds the build's row in
+/// the activity stack from its start (a big view takes seconds to plan, and the row says the preparation is under
+/// way: no count yet, the amount of work not being known), and its ✕ sets the flag [`BuildPlan::cancelled`] reads.
+/// The build that follows takes over the same row and flag.
 pub(crate) struct BuildPlan {
     ids: Arc<[lightcraft_catalog::PhotoId]>,
     /// Plan only the photos [`crate::prep::marked`] says are (the "marked" scope).
@@ -508,6 +514,8 @@ pub(crate) struct BuildPlan {
     /// Photos the build is for (marked ones only, in the "marked" scope), planned or not yet.
     pub selected: usize,
     jobs: Vec<PhotoJobs>,
+    task: TaskGuard,
+    cancel: Arc<AtomicBool>,
 }
 
 /// Photos planned in one slice (one frame), at most.
@@ -518,8 +526,15 @@ const PLAN_LOOKED_AT: usize = 8192;
 const PLAN_SLICE_TIME: std::time::Duration = std::time::Duration::from_millis(3);
 
 impl BuildPlan {
-    pub(crate) fn new(ids: Arc<[lightcraft_catalog::PhotoId]>, marked_only: bool, edge: Option<usize>) -> Self {
-        BuildPlan { ids, marked_only, edge, next: 0, selected: 0, jobs: Vec::new() }
+    pub(crate) fn new(s: &Session, ids: Arc<[lightcraft_catalog::PhotoId]>, marked_only: bool, edge: Option<usize>) -> Self {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let task = s.activity.start("previews", BACKGROUND_LABEL, Cancel::Flag(cancel.clone()));
+        BuildPlan { ids, marked_only, edge, next: 0, selected: 0, jobs: Vec::new(), task, cancel }
+    }
+
+    /// The row's ✕ was pressed: the plan is to end.
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
     }
 
     pub(crate) fn edge(&self) -> Option<usize> {
@@ -562,7 +577,8 @@ impl BuildPlan {
 pub(crate) fn start_planned(s: &mut Session, plan: BuildPlan, launch: Launch) -> Result<Value> {
     let gives_way = give_way(s, launch.background)?;
     s.fit_disk_cache();
-    launch_build(s, plan.jobs, launch, gives_way)
+    // (the plan's row and its flag carry on as the build's: the build counts from here)
+    launch_build(s, plan.jobs, launch, gives_way, Some((plan.task, plan.cancel)))
 }
 
 /// The background preparation gives way to a build that was asked for; nothing replaces a build
@@ -613,19 +629,27 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
         s.visible_cloned()
     };
     let jobs: Vec<PhotoJobs> = ids.iter().map(|id| (id.0, jobs_for(s, *id, edge))).filter(|j| !j.1.is_empty()).collect();
-    launch_build(s, jobs, launch, gives_way)
+    launch_build(s, jobs, launch, gives_way, None)
 }
 
-/// Run the build of `jobs` as `launch` says, on a worker (or here with `wait`).
-fn launch_build(s: &mut Session, jobs: Vec<PhotoJobs>, launch: Launch, gives_way: Option<Arc<AtomicBool>>) -> Result<Value> {
+/// Run the build of `jobs` as `launch` says, on a worker (or here with `wait`). `adopted`: the row and cancel flag of
+/// the plan these jobs were planned by, which the build carries on (no second row, and the ✕ it has had stays good).
+fn launch_build(
+    s: &mut Session,
+    jobs: Vec<PhotoJobs>,
+    launch: Launch,
+    gives_way: Option<Arc<AtomicBool>>,
+    adopted: Option<(TaskGuard, Arc<AtomicBool>)>,
+) -> Result<Value> {
     const C: &str = "library.buildPreviews";
     let (edge, background, force, row, wait, from) = (launch.edge, launch.background, launch.force, launch.row, launch.wait, launch.from);
     // the background build stays the session's until this one has started (a worker that can't
     // start leaves it running and in place: CodeRabbit on #3544)
     let previous = s.preview_build.clone();
     let order = jobs.iter().map(|j| j.0).collect();
+    let (adopted_task, cancel) = adopted.map_or_else(|| (None, Arc::default()), |(task, cancel)| (Some(task), cancel));
     #[cfg_attr(not(test), allow(unused_mut))]
-    let mut build_state = PreviewBuild { total: jobs.len(), background, order, ..Default::default() };
+    let mut build_state = PreviewBuild { total: jobs.len(), background, order, cancel, ..Default::default() };
     #[cfg(test)]
     {
         build_state.gate = launch.gate;
@@ -635,7 +659,13 @@ fn launch_build(s: &mut Session, jobs: Vec<PhotoJobs>, launch: Launch, gives_way
         state.focus_on(at, backward);
     }
     s.preview_build = Some(state.clone());
-    let task = row.then(|| task_for(s, &state));
+    let task = match adopted_task {
+        Some(task) => {
+            task.progress(0, state.total as u64);
+            Some(task)
+        }
+        None => row.then(|| task_for(s, &state)),
+    };
     // the background preparation leaves most of the machine to the photo on screen and the user
     let lanes = if background { crate::prep::background_lanes() } else { lanes(jobs.len(), edge.is_none()) };
     if wait {

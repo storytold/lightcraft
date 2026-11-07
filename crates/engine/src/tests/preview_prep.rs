@@ -955,6 +955,94 @@ fn many_unrelated_changes_over_a_plan_do_not_begin_it_again() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// The rows the background preparation has in the activity stack.
+fn prep_rows(s: &Session) -> Vec<crate::activity::TaskInfo> {
+    s.activity.list().into_iter().filter(|t| t.kind == "previews").collect()
+}
+
+/// @eliets2 on #3936: a big view takes seconds to plan, and nothing showed that the preparation was under way: its
+/// row is there from the plan's start, with no count (the amount of work isn't known yet), and ends with the plan.
+#[test]
+fn the_row_shows_while_the_photos_are_planned() {
+    let (mut s, root, ids) = library("prep-plan-row", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    let rows = prep_rows(&s);
+    assert_eq!(rows.len(), 1, "one row while the photos are planned: {rows:?}");
+    assert_eq!(rows[0].label, "Preparing photos in the background");
+    assert_eq!((rows[0].done, rows[0].total), (0, 0), "no count while planning");
+    assert!(rows[0].cancellable, "it has its ✕");
+    assert!(s.preview_build.is_none(), "no build yet");
+    // (another view is shown: the plan ends with its row, the view shown now is planned again after three steps)
+    s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id: ids[6] }).unwrap();
+    s.prep_tick(mode, Some(ids[2]), false);
+    assert!(!s.prep_planning() && prep_rows(&s).is_empty(), "the plan's row ends with it: {:?}", prep_rows(&s));
+    drop(hold);
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The row of the plan is the row of the build that follows it: one row from the plan's start to the build's end, and
+/// it counts from the build's start.
+#[test]
+fn the_row_of_a_plan_is_the_row_of_its_build() {
+    let (mut s, root, ids) = library("prep-plan-row-build", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    let planning = prep_rows(&s);
+    assert_eq!(planning.len(), 1, "one row while the photos are planned: {planning:?}");
+    let b = finish_planning(&mut s, &ids, mode);
+    let building = prep_rows(&s);
+    assert_eq!(building.len(), 1, "still one row once the build runs: {building:?}");
+    assert_eq!(building[0].id, planning[0].id, "the plan's row carries on");
+    assert_eq!(building[0].total, 7, "counting from the build's start");
+    drop(hold);
+    assert!(wait_finished(&b), "the build ends");
+    for _ in 0..500 {
+        if prep_rows(&s).is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(prep_rows(&s).is_empty(), "the row goes with the build");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The ✕ of the plan's row ends the plan, and no build starts: that view isn't planned again (another one is), as when
+/// the build is stopped from its row.
+#[test]
+fn stopping_the_row_while_planning_ends_the_plan() {
+    let (mut s, root, ids) = library("prep-plan-row-stop", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    let row = prep_rows(&s).pop().expect("the plan's row");
+    s.activity.cancel(row.id).expect("the row can be stopped");
+    s.prep_tick(mode, Some(ids[2]), false);
+    assert!(!s.prep_planning(), "nothing left to plan");
+    assert!(prep_rows(&s).is_empty(), "the row is gone");
+    for _ in 0..30 {
+        s.prep_tick(mode, Some(ids[2]), false);
+    }
+    assert!(s.preview_build.is_none(), "no build for the view that was stopped");
+    assert_eq!(s.prep.planned, 2, "and no planning of it");
+    // another view is prepared, once the user has stepped through a few of its photos
+    s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id: ids[6] }).unwrap();
+    for id in &ids[..3] {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    let b = finish_planning(&mut s, &ids, mode);
+    assert_eq!(b.total, 6);
+    drop(hold);
+    b.cancel.store(true, Ordering::Relaxed);
+    assert!(wait_finished(&b), "a cancelled build stops");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// A tick with the loupe open over a view that did not change neither copies the visible list nor
 /// hashes it again: a frame asks every time, and a view of millions made every frame cost seconds.
 #[test]
