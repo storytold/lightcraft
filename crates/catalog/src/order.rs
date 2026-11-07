@@ -9,7 +9,8 @@
 //! changed in what the key's comparison reads (`reads`: its own field, the file name that breaks ties, and
 //! whether the photo is in the catalog), so a rating edit moves a photo only in the rating order. Up to
 //! `IN_PLACE` such photos are moved in the list itself (a search for each, a shift of the part between); more,
-//! or a photo that came or went, are taken out and put back in one pass over the list. When that is not known
+//! or a photo that came or went, are taken out and put back in one pass over the list (photos that only came, all
+//! after the others in id, are merged in without a pass over the old list). When that is not known
 //! (too long ago, the catalog was loaded) the photos that came or went are found by comparing ids and the list is
 //! sorted again from where it was ([`Catalog::remade`]: nearly in order, so about one pass), or dropped when the
 //! query is of a small part of the library. A catalog copy starts without them, like the other [`crate::index`]
@@ -439,8 +440,9 @@ impl Catalog {
     }
 
     /// Brings `kept` up to date: the ops since its revision changed nothing it reads (it stays as it is, not
-    /// copied), a few photos (each is moved in the list itself), or many or the photos in the catalog (it is
-    /// worked out again from the old one).
+    /// copied), photos that only came after all the others (each goes in at its place, the part after it shifted
+    /// once), a few photos (each is moved in the list itself), or many or the photos in the catalog (it is worked
+    /// out again from the old one).
     fn catch_up(&self, sort: &Sort, kept: &mut Kept) {
         let Some(touched) = self.photos_changed_since(kept.revision, reads(sort.key)) else {
             // (no op since, in a library just loaded: right as it is)

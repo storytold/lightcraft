@@ -13,8 +13,8 @@ use std::hash::{BuildHasherDefault, Hasher};
 use crate::query::cmp_name;
 use crate::{Catalog, CatalogError, Op, PhotoId, Result, Stack, StackId};
 
-/// A hasher for photo ids: whole numbers given upward, which one multiplication spreads (SipHash costs several times
-/// that, and a view of a million photos is asked about photo by photo). Not for keys another party chooses.
+/// A hasher for photo ids: one mix of the number (SipHash costs several times that, and a view of a million photos is
+/// asked about photo by photo). The mix keeps ids that share their low bits apart. Not for keys another party chooses.
 #[derive(Default)]
 struct IdHasher(u64);
 
@@ -30,7 +30,7 @@ impl Hasher for IdHasher {
     }
 
     fn write_u64(&mut self, n: u64) {
-        self.0 = n.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.0 = crate::query::mix64(n);
     }
 }
 
