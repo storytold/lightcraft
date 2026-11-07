@@ -66,8 +66,8 @@ pub fn threshold_for(curve: &[(f32, f32)], noise: f32) -> f32 {
         return y0;
     }
     for pair in curve.windows(2) {
-        let [(xa, ya), (xb, yb)] = pair else { continue };
-        if xa.is_finite() && xb.is_finite() && *xa > 0.0 && xb > xa && noise <= *xb {
+        let &[(xa, ya), (xb, yb)] = pair else { continue };
+        if xa.is_finite() && xb.is_finite() && xa > 0.0 && xb > xa && noise <= xb {
             return ya + (yb - ya) * (noise / xa).ln() / (xb / xa).ln();
         }
     }
