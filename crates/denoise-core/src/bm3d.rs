@@ -401,6 +401,21 @@ fn plane_noise(plane: &[f32], t: usize) -> f32 {
     median(false).min(median(true))
 }
 
+/// The ratio of a plane's noise to the reference plane's, at least 1 and at most 4: a near-zero reference estimate
+/// (a nearly flat brightness plane) must not scale a colour-difference plane's threshold without bound, while a
+/// legitimate difference of up to four times is kept. No reference noise gives a ratio of 1.
+fn noise_ratio(ref_noise: f32, noise: f32) -> f32 {
+    if ref_noise > 0.0 && ref_noise.is_finite() && noise.is_finite() { (noise / ref_noise).clamp(1.0, 4.0) } else { 1.0 }
+}
+
+/// The extra shrink for a plane noisier than the reference, as a factor on its scaled threshold: 1 at a ratio of 1,
+/// rising towards 1.5 as the ratio grows, so a ratio just above 1 (sampling jitter in the noise estimate) does not
+/// jump the threshold by half as much again.
+fn chroma_factor(ratio: f32) -> f32 {
+    let ratio = ratio.clamp(1.0, 4.0);
+    1.0 + 0.5 * (1.0 - 1.0 / (ratio * ratio))
+}
+
 /// `lambda` (the reference plane's absolute threshold) scaled for a plane whose noise is `sigma` where the reference
 /// plane's is `sigma_ref`: the level that keeps the same amount of noise energy above it as the reference plane keeps
 /// (a Gaussian tail's kept energy falls off exponentially in the level, hence the square root), so a noisier plane is
@@ -435,10 +450,11 @@ fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], 
         let mut den = vec![0f32; t * t];
         let c = out.len();
         let pilot_plane = pilot.and_then(|pl| pl.get(c));
-        let plane_sigma = if ref_noise > 0.0 { sigma * (plane_noise(plane, t) / ref_noise).max(1.0) } else { sigma };
+        let ratio = noise_ratio(ref_noise, plane_noise(plane, t));
+        let plane_sigma = sigma * ratio;
         // a colour-difference plane noisier than the brightness plane is shrunk a little harder than its scaled
         // level, as the brightness plane is the one the groups were matched on; one no noisier keeps its scaled level
-        let plane_lambda = scaled_lambda(lambda, sigma_ref, plane_sigma) * if c == 0 || plane_sigma <= sigma_ref { 1.0 } else { 1.5 };
+        let plane_lambda = scaled_lambda(lambda, sigma_ref, plane_sigma) * chroma_factor(ratio);
         for members in groups {
             let m = members.len();
             gather(plane, t, n, members, &mut buf);
@@ -695,6 +711,40 @@ mod tests {
         let read = plane_noise(&plane, t);
         assert!(read < 1.5, "horizontal texture read as noise {read}");
         assert!(read > 0.5, "unit noise read as {read}");
+    }
+
+    /// A near-zero reference noise estimate does not blow up the scaling, and the extra chroma factor is
+    /// continuous at a ratio of 1: a ratio of 1.001 raises the threshold by about a thousandth, not by half.
+    #[test]
+    fn near_zero_reference_noise_and_the_chroma_factor_at_the_boundary() {
+        assert_eq!(noise_ratio(0.0, 1.0), 1.0, "no reference noise scales nothing");
+        assert_eq!(noise_ratio(0.001, 1.0), 4.0, "a near-zero reference is capped");
+        assert_eq!(noise_ratio(1.0, 3.0), 3.0, "a legitimate difference is kept");
+        assert_eq!(chroma_factor(1.0), 1.0);
+        assert!(chroma_factor(1.001) < 1.01, "{}", chroma_factor(1.001));
+        assert!(chroma_factor(4.0) < 1.5 && chroma_factor(4.0) > 1.4, "{}", chroma_factor(4.0));
+        // End to end: a brightness plane that is nearly flat (a pattern at a thousandth of the colour planes'
+        // amplitude, so its noise estimate is near zero) must not have the colour planes' detail thresholded away.
+        let t = 4;
+        let p = Params::default();
+        let tf = Transform::new(p.block);
+        let amplitude = 20.0f32;
+        let mut chroma = vec![0f32; t * t];
+        for j in 0..t {
+            for i in 0..t {
+                let u = tf.c.get(i).copied().unwrap_or(0.0);
+                let v = tf.c.get(t + j).copied().unwrap_or(0.0);
+                if let Some(cell) = chroma.get_mut(j * t + i) {
+                    *cell = amplitude * u * v;
+                }
+            }
+        }
+        let brightness: Vec<f32> = chroma.iter().map(|v| v * 0.001).collect();
+        let y = vec![brightness, chroma.clone(), chroma.clone(), chroma];
+        let groups = vec![vec![0u32]];
+        let out = collaborate(&y, None, &groups, t, &p, 2.0, &tf);
+        let chroma_spread = spread(out.get(1..).unwrap_or_default(), 0.0);
+        assert!(chroma_spread > 1.0, "colour detail {chroma_spread}");
     }
 
     /// A colour-difference plane whose noise is no higher than the brightness plane's keeps a coefficient between
