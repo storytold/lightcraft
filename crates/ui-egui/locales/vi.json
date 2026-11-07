@@ -2711,5 +2711,11 @@
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
   "Bottom bar": "Thanh dưới cùng",
-  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "Album name (empty outside an album view)": "Tên album (trống ngoài chế độ xem album)",
+  "Export date, UTC (YYYYMMDD)": "Ngày xuất, UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "Giờ xuất, UTC (HHMM)",
+  "Insert variable": "Chèn biến",
+  "Insert…": "Chèn…",
+  "none  ({album}, {date}, {hour})": "không có  ({album}, {date}, {hour})"
 }

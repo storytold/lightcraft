@@ -46,7 +46,7 @@ pub(crate) use scan::cards_seen;
 #[cfg(test)]
 pub(crate) use scan::{HELD_RESOLVES, ScanEnd, scan_by_hand, stall_scan, stall_scan_of};
 pub use scan::{ScanTask, browse, open, poll_scan, running};
-pub(crate) use tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
+pub(crate) use tags::{insert_at_cursor, tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
 pub use task::{ImportTask, start, start_paths, tick};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

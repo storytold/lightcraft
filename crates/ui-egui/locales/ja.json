@@ -2424,5 +2424,11 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "アプリを --control 7980 (または LIGHTCRAFT_CONTROL_PORT) で起動してから、lightcraft-cli mcp --connect でエージェントを接続できます。",
   "Welcome": "ようこそ",
   "Next": "次へ",
-  "Get Started": "始める"
+  "Get Started": "始める",
+  "Album name (empty outside an album view)": "アルバム名（アルバム表示外では空）",
+  "Export date, UTC (YYYYMMDD)": "書き出し日、UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "書き出し時刻、UTC (HHMM)",
+  "Insert variable": "変数を挿入",
+  "Insert…": "挿入…",
+  "none  ({album}, {date}, {hour})": "なし  ({album}, {date}, {hour})"
 }

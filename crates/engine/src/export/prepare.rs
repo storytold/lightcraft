@@ -44,6 +44,9 @@ pub struct PreparedExport {
     /// The folder of the photo's original on disk ([`DestinationMode::SameAsOriginal`]); `None`
     /// for a demo photo or one in the browser's storage.
     pub source_dir: Option<String>,
+    /// The already-expanded, cleaned subfolder path for this item. Resolved once per batch at
+    /// preparation time; no raw variable tokens are present.
+    pub subfolder: String,
     work: Work,
     /// The library's originals, which [`run_batch`] never writes over (shared by a batch).
     pub(super) guard: std::sync::Arc<crate::originals::OriginalGuard>,
@@ -88,13 +91,24 @@ pub fn prepare_export(
     seq: usize,
 ) -> Result<PreparedExport, String> {
     let guard = std::sync::Arc::new(session.original_guard());
-    prepare_guarded(session, id, o, seq, guard)
+    let album_name = match session.source {
+        crate::LibrarySource::Album(aid) => session.catalog.album(aid).map(|a| a.name.clone()),
+        _ => None,
+    };
+    prepare_guarded(session, id, o, seq, guard, None, album_name.as_deref())
 }
 
 /// [`prepare_export`] for each of `ids` in order (`{seq}` = position, from 1).
 pub fn prepare_batch(session: &mut crate::Session, ids: &[lightcraft_catalog::PhotoId], o: &ExportOptions) -> Result<Vec<PreparedExport>, String> {
     let guard = std::sync::Arc::new(session.original_guard());
-    ids.iter().enumerate().map(|(i, id)| prepare_guarded(session, *id, o, i + 1, guard.clone())).collect()
+    let since = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap_or_default();
+    let secs = i64::try_from(since.as_secs()).unwrap_or(i64::MAX);
+    let now = chrono::DateTime::from_timestamp(secs, 0).map(|dt| dt.naive_utc());
+    let album_name = match session.source {
+        crate::LibrarySource::Album(aid) => session.catalog.album(aid).map(|a| a.name.clone()),
+        _ => None,
+    };
+    ids.iter().enumerate().map(|(i, id)| prepare_guarded(session, *id, o, i + 1, guard.clone(), now, album_name.as_deref())).collect()
 }
 
 fn prepare_guarded(
@@ -103,10 +117,13 @@ fn prepare_guarded(
     o: &ExportOptions,
     seq: usize,
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
+    now: Option<chrono::NaiveDateTime>,
+    album: Option<&str>,
 ) -> Result<PreparedExport, String> {
     let p = session.catalog.photo(id).ok_or("no such photo")?;
     let file_name = o.file_name_for(p, seq);
     let source_dir = original_folder(&p.source);
+    let subfolder = super::place::expand_subfolder(&o.subfolder, album, now);
     // HDR output only for photos edited in HDR; the rest of the batch exports as usual
     let sdr_opts;
     let o = if o.hdr && !p.develop.hdr.enabled {
@@ -162,7 +179,7 @@ fn prepare_guarded(
         };
         (work, weight)
     };
-    Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight })
+    Ok(PreparedExport { photo: id, file_name, source_dir, subfolder, work, guard, weight })
 }
 
 /// The folder a photo's original is in, for [`DestinationMode::SameAsOriginal`]. None for a demo

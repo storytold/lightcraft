@@ -2590,5 +2590,11 @@
   "Welcome": "Benvenuto",
   "Next": "Avanti",
   "Get Started": "Inizia",
-  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto"
+  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto",
+  "Album name (empty outside an album view)": "Nome dell'album (vuoto fuori dalla vista album)",
+  "Export date, UTC (YYYYMMDD)": "Data di esportazione, UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "Ora di esportazione, UTC (HHMM)",
+  "Insert variable": "Inserisci variabile",
+  "Insert…": "Inserisci…",
+  "none  ({album}, {date}, {hour})": "nessuno  ({album}, {date}, {hour})"
 }
