@@ -38,6 +38,13 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### The point curve bends like Lightroom Classic's
+- The curve through the Point Curve's points is now a smooth cubic spline, as in Lightroom Classic, and is cut off
+  flat at black and white. With a few points it swings past them (a bump between two points, a dip after a steep
+  rise), where before it stayed between its neighbours. A point curve read from a Lightroom sidecar or preset
+  (`ToneCurvePV2012`) now renders as it does there. A curve of two points, or of points on a straight line, is
+  unchanged; saved edits keep their points, but a curve with three or more points can look different.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

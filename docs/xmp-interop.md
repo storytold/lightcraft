@@ -169,7 +169,7 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `ParametricShadows`, `ParametricDarks`, `ParametricLights`, `ParametricHighlights` | `curve.shadows/darks/lights/highlights` | |
 | `ParametricShadowSplit`, `ParametricMidtoneSplit`, `ParametricHighlightSplit` | `curve.split_shadows/split_mid/split_highlights` | |
 | `CurveRefineSaturation` | `curve.refine_saturation` | 0..100 (100 = curve saturation unchanged) |
-| `ToneCurvePV2012`, `ToneCurvePV2012Red/Green/Blue` | `curve.master/red/green/blue` | `"x, y"` points in 0..255 → 0..1; a straight 0→255 line = no curve; the red / green / blue curves are read only when `ToneCurvePV2012` and all three channel curves are present (Lightroom Classic ignores them otherwise: a master + red-only packet renders without the red curve) |
+| `ToneCurvePV2012`, `ToneCurvePV2012Red/Green/Blue` | `curve.master/red/green/blue` | `"x, y"` points in 0..255 → 0..1, interpolated as a natural cubic spline cut off at 0 and 1 (it swings past its points, as in Lightroom Classic); a straight 0→255 line = no curve; the red / green / blue curves are read only when `ToneCurvePV2012` and all three channel curves are present (Lightroom Classic ignores them otherwise: a master + red-only packet renders without the red curve) |
 | `SplitToningShadowHue/Saturation`, `SplitToningHighlightHue/Saturation` | `grading.shadows/highlights.hue/sat` | |
 | `ColorGradeShadowLum`, `ColorGradeHighlightLum` | `grading.shadows/highlights.lum` | |
 | `ColorGradeMidtoneHue/Sat/Lum`, `ColorGradeGlobalHue/Sat/Lum` | `grading.midtones/global.*` | |
