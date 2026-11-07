@@ -421,6 +421,53 @@ fn tiff_samples_narrower_than_a_byte() {
     assert!(decode(&packed_tiff(10, 2, 1, 1, &rows[..3]), DecodeOptions::default()).is_err());
 }
 
+/// PlanarConfiguration 2 stores each sample in its own plane (all reds, then all greens, then all
+/// blues). Only the first plane used to be read, so these files failed with "sample buffer too short"
+/// (#2462).
+#[test]
+fn tiff_planar_reads_every_plane() {
+    // 2 × 2 RGB, 16 bits, one uncompressed strip per plane. Pixel i has R = 1000 i, G = 20000 + 1000 i,
+    // B = 40000 + 1000 i.
+    let (w, h) = (2u32, 2u32);
+    let planes: Vec<Vec<u8>> = (0..3u16).map(|c| (0..4u16).flat_map(|i| (20000 * c + 1000 * i).to_le_bytes()).collect()).collect();
+    const N: u32 = 10;
+    let arrays = 8 + 2 + N * 12 + 4;
+    let (bits_at, offsets_at, counts_at) = (arrays, arrays + 6, arrays + 18);
+    let data_at = arrays + 30;
+    let plane_len = planes[0].len() as u32;
+    let entry =
+        |tag: u16, ty: u16, count: u32, value: u32| [&tag.to_le_bytes()[..], &ty.to_le_bytes(), &count.to_le_bytes(), &value.to_le_bytes()].concat();
+    let mut b = b"II*\0".to_vec();
+    b.extend(8u32.to_le_bytes());
+    b.extend((N as u16).to_le_bytes());
+    b.extend(entry(256, 4, 1, w));
+    b.extend(entry(257, 4, 1, h));
+    b.extend(entry(258, 3, 3, bits_at));
+    b.extend(entry(259, 3, 1, 1));
+    b.extend(entry(262, 3, 1, 2));
+    b.extend(entry(273, 4, 3, offsets_at));
+    b.extend(entry(277, 3, 1, 3));
+    b.extend(entry(278, 4, 1, h));
+    b.extend(entry(279, 4, 3, counts_at));
+    b.extend(entry(284, 3, 1, 2));
+    b.extend(0u32.to_le_bytes());
+    b.extend([16u16; 3].iter().flat_map(|v| v.to_le_bytes()));
+    b.extend((0..3).flat_map(|c| (data_at + c * plane_len).to_le_bytes()));
+    b.extend([plane_len; 3].iter().flat_map(|v| v.to_le_bytes()));
+    assert_eq!(b.len(), data_at as usize);
+    b.extend(planes.concat());
+
+    let d = decode(&b, DecodeOptions::default()).unwrap();
+    assert_eq!((d.image.width, d.image.height, d.bit_depth), (2, 2, 16));
+    for i in 0..4usize {
+        let px = d.image.get(i % 2, i / 2);
+        for c in 0..3 {
+            let want = srgb_to_linear((20000 * c + 1000 * i) as f32 / 65535.0);
+            assert!((px[c] - want).abs() < 1e-4, "pixel {i} channel {c}: {} vs {want}", px[c]);
+        }
+    }
+}
+
 #[test]
 fn webp_lossless_exact() {
     let img = gradient(31, 19);
