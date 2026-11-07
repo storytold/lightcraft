@@ -511,12 +511,6 @@ fn fixed_photo_keys(i: &egui::InputState, native: &dyn Fn(&str) -> bool, taken: 
             fire.push(format!("grid:extend:{step}"));
         }
     }
-    // Cmd+← / Cmd+→: the previous / next unrated photo of the view
-    for (key, id) in [(Key::ArrowLeft, "library.prevUnrated"), (Key::ArrowRight, "library.nextUnrated")] {
-        if matches(i, Modifiers::COMMAND, key) && !native("Cmd+Right") && !native("Cmd+Left") && !taken.contains(&(Modifiers::COMMAND, key)) {
-            fire.push(id.to_string());
-        }
-    }
 }
 
 /// Rating/flag/label keys: in Compare/Survey they act on the active photo only; `advance` (Shift+key) or
@@ -594,6 +588,14 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
     }
     if matches!(f, "library.up" | "library.down") {
         up_down_key(app, ctx, f);
+        return;
+    }
+    if matches!(f, "library.nextUnrated" | "library.prevUnrated") {
+        if let Ok(v) = app.run(f, json!({}))
+            && v.get("allRated").and_then(Value::as_bool) == Some(true)
+        {
+            app.toast(ctx, crate::i18n::tr("All photos are rated"));
+        }
         return;
     }
     // an export that can't start (e.g. no folder) says why instead of doing nothing
