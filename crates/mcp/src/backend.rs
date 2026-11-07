@@ -20,6 +20,10 @@ pub trait Backend {
     fn describe(&self) -> String;
     /// Progress/cancellation for the next headless batch export. Other backends ignore it.
     fn set_progress(&mut self, _hook: Option<ProgressHook>) {}
+    /// The automation roots a tool call runs under (`lightcraft-cli mcp --automation-read-root …`).
+    fn automation_roots(&self) -> Option<std::sync::Arc<lightcraft_engine::file_access::AutomationRoots>> {
+        None
+    }
 }
 
 /// `(completed photos, total photos, next filename)`; false stops before the next photo.

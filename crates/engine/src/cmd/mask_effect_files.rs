@@ -407,11 +407,19 @@ pub fn add_found(s: &mut Session, found: Vec<Found>, group: Option<&str>, dry: b
 /// The files under `paths` an effect import reads (folders walked, at most 8 levels), each with
 /// the group its folder gives and whether it was named (not found in a folder).
 fn effect_files(paths: &[String]) -> Vec<(String, Option<String>, bool)> {
+    /// Visit eligible effect files below this directory, stopping at the depth limit.
+    /// Walk the effect file tree and collect matching files.
     fn walk(dir: &std::path::Path, base: &std::path::Path, depth: usize, out: &mut Vec<(String, Option<String>, bool)>) {
+        if crate::file_access::check_read(dir).is_err() {
+            return;
+        }
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
         entries.sort();
         for p in entries {
+            if crate::file_access::check_read(&p).is_err() {
+                continue;
+            }
             if p.is_dir() {
                 if depth < 8 {
                     walk(&p, base, depth + 1, out);
@@ -436,6 +444,7 @@ fn effect_files(paths: &[String]) -> Vec<(String, Option<String>, bool)> {
 
 /// Read a file of at most [`MAX_FILE`] bytes.
 pub fn read_capped(path: &str) -> std::result::Result<Vec<u8>, String> {
+    crate::file_access::check_read(path)?;
     let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
     if len > MAX_FILE {
         return Err(format!("too large for a preset file ({} MB)", len >> 20));
@@ -443,6 +452,8 @@ pub fn read_capped(path: &str) -> std::result::Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| e.to_string())
 }
 
+/// Import mask effect files into the selected library.
+/// Import effect files into the local effect library.
 pub fn import_effects(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.importEffects";
     let mut paths: Vec<String> =
@@ -456,7 +467,14 @@ pub fn import_effects(s: &mut Session, p: &Value) -> Result<Value> {
     let group = str_param(p, "group").map(str::trim).filter(|g| !g.is_empty());
     let dry = p.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
     let (mut found, mut failed) = (Vec::new(), Vec::new());
-    for (f, dir_group, named) in effect_files(&paths) {
+    let mut allowed = Vec::new();
+    for x in &paths {
+        match crate::file_access::check_read(x) {
+            Ok(()) => allowed.push(x.clone()),
+            Err(e) => failed.push((x.clone(), e)),
+        }
+    }
+    for (f, dir_group, named) in effect_files(&allowed) {
         match read_capped(&f) {
             Ok(bytes) => {
                 if !found_in(&f, &bytes, dir_group, &mut found, &mut failed) && named {
@@ -470,6 +488,8 @@ pub fn import_effects(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"imported": imported, "dividers": dividers, "failed": failed.into_iter().map(|(f, e)| json!([f, e])).collect::<Vec<_>>()}))
 }
 
+/// Export the selected mask effects to a file.
+/// Export selected effect files to the requested folder.
 pub fn export_effects(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.exportEffects";
     let path = str_param(p, "path").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(C, "missing `path`"))?;
@@ -489,6 +509,7 @@ pub fn export_effects(s: &mut Session, p: &Value) -> Result<Value> {
     if chosen.is_empty() {
         return Err(bad(C, "no effect presets to export"));
     }
+    crate::file_access::check_write(&path).map_err(crate::EngineError::Other)?;
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| crate::EngineError::Other(format!("{}: {e}", dir.display())))?;
     }

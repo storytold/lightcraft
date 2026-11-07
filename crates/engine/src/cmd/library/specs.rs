@@ -29,6 +29,8 @@ fn next_seed(prev: u64, now: &str) -> u64 {
     (lightcraft_catalog::mix64(prev.wrapping_add(1)) ^ t) & (MAX_SEED - 1)
 }
 
+/// Describe the library commands and their parameter schemas.
+/// Describe the library command parameters.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // ---- view source / filter / sort
@@ -1331,6 +1333,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let paths = strs(p, "paths");
                 if paths.is_empty() {
                     return Err(bad("library.importPreview", "no paths"));
+                }
+                for path in &paths {
+                    crate::file_access::check_read(path).map_err(|e| bad("library.importPreview", e))?;
                 }
                 let out = crate::import::scan_report(s, &paths);
                 let dups = out.candidates.iter().filter(|c| c.duplicate.is_some()).count();

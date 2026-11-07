@@ -1253,6 +1253,22 @@ mod apple_photos {
         }
     }
 
+    /// Verify that confined exports cannot add files to Apple Photos.
+    #[test]
+    fn photos_is_refused_inside_automation_roots() {
+        let dir = temp_dir("photos-confined");
+        let roots = crate::file_access::AutomationRoots::new(Some(&dir), Some(&dir)).unwrap().unwrap();
+        let mut s = Session::with_demo();
+        let (runner, calls) = fake(usize::MAX);
+        s.apple_photos = Some(runner);
+        // what a preset saved on a Mac reads back as, on any platform
+        let on = ExportOptions { add_to_photos: true, ..Default::default() };
+        let e = crate::file_access::confine(Some(&roots), || s.after_export(&on).err().unwrap());
+        assert!(e.contains("another application"), "{e}");
+        assert!(calls.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn the_add_to_photos_command_needs_a_runner_and_checks_its_input() {
         let mut s = Session::with_demo();

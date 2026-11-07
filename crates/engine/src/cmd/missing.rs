@@ -126,11 +126,14 @@ pub(crate) fn relink_op(id: PhotoId, path: &str) -> Op {
     Op::Relink { id, file_name, source: Source::File { path: path.to_string() }, format: None }
 }
 
+/// Relink the selected missing photo to an existing file.
+/// Relink missing photos to the supplied file paths.
 fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.relink";
     let id = super::photo_id(p, C)?.or(s.active()).ok_or_else(|| bad(C, "no photo (give `id`)"))?;
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
     let abs = std::path::absolute(path).map_err(|e| bad(C, e.to_string()))?;
+    crate::file_access::check_read(&abs).map_err(|e| bad(C, e))?;
     if !abs.is_file() {
         return Err(bad(C, format!("{path}: no such file")));
     }
@@ -165,6 +168,7 @@ fn stored_hash(p: &Photo) -> Option<&str> {
 fn file_hash(path: &str) -> Option<String> {
     use std::io::Read;
     // the opened file must be regular (a FIFO or device would never end), and no more than its size at open is read
+    crate::file_access::check_read(path).ok()?;
     let file = std::fs::File::open(path).ok()?;
     let meta = file.metadata().ok().filter(|m| m.is_file())?;
     hash_reader(file.take(meta.len()))

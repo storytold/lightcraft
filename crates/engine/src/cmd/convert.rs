@@ -31,10 +31,7 @@ pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::res
 
 /// [`write_dng_for`] without the session (imports convert on a worker thread).
 pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path: &str, packet: String) -> std::result::Result<String, String> {
-    let bytes = match file_bytes {
-        Some(r) => r(path)?,
-        None => std::fs::read(path).map_err(|e| format!("{path}: {e}"))?,
-    };
+    let bytes = crate::merge::read_file(file_bytes, path)?;
     let mut raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
     crate::camera_preview::with_starting_colour(&mut raw, &bytes);
     drop(bytes);
@@ -52,14 +49,29 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
         return Err(format!("{path}: the DNG written for it doesn't hold the same raw data; the raw is kept"));
     }
     drop((raw, back));
+    crate::file_access::check_write_container(crate::merge::output_dir(path))?;
     let out = lightcraft_catalog::safe_file::write_new_unique(&mut dng_names(path), &dng)
         .map_err(|e| format!("{path}: could not write its DNG ({e}); the raw is kept"))?;
     Ok(out.to_string_lossy().to_string())
 }
 
+/// May each photo's file be read, and a new file be written next to it? Asked of them all before
+/// any work starts, so a refusal leaves nothing behind for the photos before it.
+fn check_beside_originals(s: &Session, ids: &[lightcraft_catalog::PhotoId], c: &str) -> Result<()> {
+    for id in ids {
+        if let Some(Source::File { path }) = s.catalog.photo(*id).map(|ph| &ph.source) {
+            crate::file_access::check_read(path).map_err(|e| bad(c, e))?;
+            crate::file_access::check_write_container(crate::merge::output_dir(path)).map_err(|e| bad(c, e))?;
+        }
+    }
+    Ok(())
+}
+
+/// Convert selected supported raw photos to DNG beside their originals.
 fn convert(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.convertToDng";
     let ids = s.targets(p)?;
+    check_beside_originals(s, &ids, C)?;
     let mut ops = Vec::new();
     let mut converted = Vec::new();
     let mut skipped = Vec::new();
@@ -157,6 +169,7 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
         conflict: crate::export::Conflict::Unique,
         ..Default::default()
     };
+    check_beside_originals(s, &ids, C)?;
     let mut copies = Vec::new();
     for id in ids {
         copies.push(edit_copy(s, p, id, &opts)?);
@@ -339,8 +352,10 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
 /// same settings, metadata, rating, flag, label and albums. → {ids}
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.duplicate";
+    let ids = s.targets(p)?;
+    check_beside_originals(s, &ids, C)?;
     let mut made = Vec::new();
-    for id in s.targets(p)? {
+    for id in ids {
         let Some(ph) = s.catalog.photo(id).map(|p| (**p).clone()) else { continue };
         let Source::File { path } = &ph.source else { return Err(bad(C, "a generated demo photo has no file to duplicate")) };
         let src = Path::new(path);
@@ -353,6 +368,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
             dst = dir.join(format!("{stem}-copy-{n}{ext}"));
             n += 1;
         }
+        crate::file_access::check_write(&dst).map_err(|e| bad(C, e))?;
         std::fs::copy(src, &dst).map_err(|e| bad(C, format!("{path}: {e}")))?;
         let new = s.catalog.alloc_photo_id();
         let mut q = ph.clone();

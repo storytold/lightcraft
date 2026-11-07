@@ -35,6 +35,67 @@ as a pre-dispatch refusal (for example, too many control connections); the next 
 
 Logs go to stderr; stdout carries only protocol messages.
 
+## Automation roots
+
+`lightcraft-cli mcp` can keep an agent's file access to the folders you give it, for a server that hosts agents or any
+other unattended use:
+
+- `--automation-read-root DIR`: reads stay inside `DIR` (or the write root).
+- `--automation-write-root DIR`: writes stay inside `DIR`.
+
+The rules:
+
+- **A root grants its own kind only.** Reads are allowed inside either root, writes only inside the write root. With only
+  a read root nothing can be written; with neither option nothing is confined.
+- **Links are followed before a path is judged.** Both the roots and every path are resolved first, so `..`, a link to a
+  file or folder outside, and a link that leads nowhere are refused before anything is opened. A file that doesn't exist
+  yet is judged by its nearest existing folder. Comparison is by whole path components (`/work2` isn't inside `/work`)
+  and exact: a folder that exists counts in its real case, so `C:\WORK` finds `C:\Work` on an ordinary Windows volume, and a
+  name that doesn't exist yet has to match. Reserved Windows device names (`CON`, `NUL`, `COM1`…) are refused too.
+- **Writing to a link acts on the link.** A write can replace, rename or remove the link itself, so a link's own folder
+  has to be inside the write root too, whatever the link points to. A file under a linked folder is judged where it
+  really is. A write root that is itself a link is used through paths below it: the link alone isn't writable unless its
+  own folder is in the root.
+- **Headless only.** `--connect` is refused together with a root: a running app isn't confined by them.
+- **Every command is classified.** `Session::execute` checks the paths among a command's parameters before it runs
+  (`crates/engine/src/file_access/commands.rs`). A command not in that list is refused, and a test walks the command
+  registry so a new command can't land without a line there. `app.export` and the helper tools go through the same check.
+- **What a command reaches indirectly is checked where it is opened**: a photo's original and sidecars through the
+  library, a watermark or identity plate graphic, a print or proof profile. A catalog or preset can name a file outside
+  the roots: it counts as missing and isn't read, and nothing says whether it exists.
+- **The check comes before anything else a command looks at.** With roots in force, `photo.convertToDng` on a photo that
+  isn't raw and sits in a read-only place answers with an error, not a skip entry.
+
+Refused while roots are in force: `export.addToPhotos` and `addToPhotos` on an export (hand files to another application) and `library.devices` (lists
+the mounted volumes).
+
+Not confined, on purpose:
+
+- What the operator chose at startup: the `--library` folder with its catalog, previews and archives.
+  A smart preview is written there from a photo the roots can read. A photo the catalog names outside
+  the roots counts as missing and is not read, including as the source of a smart preview.
+- The app's own folders: settings, user presets and templates, the denoise and face models and the lens and place-name
+  data it downloads. No path an agent gives reaches them, but a shared server should give each client its own `HOME`.
+- Other programs. A path is checked and then opened, so a process that swaps in a link in between can still win. A file
+  with more than one name is refused, because another name may lie outside the roots; a name count that cannot be read
+  is refused too. A file with one name is an ordinary file. The roots keep an agent to the files it was given; they
+  don't replace an operating-system sandbox.
+
+Where the file-touching commands are checked, besides the check of their parameters:
+
+| Commands | Access | Checked in |
+|---|---|---|
+| `import`, `library.import`, `library.importPreview`, `library.browse`, `library.findMissing`, `library.autoImport*`, `folder.synchronize`, `folder.scanChanges` | Read (`move` also needs write on the source; `destination` needs write) | `walk.rs`, `files/fs.rs`, `import_move.rs`, `cmd/library/`, `cmd/browse.rs`, `sync.rs` |
+| Originals and sidecars, read | Read | `files/fs.rs`, `files/preview.rs`, `sidecar.rs`, `import/job.rs`, `focus_scan.rs`, `cmd/query.rs` |
+| `photo.saveMetadataToFile`, automatic sidecars | Write | `sidecar.rs` |
+| `export`, `app.export`, `render_photo` with a `path`, `export.contactSheet`, `print.exportPdf`, `slideshow.export`, every `*.export*` of presets and templates | Write (a render without a `path` stays in memory) | `export/place.rs`, `originals.rs`, `slideshow_export.rs` |
+| `folder.create`, `folder.rename`, `folder.move`, `photo.moveToFolder`, `photo.rename` | Write on both ends | `cmd/browse.rs`, `rename/fs.rs`, `cmd/manage.rs` |
+| `photo.duplicate`, `photo.convertToDng`, `photo.editExternal` | Read the source, write the copy | `cmd/convert.rs`, `export/place.rs` |
+| `library.smartPreviewsLocation` | Write | `cmd/previews.rs` |
+| `photo.relink`, `photo.autoTagTracklog`, `keyword.import`, `curve.importPresets`, `preset.import`, `mask.importEffects`, `profile.import`, `print.template.import`, `slideshow.templates.import`, `denoise.models.install`, `faces.models.install` | Read | `file_access/commands.rs`, and the command's own file where it opens one |
+| `library.inspectLightroom`, `library.importLightroom` | Read, the `-wal` file too | `cmd/library/specs.rs`, `lightroom_catalog.rs` |
+| Watermark and identity plate graphics, print and proof profiles | Read | `export/watermark.rs`, `print_color.rs`, `proof.rs`, `display.rs` |
+
 ## Wiring it into a client
 
 Build once: `cargo build --release -p lightcraft-cli` (binary: `target/release/lightcraft-cli`).

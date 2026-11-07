@@ -145,6 +145,7 @@ pub fn browse_files(input: &ScanInput, root: &str, subfolders: bool) -> std::io:
     // one spelling for the folder, and so for its files: `lib/../outside` lists `outside`'s files as
     // the catalog stores them, not as new photos under another name
     let root_path = browse_path(Path::new(root))?;
+    crate::file_access::check_read(&root_path).map_err(std::io::Error::other)?;
     let root = root_path.to_string_lossy().to_string();
     // the library's folder itself, or a folder inside it: nothing to browse
     if input.skip.as_deref().is_some_and(|lib| inside(&root_path, lib)) {
@@ -162,7 +163,8 @@ pub fn browse_files(input: &ScanInput, root: &str, subfolders: bool) -> std::io:
             continue;
         }
         let f = entry.path();
-        if f.is_file() && is_supported(&f) {
+        // (a link out of the automation roots is passed over, as the walk does)
+        if f.is_file() && is_supported(&f) && crate::file_access::check_read(&f).is_ok() {
             v.push(f.to_string_lossy().to_string());
         }
     }

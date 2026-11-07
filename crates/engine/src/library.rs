@@ -592,7 +592,7 @@ impl Session {
         self.mask_tool_effects = prefs.mask_tool_effects;
         self.label_sets = prefs.label_sets;
         self.lut_profiles = prefs.lut_profiles;
-        crate::cmd::lut_profiles::register_all(self);
+        crate::cmd::lut_profiles::register_all(self, on_disk.then(|| dir.join("Profiles")).as_deref());
         self.dcp_profiles = prefs.dcp_profiles;
         crate::cmd::dcp_profiles::register_all(self, on_disk.then(|| dir.join("Profiles")).as_deref());
         self.keyword_sets = prefs.keyword_sets;

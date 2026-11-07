@@ -839,9 +839,13 @@ fn file_path(p: &Photo) -> Option<&str> {
 /// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
     if let Some(sc) = lookup.find(original) {
+        if crate::file_access::check_read(&sc).is_err() {
+            return None;
+        }
         // A discovered sidecar keeps precedence even when reading it fails.
         return std::fs::read_to_string(&sc).ok().map(|s| (s, sc));
     }
+    crate::file_access::check_read(original).ok()?;
     if kind == MediaKind::Raw {
         let bytes = std::fs::read(original).ok()?;
         let x = lightcraft_meta::embedded(&bytes).xmp?;
@@ -1118,6 +1122,7 @@ impl Session {
         self.save_sidecar_with(id, &StemOwners::among(&self.catalog, &[id]))
     }
 
+    /// Save sidecar data using the supplied atomic writer.
     pub(crate) fn save_sidecar_with(&mut self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         if p.copy_of.is_some() {
@@ -1153,6 +1158,7 @@ impl Session {
         let path = listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred);
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        crate::file_access::check_write(&path).map_err(EngineError::Other)?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
         let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
