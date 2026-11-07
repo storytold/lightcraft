@@ -407,15 +407,14 @@ fn plane_noise(plane: &[f32], t: usize) -> f32 {
 /// cleaned to the same residual level instead of keeping its extra noise spikes. A plane no noisier than the reference
 /// keeps the level; with no reference noise there is nothing to scale from.
 fn scaled_lambda(lambda: f32, sigma_ref: f32, sigma: f32) -> f32 {
-    if !(sigma_ref > 0.0) || !(sigma > sigma_ref) || !lambda.is_finite() {
-        return lambda;
+    if lambda.is_finite() && sigma_ref > 0.0 && sigma > sigma_ref {
+        let ratio = sigma / sigma_ref;
+        let k = lambda / sigma_ref;
+        if ratio.is_finite() && k > 0.0 {
+            return lambda * ratio * (1.0 + 4.0 * ratio.ln() / (k * k)).sqrt();
+        }
     }
-    let ratio = sigma / sigma_ref;
-    let k = lambda / sigma_ref;
-    if !(ratio.is_finite()) || !(k > 0.0) {
-        return lambda;
-    }
-    lambda * ratio * (1.0 + 4.0 * ratio.ln() / (k * k)).sqrt()
+    lambda
 }
 
 /// Filter every plane of `y` over the groups: hard threshold when there is no `pilot`, Wiener shrinkage by it when
