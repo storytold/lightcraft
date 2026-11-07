@@ -753,7 +753,7 @@ mod cache_tests {
             let count = c.rules_view(&cat, &rules, None, None, now, &ctx).1;
             assert!(count.n.is_some(), "the count made before is shown while the next is made");
             marked += usize::from(count.updating);
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            std::thread::sleep(SLOW / 10);
         }
         assert_eq!(marked, 40, "every frame says the count is out of date");
         assert_eq!(c.rules_count.ui_thread_scans, 0, "no frame counted the library");
