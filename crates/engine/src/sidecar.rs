@@ -413,16 +413,20 @@ impl SidecarData {
     /// may not repeat it) when the regions need it: they were drawn on a stated size ([`SidecarData::regions_drawn_on`]);
     /// and as [`SidecarData::develop_frame`] when a `crs:` patch places a crop or masks
     /// ([`SidecarData::has_positioned_develop`]). Only then is the file read ([`file_orientation`]); a file that
-    /// states no orientation is upright.
-    pub fn with_file_orientation(self, original: &str) -> Self {
+    /// states no orientation is upright. A crop or masks on a file that can't be opened is an error: taking it as
+    /// upright would save them turned the wrong way on a rotated photo.
+    pub fn with_file_orientation(self, original: &str) -> std::io::Result<Self> {
         let develop = self.has_positioned_develop();
         if self.regions_drawn_on.is_none() && !develop {
-            return self;
+            return Ok(self);
         }
         let file = file_orientation(original);
+        if develop && file.is_none() {
+            std::fs::File::open(original)?;
+        }
         let orientation = if self.regions_drawn_on.is_some() { file.or(self.orientation) } else { self.orientation };
         let develop_frame = if develop { file.or(Some(lightcraft_meta::Orientation::Normal)) } else { self.develop_frame };
-        SidecarData { orientation, develop_frame, ..self }
+        Ok(SidecarData { orientation, develop_frame, ..self })
     }
 
     /// Whether a `crs:` develop patch places anything on the image (a crop, masks): what [`SidecarData::develop_frame`]
@@ -1213,7 +1217,7 @@ impl Session {
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else { return Ok(None) };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
-        let sc = sc.with_file_orientation(orig);
+        let sc = sc.with_file_orientation(orig).map_err(|e| EngineError::Other(format!("{orig}: {e}")))?;
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
             warning.path = orig.to_string();
@@ -1815,6 +1819,26 @@ mod tests {
         assert_eq!((r.x0, r.y0, r.x1, r.y1), (0.0, 0.05, 0.95, 1.0));
         let (start, end) = linear(&p);
         assert_eq!((start.x, start.y, end.x, end.y), (-0.45, 0.48, 0.45, 0.48));
+    }
+
+    #[test]
+    fn a_crop_on_a_file_that_cannot_be_opened_is_an_error() {
+        // read as upright, the crop and gradient would be saved turned the wrong way on a rotated photo
+        let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-unreadable-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("gone.CR3").to_string_lossy().to_string();
+        let sc = parse_sidecar(PORTRAIT_RAW_SIDECAR, crate::crs::Target::RawAbsolute).unwrap();
+        assert!(sc.with_file_orientation(&missing).is_err());
+        // without a crop or masks, nothing needs the file
+        let plain = SidecarData { rating: Some(3), ..SidecarData::default() };
+        assert_eq!(plain.clone().with_file_orientation(&missing).unwrap(), plain);
+        // an existing file stating no orientation is upright
+        let there = dir.join("a.jpg");
+        std::fs::write(&there, b"not much of a photo").unwrap();
+        let sc = parse_sidecar(PORTRAIT_RAW_SIDECAR, crate::crs::Target::RawAbsolute).unwrap();
+        let sc = sc.with_file_orientation(&there.to_string_lossy()).unwrap();
+        assert_eq!(sc.develop_frame, Some(lightcraft_meta::Orientation::Normal));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn look_packet(name: &str) -> String {
