@@ -67,6 +67,48 @@ fn hdr_merge_command_creates_and_imports_a_dng() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn hdr_loading_cancels_before_reads_and_keeps_the_engine_progress_mapping() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    let images = Arc::new(lightcraft_merge::synth::bracket_dngs(96, 64, &[-2.0, 0.0, 2.0]).unwrap());
+    let reads = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&reads);
+    let job = crate::merge::MergeJob {
+        kind: crate::merge::MergeKind::Hdr { hdr: lightcraft_merge::HdrOptions { align: false, deghost: lightcraft_merge::Deghost::None } },
+        finish: Default::default(),
+        sources: (0..3).map(|i| (lightcraft_catalog::PhotoId(i), i.to_string())).collect(),
+        preview: None,
+        read: Arc::new(move |path| {
+            count.fetch_add(1, Ordering::Relaxed);
+            Ok(images[path.parse::<usize>().unwrap()].clone())
+        }),
+    };
+    for stop_after in [0, 1, 2, usize::MAX] {
+        reads.store(0, Ordering::Relaxed);
+        let events = Mutex::new(Vec::new());
+        let result = job.run(&|fraction, stage| {
+            let read = reads.load(Ordering::Relaxed);
+            events.lock().unwrap().push((fraction, stage.to_owned()));
+            if stage == "Reading photos" {
+                assert_eq!(fraction, 0.3 * read as f32 / 3.0);
+            }
+            read < stop_after
+        });
+        if stop_after < 3 {
+            assert_eq!(result.err().as_deref(), Some("cancelled"));
+            assert_eq!(reads.load(Ordering::Relaxed), stop_after);
+        } else {
+            assert!(!result.unwrap().dng.is_empty());
+            assert_eq!(reads.load(Ordering::Relaxed), 3);
+            let events = events.into_inner().unwrap();
+            assert!(events.iter().any(|(fraction, stage)| stage == "Reading photos" && *fraction == 0.3));
+            assert!(events.iter().any(|(fraction, stage)| stage == "Analysing exposures" && *fraction == 0.3 + 0.6 * 0.02));
+            assert!(events.windows(2).all(|pair| pair[0].0 <= pair[1].0), "engine progress moved backwards: {events:?}");
+        }
+    }
+}
+
 /// An HDR merge keeps the reference frame's lens corrections. The sources carry an off-centre `WarpRectilinear` and
 /// `FixVignetteRadial` for their active area and have a default crop; the merged DNG must give "Enable Profile
 /// Corrections" the same correction as the reference photo, upright and for a vertical bracket (whose DNG keeps the
