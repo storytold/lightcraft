@@ -17,8 +17,8 @@ pub(crate) use filters::covers_other_disks;
 pub use import::{ImportRequest, import_batch_done, import_params, list_auto_import_folder};
 pub fn specs() -> Vec<CommandSpec> {
     let mut v = vec![
-        cmd!("library.nextUnrated", "Next Unrated Photo", [], None, "{}", always, |s, _| step_unrated(s, 1)),
-        cmd!("library.prevUnrated", "Previous Unrated Photo", [], None, "{}", always, |s, _| step_unrated(s, -1)),
+        cmd!("library.nextUnrated", "Next Unrated Photo", [], Some("Cmd+Right"), "{}", always, |s, _| step_unrated(s, 1)),
+        cmd!("library.prevUnrated", "Previous Unrated Photo", [], Some("Cmd+Left"), "{}", always, |s, _| step_unrated(s, -1)),
     ];
     v.extend(specs::specs());
     v
@@ -29,10 +29,10 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
     if vis.is_empty() {
         return ok();
     }
-    if !vis.iter().any(|id| s.catalog.photo(*id).is_some_and(|p| p.rating == 0)) {
-        return ok();
+    let is_unrated = |id: &PhotoId| s.catalog.photo(*id).is_some_and(|p| p.rating == 0);
+    if !vis.iter().any(|id| is_unrated(id)) {
+        return Ok(json!({"allRated": true}));
     }
-    let unrated: Vec<PhotoId> = vis.iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.rating == 0)).collect();
     let active = s.active();
     let next = active
         .and_then(|a| {
@@ -40,27 +40,34 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
             if d >= 0 {
                 vis.iter()
                     .enumerate()
-                    .find(|(pos, id)| *pos > cur && unrated.contains(id))
+                    .find(|(pos, id)| *pos > cur && is_unrated(id))
                     .map(|(_, id)| *id)
-                    .or_else(|| vis.iter().enumerate().find(|(pos, id)| *pos <= cur && unrated.contains(id)).map(|(_, id)| *id))
+                    .or_else(|| vis.iter().enumerate().find(|(pos, id)| *pos <= cur && is_unrated(id)).map(|(_, id)| *id))
             } else {
                 vis.iter()
                     .enumerate()
                     .rev()
-                    .find(|(pos, id)| *pos < cur && unrated.contains(id))
+                    .find(|(pos, id)| *pos < cur && is_unrated(id))
                     .map(|(_, id)| *id)
-                    .or_else(|| vis.iter().enumerate().rev().find(|(pos, id)| *pos >= cur && unrated.contains(id)).map(|(_, id)| *id))
+                    .or_else(|| vis.iter().enumerate().rev().find(|(pos, id)| *pos >= cur && is_unrated(id)).map(|(_, id)| *id))
             }
         })
-        .or_else(|| unrated.first().copied());
+        .or_else(|| vis.iter().find(|id| is_unrated(id)).copied());
     let Some(id) = next else {
-        return ok();
+        return Ok(json!({"allRated": true}));
     };
     if active == Some(id) {
         return Ok(json!({"active": id.0}));
     }
     s.end_interaction()?;
-    s.selection = Selection::single(id);
+    if s.selection.ids.len() > 1 {
+        if !s.selection.contains(id) {
+            s.selection.ids.push(id);
+        }
+        s.selection.active = Some(id);
+    } else {
+        s.selection = Selection::single(id);
+    }
     s.active_mask = None;
     s.active_spot = None;
     Ok(json!({"active": id.0}))
@@ -125,6 +132,25 @@ mod next_unrated_tests {
         let result = s.execute("library.nextUnrated", &json!({}));
         assert!(result.is_ok(), "library.nextUnrated command should exist");
         assert_eq!(s.active(), Some(PhotoId(3)), "next unrated photo in view order");
+    }
+
+    #[test]
+    fn next_unrated_all_rated_returns_distinct_result() {
+        let mut s = session().unwrap();
+        s.execute("photo.rate", &json!({"ids": [3, 4], "rating": 5})).unwrap();
+        let result = s.execute("library.nextUnrated", &json!({})).unwrap();
+        assert_eq!(result, json!({"allRated": true}));
+        assert_eq!(s.active(), Some(PhotoId(1)));
+    }
+
+    #[test]
+    fn next_unrated_preserves_multi_selection_when_moving() {
+        let mut s = session().unwrap();
+        s.execute("library.select", &json!({"ids": [1, 2, 4], "active": 1})).unwrap();
+        let result = s.execute("library.nextUnrated", &json!({})).unwrap();
+        assert_eq!(result, json!({"active": 3}));
+        assert_eq!(s.active(), Some(PhotoId(3)));
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4), PhotoId(3)]);
     }
 
     #[test]
