@@ -2,17 +2,21 @@
   description = "LightCraft — photo library and non-destructive raw developer, in pure Rust";
 
   inputs = {
-    # LightCraft needs edition 2024 and rustc ≥ 1.90, so the flake tracks unstable. Consumers on a
+    # LightCraft needs edition 2024 and rustc ≥ 1.95, so the flake tracks unstable. Consumers on a
     # release channel can retarget it: `inputs.lightcraft.inputs.nixpkgs.follows = "nixpkgs";`
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # Optional build input of the repository: the CJK fonts (BIZ UDPGothic, BIZ UDMincho, Noto Sans CJK SC,
-    # Shippori Mincho) that `crates/engine/build.rs` embeds when `CRAFT_FONTS_DIR` is set. Official
-    # releases always build with them; without them everything works but Japanese text has no
-    # glyphs. Pinned to the revision the release workflow uses — bump deliberately
-    # (`nix flake update craft-fonts`); craftrules standards/fonts.md.
+    # Optional build input of the repository: the default fonts (BIZ UDPGothic Regular/Bold, BIZ UDMincho,
+    # Shippori Mincho, Noto Sans CJK SC, Noto Sans Arabic, Noto Sans Thai, Noto Sans Georgian,
+    # NanumGothic, Noto Sans Symbols, Noto Sans Symbols 2, Noto Sans Hebrew and Noto Sans Devanagari)
+    # listed in craft-fonts' `fonts/manifest.txt`, which `crates/engine/build.rs` embeds when
+    # `CRAFT_FONTS_DIR` is set. The opt-in LXGW WenKai Lite face in `fonts/simplified-chinese-manifest.txt`
+    # is not part of that default set and is not embedded. Official releases always build with the
+    # default fonts; without them everything works but non-Latin text lacks glyphs. Pinned to the same
+    # revision CI, the release workflow and the standalone packaging helpers use — bump all of them
+    # together (`nix flake update craft-fonts`).
     craft-fonts = {
-      url = "github:storytold/craft-fonts/3d9ab3a132ed0eff457e424226a435a901da30d3";
+      url = "github:storytold/craft-fonts/b076417b5880bd4154bd22f00695b1d28c6bea83";
       flake = false;
     };
   };

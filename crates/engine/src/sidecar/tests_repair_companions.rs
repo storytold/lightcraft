@@ -73,85 +73,85 @@ fn partial_move_companions_allow_save_and_autowrite_without_weakening_collisions
         for upper_full in [false, true] {
             for naming in [SidecarNaming::Stem, SidecarNaming::Full] {
                 for auto in [false, true] {
-                    let dir = crate::tests_xmp::temp_dir(&format!("r3-companions-{upper_stem}-{upper_full}-{naming:?}-{auto}"));
-                    let a = dir.join("a.jpg");
-                    let b = dir.join("Trip.jpg");
-                    std::fs::write(&a, b"physical fixture; Session rename does not decode").unwrap();
-                    let path = |photo: &Path, style, upper| {
-                        let path = sidecar_path(&photo.to_string_lossy(), style);
-                        if upper { path.with_extension("XMP") } else { path }
-                    };
-                    let stem_a = path(&a, SidecarNaming::Stem, upper_stem);
-                    let full_a = path(&a, SidecarNaming::Full, upper_full);
-                    let stem_b = path(&b, SidecarNaming::Stem, upper_stem);
-                    let full_b = path(&b, SidecarNaming::Full, upper_full);
-                    let stem_bytes = packet("stem-keep");
-                    let full_bytes = packet("full-keep");
-                    std::fs::write(&stem_a, &stem_bytes).unwrap();
-                    std::fs::write(&full_a, &full_bytes).unwrap();
-                    let mut s = session(&a);
-                    s.xmp.naming = naming;
-                    s.xmp.auto_write = auto;
-                    let fs = Faults(vec![full_a.clone(), b.clone()]);
-                    let plans = s.plan_rename_with(&fs, &[PhotoId(1)], "Trip", 1);
-                    assert!(s.execute_fn("photo.rename", |s| Ok(json!({"renamed": s.apply_rename_with(&fs, &plans)?}))).is_err());
-                    assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().source, Source::File { path: b.to_string_lossy().into_owned() });
-                    let pending = queues(&s);
-                    assert_eq!(pending.len(), 1);
-                    assert_eq!(std::fs::read_to_string(&stem_b).unwrap(), stem_bytes);
-
-                    // Missing packet and an unrelated packet at either case spelling remain protected.
-                    let held = dir.join("held.xmp");
-                    std::fs::rename(&full_a, &held).unwrap();
-                    s.execute("photo.setMeta", &json!({"title": "Fresh", "addKeywords": ["café"]})).unwrap();
-                    assert_eq!(save(&mut s)["failed"].as_array().unwrap().len(), 1);
-                    assert_eq!(queues(&s), pending);
-                    assert_eq!(std::fs::read_to_string(&stem_b).unwrap(), stem_bytes);
-                    std::fs::rename(&held, &full_a).unwrap();
-                    for collision in [full_b.clone(), full_b.with_extension(if upper_full { "xmp" } else { "XMP" })] {
-                        std::fs::write(&collision, packet("unrelated-packet")).unwrap();
-                        let occupied = std::fs::read(&collision).unwrap();
-                        assert_eq!(save(&mut s)["failed"].as_array().unwrap().len(), 1);
-                        assert_eq!(queues(&s), pending);
-                        assert_eq!(std::fs::read(&collision).unwrap(), occupied);
-                        assert_eq!(std::fs::read_to_string(&full_a).unwrap(), full_bytes);
-                        assert_eq!(std::fs::read_to_string(&stem_b).unwrap(), stem_bytes);
-                        std::fs::remove_file(collision).unwrap();
-                    }
-                    // AutoWrite is the first successful repair when enabled; explicit save otherwise.
-                    s.execute("photo.rate", &json!({"rating": 4})).unwrap();
-                    if !auto {
-                        assert_eq!(save(&mut s)["failed"].as_array().unwrap().len(), 0);
-                    }
-                    assert!(queues(&s).is_empty());
-                    assert!(!full_a.exists());
-                    let (written, untouched, expected) =
-                        if naming == SidecarNaming::Stem { (&stem_b, &full_b, &full_bytes) } else { (&full_b, &stem_b, &stem_bytes) };
-                    assert_fresh(written);
-                    assert_eq!(std::fs::read_to_string(untouched).unwrap(), *expected);
-                    assert_eq!(parse_sidecar(&std::fs::read_to_string(written).unwrap(), crate::crs::Target::Rendered).unwrap().rating, Some(4));
-                    for (command, rating) in [("edit.undo", 0), ("edit.redo", 4)] {
-                        s.execute(command, &json!({})).unwrap();
-                        if !auto {
-                            save(&mut s);
-                        }
-                        assert_fresh(written);
-                        assert_eq!(
-                            parse_sidecar(&std::fs::read_to_string(written).unwrap(), crate::crs::Target::Rendered).unwrap().rating,
-                            Some(rating)
-                        );
-                        assert_eq!(std::fs::read_to_string(untouched).unwrap(), *expected);
-                    }
-                    assert_eq!(s.xmp.naming, naming);
-                    assert_eq!(s.xmp.auto_write, auto);
-                    drop(s);
-                    std::fs::remove_dir_all(dir).unwrap();
+                    check_companion_scenario(upper_stem, upper_full, naming, auto);
                 }
             }
         }
     }
 }
 
+fn check_companion_scenario(upper_stem: bool, upper_full: bool, naming: SidecarNaming, auto: bool) {
+    let dir = crate::tests_xmp::temp_dir(&format!("r3-companions-{upper_stem}-{upper_full}-{naming:?}-{auto}"));
+    let a = dir.join("a.jpg");
+    let b = dir.join("Trip.jpg");
+    std::fs::write(&a, b"physical fixture; Session rename does not decode").unwrap();
+    let path = |photo: &Path, style, upper| {
+        let path = sidecar_path(&photo.to_string_lossy(), style);
+        if upper { path.with_extension("XMP") } else { path }
+    };
+    let stem_a = path(&a, SidecarNaming::Stem, upper_stem);
+    let full_a = path(&a, SidecarNaming::Full, upper_full);
+    let stem_b = path(&b, SidecarNaming::Stem, upper_stem);
+    let full_b = path(&b, SidecarNaming::Full, upper_full);
+    let stem_bytes = packet("stem-keep");
+    let full_bytes = packet("full-keep");
+    std::fs::write(&stem_a, &stem_bytes).unwrap();
+    std::fs::write(&full_a, &full_bytes).unwrap();
+    let mut s = session(&a);
+    s.xmp.naming = naming;
+    s.xmp.auto_write = auto;
+    let fs = Faults(vec![full_a.clone(), b.clone()]);
+    let plans = s.plan_rename_with(&fs, &[PhotoId(1)], "Trip", 1);
+    assert!(s.execute_fn("photo.rename", |s| Ok(json!({"renamed": s.apply_rename_with(&fs, &plans)?}))).is_err());
+    assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().source, Source::File { path: b.to_string_lossy().into_owned() });
+    let pending = queues(&s);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(std::fs::read_to_string(&stem_b).unwrap(), stem_bytes);
+
+    // Missing packet and an unrelated packet at either case spelling remain protected.
+    let held = dir.join("held.xmp");
+    std::fs::rename(&full_a, &held).unwrap();
+    s.execute("photo.setMeta", &json!({"title": "Fresh", "addKeywords": ["café"]})).unwrap();
+    assert_eq!(save(&mut s)["failed"].as_array().unwrap().len(), 1);
+    assert_eq!(queues(&s), pending);
+    assert_eq!(std::fs::read_to_string(&stem_b).unwrap(), stem_bytes);
+    std::fs::rename(&held, &full_a).unwrap();
+    for collision in [full_b.clone(), full_b.with_extension(if upper_full { "xmp" } else { "XMP" })] {
+        std::fs::write(&collision, packet("unrelated-packet")).unwrap();
+        let occupied = std::fs::read(&collision).unwrap();
+        assert_eq!(save(&mut s)["failed"].as_array().unwrap().len(), 1);
+        assert_eq!(queues(&s), pending);
+        assert_eq!(std::fs::read(&collision).unwrap(), occupied);
+        assert_eq!(std::fs::read_to_string(&full_a).unwrap(), full_bytes);
+        assert_eq!(std::fs::read_to_string(&stem_b).unwrap(), stem_bytes);
+        std::fs::remove_file(collision).unwrap();
+    }
+    // AutoWrite is the first successful repair when enabled; explicit save otherwise.
+    s.execute("photo.rate", &json!({"rating": 4})).unwrap();
+    if !auto {
+        assert_eq!(save(&mut s)["failed"].as_array().unwrap().len(), 0);
+    }
+    assert!(queues(&s).is_empty());
+    assert!(!full_a.exists());
+    let (written, untouched, expected) =
+        if naming == SidecarNaming::Stem { (&stem_b, &full_b, &full_bytes) } else { (&full_b, &stem_b, &stem_bytes) };
+    assert_fresh(written);
+    assert_eq!(std::fs::read_to_string(untouched).unwrap(), *expected);
+    assert_eq!(parse_sidecar(&std::fs::read_to_string(written).unwrap(), crate::crs::Target::Rendered).unwrap().rating, Some(4));
+    for (command, rating) in [("edit.undo", 0), ("edit.redo", 4)] {
+        s.execute(command, &json!({})).unwrap();
+        if !auto {
+            save(&mut s);
+        }
+        assert_fresh(written);
+        assert_eq!(parse_sidecar(&std::fs::read_to_string(written).unwrap(), crate::crs::Target::Rendered).unwrap().rating, Some(rating));
+        assert_eq!(std::fs::read_to_string(untouched).unwrap(), *expected);
+    }
+    assert_eq!(s.xmp.naming, naming);
+    assert_eq!(s.xmp.auto_write, auto);
+    drop(s);
+    std::fs::remove_dir_all(dir).unwrap();
+}
 #[test]
 fn rollback_repair_and_shared_copy_keep_known_companions() {
     for rollback in [false, true] {

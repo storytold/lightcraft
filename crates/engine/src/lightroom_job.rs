@@ -81,6 +81,8 @@ pub struct LightroomStart {
     index: ImportIndex,
     archive_path: Option<PathBuf>,
     warnings: Vec<String>,
+    /// The catalog's images the reader skipped (incomplete records), for the report.
+    skipped: Vec<lightroom_catalog::SkippedImage>,
     collections: Vec<Row>,
     members: Vec<Row>,
     photos: usize,
@@ -330,6 +332,7 @@ impl LightroomJob {
             index,
             archive_path,
             warnings: data.warnings,
+            skipped: data.skipped,
             collections: data.collections,
             members: data.members,
             photos: n,
@@ -428,8 +431,10 @@ impl LightroomImport {
         if !start.token.matches(s) {
             return Err(error("Lightroom import belongs to a different open library"));
         }
+        let mut apply = LightroomApply::new(s, start.source, start.update_existing, start.index, start.warnings, start.now.clone());
+        apply.skipped = start.skipped;
         Ok(Self {
-            apply: LightroomApply::new(s, start.source, start.update_existing, start.index, start.warnings, start.now.clone()),
+            apply,
             collections: start.collections,
             members: start.members,
             archive_path: start.archive_path,
@@ -549,6 +554,7 @@ mod tests {
             index: ImportIndex::default(),
             archive_path: None,
             warnings: Vec::new(),
+            skipped: Vec::new(),
             collections: Vec::new(),
             members: Vec::new(),
             photos,
@@ -809,7 +815,9 @@ mod tests {
         completion.finalization.finish().unwrap();
         let index = lightroom_catalog::load_index(Some(&index_path)).unwrap();
         assert_eq!(index.photos.get("fixture-1"), Some(&1));
-        std::fs::remove_dir_all(dir).unwrap();
+        // (the library's journal writes its snapshot on a thread of its own: dropping the session waits for it)
+        drop(session);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Importing again after a crash finds a master by its path, but a virtual copy only through
@@ -844,7 +852,9 @@ mod tests {
         let completion = import.finish(&mut session, true).unwrap();
         assert_eq!(session.catalog.len(), 2, "the saved copy is matched, not added again: {}", completion.report);
         assert_eq!(completion.report["imported"], 0);
-        std::fs::remove_dir_all(dir).unwrap();
+        // (the library's journal writes its snapshot on a thread of its own: dropping the session waits for it)
+        drop(session);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -857,6 +867,7 @@ mod tests {
             members: Vec::new(),
             collection_content: Vec::new(),
             warnings: Vec::new(),
+            skipped: Vec::new(),
         };
         data.photos = (0..5_000)
             .map(|source_id| {

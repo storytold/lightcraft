@@ -404,10 +404,12 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
 }
 
 impl Session {
-    /// Plan a merge of `ids` (catalog order of the given ids is kept).
+    /// Plan a merge of `ids` (catalog order of the given ids is kept). A photo named more than once is merged once
+    /// (issue #1947): it adds nothing to the merge, and each copy would be decoded and held in memory.
     pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
         let mut sources = Vec::new();
-        for id in ids {
+        let mut seen = std::collections::HashSet::new();
+        for id in ids.iter().filter(|id| seen.insert(**id)) {
             let p = self.catalog.photo(*id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(*id))?;
             match &p.source {
                 Source::File { path } => sources.push((*id, path.clone())),

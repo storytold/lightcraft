@@ -3,7 +3,7 @@
 //! Recipe from craft-fonts' docs/integration.md; craft-fonts is never a Cargo dependency, and this
 //! script only reads a local directory (no network).
 //!
-//! wasm32 embeds BIZ UDPGothic Regular (~4.5 MB) and Noto Sans Thai (~214 KiB), to keep the
+//! wasm32 embeds BIZ UDPGothic Regular (~4.5 MB) and Noto Sans Thai (~214 KiB) and Noto Sans Georgian, to keep the
 //! `.wasm` within the web size budget (Cloudflare serves at most 25 MiB per file); the export
 //! watermark falls back to it there. Native builds embed every font.
 use std::fmt::Write as _;
@@ -65,6 +65,7 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
     let manifest = dir.join("fonts/manifest.txt");
     println!("cargo::rerun-if-changed={}", manifest.display());
     let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let root = dir.canonicalize().map_err(|e| format!("{}: {e}", dir.display()))?;
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     let mut out = String::new();
     let mut has_japanese_ui = false;
@@ -78,11 +79,21 @@ fn craft_fonts(dir: &Path, required: bool) -> Result<String, String> {
         has_japanese_ui |= (*family, *style) == ("BIZ UDPGothic", "Regular");
         has_chinese_ui |= (*family, *style) == ("Noto Sans CJK SC", "Regular") && scripts.split(',').any(|script| script.trim() == "Hans");
         has_thai_ui |= (*family, *style) == ("Noto Sans Thai", "Regular") && scripts.split(',').any(|script| script.trim() == "Thai");
-        if wasm && !matches!((*family, *style), ("BIZ UDPGothic" | "Noto Sans Thai", "Regular")) {
+        if wasm && !matches!((*family, *style), ("BIZ UDPGothic" | "Noto Sans Thai" | "Noto Sans Georgian", "Regular")) {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
-        println!("cargo::rerun-if-changed={}", path.display());
+        // a font is a file of the checkout: a manifest entry or a link reaching outside it would
+        // embed some other file of the build machine
+        if !path.starts_with(&root) || !path.is_file() {
+            return Err(format!("{file}: not a file inside {}", root.display()));
+        }
+        let shown = path.display().to_string();
+        // one cargo instruction per line: a line break in the path would print a second one
+        if shown.contains(['\n', '\r']) {
+            return Err(format!("{file}: the path contains a line break"));
+        }
+        println!("cargo::rerun-if-changed={shown}");
         let scripts: Vec<String> = scripts.split(',').map(|s| format!("{:?}", s.trim())).collect();
         let _ = writeln!(
             out,

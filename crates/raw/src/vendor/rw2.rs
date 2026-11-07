@@ -48,8 +48,12 @@
 //!   apart with red and blue between them]; each is
 //!   predicted from the same site of the previous cell, the first cell of a row pair from the first cell of the
 //!   previous pair, 0 at the top [the strips decode to the camera JPEG's image without seams]. The streams end a
-//!   few padding rows before their stated length. Tags `0x0039`–`0x003f`, `0x0041` and `0x0043` carry the same
-//!   values in every sample; files with other values are reported as unsupported rather than guessed at.
+//!   few padding rows before their stated length. Tags `0x0039`–`0x003f` and `0x0041` carry the same
+//!   values in every sample; files with other values are reported as unsupported rather than guessed at. The high-resolution
+//!   mode of the DC-S1RM2 (16296 × 10856, `0x0043` = 2) tiles the image in two rows of four: `0x0045` then lists (x, y)
+//!   `u16` pairs (y is 0 in single-row files, so the 32-bit reading used for them is the same numbers), the tiles are
+//!   5632 and 5224 rows high and are decoded exactly like strips [the tiles' areas add up to the sensor, and `0x0043` equals
+//!   the number of distinct tile tops in every sample]; the decoder takes the geometry from the lists, not from the body.
 //!
 //! Levels and geometry:
 //!
@@ -130,7 +134,7 @@ const STRIP_BITS: u16 = 0x0046;
 const STRIP_WIDTHS: u16 = 0x0047;
 const STRIP_HEIGHTS: u16 = 0x0048;
 /// Format-8 tags of unknown meaning and the values every sample carries (as `u16` arrays).
-const FORMAT8_FIXED: [(u16, &[u16]); 9] = [
+const FORMAT8_FIXED: [(u16, &[u16]); 8] = [
     (0x0039, &[6, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1]),
     (0x003a, &[6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
     (0x003b, &[65535]),
@@ -139,15 +143,16 @@ const FORMAT8_FIXED: [(u16, &[u16]); 9] = [
     (0x003e, &[0]),
     (0x003f, &[0]),
     (0x0041, &[17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
-    (0x0043, &[1]),
 ];
+/// Format-8 tile rows (ExifTool: no name): 1 for a single row of strips, 2 for the 16296 × 10856 high-resolution mode.
+const TILE_ROWS: u16 = 0x0043;
 /// The camera's lens distortion correction (ExifTool name: DistortionInfo); see the module docs.
 const DISTORTION_INFO: u16 = 0x0119;
 /// Fixed-point one of the distortion coefficients and zoom.
 const DISTORTION_ONE: f64 = 32768.0;
 /// Largest error of the fitted inverse (relative to the half diagonal) accepted: real lenses fit within 1.2e-4.
 const DISTORTION_MAX_FIT_ERROR: f64 = 1e-3;
-/// Most strips seen in a file is 3 (the 12008 × 8008 high-resolution mode).
+/// Most strips seen in a file is 8 (the 16296 × 10856 high-resolution mode: 4 columns by 2 rows of tiles).
 const MAX_STRIPS: usize = 64;
 
 const CHUNK: usize = 0x4000;
@@ -346,6 +351,15 @@ fn u16_array(ifd: &Ifd, tag: u16, order: ByteOrder) -> Option<Vec<u16>> {
     }
 }
 
+/// The format-8 tile origins (tag `0x0045`): a count, then (x, y) pairs of `u16`.
+fn origins(ifd: &Ifd, order: ByteOrder) -> Result<Vec<(usize, usize)>> {
+    let a = u16_array(ifd, STRIP_LEFT, order).ok_or_else(|| RawError::Corrupt("RW2 format 8 without tag 0x0045".into()))?;
+    let n = a.first().map_or(0, |&n| n as usize);
+    let at = |i: usize| a.get(i).map(|&v| v as usize);
+    let values: Option<Vec<(usize, usize)>> = (0..n).map(|i| Some((at(1 + 2 * i)?, at(2 + 2 * i)?))).collect();
+    values.filter(|v| !v.is_empty() && v.len() <= MAX_STRIPS).ok_or_else(|| RawError::Corrupt("RW2 format 8: bad list in tag 0x0045".into()))
+}
+
 /// A format-8 `u16` list (count, then the values; `wide`: 32-bit values as low/high pairs).
 fn list(ifd: &Ifd, tag: u16, order: ByteOrder, wide: bool) -> Result<Vec<u64>> {
     let a = u16_array(ifd, tag, order).ok_or_else(|| RawError::Corrupt(format!("RW2 format 8 without tag {tag:#06x}")))?;
@@ -355,15 +369,17 @@ fn list(ifd: &Ifd, tag: u16, order: ByteOrder, wide: bool) -> Result<Vec<u64>> {
     values.filter(|v| !v.is_empty() && v.len() <= MAX_STRIPS).ok_or_else(|| RawError::Corrupt(format!("RW2 format 8: bad list in tag {tag:#06x}")))
 }
 
-/// One format-8 strip: its bit stream and placement.
+/// One format-8 strip or tile: its bit stream and placement.
 struct Strip<'a> {
     data: &'a [u8],
+    left: usize,
+    top: usize,
     width: usize,
     height: usize,
     bits: u64,
 }
 
-/// The format-8 strips (tiling the full width, top to bottom) and code table.
+/// The format-8 strips or tiles (together covering the whole image exactly once) and code table.
 fn format8<'a>(ifd: &Ifd, order: ByteOrder, bytes: &'a [u8], w: usize, h: usize) -> Result<(Vec<Strip<'a>>, Huffman)> {
     for (tag, want) in FORMAT8_FIXED {
         if let Some(v) = u16_array(ifd, tag, order)
@@ -372,26 +388,40 @@ fn format8<'a>(ifd: &Ifd, order: ByteOrder, bytes: &'a [u8], w: usize, h: usize)
             return Err(RawError::Unsupported(format!("Panasonic raw format 8 with tag {tag:#06x} = {v:?}")));
         }
     }
-    let (offsets, lefts, bits) = (list(ifd, STRIP_OFFSETS, order, true)?, list(ifd, STRIP_LEFT, order, true)?, list(ifd, STRIP_BITS, order, true)?);
+    let (offsets, origins, bits) = (list(ifd, STRIP_OFFSETS, order, true)?, origins(ifd, order)?, list(ifd, STRIP_BITS, order, true)?);
     let (widths, heights) = (list(ifd, STRIP_WIDTHS, order, false)?, list(ifd, STRIP_HEIGHTS, order, false)?);
     let n = offsets.len();
-    if [lefts.len(), bits.len(), widths.len(), heights.len()].iter().any(|&l| l != n) {
+    if [origins.len(), bits.len(), widths.len(), heights.len()].iter().any(|&l| l != n) {
         return Err(RawError::Corrupt("RW2 format 8: strip lists of different lengths".into()));
     }
     let mut strips = Vec::with_capacity(n);
-    let mut x = 0usize;
+    let mut area = 0usize;
     for i in 0..n {
-        let (left, width, height) = (lefts[i] as usize, widths[i] as usize, heights[i] as usize);
+        let ((left, top), width, height) = (origins[i], widths[i] as usize, heights[i] as usize);
         let len = usize::try_from(bits[i].div_ceil(8)).unwrap_or(usize::MAX);
         let data = usize::try_from(offsets[i]).ok().and_then(|o| bytes.get(o..o.checked_add(len)?));
-        let Some(data) = data.filter(|_| left == x && width > 0 && height == h) else {
+        let inside = width > 0 && height > 0 && left + width <= w && top + height <= h;
+        let Some(data) = data.filter(|_| inside) else {
             return Err(RawError::Corrupt(format!("RW2 format 8: strip {i} outside the image or file")));
         };
-        x += width;
-        strips.push(Strip { data, width, height, bits: bits[i] });
+        area += width * height;
+        strips.push(Strip { data, left, top, width, height, bits: bits[i] });
     }
-    if x != w {
-        return Err(RawError::Corrupt(format!("RW2 format 8: strips cover {x} of {w} columns")));
+    // inside the image, no two overlapping and the areas adding up to the image: every sample has exactly one strip
+    let overlap = strips.iter().enumerate().any(|(i, a)| {
+        strips[i + 1..].iter().any(|b| a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height)
+    });
+    if overlap || area != w * h {
+        return Err(RawError::Corrupt(format!("RW2 format 8: strips cover {area} of {} samples", w * h)));
+    }
+    // tag 0x0043 counts the rows of tiles; a file that says otherwise is not one we understand
+    let mut tops: Vec<usize> = strips.iter().map(|s| s.top).collect();
+    tops.sort_unstable();
+    tops.dedup();
+    if let Some(v) = u16_array(ifd, TILE_ROWS, order)
+        && v != [tops.len() as u16]
+    {
+        return Err(RawError::Unsupported(format!("Panasonic raw format 8 with tag {TILE_ROWS:#06x} = {v:?} for {} tile rows", tops.len())));
     }
     let codes = u16_array(ifd, HUFFMAN_CODES, order).unwrap_or_default();
     let pairs: Vec<(u32, u32)> = match (codes.first(), codes.get(1..35)) {
@@ -452,12 +482,21 @@ fn decode_strip(s: &Strip, codes: &Huffman, mut rows: Vec<&mut [u16]>) -> Result
 
 fn decode_strips(strips: &[Strip], codes: &Huffman, w: usize, out: &mut [u16]) -> Result<()> {
     let mut parts: Vec<Vec<&mut [u16]>> = strips.iter().map(|s| Vec::with_capacity(s.height)).collect();
-    for row in out.chunks_mut(w) {
-        let mut rest = row;
-        for (s, rows) in strips.iter().zip(parts.iter_mut()) {
-            let (part, tail) = rest.split_at_mut(s.width.min(rest.len()));
-            rows.push(part);
+    for (y, row) in out.chunks_mut(w).enumerate() {
+        // the strips crossing this row, left to right, each take their columns off its front
+        let mut here: Vec<usize> = (0..strips.len()).filter(|&i| strips.get(i).is_some_and(|s| s.top <= y && y < s.top + s.height)).collect();
+        here.sort_by_key(|&i| strips.get(i).map_or(0, |s| s.left));
+        let (mut rest, mut x) = (row, 0usize);
+        for i in here {
+            let Some(s) = strips.get(i) else { continue };
+            let skip = s.left.saturating_sub(x).min(rest.len());
+            let (_, tail) = rest.split_at_mut(skip);
+            let (part, tail) = tail.split_at_mut(s.width.min(tail.len()));
+            if let Some(rows) = parts.get_mut(i) {
+                rows.push(part);
+            }
             rest = tail;
+            x = s.left + s.width;
         }
     }
     strips.par_iter().zip(parts).try_for_each(|(s, rows)| decode_strip(s, codes, rows))
@@ -1115,16 +1154,33 @@ mod tests {
 
     /// A format-8 file with the given strip widths; `tweak` edits the tags before writing.
     fn format8_file(w: usize, h: usize, px: &[u16], widths: &[usize], table: &[(u32, u32); 17], tweak: &dyn Fn(&mut Vec<(u16, Value)>)) -> Vec<u8> {
+        format8_tiled_file(w, px, widths, &[h], table, tweak)
+    }
+
+    /// A format-8 file tiled in rows of the given heights, each cut into the given widths.
+    fn format8_tiled_file(
+        w: usize,
+        px: &[u16],
+        widths: &[usize],
+        rows: &[usize],
+        table: &[(u32, u32); 17],
+        tweak: &dyn Fn(&mut Vec<(u16, Value)>),
+    ) -> Vec<u8> {
+        let h: usize = rows.iter().sum();
         let mut payload = vec![];
-        let mut strips = vec![]; // (offset in payload, bits, left, width)
-        let mut left = 0;
-        for &sw in widths {
-            let sub: Vec<u16> = (0..h).flat_map(|y| px[y * w + left..y * w + left + sw].to_vec()).collect();
-            let (data, bits) = encode_strip(&sub, sw, h, table, 2);
-            strips.push((payload.len(), bits, left, sw));
-            payload.extend(data);
-            payload.resize(payload.len().div_ceil(16) * 16, 0);
-            left += sw;
+        let mut strips = vec![]; // (offset in payload, bits, left, width, top, height)
+        let mut top = 0;
+        for &th in rows {
+            let mut left = 0;
+            for &sw in widths {
+                let sub: Vec<u16> = (top..top + th).flat_map(|y| px[y * w + left..y * w + left + sw].to_vec()).collect();
+                let (data, bits) = encode_strip(&sub, sw, th, table, 2);
+                strips.push((payload.len(), bits, left, sw, top, th));
+                payload.extend(data);
+                payload.resize(payload.len().div_ceil(16) * 16, 0);
+                left += sw;
+            }
+            top += th;
         }
         let u16s = |v: Vec<u16>| undefined(&v);
         let wide = |v: Vec<u64>| u16s(std::iter::once(v.len() as u16).chain(v.iter().flat_map(|&x| [x as u16, (x >> 16) as u16])).collect());
@@ -1135,10 +1191,11 @@ mod tests {
         for (tag, v) in FORMAT8_FIXED {
             tags.push(if v.len() == 1 { short(tag, v[0]) } else { (tag, u16s(v.to_vec())) });
         }
-        tags.push((STRIP_LEFT, wide(strips.iter().map(|s| s.2 as u64).collect())));
+        tags.push(short(TILE_ROWS, rows.len() as u16));
+        tags.push((STRIP_LEFT, u16s(std::iter::once(strips.len() as u16).chain(strips.iter().flat_map(|s| [s.2 as u16, s.4 as u16])).collect())));
         tags.push((STRIP_BITS, wide(strips.iter().map(|s| s.1).collect())));
         tags.push((STRIP_WIDTHS, narrow(strips.iter().map(|s| s.3 as u64).collect())));
-        tags.push((STRIP_HEIGHTS, narrow(vec![h as u64; strips.len()])));
+        tags.push((STRIP_HEIGHTS, narrow(strips.iter().map(|s| s.5 as u64).collect())));
         tweak(&mut tags);
         let offsets: Vec<usize> = strips.iter().map(|s| s.0).collect();
         file(w as u16, h as u16, &tags, &payload, &|off| {
@@ -1160,6 +1217,23 @@ mod tests {
     }
 
     #[test]
+    fn format8_tiles_in_two_rows_round_trip() {
+        // the DC-S1RM2 high-resolution mode: four columns by two rows of tiles, tag 0x0043 = 2
+        let (w, h) = (96usize, 40usize);
+        let px = image(w, h, 520, 16000);
+        for (widths, rows) in [(vec![24, 24, 24, 24], vec![24, 16]), (vec![40, 56], vec![20, 20]), (vec![96], vec![8, 32])] {
+            let bytes = format8_tiled_file(w, &px, &widths, &rows, &TABLE14, &|_| {});
+            let r = crate::decode(&bytes).unwrap_or_else(|e| panic!("{widths:?} x {rows:?}: {e}"));
+            assert_eq!(samples(&r), px, "{widths:?} x {rows:?}");
+            assert_eq!(crate::probe_info(&bytes).unwrap(), r.info());
+        }
+        // a tile row count that disagrees with the tiles, or tiles that leave a gap, are refused
+        let case = |tag: u16, v: Value| crate::decode(&format8_tiled_file(w, &px, &[48, 48], &[20, 20], &TABLE14, &|t| replace(t, tag, v.clone())));
+        assert!(case(TILE_ROWS, Value::Short(vec![1])).is_err_and(|e| matches!(e, RawError::Unsupported(_))));
+        assert!(case(STRIP_HEIGHTS, undefined(&[4, 20, 20, 20, 12])).is_err_and(|e| matches!(e, RawError::Corrupt(_))));
+    }
+
+    #[test]
     fn format8_cell_is_coded_column_by_column() {
         // One 2×2 cell coded by hand (not with `encode_strip`, which shares the decoder's site order): the values
         // 1, 2, 3, 4 in stream order. Row order would put the two greens of an RGGB cell on each other's sites.
@@ -1175,7 +1249,12 @@ mod tests {
         let mut data: Vec<u8> = bits.chunks(8).map(|b| b.iter().enumerate().fold(0u8, |a, (i, &x)| a | (x as u8) << i)).collect();
         data.extend([0; 8]);
         let (mut top, mut bottom) = ([0u16; 2], [0u16; 2]);
-        decode_strip(&Strip { data: &data, width: 2, height: 2, bits: n }, &code_table(&TABLE14).unwrap(), vec![&mut top, &mut bottom]).unwrap();
+        decode_strip(
+            &Strip { data: &data, left: 0, top: 0, width: 2, height: 2, bits: n },
+            &code_table(&TABLE14).unwrap(),
+            vec![&mut top, &mut bottom],
+        )
+        .unwrap();
         assert_eq!((top, bottom), ([1, 3], [2, 4]), "top-left, bottom-left, top-right, bottom-right");
     }
 

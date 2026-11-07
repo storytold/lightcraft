@@ -880,16 +880,24 @@ fn physical_identity(file: &File) -> io::Result<(u64, [u8; 16])> {
 }
 
 fn open_read(path: &str, observe: bool) -> io::Result<(File, bool)> {
+    regular(&std::fs::metadata(path)?)?;
     #[cfg(windows)]
     if observe {
         use std::os::windows::fs::OpenOptionsExt;
-        // FILE_SHARE_READ | FILE_SHARE_DELETE: deny writes while retaining our own rename/unlink path.
-        if let Ok(file) = File::options().read(true).share_mode(0x1 | 0x4).open(path) {
+        const SHARE_READ_AND_DELETE: u32 = 0x1 | 0x4;
+        if let Ok(file) = File::options().read(true).share_mode(SHARE_READ_AND_DELETE).open(path) {
+            regular(&file.metadata()?)?;
             return Ok((file, true));
         }
     }
     let _ = observe;
-    Ok((File::open(path)?, cfg!(unix)))
+    let file = File::open(path)?;
+    regular(&file.metadata()?)?;
+    Ok((file, cfg!(unix)))
+}
+
+fn regular(meta: &std::fs::Metadata) -> io::Result<()> {
+    if meta.is_file() || meta.is_dir() { Ok(()) } else { Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")) }
 }
 
 fn read_retry(reader: &mut impl Read, out: &mut [u8]) -> io::Result<usize> {
@@ -932,13 +940,14 @@ pub(crate) struct NativeHooks {
     header: crate::media::FileProbe,
     preview: crate::media::PreviewLoader,
     pair: crate::media::PairLoader,
+    reduced: crate::media::ReducedLoader,
     bytes: crate::merge::ByteReader,
 }
 impl NativeHooks {
     fn new(reader: &Originals) -> Self {
         let (loader, probe) = crate::files::fs_hooks();
         let a = reader.clone();
-        let loader: crate::media::FileLoader = Arc::new(move |p, e| a.native_scope(p, || loader(p, e)));
+        let loader: crate::media::FileLoader = Arc::new(move |p, e, w| a.native_scope(p, || loader(p, e, w)));
         let a = reader.clone();
         let probe: crate::media::FileProbe = Arc::new(move |p| a.native_scope(p, || probe(p)));
         let header = crate::files::fs_header_probe();
@@ -949,8 +958,11 @@ impl NativeHooks {
         let preview: crate::media::PreviewLoader = Arc::new(move |p, e| a.native_scope(p, || preview(p, e)));
         let pair = crate::files::fs_pair_loader();
         let a = reader.clone();
-        let pair: crate::media::PairLoader = Arc::new(move |p, e, s| a.native_scope(p, || pair(p, e, s)));
-        Self { loader, probe, header, preview, pair, bytes: reader.reader() }
+        let pair: crate::media::PairLoader = Arc::new(move |p, e, s, w| a.native_scope(p, || pair(p, e, s, w)));
+        let reduced = crate::files::fs_reduced_loader();
+        let a = reader.clone();
+        let reduced: crate::media::ReducedLoader = Arc::new(move |p, e, w| a.native_scope(p, || reduced(p, e, w)));
+        Self { loader, probe, header, preview, pair, reduced, bytes: reader.reader() }
     }
     fn install(&self, s: &mut crate::Session, old: Option<&Self>) {
         macro_rules! hook {
@@ -965,6 +977,7 @@ impl NativeHooks {
         hook!(s.media.header_probe, header);
         hook!(s.media.preview_loader, preview);
         hook!(s.media.denoise.loader, pair);
+        hook!(s.media.reduced_loader, reduced);
         hook!(s.media.file_bytes, bytes);
     }
 }
@@ -1114,6 +1127,23 @@ impl crate::Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_or_device_is_never_read_whole() {
+        let dir = std::env::temp_dir().join(format!("lc-originals-regular-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let reader = Originals::default();
+        let folder = dir.to_string_lossy().to_string();
+        assert!(reader.hash_whole(&folder).is_err());
+        assert!(reader.read_whole(&folder).is_err());
+        #[cfg(unix)]
+        assert_eq!(reader.hash_whole("/dev/zero").unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        let file = dir.join("a.raw");
+        std::fs::write(&file, b"bytes").unwrap();
+        assert!(reader.hash_whole(&file.to_string_lossy()).is_ok());
+        let _ = std::fs::remove_dir_all(dir);
+    }
     #[test]
     fn g_completed_copy_releases_unowned_source_proofs() {
         let dir = crate::tests_xmp::temp_dir("g-copy-proof-release");
@@ -1667,7 +1697,7 @@ mod lifecycle_tests {
     fn g_library_switch_retires_native_worker_read_and_preserves_custom_hook() {
         let (mut s, dir, _) = hashless("g-read-library-switch");
         let old_reader = s.media.file_bytes.clone().unwrap();
-        let custom: crate::media::FileLoader = Arc::new(|_, _| Err("custom decoder".into()));
+        let custom: crate::media::FileLoader = Arc::new(|_, _, _| Err("custom decoder".into()));
         s.media.file_loader = Some(custom.clone());
         s.open_library(dir.join("new-library"), false).unwrap();
         assert!(s.media.file_loader.as_ref().is_some_and(|loader| Arc::ptr_eq(loader, &custom)));

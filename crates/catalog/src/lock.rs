@@ -17,15 +17,17 @@
 //!   open" for a moment and a re-open would be refused (issue #680). `LOCK_UN` through our
 //!   descriptor frees the lock whatever copies a child still holds.
 //! - Who holds it (process id, computer, program, version) is written to `catalog.lock.owner`, for
-//!   the error message. It's a separate file because a Windows lock also blocks reading the
-//!   locked file. It's only a hint: it may be missing or left over from a crash.
+//!   the error message. Only dropping the [`LibraryLock`] removes it, so a program that ends with
+//!   `std::process::exit` releases the lock first (`Session::release_library_lock`). It's a separate
+//!   file because a Windows lock also blocks reading the locked file. It's only a hint: it may be
+//!   missing or left over from a crash.
 //! - File systems without lock support (some network shares): the library opens unlocked, with a
 //!   warning — refusing it would lock the user out of their own library. Locks over SMB/NFS are
 //!   advisory and depend on the server; the owner file is then the only hint.
 //! - Browser storage (OPFS) has no file locks: see the web host for its own guard.
 
 use std::fs::{File, OpenOptions, TryLockError};
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// The lock file in the library directory.
@@ -116,9 +118,11 @@ impl LibraryLock {
             }
             Err(TryLockError::Error(e)) => return Ok(unlocked(e)),
         }
+        // A new file in place of whatever is at the name: a link planted there in a library folder
+        // someone else prepared is removed, never written through (as for the staging files, #1502).
         let owner = LockOwner::this_process(program);
         if let Ok(json) = serde_json::to_vec_pretty(&owner)
-            && let Err(e) = std::fs::write(dir.join(OWNER), json)
+            && let Err(e) = crate::store::create_staging(&dir.join(OWNER)).and_then(|mut f| f.write_all(&json))
         {
             log::warn!("library {}: can't write {OWNER}: {e}", dir.display());
         }

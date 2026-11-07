@@ -28,7 +28,9 @@ pub trait Store: Send {
         self.write_atomic(name, &buf)?;
         Ok(buf.len() as u64)
     }
-    /// Append and make durable (fsync) before returning. On an error, part of `data` may have
+    /// Append and make durable (fsync): before returning, or, natively, by the store's own log
+    /// thread right after ([`FsStore`]: a write that fails is returned by a later append, and a
+    /// read through the store sees every byte handed over). On an error, part of `data` may have
     /// been written (a full disk, a dropped network share): the journal cuts the file back to its
     /// previous length with [`Store::truncate`] before appending again.
     fn append(&mut self, name: &str, data: &[u8]) -> io::Result<()>;
@@ -43,20 +45,52 @@ pub trait Store: Send {
     fn background_writer(&self) -> Option<Box<dyn Store>> {
         None
     }
+    /// Wait until every append handed over is in the file and synced ([`FsStore`] writes them on a
+    /// thread of its own; the default has nothing to wait for). An error says why some aren't: they
+    /// are still held and retried, never dropped.
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+    /// Records handed over by [`Store::append`] that can't be written yet (a write or sync on the
+    /// store's own thread failed: they are held and retried), and why. `None`: nothing held back.
+    fn unwritten(&self) -> Option<(usize, String)> {
+        None
+    }
+}
+
+/// Appends and truncates open the name's own file, so anything else at the name is the library's
+/// problem: a link planted there redirects the write outside the directory (CWE-59), and a device
+/// hangs the open. Refused with an error the open can show, before anything is written through.
+pub(crate) fn check_regular_directory_entry(path: &Path) -> io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(md) if md.is_file() => Ok(()),
+        Ok(md) => Err(io::Error::other(format!("{} is a {:?}, not a regular file", path.display(), md.file_type()))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Files in a directory.
 pub struct FsStore {
     dir: PathBuf,
-    /// Open append handle (kept between appends; dropped on rewrite/truncate).
+    /// Open append handle (kept between appends; dropped on rewrite/truncate). Used when no thread
+    /// writes the log (the browser build, or one that couldn't start).
     appender: Option<(String, std::fs::File)>,
+    /// The thread that writes the log (natively; started by the first append).
+    #[cfg(not(target_arch = "wasm32"))]
+    log: Option<crate::log_writer::LogWriter>,
 }
 
 impl FsStore {
     /// Use `dir` (created if missing).
     pub fn open(dir: impl AsRef<Path>) -> io::Result<FsStore> {
         std::fs::create_dir_all(dir.as_ref())?;
-        Ok(FsStore { dir: dir.as_ref().to_path_buf(), appender: None })
+        Ok(FsStore {
+            dir: dir.as_ref().to_path_buf(),
+            appender: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            log: None,
+        })
     }
     pub fn dir(&self) -> &Path {
         &self.dir
@@ -64,6 +98,21 @@ impl FsStore {
     fn path(&self, name: &str) -> PathBuf {
         self.dir.join(name)
     }
+    /// The log thread, when it writes `name`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn log_for(&self, name: &str) -> Option<&crate::log_writer::LogWriter> {
+        self.log.as_ref().filter(|w| w.name == name)
+    }
+
+    /// Wait until the log thread has written and synced everything handed to it.
+    pub fn flush_log(&self) -> io::Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(w) = &self.log {
+            return w.flush();
+        }
+        Ok(())
+    }
+
     fn sync_dir(&self) {
         // Makes the rename durable on POSIX; opening a directory fails on Windows (where
         // `rename` is already journaled by NTFS), so errors are ignored.
@@ -75,8 +124,8 @@ impl FsStore {
 
 /// A new staging file at `tmp`: whatever is already there (a leftover from a crashed save, or a link) is removed first
 /// (a link itself, never what it points to), then the file is created exclusively, so a write never follows a link
-/// planted at that name into another file (issue #1502).
-fn create_staging(tmp: &std::path::Path) -> io::Result<std::fs::File> {
+/// planted at that name into another file (issue #1502). Also writes the lock's owner note.
+pub(crate) fn create_staging(tmp: &std::path::Path) -> io::Result<std::fs::File> {
     if std::fs::symlink_metadata(tmp).is_ok() {
         std::fs::remove_file(tmp)?;
     }
@@ -85,6 +134,11 @@ fn create_staging(tmp: &std::path::Path) -> io::Result<std::fs::File> {
 
 impl Store for FsStore {
     fn read(&mut self, name: &str) -> io::Result<Option<Vec<u8>>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(w) = self.log_for(name) {
+            // what was handed over, written or still held
+            return w.read();
+        }
         match std::fs::read(self.path(name)) {
             Ok(b) => Ok(Some(b)),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -94,6 +148,13 @@ impl Store for FsStore {
 
     fn write_atomic(&mut self, name: &str, data: &[u8]) -> io::Result<()> {
         use std::io::Write;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(w) = self.log_for(name) {
+            // (after the appends handed over before)
+            w.replace(data)?;
+            self.sync_dir();
+            return Ok(());
+        }
         if self.appender.as_ref().is_some_and(|(n, _)| n == name) {
             self.appender = None;
         }
@@ -110,6 +171,15 @@ impl Store for FsStore {
 
     fn write_atomic_with(&mut self, name: &str, fill: &mut dyn FnMut(&mut dyn io::Write) -> io::Result<()>) -> io::Result<u64> {
         use std::io::Write;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(w) = self.log_for(name) {
+            // (the log is small: buffered, and replaced by its thread after the appends before)
+            let mut buf = Vec::new();
+            fill(&mut buf)?;
+            w.replace(&buf)?;
+            self.sync_dir();
+            return Ok(buf.len() as u64);
+        }
         if self.appender.as_ref().is_some_and(|(n, _)| n == name) {
             self.appender = None;
         }
@@ -136,7 +206,25 @@ impl Store for FsStore {
 
     fn append(&mut self, name: &str, data: &[u8]) -> io::Result<()> {
         use std::io::Write;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.log.is_none() && !crate::fault::on_caller(&self.dir) {
+                check_regular_directory_entry(&self.path(name))?;
+                if !self.path(name).exists() {
+                    // created here, so the open's errors are this append's and its entry is durable
+                    std::fs::OpenOptions::new().create(true).append(true).open(self.path(name))?;
+                    self.sync_dir();
+                }
+                self.appender = None;
+                self.log = crate::log_writer::LogWriter::start(self.dir.clone(), name);
+            }
+            // (another name than the log's is written here, as without a thread)
+            if let Some(w) = self.log_for(name) {
+                return w.append(data);
+            }
+        }
         if self.appender.as_ref().is_none_or(|(n, _)| n != name) {
+            check_regular_directory_entry(&self.path(name))?;
             let existed = self.path(name).exists();
             let f = std::fs::OpenOptions::new().create(true).append(true).open(self.path(name))?;
             if !existed {
@@ -145,6 +233,12 @@ impl Store for FsStore {
             self.appender = Some((name.to_string(), f));
         }
         let Some((_, f)) = self.appender.as_mut() else { return Err(io::Error::other("appender not open")) };
+        #[cfg(not(target_arch = "wasm32"))]
+        let written = crate::fault::check(&self.dir, crate::fault::Step::Write)
+            .and_then(|()| f.write_all(data))
+            .and_then(|()| crate::fault::check(&self.dir, crate::fault::Step::Sync))
+            .and_then(|()| f.sync_data());
+        #[cfg(target_arch = "wasm32")]
         let written = f.write_all(data).and_then(|()| f.sync_data());
         if written.is_err() {
             // The handle may be dead (a network share that reconnected, a removed volume): the next
@@ -156,9 +250,14 @@ impl Store for FsStore {
     }
 
     fn truncate(&mut self, name: &str, len: u64) -> io::Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(w) = self.log_for(name) {
+            return w.truncate(len);
+        }
         if self.appender.as_ref().is_some_and(|(n, _)| n == name) {
             self.appender = None;
         }
+        check_regular_directory_entry(&self.path(name))?;
         let f = match std::fs::OpenOptions::new().write(true).open(self.path(name)) {
             Ok(f) => f,
             // nothing to cut (an append that failed before creating the file)
@@ -175,7 +274,16 @@ impl Store for FsStore {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn background_writer(&self) -> Option<Box<dyn Store>> {
-        Some(Box::new(FsStore { dir: self.dir.clone(), appender: None }))
+        Some(Box::new(FsStore { dir: self.dir.clone(), appender: None, log: None }))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_log()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn unwritten(&self) -> Option<(usize, String)> {
+        self.log.as_ref().and_then(|w| w.unwritten())
     }
 }
 
@@ -242,13 +350,13 @@ impl Store for MemStore {
     }
 }
 
-#[cfg(test)]
+// (its one test plants a symlink, so the module is Unix-only: elsewhere `use super::*` would be unused)
+#[cfg(all(test, unix))]
 mod tests_staging {
     use super::*;
 
     /// A link planted at a staging name (`<name>.tmp`) is removed, never followed: the file it points to keeps its
     /// bytes and the save still lands (issue #1502).
-    #[cfg(unix)]
     #[test]
     fn a_link_at_the_staging_name_is_never_written_through() {
         let dir = std::env::temp_dir().join(format!("lc-staging-link-{}", std::process::id()));
@@ -264,6 +372,30 @@ mod tests_staging {
         store.write_atomic_with("catalog.log", &mut |w| w.write_all(b"[1]")).unwrap();
         assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
         assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"[1]");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The journal's append and truncate (which recovery uses) refuse a non-regular file at the
+    /// name instead of following it, so a link planted at `catalog.log` never receives library
+    /// bytes (CWE-59, Audit row 107); the snapshot write already removes such a link (#1502).
+    #[test]
+    fn append_and_truncate_refuse_a_link_at_the_name() {
+        let dir = std::env::temp_dir().join(format!("lc-log-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let victim = dir.join("victim.txt");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&victim, b"keep").unwrap();
+        std::os::unix::fs::symlink(&victim, dir.join("catalog.log")).unwrap();
+        let mut store = FsStore::open(&dir).unwrap();
+        assert!(store.append("catalog.log", b"appended").is_err());
+        assert!(store.truncate("catalog.log", 0).is_err());
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        assert!(std::fs::symlink_metadata(dir.join("catalog.log")).unwrap().file_type().is_symlink());
+        // A regular file keeps working.
+        std::fs::remove_file(dir.join("catalog.log")).unwrap();
+        std::fs::write(dir.join("catalog.log"), b"abc").unwrap();
+        store.truncate("catalog.log", 1).unwrap();
+        assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"a");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -156,6 +156,18 @@ fn windows_outside_or_degenerate_are_clamped() {
     }
 }
 
+/// A model's segmentation on a `side²` grid: an ellipse in the middle of the photo.
+fn middle_seg(side: usize) -> lightcraft_develop::SegMask {
+    let logits: Vec<f32> = (0..side * side)
+        .map(|i| {
+            let (x, y) = (((i % side) as f32 + 0.5) / side as f32, ((i / side) as f32 + 0.5) / side as f32);
+            let r = (((x - 0.5) / 0.3).powi(2) + ((y - 0.5) / 0.25).powi(2)).sqrt();
+            (12.0 * (1.0 - r) * 4.0).clamp(-12.0, 12.0)
+        })
+        .collect();
+    lightcraft_develop::SegMask::from_logits(side, &logits)
+}
+
 /// A textured, noisy source: what noise reduction and edge refinement act on.
 fn noisy_scene() -> Rgb32f {
     let base = scene();
@@ -216,6 +228,8 @@ fn a_mask_overlay_window_matches_the_whole_render() {
         ("radial", MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.15, angle: 20.0, feather: 50.0, invert: false }, 0.0),
         ("linear refined", MaskShape::Linear { start: Point::new(0.45, 0.5), end: Point::new(0.55, 0.5) }, 100.0),
         ("sky", MaskShape::Sky, 0.0),
+        // a model's grid, enlarged along the photo's edges (issue #3272)
+        ("prompt", MaskShape::Prompt { text: "middle".into(), seg: Some(middle_seg(32)), detail: vec![], edge: 0.0 }, 0.0),
     ];
     for (name, shape, refine) in shapes {
         let mut s = DevelopSettings::default();
@@ -406,4 +420,43 @@ fn auto_mask_strokes_match_the_whole_render() {
         ..Default::default()
     };
     check_noisy("auto mask", &s, PixelWindow { x: 400, y: 300, w: 300, h: 250 }, 2, 0.1);
+}
+
+/// The margin the loupe's windows carry around what they show at this size (`region::margin_for`:
+/// 4.5 % of the long edge).
+const OVERLAY_INSET: usize = W * 45 / 1000;
+
+/// [`check`] for a diagnostic overlay, with the photo as a raw (Visualize HDR needs one), keeping the
+/// loupe's margin in from the window's edges.
+fn check_overlay(name: &str, s: &DevelopSettings, overlay: crate::Overlay, win: PixelWindow, max_ok: u8, mean_ok: f64) {
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let full_req = RenderRequest { overlay, ..RenderRequest::fit(W, H) };
+    let f = render(&scene(), &info, s, &full_req).image;
+    let w = render(&scene(), &info, s, &RenderRequest { window: Some(win), ..full_req }).image;
+    assert_eq!((w.width, w.height), (win.w, win.h), "{name}: the window's own size");
+    assert_ne!(f.data, render(&scene(), &info, s, &RenderRequest::fit(W, H)).image.data, "{name}: the overlay draws something");
+    let (max, mean) = compare_inset(&f, &w, win, OVERLAY_INSET);
+    assert!(max <= max_ok && mean <= mean_ok, "{name}: max {max} (≤ {max_ok}), mean {mean:.3} (≤ {mean_ok})");
+}
+
+// Given a diagnostic overlay (Visualize Spots, a Point Color range, Visualize HDR), a window shows
+// the same pixels as the whole-frame render, so the loupe can draw them as a zoom window
+#[test]
+fn diagnostic_overlays_in_a_window_match_the_full_render() {
+    use crate::Overlay;
+    let mut spots = DevelopSettings::default();
+    spots.detail.sharpen_amount = 60.0;
+    // a binary threshold: a pixel at the threshold may flip on a one-level difference underneath
+    check_overlay("spots", &spots, Overlay::Spots(70), MID, 255, 0.05);
+    for (x, y) in [(0, 0), (W - 400, H - 300)] {
+        check_overlay("spots at a corner", &spots, Overlay::Spots(70), PixelWindow { x, y, w: 400, h: 300 }, 255, 0.05);
+    }
+    let mut pc = DevelopSettings::default();
+    pc.point_colors.push(lightcraft_develop::PointColor { lum: 0.6, chroma: 0.08, hue: 60.0, hue_shift: 40.0, ..Default::default() });
+    check_overlay("point colour range", &pc, Overlay::PointColorRange(0), MID, 1, 0.1);
+    let mut hdr = DevelopSettings::default();
+    hdr.hdr.enabled = true;
+    hdr.hdr.max_ev = 3.0;
+    hdr.light.exposure = 1.5;
+    check_overlay("hdr range", &hdr, Overlay::HdrRange, MID, 1, 0.1);
 }

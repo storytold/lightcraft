@@ -17,11 +17,15 @@ pub(crate) struct Markers {
     pub sof: u8,
     /// Number of components in the first scan (< `components` for non-interleaved sequential files).
     pub first_scan_components: u8,
+    /// Number of APP1 segments: capped before the allocating decoders walk them again.
+    pub app1: u32,
     pub exif: Option<Vec<u8>>,
     /// Offset of the EXIF TIFF header within the file.
     pub exif_offset: usize,
     pub xmp: Option<String>,
     pub icc: Option<Vec<u8>>,
+    /// An ICC_PROFILE APP2 segment was present but its sequence was invalid.
+    pub icc_invalid: bool,
     pub adobe_transform: Option<u8>,
     /// Offset of the MPF TIFF header within the file and its bytes.
     pub mpf: Option<(usize, Vec<u8>)>,
@@ -43,7 +47,8 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
         return None;
     }
     let mut m = Markers::default();
-    let mut icc_chunks: Vec<(u8, &[u8])> = Vec::new();
+    let mut icc_chunks: [Option<&[u8]>; 255] = [None; 255];
+    let mut icc_total = None;
     let mut p = 2;
     while p + 4 <= b.len() {
         if b[p] != 0xFF {
@@ -71,9 +76,11 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
         if len < 2 {
             return None;
         }
-        let start = p + 4;
-        let end = (p + 2 + len).min(b.len());
-        let seg = &b[start..end];
+        let start = p.checked_add(4)?;
+        let declared_end = p.checked_add(2)?.checked_add(len)?;
+        let complete = declared_end <= b.len();
+        let end = declared_end.min(b.len());
+        let seg = b.get(start..end)?;
         match marker {
             0xC0..=0xCF if marker != 0xC4 && marker != 0xC8 && marker != 0xCC && seg.len() >= 6 && m.components == 0 => {
                 m.precision = seg[0];
@@ -83,6 +90,7 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
                 m.components = seg[5];
             }
             0xE1 => {
+                m.app1 = m.app1.saturating_add(1);
                 if seg.starts_with(b"Exif\0\0") && m.exif.is_none() {
                     m.exif = Some(seg[6..].to_vec());
                     m.exif_offset = start + 6;
@@ -93,8 +101,30 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
                 }
             }
             0xE2 => {
-                if seg.starts_with(b"ICC_PROFILE\0") && seg.len() >= 14 {
-                    icc_chunks.push((seg[12], &seg[14..]));
+                if seg.starts_with(b"ICC_PROFILE\0") {
+                    if !complete || seg.len() < 14 {
+                        m.icc_invalid = true;
+                    } else if let (Some(&sequence), Some(&total)) = (seg.get(12), seg.get(13)) {
+                        if sequence == 0 || total == 0 || sequence > total || icc_total.is_some_and(|expected| expected != total) {
+                            m.icc_invalid = true;
+                        } else {
+                            icc_total = Some(total);
+                            let Some(slot) = icc_chunks.get_mut(usize::from(sequence - 1)) else {
+                                m.icc_invalid = true;
+                                p = declared_end;
+                                continue;
+                            };
+                            if slot.is_some() {
+                                m.icc_invalid = true;
+                            } else if let Some(data) = seg.get(14..) {
+                                *slot = Some(data);
+                            } else {
+                                m.icc_invalid = true;
+                            }
+                        }
+                    } else {
+                        m.icc_invalid = true;
+                    }
                 } else if seg.starts_with(b"MPF\0") && m.mpf.is_none() {
                     m.mpf = Some((start + 4, seg[4..].to_vec()));
                 } else if let Some(p) = seg.strip_prefix(crate::gainmap::ISO_URN)
@@ -108,11 +138,32 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
             }
             _ => {}
         }
-        p += 2 + len;
+        p = declared_end;
     }
-    if !icc_chunks.is_empty() {
-        icc_chunks.sort_by_key(|c| c.0);
-        m.icc = Some(icc_chunks.iter().flat_map(|c| c.1.iter().copied()).collect());
+    if let Some(total) = icc_total {
+        let mut profile_len = 0usize;
+        for chunk in icc_chunks.iter().take(usize::from(total)) {
+            let Some(bytes) = chunk else {
+                m.icc_invalid = true;
+                break;
+            };
+            let Some(next_len) = profile_len.checked_add(bytes.len()) else {
+                m.icc_invalid = true;
+                break;
+            };
+            profile_len = next_len;
+        }
+        let maximum_len = usize::from(total).checked_mul(65_519);
+        if maximum_len.is_none_or(|maximum| profile_len > maximum) {
+            m.icc_invalid = true;
+        }
+        if !m.icc_invalid {
+            let mut profile = Vec::with_capacity(profile_len);
+            for bytes in icc_chunks.iter().take(usize::from(total)).flatten() {
+                profile.extend_from_slice(bytes);
+            }
+            m.icc = Some(profile);
+        }
     }
     Some(m)
 }
@@ -121,11 +172,14 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     decode_with_fallback(bytes, opts, None)
 }
 
+const MAX_APP1: u32 = 128;
+
 /// Stored dimensions and EXIF orientation from the markers, without decoding the scan data. The
 /// file is refused, as a decode would refuse it, when it has no frame header, an unsupported frame
 /// type or component count, or when its markers don't run to an end-of-image marker after the
 /// image data (a truncated file). Damage *inside* the entropy-coded data can't be seen this way.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
+    let bytes = &*without_sef_trailer(bytes);
     let m = parse_markers(bytes).ok_or_else(|| Error::Malformed(F, "missing SOI".into()))?;
     if m.components == 0 {
         return Err(Error::Malformed(F, "no frame header".into()));
@@ -172,12 +226,72 @@ fn reaches_eoi(b: &[u8]) -> bool {
     }
 }
 
+/// A Samsung panorama whose scan runs straight into its SEF trailer, with no EOI marker (issue
+/// #3350), as the file it stands for: the bytes before the trailer's earliest data block plus an
+/// EOI. Every other file, a genuinely truncated one included, is borrowed unchanged.
+fn without_sef_trailer(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    use std::borrow::Cow;
+    // The trailer is checked first: it reads only the file's last bytes, not the scan data.
+    let Some(image) = sef_image_end(bytes).and_then(|end| bytes.get(..end)) else { return Cow::Borrowed(bytes) };
+    // the image before the trailer: an FF D9 inside the SEF data doesn't end the scan
+    if reaches_eoi(image) {
+        return Cow::Borrowed(bytes);
+    }
+    let mut fixed = Vec::with_capacity(image.len().saturating_add(2));
+    fixed.extend_from_slice(image);
+    fixed.extend_from_slice(&[0xFF, 0xD9]);
+    // The cut must leave the scan data, not a segment or anything before the first scan, open.
+    let in_scan = parse_markers(&fixed).is_some_and(|m| m.first_scan_components > 0) && reaches_eoi(&fixed);
+    if in_scan { Cow::Owned(fixed) } else { Cow::Borrowed(bytes) }
+}
+
+/// Where the image ends in a file carrying a Samsung SEF trailer: the start of its earliest data
+/// block. The trailer is the file's last bytes: `SEFH`, a u32 LE version and entry count, 12-byte
+/// entries (u16 padding, u16 type, u32 LE offset of the block back from `SEFH`, u32 LE length),
+/// then the u32 LE length of that directory and `SEFT`. Each block starts with the same padding
+/// and type as its entry. `None` unless every entry's block is nonempty, starts with its entry's
+/// type and lies inside the file, before `SEFH`.
+fn sef_image_end(b: &[u8]) -> Option<usize> {
+    let le32 = |at: usize| b.get(at..at.checked_add(4)?)?.try_into().ok().map(|v| u32::from_le_bytes(v) as usize);
+    let tail = b.len().checked_sub(8)?;
+    if b.get(tail.checked_add(4)?..)? != b"SEFT" {
+        return None;
+    }
+    let dir = tail.checked_sub(le32(tail)?)?;
+    if b.get(dir..dir.checked_add(4)?)? != b"SEFH" {
+        return None;
+    }
+    let count = le32(dir.checked_add(8)?)?;
+    let entries = dir.checked_add(12)?;
+    if count == 0 || count > tail.checked_sub(entries)? / 12 {
+        return None;
+    }
+    let mut start = dir;
+    for i in 0..count {
+        let entry = entries.checked_add(i.checked_mul(12)?)?;
+        let block = dir.checked_sub(le32(entry.checked_add(4)?)?)?;
+        let len = le32(entry.checked_add(8)?)?;
+        let kind = |at: usize| b.get(at.checked_add(2)?..at.checked_add(4)?);
+        if len < 4 || block.checked_add(len)? > dir || kind(block)? != kind(entry)? {
+            return None;
+        }
+        start = start.min(block);
+    }
+    Some(start)
+}
+
 pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback: Option<crate::NamedSpace>) -> Result<Decoded> {
+    let bytes = &*without_sef_trailer(bytes);
     let m = parse_markers(bytes).ok_or_else(|| Error::Malformed(F, "missing SOI".into()))?;
     if m.components == 0 {
         return Err(Error::Malformed(F, "no frame header".into()));
     }
     check_size(F, m.width as u64, m.height as u64, opts)?;
+    // The allocating decoders below parse the markers again, all of them: the count is capped so
+    // their quadratic/unbounded handling of APP1 metadata stays linear in file size.
+    if m.app1 > MAX_APP1 {
+        return Err(Error::Malformed(F, "too many APP1 markers".into()));
+    }
     let scale_to = opts.max_size.filter(|&(mw, mh)| mw > 0 && mh > 0 && (m.width >= mw.saturating_mul(2) || m.height >= mh.saturating_mul(2)));
     // zune-jpeg handles the common cases fastest; jpeg-decoder covers DCT scaling, CMYK/YCCK,
     // 12-bit, non-interleaved sequential scans (which zune-jpeg 0.5 mis-decodes with subsampling)
@@ -185,18 +299,20 @@ pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback:
     let lossless = m.sof == 0xC3;
     let non_interleaved = matches!(m.sof, 0xC0 | 0xC1) && m.first_scan_components < m.components;
     let raw = if m.components == 4 || scale_to.is_some() || m.precision > 8 || non_interleaved || lossless {
-        decode_jpeg_decoder(bytes, &m, scale_to)?
+        decode_jpeg_decoder(bytes, &m, scale_to, opts)?
     } else {
-        decode_zune(bytes, &m)?
+        decode_zune(bytes, &m, opts)?
     };
     // A raw container may carry the colour declaration of an otherwise untagged preview.
     // Apply it before linearization/resizing; existing JPEG metadata always wins.
-    let hint = fallback.filter(|_| m.icc.is_none() && m.exif.is_none()).map(|space| crate::SourceSpace::named(space, crate::SpaceOrigin::Container));
-    let meta = Meta { icc: m.icc, exif: m.exif, xmp: m.xmp, hint, ..Default::default() };
+    let hint = fallback
+        .filter(|_| m.icc.is_none() && !m.icc_invalid && m.exif.is_none())
+        .map(|space| crate::SourceSpace::named(space, crate::SpaceOrigin::Container));
+    let meta = Meta { icc: m.icc, icc_invalid: m.icc_invalid, exif: m.exif, xmp: m.xmp, hint, ..Default::default() };
     finish(F, raw, meta, (m.width, m.height), opts)
 }
 
-fn decode_zune(bytes: &[u8], m: &Markers) -> Result<Raw> {
+fn decode_zune(bytes: &[u8], m: &Markers, budget: &DecodeOptions) -> Result<Raw> {
     use zune_core::bytestream::ZCursor;
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
@@ -207,6 +323,11 @@ fn decode_zune(bytes: &[u8], m: &Markers) -> Result<Raw> {
         ColorSpace::RGB
     });
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), opts);
+    // zune's `decode` allocates straight from the frame header it parses, with its own caps
+    // set in us: check that header against the same limits the other decoders honour first.
+    d.decode_headers().map_err(|e| Error::Malformed(F, e.to_string()))?;
+    let (zw, zh) = d.info().map(|i| (i.width as u64, i.height as u64)).ok_or_else(|| Error::Malformed(F, "no info".into()))?;
+    check_size(F, zw, zh, budget)?;
     let px = d.decode().map_err(|e| Error::Malformed(F, e.to_string()))?;
     let info = d.info().ok_or_else(|| Error::Malformed(F, "no info".into()))?;
     let (w, h) = (info.width as usize, info.height as usize);
@@ -217,10 +338,15 @@ fn decode_zune(bytes: &[u8], m: &Markers) -> Result<Raw> {
     Ok(Raw { width: w, height: h, model, alpha: false, premultiplied: false, buf: Buf::U8(px), bit_depth: 8 })
 }
 
-fn decode_jpeg_decoder(bytes: &[u8], m: &Markers, scale_to: Option<(u32, u32)>) -> Result<Raw> {
+fn decode_jpeg_decoder(bytes: &[u8], m: &Markers, scale_to: Option<(u32, u32)>, budget: &DecodeOptions) -> Result<Raw> {
     use jpeg_decoder::PixelFormat;
     let mut d = jpeg_decoder::Decoder::new(bytes);
     d.read_info().map_err(|e| Error::Malformed(F, e.to_string()))?;
+    // Its frame header is what a decode allocates from (progressive coefficient buffers follow the
+    // unscaled MCU grid): check it against the same limits the other decoders honour, before any
+    // DCT scale is requested.
+    let info = d.info().ok_or_else(|| Error::Malformed(F, "no info".into()))?;
+    check_size(F, info.width as u64, info.height as u64, budget)?;
     // `scale` is the DCT size, not a lossless resample: on a lossless frame it would cut the
     // output to the top-left of each plane. Those decode at full size; `finish` scales after.
     if let Some((mw, mh)) = scale_to.filter(|_| m.sof != 0xC3) {
@@ -369,11 +495,18 @@ pub(crate) fn decode_codes8(bytes: &[u8]) -> Result<(usize, usize, usize, Vec<u8
         return Err(Error::Malformed(F, "no frame header".into()));
     }
     check_size(F, m.width as u64, m.height as u64, &DecodeOptions::default())?;
+    if m.app1 > MAX_APP1 {
+        return Err(Error::Malformed(F, "too many APP1 markers".into()));
+    }
     if !matches!(m.components, 1 | 3) || m.precision != 8 {
         return Err(Error::Malformed(F, "expected an 8-bit greyscale or RGB image".into()));
     }
     let non_interleaved = matches!(m.sof, 0xC0 | 0xC1) && m.first_scan_components < m.components;
-    let raw = if non_interleaved { decode_jpeg_decoder(bytes, &m, None)? } else { decode_zune(bytes, &m)? };
+    let raw = if non_interleaved {
+        decode_jpeg_decoder(bytes, &m, None, &DecodeOptions::default())?
+    } else {
+        decode_zune(bytes, &m, &DecodeOptions::default())?
+    };
     let ch = raw.model.channels();
     match raw.buf {
         Buf::U8(v) if v.len() >= raw.width * raw.height * ch => Ok((raw.width, raw.height, ch, v)),
@@ -421,6 +554,110 @@ mod tests {
             assert_eq!(with.orientation, expected.orientation);
         }
         assert!(crate::decode_jpeg_with_fallback(b"bad JPEG", DecodeOptions::default(), NamedSpace::AdobeRgb).is_err());
+    }
+
+    fn app2_icc(sequence: u8, total: u8, data: &[u8]) -> Vec<u8> {
+        let mut payload = b"ICC_PROFILE\0".to_vec();
+        payload.extend_from_slice(&[sequence, total]);
+        payload.extend_from_slice(data);
+        let mut segment = vec![0xff, 0xe2];
+        segment.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+        segment.extend_from_slice(&payload);
+        segment
+    }
+
+    fn jpeg_with_icc_chunks(chunks: &[Vec<u8>]) -> Vec<u8> {
+        use crate::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+        let pixels = [180, 60, 40, 180, 60, 40, 180, 60, 40, 180, 60, 40];
+        let base = encode_jpeg(&EncodeImage::new(2, 2, 3, Samples::U8(&pixels)), 100, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let mut jpeg = base.get(..2).unwrap_or_default().to_vec();
+        for chunk in chunks {
+            jpeg.extend_from_slice(chunk);
+        }
+        jpeg.extend_from_slice(base.get(2..).unwrap_or_default());
+        jpeg
+    }
+
+    #[test]
+    fn jpeg_icc_accepts_reordered_chunks_and_preserves_pixels() {
+        use crate::{NamedSpace, SpaceOrigin, icc};
+        let profile = icc::write_named(NamedSpace::DisplayP3);
+        let (first, second) = profile.split_at(profile.len() / 2);
+        let single = jpeg_with_icc_chunks(&[app2_icc(1, 1, &profile)]);
+        let reordered = jpeg_with_icc_chunks(&[app2_icc(2, 2, second), app2_icc(1, 2, first)]);
+
+        let one = crate::decode(&single, DecodeOptions::default()).unwrap();
+        let two = crate::decode(&reordered, DecodeOptions::default()).unwrap();
+        assert_eq!(one.icc.as_deref(), Some(profile.as_slice()));
+        assert_eq!(two.icc.as_deref(), Some(profile.as_slice()));
+        assert!(!parse_markers(&reordered).unwrap().icc_invalid);
+        assert_eq!(one.space, two.space);
+        assert_eq!(two.space.origin, SpaceOrigin::IccMatrixTrc);
+        let (a, b) = (one.to_working(), two.to_working());
+        assert_eq!(a.data.len(), b.data.len());
+        for (left, right) in a.data.iter().zip(&b.data) {
+            assert!(left.iter().zip(right).all(|(x, y)| (x - y).abs() < 0.00001), "{left:?} != {right:?}");
+        }
+    }
+
+    #[test]
+    fn jpeg_icc_rejects_incoherent_chunks_and_uses_unsupported_fallback() {
+        use crate::{NamedSpace, SpaceOrigin, icc};
+        let profile = icc::write_named(NamedSpace::DisplayP3);
+        let (first, second) = profile.split_at(profile.len() / 2);
+        let base = jpeg_with_icc_chunks(&[]);
+        let reference = crate::decode(&base, DecodeOptions::default()).unwrap();
+        let cases = [
+            ("missing", vec![app2_icc(1, 2, &profile)]),
+            ("duplicate", vec![app2_icc(1, 2, first), app2_icc(1, 2, second)]),
+            ("zero sequence", vec![app2_icc(0, 1, &profile)]),
+            ("zero total", vec![app2_icc(1, 0, &profile)]),
+            ("out of range", vec![app2_icc(2, 1, &profile)]),
+            ("gap", vec![app2_icc(1, 3, first), app2_icc(3, 3, second)]),
+            ("inconsistent totals", vec![app2_icc(1, 2, first), app2_icc(2, 3, second)]),
+            ("short header", {
+                let mut segment = vec![0xff, 0xe2];
+                segment.extend_from_slice(&15u16.to_be_bytes());
+                segment.extend_from_slice(b"ICC_PROFILE\0\x01");
+                vec![segment]
+            }),
+        ];
+        for (name, chunks) in cases {
+            let jpeg = jpeg_with_icc_chunks(&chunks);
+            let markers = parse_markers(&jpeg).unwrap();
+            let decoded = crate::decode(&jpeg, DecodeOptions::default()).unwrap();
+            assert_eq!(decoded.space.origin, SpaceOrigin::IccUnsupported, "{name}: invalid profile must not be applied");
+            assert!(markers.icc.is_none(), "{name}: invalid ICC must not be assembled");
+            assert!(markers.icc_invalid, "{name}: invalid ICC presence must be retained");
+            assert_eq!(decoded.icc, None, "{name}: invalid ICC bytes must not escape decode");
+            assert_eq!(decoded.space.origin, SpaceOrigin::IccUnsupported, "{name}");
+            assert_eq!(decoded.space.named, Some(NamedSpace::Srgb), "{name}");
+            assert_eq!(decoded.to_working(), reference.to_working(), "{name}: fallback pixels");
+        }
+    }
+
+    #[test]
+    fn jpeg_icc_invalid_sequence_prevents_raw_colour_hint() {
+        use crate::{NamedSpace, SpaceOrigin, icc};
+        let profile = icc::write_named(NamedSpace::DisplayP3);
+        let jpeg = jpeg_with_icc_chunks(&[app2_icc(1, 2, &profile)]);
+        let decoded = crate::decode_jpeg_with_fallback(&jpeg, DecodeOptions::default(), NamedSpace::AdobeRgb).unwrap();
+        assert_eq!(decoded.space.origin, SpaceOrigin::IccUnsupported);
+        assert_eq!(decoded.space.named, Some(NamedSpace::Srgb));
+    }
+
+    #[test]
+    fn jpeg_icc_rejects_truncated_app2_segment() {
+        use crate::{NamedSpace, icc};
+        let profile = icc::write_named(NamedSpace::DisplayP3);
+        let mut segment = app2_icc(1, 1, &profile);
+        let declared = u16::from_be_bytes([segment[2], segment[3]]).saturating_add(1);
+        segment[2..4].copy_from_slice(&declared.to_be_bytes());
+        let mut jpeg = vec![0xff, 0xd8];
+        jpeg.extend_from_slice(&segment);
+        let markers = parse_markers(&jpeg).unwrap();
+        assert!(markers.icc.is_none());
+        assert!(markers.icc_invalid);
     }
 
     #[test]
@@ -513,7 +750,7 @@ mod tests {
     fn lossless_grayscale_samples_are_native_endian_and_left_justified() {
         let bytes = lossless_jpeg(1, 8, 12);
         let m = parse_markers(&bytes).unwrap();
-        let raw = decode_jpeg_decoder(&bytes, &m, None).unwrap();
+        let raw = decode_jpeg_decoder(&bytes, &m, None, &DecodeOptions::default()).unwrap();
         let Buf::U16(v) = &raw.buf else { panic!("expected 16-bit samples") };
         assert_eq!(v, &vec![2048u16 << 4; 8], "0x0800 native-endian, left-justified");
         assert_eq!((raw.model, raw.bit_depth), (Model::Gray, 16));
@@ -525,7 +762,7 @@ mod tests {
     fn lossless_high_precision_rgb_is_16_bit() {
         let bytes = lossless_jpeg(3, 2, 12);
         let m = parse_markers(&bytes).unwrap();
-        let raw = decode_jpeg_decoder(&bytes, &m, None).unwrap();
+        let raw = decode_jpeg_decoder(&bytes, &m, None, &DecodeOptions::default()).unwrap();
         let Buf::U16(v) = &raw.buf else { panic!("expected 16-bit samples") };
         assert_eq!(v, &vec![2048u16 << 4; 6]);
         assert_eq!(raw.model, Model::Rgb);
@@ -536,7 +773,7 @@ mod tests {
     fn lossless_high_precision_cmyk_is_16_bit() {
         let bytes = lossless_jpeg(4, 2, 12);
         let m = parse_markers(&bytes).unwrap();
-        let raw = decode_jpeg_decoder(&bytes, &m, None).unwrap();
+        let raw = decode_jpeg_decoder(&bytes, &m, None, &DecodeOptions::default()).unwrap();
         let Buf::U16(v) = &raw.buf else { panic!("expected 16-bit samples") };
         assert_eq!(v, &vec![2048u16 << 4; 8]);
         assert_eq!((raw.model, raw.bit_depth), (Model::Cmyk, 16));
@@ -550,5 +787,285 @@ mod tests {
         let d = crate::decode(&bytes, DecodeOptions::default()).unwrap();
         assert_eq!((d.width, d.height), (8, 1));
         assert_eq!(d.bit_depth, 8);
+    }
+
+    /// Rewrites an encoded file's frame-header dimensions: same tables and scan, a hostile
+    /// annotated size.
+    fn with_dims(bytes: &[u8], w: u16, h: u16) -> Vec<u8> {
+        let mut out = bytes.to_vec();
+        let mut p = 2usize;
+        while p + 1 < out.len() {
+            if out[p] != 0xFF {
+                p += 1;
+                continue;
+            }
+            match out[p + 1] {
+                0xC0..=0xCF if out[p + 1] != 0xC4 && out[p + 1] != 0xC8 && out[p + 1] != 0xCC => {
+                    out[p + 5..p + 7].copy_from_slice(&h.to_be_bytes());
+                    out[p + 7..p + 9].copy_from_slice(&w.to_be_bytes());
+                    return out;
+                }
+                0x01 | 0xD0..=0xD9 => p += 2,
+                0xFF => p += 1,
+                _ => {
+                    let Some(l) = out.get(p + 2..p + 4) else { return out };
+                    p += 2 + usize::from(u16::from_be_bytes([l[0], l[1]]));
+                }
+            }
+        }
+        out
+    }
+
+    /// A file claiming 65535×65535 must be refused for size before zune-jpeg allocates from
+    /// its frame header (4 GB+ of samples from roughly five hundred bytes of tables).
+    #[test]
+    fn zune_refuses_its_own_frame_header_over_the_budget() {
+        use crate::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+        let pixels = vec![128u8; 32 * 24];
+        let jpeg = encode_jpeg(&EncodeImage::new(32, 24, 1, Samples::U8(&pixels)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let hostile = with_dims(&jpeg, 65535, 65535);
+        assert_ne!(hostile, jpeg);
+        match crate::decode(&hostile, DecodeOptions::default()) {
+            Err(Error::TooLarge(w, h)) => assert_eq!((w, h), (65535, 65535)),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// The jpeg-decoder branch (a 4-component file) is checked the same way: its own
+    /// `read_info` result is what a full-size decode allocates from.
+    #[test]
+    fn jpeg_decoder_refuses_its_own_frame_header_over_the_budget() {
+        use crate::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+        let pixels = vec![128u8; 32 * 24 * 4];
+        let jpeg = encode_jpeg(&EncodeImage::new(32, 24, 4, Samples::U8(&pixels)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let hostile = with_dims(&jpeg, 65535, 65535);
+        match crate::decode(&hostile, DecodeOptions::default()) {
+            Err(Error::TooLarge(w, h)) => assert_eq!((w, h), (65535, 65535)),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// Extended XMP is reassembled from every APP1 fragment: an unbounded count is quadratic
+    /// memory in a marker walk, so the count is capped.
+    #[test]
+    fn an_app1_flood_is_refused_before_the_decoders_rewalk_it() {
+        let mut b = vec![0xFF, 0xD8];
+        // a 1-component SOF0: 8-bit, 2×2, component (1, 0x11, Q0)
+        b.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 8, 0, 2, 0, 2, 1, 0x01, 0x11, 0x00]);
+        for _ in 0..200 {
+            b.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x02]);
+        }
+        b.extend_from_slice(&[0xFF, 0xD9]);
+        match crate::decode(&b, DecodeOptions::default()) {
+            Err(Error::Malformed(F, m)) => assert!(m.contains("APP1"), "{m}"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+}
+
+/// [`crate::decode_jpeg_srgb8_fit`]: a plain 8-bit sRGB JPEG decoded (DCT-scaled when that still
+/// covers the box) and area-averaged in linear light straight into 8-bit sRGB, without the
+/// float image the general path builds (for a 45 MP camera preview fitted to 2560 px that float
+/// image and its conversions were half the time). `Ok(None)` for anything else.
+pub(crate) fn srgb8_fit(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<(lightcraft_raster::Rgba8, u16)>> {
+    // (a Samsung SEF trailer read as the file it stands for, as the general decode does: CodeRabbit on #3583)
+    let bytes = &*without_sef_trailer(bytes);
+    let Some(m) = parse_markers(bytes) else { return Ok(None) };
+    let plain = matches!(m.components, 1 | 3)
+        && m.precision == 8
+        && matches!(m.sof, 0xC0..=0xC2)
+        && m.icc.is_none()
+        && !m.icc_invalid
+        && m.adobe_transform.is_none();
+    let summary = m.exif.as_deref().map(exif::summarize).unwrap_or_default();
+    if !plain || summary.adobe_rgb_hint || max_w == 0 || max_h == 0 {
+        return Ok(None);
+    }
+    let budget = DecodeOptions::default();
+    check_size(F, m.width as u64, m.height as u64, &budget)?;
+    // as in the general decode: the decoders below walk every APP1 again
+    if m.app1 > MAX_APP1 {
+        return Err(Error::Malformed(F, "too many APP1 markers".into()));
+    }
+    let scale_to = (m.width >= max_w.saturating_mul(2) || m.height >= max_h.saturating_mul(2)).then_some((max_w, max_h));
+    let non_interleaved = matches!(m.sof, 0xC0 | 0xC1) && m.first_scan_components < m.components;
+    let raw =
+        if scale_to.is_some() || non_interleaved { decode_jpeg_decoder(bytes, &m, scale_to, &budget)? } else { decode_zune(bytes, &m, &budget)? };
+    let Buf::U8(px) = &raw.buf else { return Ok(None) };
+    let ch = match raw.model {
+        Model::Rgb => 3,
+        Model::Gray => 1,
+        Model::Cmyk => return Ok(None),
+    };
+    let (w, h) = (raw.width, raw.height);
+    if w == 0 || h == 0 || px.len() < w.saturating_mul(h).saturating_mul(ch) {
+        return Err(Error::Malformed(F, "short output".into()));
+    }
+    // the size `lightcraft_raster::resample::fit` gives: within the box, aspect kept, never larger
+    let s = (max_w as f64 / w as f64).min(max_h as f64 / h as f64).min(1.0);
+    let tw = ((w as f64 * s).round() as usize).clamp(1, w);
+    let th = ((h as f64 * s).round() as usize).clamp(1, h);
+    let orientation = summary.orientation.filter(|o| (1..=8).contains(o)).unwrap_or(1);
+    Ok(Some((area_average_srgb8(px, w, h, ch, tw, th), orientation)))
+}
+
+/// Source pixels and weights each output pixel along one axis covers: a box of the scale's width
+/// (`n` source pixels onto `out`), partly covered pixels at its ends weighted by their share.
+fn box_taps(n: usize, out: usize) -> Vec<(usize, Vec<f32>)> {
+    let scale = n as f64 / out as f64;
+    (0..out)
+        .map(|o| {
+            let (a, b) = (o as f64 * scale, ((o + 1) as f64 * scale).min(n as f64));
+            let first = (a.floor() as usize).min(n - 1);
+            let last = ((b.ceil() as usize).max(first + 1)).min(n);
+            let ws: Vec<f32> =
+                (first..last).map(|j| ((b.min(j as f64 + 1.0) - a.max(j as f64)).max(0.0) / (b - a).max(f64::MIN_POSITIVE)) as f32).collect();
+            (first, ws)
+        })
+        .collect()
+}
+
+/// `px` (`w × h`, `ch` = 1 or 3 interleaved 8-bit sRGB samples) averaged over boxes in linear
+/// light into `tw × th` opaque 8-bit sRGB pixels. A copy when the size doesn't change.
+fn area_average_srgb8(px: &[u8], w: usize, h: usize, ch: usize, tw: usize, th: usize) -> lightcraft_raster::Rgba8 {
+    use lightcraft_color::transfer::{decode_srgb8, encode_srgb8};
+    let mut out = lightcraft_raster::Rgba8::new(tw, th);
+    let sample = |x: usize, y: usize, c: usize| px.get((y * w + x) * ch + if ch == 3 { c } else { 0 }).copied().unwrap_or(0);
+    if (tw, th) == (w, h) {
+        lightcraft_raster::par_rows(&mut out.data, tw, |y, row| {
+            for (x, o) in row.iter_mut().enumerate() {
+                *o = [sample(x, y, 0), sample(x, y, 1), sample(x, y, 2), 255];
+            }
+        });
+        return out;
+    }
+    let lut: [f32; 256] = std::array::from_fn(|i| decode_srgb8(i as u8));
+    let xs = box_taps(w, tw);
+    let ys = box_taps(h, th);
+    // one source row filtered across into linear RGB at the output width
+    let across = |sy: usize, buf: &mut Vec<[f32; 3]>| {
+        buf.clear();
+        let Some(src) = px.get(sy * w * ch..(sy + 1) * w * ch) else {
+            buf.resize(tw, [0.0; 3]);
+            return;
+        };
+        for (x0, wx) in &xs {
+            let mut a = [0f32; 3];
+            if let Some(span) = src.get(x0 * ch..(x0 + wx.len()) * ch) {
+                for (p, &k) in span.chunks_exact(ch).zip(wx) {
+                    match p {
+                        [r, g, b] => {
+                            a[0] += lut[*r as usize] * k;
+                            a[1] += lut[*g as usize] * k;
+                            a[2] += lut[*b as usize] * k;
+                        }
+                        [v] => {
+                            let l = lut[*v as usize] * k;
+                            a = [a[0] + l, a[1] + l, a[2] + l];
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            buf.push(a);
+        }
+    };
+    lightcraft_raster::par_rows(&mut out.data, tw, |y, row| {
+        let Some((y0, wy)) = ys.get(y) else { return };
+        let mut acc = vec![[0f32; 3]; tw];
+        let mut line = Vec::with_capacity(tw);
+        for (dy, &k) in wy.iter().enumerate() {
+            across(y0 + dy, &mut line);
+            for (a, l) in acc.iter_mut().zip(&line) {
+                a[0] += l[0] * k;
+                a[1] += l[1] * k;
+                a[2] += l[2] * k;
+            }
+        }
+        for (o, a) in row.iter_mut().zip(&acc) {
+            *o = [encode_srgb8(a[0]), encode_srgb8(a[1]), encode_srgb8(a[2]), 255];
+        }
+    });
+    out
+}
+
+#[cfg(test)]
+mod srgb8_fit_tests {
+    use super::*;
+
+    fn jpeg(w: usize, h: usize, f: impl Fn(usize, usize) -> [u8; 3]) -> Vec<u8> {
+        let data: Vec<[u8; 4]> = (0..w * h)
+            .map(|i| {
+                let [r, g, b] = f(i % w, i / w);
+                [r, g, b, 255]
+            })
+            .collect();
+        let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
+        crate::encode_jpeg(&crate::EncodeImage::rgba8(&img), 95, crate::ChromaSubsampling::S420, &crate::EncodeMeta::default()).unwrap()
+    }
+
+    /// The fast path shows what the general decode shows for a plain sRGB JPEG, at the same size.
+    #[test]
+    fn matches_the_general_decode_within_a_few_levels() {
+        let b = jpeg(1203, 801, |x, y| [((x * 7) ^ (y * 3)) as u8, (x / 5 + y / 3) as u8, ((x * y) % 251) as u8]);
+        for (mw, mh) in [(300u32, 300u32), (640, 640), (1203, 801), (5000, 5000), (500, 120)] {
+            let (fast, o) = srgb8_fit(&b, mw, mh).unwrap().unwrap();
+            let slow = crate::decode(&b, DecodeOptions::fit(mw, mh)).unwrap().to_srgb8();
+            assert_eq!((fast.width, fast.height), (slow.width, slow.height), "box {mw}×{mh}");
+            assert_eq!(o, 1);
+            let diff: Vec<u32> =
+                fast.data.iter().zip(&slow.data).flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).unsigned_abs())).collect();
+            let mean = diff.iter().sum::<u32>() as f64 / diff.len() as f64;
+            assert!(mean < 3.0, "box {mw}×{mh}: mean difference {mean}");
+        }
+    }
+
+    /// Anything but plain 8-bit sRGB goes the general way; junk is an error or `None`, never a panic.
+    #[test]
+    fn declines_what_it_does_not_cover_and_never_panics() {
+        let b = jpeg(64, 48, |x, _| [x as u8, 0, 0]);
+        assert!(srgb8_fit(&b, 0, 10).unwrap().is_none());
+        assert!(srgb8_fit(b"not a jpeg", 10, 10).unwrap().is_none());
+        for cut in [0, 2, 20, b.len() / 2, b.len() - 3] {
+            let _ = srgb8_fit(&b[..cut], 32, 32);
+        }
+        // a 1-pixel-wide image into a box much smaller in one axis
+        let thin = jpeg(1, 300, |_, y| [y as u8, y as u8, y as u8]);
+        let (img, _) = srgb8_fit(&thin, 10, 10).unwrap().unwrap();
+        assert_eq!((img.width, img.height), (1, 10));
+    }
+
+    /// An incomplete ICC_PROFILE sequence (chunk 1 of 2) is "has a profile we can't read", not
+    /// "plain sRGB": the general decode handles it, as the doc says (CodeRabbit on #3577).
+    #[test]
+    fn an_incomplete_icc_sequence_goes_the_general_way() {
+        let b = jpeg(16, 16, |x, y| [x as u8, y as u8, 0]);
+        let mut seg = vec![0xFF, 0xE2, 0, 0];
+        seg.extend_from_slice(b"ICC_PROFILE ");
+        seg.extend_from_slice(&[1, 2]);
+        seg.extend_from_slice(&[0u8; 64]);
+        let len = u16::try_from(seg.len() - 2).unwrap();
+        seg[2..4].copy_from_slice(&len.to_be_bytes());
+        let mut with = b[..2].to_vec();
+        with.extend_from_slice(&seg);
+        with.extend_from_slice(&b[2..]);
+        assert!(parse_markers(&with).unwrap().icc_invalid);
+        assert!(srgb8_fit(&b, 8, 8).unwrap().is_some());
+        assert!(srgb8_fit(&with, 8, 8).unwrap().is_none());
+    }
+
+    /// The 8-bit path refuses an APP1 flood before its decoders walk it again, as the general one does.
+    #[test]
+    fn an_app1_flood_is_refused_by_the_8_bit_path_too() {
+        let b = jpeg(16, 16, |x, y| [x as u8, y as u8, 0]);
+        let mut flood = b[..2].to_vec();
+        for _ in 0..200 {
+            flood.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x02]);
+        }
+        flood.extend_from_slice(&b[2..]);
+        match srgb8_fit(&flood, 8, 8) {
+            Err(Error::Malformed(_, m)) => assert!(m.contains("APP1"), "{m}"),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }

@@ -1,4 +1,4 @@
-//! Last-resort panic guard (never-crash standard, `AGENTS.md`): a panic that escapes a command
+//! Last-resort panic guard (see `AGENTS.md`): a panic that escapes a command
 //! becomes that command's error and the session (catalog, library, undo history) stays usable.
 //! It's a safety net, not a way to report errors: commands return `Err` themselves.
 
