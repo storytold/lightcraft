@@ -130,6 +130,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("local.restoreHidden", "Show Hidden Local Locations", None, ""),
     // {on?}: the Info panel's Target Photo / Selected Photos choice (on = Selected Photos)
     ("view.infoSelectedPhotos", "Show Metadata for Selected Photos", None, ""),
+    // {ids: [albumId, ...], operation: union|intersection|difference|exclusive}; 2–8 albums.
+    ("view.combineAlbums", "Combine Albums", None, ""),
     ("view.fullScreenPreview", "Full Screen Preview", Some("F"), "View"),
     ("view.lightsOut", "Lights Out", Some("Shift+L"), "View"),
     ("view.enterFullScreen", "Enter Full Screen", Some("Cmd+Shift+F"), "View"),
@@ -148,6 +150,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.redeye", "Red Eye", None, "Window"),
     ("panel.presets", "Presets", Some("Shift+P"), "Window"),
     ("panel.info", "Info", Some("I"), "Window"),
+    ("panel.metadata", "Metadata", None, "Window"),
     ("panel.keywords", "Keywords", Some("K"), "Window"),
     // the Keywords panel with the cursor in its Add keyword box
     ("panel.addKeywords", "Add Keywords", Some("Cmd+K"), ""),

@@ -15,6 +15,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     ..craft_update::suite::LIGHTCRAFT
 };
 
+mod album_combination;
 pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
@@ -167,6 +168,7 @@ pub struct LightcraftApp {
     /// The keyboard shortcuts editor is waiting for a key press for this command: no shortcut
     /// fires (the native menu bar drops its accelerators too) until it gets one or is cancelled.
     pub recording_shortcut: Option<String>,
+    pub(crate) metadata_panel: panels::right::MetadataRuntime,
     /// A text field had the keyboard at the end of the last frame. egui drops the focus as Esc
     /// arrives, before the shortcuts are read, so this is how Esc there stays the field's own.
     pub text_focus: bool,

@@ -59,6 +59,7 @@ pub mod logging;
 pub mod media;
 pub mod memory;
 pub mod merge;
+pub mod metadata_read;
 mod model_download;
 pub mod open_path;
 pub mod originals;
@@ -1173,6 +1174,18 @@ impl Session {
     /// Library > Enable Filters is off: a filter is put aside (`library.toggleFilters`).
     pub fn filters_off(&self) -> bool {
         self.shelved_filter.is_some()
+    }
+
+    /// Clear matching view rules from both the live filter and the filter put aside by Enable Filters.
+    pub fn clear_view_rules(&mut self, rules: &lightcraft_catalog::RuleSet) {
+        if self.filter.rule_set.as_ref() == Some(rules) {
+            self.filter.rule_set = None;
+        }
+        if let Some(filter) = &mut self.shelved_filter
+            && filter.rule_set.as_ref() == Some(rules)
+        {
+            filter.rule_set = None;
+        }
     }
 
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.

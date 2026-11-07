@@ -21,11 +21,10 @@ const SHOW_ALL: &str = "shortcuts-show-all";
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     capture(app, ui.ctx());
-    ui.set_min_width(560.0);
     let (search_id, all_id) = (egui::Id::unique(SEARCH), egui::Id::unique(SHOW_ALL));
     let mut search: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
     let mut show_all: bool = ui.data(|d| d.get_temp(all_id)).unwrap_or(false);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut search).hint_text(crate::i18n::tr("Search commands or keys")).desired_width(220.0));
         register(ui, "field:shortcutsSearch", r.rect);
         let r = ui.checkbox(&mut show_all, crate::i18n::tr("Show commands without a shortcut"));
@@ -63,18 +62,24 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     // a fixed height, so the dialog doesn't jump around while the search narrows the list
     // (shorter on a short window, so the dialog fits it)
     let h = crate::panels::dialogs::list_height(ui, 400.0);
-    egui::ScrollArea::vertical().max_height(h).min_scrolled_height(h).auto_shrink([false, false]).id_salt("shortcuts-list").show(ui, |ui| {
-        egui::Grid::new("shortcuts").striped(true).num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
-            for (b, sc) in &rows {
-                row(app, ui, t, b, sc.as_deref(), mac);
-            }
-            if rows.is_empty() {
-                ui.label(RichText::new(crate::i18n::tr("No matching commands")).color(t.text_dim));
-                ui.end_row();
-            }
+    egui::ScrollArea::both()
+        .max_width(ui.available_width())
+        .max_height(h)
+        .min_scrolled_height(h)
+        .auto_shrink([false, false])
+        .id_salt("shortcuts-list")
+        .show(ui, |ui| {
+            egui::Grid::new("shortcuts").striped(true).num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
+                for (b, sc) in &rows {
+                    row(app, ui, t, b, sc.as_deref(), mac);
+                }
+                if rows.is_empty() {
+                    ui.label(RichText::new(crate::i18n::tr("No matching commands")).color(t.text_dim));
+                    ui.end_row();
+                }
+            });
+            fixed_keys(app, ui, t, mac, &needle);
         });
-        fixed_keys(app, ui, t, mac, &needle);
-    });
 }
 
 /// `Cmd+Shift+Z` as menus show it (`⇧⌘Z` on macOS).

@@ -5,6 +5,7 @@ use super::{Album, AlbumId, Align2, Icon, LibrarySource, LightcraftApp, Rect, Se
 /// Albums: the tree of albums and the folders they are sorted into. `reveal`: an album just made,
 /// whose folders open down to it.
 pub(super) fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Option<u64>) {
+    crate::album_combination::controls(app, ui);
     let kids: AlbumKids = app.session.catalog.album_children_by_parent().into_iter().map(|(k, v)| (k, v.into_iter().cloned().collect())).collect();
     let cat = &app.session.catalog;
     let mut open_to = Vec::new();
@@ -13,14 +14,20 @@ pub(super) fn albums_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, reveal: Op
         open_to.push(p);
         cur = cat.album(p).and_then(|a| a.parent);
     }
-    albums_tree(app, ui, &kids, None, 0.0, &open_to);
+    let combined = if crate::album_combination::active(app) {
+        app.ui.album_combination.as_ref().map(|(ids, _)| ids.clone()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    albums_tree(app, ui, &kids, None, 0.0, (&open_to, &combined));
 }
 
 /// The albums inside each folder (`None`: the top level), in the order they are listed.
 type AlbumKids = std::collections::HashMap<Option<AlbumId>, Vec<Album>>;
 
 /// `open_to`: folders forced open this frame (the way down to an album that was just made).
-fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Option<AlbumId>, indent: f32, open_to: &[AlbumId]) {
+fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Option<AlbumId>, indent: f32, selection: (&[AlbumId], &[u64])) {
+    let (open_to, combined) = selection;
     // 64 folders deep at most (16 points a level): a catalog that loops must not overflow the stack
     if indent > 64.0 * INDENT_STEP {
         return;
@@ -58,10 +65,10 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             }
             folder_menu(app, &resp, a);
             if draw_open {
-                albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, open_to);
+                albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, selection);
             }
         } else {
-            let sel = app.session.source == LibrarySource::Album(a.id);
+            let sel = app.session.source == LibrarySource::Album(a.id) || combined.contains(&a.id.0);
             let icon = if a.is_smart() { Icon::SmartAlbum } else { Icon::Album };
             // cached: a smart album's count scans the catalog
             let now = (app.session.clock)();
@@ -78,7 +85,8 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 .selected(sel)
                 .indent(indent)
                 .sense(Sense::click_and_drag())
-                .show(app, ui);
+                .show(app, ui)
+                .on_hover_text(crate::i18n::tr("Cmd/Ctrl-click albums to combine. A plain click shows one album."));
             if !problems.is_empty() {
                 crate::widgets::register(ui, format!("albumProblem:{}", a.id.0), resp.rect);
             }
@@ -103,7 +111,11 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 resp = resp.on_hover_text(tip);
             }
             if resp.clicked() {
-                let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
+                if ui.input(|i| i.modifiers.command || i.modifiers.ctrl) {
+                    crate::album_combination::toggle(app, a.id.0);
+                } else {
+                    let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
+                }
             }
             folder_menu(app, &resp, a);
         }

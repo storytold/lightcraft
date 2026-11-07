@@ -369,7 +369,9 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // Space held over a tool ends when the key is up, whoever has the keyboard by then
     crate::space_hand::tick(app, ctx);
-    if !matches!(app.ui.dialog, Some(crate::state::Dialog::Shortcuts)) {
+    let editing_keys = matches!(&app.ui.dialog, Some(crate::state::Dialog::Shortcuts))
+        || matches!(&app.ui.dialog, Some(crate::state::Dialog::Settings { tab }) if tab == "keys");
+    if !editing_keys {
         app.recording_shortcut = None;
     }
     // Dialogs own their keys (including Esc and text editing); background photo actions wait. A

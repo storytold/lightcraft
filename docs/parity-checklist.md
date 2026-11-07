@@ -11,6 +11,11 @@ The rows are maintained by hand; the summary block is generated (`cargo xtask pa
 `cargo xtask parity` (part of `cargo xtask ci`) checks that every command id, control id and path
 cited here still exists. Formerly docs/parity.md.
 
+2026-11-03 additions to LR-META-INFO, LR-PREF-SHORTCUTS and LR-LIB-ALBUM:
+`cmd:panel.metadata` opens a compact read-only sidebar; Settings → Keys reuses the editable
+keymap; `cmd:view.combineAlbums` combines live album membership with union, intersection,
+difference or exactly-one rules. See [behavior and tests](metadata-keys-albums.md).
+
 - **Ids** come from the (local, gitignored) reference in `plan/lightroom/`: `LR-…` = feature catalog (03),
   `MENU-…` = menu items (04), `KEY-…` / `KEYC-…` = keyboard shortcuts (06, desktop / Classic), `LRC-…` = Classic
   extras (08). Ids are stable; never renumber.

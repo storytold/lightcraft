@@ -28,6 +28,8 @@ egui_extras = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+chrono = { workspace = true }
+sys-locale = { version = "0.3", features = ["js"] }
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
