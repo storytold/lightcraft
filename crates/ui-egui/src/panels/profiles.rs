@@ -188,6 +188,9 @@ fn cell_ui(
         app.hover_preview =
             Some(HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(p_id, p_name)), settings: s.clone() });
         ui.data_mut(|m| m.insert_temp(egui::Id::new("last-profile-hover"), (id, p_id.to_string())));
+    } else if resp.hovered() && applied {
+        // resting on the applied profile shows it (no preview), not the last other profile hovered
+        ui.data_mut(|m| m.remove::<(PhotoId, String)>(egui::Id::new("last-profile-hover")));
     }
     let resp = resp.on_hover_text(format!(
         "{} ({})",

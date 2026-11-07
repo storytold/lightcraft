@@ -144,6 +144,27 @@ fn free_text_with_a_colon_searches_the_text_fields() {
     assert_eq!(q("11:45"), Vec::<PhotoId>::new(), "an unknown field matching no text finds nothing");
 }
 
+/// `f:`/`aperture:` and `focal:` are stored as `f32`; a typed value that isn't exact in binary
+/// (2.8, 5.6) must still match, and `<`/`>` must not count the photo's own value.
+#[test]
+fn search_tokens_match_f32_aperture_and_focal() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-05-01T10:00:00");
+    let mut m = c.photo(a).unwrap().meta.clone();
+    m.aperture = Some(2.8);
+    m.focal_mm = Some(5.6);
+    c.apply(Op::SetMeta { id: a, meta: Box::new(m) }).unwrap();
+    let q = |t: &str| c.query(&Filter { text: t.into(), ..Default::default() }, &Sort::default());
+    assert_eq!(q("f:2.8"), vec![a], "f:2.8");
+    assert_eq!(q("aperture:=2.8"), vec![a], "aperture:=2.8");
+    assert_eq!(q("focal:5.6"), vec![a], "focal:5.6");
+    assert!(q("f:2.9").is_empty(), "f:2.9");
+    assert!(q("f:<2.8").is_empty(), "f:<2.8");
+    assert!(q("f:>2.8").is_empty(), "f:>2.8");
+    assert!(q("focal:<5.6").is_empty(), "focal:<5.6");
+    assert_eq!(q("f:>2.7"), vec![a], "f:>2.7");
+}
+
 /// A `captured` string that is not ASCII (the Lightroom importer copies `captureTime` into an
 /// `AddPhoto` op verbatim, and a JSON snapshot is valid UTF-8 whatever it holds) must not be
 /// sliced on a byte index in `date_groups`: grouping counts the well-formed dates and ignores

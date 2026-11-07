@@ -3140,6 +3140,7 @@ version = "0.9.1"
 dependencies = [
  "avif-serialize",
  "bytemuck",
+ "dhat",
  "image",
  "image-webp",
  "jixel",

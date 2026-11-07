@@ -45,3 +45,15 @@ sync_github_name = true
 [people.Silvertree2010]
 display_name = "Netter"
 sync_github_name = false
+
+[people.nledford]
+real_name = "Nathaniel Ledford"
+
+[people.marcoarnulfo]
+real_name = "Marco Arnulfo"
+display_name = "Marco Arnulfo"
+sync_github_name = false
+
+[people.egegl]
+real_name = "Ege Gursel"
+sync_github_name = true

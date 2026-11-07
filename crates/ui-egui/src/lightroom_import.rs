@@ -52,6 +52,8 @@ pub struct LightroomTask {
     guard: TaskGuard,
     /// The import being added (from the worker's `Started` on).
     import: Option<lightcraft_engine::lightroom_job::LightroomImport>,
+    /// Writes the import index after each batch of virtual copies (from the first one on).
+    index_writer: Option<IndexWriter>,
 }
 
 impl LightroomTask {
@@ -69,7 +71,7 @@ impl LightroomTask {
             Kind::Import => "Importing Lightroom catalog",
         };
         let guard = s.activity.start("lightroom", label, Cancel::Flag(cancel.clone()));
-        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard, import: None };
+        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard, import: None, index_writer: None };
         task.refresh();
         task
     }
@@ -240,12 +242,16 @@ fn spawn_prepare(
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_finalize(
     finalization: lightcraft_engine::lightroom_job::LightroomArchiveFinalization,
+    previous: Option<std::thread::JoinHandle<()>>,
     tx: mpsc::Sender<Message>,
     ctx: egui::Context,
 ) -> Result<(), String> {
     std::thread::Builder::new()
         .name("lc-lightroom-finalize".into())
         .spawn(move || {
+            if let Some(previous) = previous {
+                let _ = previous.join();
+            }
             let result = lightcraft_engine::guard::catch("Lightroom archive finalization", || finalization.finish())
                 .and_then(|r| r.map_err(|e| e.to_string()));
             let _ = tx.send(Message::Finalized(result));
@@ -258,10 +264,103 @@ fn spawn_finalize(
 #[cfg(target_arch = "wasm32")]
 fn spawn_finalize(
     _finalization: lightcraft_engine::lightroom_job::LightroomArchiveFinalization,
+    _previous: Option<std::thread::JoinHandle<()>>,
     _tx: mpsc::Sender<Message>,
     _ctx: egui::Context,
 ) -> Result<(), String> {
     unsupported_wasm().map(|_| ())
+}
+
+/// Write the import index (`write`), logging a failure: the final write, which comes after this
+/// one, writes the whole index again and reports one.
+fn write_index(write: lightcraft_engine::lightroom_job::LightroomArchiveFinalization) {
+    let written = lightcraft_engine::guard::catch("Lightroom import index", || write.finish()).and_then(|r| r.map_err(|e| e.to_string()));
+    if let Err(e) = written {
+        log::warn!("Lightroom import index: {e}");
+    }
+}
+
+type IndexJob = Box<dyn FnOnce() + Send>;
+
+/// What waits for the index writer: the newest write, and whether to stop.
+#[derive(Default)]
+struct IndexQueue {
+    next: Option<IndexJob>,
+    closed: bool,
+}
+
+/// One worker that writes the import index after each batch of virtual copies, in order. A
+/// newer index replaces one still waiting (it holds every identity of the older one), so however
+/// fast the batches come, one write runs and at most one waits. With no worker (none could start)
+/// each write runs where it is handed in.
+struct IndexWriter {
+    queue: Arc<(std::sync::Mutex<IndexQueue>, std::sync::Condvar)>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl IndexWriter {
+    fn start() -> Self {
+        let queue: Arc<(std::sync::Mutex<IndexQueue>, std::sync::Condvar)> = Arc::default();
+        let shared = queue.clone();
+        let worker = std::thread::Builder::new()
+            .name("lc-lightroom-index".into())
+            .spawn(move || {
+                let (lock, ready) = &*shared;
+                loop {
+                    let job = {
+                        let mut queue = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        loop {
+                            if let Some(job) = queue.next.take() {
+                                break Some(job);
+                            }
+                            if queue.closed {
+                                break None;
+                            }
+                            queue = ready.wait(queue).unwrap_or_else(std::sync::PoisonError::into_inner);
+                        }
+                    };
+                    match job {
+                        Some(job) => job(),
+                        None => return,
+                    }
+                }
+            })
+            .ok();
+        Self { queue, worker }
+    }
+
+    /// Write after the write before it (in place of one that still waits).
+    fn write(&mut self, job: impl FnOnce() + Send + 'static) {
+        if self.worker.is_none() {
+            job();
+            return;
+        }
+        let (lock, ready) = &*self.queue;
+        lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner).next = Some(Box::new(job));
+        ready.notify_one();
+    }
+
+    /// Stop for the final write, which holds every identity: a write still waiting is dropped, and
+    /// the one running is returned to wait for.
+    fn close(mut self) -> Option<std::thread::JoinHandle<()>> {
+        let (lock, ready) = &*self.queue;
+        {
+            let mut queue = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            queue.next = None;
+            queue.closed = true;
+        }
+        ready.notify_one();
+        self.worker.take()
+    }
+}
+
+impl Drop for IndexWriter {
+    /// (without a final write, a write still waiting is made before the worker stops)
+    fn drop(&mut self) {
+        let (lock, ready) = &*self.queue;
+        lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closed = true;
+        ready.notify_one();
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -525,13 +624,18 @@ fn receive(app: &mut LightcraftApp, ctx: &egui::Context, mut task: LightroomTask
                 terminal(app, ctx, &task, json!({"error": "Lightroom batch before the catalog was read"}));
                 return None;
             };
+            let mut index = None;
             let added = app.session.execute_fn("library.importLightroom", |s| {
-                import.commit(s, *batch)?;
+                index = import.commit(s, *batch)?;
                 Ok(Value::Null)
             });
             if let Err(e) = added {
                 finish(app, ctx, task, false, Some(e.to_string()));
                 return None;
+            }
+            // (the batch is saved; its virtual copies are found again through the index)
+            if let Some(index) = index {
+                task.index_writer.get_or_insert_with(IndexWriter::start).write(move || write_index(index));
             }
             Some(task)
         }
@@ -541,7 +645,9 @@ fn receive(app: &mut LightcraftApp, ctx: &egui::Context, mut task: LightroomTask
             None
         }
         Message::Read => {
-            finish(app, ctx, task, true, None);
+            // (a cancel after the last batch still leaves the collections for the next import)
+            let complete = !cancelled(&task);
+            finish(app, ctx, task, complete, None);
             None
         }
         Message::Finalized(result) => {
@@ -592,7 +698,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: LightroomTask,
     };
     task.enter(Phase::Finalizing);
     let (tx, rx) = mpsc::channel();
-    if let Err(e) = spawn_finalize(finalization, tx, ctx.clone()) {
+    if let Err(e) = spawn_finalize(finalization, task.index_writer.take().and_then(IndexWriter::close), tx, ctx.clone()) {
         let mut result = json!({"report": report, "indexWarning": e});
         if let Some(error) = error {
             result["error"] = json!(error);
@@ -648,6 +754,53 @@ mod tests {
         // no render left running at exit (see tests_activity::demo)
         h.settle(std::time::Duration::from_secs(20));
         h
+    }
+
+    /// Index writes after batches of virtual copies run one at a time, in order; a newer one
+    /// replaces one still waiting, so however fast batches come only one waits (review of #1735).
+    #[test]
+    fn index_writes_keep_their_order_and_only_the_newest_waits() {
+        let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let job = |n: u32, ran: &Arc<std::sync::Mutex<Vec<u32>>>| {
+            let ran = ran.clone();
+            move || ran.lock().unwrap().push(n)
+        };
+        let mut writer = IndexWriter::start();
+        let (release, gate) = mpsc::channel::<()>();
+        let (running, started) = mpsc::channel::<()>();
+        let first = job(1, &ran);
+        writer.write(move || {
+            running.send(()).unwrap();
+            gate.recv().unwrap();
+            first();
+        });
+        started.recv().unwrap();
+        writer.write(job(2, &ran));
+        let (done, finished) = mpsc::channel::<()>();
+        let third = job(3, &ran);
+        writer.write(move || {
+            third();
+            done.send(()).unwrap();
+        });
+        release.send(()).unwrap();
+        finished.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert_eq!(*ran.lock().unwrap(), [1, 3], "the newest replaced the one waiting");
+
+        // the final write holds everything: a write still waiting is dropped for it
+        let (release, gate) = mpsc::channel::<()>();
+        let (running, started) = mpsc::channel::<()>();
+        let fourth = job(4, &ran);
+        writer.write(move || {
+            running.send(()).unwrap();
+            gate.recv().unwrap();
+            fourth();
+        });
+        started.recv().unwrap();
+        writer.write(job(5, &ran));
+        let worker = writer.close().unwrap();
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(*ran.lock().unwrap(), [1, 3, 4]);
     }
 
     #[test]

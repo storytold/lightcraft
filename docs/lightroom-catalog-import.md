@@ -87,7 +87,10 @@ probes their originals and parses their XMP and maps their develop settings. Eac
 the owner thread as it arrives, so photos appear while the rest is read; the progress counts each
 original as it is read. Cancelling (✕ in the activity stack) keeps the photos added so far, without
 collections, as one undo step; importing the catalog again continues where it stopped (their
-identities are in the import index) and then adds the collections. Late batches from a closed or
+identities are in the import index) and then adds the collections. Each batch is saved as it is added, so the
+same holds after a crash or a forced quit: a master is found again by its path, a virtual copy
+through the import index, which is written after each batch of virtual copies (they come after
+every master, in the last batches). Late batches from a closed or
 switched library are rejected, including reopening the same path. Ordinary edits during the import
 remain intact (and, as with any batched import, fall into its undo step). The archive index is
 written on a worker. CLI commands run the same pipeline synchronously; browser builds reject native

@@ -115,7 +115,7 @@ fn color(v: &Value) -> std::result::Result<Option<[u8; 3]>, String> {
         Value::String(s) if s.is_empty() || s.eq_ignore_ascii_case("none") => Ok(None),
         Value::String(s) => {
             let h = s.strip_prefix('#').unwrap_or(s);
-            if h.len() != 6 || !h.is_ascii() {
+            if h.len() != 6 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return Err(bad());
             }
             let byte = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).ok_or_else(bad);
@@ -747,6 +747,8 @@ mod tests {
             json!({"repeat": 1}),
             json!({"fadeColor": "#12345"}),
             json!({"fadeColor": "#ééé"}),
+            json!({"fadeColor": "#+f+f+f"}),
+            json!({"fadeColor": "-12345"}),
             json!({"fadeColor": [300, 0, 0]}),
             json!({"fadeColor": [1, 2]}),
             json!({"speed": 2}),

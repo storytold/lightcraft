@@ -378,3 +378,32 @@ fn the_print_preview_does_not_rebuild_thumbnails_every_frame() {
     }
     assert!(h.app.renderer.thumb_jobs_built - before < 50, "{} jobs", h.app.renderer.thumb_jobs_built - before);
 }
+
+#[test]
+fn page_options_checkboxes_set_the_page_and_hide_for_packages() {
+    let mut h = demo(Services::default());
+    open_print(&mut h);
+    let scroll = |h: &mut Headless, dy: f32| {
+        let r = h.request("ui.hoverWidget", json!({"id": "combo:printPaper"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        for _ in 0..4 {
+            h.request("ui.scroll", json!({"dy": dy}), T);
+            h.settle(T);
+        }
+    };
+    // the Page panel is below Page Setup: scroll down to it
+    scroll(&mut h, -600.0);
+    for (id, on) in [("check:printPageNumbers", 0), ("check:printPageInfo", 1), ("check:printCropMarks", 2)] {
+        click(&mut h, id);
+        let p = &h.app.session.print.page;
+        assert_eq!([p.page_numbers, p.page_info, p.crop_marks].iter().filter(|v| **v).count(), on + 1, "{id}");
+    }
+    let p = &h.app.session.print.page;
+    assert!(p.page_numbers && p.page_info && p.crop_marks);
+    scroll(&mut h, 600.0);
+    click(&mut h, "button:printStyle-1");
+    assert!(has(&h, "check:printCropMarks"), "a contact sheet has Page Options");
+    // Lightroom's packages have no Page Options
+    click(&mut h, "button:printStyle-2");
+    assert!(!has(&h, "check:printPageNumbers") && !has(&h, "check:printCropMarks"));
+}

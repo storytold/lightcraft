@@ -181,9 +181,6 @@ pub struct CatalogImport {
     pub members: Vec<Row>,
     pub collection_content: Vec<Row>,
     pub warnings: Vec<String>,
-    /// Master IDs removed for unsupported media before the worker divides photos into batches.
-    #[serde(skip)]
-    pub(crate) rejected_masters: HashSet<i64>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -520,7 +517,6 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
         members: optional_table("AgLibraryCollectionImage", &mut warnings)?,
         collection_content: optional_table("AgLibraryCollectionContent", &mut warnings)?,
         warnings,
-        rejected_masters: HashSet::new(),
     };
     for image in table("Adobe_images", true)? {
         ensure_read_active(cancel)?;
@@ -588,7 +584,6 @@ pub(crate) fn refuse_non_media(data: &mut CatalogImport) {
     if refused.is_empty() {
         return;
     }
-    data.rejected_masters.extend(refused.iter().copied());
     let mut warnings = Vec::new();
     data.photos.retain(|p| {
         let master = number(&p.image, "masterImage");
@@ -742,10 +737,14 @@ pub fn import(s: &mut crate::Session, path: &Path, update_existing: bool) -> cra
     let mut import = crate::lightroom_job::LightroomImport::begin(s, start)?;
     let mut added = || -> crate::Result<()> {
         while let Some(batch) = job.next_batch(&cancel) {
-            import.commit(s, batch?)?;
+            let index = import.commit(s, batch?)?;
             // each batch is saved: a crash keeps what was added, and importing again continues
+            // (with the index after a batch of virtual copies, which are found again through it)
             if s.library.as_ref().is_some_and(|library| library.on_disk) {
                 s.persist()?;
+                if let Some(index) = index {
+                    index.finish()?;
+                }
             }
         }
         Ok(())
@@ -875,21 +874,14 @@ pub(crate) struct LightroomApply {
     imported: usize,
     /// Local records this import brought into the library.
     promoted: HashSet<PhotoId>,
+    /// Source photos whose original path is refused ([`Original::Refused`]): left out, with their
+    /// virtual copies.
+    refused: HashSet<i64>,
     failed: Vec<(String, String)>,
-    /// Rejected master source IDs, retained across batches for virtual copies.
-    refused_masters: HashSet<i64>,
 }
 
 impl LightroomApply {
-    pub(crate) fn new(
-        s: &crate::Session,
-        source: String,
-        update_existing: bool,
-        index: ImportIndex,
-        warnings: Vec<String>,
-        now: String,
-        refused_masters: HashSet<i64>,
-    ) -> Self {
+    pub(crate) fn new(s: &crate::Session, source: String, update_existing: bool, index: ImportIndex, warnings: Vec<String>, now: String) -> Self {
         let by_path = s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
         LightroomApply {
             source,
@@ -904,8 +896,8 @@ impl LightroomApply {
             preserved: 0,
             imported: 0,
             promoted: HashSet::new(),
+            refused: HashSet::new(),
             failed: Vec::new(),
-            refused_masters,
         }
     }
 
@@ -936,13 +928,6 @@ impl LightroomApply {
         let mut ops = Vec::new();
         let now = self.now.clone();
         photos.sort_by_key(|m| number(&m.src.image, "masterImage") != 0);
-        for mapped in &photos {
-            let src = &mapped.src;
-            let master = number(&src.image, "masterImage");
-            if master == 0 && (matches!(src.original, Original::Refused(_)) || !crate::open_path::is_media(Path::new(&src.path))) {
-                self.refused_masters.insert(src.source_id);
-            }
-        }
         // Only a master whose virtual copy is in this batch needs a second owned photo while the
         // batch is staged (a copy in a later batch finds its master in the library).
         let copy_masters: HashSet<i64> = photos.iter().map(|m| number(&m.src.image, "masterImage")).filter(|id| *id != 0).collect();
@@ -950,27 +935,21 @@ impl LightroomApply {
         for mut m in photos {
             let src = &m.src;
             let master = number(&src.image, "masterImage");
-            let own_refused = matches!(src.original, Original::Refused(_));
-            let unsupported_media = !crate::open_path::is_media(Path::new(&src.path));
-            let refused_master = master == 0 && self.refused_masters.contains(&src.source_id);
-            let refused_parent = master != 0 && self.refused_masters.contains(&master);
-            if master == 0 && (missing_sources.contains(&key(&src.path)) || !src.original_is_file() || refused_master) {
+            // nothing but a file type LightCraft reads becomes a record (#2135); the catalog's
+            // reader already left these out, so this finds one only on a route around it
+            if master == 0 && !crate::open_path::is_media(Path::new(&src.path)) {
+                self.warnings.push(format!("image {}: not imported; {} isn't one of the file types LightCraft reads", src.source_id, src.path));
+                self.refused.insert(src.source_id);
+                continue;
+            }
+            if master == 0 && missing_sources.contains(&key(&src.path)) {
                 self.missing.push(src.path.clone());
             }
-            if own_refused || unsupported_media || refused_master || refused_parent {
-                let message = if refused_parent {
-                    format!("image {}: not imported; its original was not imported", src.source_id)
-                } else if unsupported_media {
-                    format!("image {}: not imported; {} isn't one of the file types LightCraft reads", src.source_id, src.path)
-                } else if let Original::Refused(why) = &src.original {
-                    format!("image {}: {} is not opened: {why}; listed as missing and not added", src.source_id, src.path)
-                } else {
-                    format!("image {}: not imported; its original was refused", src.source_id)
-                };
-                let prefix = format!("image {}:", src.source_id);
-                if !self.warnings.iter().any(|warning| warning.starts_with(&prefix)) {
-                    self.warnings.push(message);
-                }
+            // A refused path must not become a library record the app would look at later; its
+            // virtual copies (in this batch or a later one) go with it. (`masterImage` is 0 for a
+            // master: a refused id 0 in a malformed catalog must not take every master with it.)
+            if matches!(src.original, Original::Refused(_)) || (master != 0 && self.refused.contains(&master)) {
+                self.refused.insert(src.source_id);
                 continue;
             }
             let indexed = self
@@ -1082,15 +1061,14 @@ impl LightroomApply {
         Ok(())
     }
 
-    /// Finish: the collections become albums (only when every photo was added: `complete`), the
-    /// undo steps since `undo0` become one, and the report.
+    /// Finish: the collections become albums (only when every photo was added: `complete`), and
+    /// the report. (The import's undo steps are one: [`ImportSteps`].)
     pub(crate) fn finish(
         &mut self,
         s: &mut crate::Session,
         collections: &[Row],
         members: &[Row],
         complete: bool,
-        undo0: usize,
         archive: Option<&Path>,
     ) -> crate::Result<Value> {
         let mut albums = HashMap::new();
@@ -1166,7 +1144,6 @@ impl LightroomApply {
         if !ops.is_empty() {
             s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
         }
-        s.merge_undo(s.undo.len().saturating_sub(undo0), "Import Lightroom Catalog");
         let mut report = json!({
             "source": self.source,
             "photos": self.ids.len(),
@@ -1188,16 +1165,41 @@ impl LightroomApply {
     }
 }
 
+/// An import's undo steps as one. The steps a batch takes fold into the import's step while that
+/// is still on top of the undo stack; a step taken in between (an edit made while the import runs,
+/// or an undo) stays apart, and the import goes on in a new step. Counted by commits, not by the
+/// stack's length, which stops growing at its cap.
+#[derive(Debug, Default)]
+pub(crate) struct ImportSteps {
+    /// The undo stack's length and the session's commits right after the import's last step.
+    top: Option<(usize, u64)>,
+}
+
+impl ImportSteps {
+    /// Run `f`, folding the undo steps it takes into the import's.
+    pub(crate) fn run<T>(&mut self, s: &mut crate::Session, f: impl FnOnce(&mut crate::Session) -> crate::Result<T>) -> crate::Result<T> {
+        let on_top = self.top == Some((s.undo.len(), s.commits()));
+        let commits0 = s.commits();
+        let result = f(s);
+        let taken = usize::try_from(s.commits().wrapping_sub(commits0)).unwrap_or(usize::MAX);
+        if taken > 0 {
+            s.merge_undo(taken.saturating_add(usize::from(on_top)).min(s.undo.len()), "Import Lightroom Catalog");
+            self.top = Some((s.undo.len(), s.commits()));
+        }
+        result
+    }
+}
+
 #[cfg(test)]
-fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> crate::Result<Value> {
-    let mut data = data;
+fn apply(s: &mut crate::Session, mut data: CatalogImport, update_existing: bool) -> crate::Result<Value> {
+    // nothing but a file type LightCraft reads becomes a record, whichever route got here (#2135)
     refuse_non_media(&mut data);
     validate(&data).map_err(error)?;
     let archive_dir = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Interop"));
     let index_path = archive_dir.as_ref().map(|p| p.join("lightroom-index.json"));
     let index = load_index(index_path.as_deref())?;
     let archive_path = archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map_err(error)).transpose()?;
-    let undo0 = s.undo.len();
+    let mut steps = ImportSteps::default();
     let existing: HashMap<_, _> =
         s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
     let paths: Vec<_> = data
@@ -1208,10 +1210,9 @@ fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> 
         .collect();
     let missing_sources: HashSet<String> =
         data.photos.iter().filter(|p| number(&p.image, "masterImage") == 0).filter(|p| !p.original_is_file()).map(|p| key(&p.path)).collect();
-    let files = crate::import::import(s, &paths, crate::import::ImportMode::Add)?;
+    let files = steps.run(s, |s| crate::import::import(s, &paths, crate::import::ImportMode::Add))?;
     let now = (s.clock)();
-    let mut apply =
-        LightroomApply::new(s, data.source.clone(), update_existing, index, data.warnings.clone(), now.clone(), data.rejected_masters.clone());
+    let mut apply = LightroomApply::new(s, data.source.clone(), update_existing, index, data.warnings.clone(), now.clone());
     let mut probe = Photo::new(PhotoId(0), Source::File { path: String::new() }, "", "", 0, 0, &now);
     let photos = data
         .photos
@@ -1221,8 +1222,8 @@ fn apply(s: &mut crate::Session, data: CatalogImport, update_existing: bool) -> 
             MappedPhoto::new(src, Shape::of(&probe))
         })
         .collect();
-    apply.batch(s, photos, files, &missing_sources)?;
-    let report = apply.finish(s, &data.collections, &data.members, true, undo0, archive_path.as_deref())?;
+    steps.run(s, |s| apply.batch(s, photos, files, &missing_sources))?;
+    let report = steps.run(s, |s| apply.finish(s, &data.collections, &data.members, true, archive_path.as_deref()))?;
     if let Some(path) = index_path {
         s.persist()?;
         let bytes = serde_json::to_vec(&apply.index).map_err(|e| error(e.to_string()))?;
@@ -1270,7 +1271,6 @@ mod tests {
             ],
             collection_content: Vec::new(),
             warnings: Vec::new(),
-            rejected_masters: HashSet::new(),
         }
     }
     /// A crafted `.lrcat` that names a program as a photo's original gets no record for it, so
@@ -1315,6 +1315,24 @@ mod tests {
         assert!(warnings.contains("image 4: not imported"), "the virtual copy of the refused original goes with it: {warnings}");
     }
 
+    /// A refused original with id 0 (a malformed catalog) is left out alone: `masterImage` is 0
+    /// for every master, so the catalog's other photos still import.
+    #[test]
+    fn a_refused_original_with_id_zero_leaves_the_other_masters_alone() {
+        let mut data = sample();
+        let mut refused = data.photos[1].clone();
+        refused.source_id = 0;
+        refused.uuid = "refused".into();
+        refused.path = "/missing/refused.ARW".into();
+        refused.image = row(json!({"id_local":0,"fileFormat":"ARW","fileWidth":20,"fileHeight":10}));
+        refused.original = Original::Refused("it is on another computer".into());
+        data.photos.insert(0, refused);
+        let mut s = crate::Session::new();
+        let r = apply(&mut s, data, false).unwrap();
+        assert_eq!(r["photos"], 2, "the master and its copy: {r}");
+        assert!(s.catalog.photos().all(|p| !matches!(&p.source, Source::File { path } if path.ends_with("refused.ARW"))));
+    }
+
     #[test]
     fn offline_local_master_and_copy_join_library_with_one_undo_step() {
         let mut s = crate::Session::new();
@@ -1328,8 +1346,8 @@ mod tests {
         let mut index = ImportIndex::default();
         let missing_sources = [key("/missing/test.ARW")].into_iter().collect();
         let mut import = |s: &mut crate::Session| {
-            let undo0 = s.undo.len();
-            let mut apply = LightroomApply::new(s, data.source.clone(), false, index.clone(), Vec::new(), "now".into(), HashSet::new());
+            let mut steps = ImportSteps::default();
+            let mut apply = LightroomApply::new(s, data.source.clone(), false, index.clone(), Vec::new(), "now".into());
             let photos = data
                 .photos
                 .iter()
@@ -1339,8 +1357,8 @@ mod tests {
                     MappedPhoto::new(src, shape)
                 })
                 .collect();
-            apply.batch(s, photos, Default::default(), &missing_sources).unwrap();
-            let report = apply.finish(s, &data.collections, &data.members, true, undo0, None).unwrap();
+            steps.run(s, |s| apply.batch(s, photos, Default::default(), &missing_sources)).unwrap();
+            let report = steps.run(s, |s| apply.finish(s, &data.collections, &data.members, true, None)).unwrap();
             index = apply.index.clone();
             report
         };

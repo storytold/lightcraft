@@ -250,7 +250,7 @@
   "1 task is still running: {names}. Quitting stops it.": "仍有 1 個工作在執行：{names}。結束將停止它。",
   "{n} tasks are still running: {names}. Quitting stops them.": "仍有 {n} 個工作在執行：{names}。結束將停止它們。",
   "{what} merge cancelled": "已取消{what}合併",
-  "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "已略過 {n} 張本機照片{0:.0}：相簿只能收錄圖庫中的照片（請先加入我的照片）",
+  "{n} Local photo{} skipped: albums hold library photos (Add to My Photos first)": "已略過 {n} 張本機照片{0:.0}：相簿只能收錄照片庫中的照片（請先加入我的照片）",
   "New Folder in “{name}”": "在「{name}」中新增資料夾",
   "Moved {} photo(s)": "已移動 {} 張照片",
   "not added to Apple Photos: {e}": "未加入 Apple 照片：{e}",
@@ -293,7 +293,7 @@
   "{n} raws can now be developed from their raw data": "{n} 個 RAW 現在可以從 RAW 資料沖印",
   "LightCraft stopped unexpectedly: {e}\n\nThe log file has the details: {path}": "LightCraft 意外停止：{e}\n\n詳細資訊請見記錄檔：{path}",
   "LightCraft stopped unexpectedly: {e}": "LightCraft 意外停止：{e}",
-  "Renames {n} face{} across the library. The files are not changed.": "在整個圖庫中重新命名 {n} 張面孔。不會改動檔案。{:.0}",
+  "Renames {n} face{} across the library. The files are not changed.": "在整個照片庫中重新命名 {n} 張面孔。不會改動檔案。{:.0}",
   "“{to}” is already a person. Combining them makes one person; Undo separates them again.": "「{to}」已經是另一個人。合併後成為一個人；還原會再把他們分開。",
   "{what} merge added at {mp}: its full size, {full}, needs more memory than this computer has": "已新增{what}合併照片（{mp}）：完整尺寸（{full}）所需的記憶體超過這台電腦的記憶體",
   "{what} merge added at {mp}, the largest a panorama can be (its full size is {full})": "已新增{what}合併照片（{mp}），這是全景圖的最大尺寸（完整尺寸：{full}）"

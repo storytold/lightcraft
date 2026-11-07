@@ -293,7 +293,7 @@ pub fn parse_color(v: &Value) -> Option<[u8; 3]> {
     match v {
         Value::String(s) => {
             let h = s.trim().strip_prefix('#').unwrap_or(s.trim());
-            if h.len() != 6 || !h.is_ascii() {
+            if h.len() != 6 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return None;
             }
             let byte = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok());
@@ -356,6 +356,9 @@ mod tests {
             json!({"zoomToFill": 1}),
             json!({"strokeColor": "#12345"}),
             json!({"strokeColor": "#ééééé"}),
+            json!({"strokeColor": "#+f+f+f"}),
+            json!({"backdropColor": "+12345"}),
+            json!({"washColor": "#-00000"}),
             json!({"washColor": [256, 0, 0]}),
             json!({"washColor": [-1, 0, 0]}),
             json!({"backdropColor": [1, 2]}),

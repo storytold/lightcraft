@@ -885,7 +885,7 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
                 // as the import will date it (a sidecar's date, when there is one, still wins there)
                 c.captured = c.captured.or_else(|| info.file_modified.clone());
                 c.preview_only = info.preview_only.clone();
-                match dups.find(&f, &mut info) {
+                match dups.find(&f, &mut info, &progress.cancel) {
                     Some(existing) => {
                         c.duplicate = Some("content".into());
                         c.existing = existing.map(|id| id.0);
@@ -1235,13 +1235,17 @@ impl ImportJob {
                 }
             }
             if !opts.local
-                && let Some(existing) = self.dups.find(&path, &mut info)
+                && let Some(existing) = self.dups.find(&path, &mut info, cancel)
             {
                 self.done.fetch_add(1, Relaxed);
                 let hash = info.content_hash.clone();
                 let evidence = self.originals.candidate_probe(&path, &info).map(Box::new);
                 plan.slots.push(Slot::Item(PreparedItem::Duplicate { path, existing, reason: "content", hash, evidence }));
                 continue;
+            }
+            // (a cancel while comparing it with photos without a hash leaves the file out, unchecked)
+            if cancel.load(Relaxed) {
+                break;
             }
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
@@ -1389,14 +1393,42 @@ fn list_names(dir: &Path) -> Option<std::collections::HashSet<String>> {
     Some(names)
 }
 
-/// The content hash of the file at `path` (as a probe computes it), if it can be read.
+/// The content hash of the file at `path` (as a probe computes it), if it can be read and is
+/// still `size` bytes long: a file that changed since the photo was added would get a hash of
+/// other content than its record's size and dimensions describe. Read a piece at a time (in
+/// little memory), and given up (`None`) once `cancel` is set.
 #[cfg(not(target_arch = "wasm32"))]
-fn hash_file(path: &str) -> Option<String> {
+fn hash_file(path: &str, size: u64, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
     #[cfg(test)]
     FULL_HASHES.with(|n| n.set(n.get() + 1));
-    let len = std::fs::metadata(path).ok()?.len();
-    let _permit = crate::memory::work_gate().acquire(usize::try_from(len).unwrap_or(usize::MAX));
-    crate::originals::hash_whole(path).ok().map(|fp| fp.hash.to_string())
+    if std::fs::metadata(path).ok()?.len() != size {
+        return None;
+    }
+    let _permit = crate::memory::work_gate().acquire(usize::try_from(size).unwrap_or(usize::MAX));
+    let mut sink = UntilCancelled { cancel, written: 0 };
+    let fingerprint = crate::originals::copy_whole(path, &mut sink).ok()?;
+    (sink.written == size).then(|| fingerprint.hash.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct UntilCancelled<'a> {
+    cancel: &'a std::sync::atomic::AtomicBool,
+    written: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::io::Write for UntilCancelled<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(std::io::Error::other("cancelled"));
+        }
+        self.written = self.written.saturating_add(bytes.len() as u64);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -2000,6 +2032,143 @@ mod prepared_tests {
         assert_eq!(report.imported.len(), 1, "a file of the same size with other bytes is new");
         let hash = lightcraft_preview::hash_bytes(b"same bytes").to_string();
         assert_eq!(s.catalog.photo(id).and_then(|p| p.content_hash.clone()), Some(hash), "the hash is kept");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The hash an unhashed photo gets on demand changes its content key, which names its smart
+    /// preview: the proxy goes with it, so the photo still renders when its original goes offline
+    /// (review of #1735). The old file stays for an undo.
+    #[test]
+    fn a_photo_hashed_on_demand_keeps_its_smart_preview() {
+        let dir = std::env::temp_dir().join(format!("lc-import-unhashed-smart-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (orig, copy) = (dir.join("orig.jpg"), dir.join("copy.jpg"));
+        std::fs::write(&orig, b"same bytes").unwrap();
+        std::fs::write(&copy, b"same bytes").unwrap();
+        let mut s = Session::new();
+        s.media.file_probe = Some(std::sync::Arc::new(|path: &str| {
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            Ok(ProbeInfo {
+                format: "JPEG".into(),
+                width: 1,
+                height: 1,
+                file_size: bytes.len() as u64,
+                content_hash: Some(lightcraft_preview::hash_bytes(&bytes).to_string()),
+                ..Default::default()
+            })
+        }));
+        let smart = dir.join("smart");
+        s.media.smart_dir = Some(smart.clone());
+        let mut existing =
+            Photo::new(s.catalog.alloc_photo_id(), Source::File { path: orig.to_string_lossy().into() }, "orig.jpg", "JPEG", 1, 1, "now");
+        existing.file_size = 10;
+        let id = existing.id;
+        let old = crate::smart::sharded_file_path(&smart, &existing);
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"proxy").unwrap();
+        s.commit("existing", Op::AddPhoto { photo: Box::new(existing) }).unwrap();
+        let report = import(&mut s, &[copy.to_string_lossy().to_string()], ImportMode::Add).unwrap();
+        assert_eq!(report.duplicates.len(), 1, "{report:?}");
+        let photo = s.catalog.photo(id).unwrap();
+        assert!(photo.content_hash.is_some());
+        assert_ne!(crate::smart::sharded_file_path(&smart, photo), old, "the key changed");
+        let found = crate::smart::paths_for_keys(&smart, &s.media.content_keys(photo))
+            .into_iter()
+            .find(|path| std::fs::read(path).ok().as_deref() == Some(&b"proxy"[..]));
+        assert_eq!(found, Some(old.clone()), "the proxy is still found after the hash is learned");
+        assert!(old.exists(), "the old file stays for an undo");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An original that changed size since it was added isn't hashed for its record: the hash
+    /// would describe other content than the record's size and dimensions (review of #1735).
+    #[test]
+    fn an_original_that_changed_size_gets_no_hash_on_demand() {
+        let dir = std::env::temp_dir().join(format!("lc-import-unhashed-resized-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (orig, copy) = (dir.join("orig.jpg"), dir.join("copy.jpg"));
+        std::fs::write(&orig, b"same bytes, then more").unwrap();
+        std::fs::write(&copy, b"same bytes").unwrap();
+        let mut s = Session::new();
+        s.media.file_probe = Some(std::sync::Arc::new(|path: &str| {
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            Ok(ProbeInfo {
+                format: "JPEG".into(),
+                width: 1,
+                height: 1,
+                file_size: bytes.len() as u64,
+                content_hash: Some(lightcraft_preview::hash_bytes(&bytes).to_string()),
+                ..Default::default()
+            })
+        }));
+        let mut existing =
+            Photo::new(s.catalog.alloc_photo_id(), Source::File { path: orig.to_string_lossy().into() }, "orig.jpg", "JPEG", 1, 1, "now");
+        // recorded when the original was 10 bytes long, as the new file is
+        existing.file_size = 10;
+        let id = existing.id;
+        s.commit("existing", Op::AddPhoto { photo: Box::new(existing) }).unwrap();
+        let report = import(&mut s, &[copy.to_string_lossy().to_string()], ImportMode::Add).unwrap();
+        assert!(report.duplicates.is_empty(), "{report:?}");
+        assert_eq!(s.catalog.photo(id).unwrap().content_hash, None, "no hash of the original's new content");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The hash taken a piece at a time is the probe's hash of the whole file, and a cancel
+    /// stops the read (review of #1735).
+    #[test]
+    fn hash_file_reads_in_pieces_and_stops_on_cancel() {
+        let dir = std::env::temp_dir().join(format!("lc-import-hash-pieces-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.raw");
+        let bytes: Vec<u8> = (0..((2 << 20) + 12_345)).map(|i| (i * 7 % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let (path, size) = (path.to_string_lossy().to_string(), bytes.len() as u64);
+        let _binding = crate::originals::standalone_binding();
+        let go = std::sync::atomic::AtomicBool::new(false);
+        assert_eq!(hash_file(&path, size, &go), Some(lightcraft_preview::hash_bytes(&bytes).to_string()));
+        assert_eq!(hash_file(&path, size - 1, &go), None, "not the recorded size");
+        assert_eq!(hash_file(&path, size, &std::sync::atomic::AtomicBool::new(true)), None, "cancelled");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A hash computed on demand while a batch is prepared is taken of the photo's file then: a
+    /// photo relinked to another file before the batch is committed doesn't get it (review of #2051).
+    #[test]
+    fn a_hash_of_a_relinked_photo_is_not_kept() {
+        let dir = std::env::temp_dir().join(format!("lc-import-unhashed-relinked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (orig, copy, other) = (dir.join("orig.jpg"), dir.join("copy.jpg"), dir.join("other.jpg"));
+        std::fs::write(&orig, b"same bytes").unwrap();
+        std::fs::write(&copy, b"same bytes").unwrap();
+        std::fs::write(&other, b"diff bytes").unwrap();
+        let mut s = Session::new();
+        s.media.file_probe = Some(std::sync::Arc::new(|path: &str| {
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            Ok(ProbeInfo {
+                format: "JPEG".into(),
+                width: 1,
+                height: 1,
+                file_size: bytes.len() as u64,
+                content_hash: Some(lightcraft_preview::hash_bytes(&bytes).to_string()),
+                ..Default::default()
+            })
+        }));
+        let mut existing =
+            Photo::new(s.catalog.alloc_photo_id(), Source::File { path: orig.to_string_lossy().into() }, "orig.jpg", "JPEG", 1, 1, "now");
+        existing.file_size = 10;
+        let id = existing.id;
+        s.commit("existing", Op::AddPhoto { photo: Box::new(existing) }).unwrap();
+        let mut job = ImportJob::new(&mut s, ImportOptions::default()).unwrap();
+        let prepared = job.prepare(&[copy.to_string_lossy().to_string()], &std::sync::atomic::AtomicBool::new(false));
+        // while the batch was prepared, the photo was relinked to another file
+        let source = Source::File { path: other.to_string_lossy().into() };
+        s.commit("relink", Op::Relink { id, file_name: "other.jpg".into(), source, format: None }).unwrap();
+        commit_prepared(&mut s, &job.opts, &job.now, prepared).unwrap();
+        assert_eq!(s.catalog.photo(id).and_then(|p| p.content_hash.clone()), None, "orig.jpg's hash is not other.jpg's");
         let _ = std::fs::remove_dir_all(dir);
     }
 

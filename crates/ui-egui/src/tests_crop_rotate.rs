@@ -415,3 +415,42 @@ fn rotating_the_crop_dims_nothing_inside_the_box() {
     let lum = |c: egui::Color32| u32::from(c.r()) + u32::from(c.g()) + u32::from(c.b());
     assert!(lum(pixel(&rotated, corner_px)) < lum(pixel(&plain, corner_px)), "the photo's corner, outside the box, is dimmed");
 }
+
+fn crop_rect(h: &Headless) -> lightcraft_geom::Rect {
+    let id = h.app.session.active().expect("a photo");
+    h.app.session.catalog.photo(id).expect("the photo").develop.crop.geometry.rect
+}
+
+/// Press where the pointer shows the resize cursor for the left edge handle, `dx` px from the
+/// edge, and drag on by `step` px per event: the drag must resize, as the cursor said (issue #1930).
+fn drag_left_handle(dx: f32, step: f32) -> Headless {
+    let mut h = crop_tool();
+    let img = h.app.image_rect.expect("the photo on screen");
+    hover(&mut h, egui::pos2(img.left() + dx, img.center().y));
+    assert_eq!(h.last_cursor, egui::CursorIcon::ResizeHorizontal, "the pointer shows a resize");
+    let x = |px: f32| px / img.width();
+    let events: Vec<_> = std::iter::once(json!({"kind": "down", "x": x(dx), "y": 0.5}))
+        .chain((1..=4).map(|i| json!({"kind": "drag", "x": x(dx + step * i as f32), "y": 0.5})))
+        .collect();
+    let r = h.request("ui.pointer", json!({ "events": events }), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    h
+}
+
+/// Just outside the box, inside the handle's reach: the drag resizes, it does not rotate.
+#[test]
+fn a_drag_from_just_outside_a_handle_resizes_not_rotates() {
+    let h = drag_left_handle(-8.0, -3.0);
+    assert_eq!(angle(&h), 0.0, "the resize cursor showed, so nothing rotates");
+    assert!(!has(&h, "cropAngleReadout"), "no rotation under way");
+}
+
+/// Just inside the box, inside the handle's reach: the drag moves the left edge, not the box.
+#[test]
+fn a_drag_from_just_inside_a_handle_resizes_not_moves() {
+    let h = drag_left_handle(8.0, 3.0);
+    let r = crop_rect(&h);
+    assert!(r.x0 > 0.0, "the left edge moved in: {r:?}");
+    assert!((r.x1 - 1.0).abs() < 1e-6, "the right edge stays: {r:?}");
+}

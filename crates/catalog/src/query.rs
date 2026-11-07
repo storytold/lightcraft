@@ -157,13 +157,20 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             Some((_, v)) => (x - v).abs() < 1e-9,
             None => false,
         };
+        // Fields stored as `f32` compare at f32 precision: 2.8f32 widened to f64 is not 2.8.
+        let cmp32 = |x: f32, s: &str| match num(s) {
+            Some(('>', v)) => x > v as f32,
+            Some(('<', v)) => x < v as f32,
+            Some((_, v)) => x == v as f32,
+            None => false,
+        };
         return match field {
             "rating" | "stars" => cmp(p.rating as f64, val),
             "flag" => Flag::parse(val) == Some(p.flag),
             "label" | "color" => p.label.is_some_and(|l| format!("{l:?}").eq_ignore_ascii_case(val)),
             "iso" => p.meta.iso.is_some_and(|i| cmp(i as f64, val)),
-            "f" | "aperture" => p.meta.aperture.is_some_and(|a| cmp(a as f64, val)),
-            "focal" => p.meta.focal_mm.is_some_and(|a| cmp(a as f64, val)),
+            "f" | "aperture" => p.meta.aperture.is_some_and(|a| cmp32(a, val)),
+            "focal" => p.meta.focal_mm.is_some_and(|a| cmp32(a, val)),
             "camera" => p.meta.camera.to_lowercase().contains(val),
             "lens" => p.meta.lens.to_lowercase().contains(val),
             "keyword" | "kw" => p.meta.keywords.iter().any(|k| crate::keywords::is_under(k, val)),
