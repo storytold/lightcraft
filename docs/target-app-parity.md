@@ -47,7 +47,7 @@ phase #85, duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | Dimension | Breadth | Ready for real work | Remaining | Doc |
 |---|---:|---:|---:|---|
 | Features (weighted areas below) | ~77% (checklist 83.2%, measured) | ~62% | 600–1,100 h | [Features](#features) |
-| ↳ RAW cameras, colour and lens profiles (part of features) | 89% of Adobe's 1,446 models decode (39% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
+| ↳ RAW cameras, colour and lens profiles (part of features) | 85% of Adobe's 1,446 models decode (39% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
 | UI/UX fidelity | ~85% | ~70% | 32–54 h | [ui-parity.md](ui-parity.md) |
 | File formats (non-raw: images, sidecars, presets, catalogs) | ~85% | ~70% | 30–55 h | [file-format-parity.md](file-format-parity.md) |
 | Hardware | ~50% | ~40% | 40–80 h (+ tethering and printing, counted under Classic modules) | [hardware-parity.md](hardware-parity.md) |
