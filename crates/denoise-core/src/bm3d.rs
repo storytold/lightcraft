@@ -430,9 +430,10 @@ fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], 
         let c = out.len();
         let pilot_plane = pilot.and_then(|pl| pl.get(c));
         let plane_sigma = plane_noise(plane, t).max(sigma);
-        // the colour-difference planes are shrunk a little harder than the brightness plane's own level at the same
-        // noise, as the brightness plane is the one the groups were matched on
-        let plane_lambda = scaled_lambda(lambda, sigma_ref, plane_sigma) * if c == 0 { 1.0 } else { 1.5 };
+        // a colour-difference plane noisier than the brightness plane is shrunk a little harder than its scaled
+        // level, as the brightness plane is the one the groups were matched on; one no noisier keeps its scaled level
+        let plane_lambda = scaled_lambda(lambda, sigma_ref, plane_sigma)
+            * if c == 0 || plane_sigma <= sigma_ref { 1.0 } else { 1.5 };
         for members in groups {
             let m = members.len();
             gather(plane, t, n, members, &mut buf);
@@ -668,5 +669,34 @@ mod tests {
         let wild = Params { block: 0, step: 0, search: 1000, group: 0, ..Params::default() };
         assert!(filter(&noisy(16, 2.0, 1), 16, &wild, 0.5).iter().flatten().all(|v| v.is_finite()));
         assert!(filter(&[], 8, &Params::default(), 0.5).iter().all(|p| p.is_empty()));
+    }
+
+    /// A colour-difference plane whose noise is no higher than the brightness plane's keeps a coefficient between
+    /// the brightness threshold and 1.5 times it, instead of losing it to the extra chroma multiplier.
+    #[test]
+    fn chroma_detail_is_not_thresholded_harder_when_its_noise_is_not_higher() {
+        let t = 4;
+        let p = Params::default();
+        let tf = Transform::new(p.block);
+        // One DCT basis pattern of amplitude 2.5: its only transform coefficient is 2.5, between a threshold
+        // of 2.0 and 1.5 times it. Every plane carries the same pattern, so no plane is noisier than another.
+        let amplitude = 2.5f32;
+        let mut plane = vec![0f32; t * t];
+        for j in 0..t {
+            for i in 0..t {
+                let u = tf.c.get(i).copied().unwrap_or(0.0);
+                let v = tf.c.get(t + j).copied().unwrap_or(0.0);
+                if let Some(cell) = plane.get_mut(j * t + i) {
+                    *cell = amplitude * u * v;
+                }
+            }
+        }
+        let y = vec![plane.clone(), plane.clone(), plane.clone(), plane];
+        let groups = vec![vec![0u32]];
+        let out = collaborate(&y, None, &groups, t, &p, 2.0, &tf);
+        let brightness = spread(&out[..1], 0.0);
+        let chroma = spread(&out[1..], 0.0);
+        assert!(brightness > 0.1, "brightness {brightness}");
+        assert!(chroma > 0.5 * brightness, "brightness {brightness} chroma {chroma}");
     }
 }
