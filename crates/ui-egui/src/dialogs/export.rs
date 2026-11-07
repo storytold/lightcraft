@@ -157,6 +157,34 @@ pub(super) fn export_dialog_params(
     o.to_json()
 }
 
+/// What the menu of the user preset loaded in the Export dialog was asked to do.
+#[derive(Clone, Copy)]
+pub(super) enum PresetAction {
+    Update,
+    Rename,
+    Duplicate,
+    Delete,
+}
+
+/// The menu of the user preset loaded in the Export dialog (items `button:export{Update,Rename,
+/// Duplicate,Delete}Preset`).
+pub(super) fn preset_menu(ui: &mut egui::Ui, modified: bool) -> Option<PresetAction> {
+    let mut chosen = None;
+    let mut item = |ui: &mut egui::Ui, id: &str, label: &str, enabled: bool, action: PresetAction| {
+        let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)));
+        crate::widgets::register(ui, format!("button:{id}"), r.rect);
+        if r.clicked() {
+            chosen = Some(action);
+        }
+    };
+    item(ui, "exportUpdatePreset", "Update with Current Settings", modified, PresetAction::Update);
+    item(ui, "exportRenamePreset", "Rename…", true, PresetAction::Rename);
+    item(ui, "exportDuplicatePreset", "Duplicate", true, PresetAction::Duplicate);
+    ui.separator();
+    item(ui, "exportDeletePreset", "Delete", true, PresetAction::Delete);
+    chosen
+}
+
 // ------------------------------------------------------------------------------------------ dialog widgets
 
 /// Two columns of settings-group checkboxes (Copy Settings, Create Preset) plus All / None.
