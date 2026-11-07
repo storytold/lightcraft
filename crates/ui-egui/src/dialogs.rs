@@ -1018,26 +1018,50 @@ fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
     let folder = id
         .and_then(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(id)))
         .and_then(|a| a.smart.as_deref().and_then(|f| f.library_folder.clone()));
-    // problems, count and albums: cached until the catalog or the rules change (not per frame)
+    // problems and albums: cached until the catalog or the rules change (not per frame); the count is made on a
+    // worker and the last one stays shown while the catalog changes
     let now = (app.session.clock)();
-    let view = app.caches.rules_view(&app.session.catalog, rules, *id, folder, &now);
+    let (view, count) = app.caches.rules_view(&app.session.catalog, rules, *id, folder, &now, ui.ctx());
     let env = crate::panels::rules_editor::Env { problems: view.problems.clone(), today: now, albums: view.albums.clone() };
     egui::ScrollArea::vertical().max_height(list_height(ui, 360.0)).auto_shrink([false, true]).show(ui, |ui| {
         crate::panels::rules_editor::edit(ui, rules, "rules", 0, &[], &env);
     });
-    let n = view.count;
     ui.add_space(4.0);
     if view.problems.is_empty() {
-        ui.label(
-            egui::RichText::new(crate::i18n::tr_format!(
-                "{n} photo{} match · updates automatically as photos change",
-                if n == 1 { "" } else { "s" },
-                n = n
-            ))
-            .color(t.text_dim),
-        );
+        count_line(ui, t, count, |n| {
+            crate::i18n::tr_format!("{n} photo{} match · updates automatically as photos change", if n == 1 { "" } else { "s" }, n = n)
+        });
     } else {
         ui.label(egui::RichText::new(crate::i18n::tr("Fix the marked rules to save this album.")).color(t.caution));
+        reserve_row(ui, egui::TextStyle::Small);
+    }
+}
+
+/// Room for one row of `style` text with nothing in it (not an empty label: that is a node with no name).
+fn reserve_row(ui: &mut egui::Ui, style: egui::TextStyle) {
+    let height = ui.text_style_height(&style);
+    ui.allocate_space(egui::vec2(1.0, height));
+}
+
+/// A live count line: `text` of the count, or "Counting…" before the first one is made; below it, "updating…" while the
+/// catalog has changed under the count shown, until the next one is made. (Both rows stay when there is nothing to
+/// say, so the dialog doesn't change height as counts come and go.)
+fn count_line(ui: &mut egui::Ui, t: &Tokens, count: crate::caches::Count, text: impl FnOnce(usize) -> String) {
+    match count.n {
+        Some(n) => {
+            ui.label(egui::RichText::new(text(n)).color(t.text_dim));
+        }
+        None if count.updating => {
+            ui.label(egui::RichText::new(crate::i18n::tr("Counting…")).color(t.text_dim));
+        }
+        // (a count that failed has said so in the log)
+        None => reserve_row(ui, egui::TextStyle::Body),
+    }
+    if count.n.is_some() && count.updating {
+        let row = ui.label(egui::RichText::new(crate::i18n::tr("updating…")).small().italics().color(t.text_dim));
+        crate::widgets::register(ui, "label:countUpdating", row.rect);
+    } else {
+        reserve_row(ui, egui::TextStyle::Small);
     }
 }
 
@@ -1048,24 +1072,16 @@ fn new_smart_album_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, 
         *confirm = true;
     }
     let rules = app.session.view_rules();
-    // counted when the library or the rules change (or, for "in the last…" rules, the minute), not every frame
+    // counted on a worker, for these rules and (for "in the last…" rules) this minute; not for every change the
+    // library makes meanwhile
     let now = (app.session.clock)();
-    let minute = if rules.depends_on_now() { now.get(..16).unwrap_or(&now) } else { "" };
-    let n = app.caches.dialog_count(&app.session.catalog, ("smartAlbum", format!("{rules:?}"), minute), || {
-        lightcraft_catalog::rules::set_now(Some(now.clone()));
-        app.session.catalog.query(&rules, &Default::default()).len()
-    });
+    let count = app.caches.smart_album_count(&app.session.catalog, &rules, &now, ui.ctx());
     ui.label(
         egui::RichText::new(crate::i18n::tr_format!("Matches: {}", crate::i18n::filter_label(&rules, &app.session.catalog))).color(t.text_label),
     );
-    ui.label(
-        egui::RichText::new(crate::i18n::tr_format!(
-            "{n} photo{} now · updates automatically as photos change",
-            if n == 1 { "" } else { "s" },
-            n = n
-        ))
-        .color(t.text_dim),
-    );
+    count_line(ui, t, count, |n| {
+        crate::i18n::tr_format!("{n} photo{} now · updates automatically as photos change", if n == 1 { "" } else { "s" }, n = n)
+    });
 }
 
 /// The body of the CaptureTime dialog.

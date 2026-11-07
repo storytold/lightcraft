@@ -17,11 +17,233 @@ pub struct FilterValues {
 }
 
 /// What the smart-album rule dialog shows besides the rules themselves: their problems (each row
-/// marks its own), how many photos they match and the albums an Album rule picks from.
+/// marks its own) and the albums an Album rule picks from. (How many photos the rules match is a [`Count`].)
 pub struct RulesView {
     pub problems: Vec<lightcraft_catalog::rules::Problem>,
-    pub count: usize,
     pub albums: Vec<album_picker::AlbumEntry>,
+}
+
+/// How many photos a dialog's filter matches ([`LiveCount::of`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Count {
+    /// The count of this filter, if one has been made (none while the first is still running, or after one failed).
+    pub n: Option<usize>,
+    /// The catalog has changed since `n` was counted, and a new count is waiting or running: the dialog marks it.
+    pub updating: bool,
+}
+
+/// How many of a filter's counts may still be running after its filter changed (a count can't be stopped).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+const MAX_LET_GO: usize = 2;
+
+/// How long a frame waits for a count it has just started: a small library is counted in well under this, and shows
+/// the count at once instead of a frame of "counting…" for each change.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+const QUICK: std::time::Duration = std::time::Duration::from_millis(4);
+
+/// The longest a count of the same rules rests after one that took long: counts of a catalog that changes under them
+/// follow each other no closer than the last one took (at most this), so one core isn't counting for a whole import.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+const MAX_REST: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What a count was made of: the catalog revision, and the minute "in the last…" rules counted back from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stamp {
+    revision: u64,
+    minute: u64,
+}
+
+/// A count of the photos a filter matches, made on a worker thread: counting every photo takes seconds in a large
+/// library, and an import changes the catalog on every frame, so a count per catalog revision would hold the UI
+/// thread (or the worker) for the whole import. The count is of what is counted (`what`: the filter and the folder
+/// it carries), not of the catalog revision or the minute: while either changes the last count stays shown, marked
+/// as updating, and the next one starts when the worker is free (and has rested, for a library so large that
+/// counting it takes long). Where no thread can be had (wasm32) the count is made on the spot.
+#[derive(Default)]
+pub struct LiveCount {
+    /// The last count to finish, with what it counted and when.
+    done: Option<(u64, Stamp, usize)>,
+    /// The count running now.
+    job: Option<CountJob>,
+    /// Counts of a filter that has since changed, still running: they end on their own, and new counts wait for
+    /// them only when several are.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    let_go: Vec<std::thread::JoinHandle<()>>,
+    /// The what and stamp of a count that failed (already logged): not tried again for the same catalog.
+    failed: Option<(u64, Stamp)>,
+    /// No count of the same rules starts before this: the last one's own duration after it ended.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    rest_until: Option<std::time::Instant>,
+    /// How many counts ran on the worker, and how many on the UI thread (no thread to spare, or wasm).
+    pub jobs: usize,
+    pub ui_thread_scans: usize,
+    /// Tests: how long each worker count waits before it counts (a large library's seconds, made small).
+    #[cfg(test)]
+    pub(crate) slow: Option<std::time::Duration>,
+}
+
+/// What a count answers: how many, and how long it took.
+type Counted = Result<(usize, std::time::Duration), String>;
+
+/// A count of every photo on a worker thread ([`LiveCount`]).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+struct CountJob {
+    what: u64,
+    stamp: Stamp,
+    /// The count, sent before the repaint is asked for, so the frame it wakes finds it.
+    done: std::sync::mpsc::Receiver<Counted>,
+    worker: std::thread::JoinHandle<()>,
+}
+
+impl LiveCount {
+    /// The last count to finish, and the catalog revision it counted (tests).
+    #[cfg(test)]
+    pub(crate) fn last(&self) -> Option<(usize, u64)> {
+        self.done.map(|(_, stamp, n)| (n, stamp.revision))
+    }
+
+    /// Whether a count is running on the worker (it has not finished, taken or not).
+    pub(crate) fn running(&self) -> bool {
+        self.job.as_ref().is_some_and(|job| !job.worker.is_finished())
+    }
+
+    /// The count of `what` (the filter `filter` makes) in `cat`: the one made, or the one before while a new one
+    /// runs. "In the last…" rules count back from `now`, of which `minute` is the part that tells a new count from
+    /// the last. `ctx` repaints when the worker is done.
+    pub(crate) fn of(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+        what: u64,
+        minute: &str,
+        filter: impl FnOnce() -> lightcraft_catalog::Filter,
+        now: &str,
+        ctx: &egui::Context,
+    ) -> Count {
+        self.collect();
+        let stamp = Stamp { revision: cat.revision, minute: key_of(minute) };
+        // a count of other rules is no use now: let it go (it ends on its own)
+        if let Some(job) = self.job.take_if(|j| j.what != what) {
+            self.let_go.push(job.worker);
+        }
+        let shown = self.done.filter(|(of, _, _)| *of == what);
+        if let Some((_, at, n)) = shown
+            && at == stamp
+        {
+            return Count { n: Some(n), updating: false };
+        }
+        self.let_go.retain(|w| !w.is_finished());
+        if self.failed == Some((what, stamp)) {
+            return Count::default();
+        }
+        let before = shown.map(|(_, _, n)| n);
+        if self.job.is_none() && self.let_go.len() < MAX_LET_GO {
+            // (new rules count at once; the same rules again, once the catalog has changed, after a rest)
+            if before.is_some()
+                && let Some(rest) = self.rest()
+            {
+                ctx.request_repaint_after(rest);
+            } else if let Some(n) = self.start(cat, what, stamp, filter(), now, ctx) {
+                return Count { n: Some(n), updating: false };
+            }
+        }
+        Count { n: before, updating: true }
+    }
+
+    /// How much longer a count of the same rules waits, if it does.
+    fn rest(&self) -> Option<std::time::Duration> {
+        // (none on wasm32, where `Instant::now` can't be asked)
+        self.rest_until?.checked_duration_since(std::time::Instant::now())
+    }
+
+    /// Start a count of every photo on a worker thread, and say how many if it ends at once; or, where there is no
+    /// thread to be had, count them here.
+    fn start(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+        what: u64,
+        stamp: Stamp,
+        filter: lightcraft_catalog::Filter,
+        now: &str,
+        ctx: &egui::Context,
+    ) -> Option<usize> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // (the copy is of the photo pointers, not the photos: some milliseconds in a library of millions)
+            let (copy, ctx, now) = (cat.clone(), ctx.clone(), now.to_string());
+            #[cfg(test)]
+            let slow = self.slow;
+            let (tx, done) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new().name("lc-rules-count".into()).spawn({
+                let filter = filter.clone();
+                move || {
+                    let began = std::time::Instant::now();
+                    #[cfg(test)]
+                    if let Some(wait) = slow {
+                        std::thread::sleep(wait);
+                    }
+                    let counted = lightcraft_engine::guard::catch("Counting the photos a filter matches", || {
+                        lightcraft_catalog::rules::set_now(Some(now));
+                        copy.count(&filter)
+                    });
+                    let _ = tx.send(counted.map(|n| (n, began.elapsed())));
+                    ctx.request_repaint();
+                }
+            });
+            match spawned {
+                Ok(worker) => {
+                    self.jobs += 1;
+                    return match done.recv_timeout(QUICK) {
+                        Ok(counted) => self.finish(what, stamp, counted),
+                        Err(_) => {
+                            self.job = Some(CountJob { what, stamp, done, worker });
+                            None
+                        }
+                    };
+                }
+                Err(e) => log::warn!("photo count: can't start a thread ({e}); counting here"),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = ctx;
+        self.ui_thread_scans += 1;
+        lightcraft_catalog::rules::set_now(Some(now.to_string()));
+        let counted = lightcraft_engine::guard::catch("Counting the photos a filter matches", || cat.count(&filter));
+        self.finish(what, stamp, counted.map(|n| (n, std::time::Duration::ZERO)))
+    }
+
+    /// Take the worker's count once it is done.
+    fn collect(&mut self) {
+        let Some(job) = &self.job else { return };
+        let counted = match job.done.try_recv() {
+            Ok(counted) => counted,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                log::error!("photo count: the count stopped without an answer");
+                Err("stopped without an answer".to_string())
+            }
+        };
+        let Some(job) = self.job.take() else { return };
+        self.finish(job.what, job.stamp, counted);
+    }
+
+    /// A count of `what` ended: shown from now on, or (when it failed) not tried again for this catalog. Says how many.
+    fn finish(&mut self, what: u64, stamp: Stamp, counted: Counted) -> Option<usize> {
+        match counted {
+            Ok((n, took)) => {
+                self.failed = None;
+                self.done = Some((what, stamp, n));
+                // (only a count that ran on a thread took any time; on wasm32 there is none to ask the time of)
+                if !took.is_zero() {
+                    self.rest_until = Some(std::time::Instant::now() + took.min(MAX_REST));
+                }
+                Some(n)
+            }
+            Err(_) => {
+                self.failed = Some((what, stamp));
+                None
+            }
+        }
+    }
 }
 
 pub(crate) fn key_of(parts: impl std::hash::Hash) -> u64 {
@@ -264,7 +486,10 @@ impl Caches {
     /// within a minute without rescanning every frame.
     /// [`RulesView`] for `rules` edited in smart album `editing` (`None`: a new album), within
     /// `folder` when it was made from a folder view: worked out again only when the catalog, the
-    /// rules, the language or (for "in the last…" rules) the minute changes, not every frame.
+    /// rules, the language or (for "in the last…" rules) the minute changes, not every frame. How many photos the
+    /// rules match is counted on a worker thread ([`LiveCount`]): the [`Count`] is the last one made while the
+    /// catalog changes under it (an import commits a batch per frame), and none while a rule edit's count is
+    /// still running.
     pub fn rules_view(
         &mut self,
         cat: &lightcraft_catalog::Catalog,
@@ -272,25 +497,48 @@ impl Caches {
         editing: Option<u64>,
         folder: Option<String>,
         now: &str,
-    ) -> std::sync::Arc<RulesView> {
+        ctx: &egui::Context,
+    ) -> (std::sync::Arc<RulesView>, Count) {
         let relative = rules.depends_on_now();
         let minute = if relative { now.get(..16).unwrap_or(now) } else { "" };
-        let k = key_of((cat.revision, serde_json::to_string(rules).unwrap_or_default(), editing, &folder, minute, i18n::language().code()));
-        if let Some((key, v)) = &self.rules_view
-            && *key == k
-        {
-            return v.clone();
+        let written = serde_json::to_string(rules).unwrap_or_default();
+        let k = key_of((cat.revision, &written, editing, &folder, minute, i18n::language().code()));
+        let view = match &self.rules_view {
+            Some((key, v)) if *key == k => v.clone(),
+            _ => {
+                // (problems and the albums to pick from look at the rules and the albums, not at every photo)
+                let problems = rules.check_for(cat, editing.map(lightcraft_catalog::AlbumId));
+                let v = std::sync::Arc::new(RulesView { problems, albums: panels::dialogs::album_entries(cat, editing) });
+                self.rules_view = Some((k, v.clone()));
+                v
+            }
+        };
+        if !view.problems.is_empty() {
+            return (view, Count::default());
         }
-        if relative {
-            lightcraft_catalog::rules::set_now(Some(now.to_string()));
-        }
-        let problems = rules.check_for(cat, editing.map(lightcraft_catalog::AlbumId));
-        let filter = lightcraft_catalog::Filter { rule_set: Some(rules.clone()), library_folder: folder, ..Default::default() };
-        let count = if problems.is_empty() { cat.query(&filter, &Default::default()).len() } else { 0 };
-        let v = std::sync::Arc::new(RulesView { problems, count, albums: panels::dialogs::album_entries(cat, editing) });
-        self.rules_view_scans += 1;
-        self.rules_view = Some((k, v.clone()));
-        v
+        let what = key_of((&written, &folder));
+        let filter = || lightcraft_catalog::Filter { rule_set: Some(rules.clone()), library_folder: folder.clone(), ..Default::default() };
+        let count = self.rules_count.of(cat, what, minute, filter, now, ctx);
+        (view, count)
+    }
+
+    /// How many photos `filter` matches, for Create Smart Album's live count: counted on a worker thread like
+    /// [`Caches::rules_view`]'s.
+    pub(crate) fn smart_album_count(
+        &mut self,
+        cat: &lightcraft_catalog::Catalog,
+        filter: &lightcraft_catalog::Filter,
+        now: &str,
+        ctx: &egui::Context,
+    ) -> Count {
+        let minute = if filter.depends_on_now() { now.get(..16).unwrap_or(now) } else { "" };
+        let what = key_of(format!("{filter:?}"));
+        self.new_smart_album_count.of(cat, what, minute, || filter.clone(), now, ctx)
+    }
+
+    /// Whether a dialog's count is running on a worker (a frame may still have to take it).
+    pub fn count_running(&self) -> bool {
+        self.rules_count.running() || self.new_smart_album_count.running()
     }
 
     /// A count an open dialog shows (photos a filter matches, photos with a keyword…): `count` runs
@@ -419,29 +667,54 @@ mod cache_tests {
         lightcraft_catalog::rules::set_now(None);
     }
 
-    /// The rule dialog's problems, live count and album list are worked out once per change to the
-    /// catalog or the rules, not every frame; so are the sidebar's smart-album problems.
-    #[test]
-    fn rule_dialog_and_problems_are_cached_until_something_changes() {
+    fn rule_set(v: u64) -> RuleSet {
+        serde_json::from_value(serde_json::json!({"rules": [{"field": "rating", "op": "gte", "value": v}]})).unwrap()
+    }
+
+    type Shown = (std::sync::Arc<super::RulesView>, super::Count);
+
+    /// [`super::Caches::rules_view`] of `rules` once the count it started is done and taken.
+    fn rules_counted(c: &mut super::Caches, cat: &Catalog, rules: &RuleSet, now: &str) -> Shown {
+        let ctx = egui::Context::default();
+        let t0 = std::time::Instant::now();
+        loop {
+            let shown = c.rules_view(cat, rules, None, None, now, &ctx);
+            if !shown.1.updating {
+                return shown;
+            }
+            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the count is done");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    fn rated_library() -> Catalog {
         let mut cat = Catalog::default();
-        let mut c = super::Caches::default();
         for i in 0..3u64 {
             cat.apply(photo(i + 1, "2026-09-30T11:00:00", if i == 0 { 5 } else { 1 })).unwrap();
         }
-        let rules =
-            |v: u64| -> RuleSet { serde_json::from_value(serde_json::json!({"rules": [{"field": "rating", "op": "gte", "value": v}]})).unwrap() };
+        cat
+    }
+
+    /// The rule dialog's problems and album list are worked out once per change to the catalog or the rules, not
+    /// every frame; so are the sidebar's smart-album problems. Its count is made once per rules (and catalog).
+    #[test]
+    fn rule_dialog_and_problems_are_cached_until_something_changes() {
+        let mut cat = rated_library();
+        let mut c = super::Caches::default();
         let now = "2026-09-30T12:00:00";
-        let view = c.rules_view(&cat, &rules(3), None, None, now);
-        assert_eq!((view.count, view.problems.len()), (1, 0));
+        let (view, count) = rules_counted(&mut c, &cat, &rule_set(3), now);
+        assert_eq!((count.n, view.problems.len()), (Some(1), 0));
+        let jobs = c.rules_count.jobs;
         for _ in 0..10 {
-            c.rules_view(&cat, &rules(3), None, None, now);
+            rules_counted(&mut c, &cat, &rule_set(3), now);
         }
-        assert_eq!(c.rules_view_scans, 1, "unchanged frames reuse it");
-        assert_eq!(c.rules_view(&cat, &rules(1), None, None, now).count, 3, "a rule change");
-        assert_eq!(c.rules_view(&cat, &rules(9), None, None, now).problems.len(), 1);
+        assert_eq!(c.rules_count.jobs, jobs, "unchanged frames reuse it");
+        assert_eq!(rules_counted(&mut c, &cat, &rule_set(1), now).1.n, Some(3), "a rule change");
+        let (view, count) = rules_counted(&mut c, &cat, &rule_set(9), now);
+        assert_eq!((view.problems.len(), count), (1, super::Count::default()), "rules with a problem count nothing");
         cat.apply(Op::SetRating { id: PhotoId(2), rating: 4 }).unwrap();
-        assert_eq!(c.rules_view(&cat, &rules(3), None, None, now).count, 2, "a catalog change");
-        assert_eq!(c.rules_view_scans, 4);
+        assert_eq!(rules_counted(&mut c, &cat, &rule_set(3), now).1.n, Some(2), "a catalog change");
+        assert_eq!(c.rules_count.ui_thread_scans, 0);
         // the sidebar's problems
         cat.apply(Op::AddAlbum { album: lightcraft_catalog::Album::new(AlbumId(20), "Trip") }).unwrap();
         cat.apply(smart(21, serde_json::json!({"rules": [{"field": "album", "op": "is", "value": 20}]}))).unwrap();
@@ -453,6 +726,148 @@ mod cache_tests {
         cat.apply(Op::RemoveAlbum { id: AlbumId(20) }).unwrap();
         assert!(c.smart_album_problems(&cat).get(&AlbumId(21)).is_some_and(|p| !p.is_empty()), "its album is gone");
         assert_eq!(c.smart_problem_scans, 2);
+    }
+
+    const SLOW: std::time::Duration = std::time::Duration::from_millis(120);
+
+    /// Counting every photo takes seconds in a large library: it runs on a worker, never on the UI thread, and
+    /// while the catalog changes (an import commits a batch per frame) the count made before stays, marked as
+    /// updating, until the worker is free to make the next.
+    #[test]
+    fn the_rules_count_is_made_on_a_worker_and_follows_a_catalog_that_changes_every_frame() {
+        let mut cat = rated_library();
+        let mut c = super::Caches::default();
+        c.rules_count.slow = Some(SLOW);
+        let ctx = egui::Context::default();
+        let now = "2026-09-30T12:00:00";
+        let rules = rule_set(3);
+        let first = c.rules_view(&cat, &rules, None, None, now, &ctx).1;
+        assert_eq!(first, super::Count { n: None, updating: true }, "a count that takes a while has none to show yet");
+        assert_eq!((c.rules_count.jobs, c.rules_count.ui_thread_scans), (1, 0));
+        assert_eq!(rules_counted(&mut c, &cat, &rules, now).1, super::Count { n: Some(1), updating: false });
+        // a revision a frame: the last count stays, and nothing is counted on this thread
+        let (jobs, began) = (c.rules_count.jobs, std::time::Instant::now());
+        let mut marked = 0;
+        for i in 0..40u64 {
+            cat.apply(Op::SetRating { id: PhotoId(1 + i % 3), rating: if i % 2 == 0 { 5 } else { 4 } }).unwrap();
+            let count = c.rules_view(&cat, &rules, None, None, now, &ctx).1;
+            assert!(count.n.is_some(), "the count made before is shown while the next is made");
+            marked += usize::from(count.updating);
+            std::thread::sleep(SLOW / 10);
+        }
+        assert_eq!(marked, 40, "every frame says the count is out of date");
+        assert_eq!(c.rules_count.ui_thread_scans, 0, "no frame counted the library");
+        let most = began.elapsed().as_millis() / SLOW.as_millis() + 1;
+        assert!((c.rules_count.jobs - jobs) as u128 <= most, "one count at a time: {} in {most} counts' time", c.rules_count.jobs - jobs);
+        // the changes stop: the count reaches the right value
+        let right = cat.count(&Filter { rule_set: Some(rules.clone()), ..Default::default() });
+        assert_eq!(rules_counted(&mut c, &cat, &rules, now).1, super::Count { n: Some(right), updating: false });
+    }
+
+    /// An edit to the rules shows the new rules' count once it is made, never the old rules' meanwhile; going back
+    /// to the rules before keeps their count.
+    #[test]
+    fn a_rule_edit_shows_its_own_count_not_the_one_before() {
+        let cat = rated_library();
+        let mut c = super::Caches::default();
+        c.rules_count.slow = Some(SLOW);
+        let ctx = egui::Context::default();
+        let now = "2026-09-30T12:00:00";
+        assert_eq!(rules_counted(&mut c, &cat, &rule_set(3), now).1.n, Some(1));
+        let edited = c.rules_view(&cat, &rule_set(1), None, None, now, &ctx).1;
+        assert_eq!(edited, super::Count { n: None, updating: true }, "not the 1 of the rules before");
+        // back to the first rules while the edit is being counted: their count is as it was, and stays so when the
+        // edit's count ends
+        let back = c.rules_view(&cat, &rule_set(3), None, None, now, &ctx).1;
+        assert_eq!(back, super::Count { n: Some(1), updating: false });
+        std::thread::sleep(SLOW * 3);
+        assert_eq!(c.rules_view(&cat, &rule_set(3), None, None, now, &ctx).1, super::Count { n: Some(1), updating: false });
+        assert_eq!(c.rules_count.jobs, 2, "no count of them again");
+        // edits typed faster than counts end: the last rules' count is the one that shows
+        for v in [2, 3, 4, 5, 1] {
+            c.rules_view(&cat, &rule_set(v), None, None, now, &ctx);
+        }
+        assert_eq!(rules_counted(&mut c, &cat, &rule_set(1), now).1, super::Count { n: Some(3), updating: false });
+        assert_eq!(c.rules_count.ui_thread_scans, 0);
+    }
+
+    /// "In the last…" rules count back from the session clock on the worker too; a new minute is a count out of date
+    /// like a change to the catalog (the count before stays, marked), not new rules.
+    #[test]
+    fn a_new_minute_marks_the_count_and_the_worker_counts_back_from_the_session_clock() {
+        let mut cat = Catalog::default();
+        for i in 0..3u64 {
+            cat.apply(photo(i + 1, "2026-09-30T11:30:00", 1)).unwrap();
+        }
+        let mut c = super::Caches::default();
+        c.rules_count.slow = Some(SLOW);
+        let ctx = egui::Context::default();
+        let last_hour: RuleSet =
+            serde_json::from_value(serde_json::json!({"rules": [{"field": "captureDate", "op": "inLast", "value": {"n": 1, "unit": "hours"}}]}))
+                .unwrap();
+        // (the session's clock, not the machine's, which is long past these photos)
+        let t0 = std::time::Instant::now();
+        let mut shown = c.rules_view(&cat, &last_hour, None, None, "2026-09-30T12:00:00", &ctx).1;
+        while shown.updating {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the count is done");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            shown = c.rules_view(&cat, &last_hour, None, None, "2026-09-30T12:00:00", &ctx).1;
+        }
+        assert_eq!(shown.n, Some(3), "counted back from the session clock");
+        let later = c.rules_view(&cat, &last_hour, None, None, "2026-09-30T12:40:00", &ctx).1;
+        assert_eq!(later, super::Count { n: Some(3), updating: true }, "the minute changed: the count before, marked");
+        assert_eq!(rules_counted(&mut c, &cat, &last_hour, "2026-09-30T12:40:00").1.n, Some(0), "an hour and ten minutes on");
+        lightcraft_catalog::rules::set_now(None);
+    }
+
+    /// A count of the same rules waits a while after one that took long, so a catalog that changes every frame
+    /// doesn't keep a core counting.
+    #[test]
+    fn counts_of_the_same_rules_rest_between_them() {
+        let mut cat = rated_library();
+        let mut c = super::Caches::default();
+        c.rules_count.slow = Some(SLOW);
+        let ctx = egui::Context::default();
+        let now = "2026-09-30T12:00:00";
+        let rules = rule_set(3);
+        assert_eq!(rules_counted(&mut c, &cat, &rules, now).1.n, Some(1));
+        let jobs = c.rules_count.jobs;
+        // (the count took SLOW: the next waits as long)
+        cat.apply(Op::SetRating { id: PhotoId(2), rating: 4 }).unwrap();
+        assert_eq!(c.rules_view(&cat, &rules, None, None, now, &ctx).1, super::Count { n: Some(1), updating: true });
+        assert_eq!(c.rules_count.jobs, jobs, "resting");
+        let t0 = std::time::Instant::now();
+        while c.rules_count.jobs == jobs {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the rest ends");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            assert_eq!(c.rules_view(&cat, &rules, None, None, now, &ctx).1, super::Count { n: Some(1), updating: true });
+        }
+        assert_eq!(c.rules_count.jobs, jobs + 1, "rested, counting");
+        assert_eq!(rules_counted(&mut c, &cat, &rules, now).1.n, Some(2));
+    }
+
+    /// Create Smart Album's count is made the same way.
+    #[test]
+    fn the_new_smart_album_count_is_made_on_a_worker_too() {
+        let mut cat = rated_library();
+        let mut c = super::Caches::default();
+        c.new_smart_album_count.slow = Some(SLOW);
+        let ctx = egui::Context::default();
+        let now = "2026-09-30T12:00:00";
+        let filter = Filter { rule_set: Some(rule_set(3)), ..Default::default() };
+        let t0 = std::time::Instant::now();
+        let mut count = c.smart_album_count(&cat, &filter, now, &ctx);
+        assert_eq!(count.n, None);
+        while count.updating {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the count is done");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            count = c.smart_album_count(&cat, &filter, now, &ctx);
+        }
+        assert_eq!(count.n, Some(1));
+        cat.apply(Op::SetRating { id: PhotoId(2), rating: 4 }).unwrap();
+        std::thread::sleep(SLOW * 2);
+        assert_eq!(c.smart_album_count(&cat, &filter, now, &ctx), super::Count { n: Some(1), updating: true }, "the count before, marked");
+        assert_eq!(c.new_smart_album_count.ui_thread_scans, 0);
     }
 
     /// Without "in the last…" rules the clock never causes a rescan.

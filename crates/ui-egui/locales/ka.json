@@ -14,6 +14,8 @@
   "(\"Failed to associate portal window with parent window\" in the portal's log): tiling compositors put it beside the": "(„Failed to associate portal window with parent window“ პორტალის ჟურნალში): ფილისებრი კომპოზიტორები მას",
   "(Esc keeps the old angle; a decimal comma works too), or click the Straighten value; hovering any slider's value now says it can be typed.": "(Esc ძველ კუთხეს ტოვებს; ათწილადი მძიმეც მუშაობს), ან დაწკაპეთ გასწორების მნიშვნელობაზე; ნებისმიერი სლაიდერის მნიშვნელობაზე მიტანისას ახლა ჩანს, რომ მისი აკრეფა შეიძლება.",
   "(Space, G, X, ⌫) and ⌘ shortcuts were not affected.": "(Space, G, X, ⌫) და ⌘ მალსახმობებზე ეს გავლენას არ ახდენდა.",
+  "Counting…": "ითვლება…",
+  "updating…": "ახლდება…",
   "(`album.setRules` takes `name`).": "(`album.setRules` იღებს `name`-ს).",
   "(`gpuReason`, `gpuFallback`), Help ▸ System Info and Settings ▸ Performance say why the GPU isn't": "(`gpuReason`, `gpuFallback`), დახმარება → სისტემის ინფორმაცია და პარამეტრები → წარმადობა განმარტავს, რატომ არ არის GPU",
   "(`id`, `parent?`, `before?`) and `album.sort`.": "(`id`, `parent?`, `before?`) და `album.sort`-ს.",
