@@ -1175,7 +1175,8 @@ fn native_catalog_with_last_table_page(tables: &[(&str, &str, Vec<SqlValue>)], l
 /// table's root page.
 fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: Option<i64>) -> Vec<u8> {
     use SqlValue::{Integer as I, Text as T};
-    let mut bytes = vec![0u8; 5 * 2048];
+    let pages = tables.len() + 1;
+    let mut bytes = vec![0u8; pages * 2048];
     bytes[..16].copy_from_slice(b"SQLite format 3\0");
     bytes[16..18].copy_from_slice(&2048u16.to_be_bytes());
     bytes[18] = 1;
@@ -1183,7 +1184,7 @@ fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: O
     bytes[21] = 64;
     bytes[22] = 32;
     bytes[23] = 32;
-    bytes[28..32].copy_from_slice(&5u32.to_be_bytes());
+    bytes[28..32].copy_from_slice(&(pages as u32).to_be_bytes());
     bytes[44..48].copy_from_slice(&4u32.to_be_bytes());
     bytes[56..60].copy_from_slice(&1u32.to_be_bytes());
     let mut schema = Vec::new();
@@ -1550,9 +1551,34 @@ fn oversized_optional_table_warns_and_is_skipped() {
     page[8..10].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
     page[5..7].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
     let db = Database::open_with_wal(main, &[]).unwrap();
-    let reader = Reader { db, tables: vec![LiveTable { name: "optional_history".into(), rootpage: 2, column_names: Some(vec!["payload".into()]) }] };
+    let cancel = AtomicBool::new(false);
+    let reader = Reader {
+        cancel: &cancel,
+        db,
+        tables: vec![LiveTable { name: "optional_history".into(), rootpage: 2, column_names: Some(vec!["payload".into()]) }],
+    };
     let mut warnings = Vec::new();
     let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+/// Issue #1234: develop settings are streamed into the photos, and a develop table that can't be read fails the
+/// import with a clear error instead of a warning that every photo arrives unedited.
+#[test]
+fn develop_settings_reach_the_photos_and_an_unreadable_table_fails_the_import() {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let mut tables = photo_tables(("/catalog/", ""));
+    tables.push(("Adobe_imageDevelopSettings", "id_local INTEGER PRIMARY KEY, image, text", vec![N, I(1), T("s = { Exposure2012 = 1 }".into())]));
+    let path = std::env::temp_dir().join(format!("lightcraft-develop-catalog-{}.lrcat", std::process::id()));
+    let mut bytes = native_catalog(&tables);
+    std::fs::write(&path, &bytes).unwrap();
+    let catalog = read(&path).unwrap();
+    assert_eq!(catalog.photos[0].settings, "s = { Exposure2012 = 1 }");
+    // The develop table's page (the fifth table, page 6) turns into an index page this reader refuses.
+    bytes[5 * 2048] = 0x0a;
+    std::fs::write(&path, &bytes).unwrap();
+    let error = read(&path).unwrap_err();
+    assert!(error.contains("develop settings could not be read"), "{error}");
+    std::fs::remove_file(path).unwrap();
 }

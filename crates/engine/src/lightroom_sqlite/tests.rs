@@ -410,3 +410,102 @@ fn malformed_varint_and_wal_cycle_fail_cleanly() {
     };
     assert!(db.payload(&page, 0, 600).is_err());
 }
+/// Issue #1234: a table larger than any in-memory cap streams through `for_each_row` one record at a time.
+/// 1.2 million rows (more than `read_table` will collect) under one interior page; the sink only counts, so the
+/// walk holds one record at a time.
+#[test]
+fn large_tables_stream_past_the_collect_cap() {
+    const PAGE: usize = 32 * 1024;
+    const ROWS: u64 = 1_200_000;
+    let per_leaf = 3_000u64;
+    let leaves = ROWS.div_ceil(per_leaf) as usize;
+    let mut main = vec![0u8; PAGE * (2 + leaves)];
+    let mut rowid = 0u64;
+    for leaf_index in 0..leaves {
+        let page = &mut main[PAGE * (2 + leaf_index)..PAGE * (3 + leaf_index)];
+        let n = per_leaf.min(ROWS - rowid);
+        let rows: Vec<(u64, &[u8])> = (0..n).map(|i| (rowid + i + 1, &[2u8, 1, 7][..])).collect();
+        leaf_rows(page, 0, &rows);
+        rowid += n;
+    }
+    // Page 2: the interior root, one cell per leaf but the last (the right child).
+    let interior = &mut main[PAGE..2 * PAGE];
+    interior[0] = 0x05;
+    interior[3..5].copy_from_slice(&u16::try_from(leaves - 1).unwrap().to_be_bytes());
+    interior[8..12].copy_from_slice(&u32::try_from(2 + leaves).unwrap().to_be_bytes());
+    let mut end = PAGE;
+    for i in 0..leaves - 1 {
+        let mut cell = u32::try_from(3 + i).unwrap().to_be_bytes().to_vec();
+        cell.extend(varint((i as u64 + 1) * per_leaf));
+        end -= cell.len();
+        interior[end..end + cell.len()].copy_from_slice(&cell);
+        interior[12 + i * 2..14 + i * 2].copy_from_slice(&u16::try_from(end).unwrap().to_be_bytes());
+    }
+    let db = Database {
+        file: None,
+        main,
+        overlay: HashMap::new(),
+        page_size: PAGE,
+        reserved: 0,
+        encoding: TextEncoding::Utf8,
+        page_count: u32::try_from(2 + leaves).unwrap(),
+        tables: Vec::new(),
+        rowid_aliases: HashMap::new(),
+    };
+    let (mut count, mut sum) = (0u64, 0i64);
+    db.for_each_row(2, 1, &mut |r| {
+        count += 1;
+        if let Some(Value::Integer(n)) = r.values.first() {
+            sum += n;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!((count, sum), (ROWS, 7 * ROWS as i64));
+    assert!(db.read_table(2, 1).is_err(), "collecting a whole table stays capped");
+    // A sink error stops the walk and is returned.
+    let mut seen = 0;
+    let stopped = db.for_each_row(2, 1, &mut |_| {
+        seen += 1;
+        if seen == 10 { Err("enough".into()) } else { Ok(()) }
+    });
+    assert_eq!((stopped, seen), (Err("enough".to_string()), 10));
+}
+
+/// A hostile table whose cells all point at one large record can't make a streaming walk decode more than the
+/// database holds: the walk stops with an error instead of growing without bound.
+#[test]
+fn aliased_cells_cannot_decode_more_than_the_database() {
+    const PAGE: usize = 4096;
+    let mut main = vec![0u8; PAGE * 2];
+    let leaf = &mut main[PAGE..];
+    let mut cell = varint(3003);
+    cell.extend(varint(1));
+    cell.extend([3, 0xAE, 0x7D]); // header: one 3000-byte text value (serial type 6013)
+    cell.extend([b'a'; 3000]);
+    let at = 1000usize;
+    leaf[at..at + cell.len()].copy_from_slice(&cell);
+    leaf[0] = 0x0d;
+    leaf[3..5].copy_from_slice(&100u16.to_be_bytes());
+    leaf[5..7].copy_from_slice(&u16::try_from(at).unwrap().to_be_bytes());
+    for i in 0..100 {
+        leaf[8 + i * 2..10 + i * 2].copy_from_slice(&u16::try_from(at).unwrap().to_be_bytes());
+    }
+    let db = Database {
+        file: None,
+        main,
+        overlay: HashMap::new(),
+        page_size: PAGE,
+        reserved: 0,
+        encoding: TextEncoding::Utf8,
+        page_count: 2,
+        tables: Vec::new(),
+        rowid_aliases: HashMap::new(),
+    };
+    let mut rows = 0;
+    let walked = db.for_each_row(2, 1, &mut |_| {
+        rows += 1;
+        Ok(())
+    });
+    assert!(walked.is_err() && rows > 0 && rows < 100, "{walked:?} after {rows} rows");
+}

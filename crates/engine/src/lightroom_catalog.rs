@@ -18,6 +18,8 @@ type Row = BTreeMap<String, Value>;
 const COMMAND: &str = "library.importLightroom";
 /// Largest catalog database or WAL read into memory (4 GiB). The whole file is held in RAM, so the cap stays finite.
 const MAX_FILE: u64 = 1 << 32;
+/// Most decoded XMP bytes kept at once, whatever the number of packets.
+const MAX_DECODED_XMP: usize = 256 << 20;
 
 fn error(why: impl Into<String>) -> crate::EngineError {
     crate::EngineError::BadParams { cmd: COMMAND.into(), msg: why.into() }
@@ -44,93 +46,126 @@ fn source_path(p: &Photo) -> Option<&str> {
     }
 }
 
-struct Reader {
+struct Reader<'a> {
+    cancel: &'a AtomicBool,
     db: Database,
     tables: Vec<LiveTable>,
 }
-impl Reader {
-    fn table(&self, name: &str, required: bool) -> Result<Vec<Row>, String> {
+impl Reader<'_> {
+    /// Stream `name`'s rows to `f`, one at a time: the table is never collected whole, so a catalog's large develop,
+    /// history and metadata tables cost only what `f` keeps. A missing table yields no rows unless `required`.
+    /// `Blob` columns never become JSON; they reach `f` separately, as (column, bytes), and are dropped after it.
+    fn each_row(&self, name: &str, required: bool, mut f: impl FnMut(Row, Vec<(&str, Vec<u8>)>) -> Result<(), String>) -> Result<(), String> {
         let Some(t) = self.tables.iter().find(|t| t.name == name) else {
-            return if required { Err(format!("unsupported Lightroom catalog: missing {name}")) } else { Ok(Vec::new()) };
+            return if required { Err(format!("unsupported Lightroom catalog: missing {name}")) } else { Ok(()) };
         };
         let columns = t.column_names.as_ref().ok_or_else(|| format!("cannot read {name} columns"))?;
-        let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("{name}: {e:?}"))?;
-        if rows.len() > 1_000_000 {
-            return Err(format!("{name}: more than one million records"));
-        }
-        Ok(rows
-            .into_iter()
-            .map(|r| {
-                columns
-                    .iter()
-                    .cloned()
-                    .zip(r.values.into_iter().map(|v| match v {
-                        SqlValue::Null => Some(Value::Null),
-                        SqlValue::Integer(n) => Some(json!(n)),
-                        SqlValue::Real(n) => Some(json!(n)),
-                        SqlValue::Text(s) => Some(json!(s)),
-                        // Opaque Lightroom payloads never become JSON byte arrays.
-                        SqlValue::Blob(_) => None,
-                    }))
-                    .filter_map(|(column, value)| value.map(|value| (column, value)))
-                    .collect()
+        self.db
+            .for_each_row(t.rootpage, columns.len(), &mut |r| {
+                ensure_read_active(self.cancel)?;
+                let mut row = Row::new();
+                let mut blobs = Vec::new();
+                for (column, value) in columns.iter().zip(r.values) {
+                    let value = match value {
+                        SqlValue::Null => Value::Null,
+                        SqlValue::Integer(n) => json!(n),
+                        SqlValue::Real(n) => json!(n),
+                        SqlValue::Text(s) => json!(s),
+                        SqlValue::Blob(bytes) => {
+                            blobs.push((column.as_str(), bytes));
+                            continue;
+                        }
+                    };
+                    row.insert(column.clone(), value);
+                }
+                f(row, blobs)
             })
-            .collect())
+            .map_err(|e| format!("{name}: {e}"))
+    }
+
+    fn table(&self, name: &str, required: bool) -> Result<Vec<Row>, String> {
+        let mut out = Vec::new();
+        self.each_row(name, required, |row, _| {
+            out.push(row);
+            Ok(())
+        })?;
+        Ok(out)
     }
 
     fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
         match self.table(name, false) {
             Ok(rows) => Ok(rows),
             Err(error) => {
+                ensure_read_active(self.cancel)?; // a cancelled import is not a skipped table
                 warnings.push(format!("skipping optional Lightroom table {name}: {error}"));
                 Ok(Vec::new())
             }
         }
     }
 
-    fn xmp_table(&self) -> Result<(Vec<Row>, Vec<String>), String> {
-        let Some(t) = self.tables.iter().find(|t| t.name == "Adobe_AdditionalMetadata") else { return Ok((Vec::new(), Vec::new())) };
-        let columns = t.column_names.as_ref().ok_or_else(|| "cannot read Adobe_AdditionalMetadata columns".to_string())?;
-        let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("Adobe_AdditionalMetadata: {e:?}"))?;
-        if rows.len() > 1_000_000 {
-            return Err("Adobe_AdditionalMetadata: more than one million records".into());
+    /// An optional per-image table (history steps, snapshots), streamed into rows grouped by their `image` column.
+    fn grouped(&self, name: &str, warnings: &mut Vec<String>) -> Result<HashMap<i64, Vec<Row>>, String> {
+        // The walker bounds each record, not the table: what is kept is capped here.
+        const MAX_GROUPED_BYTES: usize = 256 * 1024 * 1024;
+        let mut out: HashMap<i64, Vec<Row>> = HashMap::new();
+        let mut kept = 0usize;
+        let read = self.each_row(name, false, |r, _| {
+            kept = kept.saturating_add(r.iter().map(|(k, v)| k.len().saturating_add(v.as_str().map_or(16, str::len))).sum::<usize>());
+            if kept > MAX_GROUPED_BYTES {
+                return Err("table is larger than the optional-table memory budget".into());
+            }
+            out.entry(number(&r, "image")).or_default().push(r);
+            Ok(())
+        });
+        if let Err(error) = read {
+            ensure_read_active(self.cancel)?; // a cancelled import is not a skipped table
+            warnings.push(format!("skipping optional Lightroom table {name}: {error}"));
+            out.clear();
         }
+        Ok(out)
+    }
+
+    /// `Adobe_imageDevelopSettings`, streamed into image id -> settings text. The photos' edits come from here, so a
+    /// failure to read it fails the import rather than quietly bringing every photo in unedited.
+    fn develop_settings(&self) -> Result<HashMap<i64, String>, String> {
+        let mut out = HashMap::new();
+        self.each_row("Adobe_imageDevelopSettings", false, |r, _| {
+            let settings = text(&r, "text");
+            if !settings.is_empty() {
+                out.insert(number(&r, "image"), settings.to_string());
+            }
+            Ok(())
+        })
+        .map_err(|e| format!("the Lightroom develop settings could not be read, so no photo would get its edits: {e}"))?;
+        Ok(out)
+    }
+
+    /// `Adobe_AdditionalMetadata`, streamed into image id -> row with its (decompressed) `xmp` packet.
+    fn xmp_table(&self) -> Result<(HashMap<i64, Row>, Vec<String>), String> {
         let mut warnings = Vec::new();
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            let image = row
-                .values
-                .iter()
-                .zip(columns)
-                .find_map(|(value, column)| {
-                    (column == "image").then_some(match value {
-                        SqlValue::Integer(n) => *n,
-                        _ => 0,
-                    })
-                })
-                .unwrap_or(0);
-            let mut mapped = Row::new();
-            for (column, value) in columns.iter().zip(row.values) {
-                let value = match value {
-                    SqlValue::Null => Some(Value::Null),
-                    SqlValue::Integer(n) => Some(json!(n)),
-                    SqlValue::Real(n) => Some(json!(n)),
-                    SqlValue::Text(s) => Some(json!(s)),
-                    SqlValue::Blob(bytes) if column == "xmp" => match decode_xmp_bytes(&bytes) {
-                        Ok(packet) => Some(Value::String(packet)),
-                        Err(error) => {
-                            warnings.push(format!("image {image}: {error}"));
-                            None
+        let mut out = HashMap::new();
+        let mut decoded = 0usize;
+        self.each_row("Adobe_AdditionalMetadata", false, |mut r, blobs| {
+            let image = number(&r, "image");
+            for (column, bytes) in blobs {
+                if column != "xmp" {
+                    continue;
+                }
+                match decode_xmp_bytes(&bytes) {
+                    Ok(packet) => {
+                        // each packet is bounded, the sum kept until assembly is bounded here
+                        decoded = decoded.saturating_add(packet.len());
+                        if decoded > MAX_DECODED_XMP {
+                            return Err(format!("decoded XMP packets exceed {} MiB in total", MAX_DECODED_XMP >> 20));
                         }
-                    },
-                    SqlValue::Blob(_) => None,
-                };
-                if let Some(value) = value {
-                    mapped.insert(column.clone(), value);
+                        r.insert(column.to_string(), Value::String(packet));
+                    }
+                    Err(error) => warnings.push(format!("image {image}: {error}")),
                 }
             }
-            out.push(mapped);
-        }
+            out.insert(image, r);
+            Ok(())
+        })?;
         Ok((out, warnings))
     }
 }
@@ -461,7 +496,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     if before.len() != after.len() || before.modified().ok() != after.modified().ok() || wal_before != wal_after {
         return Err("catalog changed during reading; close Lightroom and retry".into());
     }
-    let reader = Reader { tables: db.live_tables()?, db };
+    let reader = Reader { cancel, tables: db.live_tables()?, db };
     let mut warnings = Vec::new();
     let table = |name: &str, required: bool| -> Result<Vec<Row>, String> {
         ensure_read_active(cancel)?;
@@ -478,25 +513,25 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     let roots: HashMap<_, _> = table("AgLibraryRootFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let folders: HashMap<_, _> = table("AgLibraryFolder", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let files: HashMap<_, _> = table("AgLibraryFile", true)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
-    let develops: HashMap<_, _> = optional_table("Adobe_imageDevelopSettings", &mut warnings)?
-        .into_iter()
-        .map(|r| (number(&r, "image"), text(&r, "text").to_string()))
-        .collect();
     ensure_read_active(cancel)?;
-    let (metadata_rows, metadata_warnings) = match reader.xmp_table() {
+    let develops = reader.develop_settings()?;
+    done.fetch_add(1, Ordering::Relaxed);
+    ensure_read_active(cancel)?;
+    let (metadata, metadata_warnings) = match reader.xmp_table() {
         Ok(result) => result,
         Err(error) => {
+            ensure_read_active(cancel)?; // a cancelled import is not a skipped table
             warnings.push(format!("skipping optional Lightroom table Adobe_AdditionalMetadata: {error}"));
-            (Vec::new(), Vec::new())
+            (HashMap::new(), Vec::new())
         }
     };
     warnings.extend(metadata_warnings);
     done.fetch_add(1, Ordering::Relaxed);
-    let metadata: HashMap<_, _> = metadata_rows.into_iter().map(|r| (number(&r, "image"), r)).collect();
     let keyword_rows: HashMap<_, _> = optional_table("AgLibraryKeyword", &mut warnings)?.into_iter().map(|r| (number(&r, "id_local"), r)).collect();
     let mut keywords: HashMap<i64, Vec<String>> = HashMap::new();
-    for r in optional_table("AgLibraryKeywordImage", &mut warnings)? {
-        ensure_read_active(cancel)?;
+    ensure_read_active(cancel)?;
+    // streamed: the join table has a row per tagged photo and keyword, so it is never collected whole
+    let streamed = reader.each_row("AgLibraryKeywordImage", false, |r, _| {
         let mut parts = Vec::new();
         let mut at = number(&r, "tag");
         let mut seen = HashSet::new();
@@ -515,14 +550,17 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
         if !parts.is_empty() {
             keywords.entry(number(&r, "image")).or_default().push(parts.join("|"));
         }
-    }
-    let group = |rows: Vec<Row>| {
-        let mut out: HashMap<i64, Vec<Row>> = HashMap::new();
-        for r in rows {
-            out.entry(number(&r, "image")).or_default().push(r);
+        Ok(())
+    });
+    if let Err(error) = streamed {
+        ensure_read_active(cancel)?; // a cancelled import is not a skipped table
+        if error.contains("keyword hierarchy") {
+            return Err(error);
         }
-        out
-    };
+        warnings.push(format!("skipping optional Lightroom table AgLibraryKeywordImage: {error}"));
+        keywords.clear();
+    }
+    done.fetch_add(1, Ordering::Relaxed);
     let mut root_paths = HashMap::new();
     let mut refused_roots = HashSet::new();
     let mut root_ids: Vec<_> = roots.keys().copied().collect();
@@ -544,8 +582,12 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
         }
         root_paths.insert(id, resolved);
     }
-    let mut history = group(optional_table("Adobe_libraryImageDevelopHistoryStep", &mut warnings)?);
-    let mut snapshots = group(optional_table("Adobe_libraryImageDevelopSnapshot", &mut warnings)?);
+    ensure_read_active(cancel)?;
+    let mut history = reader.grouped("Adobe_libraryImageDevelopHistoryStep", &mut warnings)?;
+    done.fetch_add(1, Ordering::Relaxed);
+    ensure_read_active(cancel)?;
+    let mut snapshots = reader.grouped("Adobe_libraryImageDevelopSnapshot", &mut warnings)?;
+    done.fetch_add(1, Ordering::Relaxed);
     let mut out = CatalogImport {
         source: path.to_string_lossy().into(),
         photos: Vec::new(),

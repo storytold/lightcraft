@@ -91,8 +91,10 @@ never overwritten.
 
 Native import reads referenced database pages on demand (at most 64 KiB per page), rather than
 loading the whole `.lrcat`. Database files are capped at 16 GiB and 16,777,216 pages; the WAL
-remains capped at 1 GiB. Tables still have a 256 MiB encoded-payload budget and one million rows,
-individual records are capped at 64 MiB, and XMP packets at 16 MiB. These limits can still reject
+remains capped at 1 GiB. Large develop settings, history, snapshot, metadata and keyword-link tables are streamed one row
+at a time, so memory follows what the importer keeps rather than the table's size; decoded XMP
+packets are capped at 16 MiB each and 256 MiB together, and individual records at 64 MiB. A WAL
+can't raise the page count past the pages actually present. These limits can still reject
 large catalogs with dense tables; file size alone no longer determines the memory allocation.
 The open file and source path are checked again after all tables are read. Close Lightroom before
 importing: metadata checks detect ordinary concurrent changes, but are not SQLite snapshot isolation.
