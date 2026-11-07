@@ -332,7 +332,8 @@ pub const SHADOWS_EASE: f64 = 1.33;
 /// A global Highlights or Shadows slider (−100..100) as the strength the local tone operator takes (−1..1).
 ///
 /// Up to V6 the strength is the slider's, linearly. From V7 it eases off as the amount grows, `a / (1 + ease·|a|)`
-/// for `a` = slider / 100: unchanged for small amounts (slope 1 at 0), and at most `1 / (1 + ease)` of V6's at ±100.
+/// for `a` = slider / 100: slope 1 at 0, so small amounts change least (Shadows +10 acts at 0.88 of V6's), and
+/// `1 / (1 + ease)` of V6's at ±100.
 /// Fitted to 56 Lightroom exports of real portrait edits (Canon raws, Highlights −48 to −100, Shadows +40 to +100):
 /// V6 left their darkest tones about 6 L* above the exports and their brightest about 5 below; the amounts that
 /// cancel that are about 0.6 of V6's at Shadows +52 and 0.43 at +100, and 0.52 at Highlights −100. Masks keep
@@ -952,7 +953,8 @@ mod tests {
         }
         let v7 = |v: f64, ease: f64| tone_slider(v, ease, Process::V7);
         assert_eq!(v7(0.0, SHADOWS_EASE), 0.0);
-        assert!((v7(1.0, SHADOWS_EASE) - 0.01).abs() < 2e-4, "small amounts are as before");
+        assert!((v7(1.0, SHADOWS_EASE) - 0.01).abs() < 2e-4, "slope 1 at 0");
+        assert!((v7(10.0, SHADOWS_EASE) / 0.1 - 0.883).abs() < 0.005, "Shadows +10 eases off by about 12 %");
         assert!((v7(100.0, SHADOWS_EASE) - 0.43).abs() < 0.005);
         assert!((v7(52.0, SHADOWS_EASE) - 0.307).abs() < 0.005);
         assert!((v7(-100.0, HIGHLIGHTS_EASE) + 0.52).abs() < 0.005);
@@ -992,6 +994,33 @@ mod tests {
         };
         let (v6, v7) = (mean(Process::V6), mean(Process::V7));
         assert!(v7 > base && v7 < v6, "Shadows still lifts the darks, less than V6: none {base}, V6 {v6}, V7 {v7}");
+    }
+
+    #[test]
+    fn a_render_takes_the_calibrated_tone_strengths() {
+        // the strengths that matched the Lightroom exports: Shadows +52 → ~0.31 (0.6 of V6's), +100 → 0.43,
+        // Highlights −100 → −0.52; V6 takes the slider's
+        let params = |p: Process, highlights: f64, shadows: f64| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            (s.light.highlights, s.light.shadows) = (highlights, shadows);
+            let frame = crate::geometry::Frame::new(64, 8, &s, false);
+            let info = SourceInfo::default();
+            let fp = FinishParams::new(FinishParamsInput {
+                settings: &s,
+                frame: &frame,
+                info: &info,
+                image_size: (64, 8),
+                px_per_long: 64.0,
+                air_pre: 0.0,
+                space: OutputSpace::Srgb,
+            });
+            (fp.hl, fp.sh)
+        };
+        for (highlights, shadows, hl, sh) in [(0.0, 52.0, 0.0, 0.307), (-100.0, 100.0, -0.521, 0.429)] {
+            let (got_hl, got_sh) = params(Process::V7, highlights, shadows);
+            assert!((got_hl - hl).abs() < 0.002 && (got_sh - sh).abs() < 0.002, "V7 {highlights}/{shadows}: {got_hl}, {got_sh}");
+            assert_eq!(params(Process::V6, highlights, shadows), ((highlights / 100.0) as f32, (shadows / 100.0) as f32));
+        }
     }
 
     #[test]

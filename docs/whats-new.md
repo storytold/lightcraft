@@ -4,7 +4,7 @@
 
 ### Highlights and Shadows closer to Lightroom (process V7)
 - Global Highlights and Shadows ease off at large amounts as Lightroom's do (issue #523): ±100 acts at about half of
-  what it did (0.52 of it for Highlights, 0.43 for Shadows), +52 Shadows at 0.6, and small amounts are as before.
+  what it did (0.52 of it for Highlights, 0.43 for Shadows), +52 Shadows at 0.6, and small amounts less so (about 12 % less at +10 Shadows, 8 % at −10 Highlights).
   Strong Shadows no longer lift the darkest tones about 6 L* above Lightroom's render of the same edit, nor strong
   Highlights pull the brightest about 5 L* below it. Masks keep their amounts. New photos get it; photos edited before
   keep their look until Update to Current Process.
