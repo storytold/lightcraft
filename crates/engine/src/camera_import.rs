@@ -697,8 +697,14 @@ mod tests {
         assert!(matches!(fetch_into(&dir), Err(Error::Write(_))));
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         // a folder the user can't write in can't be told to be theirs
+        // (root writes anywhere, so the case only exists where the mode refuses a plain write)
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
-        assert!(matches!(fetch_into(&dir), Err(Error::Write(_))));
+        let probe = dir.join(".mode-probe");
+        if std::fs::File::create(&probe).is_err() {
+            assert!(matches!(fetch_into(&dir), Err(Error::Write(_))));
+        } else {
+            let _ = std::fs::remove_file(&probe);
+        }
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         // a link inside the folder: cleaning up doesn't follow it, and no copy is written through it
         symlink(&victim, dir.join("DCIM")).unwrap();
