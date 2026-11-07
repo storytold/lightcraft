@@ -57,3 +57,79 @@ This document tracks the steps and status of the clean-room Olympus ORF decoder 
   - `Olympus - E-M1MarkII - 16bit (4_3).ORI` (r = 0.998)
   - `Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI` (r = 0.994)
 - Verified `cargo fmt --check`, `cargo clippy -p lightcraft-raw --tests -- -D warnings`, `cargo xtask assets`, `cargo xtask roots`, `cargo xtask layers`, `cargo xtask wasm`.
+
+### Step 7: Code Review & Quality Gates
+- Ran `coderabbit review --agent`.
+- Resolved findings concerning strict parameter validation and audit phrasing accuracy.
+- Achieved clean CodeRabbit review with 0 findings.
+
+### Step 8 & 9: Commit & Remote Sync
+- Committed changes as `036f84d9` and synced `orf-clean2` to `origin`.
+
+---
+
+## Reference Guide: Documentation Files to Modify for Camera Parity & Coverage
+
+Per `AGENTS.md` (section *Start every session here*, rule 2) and the raw-parity governance guidelines, landing a camera format feature requires updating four tiers of documentation:
+
+### 1. Camera Coverage & Verification Database (The Source of Truth)
+- `docs/raw/evidence.tsv`: Records verified camera models, sensor dimensions, pinned 64-bit FNV-1a checksums, Pearson correlation $r$ against the camera JPEG preview, and corpus paths (e.g. `Olympus OM-D E-M1`, `Olympus OM-D E-M10 Mark III`, `Olympus OM-D E-M1 Mark II (ORI)`, `Olympus OM-D E-M5 Mark II (ORI)`).
+- `docs/raw/coverage.tsv`: The master spreadsheet mapping every camera model to its support status. Updates the 58 Olympus and OM System compressed camera models from preview-only (`preview`) to supported (`verified` or `unverified`).
+- `docs/raw/coverage.py`: The script used to recalculate the coverage percentages. Running `python docs/raw/coverage.py` outputs the exact updated tables:
+  - OM / Olympus fully working: **6% → 81%**
+  - Overall use-weighted camera coverage: **94% → 97%**
+  - Preview-only models: **187 → 129**
+
+### 2. RAW Format Specification & Clean-Room Records
+- `docs/raw-parity.md`:
+  - Updates the *By-use estimated* table (OM/Olympus to 81%, weighted camera total from 94% to 97%).
+  - Updates the per-manufacturer breakdown table for Olympus and OM Digital Solutions.
+  - Adds notes citing the clean-room implementation in `crates/raw/src/vendor/orf_compressed.rs`.
+- `docs/orf-compression.md`: Documents clean-room status, patent citations (US7333035B2, US7715639B2), CC0 verification results, and links to `clean-room/orf/`.
+
+### 3. Feature & Parity Trackers
+- `docs/gaps.md`: Gap #6 (Compressed ORF) — status update from withdrawn/pending to closed (`0 h` remaining), citing the clean-room implementation and the 58 newly unlocked camera bodies.
+- `docs/parity-checklist.md`: Updates row `LR-IMP-FORMATS` with a note citing `crates/raw/src/vendor/orf_compressed.rs` and the clean-room verification.
+  - **Rule from `AGENTS.md`:** Run `cargo xtask parity --write` to automatically synchronize and refresh the summary table and counts at the top of the file.
+
+### 4. Headline Numbers & Project Milestones
+- `ROADMAP.md`:
+  - Updates the top-level readiness summary: weighted camera coverage goes from **94% → 97%**.
+  - Updates the Top Beta Needs list (marks Compressed ORF as completed).
+  - Adds an entry to the **Progress log**.
+  - **Rule from `AGENTS.md`:** Adds a row to the **Revision history** table at the bottom (never add a `Last updated` date to the header, which causes merge conflicts across branches).
+- `docs/target-app-parity.md`:
+  - Updates the *Core user profiles* tables:
+    - *Working pro user:* Raw decoding goes from **94% → 97%**; weighted depth **74.5% → 75.3%**.
+    - *Essentials user:* Raw decoding goes from **70.5% → 73%**; weighted depth **78.1% → 78.4%**.
+  - Updates the Alpha gate summary notes.
+  - Adds a row to the **Revision history** table.
+- `docs/roadmap.md`: Synchronizes the progress log entry with `ROADMAP.md`.
+- `README.md`: Updates the headline camera support bullet (e.g. *"97% of raw users' cameras supported"*).
+
+---
+
+## Reference Guide: Updating Test Corpora from raw.pixls.us
+
+The standard command documented across the repository (e.g. in `AGENTS.md` L179, `crates/raw/tests/it/corpus.rs`, and `xtask/src/corpus.rs`) is:
+
+```powershell
+cargo xtask corpus --download
+```
+
+### What It Does
+1. **Fetches from `raw.pixls.us` into `corpus/raw/`:**
+   - Reads the manifest of CC0 raw sample URLs defined in `xtask/src/raw_samples.rs` (covering hundreds of camera bodies across Canon, Nikon, Sony, Olympus, Fujifilm, Panasonic, Pentax, Hasselblad, etc.).
+   - Downloads each file directly into `corpus/raw/`.
+2. **SHA-256 Verification:**
+   - Checks every downloaded file against its pinned SHA-256 hash. If any file fails verification, it reports the mismatch and aborts.
+3. **Downloads Auxiliary Test Corpora:**
+   - Downloads the Nikon D750 CC0 ColorChecker test suite into `corpus/d750-colorchecker/`.
+
+### Useful Operational Notes
+- **Location:** The test media is stored in `corpus/` at the repository root, which is git-ignored and never committed.
+- **Skip Behavior:** When files are absent, test suites use `lightcraft_testkit::skip!(Corpus, ...)` to skip gracefully instead of failing.
+- **Manual / Individual Downloads:** If you want to fetch an individual file from `raw.pixls.us` directly:
+  ```powershell
+  curl -L -o "corpus/raw/<filename>" "https://raw.pixls.us/getfile.php/<id>/nice/<name>"
+  ```
