@@ -578,7 +578,8 @@ fn files_kept_by_a_later_snapshot_are_the_library_as_it_was_at_open() {
     j.snapshot(&c).unwrap();
     assert_eq!(j.take_kept(), ["catalog.snap.v6-8", "catalog.log.v6-8"]);
     assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(snap), Some(log)));
-    assert_eq!(m.files.lock().unwrap().keys().filter(|k| k.contains(".v6-")).count(), 2, "{:?}", m.files.lock().unwrap().keys());
+    let files = m.files.lock().unwrap();
+    assert_eq!(files.keys().filter(|k| k.contains(".v6-")).count(), 2, "{:?}", files.keys());
 }
 
 /// Given a library left in its old format whose snapshot is in this build's format already (a
@@ -666,4 +667,136 @@ fn files_kept_for_a_failed_snapshot_are_not_written_again_on_a_retry() {
     FULL.store(false, std::sync::atomic::Ordering::SeqCst);
     j.snapshot(&c).unwrap();
     assert_eq!(j.take_kept(), ["catalog.snap.v6-8", "catalog.log.v6-8"]);
+}
+
+/// Given a library restored from an older backup that reaches the same format and change as a set
+/// kept before (other bytes under the same names), when it is upgraded, then the set kept before is
+/// left as it was, and the new files are kept beside it, both under names ending `-2`.
+#[test]
+fn files_kept_before_are_never_overwritten() {
+    let (m, snap, log) = v6_library();
+    m.set("catalog.snap.v6-8", b"an earlier snapshot".to_vec());
+    m.set("catalog.log.v6-8", b"an earlier log".to_vec());
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, r.kept.as_slice()), (Some(6), ["catalog.snap.v6-8-2".to_string(), "catalog.log.v6-8-2".to_string()].as_slice()));
+    assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(b"an earlier snapshot".to_vec()), Some(b"an earlier log".to_vec())));
+    assert_eq!((m.get("catalog.snap.v6-8-2"), m.get("catalog.log.v6-8-2")), (Some(snap), Some(log)));
+}
+
+/// Given that set and a copy of it with the same name taken too, when the library is upgraded, then the next free name is used.
+#[test]
+fn the_next_free_name_is_used_when_several_are_taken() {
+    let (m, snap, _) = v6_library();
+    for name in ["catalog.snap.v6-8", "catalog.snap.v6-8-2"] {
+        m.set(name, name.as_bytes().to_vec());
+    }
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.kept, ["catalog.snap.v6-8-3", "catalog.log.v6-8-3"]);
+    assert_eq!(m.get("catalog.snap.v6-8-3"), Some(snap));
+}
+
+/// Given kept files that are there already, byte for byte the same (an earlier open of this very library), when it is
+/// opened, then they are the copy: nothing is written under another name.
+#[test]
+fn kept_files_that_are_there_already_are_reused() {
+    let (m, snap, log) = v6_library();
+    m.set("catalog.snap.v6-8", snap);
+    m.set("catalog.log.v6-8", log);
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.kept, ["catalog.snap.v6-8", "catalog.log.v6-8"]);
+    assert!(!m.files.lock().unwrap().keys().any(|k| k.ends_with("-2")));
+}
+
+/// Given kept files that were there before and an upgrade that is then not written (a full disk), when the library is
+/// opened, then they stay: only what this open wrote is removed again.
+#[test]
+fn an_upgrade_that_is_not_written_removes_only_what_it_kept() {
+    let (m, snap, log) = v6_library();
+    m.set("catalog.snap.v6-8", snap.clone());
+    m.set("catalog.log.v6-8", log.clone());
+    let store = Refusing { files: m.clone(), refuse: |name| name == SNAPSHOT };
+    let (_, _, r) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!((r.upgraded_from, r.kept.len()), (None, 0));
+    assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(snap), Some(log)), "kept before, and still there");
+    assert_eq!(snapshot_version(&m), 6);
+
+    // and a different set that was in the way, with the new one not written whole
+    let (m, snap, log) = v6_library();
+    m.set("catalog.snap.v6-8", b"earlier".to_vec());
+    m.set("catalog.log.v6-8", b"earlier".to_vec());
+    let store = Refusing { files: m.clone(), refuse: |name| name.starts_with("catalog.log.v") };
+    let (_, _, r) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!((r.upgraded_from, r.kept.len()), (None, 0));
+    assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(b"earlier".to_vec()), Some(b"earlier".to_vec())));
+    assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(log)));
+    assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [LOG, "catalog.log.v6-8", SNAPSHOT, "catalog.snap.v6-8"], "nothing half kept");
+}
+
+/// Given a store that writes a kept file and then reports a failure (a network share that dropped its answer), when an
+/// older library is opened, then it is not upgraded, and the file that landed is not left behind.
+#[test]
+fn a_kept_file_that_landed_despite_an_error_is_removed() {
+    struct Dropped(MemStore);
+    impl Store for Dropped {
+        fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+            self.0.read(name)
+        }
+        fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            self.0.write_atomic(name, data)?;
+            if name.starts_with("catalog.log.v") {
+                return Err(std::io::Error::other("the share went away"));
+            }
+            Ok(())
+        }
+        fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            self.0.append(name, data)
+        }
+        fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+            self.0.truncate(name, len)
+        }
+        fn remove(&mut self, name: &str) -> std::io::Result<()> {
+            self.0.remove(name)
+        }
+        fn describe(&self) -> String {
+            "dropped".into()
+        }
+    }
+    let (m, snap, log) = v6_library();
+    let (_, c, r) = Journal::open(Box::new(Dropped(m.clone()))).unwrap();
+    assert_eq!((c.photos().count(), r.upgraded_from, r.kept.len()), (3, None, 0));
+    assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(log)));
+    assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [LOG, SNAPSHOT], "nothing left of the kept set");
+}
+
+/// Given a store that keeps no replaced files (the browser's), when an older library is opened, then the report says so
+/// (so a damaged log set aside beside it isn't presented as half of a copy of the library as it was).
+#[test]
+fn the_report_says_whether_the_store_keeps_files() {
+    struct Browser(MemStore);
+    impl Store for Browser {
+        fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+            self.0.read(name)
+        }
+        fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            self.0.write_atomic(name, data)
+        }
+        fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            self.0.append(name, data)
+        }
+        fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+            self.0.truncate(name, len)
+        }
+        fn keeps_replaced_formats(&self) -> bool {
+            false
+        }
+        fn describe(&self) -> String {
+            "browser".into()
+        }
+    }
+    let (m, _, _) = v6_library();
+    let (_, _, r) = Journal::open(Box::new(Browser(m.clone()))).unwrap();
+    assert!(!r.kept_files && r.kept.is_empty() && r.upgraded_from == Some(6), "{r:?}");
+    let (m, _, _) = v6_library();
+    let (_, _, r) = Journal::open(Box::new(m)).unwrap();
+    assert!(r.kept_files);
 }

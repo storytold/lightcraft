@@ -693,8 +693,8 @@ impl Session {
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
-        // (a damaged log is only part of "what the library was" when opening upgraded it: a library in this format that lost its log's tail was not upgraded)
-        let kept = kept_note(&report.kept, report.damaged.as_ref().filter(|_| report.upgraded_from.is_some()));
+        // (a damaged log is only part of "what the library was" when opening upgraded it, and the store keeps what an upgrade replaces: a library in this format that lost its log's tail was not upgraded, and the browser's store keeps no snapshot for the log to go with)
+        let kept = kept_note(&report.kept, report.damaged.as_ref().filter(|_| report.upgraded_from.is_some() && report.kept_files));
         self.library = Some(Library {
             dir,
             on_disk,

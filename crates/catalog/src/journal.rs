@@ -80,7 +80,10 @@
 //! - **An upgrade keeps what it replaces**: older builds can't read the upgraded library, so the
 //!   files it was are first kept beside it as `catalog.snap.v<format>-<seq>` and
 //!   `catalog.log.v<format>-<seq>` (`seq`: the last change they hold), byte for byte
-//!   ([`LoadReport::kept`]; a damaged log is kept under its own name instead). Put back under
+//!   ([`LoadReport::kept`]; a damaged log is kept under its own name instead). A file already
+//!   there under that name is never replaced or removed (a library restored from an older
+//!   backup can reach the same format and change as a set kept before): other bytes make both
+//!   names end `-2` (then `-3`, …), the same bytes are the copy already. Put back under
 //!   their own names, they are the library as the older build left it (what a later snapshot
 //!   keeps is the library as it was at open: a torn tail already cut, and what a session of this
 //!   build appended while it stayed in its old format, which an older build may refuse). They stay unless the
@@ -131,6 +134,19 @@ enum Upgrade {
     Repair,
 }
 
+/// The files kept for one upgrade (see [`Journal::keep_replaced`]).
+#[derive(Default)]
+struct Kept {
+    /// All of them: the snapshot, then the log.
+    names: Vec<String>,
+    /// Those this attempt wrote. The others were there already, byte for byte the same.
+    created: Vec<String>,
+}
+
+/// How many sets of kept files with the same format and change can stand side by side before a
+/// further one is refused (an upgrade that can't keep its files is not done).
+const MAX_KEPT_COPIES: u32 = 100;
+
 /// What happened while loading.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LoadReport {
@@ -159,6 +175,10 @@ pub struct LoadReport {
     /// The files that upgrade replaced, kept beside the library under these names (the snapshot,
     /// then the log; a file there was none of has no copy).
     pub kept: Vec<String>,
+    /// The store keeps the files an upgrade replaces ([`Store::keeps_replaced_formats`]): a
+    /// store that doesn't (the browser's) has no copy of the library as it was, whatever else it
+    /// set aside (a damaged log).
+    pub kept_files: bool,
 }
 
 /// Where persistence time goes (reported by `library.info` → `persistence`; printed to stderr
@@ -482,6 +502,7 @@ impl Journal {
         let snap = store.read(SNAPSHOT).map_err(io)?;
         let log = store.read(LOG).map_err(io)?;
         report.created = snap.is_none() && log.is_none();
+        report.kept_files = store.keeps_replaced_formats();
         let (mut catalog, snapshot_seq, snapshot_version) = match &snap {
             Some(bytes) => {
                 // the header first: a newer snapshot may not parse as this version's catalog
@@ -680,7 +701,7 @@ impl Journal {
                 // Nothing lost: the old files are intact and still load. No copy of them stays:
                 // there is nothing to go back from.
                 Some(_) => {
-                    self.forget_kept(&kept);
+                    self.forget_kept(&kept.created);
                     if how != Upgrade::May {
                         return Err(refused("can't be upgraded", e.to_string()));
                     }
@@ -689,8 +710,8 @@ impl Journal {
                 }
             }
         }
-        log::info!("catalog: upgraded from format v{from} to v{VERSION}; the files it was are kept as {kept:?}");
-        Ok(Some(kept))
+        log::info!("catalog: upgraded from format v{from} to v{VERSION}; the files it was are kept as {:?}", kept.names);
+        Ok(Some(kept.names))
     }
 
     /// The format of the snapshot in the store: `Some(None)` where there is none, `None` where
@@ -705,30 +726,58 @@ impl Journal {
 
     /// Keep the files of a library in format `from` before an upgrade replaces them: `snap` and
     /// `log` as they were read, under names that say their format and the last change they hold.
-    /// Returns the names (none where the store keeps none). All or nothing: on an error, what was
-    /// written is removed again.
-    fn keep_replaced(&mut self, from: u32, snap: Option<&[u8]>, log: &[u8]) -> std::io::Result<Vec<String>> {
+    /// Returns the names (none where the store keeps none). All or nothing: on an error, what
+    /// this call wrote is removed again.
+    ///
+    /// A file that is in the way is never replaced or removed: a library restored from an older
+    /// backup can reach the same format and change as a set kept before, with other bytes. The
+    /// names then end `-2`, `-3`, … (for both files alike), the first that holds nothing, or
+    /// these very bytes (that file is reused, and is not this call's to remove).
+    fn keep_replaced(&mut self, from: u32, snap: Option<&[u8]>, log: &[u8]) -> std::io::Result<Kept> {
+        let mut kept = Kept::default();
         if !self.store.keeps_replaced_formats() {
-            return Ok(Vec::new());
+            return Ok(kept);
         }
         let seq = self.seq;
-        let files = [(SNAPSHOT, snap), (LOG, (!log.is_empty()).then_some(log))];
-        let mut kept = Vec::new();
-        for (name, bytes) in files {
-            let Some(bytes) = bytes else { continue };
-            let name = format!("{name}.v{from}-{seq}");
-            if let Err(e) = self.store.write_atomic(&name, bytes) {
-                self.forget_kept(&kept);
-                return Err(e);
+        let files: Vec<(&str, &[u8])> =
+            [(SNAPSHOT, snap), (LOG, (!log.is_empty()).then_some(log))].into_iter().filter_map(|(name, bytes)| Some((name, bytes?))).collect();
+        // (nothing is written until every name of the set is known to be free or ours)
+        let mut plan: Vec<(String, &[u8], bool)> = Vec::new();
+        'sets: for copy in 1..=MAX_KEPT_COPIES {
+            plan.clear();
+            for &(name, bytes) in &files {
+                let name = if copy == 1 { format!("{name}.v{from}-{seq}") } else { format!("{name}.v{from}-{seq}-{copy}") };
+                match self.store.read(&name)? {
+                    None => plan.push((name, bytes, true)),
+                    Some(there) if there == bytes => plan.push((name, bytes, false)),
+                    Some(_) => continue 'sets,
+                }
             }
-            kept.push(name);
+            break;
+        }
+        if plan.len() != files.len() {
+            return Err(std::io::Error::other(format!("{MAX_KEPT_COPIES} sets of files kept as format v{from} at change {seq} are in the way")));
+        }
+        for (name, bytes, write) in plan {
+            if write {
+                if let Err(e) = self.store.write_atomic(&name, bytes) {
+                    // (a write that says it failed may have landed all the same, a network share that
+                    // dropped its answer: the name was free, so what is there now is this call's)
+                    kept.created.push(name);
+                    self.forget_kept(&kept.created);
+                    return Err(e);
+                }
+                kept.created.push(name.clone());
+            }
+            kept.names.push(name);
         }
         Ok(kept)
     }
 
-    /// Remove kept files that keep nothing (the upgrade they were for did not happen).
-    fn forget_kept(&mut self, kept: &[String]) {
-        for name in kept {
+    /// Remove kept files that keep nothing (the upgrade they were for did not happen): only
+    /// those a call of [`Journal::keep_replaced`] wrote, never one that was there before.
+    fn forget_kept(&mut self, created: &[String]) {
+        for name in created {
             if let Err(e) = self.store.remove(name) {
                 log::warn!("catalog: can't remove {name}: {e}");
             }
@@ -770,8 +819,8 @@ impl Journal {
         let kept = self.keep_replaced(from, snap.as_deref(), &log);
         self.seq = at;
         let kept = kept.map_err(io)?;
-        log::info!("catalog: the files of format v{from} are kept as {kept:?} before the upgrade");
-        self.kept_pending = Some(kept);
+        log::info!("catalog: the files of format v{from} are kept as {:?} before the upgrade", kept.names);
+        self.kept_pending = Some(kept.names);
         Ok(())
     }
 
