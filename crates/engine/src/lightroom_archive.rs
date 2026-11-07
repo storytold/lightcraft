@@ -540,6 +540,7 @@ mod tests {
             history: vec![BTreeMap::from([("text".into(), serde_json::json!("step")), ("curve".into(), serde_json::json!([0, 128, 255]))])],
             snapshots: vec![BTreeMap::from([("name".into(), serde_json::json!("before"))])],
             original: crate::lightroom_catalog::Original::Local,
+            as_shot_white: None,
         };
         CatalogImport {
             source: "source.lrcat".into(),
@@ -625,6 +626,7 @@ mod tests {
                 history: vec![BTreeMap::from([("text".into(), serde_json::json!(format!("history-{index}-{}", "x".repeat(8 * 1024))))])],
                 snapshots: Vec::new(),
                 original: crate::lightroom_catalog::Original::Local,
+                as_shot_white: None,
             })
             .collect();
         assert_eq!(store_best_effort(&path, &input).unwrap(), None);

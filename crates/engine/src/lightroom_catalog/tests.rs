@@ -15,6 +15,7 @@ fn sample() -> CatalogImport {
         history: vec![row(json!({"text":"s = { Exposure2012 = 0.5 }"}))],
         snapshots: Vec::new(),
         original: Original::Local,
+        as_shot_white: None,
     };
     let mut copy = photo.clone();
     copy.source_id = 2;
@@ -703,8 +704,8 @@ fn compressed_xmp_is_bounded_and_settings_are_data_only() {
 
 #[test]
 fn custom_white_balance_on_relative_wb_raws_is_not_read_as_kelvin() {
-    // Issue #510: a catalog keeps no as-shot white for Custom photos, so on a raw developed
-    // relative to its as-shot look the edit stays As Shot and is reported; a DNG keeps the Kelvin
+    // Issue #510: a Custom photo's settings keep no as-shot white, so with none from its history a
+    // raw developed relative to its as-shot look stays As Shot and is reported; a DNG keeps the Kelvin
     let settings =
         "s = { WhiteBalance = \"Custom\", Temperature = 3578, Tint = -5, CustomTemperature = 3578.95, CustomTint = -5, Exposure2012 = 0.5 }";
     let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawRelative, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
@@ -717,6 +718,63 @@ fn custom_white_balance_on_relative_wb_raws_is_not_read_as_kelvin() {
         (Some("custom"), Some(3578.0), Some(-5.0))
     );
     assert!(!unknown.iter().any(|k| k.starts_with("Temperature")), "{unknown:?}");
+}
+
+/// A history step as Lightroom stores it: the text's length, then the text deflated.
+fn compressed_step(text: &str) -> SqlValue {
+    let mut bytes = (text.len() as u32).to_be_bytes().to_vec();
+    bytes.extend(miniz_oxide::deflate::compress_to_vec_zlib(text.as_bytes(), 6));
+    SqlValue::Blob(bytes)
+}
+
+#[test]
+fn a_custom_white_balance_is_shifted_from_the_as_shot_white_in_its_history() {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-custom-wb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("custom.lrcat");
+    let custom = "s = { WhiteBalance = \"Custom\", Temperature = 11250, Tint = 103 }";
+    let mut tables: Vec<_> = photo_tables((dir.to_str().unwrap(), "")).into_iter().map(|(name, columns, row)| (name, columns, vec![row])).collect();
+    tables.push(("Adobe_imageDevelopSettings", "id_local INTEGER PRIMARY KEY, image, text", vec![vec![N, I(1), T(custom.into())]]));
+    tables.push((
+        "Adobe_libraryImageDevelopHistoryStep",
+        "id_local INTEGER PRIMARY KEY, image, text",
+        vec![
+            // the first steps say As Shot without its values
+            vec![N, I(1), compressed_step("s = { WhiteBalance = \"As Shot\" }")],
+            vec![N, I(1), compressed_step("s = { WhiteBalance = \"As Shot\", Temperature = 6350, Tint = 73 }")],
+            vec![N, I(1), compressed_step(custom)],
+            // another photo's as-shot white is not this photo's
+            vec![N, I(2), compressed_step("s = { WhiteBalance = \"As Shot\", Temperature = 3000, Tint = 0 }")],
+        ],
+    ));
+    std::fs::write(&path, native_catalog_rows(&tables, None)).unwrap();
+    let mut s = crate::Session::new();
+    let imported = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+    let id = PhotoId(imported["mapping"]["1"].as_u64().unwrap());
+    let wb = s.catalog.photo(id).unwrap().develop.wb;
+    let shift = (1e6 / 6350.0 - 1e6 / 11250.0) / 0.8;
+    assert!((wb.temp - crate::crs::rel_to_kelvin(shift)).abs() < 1.0, "{wb:?}");
+    assert!((wb.tint - 30.0).abs() < 1e-9, "{wb:?}");
+    assert_eq!(serde_json::to_value(wb).unwrap()["mode"], "custom");
+    assert!(imported["unmapped"].to_string().find("Temperature, Tint").is_none(), "{}", imported["unmapped"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn only_an_as_shot_step_with_its_values_gives_an_as_shot_white() {
+    let white = |step: &SqlValue| step_as_shot_white(step);
+    assert_eq!(white(&SqlValue::Text("s = { WhiteBalance = \"As Shot\", Temperature = 4050, Tint = 37 }".into())), Some((4050.0, 37.0)));
+    assert_eq!(white(&compressed_step("s = { WhiteBalance = \"As Shot\", Temperature = 4050, Tint = -37 }")), Some((4050.0, -37.0)));
+    assert_eq!(white(&compressed_step("s = { WhiteBalance = \"As Shot\" }")), None);
+    assert_eq!(white(&compressed_step("s = { WhiteBalance = \"As Shot\", Temperature = 0, Tint = 0 }")), None);
+    assert_eq!(white(&compressed_step("s = { WhiteBalance = \"Custom\", Temperature = 4550, Tint = 37 }")), None);
+    // hostile or damaged steps are skipped: a bad length, a truncated stream, not Lua
+    assert_eq!(white(&SqlValue::Blob(vec![0xff, 0xff, 0xff, 0xff, 1, 2])), None);
+    assert_eq!(white(&SqlValue::Blob(vec![0, 0])), None);
+    assert_eq!(white(&SqlValue::Text("As Shot {{{".into())), None);
+    assert_eq!(white(&SqlValue::Null), None);
 }
 
 #[test]
@@ -1122,6 +1180,10 @@ fn record(values: &[SqlValue]) -> Vec<u8> {
                 body.extend(s.as_bytes());
                 13 + 2 * s.len() as u64
             }
+            SqlValue::Blob(b) => {
+                body.extend(b);
+                12 + 2 * b.len() as u64
+            }
             _ => panic!("unexpected SqlValue in a test record: {value:?}"),
         };
         header.extend(varint(serial));
@@ -1159,7 +1221,8 @@ fn native_catalog_with_last_table_page(tables: &[(&str, &str, Vec<SqlValue>)], l
 /// table's root page.
 fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: Option<i64>) -> Vec<u8> {
     use SqlValue::{Integer as I, Text as T};
-    let mut bytes = vec![0u8; 5 * 2048];
+    let pages = (tables.len() + 1).max(5);
+    let mut bytes = vec![0u8; pages * 2048];
     bytes[..16].copy_from_slice(b"SQLite format 3\0");
     bytes[16..18].copy_from_slice(&2048u16.to_be_bytes());
     bytes[18] = 1;
@@ -1167,7 +1230,7 @@ fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: O
     bytes[21] = 64;
     bytes[22] = 32;
     bytes[23] = 32;
-    bytes[28..32].copy_from_slice(&5u32.to_be_bytes());
+    bytes[28..32].copy_from_slice(&(pages as u32).to_be_bytes());
     bytes[44..48].copy_from_slice(&4u32.to_be_bytes());
     bytes[56..60].copy_from_slice(&1u32.to_be_bytes());
     let mut schema = Vec::new();
