@@ -483,7 +483,9 @@ pub fn forced_window_renderer(app: Option<&str>, wgpu: Option<&str>) -> Option<W
 /// uncatchably (issue #136), so it is never in the automatic chain, and the renderer remembered
 /// from the last run cannot put it first either.
 /// `failed` (the renderer the last start died in) goes last, as a last resort only. Backends not
-/// in `compiled`, and glow without `glow`, are left out; the list is never empty.
+/// in `compiled`, and glow without `glow`, are left out. The list is empty only when no usable
+/// renderer exists and glow is unavailable; callers must handle that case instead of using an
+/// empty backend set as a renderer.
 pub fn window_renderer_order(
     forced: Option<WindowRenderer>,
     remembered: Option<WindowRenderer>,
@@ -530,23 +532,11 @@ pub fn window_renderer_order(
         } else if glow {
             out.push(WindowRenderer::Glow);
         } else {
-            // No usable renderer and no glow: never return Glow the build does not
-            // have. On Windows and Linux the automatic fallback must not load the
-            // Vulkan driver either (issue #136): use the non-Vulkan compiled set
-            // restricted to backends usable as a window backend on this platform
-            // (empty when there is none) as the last resort; an empty set will
-            // fail to create a surface rather than naming an unusable backend
-            // such as Metal on Linux.
-            let non_vulkan = if matches!(os, "windows" | "linux") {
-                let usable = match os {
-                    "windows" => Backends::DX12 | Backends::GL,
-                    _ => Backends::GL,
-                };
-                (compiled & usable) - Backends::VULKAN
-            } else {
-                compiled
-            };
-            out.push(WindowRenderer::Wgpu(non_vulkan));
+            // No usable renderer and no glow: return no renderer at all. Never
+            // return Glow the build does not have, an empty backend set as if
+            // it were usable, or (on Windows and Linux, issue #136) Vulkan
+            // merely because it is the only compiled backend. The caller
+            // handles the empty list as the no-usable-renderer failure.
         }
     }
     out
@@ -589,12 +579,15 @@ pub fn initial_window_renderer(
     {
         return WindowRenderer::Glow;
     }
-    // `window_renderer_order` never returns an empty list, so the first
-    // renderer is always there; the fallback only keeps this total.
+    // `window_renderer_order` is empty only when no usable renderer exists
+    // and glow is unavailable; the empty set is the no-usable-renderer
+    // sentinel the caller must check, never a usable renderer. It must not
+    // fall back to the platform default here, which could name Vulkan on
+    // Windows and Linux (issue #136).
     match window_renderer_order(forced, remembered, failed, os, compiled, glow).first().copied() {
         Some(r) => r,
         None if glow => WindowRenderer::Glow,
-        None => WindowRenderer::Wgpu(default_window_backends(os) & compiled),
+        None => WindowRenderer::Wgpu(Backends::empty()),
     }
 }
 
@@ -944,28 +937,22 @@ mod tests {
         assert_eq!(order.last(), Some(&WindowRenderer::Glow));
     }
 
-    /// The empty-order fallback must not yield an empty backend set, and on Linux it must
-    /// not load Vulkan automatically to do so (issue #136): with GL not compiled in and
-    /// glow unavailable it falls back to an empty non-Vulkan set rather than to the
-    /// Vulkan backend; with glow available it falls back to glow.
+    /// The empty-order fallback must not yield an empty backend set as a
+    /// usable renderer, and on Linux it must not load Vulkan automatically
+    /// to do so (issue #136): with GL not compiled in and glow unavailable
+    /// there is no usable renderer, so the order is empty for the caller to
+    /// handle; with glow available it falls back to glow.
     #[test]
     fn empty_order_fallback_is_usable_when_gl_not_compiled() {
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN, false);
-        assert!(!order.is_empty());
-        assert!(
-            order.iter().all(|r| match r {
-                WindowRenderer::Glow => false,
-                WindowRenderer::Wgpu(b) => !b.contains(Backends::VULKAN),
-            }),
-            "{order:?}"
-        );
-        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::empty())));
+        assert!(order.is_empty(), "no usable renderer: {order:?}");
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN, true);
         assert_eq!(order.first(), Some(&WindowRenderer::Glow));
-        // a non-Vulkan compiled backend usable on Linux is still used when there is one;
-        // Metal is not a Linux window backend, so it does not count as a fallback
+        // a non-Vulkan compiled backend usable on Linux is still used when
+        // there is one; Metal is not a Linux window backend, so it does
+        // not count as a fallback
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN | Backends::METAL, false);
-        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::empty())));
+        assert!(order.is_empty(), "Metal is not a Linux fallback: {order:?}");
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN | Backends::GL, false);
         assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::GL)));
     }
