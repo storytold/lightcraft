@@ -511,10 +511,7 @@ pub fn window_renderer_order(
     // On Windows and Linux the Vulkan driver is loaded only when the environment asks for it (the forced
     // renderer): a broken one crashes the process uncatchably (issue #136). So neither the
     // renderer remembered from the last run nor the one the last start died in can bring it back.
-    let no_vulkan = |r: &WindowRenderer| {
-        !matches!(os, "windows" | "linux")
-            || !matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN))
-    };
+    let no_vulkan = |r: &WindowRenderer| !matches!(os, "windows" | "linux") || !matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN));
     let candidates = forced
         .into_iter()
         .chain(remembered.filter(|r| not_failed(r) && no_vulkan(r)))
@@ -533,7 +530,15 @@ pub fn window_renderer_order(
         } else if glow {
             out.push(WindowRenderer::Glow);
         } else if !compiled.is_empty() {
-            out.push(WindowRenderer::Wgpu(compiled));
+            // On Windows and Linux the automatic fallback must not load the Vulkan
+            // driver either (issue #136): use a non-Vulkan compiled backend when
+            // there is one, otherwise glow, which loads no wgpu backend at all.
+            let non_vulkan = if matches!(os, "windows" | "linux") { compiled - Backends::VULKAN } else { compiled };
+            if !non_vulkan.is_empty() {
+                out.push(WindowRenderer::Wgpu(non_vulkan));
+            } else {
+                out.push(WindowRenderer::Glow);
+            }
         } else {
             out.push(WindowRenderer::Glow);
         }
@@ -565,15 +570,10 @@ pub fn initial_window_renderer(
     compiled: Backends,
     glow: bool,
 ) -> WindowRenderer {
-    if glow_without_marker(forced, marker_available, os, glow)
-        && !matches!(remembered, Some(WindowRenderer::Wgpu(_)))
-    {
+    if glow_without_marker(forced, marker_available, os, glow) && !matches!(remembered, Some(WindowRenderer::Wgpu(_))) {
         return WindowRenderer::Glow;
     }
-    window_renderer_order(forced, remembered, failed, os, compiled, glow)
-        .first()
-        .copied()
-        .unwrap_or(WindowRenderer::Glow)
+    window_renderer_order(forced, remembered, failed, os, compiled, glow).first().copied().unwrap_or(WindowRenderer::Glow)
 }
 
 #[cfg(test)]
@@ -916,19 +916,26 @@ mod tests {
         assert_eq!(order.last(), Some(&WindowRenderer::Glow));
     }
 
-    /// The empty-order fallback must not yield an empty backend set: on Linux with GL not
-    /// compiled in and glow unavailable it falls back to a non-empty compiled backend.
+    /// The empty-order fallback must not yield an empty backend set, and on Linux it must
+    /// not load Vulkan automatically to do so (issue #136): with GL not compiled in and
+    /// glow unavailable it falls back to glow rather than to the Vulkan backend.
     #[test]
     fn empty_order_fallback_is_usable_when_gl_not_compiled() {
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN, false);
         assert!(!order.is_empty());
-        assert!(order.iter().all(|r| match r {
-            WindowRenderer::Glow => true,
-            WindowRenderer::Wgpu(b) => !b.is_empty(),
-        }), "{order:?}");
-        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::VULKAN)));
+        assert!(
+            order.iter().all(|r| match r {
+                WindowRenderer::Glow => true,
+                WindowRenderer::Wgpu(b) => !b.is_empty() && !b.contains(Backends::VULKAN),
+            }),
+            "{order:?}"
+        );
+        assert_eq!(order.first(), Some(&WindowRenderer::Glow));
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN, true);
         assert_eq!(order.first(), Some(&WindowRenderer::Glow));
+        // a non-Vulkan compiled backend is still used when there is one
+        let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN | Backends::METAL, false);
+        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::METAL)));
     }
 
     #[test]
