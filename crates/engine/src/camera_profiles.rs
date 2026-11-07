@@ -120,7 +120,10 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     // would have written through
     lightcraft_catalog::safe_file::write_atomic(&path, &json).map_err(|e| format!("{}: {e}", path.display()))?;
     // Drop any cached lookup for this model: an earlier miss must not hide the profile just saved.
-    cache().lock().unwrap_or_else(PoisonError::into_inner).remove(profile.model.trim());
+    // Other spellings of the model map to the same file (`Foo Bar` and `Foo_Bar`), so drop those too.
+    let saved_name = file_name(&profile.model);
+    cache().lock().unwrap_or_else(PoisonError::into_inner).retain(|model, _| file_name(model) != saved_name);
+    refresh_cache_key(dir);
     Ok(path)
 }
 
@@ -131,6 +134,11 @@ fn cache() -> &'static Mutex<HashMap<String, Option<Arc<CameraProfile>>>> {
 
 /// The profile for camera `model`: from [`dir`], else built in; read once per process.
 pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
+    get_from(dir().as_deref(), model)
+}
+
+/// [`get`] for a given profiles directory (tests use an isolated one instead of the global [`dir`]).
+fn get_from(directory: Option<&Path>, model: &str) -> Option<Arc<CameraProfile>> {
     let model = model.trim();
     if model.is_empty() {
         return None;
@@ -139,7 +147,7 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     if let Some(hit) = cache.get(model) {
         return hit.clone();
     }
-    let path = dir().map(|d| d.join(file_name(model)));
+    let path = directory.map(|d| d.join(file_name(model)));
     let profile = match path {
         Some(path) if path.is_file() => match load(&path) {
             Ok(p) if p.model.trim() == model => Some(Arc::new(p)),
@@ -159,11 +167,26 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     profile
 }
 
+static CACHE_KEY: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
+
 /// Changes when the profiles folder's contents change (per process): part of the render cache
 /// keys, so thumbnails rendered before a profile existed are not reused after.
 pub fn cache_key() -> u64 {
-    static KEY: OnceLock<u64> = OnceLock::new();
-    *KEY.get_or_init(|| cache_key_for(dir().as_deref()))
+    let lock = CACHE_KEY.get_or_init(|| Mutex::new(None));
+    let mut guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+    *guard.get_or_insert_with(|| cache_key_for(dir().as_deref()))
+}
+
+/// Recompute the cached render-cache key for `directory` (the folder just saved to).
+fn refresh_cache_key(directory: &Path) {
+    let lock = CACHE_KEY.get_or_init(|| Mutex::new(None));
+    *lock.lock().unwrap_or_else(PoisonError::into_inner) = Some(cache_key_for(Some(directory)));
+}
+
+/// Recompute the cached render-cache key for the current profile directory.
+fn refresh_cache_key_from_dir() {
+    let lock = CACHE_KEY.get_or_init(|| Mutex::new(None));
+    *lock.lock().unwrap_or_else(PoisonError::into_inner) = Some(cache_key_for(dir().as_deref()));
 }
 
 fn cache_key_for(directory: Option<&Path>) -> u64 {
@@ -337,24 +360,38 @@ mod tests {
 
     #[test]
     fn saved_profile_is_found_after_earlier_miss() {
-        let model = format!(
-            "TESTMISS-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default()
-        );
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+        let model = format!("TESTMISS-{}-{stamp}", std::process::id());
+        let isolated = std::env::temp_dir().join(format!("lc-camera-profile-miss-{}-{stamp}", std::process::id()));
         let mut saved = profile();
         saved.model = model.clone();
 
         // A lookup before anything is saved caches the miss.
-        assert!(get(&model).is_none(), "no profile saved yet");
+        assert!(get_from(Some(&isolated), &model).is_none(), "no profile saved yet");
 
-        // Saving replaces the on-disk file that `get` reads.
-        let saved_path = dir().map(|d| save(&saved, &d).unwrap());
+        // Saving replaces the on-disk file that the lookup reads.
+        let saved_path = save(&saved, &isolated).unwrap();
 
-        assert_eq!(get(&model).as_deref(), Some(&saved), "a profile saved after the first lookup must be returned");
-        if let Some(path) = saved_path {
-            let _ = std::fs::remove_file(path);
-        }
+        assert_eq!(get_from(Some(&isolated), &model).as_deref(), Some(&saved), "a profile saved after the first lookup must be returned");
+        refresh_cache_key_from_dir();
+        let _ = std::fs::remove_file(saved_path);
+        let _ = std::fs::remove_dir_all(&isolated);
+    }
+
+    #[test]
+    fn saved_profile_is_found_after_earlier_miss_review_regression_1() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+        let alias = format!("TESTALIAS {} {stamp}", std::process::id());
+        let saved_model = alias.replace(' ', "_");
+        assert_eq!(file_name(&alias), file_name(&saved_model));
+        cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(alias.clone(), None);
+        let dir = std::env::temp_dir().join(format!("lc-camera-profile-alias-{}-{stamp}", std::process::id()));
+        let mut saved = profile();
+        saved.model = saved_model;
+        save(&saved, &dir).unwrap();
+        let still_cached = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(&alias);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!still_cached, "saving a profile must invalidate the cached miss for {alias:?}, which maps to the same file");
     }
 
     #[test]
