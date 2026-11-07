@@ -1555,7 +1555,25 @@ fn context_menu_locate_and_export(app: &mut LightcraftApp, ui: &mut egui::Ui, id
             }
         }
     });
+    context_menu_share(app, ui);
     ui.separator();
+}
+
+/// Share ▸ the places photos can be shared to, as File ▸ Share and the top bar's share icon offer:
+/// in the grid, the filmstrip and the loupe (Develop), without going through the menu bar.
+fn context_menu_share(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let share = crate::widgets::menu_button(ui, crate::i18n::tr("Share"), |ui| {
+        let enabled = crate::menus::ui_enabled(app, "dialog.flickrUpload");
+        let flickr = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr("Share to Flickr…")));
+        register(ui, "menu:contextShareFlickr", flickr.rect);
+        if flickr.clicked() {
+            if let Err(e) = app.run("dialog.flickrUpload", json!({})) {
+                app.toast(ui.ctx(), e);
+            }
+            ui.close();
+        }
+    });
+    register(ui, "menu:contextShare", share.response.rect);
 }
 
 fn context_menu_delete(app: &mut LightcraftApp, ui: &mut egui::Ui) {

@@ -220,6 +220,12 @@ pub struct UploadOptions {
     pub tags: bool,
     /// The photo's caption as the description.
     pub description: bool,
+    /// The title every photo goes up with, typed in the dialog (`None`: each photo's own title,
+    /// else its file name).
+    pub title: Option<String>,
+    /// The description every photo goes up with, typed in the dialog (`None`: each photo's caption
+    /// when `description` is on).
+    pub description_text: Option<String>,
     /// Leave GPS out of the file (Flickr would put the photo on its map).
     pub remove_location: bool,
     /// The id of the account's album to put the photos in (`None`: no album).
@@ -238,10 +244,38 @@ impl Default for UploadOptions {
             hidden: false,
             tags: true,
             description: true,
+            title: None,
+            description_text: None,
             remove_location: true,
             album: None,
             new_album: None,
         }
+    }
+}
+
+/// Longest title (characters) Flickr is sent.
+pub const MAX_TITLE: usize = 255;
+/// Longest description (characters) Flickr is sent.
+pub const MAX_DESCRIPTION: usize = 20_000;
+
+/// A typed title or description: trimmed, empty → `None`; too long or with control characters (a
+/// description may have line breaks and tabs) → the error to show.
+fn typed_text(p: &Value, key: &str, max: usize, lines: bool) -> Result<Option<String>, String> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => {
+            let s = s.trim();
+            if s.is_empty() {
+                Ok(None)
+            } else if s.chars().count() > max {
+                Err(format!("`{key}` is longer than {max} characters"))
+            } else if s.chars().any(|c| c.is_control() && !(lines && matches!(c, '\n' | '\r' | '\t'))) {
+                Err(format!("`{key}` can't hold control characters"))
+            } else {
+                Ok(Some(s.to_string()))
+            }
+        }
+        Some(_) => Err(format!("`{key}` must be text (or null: each photo's own)")),
     }
 }
 
@@ -271,6 +305,8 @@ impl UploadOptions {
         o.hidden = flag("hidden", o.hidden)?;
         o.tags = flag("tags", o.tags)?;
         o.description = flag("description", o.description)?;
+        o.title = typed_text(p, "title", MAX_TITLE, false)?;
+        o.description_text = typed_text(p, "descriptionText", MAX_DESCRIPTION, true)?;
         o.remove_location = flag("removeLocation", o.remove_location)?;
         o.album = match p.get("album") {
             None | Some(Value::Null) => None,
@@ -358,20 +394,28 @@ pub fn list_albums(client: &Client, token: &Token, cancel: &AtomicBool) -> Resul
 /// Most photos one upload takes: it is for chosen photos, not a whole library.
 pub const MAX_PHOTOS: usize = 500;
 
-/// What Flickr is told about photo `p`: its title (else its file name without the extension),
-/// caption and keywords as the options say. Keywords become tags the way an export writes them
+/// What Flickr is told about photo `p`: the title typed for the upload, else its title, else its
+/// file name without the extension; the description typed for the upload, else its caption when
+/// the options say; and its keywords as the options say. Keywords become tags the way an export writes them
 /// into the file ([`lightcraft_catalog::Catalog::export_keywords`]): a keyword left out of export
 /// is never sent, and a nested one goes by its own name (plus its containing keywords and
 /// synonyms when their options say so), never as a `Parent|Child` path.
 pub fn photo_info(p: &lightcraft_catalog::Photo, catalog: &lightcraft_catalog::Catalog, o: &UploadOptions) -> PhotoInfo {
-    let title = if p.meta.title.trim().is_empty() {
+    let title = if let Some(t) = &o.title {
+        t.clone()
+    } else if p.meta.title.trim().is_empty() {
         std::path::Path::new(&p.file_name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
     } else {
         p.meta.title.trim().to_string()
     };
+    let description = match &o.description_text {
+        Some(d) => d.clone(),
+        None if o.description => p.meta.caption.trim().to_string(),
+        None => String::new(),
+    };
     PhotoInfo {
         title,
-        description: if o.description { p.meta.caption.trim().to_string() } else { String::new() },
+        description,
         tags: if o.tags { catalog.export_keywords(&p.meta.keywords).flat } else { Vec::new() },
         privacy: o.privacy,
         hidden: o.hidden,

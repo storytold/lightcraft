@@ -198,6 +198,43 @@ fn only_you_uploads_private_on_the_wire() {
 }
 
 #[test]
+fn a_typed_title_and_description_go_up_with_the_photo() {
+    let (base, seen) = fake(flickr_ok);
+    let mut s = signed_in(&base);
+    let id = s.catalog.photos().next().unwrap().id.0;
+    s.execute("library.select", &json!({"ids": [id]})).unwrap();
+    s.execute("photo.setMeta", &json!({"title": "Old title", "caption": "Old caption"})).unwrap();
+    let r = s
+        .execute(
+            "flickr.upload",
+            &json!({"ids": [id], "longEdge": 128, "title": "  Sunrise, Lake Michigan ", "descriptionText": "Shot at 6:42.\nNo filter.", "description": false}),
+        )
+        .unwrap();
+    assert_eq!(r["uploaded"].as_u64(), Some(1), "{r}");
+    let seen = seen.lock().unwrap();
+    let body = String::from_utf8_lossy(&seen[0].body).to_string();
+    assert!(body.contains("name=\"title\"\r\n\r\nSunrise, Lake Michigan\r\n"), "the typed title, trimmed");
+    assert!(
+        body.contains("name=\"description\"\r\n\r\nShot at 6:42.\nNo filter.\r\n"),
+        "the typed description, line break kept, even with the caption choice off"
+    );
+    // (the file itself still carries the photo's own title and caption in its metadata)
+    assert!(!body.contains("name=\"title\"\r\n\r\nOld title"), "not the photo's own title");
+}
+
+#[test]
+fn typed_titles_and_descriptions_are_checked() {
+    let parse = |p: serde_json::Value| crate::flickr::UploadOptions::from_json(&p);
+    let o = parse(json!({"title": "   ", "descriptionText": null})).unwrap();
+    assert_eq!((o.title, o.description_text), (None, None), "empty: each photo's own");
+    assert!(parse(json!({"title": "a".repeat(crate::flickr::MAX_TITLE + 1)})).unwrap_err().contains("longer than"));
+    assert!(parse(json!({"title": "two\nlines"})).unwrap_err().contains("control"), "a title is one line");
+    assert!(parse(json!({"descriptionText": "two\nlines\tand a tab"})).is_ok(), "a description may have line breaks");
+    assert!(parse(json!({"descriptionText": "bell\u{7}"})).unwrap_err().contains("control"));
+    assert!(parse(json!({"title": 5})).is_err());
+}
+
+#[test]
 fn family_only_uploads_send_is_family_alone_on_the_wire() {
     let (base, seen) = fake(flickr_ok);
     let mut s = signed_in(&base);
