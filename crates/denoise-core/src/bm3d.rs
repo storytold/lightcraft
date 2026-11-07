@@ -439,8 +439,7 @@ fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], 
         let plane_sigma = if ref_noise > 0.0 { sigma * (plane_noise(plane, t) / ref_noise).max(1.0) } else { sigma };
         // a colour-difference plane noisier than the brightness plane is shrunk a little harder than its scaled
         // level, as the brightness plane is the one the groups were matched on; one no noisier keeps its scaled level
-        let plane_lambda = scaled_lambda(lambda, sigma_ref, plane_sigma)
-            * if c == 0 || plane_sigma <= sigma_ref { 1.0 } else { 1.5 };
+        let plane_lambda = scaled_lambda(lambda, sigma_ref, plane_sigma) * if c == 0 || plane_sigma <= sigma_ref { 1.0 } else { 1.5 };
         for members in groups {
             let m = members.len();
             gather(plane, t, n, members, &mut buf);
