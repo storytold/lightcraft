@@ -36,6 +36,22 @@ const NAME_SUFFIX: &str = ".lca";
 const MAX_SCAN: usize = 1024;
 const IO_BUFFER: usize = 16 * 1024;
 
+/// A saved archive. Once it is published it is complete, so cleanup that fails afterwards (a
+/// temporary left behind, an old archive that could not be retired) is reported beside it, not
+/// as a failure to save it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Stored {
+    pub path: PathBuf,
+    /// What could not be cleaned up after the archive was published, if anything.
+    pub cleanup_failed: Option<String>,
+}
+
+impl Stored {
+    fn new(path: PathBuf, problems: Vec<String>) -> Self {
+        Self { path, cleanup_failed: (!problems.is_empty()).then(|| problems.join("; ")) }
+    }
+}
+
 /// Store compact source data below `directory` and return its managed archive.
 ///
 /// The operation is safe to call before catalog mutation.  It rejects a
@@ -44,7 +60,7 @@ const IO_BUFFER: usize = 16 * 1024;
 /// most [`MAX_MANAGED_ARCHIVES`] and [`MAX_TOTAL_ARCHIVE_BYTES`].  Legacy
 /// `lightroom-import-*.json` files are deliberately ignored and preserved for
 /// an explicit caller warning.
-pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> {
+pub fn store(directory: &Path, data: &CatalogImport) -> Result<Stored, String> {
     prepare_directory(directory)?;
     let mut managed = managed_files(directory)?;
     managed.sort_by_key(|entry| entry.index);
@@ -64,11 +80,15 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> 
             }
         };
         if same {
-            remove_managed_file(&temporary).map_err(|e| e.to_string())?;
+            // the matching archive already exists: what is left is cleanup
+            let mut problems = Vec::new();
+            if let Err(error) = remove_managed_file(&temporary) {
+                problems.push(format!("could not remove the temporary {}: {error}", temporary.display()));
+            }
             let matched = entry.path.clone();
-            let mut all = managed.clone();
-            prune_existing(directory, &mut all, Some(&matched))?;
-            return Ok(matched);
+            problems.extend(prune_existing(&managed, Some(&matched)));
+            lightcraft_catalog::safe_file::sync_dir(directory);
+            return Ok(Stored::new(matched, problems));
         }
     }
 
@@ -115,22 +135,44 @@ pub fn store(directory: &Path, data: &CatalogImport) -> Result<PathBuf, String> 
         let _ = remove_managed_file(&temporary);
         return Err(error.to_string());
     }
-    if let Err(error) = remove_managed_file(&temporary) {
-        return Err(format!("archive published but temporary cleanup failed: {error}"));
-    }
-    for (old, held) in quarantined {
-        if let Err(error) = remove_managed_file(&held) {
-            return Err(format!("archive published but could not retire {}: {error}", old.display()));
+    let problems = clean_up_after_publish(&temporary, &quarantined);
+    // the archive's name (and the retired ones' removal) survives a power loss or an unplugged drive
+    lightcraft_catalog::safe_file::sync_dir(directory);
+    Ok(Stored::new(destination, problems))
+}
+
+/// Remove the temporary and the quarantined old archives once the new archive is published, and
+/// say what could not be removed. Every removal is tried; none of them can unpublish the archive.
+fn clean_up_after_publish(temporary: &Path, quarantined: &[(PathBuf, PathBuf)]) -> Vec<String> {
+    let mut problems = Vec::new();
+    // after a hard link the temporary is a second name of the archive; after the rename fallback it is gone
+    match remove_managed_file(temporary) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => {
+            problems.push(format!("could not remove the temporary {}: {error}", temporary.display()));
         }
+        _ => {}
     }
-    Ok(destination)
+    problems.extend(retire(quarantined));
+    problems
+}
+
+/// Remove quarantined old archives and say which could not be removed. Every removal is tried, so
+/// one stuck archive does not keep the rest.
+fn retire(quarantined: &[(PathBuf, PathBuf)]) -> Vec<String> {
+    quarantined
+        .iter()
+        .filter_map(|(old, held)| {
+            let error = remove_managed_file(held).err()?;
+            Some(format!("could not retire {} (left as {}): {error}", old.display(), held.display()))
+        })
+        .collect()
 }
 
 /// Store source data when possible. An archive that reaches its bounded size is
 /// omitted with a warning so catalog import can still complete.
-pub fn store_best_effort(directory: &Path, data: &CatalogImport) -> Result<Option<PathBuf>, String> {
+pub fn store_best_effort(directory: &Path, data: &CatalogImport) -> Result<Option<Stored>, String> {
     match store(directory, data) {
-        Ok(path) => Ok(Some(path)),
+        Ok(stored) => Ok(Some(stored)),
         Err(error) if error.contains("Lightroom archive exceeds 32 MiB") => Ok(None),
         Err(error) => Err(error),
     }
@@ -145,19 +187,18 @@ struct Managed {
 
 fn prepare_directory(directory: &Path) -> Result<(), String> {
     match fs::symlink_metadata(directory) {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() || !meta.is_dir() {
-                return Err(format!("archive directory is not a real directory: {}", directory.display()));
-            }
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir_all(directory).map_err(|e| e.to_string())?;
-            let meta = fs::symlink_metadata(directory).map_err(|e| e.to_string())?;
-            if meta.file_type().is_symlink() || !meta.is_dir() {
-                return Err(format!("archive directory is not a real directory: {}", directory.display()));
-            }
-        }
-        Err(error) => return Err(error.to_string()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir_all(directory).map_err(|e| e.to_string())?,
+        _ => {}
+    }
+    require_real_directory(directory)
+}
+
+/// Refuse `directory` when it is a symlink or not a folder, so nothing written below it lands
+/// outside the library. The archive and the import index (`lightroom_job`) both check it.
+pub(crate) fn require_real_directory(directory: &Path) -> Result<(), String> {
+    let meta = fs::symlink_metadata(directory).map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(format!("{} is a link or a file, not a folder", directory.display()));
     }
     Ok(())
 }
@@ -370,15 +411,13 @@ fn retirement_set_protected(entries: &[Managed], protected: Option<&Path>) -> Re
     Ok(retirees)
 }
 
-fn prune_existing(directory: &Path, entries: &mut [Managed], protected: Option<&Path>) -> Result<(), String> {
-    let retirees = retirement_set_protected(entries, protected)?;
-    let quarantined = quarantine(&retirees)?;
-    for (old, held) in quarantined {
-        if let Err(error) = remove_managed_file(&held) {
-            return Err(format!("could not retire {} from {}: {error}", old.display(), directory.display()));
-        }
+/// Retire what the retention limits no longer allow, keeping `protected`, and say what could not be
+/// retired.
+fn prune_existing(entries: &[Managed], protected: Option<&Path>) -> Vec<String> {
+    match retirement_set_protected(entries, protected).and_then(|retirees| quarantine(&retirees)) {
+        Ok(quarantined) => retire(&quarantined),
+        Err(error) => vec![error],
     }
-    Ok(())
 }
 
 fn quarantine(entries: &[Managed]) -> Result<Vec<(PathBuf, PathBuf)>, String> {
@@ -420,11 +459,10 @@ fn rollback_quarantine(moved: &[(PathBuf, PathBuf)]) {
     }
 }
 
+/// Never replaces an existing archive (`AlreadyExists`), also on a volume without hard links.
 fn publish_new(temporary: &Path, destination: &Path) -> io::Result<()> {
-    match fs::hard_link(temporary, destination) {
-        Ok(()) => Ok(()),
-        Err(error) => Err(io::Error::new(error.kind(), format!("cannot atomically publish archive: {error}"))),
-    }
+    lightcraft_catalog::safe_file::publish_new(temporary, destination)
+        .map_err(|error| io::Error::new(error.kind(), format!("cannot publish archive {}: {error}", destination.display())))
 }
 
 fn remove_managed_file(path: &Path) -> io::Result<()> {
@@ -560,8 +598,8 @@ mod tests {
     fn deduplicates_identical_deterministic_archives() {
         let path = tempdir();
         let input = data("catalog.lrcat".into());
-        let first = store(&path, &input).unwrap();
-        let second = store(&path, &input).unwrap();
+        let first = store(&path, &input).unwrap().path;
+        let second = store(&path, &input).unwrap().path;
         assert_eq!(first, second);
         assert_eq!(managed_count(&path), 1);
         fs::remove_dir_all(path).unwrap();
@@ -571,12 +609,12 @@ mod tests {
     fn dedup_returns_archive_that_retention_keeps() {
         let path = tempdir();
         let input = data("catalog.lrcat".into());
-        let first = store(&path, &input).unwrap();
+        let first = store(&path, &input).unwrap().path;
         for index in 1..MAX_MANAGED_ARCHIVES {
             let filler = path.join(format!("lightroom-import-{index}.lca"));
             File::create(filler).unwrap().set_len(19 * 1024 * 1024).unwrap();
         }
-        let reused = store(&path, &input).unwrap();
+        let reused = store(&path, &input).unwrap().path;
         assert_eq!(reused, first);
         assert!(reused.is_file());
         assert!(managed_count(&path) <= MAX_MANAGED_ARCHIVES);
@@ -635,7 +673,7 @@ mod tests {
     #[test]
     fn archive_roundtrips_zlib_payload_and_preserves_numeric_arrays() {
         let path = tempdir();
-        let archive = store(&path, &rich_data()).unwrap();
+        let archive = store(&path, &rich_data()).unwrap().path;
         let bytes = fs::read(archive).unwrap();
         assert!(bytes.starts_with(HEADER));
         let json = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&bytes[HEADER.len()..], MAX_ARCHIVE_BYTES as usize).unwrap();
@@ -684,6 +722,110 @@ mod tests {
         let entry = Managed { index: 0, path: old.clone(), size: 11 };
         assert!(quarantine(&[entry]).is_err());
         assert_eq!(fs::read(&old).unwrap(), b"old archive");
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// Cleanup after publishing tries every removal and reports each failure; it never fails the
+    /// archive, which is already published.
+    #[test]
+    fn cleanup_after_publish_reports_what_it_could_not_remove_and_removes_the_rest() {
+        let path = tempdir();
+        let temporary = path.join(".lightroom-import-new.tmp");
+        fs::write(&temporary, b"second name").unwrap();
+        // a held name that is no longer a regular file can't be removed; the next one still is
+        let (stuck, held_stuck) = (path.join("lightroom-import-0.lca"), path.join(".lightroom-retire-test-0.tmp"));
+        let (gone, held_gone) = (path.join("lightroom-import-1.lca"), path.join(".lightroom-retire-test-1.tmp"));
+        fs::create_dir(&held_stuck).unwrap();
+        fs::write(&held_gone, b"old").unwrap();
+        let problems = clean_up_after_publish(&temporary, &[(stuck.clone(), held_stuck.clone()), (gone, held_gone.clone())]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].starts_with(&format!("could not retire {} (left as {})", stuck.display(), held_stuck.display())), "{problems:?}");
+        assert!(!temporary.exists() && !held_gone.exists());
+        let stored = Stored::new(path.join("lightroom-import-2.lca"), problems);
+        assert!(stored.cleanup_failed.is_some_and(|note| note.contains("could not retire")));
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// Reusing a matching archive retires the old ones the same way: one that can't be removed is
+    /// named, and the ones after it are still removed and named when they fail too.
+    #[test]
+    fn retire_tries_every_archive_and_names_each_one_it_could_not_remove() {
+        let path = tempdir();
+        let held = |slot: usize| path.join(format!(".lightroom-retire-test-{slot}.tmp"));
+        let old = |slot: usize| path.join(format!("lightroom-import-{slot}.lca"));
+        fs::create_dir(held(0)).unwrap();
+        fs::write(held(1), b"old").unwrap();
+        fs::create_dir(held(2)).unwrap();
+        let quarantined: Vec<_> = (0..3).map(|slot| (old(slot), held(slot))).collect();
+        let problems = retire(&quarantined);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        for (problem, slot) in problems.iter().zip([0, 2]) {
+            assert!(problem.starts_with(&format!("could not retire {} (left as {})", old(slot).display(), held(slot).display())), "{problems:?}");
+        }
+        assert!(!held(1).exists());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// The folder is synced once the archive has its name (and old ones are retired), so a power
+    /// loss can't leave the archive the import reports without that name; also when a matching
+    /// archive is reused and old ones are retired. (Unix only: Windows can't open a folder to sync
+    /// it, so `sync_dir` does nothing there and counts nothing.)
+    #[cfg(unix)]
+    #[test]
+    fn the_archive_folder_is_synced_after_publishing_and_after_reuse() {
+        let path = tempdir();
+        let _no_links = lightcraft_catalog::safe_file::without_hard_links();
+        let syncs = lightcraft_catalog::safe_file::syncs_on_this_thread;
+        // what writing the temporary alone syncs (the file and its folder)
+        let scratch = path.join(".scratch.tmp");
+        let before = syncs();
+        write_archive(&scratch, &rich_data()).unwrap();
+        let writing = syncs() - before;
+        fs::remove_file(scratch).unwrap();
+        let before = syncs();
+        let first = store(&path, &rich_data()).unwrap().path;
+        assert_eq!(syncs() - before, writing + 1, "published: the folder is synced after the name is given");
+        let before = syncs();
+        assert_eq!(store(&path, &rich_data()).unwrap().path, first);
+        assert_eq!(syncs() - before, writing + 1, "reused: the folder is synced after the cleanup");
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    /// Issue #3114: a library on exFAT (no hard links) aborted every Lightroom import here.
+    #[test]
+    fn publishes_on_a_volume_without_hard_links() {
+        let path = tempdir();
+        let _no_links = lightcraft_catalog::safe_file::without_hard_links();
+        let first = store(&path, &rich_data()).unwrap().path;
+        assert!(fs::read(&first).unwrap().starts_with(HEADER));
+        // retention and dedup still work: a new archive gets the next name, the same data reuses it
+        let second = store(&path, &data("other.lrcat".into())).unwrap().path;
+        assert_ne!(first, second);
+        assert_eq!(store(&path, &rich_data()).unwrap().path, first);
+        let mut names: Vec<_> = fs::read_dir(&path).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        names.sort();
+        assert_eq!(names, ["lightroom-import-0.lca", "lightroom-import-1.lca"], "no temporary left behind");
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn publishing_without_hard_links_never_replaces_an_existing_archive() {
+        let path = tempdir();
+        let existing = path.join("lightroom-import-0.lca");
+        let temporary = path.join(".lightroom-import-new.tmp");
+        fs::write(&existing, b"old archive").unwrap();
+        fs::write(&temporary, b"new archive").unwrap();
+        let _no_links = lightcraft_catalog::safe_file::without_hard_links();
+        let error = publish_new(&temporary, &existing).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(error.to_string().contains("lightroom-import-0.lca"), "{error}");
+        assert_eq!(fs::read(&existing).unwrap(), b"old archive");
+        assert_eq!(fs::read(&temporary).unwrap(), b"new archive", "the temporary is kept for the caller to remove");
+        // a free name takes the fallback: the temporary is renamed (a hard link would leave it in place)
+        let fresh = path.join("lightroom-import-1.lca");
+        publish_new(&temporary, &fresh).unwrap();
+        assert_eq!(fs::read(&fresh).unwrap(), b"new archive");
+        assert!(!temporary.exists(), "published by rename, not by a hard link");
         fs::remove_dir_all(path).unwrap();
     }
 }
