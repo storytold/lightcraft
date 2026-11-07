@@ -564,6 +564,8 @@ pub(crate) struct FacesState {
     pub checked: Option<std::time::Instant>,
     /// Whether recognition was switched on when last looked up, and when.
     pub enabled_seen: Option<(std::time::Instant, bool)>,
+    /// How many of a person's best matching faces a match is based on when last looked up, and when.
+    pub top_seen: Option<(std::time::Instant, usize)>,
     pub worker: Option<crate::faces_worker::Worker>,
     /// After a failure to load the chosen model, the background pump leaves it alone until then.
     pub retry_at: Option<std::time::Instant>,
