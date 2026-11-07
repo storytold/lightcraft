@@ -3,9 +3,11 @@
 //!
 //! The size is the window's as it is when neither zoomed nor full screen: a zoomed window opens
 //! zoomed, and goes back to that size when it is un-zoomed. Full screen is not remembered (the
-//! app opens as a window), and neither is where on the desktop the window was: the system places
-//! it. A place can be on a display that is gone, and only the window system knows which
-//! displays there are.
+//! app opens as a window). Where on the desktop the window was (its outer top-left, in the
+//! system's points) is remembered too and asked for when the window opens (issue #2967: macOS
+//! otherwise opens it where it likes every time). A place that is no place (not a number, or
+//! further out than any desktop reaches) is not kept, and a place the window system does not
+//! report (Wayland) is never written: the system places the window there.
 //!
 //! Windows and Linux say whether a window is maximized. macOS says so only when the window opens
 //! and when the app zooms it itself, so there the window's size is gone by as well (`Unsaid`): a
@@ -57,6 +59,10 @@ pub struct WindowPlace {
     /// Zoomed (macOS) / maximized.
     #[serde(default)]
     pub zoomed: bool,
+    /// Its outer top-left while neither zoomed nor full screen, in the system's points (`None`:
+    /// unknown, the system places it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f32; 2]>,
 }
 
 fn size_is_one(size: [f32; 2]) -> bool {
@@ -67,6 +73,12 @@ fn size_is_one(size: [f32; 2]) -> bool {
 /// keep to the minimum, a script): what is remembered is always a size the window opens at.
 fn at_least_min(size: [f32; 2]) -> [f32; 2] {
     [size[0].max(MIN_SIZE[0]), size[1].max(MIN_SIZE[1])]
+}
+
+/// A top-left a window can have: a number, and no further from the main display's corner than
+/// the largest desktop reaches.
+fn position_is_one(pos: [f32; 2]) -> bool {
+    pos.iter().all(|p| p.is_finite() && (-MAX_SIDE..=MAX_SIDE).contains(p))
 }
 
 fn same(a: [f32; 2], b: [f32; 2]) -> bool {
@@ -88,7 +100,11 @@ impl WindowPlace {
     /// What the settings hold (which a person or another version may have written), as
     /// something a window can be: a size within bounds. `None` when the size is no size at all.
     pub fn checked(self) -> Option<WindowPlace> {
-        size_is_one(self.size).then(|| WindowPlace { size: at_least_min(self.size), zoomed: self.zoomed })
+        size_is_one(self.size).then(|| WindowPlace {
+            size: at_least_min(self.size),
+            zoomed: self.zoomed,
+            position: self.position.filter(|p| position_is_one(*p)),
+        })
     }
 
     /// Reads the window from the settings without letting it cost the rest of them: anything that
@@ -107,6 +123,8 @@ pub struct Seen {
     pub size: Option<[f32; 2]>,
     /// The size of the screen it is on.
     pub screen: Option<[f32; 2]>,
+    /// Its outer top-left, where the window system reports one (not Wayland).
+    pub position: Option<[f32; 2]>,
     /// What the window system last said of its being zoomed / maximized.
     pub zoomed: bool,
     pub full_screen: bool,
@@ -123,6 +141,7 @@ impl Seen {
         Seen {
             size: Some(scaled(content.size())).filter(|s| size_is_one(*s)),
             screen: info.monitor_size.map(scaled).filter(|s| size_is_one(*s)),
+            position: info.outer_rect.map(|r| scaled(r.min.to_vec2())).filter(|p| position_is_one(*p)),
             zoomed: info.maximized == Some(true),
             full_screen: info.fullscreen == Some(true),
             minimized: info.minimized == Some(true),
@@ -213,7 +232,11 @@ impl WindowWatch {
         if zoomed {
             // (its size now is the screen's, not the window's own: the size it goes back to stays)
             self.resting = None;
-            return Some(WindowPlace { size: remembered.map_or(DEFAULT_SIZE, |r| r.size), zoomed: true });
+            return Some(WindowPlace {
+                size: remembered.map_or(DEFAULT_SIZE, |r| r.size),
+                zoomed: true,
+                position: remembered.and_then(|r| r.position),
+            });
         }
         let Some(size) = seen.size else {
             self.resting = None;
@@ -224,7 +247,9 @@ impl WindowWatch {
             self.resting = None;
             return remembered;
         }
-        let place = WindowPlace { size: at_least_min(size), zoomed: false };
+        // (where no place is reported, the one remembered stays)
+        let position = seen.position.or_else(|| remembered.and_then(|r| r.position));
+        let place = WindowPlace { size: at_least_min(size), zoomed: false, position };
         if Some(place) == remembered {
             self.resting = None;
             return remembered;
