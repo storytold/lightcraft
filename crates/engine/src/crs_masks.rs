@@ -28,9 +28,7 @@ fn text<'a>(v: &'a XmpValue, k: &str) -> Option<&'a str> {
 }
 
 fn num(v: &XmpValue, k: &str) -> Option<f64> {
-    let s = text(v, k)?;
-    let s = s.strip_prefix('+').unwrap_or(s);
-    s.parse::<f64>().ok().filter(|x| x.is_finite())
+    crate::crs::parse_num(text(v, k)?)
 }
 
 fn flag(v: &XmpValue, k: &str) -> Option<bool> {
@@ -201,8 +199,8 @@ fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String
                 .iter()
                 .filter_map(XmpValue::text)
                 .filter_map(|d| {
-                    let mut it = d.split_whitespace().skip(1).filter_map(|v| v.parse::<f64>().ok());
-                    Some(pt(it.next()?, it.next()?))
+                    let mut it = d.split_whitespace().skip(1);
+                    Some(pt(crate::crs::parse_num(it.next()?)?, crate::crs::parse_num(it.next()?)?))
                 })
                 .collect();
             if pts.is_empty() {
@@ -227,7 +225,12 @@ fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String
             let r = m.field("crs:CorrectionRangeMask").unwrap_or(m);
             match text(r, "crs:Type") {
                 Some("2") => {
-                    let q: Vec<f64> = text(r, "crs:LumRange").unwrap_or("0 0 1 1").split_whitespace().filter_map(|v| v.parse().ok()).collect();
+                    let q: Vec<f64> = text(r, "crs:LumRange")
+                        .unwrap_or("0 0 1 1")
+                        .split_whitespace()
+                        .map(crate::crs::parse_num)
+                        .collect::<Option<_>>()
+                        .ok_or_else(|| "luminance range".to_string())?;
                     let [a, b, c, d] = q[..] else { return Err("luminance range".into()) };
                     // full strength at white (1, the top of their scale) takes in everything brighter: ours
                     // goes on above scene white, so that end stays open instead of cutting off at 0 EV
@@ -237,7 +240,12 @@ fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String
                     json!({"kind": "luminanceRange", "lo": b, "hi": hi, "lo_feather": (b - a).max(0.0), "hi_feather": hi_feather})
                 }
                 Some("3") => {
-                    let q: Vec<f64> = text(r, "crs:DepthRange").unwrap_or("0 0 1 1").split_whitespace().filter_map(|v| v.parse().ok()).collect();
+                    let q: Vec<f64> = text(r, "crs:DepthRange")
+                        .unwrap_or("0 0 1 1")
+                        .split_whitespace()
+                        .map(crate::crs::parse_num)
+                        .collect::<Option<_>>()
+                        .ok_or_else(|| "depth range".to_string())?;
                     let [a, b, c, _] = q[..] else { return Err("depth range".into()) };
                     json!({"kind": "depthRange", "lo": b, "hi": c, "feather": (b - a).max(0.0)})
                 }
@@ -335,8 +343,8 @@ fn spot(item: &XmpValue, aspect: f64) -> Result<Value, String> {
                 .iter()
                 .filter_map(XmpValue::text)
                 .filter_map(|d| {
-                    let mut it = d.split_whitespace().skip(1).filter_map(|v| v.parse::<f64>().ok());
-                    Some(pt(it.next()?, it.next()?))
+                    let mut it = d.split_whitespace().skip(1);
+                    Some(pt(crate::crs::parse_num(it.next()?)?, crate::crs::parse_num(it.next()?)?))
                 })
                 .collect();
             if pts.is_empty() {
@@ -372,7 +380,7 @@ fn legacy_spot(line: &str, aspect: f64) -> Option<Value> {
             kv.insert(k.trim().to_string(), v.trim().to_string());
         }
     }
-    let f = |k: &str| kv.get(k).and_then(|s| s.parse::<f64>().ok()).filter(|x| x.is_finite());
+    let f = |k: &str| kv.get(k).and_then(|s| crate::crs::parse_num(s));
     let (x, y, r) = (f("centerX")?, f("centerY")?, f("radius")?);
     let mode = if kv.get("spotType").is_some_and(|s| s == "clone") { "clone" } else { "heal" };
     let explicit = kv.get("sourceState").is_none_or(|s| s == "sourceSetExplicitly");
