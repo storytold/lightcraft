@@ -626,7 +626,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 }
                 app.run("mask.update", json!({"component": comp, "shape": s}))
             });
-            ui.label(egui::RichText::new(crate::i18n::tr("− harder border · + softer border")).color(t.text_dim).size(11.0));
+            ui.label(egui::RichText::new(crate::i18n::tr("− harder border · + softer border")).color(t.text_dim).font(t.caption()));
         }
         MaskShape::ColorRange { samples, refine } => {
             ui.horizontal(|ui| {
