@@ -597,9 +597,6 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         app.toast(ctx, e);
     }
     match f {
-        "photo.pick" => flag_toast(app, ctx, lightcraft_catalog::Flag::Pick),
-        "photo.reject" => flag_toast(app, ctx, lightcraft_catalog::Flag::Reject),
-        "photo.unflag" => flag_toast(app, ctx, lightcraft_catalog::Flag::None),
         "edit.undo" => app.toast(ctx, crate::i18n::tr("Undo")),
         "edit.redo" => app.toast(ctx, crate::i18n::tr("Redo")),
         _ => {}
@@ -681,7 +678,8 @@ fn fire_flag_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> bool 
             flag_toast(app, ctx, flag);
         }
         true
-    } else if matches!(f, "photo.pick" | "photo.reject" | "photo.unflag") && app.ui.right != crate::state::RightPanel::Crop {
+    } else if matches!(f, "photo.pick" | "photo.unflag") || (f == "photo.reject" && app.ui.right != crate::state::RightPanel::Crop) {
+        // P and U are the flag keys with Crop open too; X there swaps the crop aspect (`context_key_skipped`, #1866)
         cull(app, f, json!({}), false);
         let flag = match f {
             "photo.pick" => lightcraft_catalog::Flag::Pick,

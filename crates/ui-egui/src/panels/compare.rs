@@ -507,6 +507,23 @@ fn slot_index(s: Slot) -> u8 {
     }
 }
 
+/// A right-click on a photo of Compare or Survey (a tile, or its filmstrip thumbnail) makes it the active one when it
+/// is selected, so the rating, flag and color label rows of its menu judge the photo that was clicked, as the keys
+/// judge the active photo. The selection stays and goes through `library.select`, as a click does (the active mask
+/// and spot of the old photo are dropped); a photo outside it is selected by the menu itself, and no menu opens
+/// while photos are carried.
+pub fn activate_on_right_click(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId) {
+    if resp.secondary_clicked()
+        && culling(app)
+        && !crate::widgets::carrying(&resp.ctx)
+        && app.session.active() != Some(id)
+        && app.session.selection.contains(id)
+    {
+        let ids: Vec<u64> = app.session.selection.ids.iter().map(|p| p.0).collect();
+        let _ = app.session.execute("library.select", &json!({"ids": ids, "active": id.0}));
+    }
+}
+
 pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let canvas = area_and_filmstrip(app, ui);
     let Some((sel, cand)) = compare_pair(app) else {
@@ -531,6 +548,7 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if resp.double_clicked() {
             app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(100.0) } else { Zoom::Fit };
         }
+        activate_on_right_click(app, &resp, id);
         crate::widgets::context_menu(&resp, |ui| {
             if ui.button(crate::i18n::tr("Swap")).clicked() {
                 let _ = swap(app);
@@ -605,6 +623,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
             }
         }
+        activate_on_right_click(app, &resp, *id);
         crate::widgets::context_menu(&resp, |ui| super::grid::context_menu(app, ui, *id));
     }
     let n = photos.len();
