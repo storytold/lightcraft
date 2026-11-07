@@ -31,13 +31,14 @@ mod cache;
 mod quick;
 mod render;
 mod session;
+pub(crate) use session::physical_photo;
 mod settings_hash;
 mod source;
 
 pub use cache::DenoiseIndex;
 #[cfg(test)]
 pub(crate) use cache::rendered_budget;
-pub use quick::{QuickJob, QuickSource, content_key, source_info};
+pub use quick::{QuickJob, QuickSource, content_key, content_keys, source_info};
 pub use render::{RenderJob, RenderResult, ScreenFrame, develop, develop_reporting, fit_cached, fit_for_display};
 #[cfg(test)]
 use settings_hash::SETTINGS_HASH_ENTRIES;
@@ -70,6 +71,10 @@ pub struct MediaCache {
     /// What grid thumbnails load files with (see [`ReducedLoader`]); `None`: [`Self::file_loader`].
     pub reduced_loader: Option<ReducedLoader>,
     pub file_probe: Option<FileProbe>,
+    /// Probes a file from its headers where its format allows, without a content hash (an import
+    /// that adds files where they are: [`crate::import::ImportOptions::headers_only`]); `None` =
+    /// [`Self::file_probe`].
+    pub header_probe: Option<FileProbe>,
     pub preview_loader: Option<PreviewLoader>,
     /// Reads a photo file's bytes (Photo Merge); `None` = the local file system.
     pub file_bytes: Option<crate::merge::ByteReader>,
@@ -81,6 +86,7 @@ pub struct MediaCache {
     scenes: Vec<lightcraft_scenes::Scene>,
     /// Rendered thumbnails (memory, plus disk once a library is attached).
     pub rendered: Arc<PreviewCache>,
+    pub identities: crate::cache_identity::CacheIdentity,
     /// Which photos have a cached denoised picture, and how to read it.
     pub denoise: DenoiseIndex,
     /// Imported camera profiles by id ([`crate::cmd::dcp_profiles`]), handed to the decoder of photos using them.

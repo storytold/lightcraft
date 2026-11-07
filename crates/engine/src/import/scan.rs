@@ -5,11 +5,12 @@ use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
 /// What a [`scan`] needs from the session, so it can run on another thread (a folder on a network
 /// share can take minutes to read).
 pub struct ScanInput {
+    identities: crate::cache_identity::CacheIdentity,
+    originals: crate::originals::Originals,
     probe: Option<crate::media::FileProbe>,
     skip: Option<PathBuf>,
     /// The library as it is now (photos are shared with the session, not copied): looked up for
-    /// the files the scan finds ([`library_files`]) and the contents it probes
-    /// ([`library_hashes`]), on the scan's thread.
+    /// the files the scan finds ([`library_files`]) and the contents it probes, on the scan's thread.
     library: std::sync::Arc<lightcraft_catalog::Catalog>,
     cache: HashMap<String, ProbeInfo>,
 }
@@ -45,22 +46,77 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
     by_path
 }
 
-/// Which photo of the library has each of the contents `hashes` (the later one where several
-/// have it). One pass over the library, and an entry only for a content that was asked about.
-pub(super) fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: impl Iterator<Item = &'a str>) -> HashMap<String, PhotoId> {
-    let wanted: std::collections::HashSet<&str> = hashes.collect();
-    let mut by_hash = HashMap::new();
-    if wanted.is_empty() {
-        return by_hash;
+static IMPORT_RUN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub fn begin_import_log(source: &'static str, mode: &str) -> (u64, web_time::Instant) {
+    let id = IMPORT_RUN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let started = web_time::Instant::now();
+    let mode = match mode {
+        "add" => "add",
+        "copy" => "copy",
+        "move" => "move",
+        _ => "unknown",
+    };
+    log::info!(target: "lightcraft::import", "kind=import run_id={id} event=start source={source} mode={mode} elapsed_ms=0");
+    (id, started)
+}
+
+pub fn import_persist_outcome(s: &Session) -> &'static str {
+    if s.unsaved().is_some() {
+        "failed"
+    } else if s.library.as_ref().is_some_and(|l| l.on_disk) {
+        "ok"
+    } else {
+        "memory_only"
     }
-    for p in library.photos() {
-        if let Some(h) = &p.content_hash
-            && wanted.contains(h.as_str())
-        {
-            by_hash.insert(h.clone(), p.id);
-        }
-    }
-    by_hash
+}
+
+pub fn finish_import_log(
+    id: u64,
+    started: web_time::Instant,
+    status: &'static str,
+    cause: &'static str,
+    persist: &'static str,
+    counts: &serde_json::Value,
+) {
+    let count = |key: &str| counts.get(key).and_then(|v| v.as_u64().or_else(|| v.as_array().map(|a| a.len() as u64))).unwrap_or(0);
+    log::info!(target: "lightcraft::import", "kind=import run_id={id} event=terminal status={status} cause={cause} elapsed_ms={} scanned={} done={} total={} imported={} restored={} duplicates={} failed={} moved={} kept={} scan_id={} owner_detached={} persist={persist}",
+        started.elapsed().as_millis(), count("scanned"), count("done"), count("total"), count("imported"), count("restored"), count("duplicates"), count("failed"), count("moved"), count("kept"), count("scanId"), counts.get("ownerDetached").and_then(serde_json::Value::as_bool).unwrap_or(false));
+}
+
+pub(crate) fn command_import_terminal(
+    id: u64,
+    started: web_time::Instant,
+    s: &Session,
+    result: &crate::Result<serde_json::Value>,
+    observed: &serde_json::Value,
+) {
+    let persist = if matches!(result, Err(crate::EngineError::NotSaved(_))) {
+        "failed"
+    } else if result.is_err() && s.unsaved().is_none() {
+        "not_applicable"
+    } else {
+        import_persist_outcome(s)
+    };
+    let empty = serde_json::Value::Null;
+    let counts = if observed.is_null() { result.as_ref().unwrap_or(&empty) } else { observed };
+    let failed = counts.get("failed").is_some_and(|v| v.as_u64().is_some_and(|n| n > 0) || v.as_array().is_some_and(|a| !a.is_empty()));
+    let status = if result.is_err() || failed || persist == "failed" { "error" } else { "success" };
+    let cause = if persist == "failed" {
+        "persist"
+    } else if result.is_err() {
+        "command"
+    } else if failed {
+        "probe"
+    } else {
+        "none"
+    };
+    finish_import_log(id, started, status, cause, persist, counts);
+}
+
+pub(crate) fn import_report_counts(value: &serde_json::Value) -> serde_json::Value {
+    let count = |key: &str| value.get(key).and_then(|v| v.as_u64().or_else(|| v.as_array().map(|a| a.len() as u64))).unwrap_or(0);
+    serde_json::json!({"scanned":count("scanned"),"done":count("scanned"),"total":count("scanned"),"imported":count("imported"),"restored":count("restored"),"duplicates":count("duplicates"),"failed":count("failed"),"moved":count("moved"),"kept":count("kept")})
 }
 
 /// Progress and cancellation of a running [`scan_with`].
@@ -71,6 +127,81 @@ pub struct ScanProgress {
     pub done: std::sync::atomic::AtomicUsize,
     /// Shared with the scan's row in the activity stack (its ✕ sets it).
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    started: std::sync::OnceLock<(u64, web_time::Instant)>,
+    terminal: std::sync::atomic::AtomicBool,
+    found: std::sync::atomic::AtomicUsize,
+    delivery_tracked: std::sync::atomic::AtomicBool,
+    summary: std::sync::OnceLock<(usize, usize, usize)>,
+}
+
+impl ScanProgress {
+    pub fn begin(&self) {
+        self.started.get_or_init(|| {
+            let id = IMPORT_RUN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let started = web_time::Instant::now();
+            log::info!(target: "lightcraft::import", "kind=scan run_id={id} event=start elapsed_ms=0");
+            (id, started)
+        });
+    }
+    pub fn run_id(&self) -> Option<u64> {
+        self.started.get().map(|s| s.0)
+    }
+    pub fn track_delivery(&self) {
+        self.delivery_tracked.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn delivered(&self, accepted: bool) {
+        if !accepted {
+            self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.terminal(false);
+    }
+    pub fn worker_error(&self) {
+        self.terminal(true);
+    }
+    fn computed(&self, output: &ScanOutput) {
+        let _ = self.summary.set((
+            output.candidates.len(),
+            output.candidates.iter().filter(|c| c.error.is_some()).count(),
+            output.candidates.iter().filter(|c| c.duplicate.is_some()).count(),
+        ));
+        if !self.delivery_tracked.load(std::sync::atomic::Ordering::Relaxed) {
+            self.terminal(false);
+        }
+    }
+    fn terminal(&self, worker_failed: bool) {
+        let Some((id, started)) = self.started.get() else { return };
+        if self.terminal.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        let load = |v: &std::sync::atomic::AtomicUsize| v.load(std::sync::atomic::Ordering::Relaxed);
+        let (candidates, failed, duplicates) = self.summary.get().copied().unwrap_or_default();
+        let cancelled = self.cancel.load(std::sync::atomic::Ordering::Relaxed);
+        let status = if worker_failed {
+            "error"
+        } else if cancelled {
+            "cancelled"
+        } else if failed > 0 {
+            "error"
+        } else {
+            "success"
+        };
+        let cause = if worker_failed {
+            "worker"
+        } else if cancelled {
+            "cancelled"
+        } else if failed > 0 {
+            "probe"
+        } else {
+            "none"
+        };
+        log::info!(target: "lightcraft::import", "kind=scan run_id={id} event=terminal status={status} cause={cause} elapsed_ms={} found={} done={} total={} candidates={candidates} duplicates={duplicates} failed={failed} persist=not_applicable",
+            started.elapsed().as_millis(), load(&self.found), load(&self.done), load(&self.total));
+    }
+}
+impl Drop for ScanProgress {
+    fn drop(&mut self) {
+        self.worker_error();
+    }
 }
 
 /// The result of [`scan_with`]: the candidates, and the probes to keep for the import that follows.
@@ -87,11 +218,28 @@ pub struct ScanOutput {
 
 impl ScanInput {
     pub fn new(s: &mut Session, paths: &[String]) -> (Self, Vec<String>) {
+        let probe = s.media.file_probe.clone();
+        Self::with_probe(s, paths, probe)
+    }
+
+    pub fn for_import(s: &mut Session, paths: &[String]) -> (Self, Vec<String>) {
+        let probe = s.media.header_probe.clone().or_else(|| s.media.file_probe.clone());
+        Self::with_probe(s, paths, probe)
+    }
+
+    fn with_probe(s: &mut Session, paths: &[String], probe: Option<crate::media::FileProbe>) -> (Self, Vec<String>) {
         let skip = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)
         let library = std::sync::Arc::new(s.catalog.clone());
-        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes) };
+        let input = ScanInput {
+            identities: s.media.identities.clone(),
+            originals: s.originals.clone(),
+            probe,
+            skip,
+            library,
+            cache: std::mem::take(&mut s.import_probes),
+        };
         (input, paths.to_vec())
     }
 
@@ -295,8 +443,10 @@ pub fn scan(s: &mut Session, paths: &[String]) -> Vec<ImportCandidate> {
 /// [`scan`] keeping what the walks left out. The probes are already kept in the session for the
 /// import that follows, so `probes` of the output is empty.
 pub fn scan_report(s: &mut Session, paths: &[String]) -> ScanOutput {
-    let (input, paths) = ScanInput::new(s, paths);
-    let mut out = scan_with(input, &paths, &ScanProgress::default());
+    let progress = ScanProgress::default();
+    progress.begin();
+    let (input, paths) = ScanInput::for_import(s, paths);
+    let mut out = scan_with(input, &paths, &progress);
     s.import_probes = std::mem::take(&mut out.probes);
     out
 }
@@ -304,6 +454,7 @@ pub fn scan_report(s: &mut Session, paths: &[String]) -> ScanOutput {
 /// [`scan`] without the session, so it can run on a worker thread. Stops early (returning what it
 /// has) when `progress.cancel` is set.
 pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
+    progress.begin();
     let expansion = expand_report(paths, input.skip.as_deref(), crate::walk::Limits::default());
     let mut out = scan_files(input, expansion.files, progress);
     out.truncated = expansion.truncated;
@@ -316,6 +467,9 @@ pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) ->
 /// diagnostics ([`ScanOutput::truncated`] and friends) are left empty: who expanded the paths has
 /// them ([`expand_report`]).
 pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
+    progress.begin();
+    progress.found.store(files.len(), std::sync::atomic::Ordering::Relaxed);
+    let _originals = input.originals.bind();
     use std::sync::atomic::Ordering::Relaxed;
     let by_path = library_files(&input.library, &files);
     let todo: Vec<String> = files.iter().filter(|f| !by_path.contains_key(Path::new(f))).cloned().collect();
@@ -335,10 +489,11 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
     crate::memory::release();
     let mut probes: HashMap<String, Result<ProbeInfo, String>> = todo.into_iter().zip(probed).collect();
-    // (who in the library has a content that was probed: asked once the probes are in)
-    let probed_hashes = probes.values().filter_map(|r| r.as_ref().ok()).filter_map(|info| info.content_hash.as_deref());
-    let mut seen_hash: HashMap<String, Option<u64>> =
-        library_hashes(&input.library, probed_hashes).into_iter().map(|(h, id)| (h, Some(id.0))).collect();
+    let mut dups = super::dupes::Duplicates::default();
+    let probed_infos: Vec<&ProbeInfo> = probes.values().filter_map(|r| r.as_ref().ok()).collect();
+    dups.add_library_matching(input.library.photos(), &probed_infos, |p| {
+        crate::media::physical_photo(&input.library, p.id).is_some_and(|p| !input.identities.needs_validation(&p))
+    });
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
     for f in files {
@@ -351,22 +506,18 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         let name = Path::new(&f).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| f.clone());
         let mut c = ImportCandidate { path: f.clone(), name, ..Default::default() };
         match probes.remove(&f) {
-            Some(Ok(info)) => {
+            Some(Ok(mut info)) => {
                 (c.format, c.kind, c.width, c.height, c.file_size, c.captured) =
                     (info.format.clone(), info.kind, info.width, info.height, info.file_size, info.captured.clone());
                 // as the import will date it (a sidecar's date, when there is one, still wins there)
                 c.captured = c.captured.or_else(|| info.file_modified.clone());
                 c.preview_only = info.preview_only.clone();
-                if let Some(h) = &info.content_hash {
-                    match seen_hash.get(h) {
-                        Some(existing) => {
-                            c.duplicate = Some("content".into());
-                            c.existing = *existing;
-                        }
-                        None => {
-                            seen_hash.insert(h.clone(), None);
-                        }
+                match dups.find(&f, &mut info, &progress.cancel) {
+                    Some(existing) => {
+                        c.duplicate = Some("content".into());
+                        c.existing = existing.map(|id| id.0);
                     }
+                    None => dups.add_new(&f, &info),
                 }
                 kept.insert(f, info);
             }
@@ -376,5 +527,7 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         out.push(c);
     }
     // (the walks' diagnostics are [`scan_with`]'s: these files were found already)
-    ScanOutput { candidates: out, probes: kept, truncated: false, unreadable: 0, unsupported: 0 }
+    let output = ScanOutput { candidates: out, probes: kept, truncated: false, unreadable: 0, unsupported: 0 };
+    progress.computed(&output);
+    output
 }

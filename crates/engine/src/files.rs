@@ -25,13 +25,20 @@ pub use colour::bin_factor;
 pub(crate) use colour::clipped_white;
 #[cfg(test)]
 use fs::quick_image_srgb;
-pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader};
+#[cfg(test)]
+use fs::{PARTIAL_MIN, probe_file, probe_partial};
+pub use fs::{fs_header_probe, fs_hooks, fs_pair_loader, fs_reduced_loader};
 pub(crate) use load::{DngWhite, WbScaleOf, dng_tone_curve};
 pub use load::{load_bytes, load_bytes_decoded, load_bytes_with, load_vec, load_vec_pair, load_vec_reduced};
 #[cfg(test)]
 use preview::PLAN_PREFIX;
 pub(crate) use preview::decode_raw_preview;
 pub use preview::{PreviewRead, embedded_preview_srgb, fs_preview_loader, load_embedded_preview, preview_window};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use probe::file_head_hash;
+#[cfg(test)]
+pub(crate) use probe::head_hash;
+pub(crate) use probe::probe_bytes_with;
 pub use probe::{embedded_lens, probe_bytes};
 #[cfg(test)]
 use probe::{meta_of, preview_reason};

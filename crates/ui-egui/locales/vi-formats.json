@@ -120,6 +120,7 @@
   "Lightroom geometry for {path} was not preserved; saved Upright transform is unsupported.": "Hình học Lightroom cho {path} không được giữ; biến đổi Upright đã lưu không được hỗ trợ.",
   "Lightroom geometry for {path} was not preserved; saved transform is ignored because Upright is Off.": "Hình học Lightroom cho {path} không được giữ; biến đổi đã lưu bị bỏ qua vì Upright đang tắt.",
   "Lightroom geometry was not preserved for {path}; {mode} will be recalculated.": "Hình học Lightroom cho {path} không được giữ; {mode} sẽ được tính lại.",
+  "Lightroom import cancelled · {imported} photos added": "Đã hủy nhập Lightroom · đã thêm {imported} ảnh",
   "Lightroom import complete: {imported} photos added": "Nhập Lightroom xong: đã thêm {imported} ảnh",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Nhập Lightroom xong: đã thêm {imported} ảnh, {failed} thất bại",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Nhập Lightroom xong: đã thêm {imported} ảnh; cảnh báo chỉ mục: {warning}",

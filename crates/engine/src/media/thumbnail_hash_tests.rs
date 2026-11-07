@@ -194,6 +194,598 @@ fn hash_cache_is_bounded_weak_and_shared_settings_remain_independent() {
     assert!(s.media.settings_hashes.order.is_empty());
 }
 #[test]
+fn learning_a_hash_drops_no_source_in_flight() {
+    let mut s = session();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("learned".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    s.accept(&old);
+    assert!(s.media.has_source(p.id, SourceLevel::Thumb));
+}
+
+#[test]
+fn a_thumbnail_cached_before_the_hash_is_found_after_it() {
+    let mut s = session();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
+    assert!(old.rendered.is_ok());
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("learned".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("must use cached thumbnail".into())));
+    let r = s.thumb_job(p.id, 256).unwrap().run();
+    assert!(r.rendered.is_ok(), "{:?}", r.rendered.err());
+    assert!(r.loaded.is_none());
+}
+
+#[test]
+fn a_changed_file_of_the_same_size_does_not_fall_back_to_old_data() {
+    let dir = crate::tests_xmp::temp_dir("content-alias-replaced");
+    let mut s = session();
+    s.media.attach_disk_cache(&dir.join("thumbs"), 1 << 20);
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    let old_job = s.thumb_job(PhotoId(1), 256).unwrap();
+    let old_key = old_job.cache.as_ref().unwrap().1;
+    let old = old_job.clone().run();
+    assert!(old.rendered.is_ok());
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("before".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    s.commit(
+        "Replace",
+        Op::SetContent {
+            id: p.id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: Some("after".into()),
+            preview_only: None,
+            preview_checked: String::new(),
+        },
+    )
+    .unwrap();
+    s.accept(&old);
+    assert!(!s.media.has_source(p.id, SourceLevel::Thumb));
+    let _late = old_job.run();
+    s.media.rendered.put(old_key, Arc::new(Rgba8::new(8, 8)));
+    let changed = (**s.catalog.photo(p.id).unwrap()).clone();
+    let mut reopened = crate::Session::new();
+    reopened.catalog.apply(Op::AddPhoto { photo: Box::new(changed) }).unwrap();
+    reopened.media.attach_disk_cache(&dir.join("thumbs"), 1 << 20);
+    reopened.media.file_loader = Some(Arc::new(|_, _, _| Err("replacement is offline".into())));
+    let result = reopened.thumb_job(p.id, 256).unwrap().run();
+    assert!(result.rendered.is_err(), "must not show the cached old pixels after reopening");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn f_repair_copy_fallbacks_use_the_masters_physical_size() {
+    let mut s = session();
+    let master = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id: master.id,
+        width: master.width,
+        height: master.height,
+        file_size: master.file_size,
+        content_hash: Some("learned".into()),
+        preview_only: master.preview_only.clone(),
+        preview_checked: master.preview_checked.clone(),
+    })
+    .unwrap();
+    let mut copy = (**s.catalog.photo(master.id).unwrap()).clone();
+    copy.id = PhotoId(2);
+    copy.copy_of = Some(master.id);
+    copy.file_size = master.file_size.saturating_add(1);
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(copy.clone()) }).unwrap();
+    let resolved = s.cache_photo(copy.id).unwrap();
+    assert_eq!(resolved.file_size, master.file_size);
+    assert_eq!(s.media.content_keys(&resolved), s.media.content_keys(s.catalog.photo(master.id).unwrap()));
+    assert!(!s.media.content_keys(&resolved).contains(&crate::cache_identity::path_key(&copy).unwrap()));
+}
+
+#[test]
+fn f_repair_failed_marker_write_drops_populated_sources() {
+    for fault_stage in 0..if cfg!(unix) { 6 } else { 2 } {
+        let sentinel_failure = fault_stage == 1;
+        let dir = crate::tests_xmp::temp_dir(&format!("failure-populated-{fault_stage}"));
+        let mut s = session();
+        s.media.attach_disk_cache(&dir.join("thumbs"), 1 << 20);
+        let id = PhotoId(1);
+        let p = s.catalog.photo(id).unwrap().clone();
+        let content = |hash: &str| Op::SetContent {
+            id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: Some(hash.into()),
+            preview_only: p.preview_only.clone(),
+            preview_checked: p.preview_checked.clone(),
+        };
+        s.apply_system(content("before")).unwrap();
+        s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+        let old_job = s.thumb_job(id, 256).unwrap();
+        let old_key = old_job.cache.as_ref().unwrap().1;
+        let old = old_job.run();
+        assert!(old.rendered.is_ok());
+        s.accept(&old);
+        s.media.smart_dir = Some(dir.join("smart"));
+        let stale_paths = s.smart_preview_paths(s.catalog.photo(id).unwrap());
+        let proxy = crate::smart::encode(&Rgb32f::new(8, 8), None).unwrap();
+        let mut denoised_source = DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), None);
+        denoised_source.denoised = Some(Arc::new(Twin::new(Arc::new(Rgb32f::new(8, 8)))));
+        s.media.insert_source(id, SourceLevel::Full, denoised_source);
+        s.media.insert(id, SourceLevel::Thumb, Arc::new(Rgb32f::new(8, 8)));
+        s.media.insert(id, SourceLevel::Preview, Arc::new(Rgb32f::new(8, 8)));
+        s.media.denoise.set(id, DenoiseSpec { product: dir.join("old.lcdn"), key: "before".into(), make: None });
+        s.faces.scanned.insert(id.0);
+        let ticket = s.media.identities.ticket(&p);
+        let fault = if sentinel_failure {
+            std::fs::create_dir(dir.join("source-invalidations-enabled")).unwrap();
+            None
+        } else if fault_stage == 0 {
+            Some(lightcraft_catalog::safe_file::fail_writes_after(0))
+        } else {
+            None
+        };
+        #[cfg(unix)]
+        let directory_fault = (fault_stage >= 2).then(|| crate::cache_identity::fail_directory_after(fault_stage - 2));
+        assert!(s.commit("Replace", content("after")).is_err());
+        drop(fault);
+        #[cfg(unix)]
+        drop(directory_fault);
+        assert_eq!(s.catalog.photo(id).unwrap().content_hash.as_deref(), Some("before"));
+        assert!(!ticket.current());
+        assert!(!s.media.has_source(id, SourceLevel::Thumb), "old thumbnail survived failure");
+        assert!(!s.media.has_source(id, SourceLevel::Preview), "old preview survived failure");
+        assert!(s.media.denoise.spec(id).is_none());
+        assert!(!s.media.has_source(id, SourceLevel::Full));
+        assert!(!s.faces.scanned.contains(id.0));
+        assert!(!s.media.content_keys(s.catalog.photo(id).unwrap()).contains(&"before".to_string()));
+        s.media.rendered.put(old_key, Arc::new(Rgba8::new(8, 8)));
+        for path in &stale_paths {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, &proxy).unwrap();
+        }
+        s.media.file_loader = Some(Arc::new(|_, _, _| Err("replaced source offline".into())));
+        assert!(s.thumb_job(id, 256).unwrap().run().rendered.is_err());
+        let smart = s.execute("library.smartPreviews", &serde_json::json!({"ids":[id.0]})).unwrap();
+        assert_eq!(smart["built"], 0);
+        assert_eq!(smart["failed"].as_array().unwrap().len(), 1);
+        if sentinel_failure {
+            std::fs::remove_dir(dir.join("source-invalidations-enabled")).unwrap();
+        }
+        s.commit("Retry", content("after")).unwrap();
+        let reopened = crate::cache_identity::CacheIdentity::open(&dir.join("source-invalidations"));
+        assert!(!reopened.keys(&p).contains(&crate::cache_identity::path_key(&p).unwrap()));
+        let current = s.catalog.photo(id).unwrap().clone();
+        let mut s = crate::Session::new();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new((*current).clone()) }).unwrap();
+        s.media.attach_disk_cache(&dir.join("thumbs"), 1 << 20);
+        s.media.smart_dir = Some(dir.join("smart"));
+        s.media.file_loader = Some(Arc::new(|_, _, _| Err("still offline after recovery and reopen".into())));
+        assert!(s.thumb_job(id, 256).unwrap().run().rendered.is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn f_repair_system_replacement_retires_sources_without_undo() {
+    let mut s = session();
+    let id = PhotoId(1);
+    let p = s.catalog.photo(id).unwrap().clone();
+    let content = |hash: &str| Op::SetContent {
+        id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some(hash.into()),
+        preview_only: p.preview_only.clone(),
+        preview_checked: p.preview_checked.clone(),
+    };
+    s.apply_system(content("before")).unwrap();
+    s.media.insert(id, SourceLevel::Preview, Arc::new(Rgb32f::new(8, 8)));
+    s.faces.scanned.insert(id.0);
+    let ticket = s.media.identities.ticket(&p);
+    let stacks = (s.undo.len(), s.redo.len());
+    s.apply_system(content("after")).unwrap();
+    assert!(!ticket.current());
+    assert!(!s.media.has_source(id, SourceLevel::Preview));
+    assert!(!s.faces.scanned.contains(id.0));
+    assert_eq!((s.undo.len(), s.redo.len()), stacks);
+}
+
+#[test]
+fn failed_alias_invalidation_refuses_replacement_and_blocks_the_old_source() {
+    let dir = crate::tests_xmp::temp_dir("content-alias-failed");
+    let mut s = session();
+    s.media.attach_disk_cache(&dir.join("thumbs"), 1 << 20);
+    std::fs::write(dir.join("source-invalidations"), b"not a directory").unwrap();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("before".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    let result = s.commit(
+        "Replace",
+        Op::SetContent {
+            id: p.id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: Some("after".into()),
+            preview_only: None,
+            preview_checked: String::new(),
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(s.catalog.photo(p.id).unwrap().content_hash.as_deref(), Some("before"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+#[test]
+fn an_old_library_source_cannot_enter_a_reopened_library() {
+    let mut s = session();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
+    let mut reopened = session();
+    reopened.accept(&old);
+    assert!(!reopened.media.has_source(PhotoId(1), SourceLevel::Thumb));
+}
+
+#[test]
+fn learning_through_a_batch_keeps_decoded_sources_and_faces() {
+    let mut s = session();
+    let id = PhotoId(1);
+    s.media.insert(id, SourceLevel::Preview, Arc::new(Rgb32f::new(8, 8)));
+    s.faces.scanned.insert(id.0);
+    let p = s.catalog.photo(id).unwrap().clone();
+    s.commit(
+        "Learn",
+        Op::Batch {
+            ops: vec![Op::Batch {
+                ops: vec![Op::SetContent {
+                    id,
+                    width: p.width,
+                    height: p.height,
+                    file_size: p.file_size,
+                    content_hash: Some("learned".into()),
+                    preview_only: p.preview_only.clone(),
+                    preview_checked: p.preview_checked.clone(),
+                }],
+            }],
+        },
+    )
+    .unwrap();
+    assert!(s.media.has_source(id, SourceLevel::Preview));
+    assert!(s.faces.scanned.contains(id.0));
+    s.undo_step().unwrap();
+    assert!(s.media.has_source(id, SourceLevel::Preview), "undo learning dropped unchanged source");
+    assert!(s.faces.scanned.contains(id.0));
+    s.redo_step().unwrap();
+    assert!(s.media.has_source(id, SourceLevel::Preview));
+    assert!(s.faces.scanned.contains(id.0));
+}
+
+#[test]
+fn f_inventory_a_virtual_copy_finds_the_masters_smart_preview_after_learning() {
+    let dir = crate::tests_xmp::temp_dir("virtual-content-alias");
+    let mut s = session();
+    s.media.smart_dir = Some(dir.clone());
+    let master = (**s.catalog.photo(PhotoId(1)).unwrap()).clone();
+    let mut copy = master.clone();
+    copy.id = PhotoId(2);
+    copy.copy_of = Some(master.id);
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+    let path = crate::smart::sharded_file_path(&dir, &master);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, crate::smart::encode(&Rgb32f::new(8, 8), None).unwrap()).unwrap();
+    s.apply_system(Op::SetContent {
+        id: master.id,
+        width: master.width,
+        height: master.height,
+        file_size: master.file_size,
+        content_hash: Some("learned".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("offline".into())));
+    assert!(s.render_now(PhotoId(2), 16, 16).is_ok());
+    assert!(crate::cmd::previews::has_smart_preview(&s, master.id));
+    assert!(crate::cmd::previews::has_smart_preview(&s, PhotoId(2)));
+    assert!(s.catalog.photo(PhotoId(2)).unwrap().content_hash.is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn f_inventory_replacement_retires_old_and_new_size_aliases() {
+    let dir = crate::tests_xmp::temp_dir("changed-size-alias");
+    let mut s = session();
+    s.media.smart_dir = Some(dir.clone());
+    let mut replacement = (**s.catalog.photo(PhotoId(1)).unwrap()).clone();
+    replacement.file_size = 100;
+    let stale = crate::smart::sharded_file_path(&dir, &replacement);
+    std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::fs::write(&stale, crate::smart::encode(&Rgb32f::new(8, 8), None).unwrap()).unwrap();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("offline".into())));
+    s.commit(
+        "Reload",
+        Op::SetContent {
+            id: replacement.id,
+            width: replacement.width,
+            height: replacement.height,
+            file_size: replacement.file_size,
+            content_hash: None,
+            preview_only: None,
+            preview_checked: String::new(),
+        },
+    )
+    .unwrap();
+    assert!(s.render_now(replacement.id, 16, 16).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn f_inventory_memory_library_switch_retires_rendered_aliases_and_writers() {
+    let mut s = session();
+    let photo = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    assert!(s.thumb_job(photo.id, 256).unwrap().run().rendered.is_ok());
+    let late = s.thumb_job(photo.id, 256).unwrap();
+    s.open_library_in(
+        crate::library::LibraryStores {
+            dir: "isolated-memory".into(),
+            catalog: Box::new(lightcraft_catalog::MemStore::new()),
+            files: Box::new(lightcraft_catalog::MemStore::new()),
+            on_disk: false,
+        },
+        false,
+    )
+    .unwrap();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new((*photo).clone()) }).unwrap();
+    assert!(late.run().rendered.is_err(), "the retired library ticket rejects loading before it can publish");
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::from_fn(8, 8, |_, _| [1.0; 3]), SourceInfo::default()))));
+    let current = s.thumb_job(photo.id, 256).unwrap().run();
+    assert!(current.loaded.is_some(), "must decode this library's source instead of accepting the old rendered alias");
+    assert_eq!(current.loaded.unwrap().image.data.first(), Some(&[1.0; 3]));
+}
+
+#[test]
+fn f_inventory_learning_keeps_valid_work_from_the_current_retired_alias_epoch() {
+    let mut s = session();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.media.identities.invalidate(&p, None, || ()).unwrap();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    let result = s.thumb_job(p.id, 256).unwrap().run();
+    assert!(result.rendered.is_ok());
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("learned".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    s.accept(&result);
+    assert!(s.media.has_source(p.id, SourceLevel::Thumb));
+    s.media.forget(p.id);
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("must reuse the rendered cache".into())));
+    let cached = s.thumb_job(p.id, 256).unwrap().run();
+    assert!(cached.rendered.is_ok());
+    assert!(cached.loaded.is_none());
+}
+
+#[test]
+fn f_inventory_offline_and_build_use_a_valid_flat_alias_after_a_bad_primary() {
+    let dir = crate::tests_xmp::temp_dir("smart-flat-fallback");
+    let mut s = session();
+    s.media.smart_dir = Some(dir.clone());
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let alias = dir.join(crate::smart::file_name(&p));
+    std::fs::write(&alias, crate::smart::encode(&Rgb32f::new(8, 8), None).unwrap()).unwrap();
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("learned".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    let primary = crate::smart::sharded_file_path(&dir, s.catalog.photo(p.id).unwrap());
+    std::fs::create_dir_all(primary.parent().unwrap()).unwrap();
+    std::fs::write(&primary, b"damaged").unwrap();
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = reads.clone();
+    s.media.file_loader = Some(Arc::new(move |_, _, _| {
+        count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Err("offline".into())
+    }));
+    assert!(s.source_now(p.id, SourceLevel::Preview).is_ok());
+    let report = s.execute("library.smartPreviews", &serde_json::json!({"ids":[p.id.0]})).unwrap();
+    assert_eq!(report["repaired"], 0, "{report}");
+    assert_eq!(report["failed"], serde_json::json!([]));
+    assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn f_inventory_invalidated_hashless_sources_share_no_cache_alias() {
+    let mut s = session();
+    let first = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let mut second = (*first).clone();
+    second.id = PhotoId(2);
+    second.source = Source::File { path: "distinct-source.jpg".into() };
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(second.clone()) }).unwrap();
+    s.media.identities.invalidate(&first, None, || ()).unwrap();
+    s.media.identities.invalidate(&second, None, || ()).unwrap();
+    let a = s.media.content_keys(&s.cache_photo(first.id).unwrap());
+    let b = s.media.content_keys(&s.cache_photo(second.id).unwrap());
+    assert!(a.iter().all(|key| !b.contains(key)), "different unknown contents must not share an alias: {a:?} / {b:?}");
+}
+
+#[test]
+fn f_inventory_pixel_statistics_find_the_masters_hash_only_proxy() {
+    let dir = crate::tests_xmp::temp_dir("pixel-stats-virtual-proxy");
+    let mut s = session();
+    s.media.smart_dir = Some(dir.clone());
+    let mut master = (**s.catalog.photo(PhotoId(1)).unwrap()).clone();
+    master.content_hash = Some("learned".into());
+    let mut copy = master.clone();
+    copy.id = PhotoId(2);
+    copy.copy_of = Some(master.id);
+    copy.content_hash = None;
+    s.catalog.apply(Op::RemovePhoto { id: master.id }).unwrap();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(master.clone()) }).unwrap();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(copy.clone()) }).unwrap();
+    let proxy = crate::smart::sharded_file_path(&dir, &master);
+    std::fs::create_dir_all(proxy.parent().unwrap()).unwrap();
+    std::fs::write(proxy, crate::smart::encode(&Rgb32f::new(8, 8), None).unwrap()).unwrap();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("offline".into())));
+    assert!(s.source_now(copy.id, SourceLevel::Preview).is_ok());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn f_inventory_loupe_writes_the_guarded_view_cache_identity() {
+    let mut s = session();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.media.identities.invalidate(&p, None, || ()).unwrap();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    assert!(s.loupe_job(p.id, 16, 16, true).unwrap().run().rendered.is_ok());
+    let result = s.quick_view_job(p.id, 16, true).unwrap().run();
+    assert_eq!(result.quick, Some(QuickSource::Cached));
+}
+
+#[test]
+fn f_inventory_renamed_source_rejects_an_old_path_job_with_the_same_hash() {
+    let mut s = session();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("known".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    let result = s.thumb_job(p.id, 256).unwrap().run();
+    s.commit("Rename", Op::SetFile { id: p.id, file_name: "other.jpg".into(), source: Source::File { path: "other.jpg".into() } }).unwrap();
+    s.accept(&result);
+    assert!(!s.media.has_source(p.id, SourceLevel::Thumb));
+}
+
+#[test]
+fn f_inventory_relink_cannot_revive_a_destination_path_alias() {
+    let dir = crate::tests_xmp::temp_dir("relink-cache-alias");
+    let mut s = session();
+    s.media.smart_dir = Some(dir.clone());
+    let mut destination = (**s.catalog.photo(PhotoId(1)).unwrap()).clone();
+    destination.source = Source::File { path: "other.jpg".into() };
+    let old_proxy = crate::smart::sharded_file_path(&dir, &destination);
+    std::fs::create_dir_all(old_proxy.parent().unwrap()).unwrap();
+    std::fs::write(&old_proxy, crate::smart::encode(&Rgb32f::new(8, 8), None).unwrap()).unwrap();
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("offline".into())));
+    s.commit("Relink", Op::Relink { id: destination.id, file_name: "other.jpg".into(), source: destination.source.clone(), format: None }).unwrap();
+    assert!(s.render_now(destination.id, 16, 16).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn reloading_a_virtual_copy_updates_its_shared_physical_identity() {
+    let mut s = session();
+    let mut master = (**s.catalog.photo(PhotoId(1)).unwrap()).clone();
+    master.content_hash = Some("before".into());
+    let mut copy = master.clone();
+    copy.id = PhotoId(2);
+    copy.copy_of = Some(master.id);
+    copy.content_hash = None;
+    s.catalog.apply(Op::RemovePhoto { id: master.id }).unwrap();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(master.clone()) }).unwrap();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+    let info = ProbeInfo {
+        width: master.width,
+        height: master.height,
+        file_size: master.file_size,
+        content_hash: Some("after".into()),
+        ..Default::default()
+    };
+    let (mut ops, mut changed) = (Vec::new(), Vec::new());
+    crate::cmd::convert::reload_ops(&s.catalog, PhotoId(2), &info, &mut ops, &mut changed);
+    s.commit("Reload", Op::Batch { ops }).unwrap();
+    assert_eq!(s.cache_photo(PhotoId(2)).unwrap().content_hash.as_deref(), Some("after"));
+    assert_eq!(s.catalog.photo(master.id).unwrap().content_hash.as_deref(), Some("after"));
+}
+
+#[test]
+fn reloading_unchanged_duplicate_bytes_keeps_the_suffix_and_cached_work() {
+    let mut s = session();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("0123456789abcdef0123456789abcdef:dup1".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    s.media.insert(p.id, SourceLevel::Preview, Arc::new(Rgb32f::new(8, 8)));
+    s.faces.scanned.insert(p.id.0);
+    let info = ProbeInfo {
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("0123456789abcdef0123456789abcdef".into()),
+        ..Default::default()
+    };
+    let (mut ops, mut changed) = (Vec::new(), Vec::new());
+    crate::cmd::convert::reload_ops(&s.catalog, p.id, &info, &mut ops, &mut changed);
+    assert!(ops.is_empty());
+    assert!(s.catalog.photo(p.id).unwrap().content_hash.as_deref().unwrap().ends_with(":dup1"));
+    assert!(s.media.has_source(p.id, SourceLevel::Preview));
+    assert!(s.faces.scanned.contains(p.id.0));
+}
+
+#[test]
 fn source_from_before_content_reload_is_not_accepted() {
     let mut s = session();
     s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));

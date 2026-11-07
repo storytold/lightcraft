@@ -128,11 +128,30 @@ fn ext_upper(name: &str) -> String {
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
-    let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
-    let m = lightcraft_meta::extract(bytes);
+    probe_bytes_with(name, bytes, true)
+}
+
+/// What [`lightcraft_raw::probe_info`] says about a raw file (`None`: not a raw).
+pub(super) type RawProbe = Option<lightcraft_raw::Result<lightcraft_raw::RawInfo>>;
+
+pub(super) fn raw_probe(bytes: &[u8]) -> RawProbe {
+    lightcraft_raw::probe(bytes).is_some().then(|| lightcraft_raw::probe_info(bytes))
+}
+
+/// [`probe_bytes`], with the content hash only when `hash` (a buffer read in part has none).
+pub(crate) fn probe_bytes_with(name: &str, bytes: &[u8], hash: bool) -> Result<ProbeInfo, String> {
+    describe(name, bytes, raw_probe(bytes), hash)
+}
+
+/// [`probe_bytes_with`] given what the raw reader said about `bytes` ([`raw_probe`]).
+pub(super) fn describe(name: &str, bytes: &[u8], raw: RawProbe, hash: bool) -> Result<ProbeInfo, String> {
+    let content_hash = hash.then(|| lightcraft_preview::hash_bytes(bytes).to_string());
+    let head_hash = Some(head_hash(bytes));
+    let blocks = lightcraft_meta::embedded(bytes);
+    let m = lightcraft_meta::extract_embedded(&blocks);
     let (meta, captured) = meta_of(&m);
-    if lightcraft_raw::probe(bytes).is_some() {
-        let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
+    if let Some(raw) = raw {
+        let raw = match raw.map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
             Err(Ok(why)) => {
                 // a raw variant we can't decode yet: describe it from its embedded preview
@@ -147,9 +166,10 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                     meta,
                     as_shot_wb: None,
                     content_hash,
-                    xmp: lightcraft_meta::embedded(bytes).xmp,
+                    xmp: blocks.xmp,
                     orientation: m.orientation,
                     preview_only: Some(why),
+                    head_hash,
                     ..Default::default()
                 });
             }
@@ -182,9 +202,11 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             meta,
             as_shot_wb,
             content_hash,
-            xmp: lightcraft_meta::embedded(bytes).xmp,
+            xmp: blocks.xmp,
             orientation: Some(raw.orientation),
             preview_only: None,
+            head_hash,
+            native_read: None,
         });
     }
     let fmt = lightcraft_codecs::sniff(bytes).ok_or("unrecognized file format")?;
@@ -204,7 +226,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let mut meta = meta;
     if o.swaps_axes()
         && !meta.regions.is_empty()
-        && let Some(xmp) = lightcraft_meta::embedded(bytes).xmp.and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
+        && let Some(xmp) = blocks.xmp.as_deref().and_then(|x| lightcraft_meta::parse_xmp(x).ok())
         && let Some(drawn_on) = xmp.regions_drawn_on()
         && !xmp.metadata.regions.is_empty()
     {
@@ -231,7 +253,24 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         xmp: None,
         orientation: m.orientation,
         preview_only: None,
+        head_hash,
+        native_read: None,
     })
+}
+
+const HEAD_BYTES: u64 = super::fs::PARTIAL_PREFIX;
+
+pub(crate) fn head_hash(bytes: &[u8]) -> String {
+    let head = usize::try_from(HEAD_BYTES).ok().and_then(|n| bytes.get(..n)).unwrap_or(bytes);
+    lightcraft_preview::hash_bytes(head).to_string()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn file_head_hash(path: &str) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut head = Vec::new();
+    std::fs::File::open(path)?.take(HEAD_BYTES).read_to_end(&mut head)?;
+    Ok(head_hash(&head))
 }
 
 /// Why a raw that failed to decode should show its embedded preview instead (`Ok`), or the error

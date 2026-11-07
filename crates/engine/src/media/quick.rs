@@ -136,9 +136,9 @@ pub(super) fn embedded_thumb_key(k: Hash128) -> Hash128 {
 /// ([`lens_key`]; the decode fits the starting colour through it). A job's source is kept only when this still
 /// matches when the job finishes ([`super::Session::accept`]), so a decode started before a profile change never
 /// returns to the cache after `cmd::lens_refresh` has dropped the photo's sources.
-pub fn source_identity(p: &Photo) -> Hash128 {
+pub(super) fn source_identity(p: &Photo, content: &str) -> Hash128 {
     let mut k = Hasher128::new();
-    k.str(&content_key(p));
+    k.str(content);
     let lens = lens_key(p);
     if lens != 0 {
         k.u64(lens);
@@ -152,6 +152,24 @@ pub fn content_key(p: &Photo) -> String {
         (None, Source::Demo { scene }) => format!("demo:{scene}"),
         (None, Source::File { path }) => format!("file:{path}:{}", p.file_size),
     }
+}
+
+pub fn content_keys(p: &Photo) -> Vec<String> {
+    let mut keys = vec![content_key(p)];
+    if let Some(hash) = &p.content_hash {
+        if let Some((base, suffix)) = hash.split_once(":dup")
+            && !base.contains(':')
+            && suffix.split(":dup").all(|id| id.parse::<u64>().is_ok())
+        {
+            keys.push(base.to_string());
+        }
+        if let Some(alias) = crate::cache_identity::path_key(p)
+            && !keys.contains(&alias)
+        {
+            keys.push(alias);
+        }
+    }
+    keys
 }
 
 /// What a photo's lens profile adds to its render and thumbnail keys: a database profile (0 without one), with the

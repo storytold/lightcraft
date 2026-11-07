@@ -1,12 +1,94 @@
 use super::quick::QuickSource;
-use super::source::{DecodedSource, SourceLevel, SourceRef, VIEW_REUSE_SLACK};
+use super::settings_hash::with_process;
+use super::source::{DecodedSource, RENDER_CACHE_VERSION, SourceLevel, SourceRef, VIEW_REUSE_SLACK};
 use super::{
-    Arc, DevelopSettings, Hash128, Histogram, PhotoId, PreviewCache, Quality, RenderRequest, Rendered, Rgb32f, Rgba8, Source, SourceInfo, StageCache,
+    Arc, DevelopSettings, Hash128, Hasher128, Histogram, PhotoId, PreviewCache, Quality, RenderRequest, Rendered, Rgb32f, Rgba8, Source, SourceInfo,
+    StageCache,
 };
+
+#[derive(Clone)]
+pub(crate) enum CacheRecipe {
+    Thumbnail { settings: u64, bucket: usize, salt: u64, denoise_model: Option<String>, profile_salt: u64, lens: u64 },
+    Variant { edge: usize, profile_salt: u64, lens: u64 },
+    View { apply_crop: bool, salt: u64, denoise_model: Option<String>, profile_salt: u64, lens: u64 },
+}
+
+impl CacheRecipe {
+    fn key(&self, content: &str, settings: &DevelopSettings, profile: u64) -> Hash128 {
+        let denoise_salt = |salt: u64, model: &Option<String>| {
+            model.as_ref().map_or(salt, |model| {
+                let key = crate::denoise::product_key_for(model, content);
+                Hasher128::new().str(&key).finish().0 as u64 | 1
+            })
+        };
+        match self {
+            Self::Thumbnail { settings: settings_hash, bucket, salt, denoise_model, profile_salt, lens } => {
+                let salts = KeySalts { denoise: denoise_salt(*salt, denoise_model), profile: *profile_salt, lens: *lens };
+                thumb_key(content, *settings_hash, *bucket, settings, profile, salts)
+            }
+            Self::Variant { edge, profile_salt, lens } => variant_key_for(content, settings, *edge, profile, *profile_salt, *lens),
+            Self::View { apply_crop, salt, denoise_model, profile_salt, lens } => {
+                let salts = KeySalts { denoise: denoise_salt(*salt, denoise_model), profile: *profile_salt, lens: *lens };
+                view_key_for(content, settings, *apply_crop, profile, salts)
+            }
+        }
+    }
+
+    fn is_view(&self) -> bool {
+        matches!(self, Self::View { .. })
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct KeySalts {
+    pub denoise: u64,
+    pub profile: u64,
+    pub lens: u64,
+}
+
+impl KeySalts {
+    fn add_to(self, k: &mut Hasher128) {
+        if self.denoise != 0 {
+            k.u64(self.denoise);
+        }
+        if self.profile != 0 {
+            k.str("dcp").u64(self.profile);
+        }
+        if self.lens != 0 {
+            k.u64(self.lens);
+        }
+    }
+}
+
+pub(super) fn thumb_key(content: &str, settings_hash: u64, bucket: usize, settings: &DevelopSettings, profile: u64, salts: KeySalts) -> Hash128 {
+    let mut k = Hasher128::new();
+    k.str(content).u64(settings_hash).u64(bucket as u64).u64(RENDER_CACHE_VERSION);
+    with_process(&mut k, settings).u64(profile);
+    salts.add_to(&mut k);
+    k.finish()
+}
+
+pub(super) fn variant_key_for(content: &str, settings: &DevelopSettings, edge: usize, profile: u64, profile_salt: u64, lens: u64) -> Hash128 {
+    let mut k = Hasher128::new();
+    k.str(content).str("variant").u64(settings.hash64() ^ crate::files::hot_pixel_key(settings)).u64(edge as u64).u64(RENDER_CACHE_VERSION);
+    with_process(&mut k, settings).u64(profile);
+    KeySalts { denoise: 0, profile: profile_salt, lens }.add_to(&mut k);
+    k.finish()
+}
+
+pub(super) fn view_key_for(content: &str, settings: &DevelopSettings, apply_crop: bool, profile: u64, salts: KeySalts) -> Hash128 {
+    let mut k = Hasher128::new();
+    k.str(content).str("view").u64(settings.hash64() ^ crate::files::hot_pixel_key(settings)).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION);
+    with_process(&mut k, settings).u64(profile);
+    salts.add_to(&mut k);
+    k.finish()
+}
 
 /// Everything needed to render one photo, detached from the session.
 #[derive(Clone)]
 pub struct RenderJob {
+    pub(crate) cache_recipe: Option<CacheRecipe>,
+    pub(crate) cache_profile: u64,
     /// Assigned by a frontend to distinguish late completions, even for an identical render key.
     pub request_id: u64,
     pub cache_generation: u64,
@@ -25,6 +107,7 @@ pub struct RenderJob {
     pub key: u64,
     /// Rendered-thumbnail cache and this job's key in it.
     pub cache: Option<(Arc<PreviewCache>, Hash128)>,
+    pub cache_fallback: Vec<Hash128>,
     /// Intermediate results of this view's previous renders (set by the frontend for the loupe):
     /// slider drags then only redo the stages the changed setting feeds.
     pub stages: Option<Arc<StageCache>>,
@@ -294,7 +377,7 @@ impl RenderJob {
             };
         }
         if let Some((cache, key)) = &self.cache
-            && let Some(img) = cache.get_at(self.cache_generation, *key)
+            && let Some(img) = std::iter::once(key).chain(&self.cache_fallback).find_map(|key| cache.get_at(self.cache_generation, *key))
         {
             let image = Arc::unwrap_or_clone(img);
             let histogram = Histogram::of_srgb8(&image);
@@ -408,14 +491,22 @@ impl RenderJob {
                     }
                     _ => None,
                 };
+                let learned_key = |view: bool| {
+                    source
+                        .fingerprint
+                        .as_ref()
+                        .zip(self.cache_recipe.as_ref().filter(|recipe| recipe.is_view() == view))
+                        .map(|(fp, recipe)| recipe.key(&fp.hash.to_string(), &self.settings, self.cache_profile))
+                };
                 if let Some((cache, key)) = &self.cache {
-                    cache.put_at(self.cache_generation, *key, Arc::new(rendered.image.clone()));
+                    cache.put_at(self.cache_generation, learned_key(false).unwrap_or(*key), Arc::new(rendered.image.clone()));
                 }
                 if let Some((cache, key)) = &self.view_cache
                     && self.request.quality == Quality::Full
                     && (display.is_none() || srgb.is_some())
                 {
-                    cache.put_deferred_at(self.cache_generation, *key, Arc::new(srgb.unwrap_or_else(|| rendered.image.clone())));
+                    let key = learned_key(true).unwrap_or(*key);
+                    cache.put_deferred_at(self.cache_generation, key, Arc::new(srgb.unwrap_or_else(|| rendered.image.clone())));
                 }
                 // the display fit, after the caches have the full render
                 if let Some((fw, fh)) = self.display_fit

@@ -145,6 +145,33 @@ Measured on 20 EOS R5 C CR3s from a wedding (local NVMe SSD, machine shared with
 loader at 1280 px went from 168–322 ms to **31 ms** a photo; at 2560 px the decode of the 8192 px
 JPEG went from 182 to 151 ms (minimum of 15 runs; most of what remains is entropy decoding).
 
+## Reading a raw's headers on import
+
+Folder imports (`library.import` in Add, Copy and Move) and the import review (`library.importPreview`,
+the Import dialog's scan) describe a raw from its headers, as a Lightroom catalog import does
+(`fs_header_probe`, `lightcraft_raw::sparse`): its pixel data is not read. DNG, CR3, CR2, ARW, RAF,
+RW2 and SRW files are described this way; NEF, ORF, PEF and ARW6 files (their header probe looks at
+samples), JPEG and other rendered files, and files under 4 MiB are read whole. Local browsing
+(`library.browse`), Synchronize Folder and Reload from Disk still read each file whole.
+
+A raw added this way (Add) has no content hash:
+- **Duplicates** are still found. A new file is compared with the photos and files of the same size
+  and dimensions by a hash of their first 512 KiB, and only when those match are both read whole
+  and their full hashes compared. Nothing is called a duplicate without the full hash, and the hash
+  read on the way is kept.
+- **Copy** hashes the original while streaming and verifies the destination. A cross-volume
+  **Move** copies and verifies before removing its source. On Unix, same-file live-handle identity
+  allows a genuine hard-link Move to finish without reading bytes; different files still use byte
+  verification. Such a no-read Move stays hashless until a later whole read.
+- **Find Missing Photos** matches a photo without a hash by name and size only, and **Reload from
+  Disk** can learn from its existing whole probe without adding an undo step for the hash alone.
+
+Later native whole reads (decode, metadata, export, conversion and streamed matching) share the
+session reader and owner sink described in [architecture.md](architecture.md#whole-original-reads).
+They learn from the bytes already needed by the operation, with lifecycle and physical-identity
+validation before saving; partial previews never fill in a full hash. Decoded sources and authorized
+smart/denoise products survive pure learning. Replacements retire old aliases durably instead.
+
 ## Tests
 
 - `crates/raw/src/preview.rs`: the header-only range matches `embedded_preview` byte for byte; a

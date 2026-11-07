@@ -103,6 +103,8 @@ pub struct ImportDialog {
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
+    #[serde(skip)]
+    pub scan_id: Option<u64>,
     /// The library the scan was made in ([`lightcraft_engine::Session::library_generation`]): its duplicate
     /// decisions and album ids belong to that catalog, so the review is not shown or confirmed in another.
     #[serde(skip)]
@@ -432,12 +434,12 @@ mod tests {
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services { png: None, ..Default::default() });
         let mut d = dialog();
         start(&mut app, &d).unwrap();
-        let params = app.import.take().map(|t| t.params).unwrap();
+        let params = app.import.take().map(|t| t.params.clone()).unwrap();
         assert!(params.get("recipe").is_none(), "{params}");
         d.recipe.insert("light.exposure".into(), 0.5);
         d.recipe.insert("color.vibrance".into(), -20.0);
         start(&mut app, &d).unwrap();
-        let params = app.import.take().map(|t| t.params).unwrap();
+        let params = app.import.take().map(|t| t.params.clone()).unwrap();
         assert_eq!(params["recipe"], json!([{"id": "color.vibrance", "value": -20.0}, {"id": "light.exposure", "value": 0.5}]), "{params}");
     }
 }

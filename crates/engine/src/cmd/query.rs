@@ -134,7 +134,7 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             let bytes = match &s.media.file_bytes {
                 Some(r) => r(path),
-                None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
+                None => crate::originals::read_whole(path).map_err(|e| format!("{path}: {e}")),
             }
             .map_err(|e| super::bad("photo.allMetadata", e))?;
             let exif: Vec<Value> = lightcraft_meta::file_tag_rows(&bytes)

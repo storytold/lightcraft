@@ -92,6 +92,7 @@ pub(super) struct Running {
     pub(super) product: PathBuf,
     pub(super) progress: Arc<Progress>,
     pub(super) outcome: Arc<Mutex<Option<Outcome>>>,
+    pub(super) published: Arc<Mutex<Option<(PathBuf, String)>>>,
     pub(super) started: web_time::Instant,
 }
 

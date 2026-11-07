@@ -13,6 +13,7 @@ Photo metadata: EXIF, XMP (read + write), IPTC-IIM, and the containers that carr
 | `write_xmp(&Metadata, Option<&str>) -> String` | Complete `<?xpacket?>` packet; the second argument is LightCraft's full develop settings JSON. |
 | `parse_iptc(&[u8]) -> Metadata` | IIM record 2: title (2:5), keywords (2:25), by-line (2:80), copyright (2:116), caption (2:120), date/time created (2:55/2:60). |
 | `extract(&[u8]) -> Metadata` | Everything for a whole file. Precedence: EXIF → IPTC fills gaps → XMP overrides user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. |
+| `extract_embedded(&Embedded) -> Metadata` | The same precedence from blocks already collected, so callers can also use XMP without extracting the blocks again. |
 | `try_extract(&[u8]) -> Result<Metadata, ExtractError>` | Like `extract`, but reports malformed PSD/PSB headers, image-resource sections, or embedded EXIF/XMP structure (including duplicate EXIF/XMP resources) so callers can fail closed when location absence cannot be established. Other formats remain best-effort. |
 
 `Metadata` carries camera (make, model, serial, software), lens (make, model, serial, specification), capture

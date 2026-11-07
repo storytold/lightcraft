@@ -151,10 +151,17 @@ impl MoveFs for RealFs {
             return Err(std::io::Error::other(format!("{} is not a regular file", a.display())));
         }
         let copied = (|| {
-            let mut from = open_regular(a, &checked)?;
+            let _binding = crate::originals::standalone_binding();
+            open_regular(a, &checked)?;
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial)?;
-            std::io::copy(&mut from, &mut f)?;
-            f.sync_all()
+            let _capture = crate::originals::ReadCapture::new();
+            let path = a.to_string_lossy();
+            let fp = crate::originals::copy_whole(&path, &mut f)?;
+            let result = open_regular(a, &checked).and_then(|_| f.sync_all());
+            if let Some(reader) = crate::originals::bound_reader() {
+                reader.discard_scratch(&path, &fp);
+            }
+            result
         })();
         let placed = copied.and_then(|()| self.rename_no_replace(&partial, b));
         if placed.is_err() {
@@ -201,7 +208,7 @@ fn open_regular(a: &Path, checked: &std::fs::Metadata) -> std::io::Result<std::f
 
 /// Move `a` to `b` on another volume: copy (never replacing), compare the copy with the original
 /// byte for byte, and only then remove the original. A copy that doesn't match is removed.
-fn move_across_volumes(fs: &RealFs, a: &Path, b: &Path) -> std::io::Result<()> {
+pub(super) fn move_across_volumes(fs: &RealFs, a: &Path, b: &Path) -> std::io::Result<()> {
     fs.copy_no_replace(a, b)?;
     if !same_contents(a, b).unwrap_or(false) {
         let _ = std::fs::remove_file(b);
@@ -216,37 +223,12 @@ fn move_across_volumes(fs: &RealFs, a: &Path, b: &Path) -> std::io::Result<()> {
 /// Whether files `a` and `b` hold the same bytes: lengths first, then 1 MiB chunks at a time, so
 /// a large raw or video is never read into memory whole.
 pub(super) fn same_contents(a: &Path, b: &Path) -> std::io::Result<bool> {
-    const CHUNK: usize = 1 << 20;
+    let _binding = crate::originals::standalone_binding();
     let (mut fa, mut fb) = (std::fs::File::open(a)?, std::fs::File::open(b)?);
     if fa.metadata()?.len() != fb.metadata()?.len() {
         return Ok(false);
     }
-    let (mut ba, mut bb) = (vec![0u8; CHUNK], vec![0u8; CHUNK]);
-    loop {
-        let n = read_full(&mut fa, &mut ba)?;
-        let m = read_full(&mut fb, &mut bb)?;
-        if n != m || ba.get(..n) != bb.get(..m) {
-            return Ok(false);
-        }
-        if n == 0 {
-            return Ok(true);
-        }
-    }
-}
-
-/// Fill `buf` from `r` as far as the file goes; the number of bytes read (less than the buffer
-/// only at the end of the file).
-fn read_full(r: &mut impl std::io::Read, buf: &mut [u8]) -> std::io::Result<usize> {
-    let mut filled = 0;
-    while let Some(rest) = buf.get_mut(filled..).filter(|r| !r.is_empty()) {
-        match r.read(rest) {
-            Ok(0) => break,
-            Ok(k) => filled = filled.saturating_add(k),
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(filled)
+    crate::originals::compare_open(&a.to_string_lossy(), &b.to_string_lossy(), &mut fa, &mut fb)
 }
 
 /// `from` → `to` differs only in letter case and `to` is that very file (a case-insensitive

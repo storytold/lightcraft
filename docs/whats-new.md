@@ -38,6 +38,33 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### Folder imports read raws from their headers
+- Importing a folder (Add, Copy or Move) and the Import dialog's review now describe raws from their headers, as
+  Lightroom catalog imports do, instead of reading every file whole first: a DNG or CR3 is described from 2–3 % of
+  its bytes. NEF, ORF, PEF, ARW6, JPEG and other rendered files, and files under 4 MB, are still read whole, and so
+  is a folder shown in Local.
+- Copy and Move read each original once and check the copy against a hash taken while copying, so copied photos
+  still get a content hash. Photos added in place get none.
+- Copies are still found without that hash: files of the same size and dimensions are compared by their first
+  512 KB, and only then read whole. The 16-photo limit on that comparison is gone.
+
+- Import duplicate checks now keep working between batches after a Move, retain hashes learned for earlier batches, and count distinct files toward the comparison limit.
+
+### Content identity keeps cached work
+- Duplicate comparisons that learn a photo's hash keep decoded sources, thumbnails and face results.
+- Reloading changed content disables its path-based cache aliases across library reopen. Earlier render, face
+  and SAM results are rejected; smart-preview and denoise jobs cannot publish old pixels as the replacement.
+- Smart-preview status, offline rendering and Local retention use the same guarded cache identities, including virtual copies.
+
+### Reliability
+- A damaged or crafted TIFF-based raw with a very large number of strips or tiles can no longer make an import hang
+  while it reads the file's headers (issue #2128). Working out where each strip ends and which parts of the file to
+  skip now takes time in proportion to the number of strips, and a file with more than about a million of them is
+  read whole instead.
+- A damaged or crafted Epson ERF or Mamiya MEF whose raw image is far smaller than the size it declares is refused
+  before LightCraft sets aside memory for it (issue #2119). A few-kilobyte file used to make the import set aside
+  2 GB.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
@@ -937,6 +964,18 @@
   would write over the stored copy. It now leaves the library unopened, saves nothing and says which file couldn't be
   read; reload the page to try again.
 ## 2026-10-14
+
+### Lightroom catalog import
+- Large catalogs import several times faster: originals are described from their headers, so a raw's pixel data is
+  never read (a DNG or CR3 from 2–3 % of its bytes; a raw shown from its embedded preview with that preview). A
+  38,500-photo catalog with 1.1 TB of originals on a USB SSD took about 2 minutes instead of about half an hour.
+  NEF, ORF, PEF, ARW6 and JPEG files are still read whole.
+- Those headers come in a few larger reads instead of many small ones, which matters on a network share or hard
+  disk, where each read waits for a round trip: a tiled DNG from Adobe's converter took up to 240 reads, now 2; a RAF
+  7, now 4.
+- Photos appear batch by batch while the catalog is imported. ✕ keeps what was added; importing the catalog again
+  continues and adds the collections.
+- Adding the photos no longer pauses the window: XMP and develop settings are prepared in the background.
 
 ### Model downloads time out on a name that doesn't resolve
 - Model downloads (AI denoise, faces, SAM) give up on a server name that doesn't resolve within the connect timeout,

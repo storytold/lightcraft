@@ -3,12 +3,12 @@ use super::builtin::{builtin_card, builtin_marker};
 #[cfg(doc)]
 use super::model::Model;
 use super::model::STACK;
-use super::products::{Active, JobSpec, MakeError, Progress, eligible, make_product, product_key, product_path, products_in};
+use super::products::{Active, JobSpec, MakeError, Progress, eligible, make_product, product_current, product_key_for, product_path, products_in};
 use super::settings::{DIR, SETTINGS_TTL, installed_models, read_settings};
 use super::state::{AUTO_LOOK, Failure, MAX_QUEUE, Outcome, Pace, PhotoState, Running};
 use super::{
     Arc, DenoiseSpec, DevelopSettings, HashMap, HashSet, MakeProduct, Mutex, Ordering, PairLoader, Path, PathBuf, Photo, PhotoId, PoisonError,
-    Selection, Session, Source, Value, json, product,
+    Selection, Session, Source, Value, json,
 };
 
 impl Session {
@@ -64,11 +64,38 @@ impl Session {
         self.denoise.queue.clear();
         self.denoise.failed.clear();
         self.denoise.dirty = true;
+        self.originals.refresh(self);
+    }
+
+    pub(crate) fn denoise_rebind_learned(&mut self, id: PhotoId) {
+        let Some(p) = self.catalog.photo(id) else { return };
+        let Some((dir, model)) = self.denoise_products_dir().zip(self.denoise.active.as_ref().map(|a| a.fingerprint.clone())) else { return };
+        let resolved = self.cache_photo(id);
+        let keys = self.media.content_keys(resolved.as_deref().unwrap_or(p));
+        let Some(primary) = keys.first().map(|key| product_key_for(&model, key)) else { return };
+        let Some(old) = self.media.denoise.spec(id) else { return };
+        if old.key == primary || !keys.iter().any(|key| product_key_for(&model, key) == old.key) {
+            return;
+        }
+        let product = product_path(&dir, &primary);
+        if product_current(&product, &primary) {
+            self.media.denoise.set(id, DenoiseSpec { product, key: primary, make: None });
+        }
     }
 
     fn denoise_spec(&self, p: &Photo) -> Option<(DenoiseSpec, String)> {
+        self.denoise_spec_with_discovery(p, false)
+    }
+
+    fn denoise_spec_with_discovery(&self, p: &Photo, discover: bool) -> Option<(DenoiseSpec, String)> {
         let (dir, active) = (self.denoise_products_dir()?, self.denoise.active.as_ref()?);
-        let key = product_key(&active.fingerprint, p);
+        let resolved = self.cache_photo(p.id);
+        let keys: Vec<_> =
+            self.media.content_keys(resolved.as_deref().unwrap_or(p)).iter().map(|k| product_key_for(&active.fingerprint, k)).collect();
+        let found = discover.then(|| keys.iter().find(|key| product_current(&product_path(&dir, key), key)).cloned()).flatten();
+        let key = found
+            .or_else(|| self.media.denoise.spec(p.id).filter(|spec| keys.contains(&spec.key)).map(|spec| spec.key.clone()))
+            .or_else(|| keys.first().cloned())?;
         Some((DenoiseSpec { product: product_path(&dir, &key), key: key.clone(), make: None }, key))
     }
 
@@ -85,8 +112,14 @@ impl Session {
                 products_in(&dir).into_iter().filter_map(|(p, _, _)| p.file_stem().and_then(|s| s.to_str()).map(str::to_string)).collect();
             if !names.is_empty() {
                 for p in self.catalog.photos().filter(|p| eligible(p) && running != Some(p.id)) {
-                    let key = product_key(&active.fingerprint, p);
-                    if names.contains(&key) {
+                    let resolved = self.cache_photo(p.id);
+                    if let Some(key) = self
+                        .media
+                        .content_keys(resolved.as_deref().unwrap_or(p))
+                        .iter()
+                        .map(|k| product_key_for(&active.fingerprint, k))
+                        .find(|key| names.contains(key))
+                    {
                         now.insert(p.id, DenoiseSpec { product: product_path(&dir, &key), key, make: None });
                     }
                 }
@@ -129,7 +162,7 @@ impl Session {
                 self.media.forget(id);
                 self.denoise.generation += 1;
             }
-            None if spec.product.is_file() && product::is_current(&spec.product, &spec.key) => {
+            None if spec.product.is_file() && product_current(&spec.product, &spec.key) => {
                 // made by an export, or by another session
                 self.media.denoise.set(id, spec);
                 self.media.forget(id);
@@ -232,13 +265,16 @@ impl Session {
             .collect()
     }
 
-    fn denoise_job_spec(&self, p: &Photo, parallel: usize) -> Option<JobSpec> {
+    fn denoise_job_spec(&self, p: &Photo, parallel: usize, discover: bool) -> Option<JobSpec> {
         let Source::File { path } = &p.source else { return None };
-        let (spec, _) = self.denoise_spec(p)?;
+        let (spec, _) = self.denoise_spec_with_discovery(p, discover)?;
         let active = self.denoise.active.as_ref()?;
         Some(JobSpec {
             path: path.clone(),
-            read: self.media.file_bytes.clone(),
+            read: self.media.file_bytes.clone().unwrap_or_else(|| self.originals.reader()),
+            content_fingerprint: Some(active.fingerprint.clone()),
+            published: Default::default(),
+            source_ticket: Some(self.media.identities.ticket(p)),
             product: spec.product,
             key: spec.key,
             manifest: active.manifest.clone(),
@@ -257,15 +293,16 @@ impl Session {
             if !eligible(&p) || self.media.denoise.spec(id).is_some() {
                 continue;
             }
-            let Some(spec) = self.denoise_job_spec(&p, parallel) else { continue };
+            let Some(spec) = self.denoise_job_spec(&p, parallel, false) else { continue };
             // another session or an export may have made it since it was queued
-            if product::is_current(&spec.product, &spec.key) {
+            if product_current(&spec.product, &spec.key) {
                 self.denoise_check_photo(id);
                 continue;
             }
             let progress = Arc::new(Progress::default());
             let outcome: Arc<Mutex<Option<Outcome>>> = Arc::new(Mutex::new(None));
             let (key, product) = (spec.key.clone(), spec.product.clone());
+            let published = spec.published.clone();
             let (worker_progress, worker_outcome) = (progress.clone(), outcome.clone());
             let started = std::thread::Builder::new().name("denoise".into()).stack_size(STACK).spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| make_product(&spec, Some(&worker_progress))));
@@ -280,7 +317,7 @@ impl Session {
             });
             match started {
                 Ok(_) => {
-                    self.denoise.running = Some(Running { photo: id, key, product, progress, outcome, started: web_time::Instant::now() });
+                    self.denoise.running = Some(Running { photo: id, key, product, progress, outcome, published, started: web_time::Instant::now() });
                 }
                 Err(e) => {
                     self.denoise.failed.insert(id, Failure { key, why: format!("could not start the denoiser: {e}"), unsupported: false });
@@ -295,7 +332,11 @@ impl Session {
     fn denoise_poll(&mut self) {
         let Some(r) = &self.denoise.running else { return };
         let Some(outcome) = r.outcome.lock().unwrap_or_else(PoisonError::into_inner).take() else { return };
-        let Some(r) = self.denoise.running.take() else { return };
+        let Some(mut r) = self.denoise.running.take() else { return };
+        if let Some((product, key)) = r.published.lock().unwrap_or_else(PoisonError::into_inner).clone() {
+            r.product = product;
+            r.key = key;
+        }
         match outcome {
             Outcome::Done => {
                 self.denoise.made += 1;
@@ -504,14 +545,19 @@ impl Session {
             return Err(format!("{name}: Denoise needs a library on disk to keep its pictures in"));
         }
         self.denoise_check_photo(id);
-        let Some(job) = self.denoise_job_spec(&p, Pace::Full.parallel(std::thread::available_parallelism().map_or(1, |n| n.get()), None)) else {
+        let Some(job) = self.denoise_job_spec(&p, Pace::Full.parallel(std::thread::available_parallelism().map_or(1, |n| n.get()), None), true)
+        else {
             return Ok(None);
         };
         let label = name.clone();
         let spec = job.clone();
         let make: MakeProduct = Arc::new(move || match make_product(&spec, None) {
-            Ok(_) => Ok(true),
-            Err(MakeError::Unsupported(_)) => Ok(false),
+            Ok(_) => {
+                let (product, key) =
+                    spec.published.lock().unwrap_or_else(PoisonError::into_inner).clone().unwrap_or_else(|| (spec.product.clone(), spec.key.clone()));
+                Ok(Some(DenoiseSpec { product, key, make: None }))
+            }
+            Err(MakeError::Unsupported(_)) => Ok(None),
             Err(MakeError::Failed(why)) => Err(format!("{label}: could not denoise: {why}")),
             Err(MakeError::Cancelled) => Err(format!("{label}: denoise was cancelled")),
         });

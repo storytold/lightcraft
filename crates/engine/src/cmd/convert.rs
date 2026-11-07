@@ -23,17 +23,20 @@ fn dng_names(path: &str) -> impl Iterator<Item = std::path::PathBuf> {
 ///
 /// The DNG is checked before anyone relies on it (Convert to DNG relinks the photo to it, Copy as
 /// DNG deletes the raw copy): the encoded file must decode to the same raw data, and it is
-/// written to a temp file, synced, read back identical and only then given its name — never
-/// replacing an existing file. On any failure no DNG is left behind and the raw stays in use.
+/// written to a synced temp file and then given a name no other file has (never replacing one);
+/// the named file is read back and checked before any catalog change or removal of the raw copy.
+/// On any failure the raw stays in use, and only a DNG that is still the one written is removed.
 pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::result::Result<String, String> {
-    write_dng_with(s.media.file_bytes.as_ref(), path, packet)
+    let reader = s.media.file_bytes.clone().unwrap_or_else(|| s.originals.reader());
+    write_dng_with(Some(&reader), path, packet)
 }
 
 /// [`write_dng_for`] without the session (imports convert on a worker thread).
 pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path: &str, packet: String) -> std::result::Result<String, String> {
+    let _binding = crate::originals::standalone_binding();
     let bytes = match file_bytes {
         Some(r) => r(path)?,
-        None => std::fs::read(path).map_err(|e| format!("{path}: {e}"))?,
+        None => crate::originals::Originals::default().read_whole(path).map_err(|e| format!("{path}: {e}"))?.0,
     };
     let mut raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
     crate::camera_preview::with_starting_colour(&mut raw, &bytes);
@@ -52,9 +55,16 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
         return Err(format!("{path}: the DNG written for it doesn't hold the same raw data; the raw is kept"));
     }
     drop((raw, back));
-    let out = lightcraft_catalog::safe_file::write_new_unique(&mut dng_names(path), &dng)
-        .map_err(|e| format!("{path}: could not write its DNG ({e}); the raw is kept"))?;
-    Ok(out.to_string_lossy().to_string())
+    let (out, fp) = lightcraft_catalog::safe_file::write_new_unique_verified(
+        &mut dng_names(path),
+        &dng,
+        &mut crate::originals::verify_generated,
+        &crate::originals::same_file_handles,
+    )
+    .map_err(|e| format!("{path}: could not write its DNG ({e}); the raw is kept"))?;
+    let out = out.to_string_lossy().to_string();
+    crate::originals::record_generated(&out, &dng, fp)?;
+    Ok(out)
 }
 
 fn convert(s: &mut Session, p: &Value) -> Result<Value> {
@@ -83,8 +93,10 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let packet = crate::sidecar::sidecar_packet(&ph, &s.catalog);
+        let capture = crate::originals::ReadCapture::new();
         match write_dng_for(s, path, packet) {
             Ok(out) => {
+                let output = capture.fingerprint(&out).and_then(|fp| fp.probe_info());
                 let file_name = Path::new(&out).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 // virtual copies of this photo follow it to the DNG
                 for c in s.catalog.photos().filter(|c| c.copy_of == Some(id)) {
@@ -96,6 +108,19 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
                     });
                 }
                 ops.push(Op::Relink { id, file_name, source: Source::File { path: out.clone() }, format: Some("DNG".into()) });
+                if let Some(info) = output {
+                    for target in s.catalog.photos().filter(|p| p.id == id || p.copy_of == Some(id)) {
+                        ops.push(Op::SetContent {
+                            id: target.id,
+                            width: info.width,
+                            height: info.height,
+                            file_size: info.file_size,
+                            content_hash: None,
+                            preview_only: info.preview_only.clone(),
+                            preview_checked: lightcraft_catalog::preview_stamp(&info.preview_only),
+                        });
+                    }
+                }
                 converted.push(json!({"id": id.0, "path": out, "original": path}));
             }
             Err(e) => skipped.push(json!([id.0, e])),
@@ -207,7 +232,8 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 /// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
     let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
-    let same = info.content_hash == ph.content_hash
+    let same = (ph.content_hash.is_none()
+        || info.content_hash.as_deref().map(crate::sync::base_hash) == ph.content_hash.as_deref().map(crate::sync::base_hash))
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
         && info.preview_only == ph.preview_only
@@ -312,8 +338,8 @@ pub(crate) fn reload_ops(
         ops.append(&mut mine);
         changed.push(id);
     }
-    // virtual copies share the file
-    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
+    // every record of this file (virtual copies, other records of the same path) shares its content
+    for c in cat.photos().filter(|c| c.id != id && c.source == ph.source) {
         let theirs: Vec<Op> =
             content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
         if !theirs.is_empty() {
@@ -360,7 +386,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         q.source = Source::File { path: dst.to_string_lossy().to_string() };
         q.file_name = dst.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
         // the same bytes, but its own photo: no duplicate-content clash, no shared history
-        q.content_hash = q.content_hash.map(|h| format!("{h}:dup{}", new.0));
+        q.content_hash = q.content_hash.filter(|_| s.source_hash_authorized(id)).map(|h| format!("{h}:dup{}", new.0));
         q.copy_of = None;
         q.copy_name = None;
         q.history.clear();

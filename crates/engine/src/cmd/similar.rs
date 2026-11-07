@@ -15,7 +15,7 @@ use lightcraft_catalog::PhotoId;
 use serde_json::{Value, json};
 
 use super::bad;
-use crate::media::{SourceLevel, SourceRef, content_key};
+use crate::media::{SourceLevel, SourceRef};
 use crate::{Result, Session};
 
 const C: &str = "library.findSimilar";
@@ -43,8 +43,24 @@ pub struct Search {
 /// A content whose signature isn't known yet, and how to read it: from the first of its photos that
 /// can be read (a copy that is offline gives way to the next).
 struct Content {
-    key: String,
+    keys: Vec<String>,
     sources: Vec<SourceRef>,
+}
+
+struct SignatureKeys {
+    content: String,
+    guarded: Vec<String>,
+}
+
+fn signature_keys(s: &Session, id: PhotoId) -> Option<SignatureKeys> {
+    let photo = s.cache_photo(id)?;
+    let content = s.media.content_keys(&photo);
+    let guarded = content.iter().map(|key| s.media.identities.tag(&photo, key)).collect();
+    Some(SignatureKeys { content: content.into_iter().next()?, guarded })
+}
+
+fn known_signature(s: &Session, keys: &SignatureKeys) -> Option<[f32; 64]> {
+    keys.guarded.iter().find_map(|key| s.signatures.get(key)).copied()
 }
 
 /// What a search has to read: the searched photo first, as nothing can be compared without it.
@@ -70,24 +86,42 @@ pub fn plan(s: &mut Session, p: &Value) -> Result<(Search, Reads)> {
     let id = super::photo_id(p, C)?.or(s.active()).ok_or_else(|| bad(C, "no photo"))?;
     let min = p.get("similarity").and_then(Value::as_f64).unwrap_or(0.8) as f32;
     let filter = p.get("filter").and_then(Value::as_bool).unwrap_or(true);
-    let photo = s.catalog.photo(id).ok_or_else(|| bad(C, "can't read the photo"))?;
-    let my_key = content_key(photo);
-    let me =
-        (!s.signatures.contains_key(&my_key)).then(|| Content { sources: vec![s.media.source_ref(photo, SourceLevel::Thumb)], key: my_key.clone() });
+    let photo = s.cache_photo(id).ok_or_else(|| bad(C, "can't read the photo"))?;
+    let mine = signature_keys(s, id).ok_or_else(|| bad(C, "can't read the photo"))?;
+    let my_key = mine.guarded.first().cloned().ok_or_else(|| bad(C, "can't read the photo"))?;
+    let mut me = known_signature(s, &mine)
+        .is_none()
+        .then(|| Content { sources: vec![s.media.source_ref(&photo, SourceLevel::Thumb)], keys: vec![my_key.clone()] });
     let mut rest: Vec<Content> = Vec::new();
     let mut at = std::collections::HashMap::new();
-    for q in s.catalog.photos().filter(|q| q.in_library()) {
-        let key = content_key(q);
-        // (the searched photo's content is known by the time these are read, or the search has ended)
-        if key == my_key || s.signatures.contains_key(&key) {
+    let others: Vec<PhotoId> = s.catalog.photos().filter(|q| q.in_library() && q.id != id).map(|q| q.id).collect();
+    for other in others {
+        let Some(keys) = signature_keys(s, other) else { continue };
+        if known_signature(s, &keys).is_some() {
             continue;
         }
-        let source = s.media.source_ref(q, SourceLevel::Thumb);
-        match at.get(&key).and_then(|i: &usize| rest.get_mut(*i)) {
-            Some(content) => content.sources.push(source),
+        let Some(key) = keys.guarded.first().cloned() else { continue };
+        // (the searched photo's content is known by the time these are read, or the search has ended)
+        if keys.content == mine.content
+            && let Some(me) = me.as_mut()
+        {
+            if !me.keys.contains(&key) {
+                me.keys.push(key);
+            }
+            continue;
+        }
+        let Some(q) = s.cache_photo(other) else { continue };
+        let source = s.media.source_ref(&q, SourceLevel::Thumb);
+        match at.get(&keys.content).and_then(|i: &usize| rest.get_mut(*i)) {
+            Some(content) => {
+                if !content.keys.contains(&key) {
+                    content.keys.push(key);
+                }
+                content.sources.push(source);
+            }
             None => {
-                at.insert(key.clone(), rest.len());
-                rest.push(Content { key, sources: vec![source] });
+                at.insert(keys.content, rest.len());
+                rest.push(Content { keys: vec![key], sources: vec![source] });
             }
         }
     }
@@ -118,7 +152,9 @@ pub fn measure(reads: Reads, cancel: &AtomicBool, progress: &(dyn Fn(usize) + Sy
     let keep = |key: String, v: [f32; 64]| found.lock().unwrap_or_else(PoisonError::into_inner).push((key, v));
     if let Some(me) = reads.me {
         let Some(v) = signature_of(&me, cancel) else { return Vec::new() };
-        keep(me.key, v);
+        for key in me.keys {
+            keep(key, v);
+        }
         done.store(1, Ordering::Relaxed);
         progress(1);
     }
@@ -129,7 +165,9 @@ pub fn measure(reads: Reads, cancel: &AtomicBool, progress: &(dyn Fn(usize) + Sy
             let next = queue.lock().unwrap_or_else(PoisonError::into_inner).next();
             let Some(content) = next else { break };
             if let Some(v) = signature_of(&content, cancel) {
-                keep(content.key, v);
+                for key in content.keys {
+                    keep(key, v);
+                }
             }
             progress(done.fetch_add(1, Ordering::Relaxed).saturating_add(1));
         }
@@ -161,12 +199,12 @@ pub fn keep(s: &mut Session, found: Vec<Signature>) {
 /// Answer `search` from the signatures known now, most similar first, and filter the view to the
 /// photos found. A photo with none (it can't be read, or came after the [`plan`]) isn't compared.
 pub fn apply(s: &mut Session, search: &Search) -> Result<Value> {
-    let known = s.catalog.photo(search.id).and_then(|photo| s.signatures.get(&content_key(photo)));
-    let me = *known.ok_or_else(|| bad(C, "can't read the photo"))?;
+    let known = signature_keys(s, search.id).and_then(|keys| known_signature(s, &keys));
+    let me = known.ok_or_else(|| bad(C, "can't read the photo"))?;
     let mut hits: Vec<(PhotoId, f32)> = Vec::new();
     for q in s.catalog.photos().filter(|q| q.in_library()) {
-        if let Some(v) = s.signatures.get(&content_key(q)) {
-            let sim = lightcraft_pipeline::cull::similarity(&me, v);
+        if let Some(v) = signature_keys(s, q.id).and_then(|keys| known_signature(s, &keys)) {
+            let sim = lightcraft_pipeline::cull::similarity(&me, &v);
             if sim >= search.min {
                 hits.push((q.id, sim.clamp(0.0, 1.0)));
             }
@@ -381,6 +419,18 @@ mod tests {
         let mut answer = ids(&apply(&mut s, &search).unwrap());
         answer.sort_unstable();
         assert_eq!(answer, [1, 3]);
+    }
+
+    #[test]
+    fn f_inventory_signatures_are_not_reused_after_source_retirement() {
+        let (mut s, files) = session(&[("signature1", None)], Files::default());
+        s.execute(C, &json!({"id": 1})).unwrap();
+        assert_eq!(files.reads(), 1);
+        let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+        s.media.identities.invalidate(&p, None, || ()).unwrap();
+        s.media.forget(p.id);
+        s.execute(C, &json!({"id": 1})).unwrap();
+        assert_eq!(files.reads(), 2);
     }
 
     #[test]

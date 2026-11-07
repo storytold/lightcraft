@@ -315,8 +315,15 @@ fn same_for_sync(a: &Arc<Photo>, b: &Arc<Photo>) -> bool {
 }
 
 /// The content a hash stands for: a Duplicate's own hash is the original's plus `:dup<id>`.
-fn base_hash(h: &str) -> &str {
-    h.split(':').next().unwrap_or(h)
+pub(crate) fn base_hash(h: &str) -> &str {
+    let mut base = h;
+    while let Some((rest, id)) = base.rsplit_once(":dup")
+        && !id.is_empty()
+        && id.bytes().all(|b| b.is_ascii_digit())
+    {
+        base = rest;
+    }
+    base
 }
 
 /// Missing photos' files found elsewhere in the folder (old path → new path): the file was

@@ -575,7 +575,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 /// vendor raws and DNGs (whose tone can come from their preview); only those proxies go stale when
 /// the fit changes; an older encoding makes any proxy stale).
 #[cfg(not(target_arch = "wasm32"))]
-type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
+type SmartJob = (lightcraft_catalog::PhotoId, Vec<std::path::PathBuf>, Option<crate::media::SourceRef>, bool, crate::cache_identity::SourceTicket);
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
 /// So do preview-only raws: their proxy is the embedded JPEG, read in the colour space the raw
@@ -619,8 +619,8 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
     use crate::media::SourceRef;
     match source {
         // (a smart preview keeps the file's own colour: an imported camera profile is applied when the original is read)
-        SourceRef::File { path, max_edge, loader, denoise, outliers, .. } => {
-            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, outliers, reduced: None })
+        SourceRef::File { path, max_edge, loader, denoise, outliers, ticket, .. } => {
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, outliers, reduced: None, ticket })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
         _ => None,
@@ -647,18 +647,28 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for (id, path, source, look) in jobs {
+    for (id, paths, source, look, ticket) in jobs {
+        if !ticket.current() {
+            continue;
+        }
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
         let _one = SMART_WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // Read either the new shard or a pre-upgrade flat file, without making new work
         // depend on having the original online.
-        let path = crate::smart::existing_file_path(dir, path);
+        let Some(path) = paths
+            .iter()
+            .find(|path| crate::smart::is_valid(path))
+            .or_else(|| paths.iter().find(|path| path.exists()))
+            .or_else(|| paths.first())
+            .cloned()
+        else {
+            continue;
+        };
         if discard {
-            if std::fs::remove_file(&path).is_ok() {
-                n.removed += 1;
-            }
+            let removed = ticket.publish(|| paths.iter().filter(|path| std::fs::remove_file(path).is_ok()).count()).unwrap_or(0);
+            n.removed += removed;
         } else {
             // a complete, current proxy is kept; a missing or damaged one (cut short by a crash or a
             // full drive) is (re)built, and so is one written by an older encoding or camera-look
@@ -679,16 +689,25 @@ fn smart_run(
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
                     .and_then(|src| {
+                        let target = src
+                            .fingerprint
+                            .as_ref()
+                            .and_then(|fp| crate::smart::paths_for_keys(dir, &[fp.hash.to_string()]).into_iter().next())
+                            .unwrap_or_else(|| path.clone());
                         let info = src.info_or(Default::default());
-                        crate::smart::encode(&src.image, Some(&info))
+                        crate::smart::encode(&src.image, Some(&info)).map(|bytes| (target, bytes))
                     })
-                    .and_then(|b| {
-                        let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
-                        // Only create the leaf shard: do not recreate a missing external drive.
-                        if !parent.is_dir() {
-                            std::fs::create_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-                        }
-                        lightcraft_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display()))
+                    .and_then(|(path, b)| {
+                        ticket
+                            .publish(|| {
+                                let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
+                                // Only create the leaf shard: do not recreate a missing external drive.
+                                if !parent.is_dir() {
+                                    std::fs::create_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+                                }
+                                lightcraft_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display()))
+                            })
+                            .unwrap_or_else(|| Err("the original changed before its smart preview could be saved".into()))
                     });
                 match r {
                     Ok(()) => {
@@ -702,7 +721,7 @@ fn smart_run(
                             }
                         }
                     }
-                    Err(e) if stale => {
+                    Err(e) if stale && ticket.current() => {
                         // offline (or unreadable) original: the proxy is all there is, keep its look
                         log::info!("smart preview {} keeps its older look: {e}", path.display());
                         n.built += 1;
@@ -752,11 +771,12 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         if !matches!(ph.source, lightcraft_catalog::Source::File { .. }) {
             continue;
         }
-        let path = crate::smart::sharded_file_path(&dir, &ph);
+        let ph = s.cache_photo(id).unwrap_or(ph);
+        let paths = s.smart_preview_paths(&ph);
         // (a smart preview keeps the file's own colour: never built with the photo's imported camera profile, nor
         // from a cached source developed with it)
         let source = (!discard).then(|| s.media.source_ref_without_profile(&ph, crate::media::SourceLevel::Preview));
-        jobs.push((id, path, source, preview_fitted_look(&ph)));
+        jobs.push((id, paths, source, preview_fitted_look(&ph), s.media.identities.ticket(&ph)));
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
@@ -814,10 +834,12 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
         return None;
     }
     let max_edge = crate::media::SourceLevel::Preview.max_edge();
-    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
+    let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).cloned().collect();
     let jobs: Vec<SmartJob> = photos
         .iter()
-        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
+        .map(|p| {
+            (p.id, s.smart_preview_paths(p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p), s.media.identities.ticket(p))
+        })
         .collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
@@ -831,8 +853,7 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
 fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     let stale: Vec<SmartJob> = jobs
         .into_iter()
-        .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
-        .filter(|(_, path, _, look)| crate::smart::is_stale_for(path, *look))
+        .filter(|(_, paths, _, look, ticket)| ticket.current() && paths.iter().any(|path| crate::smart::is_stale_for(path, *look)))
         .collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
@@ -915,10 +936,7 @@ fn smart_location(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Whether photo `id` has a smart preview.
 pub fn has_smart_preview(s: &Session, id: lightcraft_catalog::PhotoId) -> bool {
-    match (&s.media.smart_dir, s.catalog.photo(id)) {
-        (Some(dir), Some(p)) => crate::smart::is_valid(&crate::smart::file_path(dir, p)),
-        _ => false,
-    }
+    s.catalog.photo(id).is_some_and(|p| s.smart_preview_paths(p).iter().any(|path| crate::smart::is_valid(path)))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -1044,6 +1062,7 @@ mod tests {
             camera_profile: None,
             outliers: false,
             reduced: None,
+            ticket: None,
         };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
     }
@@ -1058,5 +1077,59 @@ mod tests {
         assert_eq!(r["done"], json!(ids.len()), "{r}");
         assert_eq!(r["total"], json!(ids.len()));
         assert_eq!(r["failed"], json!(0));
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod source_publication_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn a_smart_preview_cannot_publish_after_its_original_was_replaced() {
+        let dir = crate::tests_xmp::temp_dir("smart-source-fence");
+        let p = lightcraft_catalog::Photo::new(
+            lightcraft_catalog::PhotoId(1),
+            lightcraft_catalog::Source::File { path: "original.jpg".into() },
+            "original.jpg",
+            "JPEG",
+            8,
+            8,
+            "",
+        );
+        let identities = crate::cache_identity::CacheIdentity::default();
+        let ticket = identities.ticket(&p);
+        let started = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let (a, b) = (started.clone(), release.clone());
+        let source = crate::media::SourceRef::File {
+            path: "original.jpg".into(),
+            max_edge: 8,
+            fallback: None,
+            denoise: None,
+            camera_profile: None,
+            outliers: false,
+            reduced: None,
+            ticket: None,
+            loader: Some(Arc::new(move |_, _, _| {
+                a.wait();
+                b.wait();
+                Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))
+            })),
+        };
+        let path = dir.join("late.lcsp");
+        std::thread::scope(|scope| {
+            let out = dir.clone();
+            let target = path.clone();
+            let worker = scope.spawn(move || smart_run(&out, false, false, vec![(p.id, vec![target], Some(source), false, ticket)], None));
+            started.wait();
+            identities.invalidate(&p, None, || ()).unwrap();
+            release.wait();
+            let result = worker.join().unwrap().unwrap();
+            assert_eq!(result.built, 0);
+            assert_eq!(result.failed.len(), 1);
+        });
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

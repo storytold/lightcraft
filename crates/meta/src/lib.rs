@@ -296,9 +296,13 @@ impl Metadata {
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {
     let e = embedded(bytes);
+    extract_embedded(&e)
+}
+
+pub fn extract_embedded(e: &Embedded) -> Metadata {
     let exif = e.exif.as_deref().map(read_exif).unwrap_or_default();
     let xmp = e.xmp.as_deref().and_then(|xmp| parse_xmp(xmp).ok());
-    extract_embedded(e, exif, xmp)
+    combine_embedded(e, exif, xmp)
 }
 
 /// Read metadata while reporting malformed PSD/PSB containers, embedded EXIF, or embedded XMP instead of treating
@@ -316,10 +320,10 @@ pub fn try_extract(bytes: &[u8]) -> Result<Metadata, ExtractError> {
         Some(xmp) => parse_xmp(xmp).ok(),
         None => None,
     };
-    Ok(extract_embedded(e, exif, xmp))
+    Ok(combine_embedded(&e, exif, xmp))
 }
 
-fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<XmpData>) -> Metadata {
+fn combine_embedded(e: &Embedded, mut m: Metadata, xmp: Option<XmpData>) -> Metadata {
     // the size the Exif states: a size only the XMP states may be the upright one, so it can't tell how the photo is stored
     let stored = m.width.zip(m.height);
     // and the orientation the Exif states: the photo is displayed by that alone, so an orientation only the XMP
@@ -399,6 +403,54 @@ pub(crate) fn parse_number(s: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_embedded_preserves_exif_iptc_xmp_precedence() {
+        let exif = Metadata {
+            make: Some("Example".into()),
+            model: Some("Camera".into()),
+            lens_model: Some("35mm F2".into()),
+            artist: Some("EXIF artist".into()),
+            orientation: Some(Orientation::from_exif(6)),
+            exposure_time: Some(1.0 / 125.0),
+            ..Default::default()
+        };
+        let packet = write_xmp(
+            &Metadata {
+                artist: Some("XMP artist".into()),
+                caption: Some("XMP caption".into()),
+                rating: Some(4),
+                keywords: vec!["xmp-keyword".into()],
+                ..Default::default()
+            },
+            None,
+        );
+        let mut iptc = Vec::new();
+        for (dataset, value) in [(5u8, "IPTC title"), (120u8, "IPTC caption")] {
+            iptc.extend_from_slice(&[0x1c, 2, dataset]);
+            iptc.extend_from_slice(&u16::try_from(value.len()).unwrap().to_be_bytes());
+            iptc.extend_from_slice(value.as_bytes());
+        }
+        let blocks = Embedded { exif: Some(write_exif(&exif)), iptc: Some(iptc), xmp: Some(packet.clone()), ..Default::default() };
+        let parsed = extract_embedded(&blocks);
+        assert_eq!(parsed.make, exif.make);
+        assert_eq!(parsed.model, exif.model);
+        assert_eq!(parsed.lens_model, exif.lens_model);
+        assert_eq!(parsed.orientation, exif.orientation);
+        assert_eq!(parsed.exposure_time, exif.exposure_time);
+        assert_eq!(parsed.title.as_deref(), Some("IPTC title"));
+        assert_eq!(parsed.caption.as_deref(), Some("XMP caption"));
+        assert_eq!(parsed.artist.as_deref(), Some("XMP artist"));
+        assert_eq!(parsed.rating, Some(4));
+        assert_eq!(parsed.keywords, vec!["xmp-keyword"]);
+        assert_eq!(blocks.xmp.as_deref(), Some(packet.as_str()));
+    }
+
+    #[test]
+    fn extract_embedded_ignores_damaged_blocks() {
+        let blocks = Embedded { exif: Some(vec![1, 2, 3]), iptc: Some(vec![0x1c, 2]), xmp: Some("<broken".into()), ..Default::default() };
+        assert_eq!(extract_embedded(&blocks), Metadata::default());
+    }
 
     #[test]
     fn lens_names_from_a_spec_read_like_lightroom() {

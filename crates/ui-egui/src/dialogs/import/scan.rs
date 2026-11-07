@@ -6,6 +6,7 @@ use super::{ImportDialog, LightcraftApp, Ordering, ScanInput, ScanOutput, ScanPr
 pub struct ScanTask {
     progress: std::sync::Arc<ScanProgress>,
     rx: std::sync::mpsc::Receiver<ScanEnd>,
+    received: bool,
     /// Open the review with "copy into the library" checked (a camera / card).
     pub copy: bool,
     /// Open the review with this album chosen (an album's context menu ▸ Import…).
@@ -19,6 +20,14 @@ pub struct ScanTask {
     /// Browsing: the folder as the worker resolved it, once it has. The view shows it as given until then
     /// (resolving reads the disk, which a stalled network mount can block: never on this thread).
     resolved: Option<std::sync::mpsc::Receiver<String>>,
+}
+
+impl Drop for ScanTask {
+    fn drop(&mut self) {
+        if !self.received {
+            self.progress.cancel.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 /// What a scan's worker sends back. Every way it ends sends one, so the probes of earlier scans that
@@ -63,11 +72,12 @@ fn mark(p: &lightcraft_engine::media::ProbeInfo) -> ProbeMark {
 /// Stop the running scan (if any) without waiting for its worker: the scan is closed at once, and its
 /// channel is kept until the worker ends, so the probes it holds still come back ([`collect_stopped`]).
 fn stop_scan(app: &mut LightcraftApp) {
-    if let Some(t) = app.scan.take() {
+    if let Some(mut t) = app.scan.take() {
         t.progress.cancel.store(true, Ordering::Relaxed);
+        let rx = std::mem::replace(&mut t.rx, std::sync::mpsc::channel().1);
         let s = &mut app.scans_stopping;
         s.stopped = s.stopped.saturating_add(1);
-        s.pending.push((s.stopped, t.rx));
+        s.pending.push((s.stopped, rx));
     }
 }
 
@@ -146,19 +156,31 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
         return Err("an import review is waiting for the open dialog to close".into());
     }
     let sources = paths.clone();
-    let (input, paths) = ScanInput::new(&mut app.session, &paths);
     let progress = std::sync::Arc::new(ScanProgress::default());
+    progress.begin();
+    progress.track_delivery();
+    let (input, paths) = ScanInput::for_import(&mut app.session, &paths);
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
     let job = move || {
-        let _ = tx.send(ScanEnd::Done(scan_with(input, &paths, &p)));
+        if lightcraft_engine::guard::catch("scan", || {
+            let output = scan_with(input, &paths, &p);
+            p.delivered(tx.send(ScanEnd::Done(output)).is_ok());
+        })
+        .is_err()
+        {
+            p.worker_error();
+        }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(job);
+    std::thread::Builder::new().name("lc-scan".into()).spawn(job).map_err(|e| {
+        progress.worker_error();
+        format!("could not start scan: {e}")
+    })?;
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: false, sources, guard, resolved: None });
+    app.scan = Some(ScanTask { progress, rx, received: false, copy: false, album: None, browse: false, sources, guard, resolved: None });
     Ok(json!({"scanning": true}))
 }
 
@@ -192,8 +214,10 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     app.session.source = lightcraft_engine::LibrarySource::Folder;
     // the photos the library already knows from this folder show at once: keep or pick the active one
     app.session.keep_active_in_view();
-    let (mut input, _) = ScanInput::new(&mut app.session, std::slice::from_ref(&dir_s));
     let progress = std::sync::Arc::new(ScanProgress::default());
+    progress.begin();
+    progress.track_delivery();
+    let (mut input, _) = ScanInput::new(&mut app.session, std::slice::from_ref(&dir_s));
     let (tx, rx) = std::sync::mpsc::channel();
     let p = progress.clone();
     // the worker resolves the path as given: on Unix `link/..` is the folder above where the link points, which the
@@ -202,53 +226,15 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     let sort = app.session.sort;
     let (resolved_tx, resolved) = std::sync::mpsc::channel();
     let job = move || {
-        let root = match resolve_browse_root(&given) {
-            Ok(root) => root,
-            Err(e) => {
-                log::warn!("browse: can't read {given}: {e}");
-                let _ = tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: true });
-                return;
-            }
-        };
-        let _ = resolved_tx.send(root.clone());
-        // (never the library's own folder, which the import would otherwise read as photos)
-        let files = match lightcraft_engine::import::browse_files(&input, &root, subfolders) {
-            Ok(files) => files,
-            Err(e) => {
-                // no listing is sent: the scan ends as failed, and no record is taken for a file gone
-                log::warn!("browse: can't list {root}: {e}");
-                let _ = tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: true });
-                return;
-            }
-        };
-        // Nothing is read here: the import that follows reads the files and adds them batch by
-        // batch, first screen first, so the view fills while the rest is read (PERF-CULL-1).
-        // Another folder chosen meanwhile (`p.cancel`) stops the ordering, and no listing is sent.
-        let Some(queue) = lightcraft_engine::import::browse_queue_until(&input, files.clone(), &sort, &p.cancel) else {
-            let _ = tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: false });
-            return;
-        };
-        p.total.store(queue.len(), Ordering::Relaxed);
-        p.done.store(queue.len(), Ordering::Relaxed);
-        // the files the library knows come too, marked as such: the folder bookkeeping (browse
-        // times, records of files gone) needs the whole listing; only the queue is imported
-        let queued: std::collections::HashSet<&String> = queue.iter().collect();
-        let known: Vec<String> = files.iter().filter(|f| !queued.contains(f)).cloned().collect();
-        let known =
-            known.into_iter().map(|path| lightcraft_engine::import::ImportCandidate { path, duplicate: Some("path".into()), ..Default::default() });
-        let candidates =
-            queue.iter().cloned().map(|path| lightcraft_engine::import::ImportCandidate { path, ..Default::default() }).chain(known).collect();
-        // the probes of earlier scans go back to the session with the result, for the import that follows
-        let _ = tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput {
-            candidates,
-            probes: input.take_probes(),
-            truncated: false,
-            unreadable: 0,
-            unsupported: 0,
-        }));
+        if lightcraft_engine::guard::catch("scan", || browse_worker(&given, &mut input, subfolders, &sort, &p, &tx, &resolved_tx)).is_err() {
+            p.worker_error();
+        }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(job);
+    std::thread::Builder::new().name("lc-scan".into()).spawn(job).map_err(|e| {
+        progress.worker_error();
+        format!("could not start scan: {e}")
+    })?;
     // the job takes the probes back out of `input`, so it is an FnMut where it runs in place
     #[cfg(target_arch = "wasm32")]
     {
@@ -256,9 +242,79 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         job();
     }
     let guard = scan_guard(app, &progress, true);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse: true, sources: Vec::new(), guard, resolved: Some(resolved) });
+    app.scan = Some(ScanTask {
+        progress,
+        rx,
+        received: false,
+        copy: false,
+        album: None,
+        browse: true,
+        sources: Vec::new(),
+        guard,
+        resolved: Some(resolved),
+    });
     app.renderer.forget_imports();
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
+}
+
+fn browse_worker(
+    given: &str,
+    input: &mut ScanInput,
+    subfolders: bool,
+    sort: &lightcraft_catalog::Sort,
+    p: &ScanProgress,
+    tx: &std::sync::mpsc::Sender<ScanEnd>,
+    resolved_tx: &std::sync::mpsc::Sender<String>,
+) {
+    let root = match resolve_browse_root(given) {
+        Ok(root) => root,
+        Err(e) => {
+            log::warn!("browse: can't read {given}: {e}");
+            let _ = tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: true });
+            p.worker_error();
+            return;
+        }
+    };
+    let _ = resolved_tx.send(root.clone());
+    // (never the library's own folder, which the import would otherwise read as photos)
+    let files = match lightcraft_engine::import::browse_files(input, &root, subfolders) {
+        Ok(files) => files,
+        Err(e) => {
+            // no listing is sent: the scan ends as failed, and no record is taken for a file gone
+            log::warn!("browse: can't list {root}: {e}");
+            let _ = tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: true });
+            p.worker_error();
+            return;
+        }
+    };
+    // Nothing is read here: the import that follows reads the files and adds them batch by
+    // batch, first screen first, so the view fills while the rest is read (PERF-CULL-1).
+    // Another folder chosen meanwhile (`p.cancel`) stops the ordering, and no listing is sent.
+    let Some(queue) = lightcraft_engine::import::browse_queue_until(input, files.clone(), sort, &p.cancel) else {
+        p.delivered(tx.send(ScanEnd::Stopped { probes: input.take_probes(), failed: false }).is_ok());
+        return;
+    };
+    p.total.store(queue.len(), Ordering::Relaxed);
+    p.done.store(queue.len(), Ordering::Relaxed);
+    // the files the library knows come too, marked as such: the folder bookkeeping (browse
+    // times, records of files gone) needs the whole listing; only the queue is imported
+    let queued: std::collections::HashSet<&String> = queue.iter().collect();
+    let known: Vec<String> = files.iter().filter(|f| !queued.contains(f)).cloned().collect();
+    let known =
+        known.into_iter().map(|path| lightcraft_engine::import::ImportCandidate { path, duplicate: Some("path".into()), ..Default::default() });
+    let candidates =
+        queue.iter().cloned().map(|path| lightcraft_engine::import::ImportCandidate { path, ..Default::default() }).chain(known).collect();
+    // the probes of earlier scans go back to the session with the result, for the import that follows
+    p.delivered(
+        tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput {
+            candidates,
+            probes: input.take_probes(),
+            truncated: false,
+            unreadable: 0,
+            unsupported: 0,
+        }))
+        .is_ok(),
+    );
 }
 
 /// The browsed folder `given` (the path as `browse` received it, not its [`lightcraft_engine::import::browse_spelling`])
@@ -324,7 +380,8 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             return;
         }
     };
-    let Some(task) = app.scan.take() else { return };
+    let Some(mut task) = app.scan.take() else { return };
+    task.received = true;
     let cancelled = task.progress.cancel.load(Ordering::Relaxed);
     let out = match end {
         ScanEnd::Done(out) => out,
@@ -361,7 +418,9 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             let undo0 = app.session.undo.len();
             let total = queue.len();
             let _ = total;
-            app.import = Some(ImportTask::new(queue, json!({"mode": "add", "local": true}), undo0, true));
+            let mut import = ImportTask::new(queue, json!({"mode": "add", "local": true}), undo0, true);
+            import.scan_id = task.progress.run_id();
+            app.import = Some(import);
         }
         return;
     }
@@ -378,6 +437,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     app.renderer.forget_imports();
     let mut d = ImportDialog::new(out.candidates);
+    d.scan_id = task.progress.run_id();
     (d.scan_limited, d.unreadable, d.unsupported) = (out.truncated, out.unreadable, out.unsupported);
     let trashed = d
         .candidates
@@ -391,7 +451,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
     d.copy = task.copy;
     // only an album the review offers (it may have been deleted while the scan ran)
     d.album = task.album.filter(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));
-    d.sources = task.sources;
+    d.sources = std::mem::take(&mut task.sources);
     d.library = Some(app.session.library_generation());
     app.review_pending = Some(crate::state::Dialog::Import { opts: Box::new(d) });
     show_pending_review(app, ctx);
@@ -435,7 +495,7 @@ pub(crate) fn scan_by_hand(app: &mut LightcraftApp, browse: bool) -> std::sync::
     let progress = std::sync::Arc::new(ScanProgress::default());
     let (tx, rx) = std::sync::mpsc::channel::<ScanEnd>();
     let guard = scan_guard(app, &progress, false);
-    app.scan = Some(ScanTask { progress, rx, copy: false, album: None, browse, sources: Vec::new(), guard, resolved: None });
+    app.scan = Some(ScanTask { progress, rx, received: false, copy: false, album: None, browse, sources: Vec::new(), guard, resolved: None });
     tx
 }
 

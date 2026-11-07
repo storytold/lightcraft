@@ -40,7 +40,7 @@ mod tokens;
 
 pub(crate) use fs::{MoveFs, RealFs};
 #[cfg(test)]
-use fs::{folded_path, same_contents};
+use fs::{folded_path, move_across_volumes, same_contents};
 pub(crate) use moves::move_all;
 #[cfg(test)]
 pub(crate) use moves::move_file_with;
