@@ -410,7 +410,7 @@ impl Session {
     /// When the selection holds more than one collapsed stack, this plans the first stack's job; use
     /// [`Session::plan_merges`] for one job per stack.
     pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
-        let mut jobs = self.plan_merges(kind, finish, ids, preview)?;
+        let mut jobs = self.plan_merges(kind.clone(), finish, ids, preview)?;
         jobs.into_iter().next().ok_or_else(|| EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())))
     }
 
@@ -472,13 +472,7 @@ impl Session {
             if sources.len() < kind.min_photos() {
                 return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
             }
-            jobs.push(MergeJob {
-                kind: kind.clone(),
-                finish: finish.clone(),
-                sources,
-                preview: preview.then_some(PREVIEW_EDGE),
-                read: read.clone(),
-            });
+            jobs.push(MergeJob { kind: kind.clone(), finish: finish.clone(), sources, preview: preview.then_some(PREVIEW_EDGE), read: read.clone() });
         }
         if jobs.is_empty() {
             return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
