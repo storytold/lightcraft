@@ -529,3 +529,67 @@ fn survey_command_click_on_the_active_photo_activates_the_last_one() {
     let sel: Vec<u64> = h.app.session.selection.ids.iter().map(|p| p.0).collect();
     assert_eq!((sel, h.app.session.selection.active.map(|p| p.0)), (vec![b, c], Some(c)));
 }
+
+/// Issue #3640: ↑ / ↓ in Survey step through its photos like → / ←; they used to run the grid's
+/// Photo Below / Above, which selected one photo and left the other two out of the survey.
+#[test]
+fn survey_up_and_down_step_through_its_photos() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    let sel = |h: &Headless| h.app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<u64>>();
+    for (key, want) in [("down", c), ("down", c), ("up", b), ("up", a), ("right", b), ("left", a)] {
+        let r = h.request("ui.key", json!({"key": key}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!((sel(&h), h.app.session.selection.active.map(|p| p.0)), (vec![a, b, c], Some(want)), "after {key}");
+    }
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Survey);
+}
+
+/// The same keys in Compare: ↓ / ↑ change the candidate as → / ← do, and the select stays (#3640).
+#[test]
+fn compare_up_and_down_step_the_candidate() {
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    let r = h.request("engine.execute", json!({"command": "view.compare"}), T);
+    let (sel, cand) = (r["result"]["select"].as_u64().unwrap(), r["result"]["candidate"].as_u64().unwrap());
+    h.settle(SETTLE);
+    let press = |h: &mut Headless, key: &str| {
+        let r = h.request("ui.key", json!({"key": key}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        h.app.ui.compare
+    };
+    let after_right = press(&mut h, "right");
+    assert!(after_right.is_some_and(|(s, c)| s == sel && c != cand), "{after_right:?}");
+    assert_eq!(press(&mut h, "left"), Some((sel, cand)));
+    assert_eq!(press(&mut h, "down"), after_right, "↓ steps like →");
+    assert_eq!(press(&mut h, "up"), Some((sel, cand)), "↑ steps like ←");
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::Compare);
+}
+
+/// Outside Survey and Compare, ↑ / ↓ keep the grid's Photo Below / Above (#3640 only changed the
+/// culling views): from two selected photos in the grid, ↓ selects the one photo it moves to (the
+/// Survey path would have kept both selected), and ↑ comes back.
+#[test]
+fn grid_up_and_down_still_move_to_one_photo() {
+    let mut h = demo();
+    let vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    let r = h.request("ui.set", json!({"view": "photoGrid"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[0], vis[1]], "active": vis[0]}}), T);
+    h.settle(SETTLE);
+    let key = |h: &mut Headless, k: &str| {
+        let r = h.request("ui.key", json!({"key": k}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    key(&mut h, "down");
+    let below = h.app.session.selection.active.map(|p| p.0).expect("an active photo");
+    assert_ne!(below, vis[0], "↓ moved");
+    assert_eq!(h.app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<_>>(), vec![below], "one photo selected, as Photo Below does");
+    key(&mut h, "up");
+    assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(vis[0]), "↑ comes back");
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid);
+}

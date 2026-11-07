@@ -645,8 +645,10 @@ fn fire_grid_key(app: &mut LightcraftApp, f: &str) -> bool {
         }
     } else if let Some(step) = f.strip_prefix("grid:extend:") {
         extend_selection(app, step.parse::<i64>().unwrap_or(0));
-    } else if compare::culling(app) && (f == "library.next" || f == "library.previous") {
-        let d = if f == "library.next" { 1 } else { -1 };
+    } else if compare::culling(app) && matches!(f, "library.next" | "library.previous" | "library.down" | "library.up") {
+        // ↑ / ↓ step like → / ←: run as the grid's Photo Below / Above, they would leave one photo
+        // of the survey (or the pair) selected (issue #3640)
+        let d = if matches!(f, "library.next" | "library.down") { 1 } else { -1 };
         let _ = if app.ui.view == crate::state::ViewMode::Compare { compare::compare_step(app, d) } else { compare::survey_step(app, d) };
     } else {
         return false;
