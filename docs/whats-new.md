@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Preset groups of your own
+- ⋯ → New Group… makes a group without moving a preset: it stays listed while empty, and is saved with the library.
+- A group of your own has Rename… and Delete Group… on its header. A group with built-in presets offers neither.
+- Add to Favorites on any group's header, built-in ones included, stars it and lists it above the other groups.
+
+### Select several presets
+- In the Presets panel a click still applies a preset. ⌘/Ctrl+click selects one without applying it, and Shift+click
+  selects the range from the last preset clicked; ⋯ → Select All and a group's Select All in Group take them all. Copy
+  to Group, Move to Group and Delete then act on the whole selection, from the bar under the list or a right-click
+  inside the selection (issues #1630, #3553). Built-in presets can be copied, and stay where they are. While presets
+  are selected, a plain click ends the selection and applies nothing.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

@@ -18,6 +18,10 @@ use crate::{HoverPreview, LightcraftApp};
 
 /// Long edge of preset thumbnails (px).
 const THUMB_EDGE: usize = 128;
+/// Height of the bar under the list while presets are selected (points).
+const SELECTION_BAR_H: f32 = 34.0;
+/// How many presets selected bring up the bar.
+const MIN_FOR_BAR: usize = 2;
 
 /// The preset amount slider may replace only the undo step it created.
 #[derive(Clone)]
@@ -120,6 +124,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if ui.add_enabled(any_user, egui::Button::new(crate::i18n::tr("Export User Presets…"))).clicked() {
                 let _ = app.run("file.exportPresets", json!({}));
             }
+            ui.separator();
+            let r = ui.button(crate::i18n::tr("New Group…"));
+            register(ui, "presetMenu:newGroup", r.rect);
+            if r.clicked() {
+                crate::panels::dialogs::prompt(app, "New Preset Group", "Group name", "", "preset.createGroup", json!({}), "name");
+            }
+            let r = ui.button(crate::i18n::tr("Select All"));
+            register(ui, "presetMenu:selectAll", r.rect);
+            if r.clicked() {
+                app.ui.preset_selection = app.session.presets.iter().map(|p| p.id.clone()).collect();
+            }
         });
         divider(ui);
         // amount slider (applies to the last applied preset)
@@ -161,16 +176,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let thumbs = app.ui.preset_thumbs && active.is_some();
         let row_h = if thumbs { 54.0 } else { 26.0 };
         let groups = grouped(ui.ctx(), &app.session.presets);
-        let scroll = egui::ScrollArea::vertical().id_salt("presets-scroll").auto_shrink([false, false]).show(ui, |ui| {
+        let (selected_total, selected_user) = selection_counts(&app.session.presets, &app.ui.preset_selection);
+        // the bar goes under the list, in room kept here: above it, its coming and going would move
+        // the rows under the pointer, and the next ⌘/Ctrl+click would land on another preset
+        let bar_room = if selected_total >= MIN_FOR_BAR { SELECTION_BAR_H + 1.0 } else { 0.0 };
+        let list_height = (ui.available_height() - bar_room).max(0.0);
+        let scroll = egui::ScrollArea::vertical().id_salt("presets-scroll").auto_shrink([false, false]).max_height(list_height).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             // Only the rows in view are laid out, drawn and given thumbnails: a Lightroom collection
             // imported whole is 10 000+ presets, and building every row each frame took seconds.
             let visible = ui.clip_rect().expand(row_h);
             for grp in groups.iter() {
                 let (g, builtin, favorites) = (grp.name.clone(), grp.builtin, grp.favorites);
-                // the Favorites section opens and closes apart from a user group named "Favorites"
-                let open_id = egui::Id::unique(("preset-group", favorites, &g));
-                let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
+                let open_id = group_open_id(favorites, &g);
+                let open = group_open(ui.ctx(), grp);
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
                 crate::widgets::announce(&resp, g.to_string());
                 // outside the `presetGroup:` ids, which a user group of any name can take
@@ -188,17 +207,32 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     t.semibold(13.0),
                     t.text_label,
                 );
+                if grp.pinned {
+                    crate::rating::paint_star(
+                        ui.painter(),
+                        Rect::from_center_size(pos2(r.right() - 20.0, r.center().y), vec2(16.0, 16.0)),
+                        true,
+                        t.star,
+                    );
+                }
                 if resp.clicked() {
                     ui.data_mut(|d| d.insert_temp(open_id, !open));
                 }
                 if !favorites {
-                    crate::widgets::context_menu(&resp, |ui| {
-                        if ui.button(crate::i18n::tr("Export Group…")).clicked() {
-                            let _ = app.run("file.exportPresets", json!({"group": g}));
-                        }
-                    });
+                    crate::widgets::context_menu(&resp, |ui| group_menu(app, ui, grp));
                 }
                 if !open {
+                    continue;
+                }
+                if grp.items.is_empty() {
+                    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+                    ui.painter().text(
+                        pos2(r.left() + 40.0, r.center().y),
+                        Align2::LEFT_CENTER,
+                        crate::i18n::tr("No presets in this group"),
+                        t.font(13.0),
+                        t.text_dim,
+                    );
                     continue;
                 }
                 let (first, end) = rows_in_view(ui.cursor().top(), row_h, grp.items.len(), visible);
@@ -218,6 +252,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         ui.painter().rect_filled(r, 0.0, t.tool_active);
                     } else if resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.7));
+                    }
+                    let selected = app.ui.preset_selection.contains(&pid);
+                    if selected {
+                        register(ui, format!("presetSelected:{pid}"), r);
+                        if !is_last && !resp.hovered() {
+                            ui.painter().rect_filled(r, 0.0, t.hover);
+                        }
+                        ui.painter().rect_filled(Rect::from_min_size(r.left_top(), vec2(3.0, r.height())), 0.0, t.accent);
                     }
                     // the preview is what a click commits: the same composition as `preset.apply` (`Session::preset_applied`)
                     let look = if thumbs || resp.hovered() { active.and_then(|id| app.session.preset_applied(id, &pr, 1.0)) } else { None };
@@ -251,7 +293,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             ui.data_mut(|d| d.insert_temp(egui::Id::unique("last-preset-hover"), (id, pr.clone(), label)));
                         }
                     }
-                    if resp.clicked() && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
+                    let modifiers = ui.input(|i| i.modifiers);
+                    let selects = modifiers.command || modifiers.shift;
+                    // while a selection is on show, a plain click ends it and applies nothing: a
+                    // slip after selecting a hundred presets shouldn't change the photo
+                    let ends_selection = !app.ui.preset_selection.is_empty();
+                    if resp.clicked() && selects {
+                        click_select(app, ui.ctx(), &groups, favorites, &pid, modifiers.shift);
+                    } else if resp.clicked() {
+                        app.ui.preset_selection.clear();
+                        app.ui.preset_anchor = Some(pid.clone());
+                    }
+                    let applies = resp.clicked() && !selects && !ends_selection;
+                    if applies && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
                         AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
                         ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::unique("last-preset-hover")));
@@ -259,9 +313,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     }
                     let (builtin, group) = (pr.builtin, pr.group.clone());
                     crate::widgets::context_menu(&resp, |ui| {
+                        // a right-click inside a selection acts on all of it
+                        if selected && selected_total > 1 {
+                            bulk_menu(app, ui, &groups, selected_total, selected_user);
+                            return;
+                        }
                         if ui.button(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).clicked() {
                             let _ = app.run("preset.favorite", json!({"id": pid}));
                         }
+                        crate::widgets::menu_button(ui, crate::i18n::tr("Copy to Group"), |ui| {
+                            group_targets(app, ui, &groups, "preset.copy", std::slice::from_ref(&pid), "Copy Preset to New Group");
+                        });
                         if builtin {
                             return;
                         }
@@ -306,8 +368,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ui.allocate_space(vec2(ui.available_width(), (grp.items.len() - end) as f32 * row_h));
                 }
             }
-            ui.add_space(30.0);
+            // as much more room as the bar takes when it isn't there: at the very end of the list the
+            // bar going away would otherwise bring the rows down, under the pointer
+            ui.add_space(30.0 + SELECTION_BAR_H + 1.0 - bar_room);
         });
+        selection_bar(app, ui);
         let last_hover_id = egui::Id::unique("last-preset-hover");
         let pointer_in_scroll = ui.ctx().input(|i| i.pointer.hover_pos()).is_some_and(|pos| scroll.inner_rect.contains(pos));
         if pointer_in_scroll {
@@ -326,16 +391,201 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// The key of a group's open state. The Favorites section opens and closes apart from a user group
+/// named "Favorites".
+fn group_open_id(favorites: bool, name: &str) -> egui::Id {
+    egui::Id::unique(("preset-group", favorites, name))
+}
+
+fn group_open(ctx: &egui::Context, group: &Group) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(group_open_id(group.favorites, &group.name))).unwrap_or(true)
+}
+
+/// How many presets are selected, and how many of them are user presets (a selection may name
+/// presets that are gone). O(presets) only while something is selected.
+fn selection_counts(presets: &PresetList, selection: &std::collections::BTreeSet<String>) -> (usize, usize) {
+    if selection.is_empty() {
+        return (0, 0);
+    }
+    let chosen = presets.iter().filter(|p| selection.contains(&p.id));
+    chosen.fold((0, 0), |(total, user), p| (total + 1, user + usize::from(!p.builtin)))
+}
+
+/// A row clicked with ⌘/Ctrl or Shift: toggle it, or with Shift extend from the last row clicked
+/// (with or without a modifier) across the open groups. A preset listed twice (Favorites and its group) extends within the
+/// section clicked, so a range in the groups doesn't start up in Favorites.
+fn click_select(app: &mut LightcraftApp, ctx: &egui::Context, groups: &[Group], favorites: bool, pid: &str, extend: bool) {
+    if extend && let Some(anchor) = app.ui.preset_anchor.clone() {
+        let rows = open_rows(ctx, &app.session.presets, groups, favorites);
+        if let Some(range) = ids_between(&rows, &anchor, pid) {
+            app.ui.preset_selection.extend(range.iter().cloned());
+            return;
+        }
+    }
+    if !app.ui.preset_selection.remove(pid) {
+        app.ui.preset_selection.insert(pid.to_string());
+    }
+    app.ui.preset_anchor = Some(pid.to_string());
+}
+
+/// The ids of the rows on show, in panel order: the Favorites section, or the other groups.
+fn open_rows(ctx: &egui::Context, presets: &PresetList, groups: &[Group], favorites: bool) -> Vec<String> {
+    let open = groups.iter().filter(|g| g.favorites == favorites && group_open(ctx, g));
+    open.flat_map(|g| g.items.iter()).filter_map(|&i| presets.get(i).map(|p| p.id.clone())).collect()
+}
+
+/// The rows from `a` to `b`, whichever comes first; `None` when either isn't on show.
+fn ids_between<'a>(rows: &'a [String], a: &str, b: &str) -> Option<&'a [String]> {
+    let i = rows.iter().position(|x| x == a)?;
+    let j = rows.iter().position(|x| x == b)?;
+    rows.get(i.min(j)..=i.max(j))
+}
+
+/// The bar shown while presets are selected: how many, what can be done with them, and a way out.
+/// A plain click on a preset also ends the selection. One preset selected has its own menu.
+fn selection_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let (total, user) = selection_counts(&app.session.presets, &app.ui.preset_selection);
+    // presets gone (a group deleted, an agent): they shouldn't count, nor come back selected if imported again
+    if total < app.ui.preset_selection.len() {
+        let exists: std::collections::HashSet<&str> = app.session.presets.iter().map(|p| p.id.as_str()).collect();
+        app.ui.preset_selection.retain(|id| exists.contains(id.as_str()));
+    }
+    if total < MIN_FOR_BAR {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let groups = grouped(ui.ctx(), &app.session.presets);
+    divider(ui);
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), SELECTION_BAR_H), Sense::hover());
+    let text = crate::i18n::tr_format!("{n} selected", n = total);
+    ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, text, t.font(13.0), t.text_label);
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(8.0, 0.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    if icon_button(&mut row, "presetSelectionClear", Icon::Close, vec2(24.0, 24.0), false, true, crate::i18n::tr("Deselect All")).clicked() {
+        app.ui.preset_selection.clear();
+        app.ui.preset_anchor = None;
+    }
+    let menu = crate::widgets::menu_button(&mut row, crate::i18n::tr("Actions"), |ui| bulk_menu(app, ui, &groups, total, user));
+    register(&row, "presetSelectionActions", menu.response.rect);
+}
+
+/// What can be done with the selection: built-in presets can be copied, not moved or deleted.
+fn bulk_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], total: usize, user: usize) {
+    let selection = &app.ui.preset_selection;
+    let ids: Vec<String> = app.session.presets.iter().filter(|p| selection.contains(&p.id)).map(|p| p.id.clone()).collect();
+    let r = crate::widgets::menu_button(ui, crate::i18n::tr("Copy to Group"), |ui| {
+        group_targets(app, ui, groups, "preset.copy", &ids, "Copy Presets to New Group");
+    });
+    register(ui, "presetBulk:copy", r.response.rect);
+    let r = ui.add_enabled_ui(user > 0, |ui| {
+        crate::widgets::menu_button(ui, crate::i18n::tr("Move to Group"), |ui| {
+            group_targets(app, ui, groups, "preset.moveMany", &ids, "Move Presets to New Group");
+        })
+    });
+    register(ui, "presetBulk:move", r.inner.response.rect);
+    ui.separator();
+    let r = ui.add_enabled(user > 0, egui::Button::new(crate::i18n::tr("Delete…")));
+    register(ui, "presetBulk:delete", r.rect);
+    if r.clicked() {
+        app.ui.dialog =
+            Some(crate::state::Dialog::DeletePresets { ids, builtin: total.saturating_sub(user), library: app.session.library_generation() });
+    }
+}
+
+/// The user groups as the targets of `command` (`{ids, group}`), and a new one.
+fn group_targets(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Group], command: &str, ids: &[String], new_title: &str) {
+    for g in groups.iter().filter(|x| x.user) {
+        let r = ui.button(&g.name);
+        register(ui, format!("presetTarget:{command}:{}", g.name), r.rect);
+        if r.clicked() {
+            let message = match app.run(command, json!({"ids": ids, "group": g.name})) {
+                Ok(done) => outcome(command, &g.name, &done),
+                Err(e) => e,
+            };
+            app.toast(ui.ctx(), message);
+        }
+    }
+    if ui.button(crate::i18n::tr("New Group…")).clicked() {
+        crate::panels::dialogs::prompt(app, new_title, "Group name", "", command, json!({"ids": ids}), "group");
+    }
+}
+
+/// What a bulk copy or move into `group` did, for the toast.
+fn outcome(command: &str, group: &str, done: &serde_json::Value) -> String {
+    if command == "preset.copy" {
+        let n = done["ids"].as_array().map_or(0, Vec::len);
+        let skipped = done["skipped"].as_u64().unwrap_or(0);
+        if skipped > 0 {
+            return crate::i18n::tr_format!("Copied {n} to “{group}”, {skipped} already there", n = n, group = group, skipped = skipped);
+        }
+        return crate::i18n::tr_format!("Copied {n} to “{group}”", n = n, group = group);
+    }
+    let n = done["moved"].as_u64().unwrap_or(0);
+    crate::i18n::tr_format!("Moved {n} to “{group}”", n = n, group = group)
+}
+
+/// A group header's menu.
+fn group_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, group: &Group) {
+    let empty = group.items.is_empty();
+    let r = ui.add_enabled(!empty, egui::Button::new(crate::i18n::tr("Select All in Group")));
+    register(ui, "presetGroupMenu:selectAll", r.rect);
+    if r.clicked() {
+        let ids: Vec<String> = group.items.iter().filter_map(|&i| app.session.presets.get(i).map(|p| p.id.clone())).collect();
+        app.ui.preset_selection.extend(ids);
+    }
+    if ui.add_enabled(!empty, egui::Button::new(crate::i18n::tr("Export Group…"))).clicked() {
+        let _ = app.run("file.exportPresets", json!({"group": group.name}));
+    }
+    let r = ui.button(crate::i18n::tr(if group.pinned { "Remove from Favorites" } else { "Add to Favorites" }));
+    register(ui, "presetGroupMenu:favorite", r.rect);
+    if r.clicked() {
+        let _ = app.run("preset.favoriteGroup", json!({"name": group.name, "favorite": !group.pinned}));
+    }
+    if group.builtin {
+        return;
+    }
+    ui.separator();
+    let r = ui.button(crate::i18n::tr("Rename…"));
+    register(ui, "presetGroupMenu:rename", r.rect);
+    if r.clicked() {
+        crate::panels::dialogs::prompt(
+            app,
+            "Rename Preset Group",
+            "Group name",
+            &group.name,
+            "preset.renameGroup",
+            json!({"name": group.name}),
+            "to",
+        );
+    }
+    let r = ui.button(crate::i18n::tr("Delete Group…"));
+    register(ui, "presetGroupMenu:delete", r.rect);
+    if r.clicked() {
+        if empty {
+            if let Err(e) = app.run("preset.deleteGroup", json!({"name": group.name})) {
+                app.toast(ui.ctx(), e);
+            }
+        } else {
+            app.ui.dialog = Some(crate::state::Dialog::DeletePresetGroup {
+                name: group.name.clone(),
+                count: group.items.len(),
+                library: app.session.library_generation(),
+            });
+        }
+    }
+}
+
 /// A preset group as the panel lists it: indices into the session's presets.
 struct Group {
     name: String,
     /// Holds a stock preset: a stock group (shown in the UI language), even when user presets
     /// share its name; a group of user presets keeps its name.
     builtin: bool,
-    /// Holds a user preset (a Move to Group target).
+    /// Holds a user preset or was made by name (a Move and Copy to Group target).
     user: bool,
     /// The Favorites section on top (issue #1999): the starred presets, each also in its own group.
     favorites: bool,
+    /// Starred as a group: listed right after that section, before the other groups.
+    pinned: bool,
     items: Vec<usize>,
 }
 
@@ -355,16 +605,31 @@ fn grouped(ctx: &egui::Context, presets: &PresetList) -> Arc<Vec<Group>> {
             builtin: false,
             user: false,
             favorites: false,
+            pinned: presets.favorite_groups().contains(&p.group),
             items: Vec::new(),
         });
         g.builtin |= p.builtin;
         g.user |= !p.builtin;
         g.items.push(i);
     }
+    // the groups made by name are listed even with no preset naming them
+    for name in presets.created_groups() {
+        let g = by_name.entry(name).or_insert_with(|| Group {
+            name: name.clone(),
+            builtin: false,
+            user: true,
+            favorites: false,
+            pinned: presets.favorite_groups().contains(name),
+            items: Vec::new(),
+        });
+        g.user = true;
+    }
     // starred presets first, in their own section, as Profiles does
     let starred: Vec<usize> = presets.iter().enumerate().filter(|(_, p)| p.favorite).map(|(i, _)| i).collect();
-    let favorites = (!starred.is_empty()).then(|| Group { name: "Favorites".into(), builtin: true, user: false, favorites: true, items: starred });
-    let groups = Arc::new(favorites.into_iter().chain(by_name.into_values()).collect::<Vec<_>>());
+    let favorites =
+        (!starred.is_empty()).then(|| Group { name: "Favorites".into(), builtin: true, user: false, favorites: true, pinned: false, items: starred });
+    let (pinned, others): (Vec<Group>, Vec<Group>) = by_name.into_values().partition(|g| g.pinned);
+    let groups = Arc::new(favorites.into_iter().chain(pinned).chain(others).collect::<Vec<_>>());
     ctx.data_mut(|d| d.insert_temp(id, (presets.generation(), groups.clone())));
     groups
 }
