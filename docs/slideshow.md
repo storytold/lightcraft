@@ -7,7 +7,7 @@ next to a live preview of the selected photo's slide, and View ▸ Slideshow (�
 
 | Part | Commands | Code |
 |---|---|---|
-| Playback: slide and fade durations, fade colour, random order, repeat, preparing slides ahead, manual slideshow | `slideshow.playback`, `view.slideshow` | `crates/engine/src/slideshow.rs` (the timeline), `crates/ui-egui/src/panels/slideshow.rs` |
+| Playback: slide and fade durations, fade colour, random order, repeat, preparing slides ahead, manual slideshow, pan and zoom | `slideshow.playback`, `view.slideshow` | `crates/engine/src/slideshow.rs` (the timeline), `crates/slideshow/src/motion.rs` (the pan and zoom path), `crates/ui-egui/src/panels/slideshow.rs` |
 | Layout, options, backdrop: margins, aspect preview, zoom to fill, stroke, shadow, colour, colour wash, background photo | `slideshow.layout` | `crates/slideshow` (the composer, no UI), `crates/engine/src/slide.rs` |
 | Overlays: identity plate, rating stars, text with tokens, watermark | `slideshow.overlays` | `crates/engine/src/slide_overlay.rs` |
 | Intro and ending screens | `slideshow.titles` | `crates/engine/src/slide_title.rs` |
@@ -23,7 +23,7 @@ the same pixels through the same composer.
 
 View ▸ Export Slideshow… (or Export PDF / JPEG / Video at the end of Settings ▸ Slideshow) chooses a format and size,
 then asks where to write. The slides are the photos in view, in view order, between the intro and ending screens that
-are on; random order, repeat and manual slideshow are playback choices and don't apply. The slide aspect is the Layout's aspect preview
+are on; random order, repeat, manual slideshow and pan and zoom are playback choices and don't apply. The slide aspect is the Layout's aspect preview
 (Screen exports 16:9).
 
 - **PDF** — one page per slide, its picture a JPEG at the chosen quality, the page as many points as the slide has
@@ -61,4 +61,4 @@ rendering included. The cost is in the fades (one encoded frame per frame of fad
 ## Not yet
 
 The Slideshow module view (left-panel template browser, slide editor with draggable guides and overlays), music and
-sync to music, pan & zoom, H.264 video, saving a slideshow with an album, export presets.
+sync to music, pan and zoom in exports, H.264 video, saving a slideshow with an album, export presets.
