@@ -878,7 +878,9 @@ fn cached(cache: &Cache, key: Key) -> Option<Arc<CrystalTile>> {
 /// The tile of `look` and `seed`, drawn or from the cache. Unless `wait`, a tile not drawn yet
 /// is drawn in the background and the last one drawn for `seed` stands in for it meanwhile: a
 /// Size or Roughness drag doesn't wait for every step's tile (tens of milliseconds on a slow
-/// CPU), and the full-quality render when it ends waits for the exact one.
+/// CPU), and the full-quality render when it ends waits for the exact one. With no tile cached
+/// for `seed` nothing can stand in, so even without `wait` this waits for a draw already running
+/// or draws the tile.
 fn tile(look: CrystalLook, seed: u32, wait: bool) -> Option<Arc<CrystalTile>> {
     tile_in(&TILES, look, seed, wait)
 }

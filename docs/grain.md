@@ -108,10 +108,12 @@ curtain; #1060: −9.3). Fine detail under the grain is kept (detail gain
   in bit-sliced counters, and the tiles are drawn in parallel bands. 7–15 ms on an M2 Max (12
   threads), 15–33 ms on a Ryzen 5 7545U (6 cores, 12 threads; 10–20 % less than before the row
   masks) at any setting (`tile_timing_report`).
-- **Drags.** A draft render (a slider drag) doesn't wait for a tile it hasn't got: the last tile
-  drawn for the photo's seed stands in while the new one is drawn in the background, on a pool of
-  half the cores so the drag's renders don't queue behind it, and the next render takes it. The
-  full-quality render when the drag ends waits for the exact tile. A Size drag on the Ryzen with its
+- **Drags.** A draft render (a slider drag) doesn't wait for a tile it hasn't got if one for the
+  photo's seed is cached: the last one drawn stands in while the new one is drawn in the background,
+  on a pool of half the cores so the drag's renders don't queue behind it, and the next render takes
+  it. With none cached for the seed there is nothing to stand in, so the draft waits for a draw
+  already running or draws the tile itself. The full-quality render when the drag ends waits for the
+  exact tile. A Size drag on the Ryzen with its
   Radeon 740M (GPU, 2.5 MP preview): 13–14 ms a frame instead of 62–66 ms. (On wasm, without
   threads, drafts wait.)
 - **Drag benchmark** (`FRAMES=100 cargo run --release -p lightcraft-gpu --example grain_drag_bench`: GPU
