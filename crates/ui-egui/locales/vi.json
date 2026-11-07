@@ -2711,5 +2711,8 @@
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
   "Bottom bar": "Thanh dưới cùng",
-  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Phím đang điều khiển thanh bên: phím mũi tên di chuyển, Enter mở, gõ để tìm, Esc quay lại ảnh",
+  "This row has no name to change": "Hàng này không có tên để đổi",
+  "Keyboard in Sidebar": "Bàn phím trong thanh bên"
 }

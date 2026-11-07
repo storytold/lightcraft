@@ -38,6 +38,19 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### The sidebar from the keyboard
+- **View ▸ Keyboard in Sidebar** (Cmd+Alt+B) gives the keys to the left sidebar: a ring shows the row they are
+  on, starting at what the grid shows. ↑ ↓ move (Home, End, Page Up, Page Down too), → unfolds a folder or
+  section or steps into it, ← folds it or steps out, Enter or Space chooses the row as a click does, typing goes
+  to the next row that starts so (the same letter again: the one after), and F2 renames an album, a keyword or
+  a folder.
+- Esc, Tab, the shortcut again, Find or a click on the photos gives the keys back. While the keys are in the
+  sidebar, keys without Cmd / Ctrl / Alt are not shortcuts (P finds a row; it does not flag a photo). Keys with
+  Shift are not the sidebar's either, except Shift+Tab, which gives the keys back like Tab, and typed capital
+  letters.
+- With Keyboard in Sidebar off, nothing changes: a click on a row never takes the keys.
+- For agents: `view.sidebarKeys` `{on?}`; the ring is widget `sidebarCursor`.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
