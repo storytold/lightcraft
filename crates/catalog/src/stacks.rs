@@ -8,9 +8,34 @@
 //! collapsed stacks reduced to one photo).
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 
 use crate::query::cmp_name;
 use crate::{Catalog, CatalogError, Op, PhotoId, Result, Stack, StackId};
+
+/// A hasher for photo ids: whole numbers given upward, which one multiplication spreads (SipHash costs several times
+/// that, and a view of a million photos is asked about photo by photo). Not for keys another party chooses.
+#[derive(Default)]
+struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = n.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+type IdMap<V> = HashMap<PhotoId, V, BuildHasherDefault<IdHasher>>;
+type IdSet = HashSet<PhotoId, BuildHasherDefault<IdHasher>>;
 
 impl Catalog {
     pub fn stack(&self, id: StackId) -> Option<&Stack> {
@@ -175,15 +200,15 @@ impl Catalog {
         if self.stacks.is_empty() {
             return ids.to_vec();
         }
-        let index = self.stack_index();
-        // (only a stack's members are asked about: hashing every photo of a million-photo view cost more than the rest)
-        let present: HashSet<PhotoId> = ids.iter().copied().filter(|id| index.contains_key(id)).collect();
+        // (every photo of the view is asked about, in a view of a million: a cheap hash, and only a stack's members kept)
+        let index: IdMap<StackId> = self.stacks.iter().flat_map(|(id, s)| s.photos.iter().map(move |p| (*p, *id))).collect();
+        let present: IdSet = ids.iter().copied().filter(|id| index.contains_key(id)).collect();
         let mut done: HashSet<StackId> = HashSet::new();
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             match index.get(id) {
                 None => out.push(*id),
-                Some((sid, _)) => {
+                Some(sid) => {
                     if !done.insert(*sid) {
                         continue;
                     }
