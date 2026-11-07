@@ -21,9 +21,15 @@ pub(crate) fn config_dir() -> Option<std::path::PathBuf> {
     lightcraft_engine::config::config_dir()
 }
 
+/// Native geometry follows the same no-write modes as ui.json (#1839).
+pub(crate) fn remember_native_window(in_memory: bool, keep_prefs_file: bool, has_prefs_path: bool) -> bool {
+    !in_memory && !keep_prefs_file && has_prefs_path
+}
+
 /// The window at the size it was last used at, zoomed if it was (`window`), or at the usual size
 /// when nothing is remembered. A zoomed window is given the size it goes back to. Where it
-/// opens is the system's to say.
+/// opens is the system's to say on macOS/Linux; Windows additionally restores monitor-aware
+/// geometry through eframe's persistence when available.
 pub(crate) fn as_remembered(builder: egui::ViewportBuilder, window: Option<lightcraft_ui_egui::window_place::WindowPlace>) -> egui::ViewportBuilder {
     let builder = builder.with_inner_size(window.map_or(lightcraft_ui_egui::window_place::DEFAULT_SIZE, |w| w.size));
     // (only ever asked to zoom: asked not to, macOS un-zooms a window whose size fills the screen
