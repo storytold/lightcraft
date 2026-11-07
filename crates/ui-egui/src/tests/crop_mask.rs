@@ -77,6 +77,27 @@ fn crop_mask_context_menu_sets_opacity() {
     assert_eq!(h.app.ui.crop_mask_opacity, 80);
 }
 
+/// The submenu belongs to the crop box: it is left out while Guided Upright or Straighten is in use,
+/// and when the right panel isn't Crop. The rest of the photo's menu is still there.
+#[test]
+fn crop_mask_menu_only_while_cropping() {
+    for case in ["guidedUpright", "straighten", "edit panel"] {
+        let mut h = crop_tool();
+        if case == "edit panel" {
+            let r = h.request("ui.set", json!({"right": "edit"}), T);
+            assert_eq!(r["ok"], true, "{r}");
+        } else {
+            h.app.ui.tool = case.into();
+        }
+        h.settle(SETTLE);
+        let img = h.app.image_rect.expect("the photo is on screen");
+        click(&mut h, img.center(), "right");
+        let labels = h.painted_text();
+        assert!(labels.iter().any(|t| t == "Zoom"), "{case}: the photo's menu opened: {labels:?}");
+        assert!(!labels.iter().any(|t| t == "Crop Mask"), "{case}: no Crop Mask submenu: {labels:?}");
+    }
+}
+
 /// Only supported integer levels change the preference; rejected values leave it untouched.
 #[test]
 fn crop_mask_opacity_command_accepts_supported_values_and_rejects_others() {
@@ -132,7 +153,7 @@ fn crop_mask_opacity_is_saved_leniently() {
 #[test]
 fn crop_mask_labels_are_translated_in_every_catalog() {
     for locale in crate::i18n::Locale::ALL {
-        for label in ["Crop Mask", "Crop Mask Opacity"] {
+        for label in ["Crop Mask", "Crop Mask Opacity", "Off"] {
             assert_eq!(*locale == crate::i18n::Locale::En, locale.tr(label) == label, "{label} in {locale:?}");
         }
     }
