@@ -247,7 +247,10 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
         }
         comp::LOSSY_JPEG => {
             // lossy DNG: each chunk is a baseline (DCT) JPEG of 8-bit samples
-            let (px, jw, jh, jc) = lossy_jpeg(src, cpp, MAX_JPEG_SAMPLES)?;
+            // a JPEG decoded for a tile may hold no more samples than the tile (a real one is exactly the tile):
+            // many small tiles pointing at one big JPEG would otherwise each decode all of it
+            let tile_budget = cw.saturating_mul(ch).saturating_mul(if cpp == 1 { 1 } else { 3 }).clamp(1 << 16, MAX_JPEG_SAMPLES);
+            let (px, jw, jh, jc) = lossy_jpeg(src, cpp, tile_budget)?;
             // the buffer holds the rows the decoded JPEG covers (the caller zero-fills the tile's
             // remainder and reads only rows it fills): a tile-many-larger decoded JPEG does not
             // get the nominal tile's full buffer (issue #1517)
@@ -271,6 +274,11 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
             // Deflate compresses at most about 1:1032, so a source this far under half of its
             // nominal length cannot reconstruct the chunk: refused before the nominal buffer is
             // inflated and predicted, which padding-only work would make gigabytes.
+            // Nor may the nominal chunk be mostly padding outside the image (a tile far larger than the picture):
+            // its allocation and predictor pass would be spent on samples nobody reads.
+            if n > vw.saturating_mul(vh).saturating_mul(cpp).saturating_mul(MAX_PADDING_FACTOR).saturating_add(1 << 20) {
+                return Err(RawError::Limit("deflated chunk is mostly padding outside the image"));
+            }
             if (src.len() as u64).saturating_mul(2048) < inflate_len {
                 return Err(RawError::Corrupt(format!("a deflated chunk of {inflate_len} bytes is packed into only {} bytes", src.len())));
             }
@@ -314,6 +322,10 @@ fn jxl_chunk(_: &[u8], _: usize, _: usize, _: usize, _: usize, _: usize, _: u32,
 fn jxl_chunk_check(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: usize, bits: u32, float: bool) -> Result<()> {
     jxl_chunk(src, cw, ch, vw, vh, cpp, bits, float).map(|_| ())
 }
+
+/// How many times its in-image samples a deflated chunk's nominal size may reach (plus 1 Mi samples of slack):
+/// edge tiles of real files are mostly inside the image.
+const MAX_PADDING_FACTOR: usize = 32;
 
 /// The most samples a tiled JPEG chunk or a white-balance preview may decode to: far more than
 /// any real lossy tile or preview carries, and small enough that a JPEG header alone cannot size
