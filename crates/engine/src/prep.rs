@@ -519,7 +519,7 @@ impl Session {
             return;
         }
         self.prep.library_gen = Some(self.library_generation());
-        if let Some(b) = &self.prep.build {
+        if let Some(b) = self.prep.build.as_ref().filter(|b| b.running()) {
             b.cancel.store(true, Ordering::Relaxed);
         }
         self.drop_plan();
