@@ -11,6 +11,9 @@ const F: Format = Format::Png;
 /// kilobytes, so anything past this is hostile input, not metadata.
 const MAX_TEXT_CHUNK: usize = 4 << 20;
 
+/// Deflate's largest expansion: a 258-byte match coded in two bits, 1032 bytes per input byte.
+const MAX_DEFLATE_RATIO: u64 = 1032;
+
 fn err(e: impl std::fmt::Display) -> Error {
     Error::Malformed(F, e.to_string())
 }
@@ -20,11 +23,24 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     dec.set_transformations(png::Transformations::EXPAND);
     dec.set_limits(png::Limits { bytes: opts.max_pixels.saturating_mul(8).min(usize::MAX as u64) as usize });
     let mut reader = dec.read_info().map_err(err)?;
-    let (w, h) = {
+    let (w, h, bits) = {
         let i = reader.info();
-        (i.width, i.height)
+        let samples: u64 = match i.color_type {
+            png::ColorType::Grayscale | png::ColorType::Indexed => 1,
+            png::ColorType::GrayscaleAlpha => 2,
+            png::ColorType::Rgb => 3,
+            png::ColorType::Rgba => 4,
+        };
+        (i.width, i.height, samples * i.bit_depth as u64)
     };
     check_size(F, w as u64, h as u64, opts)?;
+    // The pixel bytes are inflated from the file's IDAT data, and Deflate expands at most 1032:1 (a 258-byte match
+    // per two bits): an IHDR claiming more pixel bytes than the whole file can inflate to is refused before the
+    // output buffer is made (a few-hundred-byte file could otherwise ask for max_pixels × 8 bytes).
+    let pixel_bytes = (w as u64).saturating_mul(h as u64).saturating_mul(bits) / 8;
+    if pixel_bytes > (bytes.len() as u64).saturating_mul(MAX_DEFLATE_RATIO) {
+        return Err(err(format!("{w}×{h} image data cannot come from {} bytes", bytes.len())));
+    }
     let size = reader.output_buffer_size().ok_or_else(|| err("buffer size overflow"))?;
     let mut buf = vec![0u8; size];
     let out = reader.next_frame(&mut buf).map_err(err)?;
@@ -193,6 +209,43 @@ mod tests {
         let d = crate::decode(&out, DecodeOptions::default()).unwrap();
         assert!(d.xmp.is_none());
         assert_eq!((d.width, d.height), (1, 1));
+    }
+
+    /// #2562: an IHDR claiming 20000×20000 RGBA16 (3.2 GB of pixel bytes) in a file of under 100 bytes is refused
+    /// as malformed before the output buffer is made, even under a cap that allows its pixel count.
+    #[test]
+    fn ihdr_larger_than_its_data_can_inflate_is_refused() {
+        fn crc(data: &[u8]) -> u32 {
+            let mut c = !0u32;
+            for &b in data {
+                c ^= u32::from(b);
+                for _ in 0..8 {
+                    c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+                }
+            }
+            !c
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            out.extend((data.len() as u32).to_be_bytes());
+            let start = out.len();
+            out.extend(kind);
+            out.extend(data);
+            let c = crc(&out[start..]);
+            out.extend(c.to_be_bytes());
+        }
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::new();
+        ihdr.extend(20000u32.to_be_bytes());
+        ihdr.extend(20000u32.to_be_bytes());
+        ihdr.extend([16, 6, 0, 0, 0]);
+        chunk(&mut png, b"IHDR", &ihdr);
+        // a zlib stream with one empty stored block
+        chunk(&mut png, b"IDAT", &[0x78, 0x01, 0x01, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x01]);
+        chunk(&mut png, b"IEND", &[]);
+        assert!(png.len() < 100);
+        let opts = DecodeOptions { max_size: None, max_pixels: 1 << 30 };
+        // refused by the inflate bound itself, not later by the empty IDAT once the 3.2 GB buffer is made
+        assert!(matches!(crate::decode(&png, opts), Err(crate::Error::Malformed(_, m)) if m.contains("cannot come from")));
     }
 
     /// XMP within the cap is still read, compressed or not.
