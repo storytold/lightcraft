@@ -46,6 +46,11 @@ const QUICK: std::time::Duration = std::time::Duration::from_millis(4);
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const MAX_REST: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long a count that waits for the worker gate (counts of rules since changed, still running) waits before it asks
+/// again: the repaint such a worker asks for as it ends can come before its thread has, and nothing else need repaint.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+const GATE_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// What a count was made of: the catalog revision, and the minute "in the last…" rules counted back from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Stamp {
@@ -74,12 +79,21 @@ pub struct LiveCount {
     /// No count of the same rules starts before this: the last one's own duration after it ended.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     rest_until: Option<std::time::Instant>,
+    /// The pass (of the `egui::Context`) of the last call that answered "updating" with no count running: a count is
+    /// still to start (resting, or waiting for the gate). Headless settling waits for it while a dialog asks.
+    waiting: Option<u64>,
     /// How many counts ran on the worker, and how many on the UI thread (no thread to spare, or wasm).
     pub jobs: usize,
     pub ui_thread_scans: usize,
     /// Tests: how long each worker count waits before it counts (a large library's seconds, made small).
     #[cfg(test)]
     pub(crate) slow: Option<std::time::Duration>,
+    /// Tests: every count ends in an error.
+    #[cfg(test)]
+    pub(crate) fails: bool,
+    /// Tests: no worker thread can be had (the count is made on the spot, as on wasm32).
+    #[cfg(test)]
+    pub(crate) no_thread: bool,
 }
 
 /// What a count answers: how many, and how long it took.
@@ -102,9 +116,12 @@ impl LiveCount {
         self.done.map(|(_, stamp, n)| (n, stamp.revision))
     }
 
-    /// Whether a count is running on the worker (it has not finished, taken or not).
-    pub(crate) fn running(&self) -> bool {
+    /// Whether a count is running on the worker (it has not finished, taken or not), or one is still to start for a
+    /// dialog that was drawn in the last pass: a recount that rests or waits for the worker gate. Not while no
+    /// dialog asks for it any more.
+    pub(crate) fn running(&self, ctx: &egui::Context) -> bool {
         self.job.as_ref().is_some_and(|job| !job.worker.is_finished())
+            || self.waiting.is_some_and(|pass| pass.saturating_add(1) >= ctx.cumulative_pass_nr())
     }
 
     /// The count of `what` (the filter `filter` makes) in `cat`: the one made, or the one before while a new one
@@ -120,6 +137,7 @@ impl LiveCount {
         ctx: &egui::Context,
     ) -> Count {
         self.collect();
+        self.waiting = None;
         let stamp = Stamp { revision: cat.revision, minute: key_of(minute) };
         // a count of other rules is no use now: let it go (it ends on its own)
         if let Some(job) = self.job.take_if(|j| j.what != what) {
@@ -144,7 +162,15 @@ impl LiveCount {
                 ctx.request_repaint_after(rest);
             } else if let Some(n) = self.start(cat, what, stamp, filter(), now, ctx) {
                 return Count { n: Some(n), updating: false };
+            } else if self.failed == Some((what, stamp)) {
+                // (it ended at once, in an error: not "counting…")
+                return Count::default();
             }
+        } else if self.job.is_none() {
+            ctx.request_repaint_after(GATE_RETRY);
+        }
+        if self.job.is_none() {
+            self.waiting = Some(ctx.cumulative_pass_nr());
         }
         Count { n: before, updating: true }
     }
@@ -171,24 +197,34 @@ impl LiveCount {
             // (the copy is of the photo pointers, not the photos: some milliseconds in a library of millions)
             let (copy, ctx, now) = (cat.clone(), ctx.clone(), now.to_string());
             #[cfg(test)]
-            let slow = self.slow;
+            let (slow, fails) = (self.slow, self.fails);
             let (tx, done) = std::sync::mpsc::channel();
-            let spawned = std::thread::Builder::new().name("lc-rules-count".into()).spawn({
-                let filter = filter.clone();
-                move || {
-                    let began = std::time::Instant::now();
-                    #[cfg(test)]
-                    if let Some(wait) = slow {
-                        std::thread::sleep(wait);
+            #[cfg(test)]
+            let no_thread = self.no_thread;
+            #[cfg(not(test))]
+            let no_thread = false;
+            let spawned = if no_thread {
+                Err(std::io::Error::other("no thread to spare"))
+            } else {
+                std::thread::Builder::new().name("lc-rules-count".into()).spawn({
+                    let filter = filter.clone();
+                    move || {
+                        let began = std::time::Instant::now();
+                        #[cfg(test)]
+                        if let Some(wait) = slow {
+                            std::thread::sleep(wait);
+                        }
+                        let counted = lightcraft_engine::guard::catch("Counting the photos a filter matches", || {
+                            lightcraft_catalog::rules::set_now(Some(now));
+                            copy.count(&filter)
+                        });
+                        #[cfg(test)]
+                        let counted = counted.and_then(|n| if fails { Err("the count fails".to_string()) } else { Ok(n) });
+                        let _ = tx.send(counted.map(|n| (n, began.elapsed())));
+                        ctx.request_repaint();
                     }
-                    let counted = lightcraft_engine::guard::catch("Counting the photos a filter matches", || {
-                        lightcraft_catalog::rules::set_now(Some(now));
-                        copy.count(&filter)
-                    });
-                    let _ = tx.send(counted.map(|n| (n, began.elapsed())));
-                    ctx.request_repaint();
-                }
-            });
+                })
+            };
             match spawned {
                 Ok(worker) => {
                     self.jobs += 1;
@@ -208,6 +244,8 @@ impl LiveCount {
         self.ui_thread_scans += 1;
         lightcraft_catalog::rules::set_now(Some(now.to_string()));
         let counted = lightcraft_engine::guard::catch("Counting the photos a filter matches", || cat.count(&filter));
+        #[cfg(test)]
+        let counted = counted.and_then(|n| if self.fails { Err("the count fails".to_string()) } else { Ok(n) });
         self.finish(what, stamp, counted.map(|n| (n, std::time::Duration::ZERO)))
     }
 
@@ -537,8 +575,8 @@ impl Caches {
     }
 
     /// Whether a dialog's count is running on a worker (a frame may still have to take it).
-    pub fn count_running(&self) -> bool {
-        self.rules_count.running() || self.new_smart_album_count.running()
+    pub fn count_running(&self, ctx: &egui::Context) -> bool {
+        self.rules_count.running(ctx) || self.new_smart_album_count.running(ctx)
     }
 
     /// A count an open dialog shows (photos a filter matches, photos with a keyword…): `count` runs
@@ -844,6 +882,125 @@ mod cache_tests {
         }
         assert_eq!(c.rules_count.jobs, jobs + 1, "rested, counting");
         assert_eq!(rules_counted(&mut c, &cat, &rules, now).1.n, Some(2));
+    }
+
+    /// A pass of `ctx` with nothing drawn: the dialog that asked for the count is no longer open.
+    fn pass_without_the_dialog(ctx: &egui::Context) {
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+    }
+
+    /// Headless settling waits for a recount that is still to start (the catalog changed after the last count, which
+    /// rests before the next), not only for one that is running: a screenshot then never shows the stale count.
+    #[test]
+    fn a_recount_that_waits_keeps_the_headless_view_busy_until_the_count_is_current() {
+        let mut cat = rated_library();
+        let mut c = super::Caches::default();
+        c.rules_count.slow = Some(SLOW);
+        let ctx = egui::Context::default();
+        let now = "2026-09-30T12:00:00";
+        let rules = rule_set(3);
+        let mut shown = c.rules_view(&cat, &rules, None, None, now, &ctx).1;
+        let t0 = std::time::Instant::now();
+        while shown.updating {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the count is done");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            shown = c.rules_view(&cat, &rules, None, None, now, &ctx).1;
+        }
+        assert!(!c.count_running(&ctx), "a current count is nothing to wait for");
+        let jobs = c.rules_count.jobs;
+        cat.apply(Op::SetRating { id: PhotoId(2), rating: 4 }).unwrap();
+        assert_eq!(c.rules_view(&cat, &rules, None, None, now, &ctx).1, super::Count { n: Some(1), updating: true });
+        assert_eq!(c.rules_count.jobs, jobs, "resting: no worker runs");
+        assert!(c.count_running(&ctx), "the recount is still to come");
+        // the dialog is closed (nothing asks for the count any more): nothing is waited for
+        pass_without_the_dialog(&ctx);
+        pass_without_the_dialog(&ctx);
+        assert!(!c.count_running(&ctx), "a count nobody shows is not waited for");
+        // open again: the recount is waited for, until it is made and shown
+        c.rules_view(&cat, &rules, None, None, now, &ctx);
+        assert!(c.count_running(&ctx));
+        assert_eq!(rules_counted_in(&mut c, &cat, &rules, now, &ctx).1.n, Some(2));
+        assert!(!c.count_running(&ctx), "current again");
+    }
+
+    /// [`rules_counted`] with the caller's `ctx`.
+    fn rules_counted_in(c: &mut super::Caches, cat: &Catalog, rules: &RuleSet, now: &str, ctx: &egui::Context) -> Shown {
+        let t0 = std::time::Instant::now();
+        loop {
+            let shown = c.rules_view(cat, rules, None, None, now, ctx);
+            if !shown.1.updating {
+                return shown;
+            }
+            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the count is done");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// Two counts of rules since changed fill the worker gate; a count of the latest rules that has to wait for
+    /// them asks to be tried again soon, because the repaint a finishing worker asks for can come before its thread
+    /// has ended (and nothing else need repaint).
+    #[test]
+    fn a_count_held_back_by_the_workers_let_go_asks_to_be_tried_again() {
+        let cat = rated_library();
+        let mut c = super::Caches::default();
+        c.rules_count.slow = Some(std::time::Duration::from_millis(600));
+        let ctx = egui::Context::default();
+        let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        ctx.set_repaint_observer({
+            let delays = delays.clone();
+            move |info| delays.lock().unwrap().push(info.delay)
+        });
+        let now = "2026-09-30T12:00:00";
+        for v in [3, 1] {
+            assert_eq!(c.rules_view(&cat, &rule_set(v), None, None, now, &ctx).1, super::Count { n: None, updating: true });
+        }
+        assert_eq!(c.rules_count.jobs, 2, "both counts run (the second's rules have since changed)");
+        delays.lock().unwrap().clear();
+        // the third rules: the gate holds (both before are still counting), and it will not open by itself
+        assert_eq!(c.rules_view(&cat, &rule_set(2), None, None, now, &ctx).1, super::Count { n: None, updating: true });
+        assert_eq!(c.rules_count.jobs, 2, "held back");
+        assert!(delays.lock().unwrap().iter().any(|d| !d.is_zero()), "a later try is asked for: {:?}", delays.lock().unwrap());
+        assert!(c.count_running(&ctx), "headless settling waits for it");
+        // (once they end the held count is made)
+        assert_eq!(rules_counted_in(&mut c, &cat, &rule_set(2), now, &ctx).1.n, Some(1));
+    }
+
+    /// A count that fails at once is the failed state on the first frame, not "counting…" until some other repaint:
+    /// it ended on the worker before the frame stopped waiting for it, or where no thread can be had it ended
+    /// on the spot.
+    #[test]
+    fn a_count_that_fails_at_once_shows_the_failed_state_on_the_first_frame() {
+        let cat = rated_library();
+        let ctx = egui::Context::default();
+        let now = "2026-09-30T12:00:00";
+        // no thread: counted here, and it fails
+        let mut c = super::Caches::default();
+        (c.rules_count.no_thread, c.rules_count.fails) = (true, true);
+        assert_eq!(c.rules_view(&cat, &rule_set(3), None, None, now, &ctx).1, super::Count::default());
+        assert_eq!(c.rules_count.ui_thread_scans, 1);
+        assert_eq!(c.rules_view(&cat, &rule_set(3), None, None, now, &ctx).1, super::Count::default(), "and stays so");
+        assert_eq!(c.rules_count.ui_thread_scans, 1, "not tried again for this catalog");
+        // a worker that fails within the wait (a few photos, no delay: it ends in microseconds)
+        let mut c = super::Caches::default();
+        c.rules_count.fails = true;
+        let first = c.rules_view(&cat, &rule_set(3), None, None, now, &ctx).1;
+        if c.rules_count.failed.is_some() {
+            assert_eq!(first, super::Count::default());
+        } else {
+            // (a machine so busy that the worker missed the wait: the count was still pending)
+            assert_eq!(first, super::Count { n: None, updating: true });
+        }
+        assert_eq!(c.rules_count.jobs, 1);
+        let t0 = std::time::Instant::now();
+        while c.rules_view(&cat, &rule_set(3), None, None, now, &ctx).1.updating {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the failure is taken");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(c.rules_count.jobs, 1, "not tried again for this catalog");
+        // a count that is only slow is still pending on the first frame
+        let mut c = super::Caches::default();
+        c.rules_count.slow = Some(SLOW);
+        assert_eq!(c.rules_view(&cat, &rule_set(3), None, None, now, &ctx).1, super::Count { n: None, updating: true });
     }
 
     /// Create Smart Album's count is made the same way.
