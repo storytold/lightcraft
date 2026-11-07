@@ -89,7 +89,7 @@ fn exact_reductions_match_the_frozen_f32_merge_bit_for_bit() {
 }
 
 #[test]
-fn streamed_saturation_keeps_the_exact_fold_and_edge_intervals() {
+fn streamed_saturation_keeps_exact_maxima_and_edge_intervals() {
     for (w, h) in [(1, 1), (1, 137), (7, 1), (19, 137)] {
         let image = Rgb32f::from_fn(w, h, |x, y| {
             let value = [0.0, -0.0, -1.0, 0.8, 0.96, 1.0, 1e-8][(x + 3 * y) % 7];
@@ -105,7 +105,12 @@ fn streamed_saturation_keeps_the_exact_fold_and_edge_intervals() {
                 }
                 let [a, b, c] = rows.for_row(0, y).unwrap();
                 for (x, ((&a, &b), &c)) in a.iter().zip(b).zip(c).enumerate() {
-                    assert_eq!(0.0f32.max(a).max(b).max(c).to_bits(), expected[y * w + x].to_bits(), "{w}x{h} at {x},{y}");
+                    // f32::max may choose either signed zero on a tie, including between
+                    // separately compiled reductions on x86. For finite maxima, numeric
+                    // equality permits only that sign difference, with no error tolerance.
+                    // Saturation feeds smoothstep, never a divisor or a sign test. Final
+                    // radiance and DNG comparisons remain bit-exact, including signed zeros.
+                    assert_eq!(0.0f32.max(a).max(b).max(c), expected[y * w + x], "{w}x{h} at {x},{y}");
                 }
             }
         }
@@ -182,7 +187,12 @@ fn a_decode_error_after_successful_inputs_is_unchanged_and_stops_loading() {
 
 #[test]
 fn direct_stored_warp_matches_the_original_lanczos_kernel_bit_for_bit() {
-    let image = brackets(129, 131, 3).remove(1).image;
+    let mut image = brackets(129, 131, 3).remove(1).image;
+    // Exercise zero ties in the shared Lanczos neighbour clamp too. These comparisons
+    // must retain every output bit, unlike an unobservable saturation intermediate.
+    for (i, pixel) in image.data.iter_mut().take(129 * 32).enumerate() {
+        *pixel = if i % 2 == 0 { [-0.0, 0.0, -0.0] } else { [0.0, -1e-8, 0.0] };
+    }
     for h in [
         lightcraft_geom::Homography::IDENTITY,
         lightcraft_geom::Homography([1.0, 0.0, 2.375, 0.0, 1.0, -1.625, 0.0, 0.0, 1.0]),

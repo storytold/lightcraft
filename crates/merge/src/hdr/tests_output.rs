@@ -86,6 +86,52 @@ fn developed(source: &Rgb32f, exposure: f64, temp: f64, tint: f64) -> Rgb32f {
 }
 
 #[test]
+fn signed_zero_saturation_keeps_radiance_and_dng_bytes_identical() {
+    for pattern in 0..4 {
+        let mut frames = fixture();
+        for frame in &mut frames {
+            for (i, pixel) in frame.image.data.iter_mut().enumerate() {
+                match pattern {
+                    0 => *pixel = [-0.0; 3],
+                    1 => *pixel = if i % 2 == 0 { [-0.0, 0.0, -0.0] } else { [0.0, -0.0, 0.0] },
+                    2 if i % W < 32 => {
+                        *pixel = match i % 3 {
+                            0 => [-0.0, 0.0, -0.0],
+                            1 => [0.0, -1e-8, 0.0],
+                            _ => [f32::from_bits(1), -f32::from_bits(1), 0.0],
+                        };
+                    }
+                    // A clipped reference highlight sees signed-zero saturation in the
+                    // other frames, so the highlight guard's m / k / bound path runs too.
+                    3 if i % W >= 96 && pixel.iter().all(|v| v.abs() < 0.01) => *pixel = [-0.0, 0.0, -0.0],
+                    _ => {}
+                }
+            }
+        }
+        for deghost in [Deghost::None, Deghost::Low, Deghost::Medium, Deghost::High] {
+            for align in [false, true] {
+                let options = HdrOptions { align, deghost };
+                let old = baseline::merge_hdr(frames.clone(), &old_options(&options), &crate::no_progress).unwrap();
+                let new = merge_hdr(frames.clone(), &options, &crate::no_progress).unwrap();
+                regions(&old.radiance, &new.radiance);
+                assert_eq!(
+                    old.ghost.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    new.ghost.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                );
+                for samples in [crate::DngSamples::Half, crate::DngSamples::Float] {
+                    let encode = |image: &Rgb32f| {
+                        crate::write_linear_dng(image, &new.color, new.orientation, &new.metadata, new.baseline_exposure, samples, &new.lens).unwrap()
+                    };
+                    let (a, b) = (encode(&old.radiance), encode(&new.radiance));
+                    assert_eq!(a, b, "signed-zero pattern {pattern}, {options:?}, {samples:?}");
+                    regions(&decode(&a, old.baseline_exposure), &decode(&b, new.baseline_exposure));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn exact_reductions_keep_dng_restored_radiance_shadow_lifting_and_white_balance() {
     for deghost in [Deghost::None, Deghost::High] {
         let options = HdrOptions { align: false, deghost };

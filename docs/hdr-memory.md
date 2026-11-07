@@ -199,6 +199,25 @@ overlay, exposure values, alignment, reference and metadata. Tests include
 all deghost settings, alignment on and off, band boundaries, narrow images,
 all-black, all-clipped and moving-highlight cases.
 
+Saturation scratch is compared with exact float equality. Its `f32::max`
+reductions can select different signs when positive and negative zero tie, as
+[Rust documents](https://doc.rust-lang.org/std/primitive.f32.html#method.max).
+
+The original materialised reduction returns `-0.0` where the streamed path
+returns `+0.0` for the `7x1` fixture on x86. This was reproduced with the
+unchanged failing test under Rosetta using `x86_64-apple-darwin`.
+
+For finite maxima, only zero has two numerically equal bit patterns; no
+tolerance is used. Saturation is never a divisor or inspected for its sign.
+Both uses subtract a positive smoothstep threshold, which removes the zero
+sign before it can affect a weight.
+
+Production arithmetic is unchanged.
+Signed-zero, negative-sample and subnormal fixtures retain strict bit checks
+for radiance and overlay, byte checks for half and float DNGs, and bit checks
+after DNG decoding and scale restoration. The Lanczos equality fixture also
+contains mixed signed zeros and negative samples.
+
 A second fixture has fixed non-empty shadow-ramp, coloured clipping-boundary
 and moving-highlight regions. Every channel is checked before encoding and
 after decoding the half-float DNG and undoing its maximum-dependent scale via
@@ -486,6 +505,7 @@ frame storage has been shipped.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | patch | LR-MERGE-HDR: reproduce x86 signed-zero max ties under Rosetta; compare saturation maxima exactly without imposing a zero sign, and extend strict output and Lanczos regression coverage |
 | 2026-11-07 | patch | LR-MERGE-HDR: release comparisons and A/B checks; checked row/tile views and parallel finite scans remove the measured slowdown, with unchanged large-case heap maxima; safe no-zero warp rejected |
 | 2026-11-05 | patch | LR-MERGE-HDR: check cancellation before each lazy input request; regressions cover loading cancellation, decode errors, two-frame merges and mixed orientations; merge current main before PR |
 | 2026-11-05 | minor | LR-MERGE-HDR: Stage 1 exact reductions, frozen-oracle and cutoff diagnostics, large generated profiles and upper allocation budgets; half-float storage deferred |
