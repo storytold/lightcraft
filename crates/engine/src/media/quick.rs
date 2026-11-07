@@ -131,14 +131,31 @@ pub(super) fn embedded_thumb_key(k: Hash128) -> Hash128 {
     Hasher128::new().str("embedded-thumb").u64((k.0 >> 64) as u64).u64(k.0 as u64).finish()
 }
 
-/// What identifies a photo's pixels for caching: its content hash, else its source.
-/// Which decode of a photo a loaded source is: its file's content and, when it has one, its database lens profile
+/// ORF decoding changed when compressed sensor support was withdrawn. Keep its old renders
+/// out even before catalog rechecking finishes, and distinguish sensor from preview-only
+/// pixels after Reload. Other formats keep their existing keys. This is deliberately not
+/// part of `content_key`: smart previews and denoise products identify the original file.
+pub(super) fn decoder_key(p: &Photo) -> u64 {
+    if !p.format.eq_ignore_ascii_case("ORF") {
+        return 0;
+    }
+    // Spread the status bit: this salt is XORed with frontend dimensions, so adjacent
+    // integers could cancel a small resize occurring at the same time as a recheck.
+    let h = Hasher128::new().str("orf-withdrawal-v1").u64(u64::from(p.preview_only.is_some())).finish();
+    ((h.0 as u64) ^ ((h.0 >> 64) as u64)) | 1
+}
+
+/// Which decode of a photo a loaded source is: its file's content, decoder identity and database lens profile
 /// ([`lens_key`]; the decode fits the starting colour through it). A job's source is kept only when this still
 /// matches when the job finishes ([`super::Session::accept`]), so a decode started before a profile change never
 /// returns to the cache after `cmd::lens_refresh` has dropped the photo's sources.
 pub fn source_identity(p: &Photo) -> Hash128 {
     let mut k = Hasher128::new();
     k.str(&content_key(p));
+    let decoder = decoder_key(p);
+    if decoder != 0 {
+        k.str("decoder").u64(decoder);
+    }
     let lens = lens_key(p);
     if lens != 0 {
         k.u64(lens);
