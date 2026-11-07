@@ -304,9 +304,9 @@ pub(crate) fn reload_ops(
     // predates the fields being read). The stamp goes in those cases and a later sweep reads
     // the file again (this read may itself have run while no lens database was there to look
     // the file up in).
-    let lookup_changed = content.is_some()
-        || !lens.is_empty()
-        || meta_ops.iter().any(|op| matches!(op, Op::SetMeta { meta, .. } if meta.camera != ph.meta.camera || meta.lens != ph.meta.lens || meta.focal_mm != ph.meta.focal_mm));
+    let lookup_meta_changed =
+        meta_ops.iter().any(|op| matches!(op, Op::SetMeta { meta, .. } if meta.camera != ph.meta.camera || meta.lens != ph.meta.lens || meta.focal_mm != ph.meta.focal_mm));
+    let lookup_changed = content.is_some() || !lens.is_empty() || lookup_meta_changed;
     let stamp = (lookup_changed && !ph.lens_checked.is_empty()).then(|| Op::SetLensChecked { id, checked: String::new() });
     let mut mine: Vec<Op> = content.into_iter().chain(meta_ops).chain(lens).chain(as_shot_wb_op(id, ph, info)).chain(stamp).collect();
     if !mine.is_empty() {
@@ -319,8 +319,10 @@ pub(crate) fn reload_ops(
         let content = content_op(c.id, c, info.clone());
         let lens = lens_ops(c.id, c, info);
         copy_changed_lookup |= content.is_some() || !lens.is_empty();
-        let stamp =
-            ((content.is_some() || !lens.is_empty()) && !c.lens_checked.is_empty()).then(|| Op::SetLensChecked { id: c.id, checked: String::new() });
+        // the metadata fill above changed what a lookup keys on for the shared file, so it
+        // stales a copy's stamp too, even when the copy's own content and lens ops are empty
+        let stamp = ((lookup_meta_changed || content.is_some() || !lens.is_empty()) && !c.lens_checked.is_empty())
+            .then(|| Op::SetLensChecked { id: c.id, checked: String::new() });
         let theirs: Vec<Op> = content.into_iter().chain(lens).chain(as_shot_wb_op(c.id, c, info)).chain(stamp).collect();
         if !theirs.is_empty() {
             ops.extend(theirs);

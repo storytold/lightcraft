@@ -391,6 +391,46 @@ fn a_copy_reload_that_changes_lookup_inputs_clears_the_originals_stamp_too() {
     }
 }
 
+/// CodeRabbit round 5 on #3867: the metadata-only case reaches virtual copies too. The
+/// original's catalog predates the camera/lens fields being read and this read fills them
+/// in with the content unchanged; the copy's own content and lens ops are empty (its record
+/// already matches the probe on those), yet its stamp keyed on the same shared file, so it
+/// goes as well \u2014 a copy left behind by a deleted original is looked up by its own stamp.
+#[test]
+fn a_metadata_only_reload_clears_a_virtual_copys_lens_miss_stamp_too() {
+    let mut s = Session::new();
+    let mut master = raw(1, "", false);
+    master.meta.camera = String::new();
+    let mut copy = raw(2, "50mm F1.8", false);
+    copy.copy_of = Some(PhotoId(1));
+    for p in [master, copy] {
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    for id in [PhotoId(1), PhotoId(2)] {
+        s.catalog.apply(Op::SetLensChecked { id, checked: "1:old".into() }).unwrap();
+    }
+    let ph = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let mut info = crate::media::ProbeInfo {
+        width: ph.width,
+        height: ph.height,
+        file_size: ph.file_size,
+        content_hash: ph.content_hash.clone(),
+        ..Default::default()
+    };
+    info.meta.camera = "Testcam TC-1".into();
+    info.meta.lens = "50mm F1.8".into();
+    let (mut ops, mut changed) = (Vec::new(), Vec::new());
+    crate::cmd::convert::reload_ops(&s.catalog, PhotoId(1), &info, &mut ops, &mut changed);
+    assert!(changed.contains(&PhotoId(1)) && changed.contains(&PhotoId(2)), "both records changed: {changed:?}");
+    for op in ops {
+        s.catalog.apply(op).unwrap();
+    }
+    assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().meta.lens, "50mm F1.8", "the metadata fill landed");
+    for id in [PhotoId(1), PhotoId(2)] {
+        assert!(s.catalog.photo(id).unwrap().lens_checked.is_empty(), "photo {}: the stamp read the file without its lens metadata", id.0);
+    }
+}
+
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-lens-refresh-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
