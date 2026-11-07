@@ -86,6 +86,7 @@ mod scan_probes;
 mod scroll;
 mod slider_reset;
 mod slideshow;
+mod smart_count;
 mod solo_sections;
 mod space_hand;
 mod switch_library;

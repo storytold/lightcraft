@@ -929,8 +929,8 @@ fn offers_never_cover_the_box() {
     }
 }
 
-/// Rename Keyword's "used by n photos" and Create Smart Album's live count scan the library once
-/// per change to it, not every frame the dialog is open.
+/// Rename Keyword's "used by n photos" scans the library once per change to it, not every frame the dialog is open;
+/// Create Smart Album's live count is made on a worker, once for its rules, and never on a frame.
 #[test]
 fn open_dialogs_count_once_per_library_change() {
     let (mut h, ids) = two_selected();
@@ -947,5 +947,11 @@ fn open_dialogs_count_once_per_library_change() {
     for _ in 0..10 {
         h.step();
     }
-    assert_eq!(h.app.caches.dialog_count_scans, before + 3, "another dialog counts its own photos, once");
+    assert!(h.step_until(T, |h| h.app.caches.new_smart_album_count.last().is_some()), "the worker's count arrives");
+    for _ in 0..10 {
+        h.step();
+    }
+    assert_eq!(h.app.caches.new_smart_album_count.jobs, 1, "counted once for its rules, on a worker");
+    assert_eq!(h.app.caches.new_smart_album_count.ui_thread_scans, 0);
+    assert_eq!(h.app.caches.dialog_count_scans, before + 2, "no frame counted the photos");
 }

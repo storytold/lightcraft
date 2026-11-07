@@ -31,6 +31,8 @@
   "A sleeping NAS, a dropped network share or a USB drive spinning up no longer freezes the window (issue #104):": "Ein schlafendes NAS, eine getrennte Netzwerkfreigabe oder ein anlaufendes USB-Laufwerk blockieren das Fenster nicht mehr (Issue #104).",
   "AI Mask Model Status": "Status des KI-Maskenmodells",
   "AI masks with SAM 3 (Object and Describe in the Masking panel): click an object to select it (⌥-click leaves a": "KI-Masken mit SAM 3 über Objekt und Beschreiben im Maskenbereich: Ein Objekt zum Auswählen anklicken; ⌥-Klick lässt einen Teil",
+  "Counting…": "Wird gezählt…",
+  "updating…": "wird aktualisiert…",
   "About": "Über",
   "About LightCraft": "Über LightCraft",
   "Active": "Aktiv",

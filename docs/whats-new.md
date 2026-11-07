@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Smart album dialogs stay responsive during an import
+- With the New Smart Album, Edit Smart Album or Create Smart Album dialog open while photos are imported or synchronized
+  into a large library, the window no longer stalls on every change the library makes. How many photos match is
+  counted in the background: the dialog shows "Counting…" until the first count is made, keeps showing the last count
+  with an "updating…" mark under it while the library changes, and shows the new count once it is made.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

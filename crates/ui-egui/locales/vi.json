@@ -37,6 +37,8 @@
   "AI Denoise Model": "Mô hình khử nhiễu AI",
   "AI Mask Model Status": "Trạng thái mô hình mặt nạ AI",
   "AI masks with SAM 3 (Object and Describe in the Masking panel): click an object to select it (⌥-click leaves a": "Mặt nạ AI với SAM 3 (Object và Describe trong bảng Mặt nạ): bấm vào đối tượng để chọn (⌥-click để lại",
+  "Counting…": "Đang đếm…",
+  "updating…": "đang cập nhật…",
   "About": "Giới thiệu",
   "About LightCraft": "Giới thiệu LightCraft",
   "Accept & Download": "Chấp nhận và tải",

@@ -631,7 +631,10 @@ pub struct Caches {
     pub album_count_scans: usize,
     /// What the open smart-album rule dialog shows besides the rules ([`Caches::rules_view`]).
     rules_view: Option<(u64, std::sync::Arc<RulesView>)>,
-    pub rules_view_scans: usize,
+    /// How many photos the open smart-album rule dialog's rules match ([`Caches::rules_view`]), counted on a worker.
+    pub rules_count: caches::LiveCount,
+    /// The same for Create Smart Album's ([`Caches::smart_album_count`]).
+    pub new_smart_album_count: caches::LiveCount,
     /// A count an open dialog shows ([`Caches::dialog_count`]), by what it counts.
     dialog_count: Option<(u64, usize)>,
     pub dialog_count_scans: usize,
