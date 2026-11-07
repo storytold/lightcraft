@@ -96,12 +96,16 @@ pub enum Process {
     /// V5, with colour noise reduction on the linear colour differences R−Y and B−Y, leaving Y alone, with
     /// edge-aware weights from a denoised guide and a brake for isolated colour specks (issue #815).
     V6,
+    /// V6, calibrated against Lightroom exports of real edits: global Highlights and Shadows answer large amounts
+    /// compressively (`lightcraft_pipeline::finish::tone_slider`), a negative Texture smooths less
+    /// (`finish::texture_slider`) and the Global grading wheel tints less (`colorops::global_wheel`).
+    V7,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 6] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6];
-    pub const LATEST: Process = Process::V6;
+    pub const ALL: [Process; 7] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7];
+    pub const LATEST: Process = Process::V7;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -111,6 +115,7 @@ impl Process {
             Process::V4 => ProcessVersion(4),
             Process::V5 => ProcessVersion(5),
             Process::V6 => ProcessVersion(6),
+            Process::V7 => ProcessVersion(7),
         }
     }
 }
