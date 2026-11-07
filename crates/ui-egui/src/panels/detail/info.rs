@@ -96,11 +96,22 @@ pub(super) fn info_overlay_extent(app: &LightcraftApp, p: &egui::Painter, photo:
 }
 
 /// Where the info overlay's text starts below the canvas' top: the full-screen preview has no top
-/// bar, so on macOS it starts below the window controls that sit over the photo there (#2460).
+/// bar, so on macOS it starts below the window controls that sit over the photo there (#2460); in
+/// the loupe it starts below the filter pill when a filter is active (#3837), as the Before label
+/// does.
 fn info_overlay_top(app: &LightcraftApp, t: &Tokens) -> f32 {
     let controls = app.ui.fullscreen && app.integrated_titlebar && !app.window_is_fullscreen;
-    if controls { t.top_bar_h } else { INFO_OVERLAY_TOP }
+    if controls {
+        t.top_bar_h
+    } else if !app.ui.fullscreen && filter_pill_shown(app) {
+        FILTER_PILL_INSET + FILTER_PILL_HEIGHT + INFO_OVERLAY_BELOW_PILL
+    } else {
+        INFO_OVERLAY_TOP
+    }
 }
+
+/// The gap between the filter pill and the info overlay's first line under it.
+const INFO_OVERLAY_BELOW_PILL: f32 = 6.0;
 
 /// The info overlay's lines for `photo`, or `None` when it is off.
 fn info_overlay_lines(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> Option<Vec<String>> {
@@ -531,6 +542,38 @@ mod info_overlay_tests {
         app.window_is_fullscreen = false;
         app.ui.fullscreen = false;
         assert_eq!(name_top(&app, &photo), 12.0, "the loupe's canvas starts below the top bar");
+    }
+
+    /// #3837: with a filter active, the file name starts below the loupe's filter pill instead of
+    /// under it, and a label placed below the overlay clears both; the full-screen preview, which
+    /// has no pill, keeps the usual top.
+    #[test]
+    fn the_file_name_starts_below_the_filter_pill() {
+        let (mut app, photo) = demo_app();
+        assert_eq!(name_top(&app, &photo), INFO_OVERLAY_TOP, "no filter, no pill");
+        app.session.execute("library.filter", &serde_json::json!({"text": "x"})).unwrap();
+        assert!(filter_pill_shown(&app), "the search shows the pill");
+        let top = name_top(&app, &photo);
+        assert!(top >= FILTER_PILL_INSET + FILTER_PILL_HEIGHT, "the name starts below the pill: {top}");
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let raw = crate::headless::HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        let mut extent = 0.0;
+        ctx.run_ui(raw, |ui| extent = info_overlay_extent(&app, ui.painter(), &photo)).textures_delta.clear();
+        let (texts, _) = paint_overlay(&app, &photo);
+        let bottom = texts.iter().map(|t| t.pos.y + t.galley.size().y).fold(0.0, f32::max);
+        assert!(extent >= bottom, "the extent follows the overlay down: {extent} < {bottom}");
+        // with badges under the text, a label below the overlay clears them too
+        let mut rated = photo.clone();
+        rated.rating = 3;
+        let (_, rects) = paint_overlay(&app, &rated);
+        let badges = rects.into_iter().find(|(id, _)| id == "canvas:infoOverlayBadges").map(|(_, r)| r).expect("three stars");
+        let mut extent = 0.0;
+        let raw = crate::headless::HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        ctx.run_ui(raw, |ui| extent = info_overlay_extent(&app, ui.painter(), &rated)).textures_delta.clear();
+        assert!(extent >= badges.bottom(), "the extent clears the moved badges: {extent} < {badges:?}");
+        app.ui.fullscreen = true;
+        assert_eq!(name_top(&app, &photo), INFO_OVERLAY_TOP, "the full-screen preview has no pill");
     }
 
     /// #2460: a rated or flagged photo shows its stars and flag under the date and size.
