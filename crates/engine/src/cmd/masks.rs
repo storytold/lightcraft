@@ -1,14 +1,63 @@
 //! Masking and Remove (spot) commands on the active photo.
 
+use lightcraft_codecs::{EncodeImage, EncodeMeta, Samples, encode_png};
 use lightcraft_develop::{
     BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode,
 };
 use lightcraft_geom::Point;
+use lightcraft_pipeline::{MaskView, Overlay, RenderRequest};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
 use crate::segment::{Click, MAX_CLICKS};
-use crate::{Result, Session};
+use crate::{Result, Session, SourceLevel};
+
+/// Long edge of an exported matte, unless the caller names one.
+const MATTE_EDGE: f64 = 2048.0;
+/// A pixel this bright counts as selected when measuring a matte: the mask's own 50 % contour.
+const MATTE_SELECTED: u8 = 128;
+
+/// What [`export_matte`] measures: the selected share of the photo, and the normalized
+/// `[x0, y0, x1, y1]` around the selected pixels (`None`: nothing is selected).
+fn measure_matte(grey: &[u8], w: usize, h: usize) -> (f64, Option<[f64; 4]>) {
+    let coverage = grey.iter().map(|&v| f64::from(v)).sum::<f64>() / (255.0 * grey.len().max(1) as f64);
+    let mut bounds: Option<[usize; 4]> = None;
+    for (i, _) in grey.iter().enumerate().filter(|(_, v)| **v >= MATTE_SELECTED) {
+        let (x, y) = (i % w, i / w);
+        let b = bounds.get_or_insert([x, y, x, y]);
+        *b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+    }
+    let (fw, fh) = (w.max(1) as f64, h.max(1) as f64);
+    (coverage, bounds.map(|b| [b[0] as f64 / fw, b[1] as f64 / fh, (b[2] + 1) as f64 / fw, (b[3] + 1) as f64 / fh]))
+}
+
+/// `mask.export`: the mask as the render evaluates it, edges included, over the whole photo.
+fn export_matte(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "mask.export";
+    let path = str_param(p, "path").ok_or_else(|| bad(C, "missing path"))?.to_string();
+    let mid = mask_id(p, s.active_mask, C)?;
+    let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
+    let d = (*s.develop_of(id).unwrap_or_default()).clone();
+    let mask = d.masks.iter().find(|m| m.id == mid).ok_or_else(|| bad(C, "no such mask"))?;
+    if mask.components.is_empty() {
+        return Err(bad(C, "the mask has no components"));
+    }
+    let overlay_id = u16::try_from(mid).map_err(|_| bad(C, "mask id out of range"))?;
+    let edge = f64_or(p, "longEdge", MATTE_EDGE).clamp(16.0, 16384.0) as usize;
+    let level = if edge > SourceLevel::Preview.max_edge() { SourceLevel::Full } else { SourceLevel::Preview };
+    let src = s.source_now(id, level).map_err(|e| bad(C, e))?;
+    let info = s.source_info(id);
+    let mut req = RenderRequest::fit(edge, edge);
+    req.apply_crop = false;
+    req.overlay = Overlay::Mask { id: overlay_id, view: MaskView::WhiteOnBlack, color: [255; 3], opacity: 100 };
+    let image = lightcraft_pipeline::render(&src, &info, &d, &req).image;
+    let grey: Vec<u8> = image.data.iter().map(|px| px[0]).collect();
+    let (coverage, bounds) = measure_matte(&grey, image.width, image.height);
+    let encoded = EncodeImage { width: image.width as u32, height: image.height as u32, channels: 1, samples: Samples::U8(&grey) };
+    let png = encode_png(&encoded, &EncodeMeta::default()).map_err(|e| bad(C, e.to_string()))?;
+    crate::export::write_file(&path, &png).map_err(|e| bad(C, e))?;
+    Ok(json!({"path": path, "width": image.width, "height": image.height, "coverage": coverage, "bounds": bounds}))
+}
 
 /// Caps a colour-range shape's sample list at [`MAX_COLOR_RANGE_SAMPLES`] (render cost is pixels x samples).
 fn cap_color_range_samples(shape: &mut MaskShape) {
@@ -625,6 +674,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{} — stop the SAM 3 download (what has arrived is kept, and a new download resumes from it) → {cancelled}",
             super::always,
             |s, _| Ok(json!({"cancelled": s.segmenter.cancel_download()}))
+        ),
+        cmd!(
+            query "mask.export",
+            "Export Mask Matte",
+            [],
+            None,
+            "{id?, path, longEdge?: px (2048)} — the mask as an 8-bit greyscale PNG over the whole uncropped photo, white where it selects; needs no model → {path, width, height, coverage: 0..1, bounds: [x0, y0, x1, y1] normalized | null}",
+            has_active,
+            |s, p| export_matte(s, p)
         ),
         cmd!(
             "mask.refine",
