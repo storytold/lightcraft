@@ -31,6 +31,8 @@ const ALPHABET: &[u8; 85] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN
 const MAX_TEXT: usize = 32 << 20;
 /// Largest selection image decoded.
 const MAX_PIXELS: u64 = 64 << 20;
+/// Longest side of a selection image (Lightroom's seen so far are 2880 px wide): bounds the grid's resampling.
+const MAX_EDGE: u64 = 1 << 15;
 /// Most tiles a selection image may claim.
 const MAX_TILES: u64 = 4096;
 /// TIFF compression codes: none, JPEG XL (DNG 1.7).
@@ -74,7 +76,15 @@ pub fn decode_image(bytes: &[u8]) -> Option<(usize, usize, Vec<f32>)> {
     let bits = u(0x102, 0).unwrap_or(1);
     let compression = u(0x103, 0).unwrap_or(NONE);
     let samples = u(0x115, 0).unwrap_or(1);
-    if w == 0 || h == 0 || w.checked_mul(h)? > MAX_PIXELS || bits != 8 || samples != 1 || !matches!(compression, NONE | JPEG_XL) {
+    if w == 0
+        || h == 0
+        || w > MAX_EDGE
+        || h > MAX_EDGE
+        || w.checked_mul(h)? > MAX_PIXELS
+        || bits != 8
+        || samples != 1
+        || !matches!(compression, NONE | JPEG_XL)
+    {
         return None;
     }
     // tiles, or strips as tiles the image's width wide
@@ -96,16 +106,26 @@ pub fn decode_image(bytes: &[u8]) -> Option<(usize, usize, Vec<f32>)> {
         let (off, len) = (u(offsets, t)? as usize, u(counts, t)? as usize);
         let data = tiff.get(off..off.checked_add(len)?)?;
         let (x0, y0) = ((t % across as usize) * tw, (t / across as usize) * th);
-        let tile = decode_tile(data, compression, tw, th)?;
-        for y in 0..th.min(h.saturating_sub(y0)) {
-            for x in 0..tw.min(w.saturating_sub(x0)) {
-                if let (Some(dst), Some(src)) = (out.get_mut((y0 + y) * w + x0 + x), tile.2.get(y * tile.0 + x)) {
-                    *dst = *src;
-                }
+        place(&mut out, (w, h), (x0, y0), (tw.min(w.saturating_sub(x0)), th.min(h.saturating_sub(y0))), &decode_tile(data, compression, tw, th)?)?;
+    }
+    Some((w, h, out))
+}
+
+/// Copy the `need` (width, height) part of a decoded `tile` (`(width, height, values)`) to `at` in the `size` image
+/// `out`. `None` when the tile is smaller than that: its rows would land shifted, or leave a hole.
+fn place(out: &mut [f32], size: (usize, usize), at: (usize, usize), need: (usize, usize), tile: &(usize, usize, Vec<f32>)) -> Option<()> {
+    let (tile_w, tile_h, values) = tile;
+    if *tile_w < need.0 || *tile_h < need.1 || values.len() < tile_w.checked_mul(*tile_h)? {
+        return None;
+    }
+    for y in 0..need.1 {
+        for x in 0..need.0 {
+            if let (Some(dst), Some(src)) = (out.get_mut((at.1 + y) * size.0 + at.0 + x), values.get(y * tile_w + x)) {
+                *dst = *src;
             }
         }
     }
-    Some((w, h, out))
+    Some(())
 }
 
 /// One tile's values 0..1 as `(width, height, values)`.
@@ -162,23 +182,61 @@ pub fn image_mask(values: &Values, m: &XmpValue) -> Option<Value> {
     Some(json!({"kind": "object", "hint": [], "seg": seg}))
 }
 
-/// `side × side` logits sampled (bilinearly) from a `w × h` image of values 0..1.
+/// `side × side` logits from a `w × h` image of values 0..1, one axis at a time ([`taps`]); the longer axis goes
+/// first, so the image in between is at most the shorter axis × `side`.
 fn grid(w: usize, h: usize, px: &[f32], side: usize) -> Vec<f32> {
-    let at = |x: usize, y: usize| px.get(y.min(h - 1) * w + x.min(w - 1)).copied().unwrap_or(0.0);
-    let mut out = Vec::with_capacity(side * side);
-    for gy in 0..side {
-        let sy = ((gy as f64 + 0.5) * h as f64 / side as f64 - 0.5).max(0.0);
-        let (y0, fy) = (sy.floor() as usize, (sy - sy.floor()) as f32);
-        for gx in 0..side {
-            let sx = ((gx as f64 + 0.5) * w as f64 / side as f64 - 0.5).max(0.0);
-            let (x0, fx) = (sx.floor() as usize, (sx - sx.floor()) as f32);
-            let top = at(x0, y0) * (1.0 - fx) + at(x0 + 1, y0) * fx;
-            let bottom = at(x0, y0 + 1) * (1.0 - fx) + at(x0 + 1, y0 + 1) * fx;
-            let p = top * (1.0 - fy) + bottom * fy;
-            out.push(logit(p));
+    let at = |x: usize, y: usize| px.get(y * w + x).copied().unwrap_or(0.0);
+    let (across, down) = (taps(w, side), taps(h, side));
+    let mut out = vec![0.0f32; side * side];
+    if w <= h {
+        let mut mid = vec![0.0f32; w * side];
+        for (gy, t) in down.iter().enumerate() {
+            for x in 0..w {
+                mid[gy * w + x] = t.iter().map(|&(y, k)| at(x, y) * k).sum();
+            }
+        }
+        for gy in 0..side {
+            for (gx, t) in across.iter().enumerate() {
+                out[gy * side + gx] = t.iter().map(|&(x, k)| mid.get(gy * w + x).copied().unwrap_or(0.0) * k).sum();
+            }
+        }
+    } else {
+        let mut mid = vec![0.0f32; side * h];
+        for y in 0..h {
+            for (gx, t) in across.iter().enumerate() {
+                mid[y * side + gx] = t.iter().map(|&(x, k)| at(x, y) * k).sum();
+            }
+        }
+        for (gy, t) in down.iter().enumerate() {
+            for gx in 0..side {
+                out[gy * side + gx] = t.iter().map(|&(y, k)| mid.get(y * side + gx).copied().unwrap_or(0.0) * k).sum();
+            }
         }
     }
-    out
+    out.into_iter().map(logit).collect()
+}
+
+/// The `n` samples of one axis brought to `m` cells: for each cell, the samples it takes and their weights. Fewer
+/// cells than samples, a cell averages the samples it covers (a strand of hair thinner than a cell still counts);
+/// more, it interpolates between the two nearest.
+fn taps(n: usize, m: usize) -> Vec<Vec<(usize, f32)>> {
+    let last = n.saturating_sub(1);
+    let s = n as f64 / m as f64;
+    (0..m)
+        .map(|i| {
+            if s > 1.0 {
+                let (a, b) = (i as f64 * s, (i + 1) as f64 * s);
+                (a.floor() as usize..(b.ceil() as usize).min(n))
+                    .map(|j| (j, ((b.min(j as f64 + 1.0) - a.max(j as f64)) / s) as f32))
+                    .filter(|&(_, k)| k > 0.0)
+                    .collect()
+            } else {
+                let x = ((i as f64 + 0.5) * s - 0.5).max(0.0);
+                let (j, f) = ((x.floor() as usize).min(last), (x - x.floor()) as f32);
+                vec![(j, 1.0 - f), ((j + 1).min(last), f)]
+            }
+        })
+        .collect()
 }
 
 fn logit(p: f32) -> f32 {
@@ -330,6 +388,45 @@ mod tests {
         assert_eq!(image_mask(&values, &m), None);
         let (values, m) = component("crs:Table_ABCD=\"0000\"");
         assert_eq!(image_mask(&values, &m), None);
+    }
+
+    #[test]
+    fn a_tile_smaller_than_its_place_is_refused() {
+        // a 4 × 2 tile placed at (2, 1) of an 8 × 4 image, then one a pixel too narrow or too short
+        let mut out = vec![0.0; 32];
+        assert_eq!(place(&mut out, (8, 4), (2, 1), (4, 2), &(4, 2, vec![1.0; 8])), Some(()));
+        assert_eq!(out.iter().filter(|v| **v == 1.0).count(), 8);
+        assert_eq!((out[8 + 2], out[2 * 8 + 5], out[8 + 1]), (1.0, 1.0, 0.0));
+        assert_eq!(place(&mut out, (8, 4), (2, 1), (4, 2), &(3, 2, vec![1.0; 6])), None);
+        assert_eq!(place(&mut out, (8, 4), (2, 1), (4, 2), &(4, 1, vec![1.0; 4])), None);
+        assert_eq!(place(&mut out, (8, 4), (2, 1), (4, 2), &(4, 2, vec![1.0; 7])), None, "fewer values than it claims");
+        // an edge tile need only cover the part inside the image
+        assert_eq!(place(&mut out, (8, 4), (6, 3), (2, 1), &(4, 2, vec![1.0; 8])), Some(()));
+    }
+
+    #[test]
+    fn a_thin_part_of_a_large_selection_survives_the_grid() {
+        // a strand one pixel wide in a selection three times the grid's width: sampling every third column
+        // would miss it, averaging what each cell covers keeps a third of it
+        let side = lightcraft_develop::segmask::MAX_SIDE;
+        let (w, h) = (3 * side, 16);
+        let px: Vec<f32> = (0..w * h).map(|i| if i % w == 3 { 1.0 } else { 0.0 }).collect();
+        let g = grid(w, h, &px, side);
+        let row = side / 2 * side;
+        let p = 1.0 / (1.0 + (-g[row + 1]).exp());
+        assert!((p - 1.0 / 3.0).abs() < 0.01, "the cell over columns 3..6: {p}");
+        assert!(g[row] <= -FULL + 1e-3 && g[row + 2] <= -FULL + 1e-3, "its neighbours stay unselected");
+        // a small selection is interpolated as before: a 2 × 2 image's corners fill the grid's corners
+        let g = grid(2, 2, &[1.0, 0.0, 0.0, 0.0], 16);
+        assert!(g[0] >= FULL - 1e-3 && g[15] <= -FULL + 1e-3 && g[255] <= -FULL + 1e-3);
+    }
+
+    #[test]
+    fn an_overlong_selection_is_refused() {
+        // within the pixel budget but longer than any mask: refused before its resampling is set up
+        let row = |w: u64| tiff(w as u32, 1, &vec![255; w as usize]);
+        assert_eq!(decode_image(&row(MAX_EDGE)).map(|(w, h, _)| (w, h)), Some((MAX_EDGE as usize, 1)));
+        assert_eq!(decode_image(&row(MAX_EDGE + 1)), None);
     }
 
     #[test]
