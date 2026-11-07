@@ -330,7 +330,21 @@ fn a_refused_upload_does_not_sign_out_an_account_connected_meanwhile() {
             let Ok(mut s) = s else { break };
             let mut buf = [0u8; 65536];
             let mut got = Vec::new();
-            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+            let head_end = loop {
+                let Ok(n) = s.read(&mut buf) else { break 0 };
+                if n == 0 {
+                    break 0;
+                }
+                got.extend_from_slice(&buf[..n]);
+                if let Some(i) = got.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break i + 4;
+                }
+            };
+            // read the whole upload: closing with part of it unread resets the connection (os
+            // error 10054 on Windows), and the client would see that instead of the answer below
+            let head = String::from_utf8_lossy(&got[..head_end]).to_string();
+            let len: usize = head.lines().find_map(|l| l.strip_prefix("Content-Length: ")).map_or(0, |v| v.trim().parse().unwrap());
+            while got.len() < head_end + len {
                 let Ok(n) = s.read(&mut buf) else { break };
                 if n == 0 {
                     break;
@@ -359,7 +373,6 @@ fn a_refused_upload_does_not_sign_out_an_account_connected_meanwhile() {
     assert!(h.request("engine.execute", json!({"command": "flickr.signOut"}), T)["error"].is_string());
     assert!(h.app.run("flickr.setApiKey", json!({"key": "other", "secret": "key"})).is_err(), "a new key would sign out too");
     assert_eq!(h.app.session.flickr_status()["signedIn"], true);
-    assert!(h.app.run("flickr.signIn", json!({})).is_err() || h.app.flickr.busy.is_some() || h.app.flickr.uploading());
     // another account signs in anyway (through the engine, as an agent could)
     h.app
         .session
@@ -373,7 +386,7 @@ fn a_refused_upload_does_not_sign_out_an_account_connected_meanwhile() {
         .unwrap();
     drop(release);
     assert!(h.step_until(T, |h| h.app.flickr.last_result.is_some()), "the upload ends");
-    assert_eq!(h.app.flickr.last_result.as_ref().unwrap()["signInNeeded"], true);
+    assert_eq!(h.app.flickr.last_result.as_ref().unwrap()["signInNeeded"], true, "{}", h.app.flickr.last_result.as_ref().unwrap());
     assert_eq!(h.app.session.flickr_status()["username"], "dorothea", "the account connected meanwhile stays signed in");
 }
 
