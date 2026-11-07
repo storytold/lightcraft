@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Deep shadows in photos of fine dark detail
+- Some raws of dark, finely detailed subjects such as foliage open with shadows closer to the camera JPEG, instead of a
+  grey floor. The camera toe was refused when the JPEG sat slightly off from the raw, because fine detail no longer lined
+  up; it is now also judged away from edges. On an Olympus E-M10 II photo, shadows rendered at sRGB 22 go to the camera
+  JPEG's 8.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
