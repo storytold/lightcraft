@@ -195,7 +195,7 @@ fn a_negative_zero_survives() {
 }
 
 /// While a library's header doesn't state every setting this build has, settings are stored
-/// whole (as formats up to 9 did), and only on the thread that asked.
+/// whole (as formats up to 12 did), and only on the thread that asked.
 #[test]
 fn settings_are_stored_whole_while_asked_to() {
     let r = record_of(edited(|s| s.light.exposure = 0.3));

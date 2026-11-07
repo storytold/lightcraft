@@ -12,7 +12,7 @@
 //! defaults: about 3.2 kB each for a photo with no metadata, nearly all of it the default develop
 //! settings. Reading needs
 //! nothing of its own: both forms are read by the types' `Deserialize`, where a missing field
-//! takes its default, so libraries with full records (catalog formats up to 9) load as they are.
+//! takes its default, so libraries with full records (catalog formats up to 12) load as they are.
 //!
 //! **Settings are never stored in a form that reads back differently.** A value is left out only
 //! where leaving it out of the defaults reads back as the defaults. That is not so for `process`,

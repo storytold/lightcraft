@@ -673,14 +673,14 @@ fn stored_record(id: u64, develop: Value) -> Value {
     r
 }
 
-/// Given a format 9 library that states this build's defaults (what #2948 writes) and whose
-/// upgrade can't be written, when it is opened, then it is refused and left as it was: a compact
-/// record appended under its format 9 header would be read by builds of that format as their own
-/// defaults. It opens, upgraded, once the disk takes the write.
+/// Given a library in the newest format before compact records (12, what #2948 writes) that states this build's defaults and whose
+/// upgrade can't be written, when it is opened, then it is refused and left as it was: a compact record appended under its format 12
+/// header would be read by builds of that format as their own defaults. It opens, upgraded, once the disk takes the write.
 #[test]
-fn a_format_9_library_that_states_defaults_is_refused_when_it_cannot_be_upgraded() {
+fn a_library_before_compact_records_that_states_defaults_is_refused_when_it_cannot_be_upgraded() {
+    const BEFORE: u32 = 12;
     let snap = String::from_utf8(snapshot_stating(&stored::base().1, serde_json::json!({}))).unwrap();
-    let snap = snap.replace(&format!("\"version\":{VERSION}"), "\"version\":9").into_bytes();
+    let snap = snap.replace(&format!("\"version\":{VERSION}"), &format!("\"version\":{BEFORE}")).into_bytes();
     let m = MemStore::new();
     m.set(SNAPSHOT, snap.clone());
     let store = Refusing { files: m.clone(), refuse: |name| name == SNAPSHOT };
@@ -690,7 +690,7 @@ fn a_format_9_library_that_states_defaults_is_refused_when_it_cannot_be_upgraded
     assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [SNAPSHOT], "nothing half kept");
 
     let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(r.upgraded_from, Some(BEFORE));
 }
 
 /// Given a saved library, then its snapshot states what a record's missing develop settings read

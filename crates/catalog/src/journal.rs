@@ -208,7 +208,7 @@ impl Upgrade {
     /// What a library in format `from` needs at open, when this open hasn't upgraded it already. One in a format that writes
     /// compact records and states its defaults may go on as it is when it can't be upgraded now (the next open tries again):
     /// what is appended to it reads the same in every build that reads it. One before that (a build of those formats reads a
-    /// missing value as its own default, and a library of format 9 that states defaults is still read so by builds that don't
+    /// missing value as its own default, and a library of format 12 that states defaults is still read so by builds that don't
     /// know the statement), or one that states other defaults, must not be appended to as it is: a record written from here on
     /// leaves out what equals this build's defaults. (One that only lacks a setting this build has may: its records are
     /// written whole until it is restated, `header_incomplete`.)
@@ -229,6 +229,7 @@ struct Kept {
 /// How many sets of kept files with the same format and change can stand side by side before a
 /// further one is refused (an upgrade that can't keep its files is not done).
 const MAX_KEPT_COPIES: u32 = 100;
+
 /// What happened while loading.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LoadReport {
