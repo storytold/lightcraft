@@ -19,4 +19,4 @@ plan/
 __pycache__/
 
 # Scratch / agent action plans
-bdu-todo-actions.md
+bdu-*.md
