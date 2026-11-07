@@ -1647,7 +1647,6 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -3589,10 +3588,12 @@ dependencies = [
 name = "lightcraft"
 version = "0.18.0"
 dependencies = [
+ "bytemuck",
  "chrono",
  "craft-update",
  "eframe",
  "egui",
+ "half",
  "lightcraft-codecs",
  "lightcraft-engine",
  "lightcraft-raster",

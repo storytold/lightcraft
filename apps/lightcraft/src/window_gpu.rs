@@ -154,6 +154,10 @@ fn user_notice(failed: Option<WindowRenderer>, forced: Option<WindowRenderer>, p
 /// later than eframe's default. Live window resizing still gets three drawables from egui-wgpu.
 pub fn base_options() -> WgpuConfiguration {
     let mut c = eframe::NativeOptions::default().wgpu_options;
+    c.surface_format = crate::hdr_display::requested_surface_format_from_env();
+    if c.surface_format == Some(wgpu::TextureFormat::Rgba16Float) {
+        c.surface.color_space = Some(wgpu::SurfaceColorSpace::ExtendedSrgb);
+    }
     if let WgpuSetup::CreateNew(n) = &mut c.wgpu_setup {
         n.instance_descriptor.backends = backend::window_backends();
         n.instance_descriptor.backend_options = backend::backend_options();
@@ -342,11 +346,10 @@ mod tests {
     #[test]
     fn window_surface_keeps_one_frame_in_flight() {
         let surface = base_options().surface;
-        assert_eq!(surface, eframe::NativeOptions::default().wgpu_options.surface);
-        assert_eq!(surface, eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY);
+        assert_eq!(surface.present_mode, eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY.present_mode);
         assert_eq!(surface.desired_maximum_frame_latency, Some(1));
         assert_eq!(surface.present_mode, wgpu::PresentMode::AutoVsync);
-        assert_ne!(surface, WgpuConfiguration::default().surface, "egui-wgpu's own default is the high-throughput one");
+        assert_eq!(surface.color_space, crate::hdr_display::requested_surface_format_from_env().map(|_| wgpu::SurfaceColorSpace::ExtendedSrgb));
         // what `main` hands eframe (on Windows `choose` probes the adapters first; not here)
         if !cfg!(windows) {
             assert_eq!(choose(&Files::new(None), false).wgpu_options.surface, surface);

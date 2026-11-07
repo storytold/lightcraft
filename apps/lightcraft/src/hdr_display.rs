@@ -4,11 +4,9 @@
 //!
 //! HDR needs three things: a platform path (macOS EDR via an extended-range float Metal layer,
 //! Windows HDR via scRGB float or HDR10 swap chains, Wayland via the colour-management protocol),
-//! a surface format that carries values above 1.0 (`Rgba16Float`) or a 10-bit PQ signal
-//! (`Rgb10a2Unorm`), and a renderer that actually configured that format. eframe 0.36 picks the
-//! surface format itself (8-bit only, `egui_wgpu::preferred_framebuffer_format`), so today the
-//! choice reports SDR with the reason; the moment the renderer's target is an HDR format the same
-//! decision turns HDR on.
+//! a surface format and transfer function that carry values above 1.0, and a renderer configured
+//! for that target. macOS uses fp16 extended-sRGB so egui's gamma-encoded chrome stays correct;
+//! other linear HDR surfaces use extended-linear RGB.
 
 use eframe::wgpu::TextureFormat;
 
@@ -50,9 +48,10 @@ impl Platform {
 /// How HDR values reach the display.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HdrEncoding {
-    /// Linear float, SDR white at 1.0 and the headroom above it (macOS EDR, Windows scRGB,
-    /// Wayland extended linear).
+    /// Linear float, SDR white at 1.0 and the headroom above it (Windows scRGB, Wayland extended linear).
     ExtendedLinear,
+    /// Extended sRGB transfer, used by macOS EDR to keep egui's SDR interface correctly encoded.
+    ExtendedSrgb,
     /// 10-bit BT.2100 PQ (Windows HDR10, Wayland PQ).
     Pq10,
 }
@@ -74,6 +73,7 @@ impl DisplayOutput {
 /// The encoding a surface format carries on `platform`, if it is an HDR one.
 fn encoding_of(format: TextureFormat, platform: Platform) -> Option<HdrEncoding> {
     match format {
+        TextureFormat::Rgba16Float if platform == Platform::MacOs => Some(HdrEncoding::ExtendedSrgb),
         TextureFormat::Rgba16Float => Some(HdrEncoding::ExtendedLinear),
         // macOS takes HDR through EDR floats only
         TextureFormat::Rgb10a2Unorm if platform != Platform::MacOs => Some(HdrEncoding::Pq10),
@@ -83,13 +83,23 @@ fn encoding_of(format: TextureFormat, platform: Platform) -> Option<HdrEncoding>
 
 /// The best HDR surface format among those a surface offers (`available`), for `platform`:
 /// float first (keeps SDR white at 1.0 and needs no PQ encode), then 10-bit PQ. `None` = SDR only.
-/// (For configuring the surface once eframe lets the app pick its format.)
+/// (Used when configuring the optional surface format.)
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn preferred_hdr_format(available: &[TextureFormat], platform: Platform) -> Option<TextureFormat> {
     if !platform.has_hdr_path() {
         return None;
     }
     [TextureFormat::Rgba16Float, TextureFormat::Rgb10a2Unorm].into_iter().find(|f| available.contains(f) && encoding_of(*f, platform).is_some())
+}
+
+/// Request the macOS EDR float surface unless the user disabled HDR display output.
+pub fn requested_surface_format(platform: Platform, disabled: bool) -> Option<TextureFormat> {
+    (platform == Platform::MacOs && !disabled).then_some(TextureFormat::Rgba16Float)
+}
+
+pub fn requested_surface_format_from_env() -> Option<TextureFormat> {
+    let disabled = std::env::var("LIGHTCRAFT_HDR_DISPLAY").ok().is_some_and(|v| matches!(v.trim(), "0" | "off" | "false" | "no"));
+    requested_surface_format(Platform::current(), disabled)
 }
 
 /// The decision for the window: `target` is the format the renderer configured (`None`: the glow
@@ -117,10 +127,9 @@ pub fn choose(target: Option<TextureFormat>, platform: Platform, display_headroo
 }
 
 /// The decision for this start, logged once (the window renderer's `target` format).
-pub fn report(target: Option<TextureFormat>) -> DisplayOutput {
+pub fn report(target: Option<TextureFormat>, display_headroom: Option<f32>) -> DisplayOutput {
     let disabled = std::env::var("LIGHTCRAFT_HDR_DISPLAY").ok().is_some_and(|v| matches!(v.trim(), "0" | "off" | "false" | "no"));
-    // no OS headroom query is wired yet: unknown, so SDR unless everything else is HDR-ready
-    let out = choose(target, Platform::current(), None, disabled);
+    let out = choose(target, Platform::current(), display_headroom, disabled);
     match out {
         DisplayOutput::Sdr { reason } => log::info!("display: SDR ({reason})"),
         DisplayOutput::Hdr { format, encoding } => log::info!("display: HDR {encoding:?} ({format:?})"),
@@ -144,7 +153,7 @@ mod tests {
 
     #[test]
     fn hdr_needs_platform_format_and_headroom() {
-        let hdr = DisplayOutput::Hdr { format: F::Rgba16Float, encoding: HdrEncoding::ExtendedLinear };
+        let hdr = DisplayOutput::Hdr { format: F::Rgba16Float, encoding: HdrEncoding::ExtendedSrgb };
         assert_eq!(choose(Some(F::Rgba16Float), Platform::MacOs, Some(2.0), false), hdr);
         assert_eq!(
             choose(Some(F::Rgb10a2Unorm), Platform::Windows, Some(4.0), false),
@@ -170,5 +179,19 @@ mod tests {
         assert_eq!(preferred_hdr_format(&[F::Bgra8Unorm, F::Rgb10a2Unorm], Platform::MacOs), None);
         assert_eq!(preferred_hdr_format(&all, Platform::X11), None);
         assert_eq!(preferred_hdr_format(&[], Platform::MacOs), None);
+    }
+
+    #[test]
+    fn surface_format_request_is_macos_only_and_respects_opt_out() {
+        assert_eq!(requested_surface_format(Platform::MacOs, false), Some(F::Rgba16Float));
+        assert_eq!(requested_surface_format(Platform::MacOs, true), None);
+        assert_eq!(requested_surface_format(Platform::Windows, false), None);
+    }
+
+    #[test]
+    fn surface_format_override_uses_supported_request_and_falls_back() {
+        let available = [F::Bgra8Unorm, F::Rgba16Float];
+        assert!(matches!(eframe::egui_wgpu::preferred_framebuffer_format_with_override(&available, Some(F::Rgba16Float)), Ok(F::Rgba16Float)));
+        assert!(matches!(eframe::egui_wgpu::preferred_framebuffer_format_with_override(&available, Some(F::Rgb10a2Unorm)), Ok(F::Bgra8Unorm)));
     }
 }

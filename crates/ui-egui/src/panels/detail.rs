@@ -1296,6 +1296,27 @@ pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, resp: &egui::Response,
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn visualize_hdr_keeps_the_diagnostic_overlay_path_on_an_hdr_display() {
+        use super::{RightPanel, view_overlay};
+        use crate::{LightcraftApp, Services};
+        use lightcraft_pipeline::{OutputDepth, Overlay};
+
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+        let id = app.session.active().unwrap_or_else(|| panic!("demo has no active photo"));
+        app.ui.right = RightPanel::Edit;
+        app.ui.hdr_visualize = true;
+        let mut settings = lightcraft_develop::DevelopSettings::default();
+        settings.hdr.enabled = true;
+        let overlay = view_overlay(&app, &settings);
+        assert_eq!(overlay, Overlay::HdrRange);
+
+        app.renderer.set_hdr_display(true);
+        let job = app.session.loupe_job(id, 320, 240, true).unwrap_or_else(|| panic!("demo photo has no loupe job")).with_overlay(overlay);
+        let job = app.renderer.job_for(crate::render::Slot::Main, job);
+        assert_eq!(job.request.depth, OutputDepth::U8, "the diagnostic overlay must not be bypassed by F32Hdr output");
+    }
+
     /// The camera JPEG goes only where the window render will: a window of the left half of the
     /// frame covers the left half of the drawn photo, not the strips beside it.
     #[test]
