@@ -72,13 +72,25 @@ struct Parser<'a> {
 /// Deepest `<dict>` / `<array>` nesting read (real looks nest a handful of levels).
 const MAX_DEPTH: usize = 64;
 
+/// Where the `;` of a reference starting at `rest` (its `&`) ends it, looked for only as far as
+/// the longest reference reaches (`&#x10FFFF;`): a text of many `&` with a distant `;` is read
+/// once, not once per `&`.
+fn entity_end(rest: &str) -> Option<usize> {
+    rest.char_indices().take(11).find(|&(_, c)| c == ';').map(|(i, _)| i)
+}
+
 fn unescape(t: &str) -> String {
     let mut out = String::with_capacity(t.len());
     let mut rest = t;
     while let Some(p) = rest.find('&') {
         out.push_str(&rest[..p]);
         rest = &rest[p..];
-        let Some(end) = rest.find(';') else { break };
+        // no `;` within a reference's reach: the `&` is kept and the search goes on after it
+        let Some(end) = entity_end(rest) else {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        };
         let ent = &rest[1..end];
         let c = match ent {
             "amp" => Some('&'),
@@ -335,11 +347,13 @@ struct Acc {
     sums: BTreeMap<String, (f64, (f64, f64))>,
     curves: BTreeMap<String, Vec<(f64, f64)>>,
     unmapped: Vec<String>,
+    /// What `unmapped` holds, for the look-up (a look names each unsupported setting once).
+    seen: std::collections::HashSet<String>,
 }
 
 impl Acc {
     fn skip(&mut self, what: String) {
-        if !self.unmapped.contains(&what) {
+        if self.seen.insert(what.clone()) {
             self.unmapped.push(what);
         }
     }
@@ -485,6 +499,13 @@ mod tests {
     use super::*;
     use crate::preset_import::read_presets;
     use serde_json::json;
+
+    #[test]
+    fn many_ampersands_before_one_semicolon_are_read_once() {
+        let hostile = format!("{};&amp;", "&".repeat(200_000));
+        assert_eq!(unescape(&hostile), format!("{};&", "&".repeat(200_000)));
+        assert_eq!(unescape("&lt;a&gt; &#x10FFFF; &unknownreference;"), "<a> \u{10FFFF} &unknownreference;");
+    }
 
     #[test]
     fn unescape_rejects_signed_numeric_references() {

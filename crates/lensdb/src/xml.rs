@@ -53,13 +53,20 @@ fn entity(name: &str) -> Option<char> {
     })
 }
 
+/// Where the `;` of a reference starting at `rest` (its `&`) ends it, looked for only as far as
+/// the longest reference reaches (`&#x10FFFF;`): a text of many `&` with a distant `;` is read
+/// once, not once per `&`.
+fn entity_end(rest: &str) -> Option<usize> {
+    rest.char_indices().take(11).find(|&(_, c)| c == ';').map(|(i, _)| i)
+}
+
 fn unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find('&') {
         out.push_str(rest.get(..i).unwrap_or_default());
         let tail = rest.get(i..).unwrap_or_default();
-        match tail.find(';').and_then(|j| entity(tail.get(1..j)?).map(|c| (c, j))) {
+        match entity_end(tail).and_then(|j| entity(tail.get(1..j)?).map(|c| (c, j))) {
             Some((c, j)) => {
                 out.push(c);
                 rest = tail.get(j + 1..).unwrap_or_default();
@@ -139,6 +146,14 @@ fn close(stack: &mut Vec<Node>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn many_ampersands_before_one_semicolon_are_read_once() {
+        // 200 000 `&` then a `;`: each `&` once searched the whole rest for the `;`
+        let hostile = format!("{};&amp;", "&".repeat(200_000));
+        assert_eq!(unescape(&hostile), format!("{};&", "&".repeat(200_000)));
+        assert_eq!(unescape("&lt;a&gt; &#x10FFFF; &unknownreference;"), "<a> \u{10FFFF} &unknownreference;");
+    }
 
     #[test]
     fn entity_rejects_signed_numeric_references() {
