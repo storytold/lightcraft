@@ -716,15 +716,10 @@ fn a_cache_cleared_while_planning_is_planned_again() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-/// CodeRabbit on #3936: another library that shows the same photo ids (and as many photos) is not the one whose
-/// photos were being planned: the plan of the library before is dropped, not resumed against it.
-#[test]
-fn a_library_opened_while_planning_is_planned_afresh() {
-    let (mut s, root, ids) = library("prep-plan-lib-a", 7);
-    let mode = crate::prep::Mode::Library;
-    let hold = crate::prep::TestHold::new();
-    start_planning(&mut s, &ids, mode);
-    let other = temp_dir("prep-plan-lib-b");
+/// Opens another library in `s` holding 7 photos of the same names as [`library`]'s (so the same photo ids, in the
+/// same order): a view that looks like the one before. Its folder, and its photos by name.
+fn open_other_library(s: &mut Session, tag: &str) -> (PathBuf, Vec<PhotoId>) {
+    let other = temp_dir(tag);
     let paths: Vec<String> = (0..7)
         .map(|i| {
             let p = other.join("shoot").join(format!("p{i:02}.png"));
@@ -736,14 +731,117 @@ fn a_library_opened_while_planning_is_planned_afresh() {
     s.execute("library.import", &json!({"paths": paths})).unwrap();
     let mut now: Vec<(String, PhotoId)> = s.catalog.photos().map(|p| (p.file_name.clone(), p.id)).collect();
     now.sort();
-    let now: Vec<PhotoId> = now.into_iter().map(|(_, id)| id).collect();
+    (other, now.into_iter().map(|(_, id)| id).collect())
+}
+
+/// Steps through the first three photos of the view now shown (the build waits for three steps in a view).
+fn step_through(s: &mut Session, ids: &[PhotoId], mode: crate::prep::Mode) {
+    for id in &ids[..3] {
+        s.prep_tick(mode, Some(*id), false);
+    }
+}
+
+/// CodeRabbit on #3936: another library that shows the same photo ids (and as many photos) is not the one whose
+/// photos were being planned: the plan of the library before is dropped, not resumed against it.
+#[test]
+fn a_library_opened_while_planning_is_planned_afresh() {
+    let (mut s, root, ids) = library("prep-plan-lib-a", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    let (other, now) = open_other_library(&mut s, "prep-plan-lib-b");
     assert_eq!(now, ids, "the same photo ids, and as many photos: a view that looks the same");
+    step_through(&mut s, &now, mode);
     let b = finish_planning(&mut s, &now, mode);
     drop(hold);
     assert!(wait_finished(&b), "the build ends");
     assert_eq!((b.total, b.failed.load(Ordering::Relaxed)), (7, 0), "no photo is rendered for the library before");
     assert!(all_built(&mut s, &now), "every photo of the library now open is built");
     assert_eq!(s.prep.planned, 2 + 7);
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&other).unwrap();
+}
+
+/// A library just opened (no op applied to its catalog yet: the catalog doesn't know what changed since its
+/// revision) is planned through all its slices and its build starts, as it did before plans could be dropped.
+#[test]
+fn a_library_just_opened_is_planned_through_to_its_build() {
+    let (s, root, _) = library("prep-plan-reopen", 7);
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(root.join("lib"), false).unwrap();
+    let ids = s.visible_cloned();
+    assert_eq!(ids.len(), 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    start_planning(&mut s, &ids, mode);
+    let b = finish_planning(&mut s, &ids, mode);
+    assert_eq!(b.total, 7);
+    assert_eq!(s.prep.planned, 7, "planned once, not again on every frame");
+    drop(hold);
+    b.cancel.store(true, Ordering::Relaxed);
+    assert!(wait_finished(&b), "a cancelled build stops");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// CodeRabbit on #3936: opening another library that shows the same photo ids (and as many photos) stops the
+/// background build of the library before, which renders for a cache that is gone, and prepares the new one.
+#[test]
+fn a_library_opened_while_its_build_runs_stops_it_and_prepares_the_new_one() {
+    let (mut s, root, ids) = library("prep-run-a", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    step_through(&mut s, &ids, mode);
+    let before = s.preview_build.clone().expect("the first library's build");
+    let (other, now) = open_other_library(&mut s, "prep-run-b");
+    assert_eq!(now, ids);
+    let mut next = None;
+    for k in 0..200 {
+        s.prep_tick(mode, Some(now[k % 3]), false);
+        if s.preview_build.as_ref().is_some_and(|p| !std::sync::Arc::ptr_eq(p, &before)) {
+            next = s.preview_build.clone();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let next = next.expect("a build for the library now open");
+    assert!(before.cancel.load(Ordering::Relaxed), "the first library's build was stopped");
+    drop(hold);
+    for b in [&before, &next] {
+        assert!(wait_finished(b), "the builds end");
+    }
+    assert_eq!((next.total, next.failed.load(Ordering::Relaxed)), (7, 0));
+    assert!(all_built(&mut s, &now), "every photo of the library now open is built");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&other).unwrap();
+}
+
+/// CodeRabbit on #3936: a build the user stopped declines its view for that library only: another library that
+/// shows the same photo ids (and as many photos) is prepared.
+#[test]
+fn a_library_opened_after_a_stopped_build_is_prepared() {
+    let (mut s, root, ids) = library("prep-declined-a", 7);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    step_through(&mut s, &ids, mode);
+    let stopped = s.preview_build.clone().expect("the first library's build");
+    s.execute("library.cancelPreviews", &json!({})).unwrap();
+    assert!(wait_finished(&stopped), "a cancelled build stops");
+    for _ in 0..5 {
+        s.prep_tick(mode, Some(ids[2]), false);
+    }
+    assert!(s.preview_build.as_ref().is_some_and(|p| std::sync::Arc::ptr_eq(p, &stopped)), "not built again for the view the user stopped");
+    let (other, now) = open_other_library(&mut s, "prep-declined-b");
+    assert_eq!(now, ids);
+    step_through(&mut s, &now, mode);
+    let next = finish_planning(&mut s, &now, mode);
+    assert!(!std::sync::Arc::ptr_eq(&next, &stopped), "a build for the library now open");
+    drop(hold);
+    assert!(wait_finished(&next), "the build ends");
+    assert_eq!((next.total, next.failed.load(Ordering::Relaxed)), (7, 0));
     drop(s);
     std::fs::remove_dir_all(&root).unwrap();
     std::fs::remove_dir_all(&other).unwrap();

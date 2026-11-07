@@ -227,6 +227,10 @@ pub struct PrepState {
     steps_in: Option<u64>,
     last_at: Option<PhotoId>,
     steps: usize,
+    /// The library this state is of ([`Session::library_generation`]): another one open (opened, or opened again)
+    /// starts it afresh ([`Session::follow_library`]), though its view may look the same (the same photo ids, as
+    /// many photos).
+    library_gen: Option<u64>,
     /// The signature of the visible list of a generation ([`Session::view_signature`]).
     signed: Option<(u64, Scope, u64)>,
     /// The build whose photos are being planned a slice at a time, and whether the last slice left
@@ -379,6 +383,7 @@ impl Session {
     /// Advance the background preparation (cheap; call every frame). `mode`: what the user is doing;
     /// `at`: the photo in the loupe (`None` in the grid), `backward`: stepping back.
     pub fn prep_tick(&mut self, mode: Mode, at: Option<PhotoId>, backward: bool) {
+        self.follow_library();
         let settings = self.prep.settings();
         let want = settings.mode(mode);
         // the whole view's build follows its own row (Culling, or Library also while editing): its
@@ -492,7 +497,8 @@ impl Session {
     /// Whether the jobs `p` has planned are out of date: another library's preview cache is in use (the plan is of
     /// the library before, though its view looks the same), the cache was cleared (the jobs would save into the
     /// cache as it was and fail), or a photo's settings, file or analysis changed since the plan began (its jobs
-    /// would render, and be keyed, as it was). A rating or a keyword changes none of them.
+    /// would render, and be keyed, as it was). A rating or a keyword changes none of them. (A catalog the library
+    /// has just loaded doesn't know what changed since its revision, but nothing has when the revision is the same.)
     fn plan_outdated(&self, p: &Planning) -> bool {
         const RENDERED_FROM: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::DEVELOP
             .with(lightcraft_catalog::Aspects::FILE)
@@ -500,7 +506,26 @@ impl Session {
             .with(lightcraft_catalog::Aspects::PRESENCE);
         !Arc::ptr_eq(&p.cache, &self.media.rendered)
             || p.cache.generation() != p.generation
-            || self.catalog.aspects_since(p.revision).is_none_or(|changed| changed.any_of(RENDERED_FROM))
+            || (self.catalog.revision != p.revision && self.catalog.aspects_since(p.revision).is_none_or(|changed| changed.any_of(RENDERED_FROM)))
+    }
+
+    /// Another library than the one the preparation state is of is open: what it holds is of the library before and
+    /// its view may look the same as this one's (the same photo ids and as many photos), so it must not stand for it.
+    /// The build that runs is stopped (it renders for a preview cache that is gone), the plan is dropped, and the
+    /// views that were started, stopped by the user or that failed to start are tried afresh, with the steps counted
+    /// again.
+    fn follow_library(&mut self) {
+        if self.prep.library_gen == Some(self.library_generation()) {
+            return;
+        }
+        self.prep.library_gen = Some(self.library_generation());
+        if let Some(b) = &self.prep.build {
+            b.cancel.store(true, Ordering::Relaxed);
+        }
+        self.drop_plan();
+        let p = &mut self.prep;
+        (p.started_for, p.declined_for, p.retry_at) = (None, None, None);
+        (p.steps_in, p.last_at, p.steps) = (None, None, 0);
     }
 
     /// Give up the plan under way; its view is prepared afresh when it is next due.
