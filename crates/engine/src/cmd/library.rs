@@ -15,7 +15,53 @@ mod specs;
 
 pub(crate) use filters::covers_other_disks;
 pub use import::{ImportRequest, import_batch_done, import_params, list_auto_import_folder};
-pub use specs::specs;
+pub fn specs() -> Vec<CommandSpec> {
+    let mut v = vec![
+        cmd!("library.nextUnrated", "Next Unrated Photo", [], None, "{}", always, |s, _| step_unrated(s, 1)),
+        cmd!("library.prevUnrated", "Previous Unrated Photo", [], None, "{}", always, |s, _| step_unrated(s, -1)),
+    ];
+    v.extend(specs::specs());
+    v
+}
+
+fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
+    let vis = s.visible_cloned();
+    if vis.is_empty() {
+        return ok();
+    }
+    if !vis.iter().any(|id| s.catalog.photo(*id).is_some_and(|p| p.rating == 0)) {
+        return ok();
+    }
+    let unrated: Vec<PhotoId> = vis.iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.rating == 0)).collect();
+    let active = s.active();
+    let next = active
+        .and_then(|a| {
+            let cur = vis.iter().position(|x| *x == a)?;
+            if d >= 0 {
+                vis.iter()
+                    .enumerate()
+                    .find(|(pos, id)| *pos > cur && unrated.contains(id))
+                    .map(|(_, id)| *id)
+                    .or_else(|| vis.iter().enumerate().find(|(pos, id)| *pos <= cur && unrated.contains(id)).map(|(_, id)| *id))
+            } else {
+                vis.iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(pos, id)| *pos < cur && unrated.contains(id))
+                    .map(|(_, id)| *id)
+                    .or_else(|| vis.iter().enumerate().rev().find(|(pos, id)| *pos >= cur && unrated.contains(id)).map(|(_, id)| *id))
+            }
+        })
+        .or_else(|| unrated.first().copied());
+    let Some(id) = next else {
+        return ok();
+    };
+    s.end_interaction()?;
+    s.selection = Selection::single(id);
+    s.active_mask = None;
+    s.active_spot = None;
+    Ok(json!({"active": id.0}))
+}
 
 #[cfg(test)]
 #[path = "library/tests_relative_ratings.rs"]
@@ -40,3 +86,41 @@ mod enable_filters_tests;
 #[cfg(test)]
 #[path = "library/tests_source_album_filter.rs"]
 mod source_album_filter_tests;
+
+#[cfg(test)]
+mod next_unrated_tests {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use serde_json::json;
+
+    use crate::{Result, Session};
+
+    fn session() -> Result<Session> {
+        let mut s = Session::new();
+        for (id, rating) in [(1, 5), (2, 1), (3, 0), (4, 0)] {
+            let mut photo = Photo::new(
+                PhotoId(id),
+                Source::File { path: format!("/lightcraft-next-unrated/{id}.jpg") },
+                &format!("{id}.jpg"),
+                "JPEG",
+                40,
+                30,
+                "2026-10-09",
+            );
+            photo.rating = rating;
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) })?;
+        }
+        s.execute("library.sort", &json!({"key": "fileName", "ascending": true}))?;
+        s.execute("library.select", &json!({"ids": [1]}))?;
+        Ok(s)
+    }
+
+    #[test]
+    fn next_unrated_jumps_to_next_unrated_photo() {
+        let mut s = session().unwrap();
+        assert_eq!(s.active(), Some(PhotoId(1)));
+        // The command that moves the active photo to the next unrated photo in view order.
+        let result = s.execute("library.nextUnrated", &json!({}));
+        assert!(result.is_ok(), "library.nextUnrated command should exist");
+        assert_eq!(s.active(), Some(PhotoId(3)), "next unrated photo in view order");
+    }
+}

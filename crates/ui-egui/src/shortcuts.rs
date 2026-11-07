@@ -511,6 +511,12 @@ fn fixed_photo_keys(i: &egui::InputState, native: &dyn Fn(&str) -> bool, taken: 
             fire.push(format!("grid:extend:{step}"));
         }
     }
+    // Cmd+← / Cmd+→: the previous / next unrated photo of the view
+    for (key, id) in [(Key::ArrowLeft, "library.prevUnrated"), (Key::ArrowRight, "library.nextUnrated")] {
+        if matches(i, Modifiers::COMMAND, key) && !native("Cmd+Right") && !native("Cmd+Left") && !taken.contains(&(Modifiers::COMMAND, key)) {
+            fire.push(id.to_string());
+        }
+    }
 }
 
 /// Rating/flag/label keys: in Compare/Survey they act on the active photo only; `advance` (Shift+key) or
