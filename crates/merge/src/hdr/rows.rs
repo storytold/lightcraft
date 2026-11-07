@@ -35,10 +35,12 @@ impl SaturationRows {
         let w = self.width;
         let start = y.checked_mul(w).ok_or_else(|| bad("source row offset overflow"))?;
         let end = start.checked_add(w).ok_or_else(|| bad("source row end overflow"))?;
-        let slot = (y % 3) * w;
-        for (frame, buffer) in frames.iter().zip(self.data.chunks_exact_mut(3 * w)) {
+        let frame_len = w.checked_mul(3).ok_or_else(|| bad("saturation frame size overflow"))?;
+        let slot = (y % 3).checked_mul(w).ok_or_else(|| bad("saturation slot offset overflow"))?;
+        let slot_end = slot.checked_add(w).ok_or_else(|| bad("saturation slot end overflow"))?;
+        for (frame, buffer) in frames.iter().zip(self.data.chunks_exact_mut(frame_len)) {
             let src = frame.image.data.get(start..end).ok_or_else(|| bad("source row is outside its image"))?;
-            let dst = buffer.get_mut(slot..slot + w).ok_or_else(|| bad("missing saturation row"))?;
+            let dst = buffer.get_mut(slot..slot_end).ok_or_else(|| bad("missing saturation row"))?;
             for (x, value) in dst.iter_mut().enumerate() {
                 let neighbours = src.get(x.saturating_sub(1)..=x.saturating_add(1).min(w - 1)).ok_or_else(|| bad("missing saturation neighbours"))?;
                 *value = neighbours.iter().copied().map(maxc).fold(0.0, f32::max);
@@ -47,15 +49,20 @@ impl SaturationRows {
         Ok(())
     }
 
-    #[inline]
-    pub(super) fn at(&self, frame: usize, x: usize, y: usize) -> Result<f32> {
-        let base = frame.checked_mul(3).and_then(|v| v.checked_mul(self.width)).ok_or_else(|| bad("saturation frame offset overflow"))?;
-        let mut value = 0.0f32;
-        for sy in y.saturating_sub(1)..=y.saturating_add(1).min(self.height - 1) {
-            let offset =
-                base.checked_add((sy % 3) * self.width).and_then(|v| v.checked_add(x)).ok_or_else(|| bad("saturation sample offset overflow"))?;
-            value = value.max(*self.data.get(offset).ok_or_else(|| bad("missing saturation sample"))?);
+    /// Borrow the vertical neighbourhood once per row. Repeating the last row at an edge
+    /// keeps the original maximum, including its zero initial value, without pixel offsets.
+    pub(super) fn for_row(&self, frame: usize, y: usize) -> Result<[&[f32]; 3]> {
+        if y >= self.height {
+            return Err(bad("saturation row is outside its image"));
         }
-        Ok(value)
+        let base = frame.checked_mul(3).and_then(|v| v.checked_mul(self.width)).ok_or_else(|| bad("saturation frame offset overflow"))?;
+        let first = y.saturating_sub(1);
+        let last = y.saturating_add(1).min(self.height.saturating_sub(1));
+        let row = |sy: usize| {
+            let start = (sy % 3).checked_mul(self.width).and_then(|v| base.checked_add(v)).ok_or_else(|| bad("saturation row offset overflow"))?;
+            let end = start.checked_add(self.width).ok_or_else(|| bad("saturation row end overflow"))?;
+            self.data.get(start..end).ok_or_else(|| bad("missing saturation row"))
+        };
+        Ok([row(first)?, row(first.saturating_add(1).min(last))?, row(first.saturating_add(2).min(last))?])
     }
 }

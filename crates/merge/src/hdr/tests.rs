@@ -75,7 +75,7 @@ fn assert_identical(frames: Vec<Frame>, opts: HdrOptions) {
 
 #[test]
 fn exact_reductions_match_the_frozen_f32_merge_bit_for_bit() {
-    for (w, h, n) in [(1, 1, 3), (3, 2, 3), (127, 129, 3), (128, 130, 5), (128, 97, 7)] {
+    for (w, h, n) in [(1, 1, 3), (3, 2, 3), (127, 129, 3), (128, 130, 5), (128, 97, 7), (257, 67, 3)] {
         for deghost in [Deghost::None, Deghost::Low, Deghost::Medium, Deghost::High] {
             for align in [false, true] {
                 assert_identical(brackets(w, h, n), HdrOptions { align, deghost });
@@ -103,8 +103,9 @@ fn streamed_saturation_keeps_the_exact_fold_and_edge_intervals() {
                 if y > first {
                     rows.advance(&frames, y).unwrap();
                 }
-                for x in 0..w {
-                    assert_eq!(rows.at(0, x, y).unwrap().to_bits(), expected[y * w + x].to_bits(), "{w}x{h} at {x},{y}");
+                let [a, b, c] = rows.for_row(0, y).unwrap();
+                for (x, ((&a, &b), &c)) in a.iter().zip(b).zip(c).enumerate() {
+                    assert_eq!(0.0f32.max(a).max(b).max(c).to_bits(), expected[y * w + x].to_bits(), "{w}x{h} at {x},{y}");
                 }
             }
         }
@@ -257,6 +258,28 @@ fn malformed_and_non_finite_inputs_return_errors_in_both_entry_points() {
     }
     let mismatch = frame(Rgb32f::filled(4, 2, [0.2; 3]), 0.0);
     assert!(merge_hdr(vec![good(), mismatch], &HdrOptions::default(), &crate::no_progress).is_err());
+}
+
+#[test]
+fn finite_checks_cover_partial_chunks_and_stop_before_the_next_decode() {
+    let reads = std::cell::Cell::new(0);
+    let inputs = (0..3).map(|i| {
+        reads.set(reads.get() + 1);
+        let mut input = frame(Rgb32f::filled(257, 65, [0.2; 3]), f64::from(i));
+        if i == 1 {
+            input.image.data.last_mut().unwrap()[2] = f32::NAN;
+        }
+        Ok(input)
+    });
+    let result = merge_hdr_iter(inputs, &HdrOptions::default(), &crate::no_progress);
+    assert_eq!(result.err(), Some(input::bad("RGB samples must be finite")));
+    assert_eq!(reads.get(), 2);
+
+    let mut dark = frame(Rgb32f::filled(257, 65, [0.2; 3]), -20.0);
+    dark.image.data.last_mut().unwrap()[2] = f32::MAX;
+    let reference = frame(Rgb32f::filled(257, 65, [0.2; 3]), 0.0);
+    let result = merge_hdr(vec![dark, reference], &HdrOptions::default(), &crate::no_progress);
+    assert_eq!(result.err(), Some(input::bad("alignment exposure arithmetic overflows f32")));
 }
 
 #[test]

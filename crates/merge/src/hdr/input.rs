@@ -13,6 +13,12 @@ pub(super) fn bad(why: &str) -> MergeError {
     MergeError::Mismatch(format!("HDR merge: {why}"))
 }
 
+/// Scan samples across workers without allocating image scratch. Each chunk retains the
+/// original serial predicate; images up to 16,384 pixels fit in one chunk.
+pub(super) fn samples_finite(image: &Rgb32f) -> bool {
+    image.data.par_chunks(16_384).all(|pixels| pixels.iter().flatten().all(|value| value.is_finite()))
+}
+
 /// Check before any image indexing, orientation, resampling or dimension-derived allocation.
 pub(super) fn validate(frame: &Frame) -> Result<()> {
     let image = &frame.image;
@@ -36,7 +42,7 @@ pub(super) fn validate(frame: &Frame) -> Result<()> {
     if frame.exposure.is_some_and(|v| !v.is_finite()) || !frame.baseline_exposure.is_finite() {
         return Err(bad("exposure must be finite"));
     }
-    if image.data.iter().flatten().any(|v| !v.is_finite()) {
+    if !samples_finite(image) {
         return Err(bad("RGB samples must be finite"));
     }
     Ok(())
@@ -101,7 +107,7 @@ pub(super) fn warp(frame: &mut Frame, transform: &Homography) -> Result<Vec<bool
             }
         }
     });
-    if output.data.iter().flatten().any(|v| !v.is_finite()) {
+    if !samples_finite(&output) {
         return Err(bad("resampling arithmetic produced a non-finite value"));
     }
     frame.image = output;

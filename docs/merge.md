@@ -98,6 +98,9 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   comparable to the older real-raw RSS measurements. Half-float storage is deferred because original threshold
   decisions must survive packing and alignment; naive packing changes a generated highlight by over 15%.
   Lazy input requests check cancellation before decoding, and a decode error stops subsequent requests.
+  Checked row/tile views and parallel finite scans keep the safety checks while removing a measured CPU regression.
+  Release medians on generated 24-MP brackets are 1.072 s for three frames and 1.982 s for five, with unchanged
+  paired peak heap; these are merge-core timings, not real-raw or end-to-end timings.
   Measurements, allocation budgets, precision gates and limits: [HDR memory](hdr-memory.md).
 - The browser build has no file access for merges yet.
 
@@ -105,5 +108,6 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | patch | LR-MERGE-HDR: safe row/tile access and parallel finite checks; release timing and heap A/B evidence, byte-identical output |
 | 2026-11-05 | patch | LR-MERGE-HDR: cancellation before each lazy input request, unchanged decode errors and engine progress mapping; regressions for two frames and mixed orientations |
 | 2026-11-05 | minor | LR-MERGE-HDR: exact row saturation, sequential validated storage and input release before overlay; generated 24 MP and 67.28 MP memory measurements; half-float frames deferred, no parity gap closes |

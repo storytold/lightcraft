@@ -390,13 +390,93 @@ Separate runs of `cargo xtask parity`, `cargo xtask layers`, `cargo xtask assets
 and `cargo xtask wasm` passed. Parity also reported that the existing checklist
 summary is stale; this measurement commit does not refresh feature counts.
 
+## Release performance review (2026-11-07)
+
+`tests/hdr_timing.rs` shares its generated fixture with `hdr_heap` through
+`tests/support/hdr_fixture.rs`. It uses the standard allocator, not `dhat`.
+Only `merge_hdr` is timed: the inputs are generated and allocated beforehand,
+a 96 x 64 merge warms the pool, and output hashing runs after the timer stops.
+The comparable Vec adapter is used on both main and the PR. This excludes raw
+decoding, streaming input generation, DNG writing, and app caches.
+
+The comparison uses release builds, Rust 1.99.0, the same Apple M3 Max with
+36 GiB RAM, 6000 x 4000 pixels, four Rayon workers, alignment and High
+deghosting. Main is `8a0b91a95c30618b690374dd2db9d0684ebc9b23`; the reviewed
+PR head is `400703b7096534a62552f138de2a20dc1505fff3`. Identical test-only
+fixture and timing files were added to the main checkout; its production code
+was unchanged. Five separate processes per case alternate implementation
+order while holding the machine's CI lock. Each merge exercises every
+non-reference Lanczos warp. Input hashes and full radiance/overlay hashes
+match across all runs.
+
+| Frames | Main median (min to max), s | Reviewed PR median (min to max), s | Revised median (min to max), s |
+|---|---:|---:|---:|
+| 3 | 1.092 (1.087 to 1.191) | 1.219 (1.216 to 1.230) | 1.072 (1.062 to 1.079) |
+| 5 | 2.033 (1.998 to 2.177) | 2.222 (2.216 to 2.272) | 1.982 (1.962 to 2.020) |
+
+The reviewed head was 11.7% and 9.3% slower than main in this series. Revised
+medians are 12.1% and 10.8% below the reviewed head, and 1.8% and 2.5% below
+main. Five-frame ranges overlap, so this is evidence that the measured
+regression is removed, not a general speedup claim for real files or 67 MP.
+An earlier independent five-run main/PR comparison also found a slowdown
+(1.082 to 1.210 s for three frames; 1.990 to 2.194 s for five).
+
+### Changes and A/B checks
+
+- Image and mask sizes are checked before blending. Row views resolve image,
+  validity and saturation offsets once, then checked tile slices feed zipped
+  iterators. A 256-pixel stack tile retains f64 accumulators and the original
+  brightness order for every pixel. No additional heap image or row is made.
+  A separate row-only A/B reduced blend-phase medians from 0.244 to 0.176 s
+  and 0.416 to 0.292 s (28% and 30%); whole merges improved 4.8% and 6.2%.
+  The reviewed blend phase was about 19% to 20% of total time, not the largest
+  phase. Warping was larger.
+- Full-buffer finite-value checks now scan chunks across workers. The input
+  validation median fell from 0.040 to 0.010 s and 0.068 to 0.017 s. The
+  alignment gain overflow check stays in place, as do checks after warping,
+  blending and overlay creation. A regression checks non-finite samples in a
+  final partial chunk, stops later decoding, and checks gain overflow there.
+- The initializer remains fallible and safe. An experiment used fallibly
+  reserved vectors and Rayon's safe `unzip_into_vecs` for fully assigned warp
+  pixels, explicitly producing black/false outside the source. Removing the
+  zero pass from that collecting warp changed warp medians by 9 and 15 ms,
+  but the complete alternative was 3.0% and 2.8% slower than the row fill.
+  Its total medians were 1.178 and 2.144 s versus 1.144 and 2.086 s for the
+  row fill in the same series. It was rejected. No `unsafe`, `set_len` or
+  unchecked input-derived indexing was added.
+
+Three paired release heap profiles per large case compare the reviewed and
+revised code, including generated inputs. Three-frame peaks are exactly
+1,232,914,139 bytes in both. Five-frame maxima are 1,962,955,460 bytes in both
+(the revised range was 1,952,283,460 to 1,962,955,460 bytes). The fast control
+is exactly 7,399,433 bytes in both versions. The small aligned case varies
+with feature scheduling, about 20.6 to 24.8 MB across both implementations;
+all upper budgets still pass. The changes add bounded stack accumulators,
+not heap scratch. Existing exactness checks include a new 257-pixel row that
+crosses a tile boundary. The 67 MP and seven-frame profiles were not repeated
+for this CPU review.
+
+Reproduce one unprofiled timing process, then repeat with five frames:
+
+```sh
+CARGO_TARGET_DIR=target/agent-hdr-half \
+LIGHTCRAFT_HDR_TIMING_FRAMES=3 \
+cargo test --release -p lightcraft-merge --test hdr_timing \
+  -- --ignored --exact hdr_release_wall_time --nocapture --test-threads=1
+```
+
+Build first and run the emitted test executable directly for repeated runs;
+compilation is outside its internal merge timer too. The large test is ignored
+in routine CI. Raw runs, A/B variants and stage medians are retained in the
+local `scratch/hdr-3797` report beside the draft review reply.
+
 ## Limits of this checkpoint
 
 The memory measurement covers the merge core with generated decoded frames, not raw decode,
 catalog caches, DNG output, GPU rendering, or an end-to-end app merge. It does
 not validate camera noise or colour on real files. The fixture is a 24 MP
 upsample of a smaller procedural scene, sufficient to exercise full-size
-allocations and actual warps; it is not a 24 MP detail or speed benchmark.
+allocations and actual warps; it does not measure camera detail or real-file merge speed.
 The large runs cover 67.28 MP with three frames and 24 MP with seven, not
 67 MP with seven. Small fixtures verify DNG and developer exactness, but their
 allocations are outside the merge-memory measurement. No production half-float
@@ -406,6 +486,7 @@ frame storage has been shipped.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | patch | LR-MERGE-HDR: release comparisons and A/B checks; checked row/tile views and parallel finite scans remove the measured slowdown, with unchanged large-case heap maxima; safe no-zero warp rejected |
 | 2026-11-05 | patch | LR-MERGE-HDR: check cancellation before each lazy input request; regressions cover loading cancellation, decode errors, two-frame merges and mixed orientations; merge current main before PR |
 | 2026-11-05 | minor | LR-MERGE-HDR: Stage 1 exact reductions, frozen-oracle and cutoff diagnostics, large generated profiles and upper allocation budgets; half-float storage deferred |
 | 2026-11-05 | minor | LR-MERGE-HDR: checkpoint A generated heap harness and original baseline |

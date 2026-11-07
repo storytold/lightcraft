@@ -198,7 +198,7 @@ pub fn merge_hdr_iter(frames: impl IntoIterator<Item = Result<Frame>>, opts: &Hd
         }
         if frames.iter().zip(&rel).any(|(frame, relative)| {
             let gain = g0 * *relative;
-            gain > 1.0 && frame.image.data.iter().flatten().any(|v| !(*v * gain).is_finite())
+            gain > 1.0 && frame.image.data.par_chunks(16_384).any(|pixels| pixels.iter().flatten().any(|v| !(*v * gain).is_finite()))
         }) {
             return Err(input::bad("alignment exposure arithmetic overflows f32"));
         }
@@ -313,7 +313,7 @@ pub fn merge_hdr_iter(frames: impl IntoIterator<Item = Result<Frame>>, opts: &Hd
                 *o = (0..n).filter(|&i| i != reference).map(|i| sample_plane(&maps[i], sx, sy)).fold(0.0, f32::max);
             }
         });
-        if ghost.data.iter().any(|v| !v.is_finite()) {
+        if ghost.data.par_chunks(16_384).any(|pixels| pixels.iter().any(|v| !v.is_finite())) {
             return Err(input::bad("deghost arithmetic produced a non-finite value"));
         }
         result.ghost = ghost;
