@@ -21,6 +21,13 @@ finish-args:
   # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland
   - --socket=fallback-x11
+  # Cursor theme: without the cursor-shape protocol (GNOME 46, for one) winit loads the pointer
+  # from an Xcursor theme itself. The sandbox sets no XCURSOR_PATH and the runtime ships no cursor
+  # themes, so once a tool hides the pointer (Crop, brushes) it never comes back. The host's themes
+  # are mounted under /run/host (#1657; the same fix as storytold/vectorcraft#2502).
+  # A host whose default theme is a symlink out of /usr/share/icons (Ubuntu's /etc/alternatives)
+  # still needs a theme named: flatpak override --user --env=XCURSOR_THEME=Adwaita ai.storyteller.lightcraft
+  - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
   # X11 shared memory (MIT-SHM). Without it the X11 fallback is slow or fails.
   - --share=ipc
   # GPU access for the wgpu renderer (Vulkan, or GL as a fallback).
