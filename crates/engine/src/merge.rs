@@ -416,6 +416,12 @@ impl Session {
         let mut seen = std::collections::HashSet::new();
         let mut planned: Vec<Vec<(PhotoId, String)>> = Vec::new();
         for group in groups {
+            if Self::fresh_group_size(&group, &seen) < kind.min_photos() {
+                for id in &group {
+                    seen.insert(*id);
+                }
+                continue;
+            }
             let sources = self.merge_sources(&group, &mut seen)?;
             if !sources.is_empty() {
                 planned.push(sources);
@@ -449,6 +455,13 @@ impl Session {
         let mut skipped = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for group in groups {
+            if Self::fresh_group_size(&group, &seen) < kind.min_photos() {
+                for id in &group {
+                    seen.insert(*id);
+                }
+                skipped.push(group);
+                continue;
+            }
             let sources = self.merge_sources(&group, &mut seen)?;
             if sources.is_empty() {
                 continue;
@@ -470,6 +483,11 @@ impl Session {
             Some(r) => r.clone(),
             None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
         }
+    }
+
+    fn fresh_group_size(group: &[PhotoId], seen: &std::collections::HashSet<PhotoId>) -> usize {
+        let mut fresh = std::collections::HashSet::new();
+        group.iter().filter(|id| !seen.contains(id) && fresh.insert(**id)).count()
     }
 
     fn merge_sources(&self, group: &[PhotoId], seen: &mut std::collections::HashSet<PhotoId>) -> Result<Vec<(PhotoId, String)>> {

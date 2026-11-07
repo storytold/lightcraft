@@ -259,7 +259,7 @@ fn two_collapsed_stacks_and_loose_photos_plan_separate_jobs() {
     let dir = temp_dir("multi-stack");
     let mut paths = Vec::new();
     for (set, evs) in [("A", &[-2.0, 0.0, 2.0][..]), ("B", &[-1.5, 0.5, 2.5][..]), ("C", &[-1.0, 1.0][..])] {
-        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, &evs).unwrap().into_iter().enumerate() {
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, evs).unwrap().into_iter().enumerate() {
             let p = dir.join(format!("{set}_{i}.dng"));
             std::fs::write(&p, b).unwrap();
             paths.push(p.to_string_lossy().to_string());
@@ -272,7 +272,7 @@ fn two_collapsed_stacks_and_loose_photos_plan_separate_jobs() {
     s.execute("stack.group", &json!({"ids": ids[3..6]})).unwrap();
     let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
     // Interleave the groups: loose photos first, then a member of each stack.
-    let mixed = vec![ids[6], ids[0], ids[3], ids[7], ids[1], ids[4]];
+    let mixed = [ids[6], ids[0], ids[3], ids[7], ids[1], ids[4]];
     let mixed_ids: Vec<lightcraft_catalog::PhotoId> = mixed.iter().map(|id| lightcraft_catalog::PhotoId(*id)).collect();
     let jobs = s.plan_merges(kind.clone(), finish.clone(), &mixed_ids, true).unwrap();
     assert_eq!(jobs.len(), 3, "one job per group");
@@ -293,7 +293,7 @@ fn two_stacks_merge_via_command_and_undersized_loose_is_skipped() {
     let dir = temp_dir("multi-stack-cmd");
     let mut paths = Vec::new();
     for (set, evs) in [("A", &[-2.0, 0.0, 2.0][..]), ("B", &[-1.5, 0.5, 2.5][..]), ("C", &[-1.0, 1.0][..])] {
-        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, &evs).unwrap().into_iter().enumerate() {
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, evs).unwrap().into_iter().enumerate() {
             let p = dir.join(format!("{set}_{i}.dng"));
             std::fs::write(&p, b).unwrap();
             paths.push(p.to_string_lossy().to_string());
@@ -347,4 +347,47 @@ fn collapsed_stack_top_expands_to_stack_members() {
     let job = planned.unwrap();
     assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), stack.photos.iter().map(|p| p.0).collect::<Vec<_>>());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An undersized group is skipped before its sources are validated: a demo photo alone is too
+/// few to merge, so it must not reject a valid collapsed stack selected with it.
+#[test]
+fn undersized_group_is_skipped_before_source_validation() {
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for i in 0..3 {
+        let id = s.catalog.alloc_photo_id();
+        let name = format!("IMG_{i}.dng");
+        let p = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: name.clone() },
+            &name,
+            "DNG",
+            96,
+            64,
+            "2026-01-01T00:00:00",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        ids.push(id);
+    }
+    let demo = s.catalog.alloc_photo_id();
+    let demo_photo = lightcraft_catalog::Photo::new(
+        demo,
+        lightcraft_catalog::Source::Demo { scene: 1 },
+        "demo.jpg",
+        "JPEG",
+        96,
+        64,
+        "2026-01-01T00:00:00",
+    );
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(demo_photo) }).unwrap();
+    let op = s.catalog.group_ops(ids[0], &ids, true).unwrap();
+    s.catalog.apply(op).unwrap();
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    let selected = vec![ids[0], demo];
+    let planned = s.plan_merges(kind, finish, &selected, true);
+    assert!(planned.is_ok(), "undersized demo group should be skipped: {:?}", planned.err());
+    let jobs = planned.unwrap();
+    assert_eq!(jobs.len(), 1, "the valid stack is kept");
+    assert_eq!(jobs[0].sources.iter().map(|(p, _)| *p).collect::<Vec<_>>(), ids);
 }
