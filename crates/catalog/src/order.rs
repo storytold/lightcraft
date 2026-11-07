@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 
-use crate::query::{Sort, SortKey};
+use crate::query::{Filter, Sort, SortKey};
 use crate::{Aspects, Catalog, Photo, PhotoId};
 
 /// A place that is no photo's.
@@ -185,10 +185,12 @@ fn making(photos: Vec<Arc<Photo>>, sort: Sort, revision: u64) -> (Arc<Slot>, imp
 /// Below this many photos an order is sorted when first asked for (about 50 ms at most): a thread is not worth it.
 const PREBUILD_FROM: usize = 50_000;
 
-/// The orders of a catalog: what is kept and being made, how many times every photo was sorted, and whether the
-/// platform has no threads at all (wasm32 in the browser), which is not asked again.
+/// The orders of a catalog: what is kept and being made, how many times every photo was sorted, whether the
+/// platform has no threads at all (wasm32 in the browser), which is not asked again, and two diagnostics: how many
+/// times a kept order was made again from every photo to follow an edit, and how many times a query walked
+/// every photo.
 #[derive(Debug, Default)]
-pub(crate) struct Orders(Mutex<Held>, AtomicUsize, AtomicBool);
+pub(crate) struct Orders(Mutex<Held>, AtomicUsize, AtomicBool, AtomicUsize, AtomicUsize);
 
 impl Orders {
     /// Forget every order (the catalog was changed other than by ops).
@@ -278,6 +280,7 @@ impl Catalog {
             return None;
         }
         // (the photos come in id order, as `ids` of an order does)
+        self.index.orders.4.fetch_add(1, Ordering::Relaxed);
         let marks: Vec<bool> = self.photos().map(|p| wanted(p)).collect();
         let matching = marks.iter().filter(|m| **m).count();
         let Some(order) = self.order_for(sort, marks.len(), matching) else {
@@ -337,6 +340,24 @@ impl Catalog {
     #[doc(hidden)]
     pub fn full_sorts(&self) -> usize {
         self.index.orders.1.load(Ordering::Relaxed)
+    }
+
+    /// How many times a kept order was made again from every photo to follow edits (a diagnostic: what following by
+    /// the photos that came or moved is there to avoid).
+    #[doc(hidden)]
+    pub fn order_remakes(&self) -> usize {
+        self.index.orders.3.load(Ordering::Relaxed)
+    }
+
+    /// How many times a query walked every photo of the catalog to tell which match (a diagnostic).
+    #[doc(hidden)]
+    pub fn library_scans(&self) -> usize {
+        self.index.orders.4.load(Ordering::Relaxed)
+    }
+
+    /// Notes that every photo of the catalog is about to be walked ([`Catalog::library_scans`]).
+    pub(crate) fn note_scan(&self) {
+        self.index.orders.4.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Whether the order for `key` is there to be used: kept, or made on another thread and waiting (a diagnostic).
@@ -431,12 +452,121 @@ impl Catalog {
             return;
         };
         if !(touched.is_empty() && kept.order.ids.len() == self.len()) {
-            let moved = touched.len() <= IN_PLACE && self.move_in_place(sort, &mut kept.order, &touched);
+            let moved = self.merge_new(sort, &mut kept.order, &touched) || (touched.len() <= IN_PLACE && self.move_in_place(sort, &mut kept.order, &touched));
             if !moved {
                 kept.order = Arc::new(self.rebuilt(sort, &kept.order, &touched));
             }
         }
         kept.revision = self.revision;
+    }
+
+    /// Puts photos that came after every photo in `order` (an import: ids are given upward, `touched` is sorted by
+    /// id and each is there to be found) in their places in it, with no pass over the library: each is searched
+    /// for in the list, and the part after it shifted once. `false` when that does not apply (a photo came or went
+    /// among the others, an old photo was edited too: the list is of other photos), with `order` as it was.
+    fn merge_new(&self, sort: &Sort, order: &mut Arc<Order>, touched: &[PhotoId]) -> bool {
+        let Some(first) = touched.first() else { return false };
+        let n = order.ids.len();
+        if n.checked_add(touched.len()) != Some(self.len()) || order.ids.last().is_some_and(|last| last >= first) {
+            return false;
+        }
+        let (Ok(base), Ok(top)) = (u32::try_from(n), u32::try_from(self.len())) else { return false };
+        let Some(mut new) = touched.iter().zip(base..top).map(|(id, at)| self.photo(*id).map(|p| (at, p.as_ref()))).collect::<Option<Vec<(u32, &Photo)>>>() else {
+            return false;
+        };
+        new.sort_unstable_by(|a, b| sort.order(a.1, b.1));
+        let Order { ids, sorted } = Arc::make_mut(order);
+        // where each goes among the photos there (they come in order, so the places never go back)
+        let points: Vec<usize> = {
+            let key = |at: u32| ids.get(at as usize).and_then(|id| self.photo(*id));
+            new.iter().map(|(_, p)| sorted.partition_point(|other| key(*other).is_some_and(|o| sort.order(o, p).is_lt()))).collect()
+        };
+        ids.extend_from_slice(touched);
+        sorted.resize(n + new.len(), 0);
+        // from the back, each shifts what is after its place to make room, the last first
+        let mut end = n;
+        for (j, ((at, _), point)) in new.iter().zip(&points).enumerate().rev() {
+            if *point > end {
+                *order = Arc::new(self.sorted_afresh(sort));
+                return true;
+            }
+            sorted.copy_within(*point..end, point + j + 1);
+            if let Some(slot) = sorted.get_mut(point + j) {
+                *slot = *at;
+            }
+            end = *point;
+        }
+        true
+    }
+
+    /// The order kept for `sort`'s key, brought up to date, when it can be had without making it from every photo
+    /// here: one that is kept, or was made on another thread, or (a library too small for a thread to be worth it) is
+    /// quickly made. `None` while a big library's is not made yet: the caller goes without it, and has it made
+    /// ([`Catalog::prebuild_order`]).
+    fn order_now(&self, sort: &Sort) -> Option<Arc<Order>> {
+        if u32::try_from(self.len()).is_err() {
+            return None;
+        }
+        let sort = ascending(sort);
+        let mut held = self.index.orders.0.lock().ok()?;
+        held.adopt(sort.key);
+        if let Some(kept) = held.kept.get_mut(&sort.key) {
+            self.catch_up(&sort, kept);
+            return Some(kept.order.clone());
+        }
+        if self.len() >= PREBUILD_FROM {
+            return None;
+        }
+        let order = Arc::new(self.sorted_afresh(&sort));
+        held.kept.insert(sort.key, Kept { revision: self.revision, order: order.clone() });
+        Some(order)
+    }
+
+    /// The newest import date of the photos in the library (taken from the end of the import-date order when
+    /// that can be had, else from every photo).
+    pub fn latest_import(&self) -> Option<String> {
+        if let Some(order) = self.order_now(&Sort { key: SortKey::ImportDate, ascending: true, ..Sort::default() }) {
+            // (the photos deleted or only browsed are skipped: the last import is mostly there)
+            let mut newest = order.sorted.iter().rev().filter_map(|at| order.ids.get(*at as usize)).filter_map(|id| self.photo(*id)).filter(|p| p.in_library());
+            return newest.next().map(|p| p.imported.clone());
+        }
+        self.index.orders.4.fetch_add(1, Ordering::Relaxed);
+        self.photos().filter(|p| p.in_library()).map(|p| p.imported.as_str()).max().map(str::to_owned)
+    }
+
+    /// What Recently Added lists: the photos that match `filter` (its `imported_from` is how far back) or are in
+    /// `keep` and match `within` (a held view, as [`Catalog::query_keeping`]), newest import first and a batch in file
+    /// order whatever the sort. The photos imported since that day are the end of the import-date order, so with that
+    /// order kept only they are looked at, not every photo; without it (a big library's is still being made) every
+    /// photo is, as before.
+    pub fn query_recent(&self, filter: &Filter, keep: &HashSet<PhotoId>, within: &Filter) -> Vec<PhotoId> {
+        let prepared = filter.prepare(self);
+        let within_prepared = within.prepare_one(self);
+        let wanted = |p: &Photo| filter.matches_in(p, self, &prepared) || (keep.contains(&p.id) && within.matches_in(p, self, &within_prepared));
+        let by_import_date = Sort { key: SortKey::ImportDate, ascending: true, ..Sort::default() };
+        let from = filter.imported_from.as_deref().unwrap_or_default();
+        let Some(order) = self.order_now(&by_import_date) else {
+            self.index.orders.4.fetch_add(1, Ordering::Relaxed);
+            let mut all: Vec<(&str, &str, PhotoId)> =
+                self.photos().filter(|p| wanted(p)).map(|p| (p.imported.as_str(), p.file_name.as_str(), p.id)).collect();
+            all.sort_unstable_by(|a, b| b.0.cmp(a.0).then_with(|| crate::query::cmp_name(a.1, b.1)).then(a.2.cmp(&b.2)));
+            return all.into_iter().map(|(_, _, id)| id).collect();
+        };
+        let photo_at = |at: &u32| order.ids.get(*at as usize).and_then(|id| self.photo(*id));
+        let start = order.sorted.partition_point(|at| photo_at(at).is_some_and(|p| p.imported.as_str() < from));
+        // (held photos from before that day come first in the import order: older than all the others)
+        let mut ordered: Vec<&Photo> = keep.iter().filter_map(|id| self.photo(*id)).map(|p| p.as_ref()).filter(|p| p.imported.as_str() < from && wanted(p)).collect();
+        ordered.sort_unstable_by(|a, b| a.imported.cmp(&b.imported).then_with(|| crate::query::cmp_name(&a.file_name, &b.file_name)).then(a.id.cmp(&b.id)));
+        ordered.extend(order.sorted.get(start..).unwrap_or_default().iter().filter_map(photo_at).map(|p| p.as_ref()).filter(|p| wanted(p)));
+        // the batches newest first, each in the order it is in
+        let mut ids = Vec::with_capacity(ordered.len());
+        let mut end = ordered.len();
+        while let Some(newest) = ordered.get(..end).and_then(<[&Photo]>::last).map(|p| p.imported.as_str()) {
+            let begin = ordered.get(..end).map_or(0, |upto| upto.partition_point(|p| p.imported.as_str() < newest));
+            ids.extend(ordered.get(begin..end).unwrap_or_default().iter().map(|p| p.id));
+            end = begin;
+        }
+        ids
     }
 
     /// Moves the `touched` photos (few, sorted by id, each once) to where they sort now, in `order` itself: no
@@ -476,6 +606,7 @@ impl Catalog {
     /// `old` worked out again after the ops that touched the photos `touched` (sorted by id, each once), from
     /// the list of `old` and one pass over the photos: those taken out and put back by their keys.
     fn rebuilt(&self, sort: &Sort, old: &Order, touched: &[PhotoId]) -> Order {
+        self.index.orders.3.fetch_add(1, Ordering::Relaxed);
         let photos: Vec<&Photo> = self.photos().map(|p| p.as_ref()).collect();
         let ids: Vec<PhotoId> = photos.iter().map(|p| p.id).collect();
         // where each photo of the old list is now (the touched ones are taken out, to go back by their new keys)
@@ -515,6 +646,7 @@ impl Catalog {
     /// sorting every photo from scratch takes `n·log n` comparisons, and a photo whose key changed is put right
     /// as well (the sort does not rely on `old` being right).
     fn remade(&self, sort: &Sort, old: &Order) -> Order {
+        self.index.orders.3.fetch_add(1, Ordering::Relaxed);
         let photos: Vec<&Photo> = self.photos().map(|p| p.as_ref()).collect();
         let ids: Vec<PhotoId> = photos.iter().map(|p| p.id).collect();
         let now = places_now(&old.ids, &ids);

@@ -42,7 +42,7 @@ impl LibrarySource {
             LibrarySource::All => {}
             // everything imported in the 30 days up to the latest import (by import, newest first)
             LibrarySource::RecentlyAdded => {
-                let latest = cat.photos().filter(|p| p.in_library()).map(|p| p.imported.clone()).max().unwrap_or_default();
+                let latest = cat.latest_import().unwrap_or_default();
                 let from = lightcraft_catalog::stacks::iso_seconds(&latest)
                     .map(|s| lightcraft_catalog::dates::civil(s - RECENT_DAYS * 86_400))
                     .unwrap_or_else(|| latest.get(..10).unwrap_or("").to_string());

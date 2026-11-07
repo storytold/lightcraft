@@ -176,7 +176,8 @@ impl Catalog {
             return ids.to_vec();
         }
         let index = self.stack_index();
-        let present: HashSet<PhotoId> = ids.iter().copied().collect();
+        // (only a stack's members are asked about: hashing every photo of a million-photo view cost more than the rest)
+        let present: HashSet<PhotoId> = ids.iter().copied().filter(|id| index.contains_key(id)).collect();
         let mut done: HashSet<StackId> = HashSet::new();
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {

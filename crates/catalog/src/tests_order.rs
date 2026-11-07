@@ -594,3 +594,111 @@ fn a_thread_that_could_not_start_for_want_of_resources_is_tried_again() {
     assert_eq!(ask_twice_over(&c, &sort, std::io::ErrorKind::WouldBlock), (3, 3));
     assert!(!c.index.orders.pending(sort.key));
 }
+
+/// A photo as an import brings it: keys before, among and after the ones in `library_of`, tied with them.
+fn incoming(i: u64) -> Photo {
+    let mut p = photo(i);
+    p.captured = match i % 3 {
+        0 => Some("2024-12-31T00:00:00".into()),
+        1 => Some("2025-01-01T00:00:00".into()),
+        _ => Some("2027-01-01T00:00:00".into()),
+    };
+    p.imported = format!("2026-01-0{}T00:00:00", 1 + i % 5);
+    p.rating = (i % 6) as u8;
+    p.file_size = i % 5;
+    p
+}
+
+/// Photos that come after every photo there (an import: ids are given upward) are put in each kept order where they
+/// belong, without the order being made again from every photo: at a million photos that was the pass over every
+/// one of them that each import batch cost a view that is not followed.
+#[test]
+fn imported_photos_are_merged_into_every_order_without_remaking_it() {
+    let mut c = library_of(300);
+    agree(&c).unwrap();
+    let remakes = c.order_remakes();
+    for batch in 0..6u64 {
+        let first = 301 + batch * 16;
+        c.apply(Op::Batch { ops: (first..first + 16).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) }).collect() }).unwrap();
+        agree(&c).unwrap_or_else(|e| panic!("{e}"));
+    }
+    // one photo at a time, with ids that skip, asked after each
+    for i in 0..12u64 {
+        c.apply(Op::AddPhoto { photo: Box::new(incoming(500 + i * 3)) }).unwrap();
+        agree(&c).unwrap_or_else(|e| panic!("{e}"));
+    }
+    assert_eq!(c.order_remakes(), remakes, "an order was made again from every photo");
+    // a photo that is not after the others (an undo that brings one back) is still put right, by the way it was
+    c.apply(Op::AddPhoto { photo: Box::new(incoming(350)) }).ok();
+    c.apply(Op::AddPhoto { photo: Box::new(incoming(2)) }).ok();
+    c.apply(Op::RemovePhoto { id: PhotoId(7) }).unwrap();
+    c.apply(Op::AddPhoto { photo: Box::new(incoming(7)) }).unwrap();
+    agree(&c).unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// What Recently Added lists, worked out from every photo: newest import first, a batch in file order.
+fn recent_from_every_photo(c: &Catalog, filter: &Filter, keep: &std::collections::HashSet<PhotoId>, within: &Filter) -> Vec<PhotoId> {
+    let mut v: Vec<&Photo> = c.photos().map(|p| p.as_ref()).filter(|p| filter.matches(p, c) || (keep.contains(&p.id) && within.matches(p, c))).collect();
+    v.sort_by(|a, b| b.imported.cmp(&a.imported).then_with(|| crate::query::cmp_name(&a.file_name, &b.file_name)).then(a.id.cmp(&b.id)));
+    v.into_iter().map(|p| p.id).collect()
+}
+
+/// Recently Added is read off the end of the import-date order: the photos imported since a day, in the order the
+/// grid shows them, without a pass over the library; held photos from before that day join them.
+#[test]
+fn the_recently_added_are_the_end_of_the_import_order() {
+    let mut c = library_of(300);
+    for id in [4, 40, 41] {
+        c.apply(Op::SetDeleted { id: PhotoId(id), deleted: true }).unwrap();
+    }
+    let since = Filter { imported_from: Some("2026-01-02".into()), ..Filter::default() };
+    let rated = Filter { imported_from: Some("2026-01-02".into()), rating: 2, ..Filter::default() };
+    let nothing = std::collections::HashSet::new();
+    let held: std::collections::HashSet<PhotoId> = (1..=9).map(PhotoId).collect();
+    let everything = Filter::default();
+    let check = |c: &Catalog| {
+        for (filter, keep, within) in [(&since, &nothing, &since), (&rated, &nothing, &rated), (&since, &held, &everything), (&Filter::default(), &nothing, &Filter::default())] {
+            assert_eq!(c.query_recent(filter, keep, within), recent_from_every_photo(c, filter, keep, within), "{filter:?}, {} held", keep.len());
+        }
+        let latest = c.photos().filter(|p| p.in_library()).map(|p| p.imported.clone()).max();
+        assert_eq!(c.latest_import(), latest);
+    };
+    // (the order is made by the first ask)
+    check(&c);
+    let (scans, sorts, remakes) = (c.library_scans(), c.full_sorts(), c.order_remakes());
+    check(&c);
+    // an import, and an edit of a photo that it has no business with
+    c.apply(Op::Batch { ops: (301..=316).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) }).collect() }).unwrap();
+    c.apply(Op::SetRating { id: PhotoId(5), rating: 5 }).unwrap();
+    check(&c);
+    c.apply(Op::Batch { ops: (317..=332).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) }).collect() }).unwrap();
+    check(&c);
+    assert_eq!((c.library_scans(), c.full_sorts(), c.order_remakes()), (scans, sorts, remakes), "a pass over every photo");
+}
+
+/// A list followed through an import's photos (many, tied with the others on every key, all after the old ones) and
+/// through edits and removals, equals the list asked for again, for every sort both ways.
+#[test]
+fn a_list_followed_through_added_and_edited_photos_equals_the_query() {
+    let filters = [Filter::default(), Filter { rating: 2, ..Filter::default() }];
+    for filter in &filters {
+        for sort in sorts() {
+            let mut c = library_of(300);
+            let mut list = c.query(filter, &sort);
+            let mut revision = c.revision;
+            let steps: Vec<Vec<Op>> = vec![
+                (301..=360).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) }).collect(),
+                // old photos edited with new ones added, and some removed
+                (1..=30u64).map(|i| Op::SetRating { id: PhotoId(i * 7 % 300 + 1), rating: (i % 6) as u8 }).chain((361..=380).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) })).collect(),
+                (1..=20u64).map(|i| Op::RemovePhoto { id: PhotoId(i * 11) }).chain((381..=383).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) })).collect(),
+            ];
+            for ops in steps {
+                c.apply(Op::Batch { ops }).unwrap();
+                let touched = c.touched_since(revision).unwrap();
+                list = c.follow(&list, &touched, filter, &sort, None);
+                revision = c.revision;
+                assert_eq!(list, c.query(filter, &sort), "{filter:?} {sort:?}");
+            }
+        }
+    }
+}
