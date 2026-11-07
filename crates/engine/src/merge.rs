@@ -516,7 +516,14 @@ impl Session {
                     if !expanded_stacks.insert(st.id) {
                         continue;
                     }
-                    let members = st.photos.clone();
+                    let members: Vec<PhotoId> = st
+                        .photos
+                        .iter()
+                        .copied()
+                        .filter(|id| {
+                            self.catalog.photo(*id).is_none_or(|p| lightcraft_catalog::query::merged_kind(&p.file_name).is_none())
+                        })
+                        .collect();
                     // Capture order, not stack order (top first): an HDR panorama's bracket
                     // detection expects the periodic exposure sequence from the earliest capture.
                     // File names do not reflect capture sequence (renamed files, several cameras), so
@@ -597,9 +604,17 @@ impl Session {
     pub fn merge_now(&mut self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId]) -> Result<Value> {
         let (jobs, skipped) = self.plan_merges_inner(kind, finish, ids, false)?;
         let mut merged = Vec::new();
+        let mut failed = Vec::new();
         for job in &jobs {
-            let out = job.run(&|_, _| true).map_err(EngineError::Other)?;
-            merged.push(self.finish_merge(job, out)?);
+            let photos: Vec<u64> = job.sources.iter().map(|(p, _)| p.0).collect();
+            let result = job.run(&|_, _| true).map_err(EngineError::Other).and_then(|out| self.finish_merge(job, out));
+            match result {
+                Ok(v) => merged.push(v),
+                Err(e) => failed.push(json!({"photos": photos, "error": e.to_string()})),
+            }
+        }
+        if merged.is_empty() {
+            return Ok(json!({"merged": merged, "failed": failed}));
         }
         let first_id = merged.first().and_then(|v| v.get("id")).and_then(Value::as_u64).map(PhotoId);
         let mut first = merged.first().cloned().unwrap_or(Value::Null);
@@ -608,13 +623,16 @@ impl Session {
         {
             obj.insert("skipped".into(), json!(skipped.iter().map(|g| g.iter().map(|p| p.0).collect::<Vec<_>>()).collect::<Vec<_>>()));
         }
-        if merged.len() > 1 {
+        if merged.len() > 1 || !failed.is_empty() {
             // finish_merge selected each result in turn; leave the selection on the returned (first) result.
             if let Some(id) = first_id {
                 self.selection = crate::Selection::single(id);
             }
             if let Some(obj) = first.as_object_mut() {
                 obj.insert("merged".into(), Value::Array(merged));
+                if !failed.is_empty() {
+                    obj.insert("failed".into(), Value::Array(failed));
+                }
             }
         }
         Ok(first)

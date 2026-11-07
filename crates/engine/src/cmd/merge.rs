@@ -24,18 +24,35 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     if !bool_or(p, "preview", false) {
         return s.merge_now(kind, finish, &ids);
     }
-    let job = s.plan_merge(kind, finish, &ids, true)?;
-    let out = job.run(&|_, _| true).map_err(|e| bad(id, e))?;
-    let mut info = out.info;
-    if let (Some(path), Some(img)) = (str_param(p, "previewPath"), &out.preview) {
-        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default())
-            .map_err(|e| bad(id, e.to_string()))?;
-        s.check_write_target(path).map_err(|e| bad(id, e))?;
-        crate::export::write_file(path, &png).map_err(|e| bad(id, e))?;
-        info["previewPath"] = json!(path);
+    let jobs = s.plan_merges(kind, finish, &ids, true)?;
+    let mut previews = Vec::new();
+    for job in &jobs {
+        let out = job.run(&|_, _| true).map_err(|e| bad(id, e))?;
+        let mut info = out.info;
+        if let Some(img) = &out.preview {
+            info["previewSize"] = json!([img.width, img.height]);
+        }
+        previews.push(info);
     }
-    if let Some(img) = &out.preview {
-        info["previewSize"] = json!([img.width, img.height]);
+    let mut info = previews.first().cloned().unwrap_or(Value::Null);
+    if let (Some(path), Some(first)) = (str_param(p, "previewPath"), previews.first()) {
+        // Re-run is avoided: the preview image itself is not retained, so only the
+        // single-group path writes a preview file (as before).
+        let _ = (path, first);
+    }
+    if jobs.len() == 1 {
+        // Preserve the single-group preview file behaviour.
+        let job = &jobs[0];
+        let out = job.run(&|_, _| true).map_err(|e| bad(id, e))?;
+        if let (Some(path), Some(img)) = (str_param(p, "previewPath"), &out.preview) {
+            let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default())
+                .map_err(|e| bad(id, e.to_string()))?;
+            s.check_write_target(path).map_err(|e| bad(id, e))?;
+            crate::export::write_file(path, &png).map_err(|e| bad(id, e))?;
+            info["previewPath"] = json!(path);
+        }
+    } else if let Some(obj) = info.as_object_mut() {
+        obj.insert("previews".into(), Value::Array(previews));
     }
     Ok(info)
 }
