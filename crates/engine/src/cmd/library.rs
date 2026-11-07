@@ -167,4 +167,56 @@ mod next_unrated_tests {
         assert_eq!(s.active_mask, Some(7), "staying must preserve the mask state");
         assert_eq!(s.active_spot, Some(2), "staying must preserve the spot state");
     }
+
+    #[test]
+    fn prev_unrated_jumps_to_previous_unrated_photo() {
+        let mut s = session().unwrap();
+        s.execute("library.select", &json!({"ids": [4]})).unwrap();
+        let result = s.execute("library.prevUnrated", &json!({}));
+        assert!(result.is_ok(), "library.prevUnrated command should exist");
+        assert_eq!(s.active(), Some(PhotoId(3)), "previous unrated photo in view order");
+    }
+
+    #[test]
+    fn prev_unrated_wraps_to_last_unrated_photo() {
+        let mut s = session().unwrap();
+        assert_eq!(s.active(), Some(PhotoId(1)));
+        let result = s.execute("library.prevUnrated", &json!({})).unwrap();
+        assert_eq!(result, json!({"active": 4}));
+        assert_eq!(s.active(), Some(PhotoId(4)), "wraps to the last unrated photo in view order");
+    }
+
+    #[test]
+    fn prev_unrated_all_rated_returns_distinct_result() {
+        let mut s = session().unwrap();
+        s.execute("photo.rate", &json!({"ids": [3, 4], "rating": 5})).unwrap();
+        let result = s.execute("library.prevUnrated", &json!({})).unwrap();
+        assert_eq!(result, json!({"allRated": true}));
+        assert_eq!(s.active(), Some(PhotoId(1)));
+    }
+
+    #[test]
+    fn prev_unrated_preserves_multi_selection_when_moving() {
+        let mut s = session().unwrap();
+        s.execute("library.select", &json!({"ids": [1, 2, 4], "active": 4})).unwrap();
+        let result = s.execute("library.prevUnrated", &json!({})).unwrap();
+        assert_eq!(result, json!({"active": 3}));
+        assert_eq!(s.active(), Some(PhotoId(3)));
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4), PhotoId(3)]);
+    }
+
+    #[test]
+    fn prev_unrated_preserves_selection_and_mask_spot_when_staying() {
+        let mut s = session().unwrap();
+        s.execute("photo.rate", &json!({"ids": [4], "rating": 5})).unwrap();
+        s.execute("library.select", &json!({"ids": [1, 2, 3], "active": 3})).unwrap();
+        s.active_mask = Some(7);
+        s.active_spot = Some(2);
+        let result = s.execute("library.prevUnrated", &json!({}));
+        assert!(result.is_ok(), "library.prevUnrated command should exist");
+        assert_eq!(s.active(), Some(PhotoId(3)), "the only unrated photo stays active");
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(3)], "staying must preserve the multi-photo selection");
+        assert_eq!(s.active_mask, Some(7), "staying must preserve the mask state");
+        assert_eq!(s.active_spot, Some(2), "staying must preserve the spot state");
+    }
 }
