@@ -3612,6 +3612,38 @@ fn content_duplicates_name_their_match_and_can_be_imported_anyway() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// An `importAnyway` entry naming a file that is not part of the import changes nothing: that
+/// file is not imported, and a content duplicate in the import (even one with the same name and
+/// content) is still skipped. The list overrides only the files it names, by their full path.
+#[test]
+fn import_anyway_entry_outside_the_import_changes_nothing() {
+    let src = temp_dir("dup-anyway-outside");
+    let other = temp_dir("dup-anyway-outside-other");
+    write_png(&src.join("a.png"), 1);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    std::fs::copy(src.join("a.png"), src.join("copy.png")).unwrap();
+    // the same name and content, in a folder this import does not include
+    std::fs::copy(src.join("a.png"), other.join("copy.png")).unwrap();
+    let inside = src.join("copy.png").to_string_lossy().to_string();
+    let outside = other.join("copy.png").to_string_lossy().to_string();
+    let missing = other.join("nowhere.png").to_string_lossy().to_string();
+
+    let found = crate::import::scan(&mut s, std::slice::from_ref(&inside));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].duplicate.as_deref(), Some("content"));
+    let r = s.execute("library.import", &json!({"paths": [inside], "importAnyway": [outside, missing]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 0, "{r}");
+    assert_eq!(ids(&r, "failed"), 0, "{r}");
+    assert_eq!(r.get("importedAnyway"), None, "{r}");
+    assert_eq!(ids(&r, "duplicates"), 1, "{r}");
+    assert_eq!(r["duplicates"][0]["reason"], "content", "{r}");
+    assert_eq!(s.catalog.len(), 1, "neither the outside file nor the copy is added");
+    assert!(s.catalog.photos().all(|p| p.content_hash.as_deref().is_some_and(|h| !h.contains(":dup"))));
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&other);
+}
+
 /// A forced content duplicate still reads its own sidecar after a scan cached its probe.
 #[test]
 fn import_anyway_keeps_the_duplicates_own_sidecar() {

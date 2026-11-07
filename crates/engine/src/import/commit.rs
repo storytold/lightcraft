@@ -171,6 +171,21 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
     PreparedItem::Ready(Box::new(ReadyFile { path, stored, info, sidecar, placed }))
 }
 
+/// The library's photos by base content hash (a Duplicate's `:dup<id>` dropped), built once per
+/// commit for the files ticked to import anyway (`wanted`) instead of a catalog scan per file.
+fn photos_by_base_hash(cat: &lightcraft_catalog::Catalog, wanted: bool) -> HashMap<String, Vec<PhotoId>> {
+    let mut by_base: HashMap<String, Vec<PhotoId>> = HashMap::new();
+    if !wanted {
+        return by_base;
+    }
+    for p in cat.photos() {
+        if let Some(h) = &p.content_hash {
+            by_base.entry(crate::sync::base_hash(h).to_string()).or_default().push(p.id);
+        }
+    }
+    by_base
+}
+
 /// A trashed photo's file is not where the library had it (never on the web, where paths are
 /// storage keys, not files).
 fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool {
@@ -206,6 +221,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             }
         }
     }
+    let by_base = photos_by_base_hash(&s.catalog, !anyway.is_empty());
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
     for it in prepared.items {
@@ -267,9 +283,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 if anyway.contains(&normalize_import_path(&path))
                     && let Some(h) = &mut hash
                     && (new_hash.get(h.as_str()).is_some_and(|first| *first != id)
-                        || s.catalog
-                            .photos()
-                            .any(|p| !purged.contains(&p.id) && p.content_hash.as_deref().map(crate::sync::base_hash) == Some(h.as_str())))
+                        || by_base.get(h.as_str()).is_some_and(|ids| ids.iter().any(|p| !purged.contains(p))))
                 {
                     *h = format!("{h}:dup{}", id.0);
                     report.imported_anyway += 1;
