@@ -290,9 +290,10 @@ fn subfolder_variables_expansion_and_presets() {
     assert_eq!(clean_album_name("..hidden.."), "hidden");
     assert_eq!(clean_album_name("..."), "");
     assert_eq!(clean_album_name("   "), "");
-    // Windows reserved device names
+    // Windows reserved device names (bare and with extension, ASCII and superscript)
     assert_eq!(clean_album_name("CON"), "CON_");
     assert_eq!(clean_album_name("con"), "con_");
+    assert_eq!(clean_album_name("con.txt"), "con_.txt");
     assert_eq!(clean_album_name("PRN"), "PRN_");
     assert_eq!(clean_album_name("AUX"), "AUX_");
     assert_eq!(clean_album_name("NUL"), "NUL_");
@@ -300,7 +301,11 @@ fn subfolder_variables_expansion_and_presets() {
     assert_eq!(clean_album_name("com9"), "com9_");
     assert_eq!(clean_album_name("LPT1"), "LPT1_");
     assert_eq!(clean_album_name("lpt9"), "lpt9_");
-    assert_eq!(clean_album_name("NUL.tar.gz"), "NUL.tar.gz_");
+    assert_eq!(clean_album_name("NUL.tar.gz"), "NUL_.tar.gz");
+    assert_eq!(clean_album_name("COM¹"), "COM¹_");
+    assert_eq!(clean_album_name("com²"), "com²_");
+    assert_eq!(clean_album_name("lpt³"), "lpt³_");
+    assert_eq!(clean_album_name("com¹.backup"), "com¹_.backup");
 
     // Expand variables with fixed date/time: 2026-11-05 14:30
     let fixed_time = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).unwrap().and_hms_opt(14, 30, 0);

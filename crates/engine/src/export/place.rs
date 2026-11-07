@@ -72,8 +72,9 @@ pub fn clean_subfolder(s: &str) -> String {
 ///
 /// Characters `/ \ : * ? " < > | \0` and control characters become `_`, and surrounding
 /// whitespace and dots are trimmed. Windows-reserved device names (`CON`, `PRN`, `AUX`, `NUL`,
-/// `COM1`–`COM9`, `LPT1`–`LPT9`, case-insensitive) get `_` appended so they remain usable directory
-/// components. The result may be empty if the album name consisted entirely of dots or whitespace.
+/// `COM1`–`COM9`, `LPT1`–`LPT9`, plus superscript forms `COM¹`–`COM³`, `LPT¹`–`LPT³`, case-insensitive)
+/// get `_` inserted after the base component so they remain usable directory components. The result
+/// may be empty if the album name consisted entirely of dots or whitespace.
 pub fn clean_album_name(album: &str) -> String {
     let mut s: String = album
         .chars()
@@ -87,8 +88,9 @@ pub fn clean_album_name(album: &str) -> String {
         s = trimmed.to_string();
     }
     let base = s.split('.').next().unwrap_or(&s);
+    let upper = base.to_uppercase();
     if matches!(
-        base.to_ascii_uppercase().as_str(),
+        upper.as_str(),
         "CON"
             | "PRN"
             | "AUX"
@@ -111,8 +113,14 @@ pub fn clean_album_name(album: &str) -> String {
             | "LPT7"
             | "LPT8"
             | "LPT9"
+            | "COM¹"
+            | "COM²"
+            | "COM³"
+            | "LPT¹"
+            | "LPT²"
+            | "LPT³"
     ) {
-        s.push('_');
+        s.insert(base.len(), '_');
     }
     s
 }
