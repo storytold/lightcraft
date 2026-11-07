@@ -331,6 +331,32 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
     Ok(out)
 }
 
+/// Photo `p` (`id`) with the reload ops in `ops` ([`crate::cmd::convert::reload_ops`]) applied:
+/// what its file says now. Ops for other photos (the original or other virtual copies) are skipped.
+fn reloaded(p: &Photo, id: PhotoId, ops: &[Op]) -> Photo {
+    let mut q = p.clone();
+    for op in ops {
+        match op {
+            Op::SetContent { id: of, width, height, file_size, content_hash, preview_only, preview_checked } if *of == id => {
+                (q.width, q.height, q.file_size) = (*width, *height, *file_size);
+                q.content_hash.clone_from(content_hash);
+                q.preview_only.clone_from(preview_only);
+                q.preview_checked.clone_from(preview_checked);
+            }
+            Op::SetMeta { id: of, meta } if *of == id => q.meta = (**meta).clone(),
+            Op::SetCaptured { id: of, captured } if *of == id => q.captured.clone_from(captured),
+            Op::SetEmbeddedLens { id: of, lens } if *of == id => q.embedded_lens = lens.as_deref().copied(),
+            Op::SetAsShotWb { id: of, wb } if *of == id => q.as_shot_wb = *wb,
+            Op::SetDevelop { id: of, settings, edited, .. } if *of == id => {
+                q.develop = settings.clone();
+                q.edited.clone_from(edited);
+            }
+            _ => {}
+        }
+    }
+    q
+}
+
 /// Apply sidecar data to a photo record (the sidecar wins, except that a capture time embedded in
 /// the file is kept). Returns true if develop changed.
 pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
@@ -1266,35 +1292,30 @@ impl Session {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else { return Ok(None) };
-        let mut sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p))
-            .map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?
-            .with_file_orientation(orig);
         let mut content = Vec::new();
         // An explicit reread can follow an external EXIF change even without a crop. Refresh
         // content through the normal reload operations so decoded pixels and render keys agree.
         let info = self.media.file_probe.as_ref().and_then(|probe| probe(orig).ok());
-        if sc.needs_frame() {
-            sc.prepare_frame(info.as_ref().and_then(crate::media::ProbeInfo::stored_frame));
-        }
-        if let Some(info) = info
+        if let Some(info) = info.as_ref()
             && info.width > 0
             && info.height > 0
             && (info.content_hash != p.content_hash || (info.width, info.height) != (p.width, p.height))
         {
-            crate::cmd::convert::reload_ops(&self.catalog, p.copy_of.unwrap_or(id), &info, &mut content, &mut Vec::new());
+            crate::cmd::convert::reload_ops(&self.catalog, p.copy_of.unwrap_or(id), info, &mut content, &mut Vec::new());
+        }
+        // the sidecar goes on top of what the reload just read, not on the catalog's copy from
+        // before it: its ops come last and would put the old camera fields, capture time and
+        // develop settings (a lens correction the reload turned on) back
+        let base = reloaded(p, id, &content);
+        let mut sc = parse_sidecar(&packet, crate::crs::Target::for_photo(&base))
+            .map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?
+            .with_file_orientation(orig);
+        if sc.needs_frame() {
+            sc.prepare_frame(info.as_ref().and_then(crate::media::ProbeInfo::stored_frame));
         }
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
             warning.path = orig.to_string();
-        }
-        // the sidecar's metadata goes on top of the camera fields the reload just filled, not on
-        // the catalog's copy from before it (its `SetMeta` comes last and would empty them again)
-        let mut base = (**p).clone();
-        if let Some(meta) = content.iter().rev().find_map(|op| match op {
-            Op::SetMeta { id: of, meta } if *of == id => Some(meta),
-            _ => None,
-        }) {
-            base.meta = (**meta).clone();
         }
         content.push(self.sidecar_op_on(id, &base, sc));
         Ok(Some((Op::Batch { ops: content }, from, warnings)))

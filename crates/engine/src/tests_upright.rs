@@ -1507,6 +1507,62 @@ fn review_metadata_reread_keeps_the_camera_fields_its_reload_fills() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A reread of a changed file runs the reload first. For an unedited photo whose file now
+/// carries lens data, the reload turns the lens correction on. A sidecar that only sets a crop
+/// used to write the settings from before the reload back over it.
+#[test]
+fn review_metadata_reread_keeps_the_lens_correction_its_reload_turns_on() {
+    let dir = temp_dir("review-reread-lens");
+    let mut s = Session::new().with_fs();
+    let id = import_jpeg(&mut s, &dir, "lens", 1, None);
+    let p = s.catalog.photo(id).unwrap();
+    assert!(p.embedded_lens.is_none() && !p.is_edited() && !p.develop.optics.lens_profile, "an unedited photo without lens data");
+    let probe = s.media.file_probe.clone().unwrap();
+    s.media.file_probe = Some(std::sync::Arc::new(move |path: &str| {
+        let mut info = probe(path)?;
+        info.embedded_lens = Some(lightcraft_develop::EmbeddedLens::default());
+        Ok(info)
+    }));
+    write_jpeg(&dir.join("lens.jpg"), 60, 40, 1);
+    let xmp = crop_packet(r#"crs:CropLeft="0.1" crs:CropTop="0.2" crs:CropRight="0.6" crs:CropBottom="0.9""#);
+    std::fs::write(dir.join("lens.xmp"), xmp).unwrap();
+    let r = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(r["failed"].as_array().unwrap().is_empty(), "{r}");
+    let p = s.catalog.photo(id).unwrap();
+    assert!(p.embedded_lens.is_some(), "the reload read the lens data");
+    assert_ne!(p.develop.crop.geometry, lightcraft_geom::CropGeometry::default(), "the sidecar's crop applies");
+    assert!(p.develop.optics.lens_profile, "and the reload's lens correction stays on");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The capture time a reload reads from the changed file is kept over the sidecar's, as
+/// [`crate::sidecar::merge_into`] keeps one the photo already had.
+#[test]
+fn review_metadata_reread_keeps_the_capture_time_its_reload_reads() {
+    let dir = temp_dir("review-reread-captured");
+    let mut s = Session::new().with_fs();
+    let id = import_jpeg(&mut s, &dir, "dated", 1, None);
+    // (a photo imported before its capture time was read: import now takes the file's date)
+    s.catalog.apply(lightcraft_catalog::Op::SetCaptured { id, captured: None }).unwrap();
+    let probe = s.media.file_probe.clone().unwrap();
+    s.media.file_probe = Some(std::sync::Arc::new(move |path: &str| {
+        let mut info = probe(path)?;
+        info.captured = Some("2024-01-02T03:04:05".into());
+        Ok(info)
+    }));
+    write_jpeg(&dir.join("dated.jpg"), 60, 40, 1);
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" exif:DateTimeOriginal="2020-05-06T07:08:09" xmp:Rating="3"/>
+    </rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(dir.join("dated.xmp"), xmp).unwrap();
+    let r = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(r["failed"].as_array().unwrap().is_empty(), "{r}");
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(p.rating, 3, "the sidecar applies");
+    assert_eq!(p.captured.as_deref(), Some("2024-01-02T03:04:05"), "with the file's capture time");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn review_mirrored_sidecar_crops_use_exif_4_5_and_7() {
     for (exif, expected) in [(4, [0.1, 0.1, 0.6, 0.8]), (5, [0.2, 0.1, 0.9, 0.6]), (7, [0.1, 0.4, 0.8, 0.9])] {
