@@ -29,6 +29,12 @@ pub struct UploadDialog {
     /// Make a new album for the photos instead, named `new_album_title`.
     pub new_album: bool,
     pub new_album_title: String,
+    /// The title the photos go up with (empty: each photo's own title, else its file name). Filled
+    /// from the photo when one is shared; starts empty every time.
+    pub title: String,
+    /// The description the photos go up with (empty: each photo's caption, per `description`).
+    /// Filled from the photo when one is shared; starts empty every time.
+    pub description_text: String,
 }
 
 impl Default for UploadDialog {
@@ -44,6 +50,8 @@ impl Default for UploadDialog {
             album: String::new(),
             new_album: false,
             new_album_title: String::new(),
+            title: String::new(),
+            description_text: String::new(),
         }
     }
 }
@@ -60,6 +68,8 @@ impl UploadDialog {
             "removeLocation": self.remove_location,
             "album": if self.album.is_empty() || self.new_album { Value::Null } else { json!(self.album) },
             "newAlbum": if self.new_album { json!(self.new_album_title) } else { Value::Null },
+            "title": if self.title.trim().is_empty() { Value::Null } else { json!(self.title) },
+            "descriptionText": if self.description_text.trim().is_empty() { Value::Null } else { json!(self.description_text) },
         })
     }
 }
@@ -229,11 +239,15 @@ mod native {
                     app.ui.dialog = Some(Dialog::Settings { tab: "accounts".into() });
                     return Err(crate::i18n::tr("Sign in to Flickr first").to_string());
                 }
-                // no album unless one is chosen this time
+                // no album unless one is chosen this time, and the title and description are this
+                // photo's (one photo) or empty (several: each keeps its own)
+                let (title, description_text) = one_photo_text(app);
                 let opts = super::UploadDialog {
                     album: String::new(),
                     new_album: false,
                     new_album_title: String::new(),
+                    title,
+                    description_text,
                     ..app.flickr.last_dialog.clone().unwrap_or_default()
                 };
                 app.ui.dialog = Some(Dialog::FlickrUpload { opts });
@@ -373,6 +387,20 @@ mod native {
         }
         app.flickr.busy = None;
         app.flickr.busy_step = app.flickr.busy_step.wrapping_add(1);
+    }
+
+    /// The title (its title, else its file name) and caption of the one photo about to be shared;
+    /// empty for several photos, which then each go up with their own.
+    fn one_photo_text(app: &LightcraftApp) -> (String, String) {
+        let Ok(ids) = app.session.targets(&json!({})) else { return Default::default() };
+        let [id] = ids.as_slice() else { return Default::default() };
+        let Some(p) = app.session.catalog.photo(*id) else { return Default::default() };
+        let title = if p.meta.title.trim().is_empty() {
+            std::path::Path::new(&p.file_name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+        } else {
+            p.meta.title.trim().to_string()
+        };
+        (title, p.meta.caption.trim().to_string())
     }
 
     /// The signed-in account (its token's public half).

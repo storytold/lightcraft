@@ -571,3 +571,65 @@ fn a_new_album_already_in_the_list_is_not_added_twice() {
     let n = h.app.flickr.albums.as_ref().unwrap().iter().filter(|(id, _, _)| id == "601").count();
     assert_eq!(n, 1, "listed once");
 }
+
+fn widget_rect(h: &Headless, id: &str) -> egui::Rect {
+    h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
+}
+
+fn click_widget(h: &mut Headless, id: &str) {
+    let r = h.request("ui.clickWidget", json!({"id": id}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+}
+
+#[test]
+fn the_photo_right_click_menu_in_develop_shares_to_flickr() {
+    let (mut h, _) = app("http://127.0.0.1:9");
+    signed_in(&mut h);
+    let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    // right-click the photo being developed: Share ▸ Share to Flickr…
+    let c = widget_rect(&h, "canvas:image").center();
+    let r = h.request("ui.click", json!({"x": c.x, "y": c.y, "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(has(&h, "menu:contextShare"), "the menu has Share");
+    let share = widget_rect(&h, "menu:contextShare").center();
+    h.app.synthetic.push(egui::Event::PointerMoved(share));
+    for _ in 0..6 {
+        h.step();
+    }
+    click_widget(&mut h, "menu:contextShareFlickr");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::FlickrUpload { .. })), "the Flickr dialog opens: {:?}", h.app.ui.dialog);
+}
+
+#[test]
+fn the_dialog_offers_the_photos_title_and_description() {
+    let (mut h, _) = app("http://127.0.0.1:9");
+    signed_in(&mut h);
+    let photos: Vec<_> = h.app.session.catalog.photos().take(2).map(|p| (p.id, p.file_name.clone())).collect();
+    // no title of its own: the dialog offers its file name
+    h.app.session.execute("library.select", &json!({"ids": [photos[0].0.0]})).unwrap();
+    h.app.session.execute("photo.setMeta", &json!({"title": ""})).unwrap();
+    // one photo: its title (none yet: its file name) and caption, ready to edit
+    h.app.session.execute("library.select", &json!({"ids": [photos[0].0.0]})).unwrap();
+    h.app.session.execute("photo.setMeta", &json!({"caption": "Dawn over the lake"})).unwrap();
+    h.app.run("dialog.flickrUpload", json!({})).unwrap();
+    let Some(Dialog::FlickrUpload { opts }) = &h.app.ui.dialog else { panic!("no dialog") };
+    let stem = std::path::Path::new(&photos[0].1).file_stem().unwrap().to_string_lossy().to_string();
+    assert_eq!(opts.title, stem);
+    assert_eq!(opts.description_text, "Dawn over the lake");
+    assert_eq!(opts.params()["title"], stem.as_str());
+    h.app.ui.dialog = None;
+    // two photos: empty, so each keeps its own (sent as null)
+    h.app.session.execute("library.select", &json!({"ids": [photos[0].0.0, photos[1].0.0]})).unwrap();
+    h.app.run("dialog.flickrUpload", json!({})).unwrap();
+    let Some(Dialog::FlickrUpload { opts }) = &h.app.ui.dialog else { panic!("no dialog") };
+    assert!(opts.title.is_empty() && opts.description_text.is_empty());
+    assert!(opts.params()["title"].is_null() && opts.params()["descriptionText"].is_null());
+    h.step();
+    assert!(has(&h, "field:flickrTitle") && has(&h, "field:flickrDescriptionText"), "both fields are shown");
+}

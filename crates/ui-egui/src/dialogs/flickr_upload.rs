@@ -17,6 +17,28 @@ pub(super) fn flickr_upload_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: 
         egui::RichText::new(crate::i18n::tr_format!("Upload {n} photo{} to Flickr as {name}", if n == 1 { "" } else { "s" }, n = n, name = name))
             .color(t.text_dim),
     );
+    // what the photos go up with, so nothing has to be fixed on flickr.com afterwards
+    let several = n > 1;
+    field(ui, "Title", |ui| {
+        crate::text_field::TextField::singleline("field:flickrTitle", &mut opts.title)
+            .hint(crate::i18n::tr(if several { "Each photo's own title, else its file name" } else { "The photo's file name" }))
+            .width(320.0)
+            .show(ui);
+    });
+    field(ui, "Description", |ui| {
+        crate::text_field::TextField::multiline("field:flickrDescriptionText", &mut opts.description_text)
+            .hint(crate::i18n::tr(if several { "Each photo's own caption" } else { "No description" }))
+            .width(320.0)
+            .rows(3)
+            .show(ui);
+    });
+    if several && (!opts.title.trim().is_empty() || !opts.description_text.trim().is_empty()) {
+        ui.label(
+            egui::RichText::new(crate::i18n::tr_format!("The title and description typed here go with all {n} photos.", n = n))
+                .size(11.0)
+                .color(t.text_dim),
+        );
+    }
     field(ui, "Size", |ui| {
         let current = SIZES.iter().find(|(v, _)| *v == opts.long_edge).map_or("2048 px", |(_, l)| l);
         // (pixel sizes read the same in every language)
@@ -103,18 +125,16 @@ pub(super) fn flickr_upload_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: 
     if let Some(e) = &app.flickr.albums_error {
         ui.label(egui::RichText::new(format!("{} {e}", crate::i18n::tr("Couldn't read your Flickr albums:"))).size(11.0).color(t.caution));
     }
-    for (value, id, label) in [
-        (&mut opts.tags, "flickrTags", "Keywords as tags"),
-        (&mut opts.description, "flickrDescription", "Caption as description"),
-        (&mut opts.remove_location, "flickrRemoveLocation", "Remove location info"),
-        (&mut opts.hidden, "flickrHidden", "Hide from public searches"),
+    // a typed description is what goes up: the caption choice only matters while it's empty
+    let typed = !opts.description_text.trim().is_empty();
+    for (value, id, label, enabled) in [
+        (&mut opts.tags, "flickrTags", "Keywords as tags", true),
+        (&mut opts.description, "flickrDescription", "Caption as description", !typed),
+        (&mut opts.remove_location, "flickrRemoveLocation", "Remove location info", true),
+        (&mut opts.hidden, "flickrHidden", "Hide from public searches", true),
     ] {
-        let r = ui.checkbox(value, crate::i18n::tr(label));
+        let r = ui.add_enabled(enabled, egui::Checkbox::new(value, crate::i18n::tr(label)));
         crate::widgets::register(ui, format!("check:{id}"), r.rect);
     }
-    ui.label(
-        egui::RichText::new(crate::i18n::tr("Each photo goes up with its edits as a JPEG, titled with its title or else its file name."))
-            .size(11.0)
-            .color(t.text_dim),
-    );
+    ui.label(egui::RichText::new(crate::i18n::tr("Each photo goes up with its edits as a JPEG.")).size(11.0).color(t.text_dim));
 }

@@ -15,14 +15,18 @@ republished and nothing on Flickr is changed or deleted afterwards (see `LRC-LIB
 2. **Sign in.** Continue goes straight on: Flickr's approval page opens in your browser. Approve LightCraft (it asks
    to upload, nothing more), then paste the code Flickr shows (like `123-456-789`) into the Code field; it is sent as
    soon as it is complete. LightCraft never sees your Flickr password. While an upload runs, the sign-in can't be changed.
-3. **Upload.** Select photos, then **File ▸ Share ▸ Flickr…**:
+3. **Upload.** Select photos, then **File ▸ Share ▸ Flickr…** (or right-click a photo ▸ **Share ▸ Share to Flickr…**,
+   in Develop, the grid or the filmstrip):
    - **Size**: 1024, 2048 (default) or 4096 px on the long edge, or full size; never enlarged.
    - **Quality**: JPEG quality, 90 by default.
    - **Visibility**: public, friends, family, friends & family, or only you.
    - **Keywords as tags**, **caption as description** (both on by default). Tags are the keywords the exported file
      carries: a keyword whose *Include on Export* is off is never sent, and a nested keyword goes by its own name
-     (with its containing keywords and synonyms when their options say so). The title is the photo's title, or its
-     file name without the extension.
+     (with its containing keywords and synonyms when their options say so).
+   - **Title** and **Description**: what the photos go up with on Flickr, so there's nothing to fix on flickr.com
+     afterwards. For one photo they start as its title (else its file name) and caption; edit them freely. For several
+     photos they start empty: left empty, each photo goes up with its own title (else its file name) and caption;
+     typed in, the text goes with every photo. A typed description is sent even when *Caption as description* is off.
    - **Remove location info** (on by default): GPS is left out of the file, so the photo isn't placed on Flickr's map.
      Turn it off to share where it was taken.
    - **Hide from public searches**.
@@ -57,7 +61,7 @@ over MCP (`lightcraft-cli mcp`, synchronously):
 | `flickr.completeSignIn` | `{code}` | status, signed in and saved |
 | `flickr.cancelSignIn` / `flickr.signOut` | — | status |
 | `flickr.albums` | — | `{albums: [{id, title, photos}]}`, as arranged on Flickr |
-| `flickr.upload` | `{ids?, longEdge?, quality?, privacy?, hidden?, tags?, description?, removeLocation?, album?, newAlbum?}` (`album` or `newAlbum`, not both) | `{total, uploaded, failed, albumFailed, cancelled, signInNeeded, album, createdAlbum?, albumCreateError?, photos: [{photo, file, photoId, url, albumError?} \| {photo, file, error}]}` |
+| `flickr.upload` | `{ids?, longEdge?, quality?, privacy?, hidden?, tags?, description?, title?, descriptionText?, removeLocation?, album?, newAlbum?}` (`album` or `newAlbum`, not both) | `{total, uploaded, failed, albumFailed, cancelled, signInNeeded, album, createdAlbum?, albumCreateError?, photos: [{photo, file, photoId, url, albumError?} \| {photo, file, error}]}` |
 
 At most 500 photos per upload. In the app, `flickr.upload` returns `{background: true, total}` at once; poll
 `ui.inspect` → `flickr` (or `activity.list`, kind `upload`). `flickr.albums` likewise returns `{started: true}` and
