@@ -43,12 +43,12 @@ impl crate::Session {
             source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h))
         });
         // the Before side develops with the Before settings' camera profile (or none), not the edit's
-        let source = if before {
+        let (cache_generation, source) = if before {
             let mut q = (*p).clone();
             q.develop = settings.clone();
-            self.media.source_ref(&q, level)
+            self.media.current_source(&q, level)
         } else {
-            self.media.source_ref(&p, level)
+            self.media.current_source(&p, level)
         };
         let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
         // the photo id is part of the key: two photos with the same settings and size must not
@@ -72,7 +72,8 @@ impl crate::Session {
             ^ content.rotate_left(17)
             ^ salt
             ^ profile_salt.rotate_left(29)
-            ^ lens.rotate_left(37);
+            ^ lens.rotate_left(37)
+            ^ cache_generation.wrapping_mul(0xd6e8_feb8_6659_fd93);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
@@ -93,7 +94,8 @@ impl crate::Session {
         });
         Some(RenderJob {
             request_id: 0,
-            cache_generation: self.media.rendered.generation(),
+            cache_generation,
+            cache_owner: Arc::downgrade(&self.media.rendered),
             source_key: Some(source_key),
             photo: id,
             level,
@@ -138,7 +140,8 @@ impl crate::Session {
             ^ (apply_crop as u64)
             ^ (job.level as u64) << 60
             ^ profile_salt.rotate_left(29)
-            ^ lens.rotate_left(37);
+            ^ lens.rotate_left(37)
+            ^ job.cache_generation.wrapping_mul(0xd6e8_feb8_6659_fd93);
         Some(job)
     }
 
@@ -173,11 +176,12 @@ impl crate::Session {
         let level = SourceLevel::Thumb;
         // decoded as these settings develop it (their camera profile, or none)
         p.develop = Arc::new(settings.clone());
-        let source = self.media.source_ref(&p, level);
+        let (cache_generation, source) = self.media.current_source(&p, level);
         let ck = Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&settings.profile.id));
         Some(RenderJob {
             request_id: 0,
-            cache_generation: self.media.rendered.generation(),
+            cache_generation,
+            cache_owner: Arc::downgrade(&self.media.rendered),
             source_key: Some(super::quick::source_identity(&p)),
             photo: id,
             level,
@@ -186,7 +190,7 @@ impl crate::Session {
             info: source_info(&p),
             settings: Arc::new(settings.clone()),
             request: RenderRequest { apply_crop: true, ..RenderRequest::fit(edge, edge) },
-            key: (ck.0 as u64) ^ ((ck.0 >> 64) as u64),
+            key: (ck.0 as u64) ^ ((ck.0 >> 64) as u64) ^ cache_generation.wrapping_mul(0xd6e8_feb8_6659_fd93),
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
@@ -228,12 +232,13 @@ impl crate::Session {
         // pixels along the long edge that leave `edge` across the crop
         let needed = (edge as f64 * w.max(h) / side).ceil().min(SourceLevel::Preview.max_edge() as f64);
         let level = SourceLevel::for_size(needed as usize);
-        let source = self.media.source_ref(&p, level);
+        let (cache_generation, source) = self.media.current_source(&p, level);
         let ck = Self::variant_key(&p, &settings, edge, self.media.camera_profile_salt(&settings.profile.id));
         let preview_cut = self.face_preview_cut(&p, rect, edge, needed as usize);
         Some(RenderJob {
             request_id: 0,
-            cache_generation: self.media.rendered.generation(),
+            cache_generation,
+            cache_owner: Arc::downgrade(&self.media.rendered),
             source_key: Some(super::quick::source_identity(&p)),
             photo: id,
             level,
@@ -242,7 +247,7 @@ impl crate::Session {
             info: source_info(&p),
             settings: Arc::new(settings),
             request: RenderRequest { apply_crop: true, ..RenderRequest::fit(edge, edge) },
-            key: (ck.0 as u64) ^ ((ck.0 >> 64) as u64),
+            key: (ck.0 as u64) ^ ((ck.0 >> 64) as u64) ^ cache_generation.wrapping_mul(0xd6e8_feb8_6659_fd93),
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
@@ -491,7 +496,9 @@ impl crate::Session {
     /// Accept a finished job's loaded source into the cache. What the decode learnt about the file that the catalog
     /// has wrong is corrected too ([`Self::learn_as_shot_wb`]).
     pub fn accept(&mut self, r: &RenderResult) {
-        if let Some(src) = &r.loaded
+        if r.cache_owner.upgrade().is_some_and(|cache| Arc::ptr_eq(&cache, &self.media.rendered))
+            && r.cache_generation == self.media.rendered.generation()
+            && let Some(src) = &r.loaded
             && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| super::quick::source_identity(p) == key))
         {
             if let Some(info) = &src.info {
