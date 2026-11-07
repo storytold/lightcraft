@@ -28,6 +28,49 @@ fn snapshot_version(m: &MemStore) -> u64 {
     v["version"].as_u64().unwrap()
 }
 
+/// Existing catalogs upgrade before accepting ignored regions, retaining face metadata.
+#[test]
+fn legacy_faces_upgrade_without_losing_assignments_or_boxes() {
+    let (mut base, _, _) = legacy_parts();
+    let id = base.photos().next().unwrap().id;
+    let mut meta = base.photo(id).unwrap().meta.clone();
+    meta.regions = vec![lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.4 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: Some("Person".into()),
+        description: Some("retained".into()),
+    }];
+    base.apply(Op::SetMeta { id, meta: Box::new(meta.clone()) }).unwrap();
+    for version in [9, 10, 11, 12] {
+        let m = MemStore::new();
+        m.set(
+            SNAPSHOT,
+            format!("{{\"format\":\"lightcraft-catalog\",\"version\":{version},\"seq\":3,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes(),
+        );
+        let (mut journal, mut catalog, report) = Journal::open(Box::new(m.clone())).unwrap();
+        assert_eq!(report.upgraded_from, Some(version));
+        assert_eq!(snapshot_version(&m), u64::from(VERSION));
+        assert!(snapshot_version(&m) > 12, "older builds must refuse the format before decoding ignored faces");
+        assert_eq!(catalog.photo(id).unwrap().meta, meta);
+
+        let mut ignored = meta.clone();
+        ignored.regions[0].kind = lightcraft_meta::RegionKind::IgnoredFace;
+        let op = Op::SetMeta { id, meta: Box::new(ignored.clone()) };
+        catalog.apply(op.clone()).unwrap();
+        journal.append(&[op]).unwrap();
+        drop(journal);
+        // Both log replay and a subsequent compaction retain the ignored state and metadata.
+        let (mut journal, reopened, report) = Journal::open(Box::new(m.clone())).unwrap();
+        assert_eq!(report.upgraded_from, None);
+        assert_eq!(report.replayed, 1);
+        assert_eq!(reopened.photo(id).unwrap().meta, ignored);
+        journal.snapshot(&reopened).unwrap();
+        drop(journal);
+        let (_, compacted, _) = Journal::open(Box::new(m)).unwrap();
+        assert_eq!(compacted.photo(id).unwrap().meta, ignored);
+    }
+}
+
 #[test]
 fn v1_library_loads_and_is_upgraded() {
     let (base, log, full) = legacy_parts();
@@ -238,9 +281,10 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v12: `Catalog.grids` and `SegMask.grid`, shared by a snapshot's masks (#2154) (v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
+    /// v13: the persisted `RegionKind::IgnoredFace` value in metadata regions (v12: `Catalog.grids`
+    /// and `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
     /// `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 12;
+    const NEWEST_FIELDS: u32 = 13;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

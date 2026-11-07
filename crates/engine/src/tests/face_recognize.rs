@@ -477,6 +477,104 @@ fn many_faces_are_named_in_one_undo_step() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// Ignoring is atomic, persists on reopen and can be restored without a recognition model.
+#[test]
+fn ignored_faces_survive_reopening_and_can_be_restored() {
+    let d = temp("ignore");
+    let lib = d.join("library");
+    let (mut s, _) = setup(&d, 64);
+    s.open_library(&lib, true).unwrap();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Person"))]);
+    set_regions(&mut s, b, vec![region(0.1, None)]);
+    s.execute("faces.index", &json!({"budgetMs": 0})).unwrap();
+    s.faces.index.insert(a.0, &region(0.1, None).rect, unit64(&[(0, 1.0)]));
+    s.faces.index.insert(b.0, &region(0.1, None).rect, unit64(&[(0, 1.0)]));
+    let faces = json!([{"photo": a.0,"index":0,"rect":region(0.1,None).rect}, {"photo":b.0,"index":0,"rect":region(0.1,None).rect}]);
+    let before = s.undo.len();
+    assert!(s.execute("faces.ignore", &json!({"faces": faces, "ignored": "false"})).is_err());
+    let mut stale = faces.clone();
+    stale[1]["rect"] = json!(region(0.3, None).rect);
+    assert!(s.execute("faces.ignore", &json!({"faces":stale})).is_err());
+    assert_eq!(s.undo.len(), before);
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].kind, RegionKind::Face);
+    s.execute("faces.ignore", &json!({"faces":faces})).unwrap();
+    assert_eq!(s.undo.len(), before + 1);
+    assert_eq!(s.execute("faces.unnamed", &json!({})).unwrap()["total"], 0);
+    assert_eq!(s.execute("faces.person", &json!({"name":"Person"})).unwrap()["total"], 0);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].kind, RegionKind::Face);
+    s.execute("faces.ignore", &json!({"faces":faces})).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(s.execute("faces.ignored", &json!({})).unwrap()["total"], 2);
+    s.execute("faces.ignore", &json!({"faces":faces,"ignored":false})).unwrap();
+    assert_eq!(s.execute("faces.ignored", &json!({})).unwrap()["total"], 0);
+    let restored = &s.catalog.photo(a).unwrap().meta.regions[0];
+    assert_eq!(restored.name.as_deref(), Some("Person"));
+    assert_eq!(restored.rect, region(0.1, None).rect);
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Invalid targets do not partially apply; duplicate targets are one change and one undo step.
+#[test]
+fn ignoring_a_batch_validates_every_face_and_deduplicates_targets() {
+    let mut s = Session::with_demo();
+    let id = s.catalog.photos().next().unwrap().id;
+    let regions = vec![region(0.1, None), region(0.4, Some("Person"))];
+    set_regions(&mut s, id, regions.clone());
+    let before = s.undo.len();
+    for params in [
+        json!({"faces": []}),
+        json!({"faces": [{"photo": id.0, "index": 0}, {"photo": id.0, "index": 99}]}),
+        json!({"faces": [{"photo": id.0, "index": 0}, {"photo": id.0, "index": -1}]}),
+        json!({"faces": [{"photo": id.0, "index": 0}, {"photo": 987_654, "index": 0}]}),
+        json!({"faces": [{"photo": id.0, "index": 0}], "ignored": false}),
+    ] {
+        assert!(s.execute("faces.ignore", &params).is_err(), "{params}");
+        assert_eq!(s.catalog.photo(id).unwrap().meta.regions, regions);
+        assert_eq!(s.undo.len(), before);
+    }
+    let response = s.execute("faces.ignore", &json!({"faces": [{"photo": id.0, "index": 0}, {"photo": id.0, "index": 0}]})).unwrap();
+    assert_eq!(response["changed"], 1);
+    assert_eq!(s.undo.len(), before + 1);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.regions[0].kind, RegionKind::IgnoredFace);
+    assert_eq!(s.catalog.photo(id).unwrap().meta.regions[1], regions[1]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().meta.regions, regions);
+}
+
+/// Multiple valid ignore batches can exceed the old whole-library cap; every page stays available.
+#[test]
+fn ignored_faces_pages_beyond_100000_and_uses_indexed_views() {
+    let mut s = Session::with_demo();
+    let id = s.catalog.photos().next().unwrap().id;
+    let loose = region(0.1, None).rect;
+    let tight = region(0.2, None).rect;
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.regions = vec![Region { rect: loose, kind: RegionKind::IgnoredFace, name: None, description: None }; 100_001];
+    s.catalog.apply(Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.faces.index.insert_with_view(id.0, &loose, unit64(&[(0, 1.0)]), &tight);
+
+    let first = s.execute("faces.ignored", &json!({"limit": 2})).unwrap();
+    assert_eq!(first["total"], 100_001);
+    assert_eq!(first["offset"], 0);
+    assert_eq!(first["faces"].as_array().unwrap().len(), 2);
+    assert_eq!(first["faces"][0]["rect"], json!(loose));
+    assert_eq!(first["faces"][0]["view"], json!(tight));
+    let last = s.execute("faces.ignored", &json!({"offset": 100_000, "limit": 2})).unwrap();
+    assert_eq!(last["total"], 100_001);
+    assert_eq!(last["faces"].as_array().unwrap().len(), 1);
+    assert_eq!(last["faces"][0]["index"], 100_000);
+    assert!(s.execute("faces.ignored", &json!({"offset": 100_001})).unwrap()["faces"].as_array().unwrap().is_empty());
+    for params in [json!({"limit": 0}), json!({"limit": 5001}), json!({"limit": -1}), json!({"offset": -1})] {
+        assert!(s.execute("faces.ignored", &params).is_err(), "{params}");
+    }
+}
+
 #[test]
 fn unnamed_faces_come_with_look_alikes_together_and_the_name_the_named_ones_suggest() {
     let d = temp("unnamed");
@@ -690,4 +788,26 @@ fn rename_person_covers_more_than_the_person_query_and_rejects_bad_input() {
     assert_eq!(r["photos"], 1, "the browsed photo is not another person and is not renamed");
     assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Bea"));
     assert_eq!(s.catalog.photo(local).unwrap().meta.regions[0].name.as_deref(), Some("Ada"));
+}
+
+/// Retained assignments follow renames and merges while their regions remain ignored.
+#[test]
+fn ignored_assignments_follow_person_renames_and_merges_without_restoring_faces() {
+    let mut s = Session::with_demo();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
+    set_regions(&mut s, b, vec![region(0.1, Some("Ann")), region(0.5, Some("Bea"))]);
+    let face = json!([{ "photo": a.0, "index": 0 }]);
+    s.execute("faces.ignore", &json!({"faces": face})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].kind, RegionKind::IgnoredFace);
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Ada"));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Ann"));
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Bea"})).is_err());
+    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Bea", "merge": true})).unwrap();
+    s.execute("faces.ignore", &json!({"faces": face, "ignored": false})).unwrap();
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Bea"));
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].kind, RegionKind::Face);
 }

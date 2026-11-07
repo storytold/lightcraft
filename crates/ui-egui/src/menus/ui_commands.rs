@@ -70,6 +70,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.compare", "Compare", Some("Shift+C"), "View"),
     ("view.survey", "Survey", Some("N"), "View"),
     ("view.people", "People", None, "View"),
+    ("view.ignoredFaces", "Ignored Faces", None, ""),
     ("view.person", "Show Person", None, ""),
     ("view.faceBoxes", "Face Boxes", None, "View"),
     ("view.focusPoint", "Focus Point", Some("Alt+F"), "View"),

@@ -27,6 +27,78 @@ fn name_param(p: &Value, c: &str) -> Result<Option<String>> {
     Ok(name)
 }
 
+/// Validate the whole selection before changing its ignored state in one catalog-only undo step.
+fn ignore_faces(s: &mut Session, p: &Value) -> Result<Value> {
+    use lightcraft_meta::RegionKind;
+    const C: &str = "faces.ignore";
+    let ignored = match p.get("ignored") {
+        None => true,
+        Some(value) => value.as_bool().ok_or_else(|| bad(C, "ignored must be true or false"))?,
+    };
+    let faces = p["faces"].as_array().ok_or_else(|| bad(C, "missing faces"))?;
+    if faces.is_empty() || faces.len() > 100_000 {
+        return Err(bad(C, "select between 1 and 100000 faces"));
+    }
+    let mut edits: std::collections::BTreeMap<lightcraft_catalog::PhotoId, lightcraft_catalog::Meta> = Default::default();
+    let mut seen = std::collections::HashSet::new();
+    for face in faces {
+        let id = lightcraft_catalog::PhotoId(face["photo"].as_u64().ok_or_else(|| bad(C, "missing photo"))?);
+        let index = face["index"].as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(C, "invalid face index"))?;
+        if !seen.insert((id, index)) {
+            continue;
+        }
+        let photo = s.catalog.photo(id).filter(|p| p.in_library()).ok_or_else(|| bad(C, "photo is no longer in the library"))?;
+        let region = photo.meta.regions.get(index).ok_or_else(|| bad(C, "face no longer exists"))?;
+        let expected = if ignored { RegionKind::Face } else { RegionKind::IgnoredFace };
+        if region.kind != expected {
+            return Err(bad(C, "a selected face changed; reload the faces and try again"));
+        }
+        if let Some(rect) = face.get("rect") {
+            let rect: lightcraft_geom::Rect = serde_json::from_value(rect.clone()).map_err(|_| bad(C, "invalid reviewed rectangle"))?;
+            if rect != region.rect {
+                return Err(bad(C, "a selected face changed; reload the faces and try again"));
+            }
+        }
+        let meta = edits.entry(id).or_insert_with(|| photo.meta.clone());
+        if let Some(region) = meta.regions.get_mut(index) {
+            region.kind = if ignored { RegionKind::IgnoredFace } else { RegionKind::Face };
+        }
+    }
+    let count = seen.len();
+    s.commit_catalog_only(
+        if ignored { "Ignore Faces" } else { "Restore Ignored Faces" },
+        Op::Batch { ops: edits.into_iter().map(|(id, meta)| Op::SetMeta { id, meta: Box::new(meta) }).collect() },
+    )?;
+    Ok(json!({"changed": count, "ignored": ignored}))
+}
+
+/// List one bounded page of retained ignored regions in catalog order, without a recognition model.
+fn ignored_faces(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.ignored";
+    let offset = match p.get("offset") {
+        None => 0,
+        Some(value) => value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(C, "offset must be a nonnegative index"))?,
+    };
+    let limit = match p.get("limit") {
+        None => 1000,
+        Some(value) => value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(C, "limit must be between 1 and 5000"))?,
+    };
+    if !(1..=5000).contains(&limit) {
+        return Err(bad(C, "limit must be between 1 and 5000"));
+    }
+    let mut faces = Vec::new();
+    let mut total = 0usize;
+    for photo in s.catalog.photos().filter(|p| p.in_library()) {
+        for (index, region) in photo.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == lightcraft_meta::RegionKind::IgnoredFace) {
+            if total >= offset && faces.len() < limit {
+                faces.push(json!({"photo": photo.id.0, "index": index, "rect": region.rect, "view": s.face_view(photo.id, region.rect)}));
+            }
+            total = total.saturating_add(1);
+        }
+    }
+    Ok(json!({"total": total, "offset": offset, "faces": faces}))
+}
+
 /// Give a face region its name. Naming makes the face yours: a later "Detect Faces" run no longer replaces it.
 fn apply_name(region: &mut lightcraft_meta::Region, name: &Option<String>) {
     region.name = name.clone();
@@ -73,8 +145,7 @@ fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "none of those faces exist"));
     }
     let photos = ops.len();
-    s.commit(if name.is_some() { "Name Faces" } else { "Clear Face Names" }, Op::Batch { ops })?;
-    s.skip_auto_write = true;
+    s.commit_catalog_only(if name.is_some() { "Name Faces" } else { "Clear Face Names" }, Op::Batch { ops })?;
     Ok(json!({"named": named, "photos": photos, "name": name}))
 }
 
@@ -88,8 +159,7 @@ fn set_name(s: &mut Session, p: &Value) -> Result<Value> {
     let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
     let region = meta.regions.get_mut(index).ok_or_else(|| bad(C, "no such region"))?;
     apply_name(region, &name);
-    s.commit(if name.is_some() { "Name Face" } else { "Clear Face Name" }, Op::SetMeta { id, meta: Box::new(meta) })?;
-    s.skip_auto_write = true;
+    s.commit_catalog_only(if name.is_some() { "Name Face" } else { "Clear Face Name" }, Op::SetMeta { id, meta: Box::new(meta) })?;
     Ok(json!({"id": id.0, "index": index, "name": name}))
 }
 
@@ -135,7 +205,7 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
         let Some(ph) = s.catalog.photo(id) else { continue };
         let mut indexes = Vec::new();
         for (i, r) in ph.meta.regions.iter().enumerate() {
-            if r.kind != lightcraft_meta::RegionKind::Face {
+            if !matches!(r.kind, lightcraft_meta::RegionKind::Face | lightcraft_meta::RegionKind::IgnoredFace) {
                 continue;
             }
             let Some(n) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
@@ -171,8 +241,7 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("{to} is already another person; pass merge: true to combine them")));
     }
     let photos = ops.len();
-    s.commit(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
-    s.skip_auto_write = true;
+    s.commit_catalog_only(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
         s.filter.person = Some(to.clone());
     }
@@ -352,7 +421,7 @@ mod imp {
     fn needs_search(s: &Session, photo: &Photo) -> bool {
         photo.in_library()
             && !photo.is_video()
-            && !photo.meta.regions.iter().any(|r| r.kind == RegionKind::Face)
+            && !photo.meta.regions.iter().any(|r| matches!(r.kind, RegionKind::Face | RegionKind::IgnoredFace))
             && !s.faces.scanned.contains(photo.id.0)
             && !s.faces.scan_failed.contains(&photo.id.0)
     }
@@ -383,7 +452,7 @@ mod imp {
         }
         let Some(photo) = s.catalog.photo(id) else { return };
         // the user (or an import) got there first: leave their faces alone
-        if photo.meta.regions.iter().any(|r| r.kind == RegionKind::Face) {
+        if photo.meta.regions.iter().any(|r| matches!(r.kind, RegionKind::Face | RegionKind::IgnoredFace)) {
             return;
         }
         let mut meta = photo.meta.clone();
@@ -1092,6 +1161,15 @@ mod imp {
             assert!(r.items[0]["score"].as_f64().unwrap() > r.items[1]["score"].as_f64().unwrap());
             assert_eq!(similar(&mut s, "ann", 1).items.len(), 1, "capped");
             assert!(similar(&mut s, "nobody", 10).items.is_empty());
+            // The positive control above produces both candidates. Ignoring a candidate excludes
+            // that exact pair; ignoring Ann's only exemplar must exclude the remaining candidate.
+            s.execute("faces.ignore", &json!({"faces": [{"photo": b.0, "index": 0}]})).unwrap();
+            let pairs = |r: Similar| r.items.iter().map(|i| (i["photo"].as_u64().unwrap(), i["index"].as_u64().unwrap())).collect::<Vec<_>>();
+            assert_eq!(pairs(similar(&mut s, "ann", 10)), vec![(c.0, 0)]);
+            s.execute("faces.ignore", &json!({"faces": [{"photo": a.0, "index": 0}]})).unwrap();
+            assert!(pairs(similar(&mut s, "ann", 10)).is_empty());
+            s.execute("faces.ignore", &json!({"faces": [{"photo": a.0, "index": 0}], "ignored": false})).unwrap();
+            assert_eq!(pairs(similar(&mut s, "ann", 10)), vec![(c.0, 0)], "restoring the exemplar restores its suggestion");
             let _ = std::fs::remove_dir_all(&d);
         }
     }
@@ -1129,8 +1207,20 @@ mod imp {
     }
 }
 
+/// Register face review queries and explicit catalog-only identity mutations.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(
+            "faces.ignore",
+            "Ignore Faces",
+            [],
+            None,
+            "{faces: [{photo, index, rect?}], ignored?: true} — persistently ignore blurry or false faces, or restore them; one undo step; originals are untouched",
+            super::always,
+            ignore_faces
+        ),
+        cmd!(query "faces.ignored", "Ignored Faces", [], None,
+            "{offset?: 0, limit?: 1000} → {total, offset, faces} — review ignored faces in catalog order, including named faces excluded from matching; limit is 1..5000", super::always, ignored_faces),
         cmd!(
             "faces.index",
             "Index Faces",

@@ -38,6 +38,15 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+## 2026-11-04
+
+### Keep unwanted faces out of People
+- Select one or several faces in Unnamed faces and choose **Ignore selected faces**. A person's page also offers
+  selection controls and a face's right-click **Ignore face** action. Ignored faces stay out of recognition suggestions
+  across launches; their photos, face boxes and names are retained. **Ignored faces…** in People lets you review and
+  restore them, without a recognition model. Each ignore or restore batch is one Undo step and does not write XMP.
+  Existing libraries upgrade to catalog format 13; older builds cannot open an upgraded library.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

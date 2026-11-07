@@ -232,8 +232,9 @@ fn overlaps_existing(f: &Face, regions: &[Region]) -> bool {
     })
 }
 
+/// Recognize replaceable detector results while retaining explicitly ignored regions.
 pub(crate) fn is_detected(r: &Region) -> bool {
-    r.description.as_deref().is_some_and(|d| d.starts_with(MARK))
+    r.kind != RegionKind::IgnoredFace && r.description.as_deref().is_some_and(|d| d.starts_with(MARK))
 }
 
 /// The photo as the faces see it: upright, uncropped, default settings, as 8-bit RGB with its size, its long edge at
@@ -246,6 +247,7 @@ pub(crate) fn render_rgb(s: &mut Session, id: lightcraft_catalog::PhotoId, edge:
     Ok((rgb, image.width, image.height))
 }
 
+/// Detect selected photos and commit new face regions without automatic sidecar writes.
 fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     let apply = p.get("apply").and_then(Value::as_bool).unwrap_or(true);
     let defaults = Options::default();
@@ -290,9 +292,7 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let applied = !ops.is_empty();
     if applied {
-        s.commit("Detect Faces", Op::Batch { ops })?;
-        // regions are not written to XMP, so a sidecar must not be rewritten for this
-        s.skip_auto_write = true;
+        s.commit_catalog_only("Detect Faces", Op::Batch { ops })?;
     }
     Ok(json!({"detector": LABEL, "applied": applied, "photos": results, "ms": started.elapsed().as_secs_f64() * 1000.0}))
 }
@@ -329,6 +329,15 @@ mod tests {
     }
     fn region(x0: f64, y0: f64, x1: f64, y1: f64) -> Region {
         Region { rect: lightcraft_geom::Rect { x0, y0, x1, y1 }, kind: RegionKind::Face, name: Some("Ann".into()), description: None }
+    }
+
+    #[test]
+    fn ignored_detections_are_retained_and_suppress_overlapping_redetection() {
+        let mut ignored = region(0.4, 0.2, 0.6, 0.5);
+        ignored.kind = RegionKind::IgnoredFace;
+        ignored.description = Some(format!("{MARK}{LABEL}"));
+        assert!(!is_detected(&ignored));
+        assert!(overlaps_existing(&face(0.4, 0.2, 0.6, 0.5), &[ignored]));
     }
 
     #[test]

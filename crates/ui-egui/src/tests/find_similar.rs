@@ -293,8 +293,23 @@ fn another_library_stops_the_search_and_gets_nothing_from_it() {
         h.step();
     }
     let dir = std::env::temp_dir().join(format!("lc-ui-similar-other-{}", std::process::id()));
+    // The library-switch hook must invalidate face review as well as cancel the old search.
+    h.app.ui.ignored_faces = Some(Default::default());
+    h.app.ui.dismissed_faces.insert((1, 0));
+    h.app.ui.unnamed_selected.insert((1, 0));
+    h.app.ui.unnamed_anchor = Some(0);
+    let revision = h.app.session.catalog.revision;
+    let indexed = h.app.caches.faces_indexed;
+    h.app.caches.unnamed = Some((revision, indexed, h.time(), Arc::new(Default::default())));
+    h.app.caches.person_page = Some(("Old Person".into(), revision, indexed, h.time(), Arc::new(Default::default())));
     h.app.session.open_library(&dir, false).unwrap();
     h.step();
+    assert!(h.app.ui.ignored_faces.is_none());
+    assert!(h.app.ui.dismissed_faces.is_empty());
+    assert!(h.app.ui.unnamed_selected.is_empty());
+    assert!(h.app.ui.unnamed_anchor.is_none());
+    assert!(h.app.caches.unnamed.is_none());
+    assert!(h.app.caches.person_page.is_none());
     drive.open.store(true, Ordering::SeqCst);
     let reply = answer(&mut h, &rx);
     assert_eq!(reply["ok"], false, "{reply}");

@@ -206,7 +206,8 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         keywords: (!m.keywords.is_empty() || !m.hierarchical_keywords.is_empty())
             .then(|| lightcraft_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords)),
         // A sidecar that has `mwg-rs:Regions` at all (even an empty list) was written by an app that
-        // knows about regions, so it's authoritative: its list, empty or not, replaces the catalog's.
+        // knows about regions, so it's authoritative for ordinary regions: its list, empty or not,
+        // replaces those in the catalog. Local ignored-face decisions are reconciled in merge_into.
         // One without it (most writers, LightCraft's own included, which keeps another app's
         // `mwg-rs:Regions` byte for byte but never writes one) says nothing about regions, and the
         // photo's are kept.
@@ -343,12 +344,29 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
         m.keywords = k.clone();
     }
     if let Some(r) = &sc.regions {
-        m.regions = r.clone();
-        // (the photo's size is the upright one)
+        // Ignore is a local catalog decision, not represented by MWG XMP. Foreign lists remain
+        // authoritative for ordinary regions, but must neither restore nor delete ignored faces.
+        let mut regions = r.clone();
+        // Foreign boxes must be upright before matching the catalog's already-upright ignored
+        // boxes. Never rotate a retained local ignore decision a second time.
         if let (Some(drawn_on), Some(o)) = (sc.regions_drawn_on, sc.orientation) {
             let stored = if o.swaps_axes() { (p.height, p.width) } else { (p.width, p.height) };
-            lightcraft_meta::upright_regions(&mut m.regions, drawn_on, o, stored);
+            lightcraft_meta::upright_regions(&mut regions, drawn_on, o, stored);
         }
+        for ignored in m.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::IgnoredFace) {
+            let same_box = |r: &&mut lightcraft_meta::Region| {
+                r.kind == lightcraft_meta::RegionKind::Face
+                    && [r.rect.x0 - ignored.rect.x0, r.rect.y0 - ignored.rect.y0, r.rect.x1 - ignored.rect.x1, r.rect.y1 - ignored.rect.y1]
+                        .iter()
+                        .all(|delta| delta.abs() <= 1e-6)
+            };
+            if let Some(region) = regions.iter_mut().find(same_box) {
+                *region = ignored.clone();
+            } else {
+                regions.push(ignored.clone());
+            }
+        }
+        m.regions = regions;
     }
     let develop = match &sc.develop {
         Some(DevelopPatch::Full(s)) => (**s).clone(),
@@ -1213,8 +1231,15 @@ impl Session {
     pub(crate) fn auto_write_sidecars_since(&mut self, log_start: usize) {
         let mut ids = Vec::new();
         if let Some(ops) = self.pending_log.get(log_start..) {
-            ops.iter().for_each(|o| op_photos(o, &mut ids));
+            for (offset, op) in ops.iter().enumerate() {
+                match self.sidecar_policies.get(&log_start.saturating_add(offset)) {
+                    Some(targets) => ids.extend(targets),
+                    None => op_photos(op, &mut ids),
+                }
+            }
         }
+        ids.sort_unstable();
+        ids.dedup();
         self.auto_write_sidecar_ids(ids);
     }
 

@@ -136,6 +136,58 @@ fn v9_catalog_with_inline_grids_loads_and_is_upgraded() {
     assert!(rewritten.contains("\"grids\":["), "the shared table is in the file");
 }
 
+/// Format 12's shared-grid snapshots and the earlier face branch's inline format-12 snapshots
+/// both upgrade before writing ignored faces. Face state and every settings holder survive.
+#[test]
+fn v12_shared_grids_and_faces_upgrade_without_losing_either() {
+    for shared in [false, true] {
+        for kind in [lightcraft_meta::RegionKind::Face, lightcraft_meta::RegionKind::IgnoredFace] {
+            let (mut live, _, id, blob) = masked_catalog(3);
+            let mut meta = live.photo(id).unwrap().meta.clone();
+            meta.regions = vec![lightcraft_meta::Region {
+                rect: lightcraft_geom::Rect { x0: 0.1, y0: 0.2, x1: 0.4, y1: 0.6 },
+                kind,
+                name: Some("Person".into()),
+                description: Some("retained".into()),
+            }];
+            live.apply(Op::SetMeta { id, meta: Box::new(meta.clone()) }).unwrap();
+            let m = MemStore::new();
+            if shared {
+                let (mut j, _, _) = open(&m);
+                j.snapshot(&live).unwrap();
+                drop(j);
+                let mut snapshot: serde_json::Value = serde_json::from_slice(&m.get(SNAPSHOT).unwrap()).unwrap();
+                snapshot["version"] = serde_json::json!(12);
+                assert_eq!(snapshot["catalog"]["grids"].as_array().unwrap().len(), 1);
+                m.set(SNAPSHOT, serde_json::to_vec(&snapshot).unwrap());
+            } else {
+                m.set(
+                    SNAPSHOT,
+                    format!("{{\"format\":\"lightcraft-catalog\",\"version\":12,\"seq\":0,\"catalog\":{}}}\n", live.to_snapshot()).into_bytes(),
+                );
+            }
+            let (mut j, mut loaded, report) = open(&m);
+            assert_eq!(report.upgraded_from, Some(12));
+            assert!(snapshot_version(&m) > 12, "main's format-12 reader must refuse ignored-face snapshots");
+            assert_eq!(loaded.to_snapshot(), live.to_snapshot());
+            let snapshot = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+            assert_eq!(snapshot.match_indices(&blob).count(), 1, "the upgrade retains shared grids");
+
+            meta.regions[0].kind = lightcraft_meta::RegionKind::IgnoredFace;
+            let op = Op::SetMeta { id, meta: Box::new(meta) };
+            loaded.apply(op.clone()).unwrap();
+            j.append(&[op]).unwrap();
+            drop(j);
+            let (mut j, replayed, _) = open(&m);
+            assert_eq!(replayed.to_snapshot(), loaded.to_snapshot(), "ignored state and masks survive log replay");
+            j.snapshot(&replayed).unwrap();
+            drop(j);
+            let (_, compacted, _) = open(&m);
+            assert_eq!(compacted.to_snapshot(), loaded.to_snapshot(), "ignored state and masks survive compaction");
+        }
+    }
+}
+
 /// The op log is not deduplicated: every record keeps the grids inline (a log never carries the
 /// shared table), and replaying it rebuilds the same state.
 #[test]

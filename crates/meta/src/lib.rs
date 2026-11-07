@@ -77,6 +77,8 @@ pub struct Region {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RegionKind {
     Face,
+    /// Explicitly ignored in the catalog; kept to prevent redetection and allow restoration.
+    IgnoredFace,
     Pet,
     Focus,
     BarCode,
