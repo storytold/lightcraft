@@ -38,6 +38,18 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### The grid's thumbnails follow the memory budget, and unreadable files stop filling the log
+- The thumbnails the grid and the filmstrip kept off screen were capped at 600 pictures whatever Settings ▸ Performance ▸
+  Memory for caches said: a small budget still gave them up to about 400 MB, and a large one never used its room. They
+  now hold up to a quarter of the budget, so a smaller budget keeps fewer pictures off screen and a larger one more.
+- A folder whose files can't be read (a drive that went to sleep, a card of damaged files) wrote a warning, with the
+  file's path, for every photo the grid asked about, and kept a note of each one for as long as the app ran. The log
+  now has the first 20 such warnings and then one a second, saying how many it left out (in a line of its own once
+  the failures stop); `LIGHTCRAFT_LOG=debug` still lists every one. The notes, which keep the grid from asking for
+  the same file every frame, are kept for the photos on screen, and for 1,024 others at most.
+- `ui.inspect` reports the grid's thumbnails and the limit they are held to, and `library.memory` the photo records
+  of the catalog, which the memory budget doesn't limit (`docs/control-protocol.md`, `docs/gpu-pipeline.md`).
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

@@ -108,7 +108,7 @@ fn each_render_request_and_how_it_ended_is_a_debug_line_with_its_file() {
     app.renderer.request(slot, j, 10);
     let j = job(&mut app, 128);
     app.renderer.request(slot, j, 10);
-    app.renderer.evict_thumbs(&Default::default(), 0);
+    app.renderer.evict_thumbs_within(&Default::default(), 0);
     let j = job(&mut app, 64);
     app.renderer.request(slot, j, 5);
     app.renderer.forget_all();
@@ -146,7 +146,7 @@ fn each_render_request_and_how_it_ended_is_a_debug_line_with_its_file() {
     );
 }
 
-struct Blocked;
+pub(super) struct Blocked;
 impl RenderOffload for Blocked {
     fn try_start(&mut self, _: Slot, job: RenderJob) -> Option<RenderJob> {
         Some(job)
@@ -234,7 +234,7 @@ fn queue_promotions_running_work_and_cancellation() {
     assert!(r.thumb_current(&p, 384, 5));
     r.pending.clear();
     assert!(!r.thumb_current(&p, 384, 10));
-    r.evict_thumbs(&Default::default(), 600);
+    r.evict_thumbs(&Default::default());
     assert!(r.thumb_inputs.is_empty());
 }
 fn queued_quick_thumbnail(id: PhotoId) -> (Arc<Photo>, QuickJob) {
@@ -1887,7 +1887,10 @@ fn a_thumbnail_replacing_its_stand_in_is_not_counted_again() {
     assert!(app.renderer.textures.contains_key(&Slot::Thumb(id)), "the render replaced the stand-in");
     assert_eq!(app.renderer.thumbs_made, 1, "still one photo");
     // evicted and made again (scrolled away and back): the same photo (CodeRabbit on #3055)
-    app.renderer.evict_thumbs(&Default::default(), 0);
+    // (two frames that don't ask for it: the trim keeps what was asked in this frame or the last)
+    app.renderer.frame_drawn();
+    app.renderer.frame_drawn();
+    app.renderer.evict_thumbs_within(&Default::default(), 0);
     assert!(!app.renderer.textures.contains_key(&Slot::Thumb(id)), "evicted");
     crate::panels::grid::request_thumb(&mut app, id, 384, 10);
     let (slot, job) = take_job(&work);

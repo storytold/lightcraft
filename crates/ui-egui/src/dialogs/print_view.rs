@@ -886,16 +886,8 @@ fn paint_cell(
         painter.rect_filled(frame.intersect(cell), 0.0, Color32::from_rgb(c[0], c[1], c[2]));
     }
     let clip = painter.with_clip_rect(avail.intersect(painter.clip_rect()));
-    let tex = photo.and_then(|id| {
-        // Use the library's thumbnail when there is one. A thumbnail is kept at one size, so asking
-        // for another size here every frame made the preview and the grid behind the dialog
-        // re-render each other's thumbnail for as long as the dialog stayed open.
-        if app.renderer.thumb(id).is_none() {
-            let px = (shown.width().max(shown.height()) * 2.0).clamp(64.0, 1024.0) as usize;
-            crate::panels::grid::request_thumb(app, id, px, 10);
-        }
-        app.renderer.thumb(id).map(|tex| tex.id())
-    });
+    let px = (shown.width().max(shown.height()) * 2.0).clamp(64.0, 1024.0) as usize;
+    let tex = photo.and_then(|id| cell_thumbnail(app, id, px));
     match tex {
         Some(id) => {
             let mut mesh = egui::Mesh::with_texture(id);
@@ -932,6 +924,19 @@ fn paint_cell(
         painter.galley(at, galley, Color32::WHITE);
     }
     Some(visible)
+}
+
+/// The library's thumbnail of `id` for a cell, asked for at `px` only while it has none. A
+/// thumbnail is kept at one size, so asking for another size here every frame made the preview and
+/// the grid behind the dialog re-render each other's thumbnail for as long as the dialog stayed
+/// open. The photo is noted every frame the cell is drawn, though: the dialog draws after the
+/// grid, whose trim keeps only what was asked for in this frame or the last.
+pub(crate) fn cell_thumbnail(app: &mut LightcraftApp, id: PhotoId, px: usize) -> Option<egui::TextureId> {
+    app.renderer.thumb_asked(id);
+    if app.renderer.thumb(id).is_none() {
+        crate::panels::grid::request_thumb(app, id, px, 10);
+    }
+    app.renderer.thumb(id).map(|tex| tex.id())
 }
 
 /// The Page Options as the print draws them ([`compose`]): crop marks at the corners of each

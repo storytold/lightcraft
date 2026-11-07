@@ -120,6 +120,11 @@ impl Tex {
     pub fn id(&self) -> egui::TextureId {
         self.native.unwrap_or_else(|| egui::TextureHandle::id(&self.tex))
     }
+
+    /// What the texture takes: four bytes a pixel, as [`Renderer::memory`] counts it.
+    fn bytes(&self) -> usize {
+        self.size[0].saturating_mul(self.size[1]).saturating_mul(4)
+    }
 }
 
 /// Draws renders that stayed on the GPU ([`lightcraft_engine::media::ScreenFrame`]): the window's
@@ -241,6 +246,22 @@ pub(crate) fn stage_trim_order(sizes: &[(Slot, usize)], budget: usize) -> Vec<Sl
 /// engine's own caches do not count.
 const STAGE_BUDGET_SHARE: usize = 4;
 
+/// The share of the memory budget the thumbnail textures (the grid's and the filmstrip's) may hold
+/// before the ones not on screen are dropped: with the stage caches' share, the part of the budget
+/// that is the UI's own. A smaller budget keeps fewer pictures off screen, a larger one more.
+const THUMB_BUDGET_SHARE: usize = 4;
+
+/// How many failed grid thumbnails are remembered. A failure is remembered so the grid, which
+/// asks every frame, doesn't send the same unreadable file back to the decoder; scrolling through
+/// a whole library whose files can't be read (a drive that sleeps) would otherwise keep one
+/// record, with its error text, for every photo passed. Past this many, the ones for photos
+/// nothing shows go (the ones on screen count too, and stay).
+const MAX_FAILED_THUMBS: usize = 1024;
+
+/// How many thumbnail failures are logged as warnings in a row, and then how often one more may be.
+const FAILURE_WARN_BURST: f64 = 20.0;
+const FAILURE_WARN_INTERVAL_MS: f64 = 1000.0;
+
 /// Variant thumbnails kept as textures (LRU), when nothing asks for more.
 pub const VARIANT_TEXTURES: usize = 96;
 /// The most a view can raise that to ([`Renderer::want_variants`]): a screenful of small faces is a few hundred pictures of
@@ -252,6 +273,65 @@ const VARIANT_PRIORITY: u32 = 6;
 /// The camera-preview edge a loupe stand-in is made at (0: one that doesn't depend on the size).
 fn quick_edge(job: &QuickJob) -> usize {
     job.embedded.as_ref().map_or(0, |e| e.2)
+}
+
+/// What [`WarnLimit::admit`] decides for one failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Admit {
+    /// Log it as a warning; `held_back` failures went unlogged since the last warning.
+    Warn { held_back: u64 },
+    /// Don't: the log already has its share.
+    Held,
+}
+
+/// How many thumbnail failures reach the log as warnings (the grid asks for a thousand thumbnails a
+/// second, so a folder whose files can't be read would write a line each). A burst of
+/// [`FAILURE_WARN_BURST`] goes through, then one every [`FAILURE_WARN_INTERVAL_MS`]; the rest are
+/// counted, and the next warning says how many (or, when the failures stop, a line of its own).
+#[derive(Debug)]
+struct WarnLimit {
+    /// Warnings that may go out now: each takes one, and one more comes every interval.
+    tokens: f64,
+    /// When `tokens` was last topped up (monotonic milliseconds).
+    at_ms: Option<f64>,
+    /// Failures held back since the last warning.
+    held_back: u64,
+}
+
+impl Default for WarnLimit {
+    fn default() -> Self {
+        WarnLimit { tokens: FAILURE_WARN_BURST, at_ms: None, held_back: 0 }
+    }
+}
+
+impl WarnLimit {
+    /// Whether a failure at `now_ms` (monotonic milliseconds) is logged. A time that doesn't go
+    /// forward, or isn't a time, earns nothing.
+    fn admit(&mut self, now_ms: f64) -> Admit {
+        let now = if now_ms.is_finite() { now_ms } else { self.at_ms.unwrap_or(0.0) };
+        let last = self.at_ms.unwrap_or(now);
+        let now = now.max(last);
+        self.at_ms = Some(now);
+        self.tokens = (self.tokens + (now - last) / FAILURE_WARN_INTERVAL_MS).min(FAILURE_WARN_BURST);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            Admit::Warn { held_back: std::mem::take(&mut self.held_back) }
+        } else {
+            self.held_back = self.held_back.saturating_add(1);
+            Admit::Held
+        }
+    }
+
+    /// The failures held back, once none has come for a whole interval: the next warning would
+    /// have said how many, and when the failures have stopped none comes. Taken, so each is
+    /// counted once. A time that isn't one says nothing.
+    fn settle(&mut self, now_ms: f64) -> Option<u64> {
+        let last = self.at_ms?;
+        if self.held_back == 0 || !now_ms.is_finite() || now_ms - last < FAILURE_WARN_INTERVAL_MS {
+            return None;
+        }
+        Some(std::mem::take(&mut self.held_back))
+    }
 }
 
 pub struct Renderer {
@@ -318,6 +398,13 @@ pub struct Renderer {
     /// the photo: not requested again until the key changes (an edit, another size) — the grid
     /// asks every frame.
     failed: HashMap<Slot, (u64, String, u64, PhotoId)>,
+    /// Whether the thumbnail failures logged as warnings keep to their limit, see [`WarnLimit`].
+    thumb_warnings: WarnLimit,
+    /// The photos a thumbnail was asked for in this frame, and in the one before: the trim keeps
+    /// them whoever asked, see [`Self::evict_thumbs`]. A frame is one that was drawn, see
+    /// [`Self::frame_drawn`].
+    thumbs_asked: std::collections::HashSet<PhotoId>,
+    thumbs_asked_last: std::collections::HashSet<PhotoId>,
     /// The catalog revision seen at the last poll: a failure is retried once the catalog changes
     /// its photo (a relinked or re-imported file), see [`Self::follow_catalog`].
     catalog_rev: u64,
@@ -429,6 +516,9 @@ impl Renderer {
             quick_tried: HashMap::new(),
             quick_edge: HashMap::new(),
             failed: HashMap::new(),
+            thumb_warnings: WarnLimit::default(),
+            thumbs_asked: Default::default(),
+            thumbs_asked_last: Default::default(),
             catalog_rev: 0,
             prefetched: HashMap::new(),
             variant_used: HashMap::new(),
@@ -1204,6 +1294,46 @@ impl Renderer {
         self.textures.keys().filter(|s| matches!(s, Slot::Thumb(_) | Slot::ThumbQuick(_))).count()
     }
 
+    /// Bytes the thumbnail textures hold (the grid's, the filmstrip's and their stand-ins), counted
+    /// as [`Self::memory`] counts a texture: four bytes a pixel.
+    pub fn thumb_bytes(&self) -> usize {
+        self.textures.iter().filter(|(s, _)| matches!(s, Slot::Thumb(_) | Slot::ThumbQuick(_))).map(|(_, t)| t.bytes()).fold(0, usize::saturating_add)
+    }
+
+    /// Bytes the thumbnail textures of photo `id` hold (counted as [`Self::thumb_bytes`] does).
+    pub fn thumb_bytes_of(&self, id: PhotoId) -> usize {
+        [Slot::Thumb(id), Slot::ThumbQuick(id)].iter().filter_map(|s| self.textures.get(s)).map(Tex::bytes).fold(0, usize::saturating_add)
+    }
+
+    /// Bytes the thumbnail textures may hold before the ones not on screen are dropped: a share
+    /// ([`THUMB_BUDGET_SHARE`]) of the memory budget, so a smaller budget keeps fewer and a larger
+    /// one more.
+    pub fn thumb_budget(&self) -> usize {
+        lightcraft_engine::memory::budget() / THUMB_BUDGET_SHARE
+    }
+
+    /// How many failed grid thumbnails are remembered (see [`MAX_FAILED_THUMBS`]).
+    pub fn failed_thumbs(&self) -> usize {
+        self.failed.keys().filter(|s| matches!(s, Slot::Thumb(_) | Slot::ThumbQuick(_))).count()
+    }
+
+    /// Whether [`Self::evict_thumbs`] has something to drop: the thumbnails hold more than their
+    /// share of the budget, or more failures are remembered than [`MAX_FAILED_THUMBS`].
+    pub fn thumbs_over_limit(&self) -> bool {
+        self.thumb_bytes() > self.thumb_budget() || self.failed_thumbs() > MAX_FAILED_THUMBS
+    }
+
+    /// What the thumbnails hold (`ui.inspect` → `memory` → `thumbnails`): how many pictures, their
+    /// bytes, the limit they are held to, and how many failures are remembered.
+    pub fn thumbnail_memory(&self) -> serde_json::Value {
+        serde_json::json!({
+            "count": self.thumb_textures(),
+            "bytes": self.thumb_bytes(),
+            "budgetBytes": self.thumb_budget(),
+            "failed": self.failed_thumbs(),
+        })
+    }
+
     /// Collect finished jobs into textures. Returns true if anything changed.
     pub fn poll(&mut self, ctx: &egui::Context, session: &mut Session) -> bool {
         let cache = &session.media.rendered;
@@ -1213,6 +1343,7 @@ impl Renderer {
         }
         self.preview_generation = Some((Arc::downgrade(cache), generation));
         self.follow_catalog(&session.catalog, &session.media.availability);
+        self.warn_held_back();
         self.frame += 1;
         self.trim_stages();
         // wasm: run one job per frame on this thread, timed with the host clock
@@ -1426,9 +1557,7 @@ impl Renderer {
                 Err(e) => {
                     if !matches!(slot, Slot::Prefetch(_) | Slot::QuickAhead(_)) {
                         let message = render_failure_message(slot, r.photo, source.as_ref(), &e);
-                        #[cfg(test)]
-                        self.failure_messages.push(message.clone());
-                        log::warn!("{message}");
+                        self.warn_failure(slot, message);
                         self.failed.insert(slot, (r.key, e, self.catalog_rev, r.photo));
                     } else {
                         // (a prefetch only prepares: its failure is no warning, but the trace says how it ended)
@@ -1629,11 +1758,43 @@ impl Renderer {
     }
 
     /// Drop thumbnails that aren't in `keep` (bounded memory for huge libraries), and queued
-    /// thumbnail jobs for photos that scrolled out of `keep`.
-    pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>, max: usize) {
-        self.thumb_inputs.retain(|id, _| keep.contains(id));
+    /// thumbnail jobs for photos that scrolled out of `keep`. The pictures not in `keep` go once
+    /// the thumbnails hold more than their share of the memory budget ([`Self::thumb_budget`]);
+    /// the failures remembered for photos not in `keep` go once there are more than
+    /// [`MAX_FAILED_THUMBS`] of them, and a stand-in's failure forgotten takes with it the note
+    /// that it was tried ([`Self::request_quick`] asks once for each job), so the photo is asked
+    /// for again when it comes back on screen. None of it takes a photo something asked a
+    /// thumbnail of in this frame or the last ([`Self::thumb_asked`]), its queued job included:
+    /// the Print dialog's cells draw after the grid, which trims, and a cell whose job went would
+    /// build and ask for a new one every frame.
+    pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>) {
+        self.evict_thumbs_within(keep, self.thumb_budget());
+    }
+
+    /// Note that something shows `id`'s thumbnail (every caller of `grid::request_thumb`).
+    pub fn thumb_asked(&mut self, id: PhotoId) {
+        self.thumbs_asked.insert(id);
+    }
+
+    /// A frame was drawn: what was asked for in it is the frame before's now. The host's UI pass
+    /// calls this once it is laid out for good. [`Self::poll`] doesn't: it also runs on the logic
+    /// ticks of a hidden window, where no view draws, and counting those would age the asks away
+    /// before the first frame drawn after the window comes back.
+    pub fn frame_drawn(&mut self) {
+        std::mem::swap(&mut self.thumbs_asked, &mut self.thumbs_asked_last);
+        self.thumbs_asked.clear();
+    }
+
+    /// [`Self::evict_thumbs`] with the bytes the thumbnails may hold given (the tests ask for 0:
+    /// every picture nothing shows goes).
+    fn evict_thumbs_within(&mut self, keep: &std::collections::HashSet<PhotoId>, max_bytes: usize) {
+        // (a photo something asked a thumbnail of in this frame or the last stays too: its job, its
+        // picture and its failure)
+        let (asked, last) = (std::mem::take(&mut self.thumbs_asked), std::mem::take(&mut self.thumbs_asked_last));
+        let shown = |id: &PhotoId| keep.contains(id) || asked.contains(id) || last.contains(id);
+        self.thumb_inputs.retain(|id, _| shown(id));
         let dropped = self.pool.reprioritize(|s, p| match s {
-            Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id) && p <= 11 => None,
+            Slot::Thumb(id) | Slot::ThumbQuick(id) if !shown(id) && p <= 11 => None,
             _ => Some(p),
         });
         for s in dropped {
@@ -1646,7 +1807,7 @@ impl Renderer {
         let requests = &mut self.requests;
         let pending = &mut self.pending;
         self.queue.retain(|q| match q.slot {
-            Slot::Thumb(id) if !keep.contains(&id) && q.priority <= 10 => {
+            Slot::Thumb(id) if !shown(&id) && q.priority <= 10 => {
                 pending.remove(&q.slot);
                 gone.push((q.slot, requests.remove(&q.slot)));
                 false
@@ -1656,16 +1817,69 @@ impl Renderer {
         for (s, request) in gone {
             self.decided(|| abandoned_line(s, request.as_ref(), "scrolled out of view before it started"));
         }
-        let thumbs = self.thumb_textures();
-        if thumbs <= max {
-            return;
+        if self.thumb_bytes() > max_bytes {
+            self.textures.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !shown(id)));
+            self.quick_tried.retain(|s, _| !matches!(s, Slot::ThumbQuick(id) if !shown(id)));
         }
-        self.textures.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id)));
-        self.quick_tried.retain(|s, _| !matches!(s, Slot::ThumbQuick(id) if !keep.contains(id)));
+        // A failure is remembered so that the grid, which asks every frame, doesn't send the same
+        // unreadable file back to the decoder: the cells on screen keep theirs. A stand-in is asked
+        // for once for each job (`quick_tried`), so the note goes with its failure: left behind, it
+        // would keep the photo from being asked for again, with no failure left to say why.
+        if self.failed_thumbs() > MAX_FAILED_THUMBS {
+            let quick_tried = &mut self.quick_tried;
+            self.failed.retain(|s, f| {
+                let forget = matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !shown(id));
+                if forget && quick_tried.get(s) == Some(&f.0) {
+                    quick_tried.remove(s);
+                }
+                !forget
+            });
+        }
+        self.thumbs_asked = asked;
+        self.thumbs_asked_last = last;
+    }
+
+    /// Log a failed render as a warning. Thumbnails share a limit ([`WarnLimit`]): a folder whose
+    /// files can't be read fails a thumbnail per cell, and the log keeps the first ones and one a
+    /// second after them. The failures held back are still logged at debug level
+    /// ([`Self::decided`]), and the next warning says how many there were ([`Self::warn_held_back`]
+    /// when none comes). A view the person is looking at (the loupe, Compare, a slide) always warns.
+    fn warn_failure(&mut self, slot: Slot, message: String) {
+        let mut held_back = 0;
+        if matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_)) {
+            match self.thumb_warnings.admit(crate::monotonic_ms()) {
+                Admit::Warn { held_back: n } => held_back = n,
+                Admit::Held => {
+                    self.decided(|| format!("{message} (not a warning: the log has its share of thumbnail failures)"));
+                    return;
+                }
+            }
+        }
+        let message = if held_back > 0 {
+            format!("{message} (thumbnail failures not logged since the last warning: {held_back}; LIGHTCRAFT_LOG=debug logs each one)")
+        } else {
+            message
+        };
+        self.log_warning(message);
+    }
+
+    /// Once the thumbnail failures stop (an interval with none) after some went unlogged, say how
+    /// many: the next warning would have, and none comes. The host calls [`Self::poll`] every
+    /// frame, which is where it is noticed.
+    fn warn_held_back(&mut self) {
+        let Some(held_back) = self.thumb_warnings.settle(crate::monotonic_ms()) else { return };
+        self.log_warning(format!("thumbnail failures not logged since the last warning: {held_back}; LIGHTCRAFT_LOG=debug logs each one"));
+    }
+
+    fn log_warning(&mut self, message: String) {
+        #[cfg(test)]
+        self.failure_messages.push(message.clone());
+        log::warn!("{message}");
     }
 
     /// Log a render decision at debug level: each request, and how it ended when it ended without
-    /// a picture or a failure (failures stay warnings). One "requested" line per request tells a
+    /// a picture or a failure (failures stay warnings, but the thumbnail failures past the log's
+    /// share, see [`WarnLimit`], are lines here). One "requested" line per request tells a
     /// file asked for 37 times from one asked once and failing inside (issue #2682). `line` is only
     /// built when the log takes debug lines (`LIGHTCRAFT_LOG=debug`, or
     /// `RUST_LOG=lightcraft_ui_egui::render=debug`), so the grid's requests cost nothing more otherwise.
@@ -1753,6 +1967,9 @@ fn abandoned_line(slot: Slot, request: Option<&Requested>, why: &str) -> String 
 
 #[cfg(test)]
 mod thumbnail_tests;
+
+#[cfg(test)]
+mod thumbnail_memory_tests;
 
 #[cfg(test)]
 mod stage_budget_tests {
