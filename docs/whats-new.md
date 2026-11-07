@@ -761,6 +761,20 @@
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
 
+### Several albums, folders, keywords or dates shown at once (agents)
+- `library.source` takes `ids` (albums) or `paths` (folders of the library, as `library.folders` lists them, not a
+  browsed Local folder) and shows the photos of any of them, each once; `library.filter` takes `keywords`, `dates`,
+  `libraryFolders` and `albums`. The single fields stay and count as one
+  more of them. `library.state` lists `albums` and `libraryFolders`. The sidebars' Cmd+click and Shift+click that use
+  this come in a later change. When the albums shown include a smart album, New Smart Album from Filter… is grayed out
+  and says why, as `album.createSmart` does. So does a filter that names a smart album.
+- With View ▸ Hold View Until Refreshed on, a view of several albums holds a photo only while one of them has it: a
+  photo that stops matching the rules of a smart album among them goes at once, unless another album shown has it.
+- `library.filter` refuses an album that is not there (`no such album N`), as `library.source` does. Deleting a shown
+  album moves the active photo into what is left. A filter put aside by Enable Filters that a deleted album or folder
+  leaves with only the rating operator is dropped, as one a deleted keyword leaves.
+- `album.setRules` with `replace` keeps a smart album's album, as it already kept its folder (`album: null` drops
+  it), so editing a smart album saved from a view of several albums no longer loses them.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
