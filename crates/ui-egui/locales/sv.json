@@ -2486,5 +2486,9 @@
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
   "Bottom bar": "Nedre fältet",
+  "User Templates": "Användarmallar",
+  "Delete Folder": "Radera mapp",
+  "Folder name": "Mappnamn",
+  "Its templates move to User Templates.": "Dess mallar flyttas till Användarmallar.",
   "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
 }

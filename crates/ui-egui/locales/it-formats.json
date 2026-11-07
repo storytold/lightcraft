@@ -285,6 +285,7 @@
   "{n} JPEG files": "File JPEG: {n}",
   "Exported {} effect preset{}": "Preset effetto esportati: {}{:.0}",
   "Imported {name}": "{name} importato",
+  "Moved {name} to {folder}": "{name} spostato in {folder}",
   "{n} pages": "Pagine: {n}",
   " · kept, not applied: {}": " · conservato, non applicato: {}",
   "Delete the effect preset “{name}”?": "Eliminare il preset effetto “{name}”?",
