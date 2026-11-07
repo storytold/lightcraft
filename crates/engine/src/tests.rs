@@ -532,6 +532,41 @@ fn auto_skips_a_selected_photo_it_cannot_read() {
     assert!(s.execute("develop.auto", &json!({"ids": [good.0, 999_999]})).is_err(), "a wrong id is refused, not skipped");
 }
 
+/// A call that names its photos (`ids`, or `id`) is not held back by the selection, as `develop.updateProcess`'s is
+/// not: an agent's `develop.auto {ids}` works with nothing selected (#1752). A list that names none is refused, as
+/// `develop.updateProcess` refuses it, not a success that set nothing.
+#[test]
+fn auto_on_named_photos_needs_no_selection() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(4).map(|p| p.id.0).collect();
+    let (ids, single, bystander) = (ids[..2].to_vec(), ids[2], ids[3]);
+    let dev = |s: &Session, id: u64| s.develop_of(PhotoId(id)).map(|d| (*d).clone()).unwrap_or_default();
+    s.selection = Default::default();
+    // Shift+A from the UI sends no `ids`: with nothing selected it still gets the selection gate's message
+    let e = s.execute("develop.auto", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("no photos selected"), "nothing named and nothing selected: {e}");
+    assert!(s.execute("develop.auto", &json!({"ids": [999_999]})).is_err(), "a wrong id is still refused");
+    assert!(s.execute("develop.auto", &json!({"ids": [ids[0], 999_999]})).is_err(), "a wrong id refuses the whole call");
+    assert!(s.execute("develop.auto", &json!({"ids": []})).is_err(), "an empty list names no photos");
+    for id in &ids {
+        assert!(dev(&s, *id).is_unedited(), "photo {id} is untouched by the refused calls");
+    }
+    // named photos need no selection
+    s.execute("develop.auto", &json!({"ids": ids.clone()})).unwrap();
+    for id in &ids {
+        assert_eq!(dev(&s, *id).color.vibrance, 30.0, "photo {id} got Auto with nothing selected");
+    }
+    // and a selected photo is not a target when the call names its photos
+    s.selection.active = Some(PhotoId(bystander));
+    let untouched = dev(&s, bystander);
+    s.execute("develop.auto", &json!({"ids": ids.clone()})).unwrap();
+    assert_eq!(dev(&s, bystander), untouched, "the selected photo is not a target of a call that names its photos");
+    s.execute("develop.auto", &json!({"id": single})).unwrap();
+    assert_eq!(dev(&s, single).color.vibrance, 30.0, "the photo named by `id` got Auto");
+    assert_eq!(dev(&s, bystander), untouched, "nor of a call that names one photo by `id`");
+}
+
 #[test]
 fn versions_history_and_reset() {
     let mut s = demo();
