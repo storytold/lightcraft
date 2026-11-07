@@ -67,6 +67,16 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// A batch-edit recipe: develop control id / value pairs (e.g. `light.exposure` → 0.5),
+    /// applied to every imported photo *after* its XMP sidecar, camera default and import preset,
+    /// as one more History step (`Import adjustments`). Only the named controls change; the recipe
+    /// is a snapshot taken when the import starts, so editing a preset afterwards cannot change it.
+    /// It names plain adjustments only (no white balance, geometry or crop: `cmd::check_recipe`),
+    /// and [`ImportJob::new`] refuses anything else.
+    /// Empty (the default) = no recipe. A photo the library already has keeps its own settings:
+    /// one skipped as a duplicate, restored from Recently Deleted, or joined from a browsed
+    /// folder (Local) is never touched, as the preset and keywords never are.
+    pub recipe: Vec<(String, f64)>,
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the
@@ -146,6 +156,21 @@ pub struct Duplicate {
     /// That photo is in Recently Deleted (see [`OnDeleted`]).
     #[serde(rename = "existingDeleted", skip_serializing_if = "std::ops::Not::not")]
     pub existing_deleted: bool,
+    /// What the file itself says, as a file import reads it; `None` when the file wasn't read (a
+    /// path match). A Lightroom import makes a record of its own for a duplicate by content and
+    /// starts it from these, not from the other photo's record, which may have been edited (#2589).
+    #[serde(skip)]
+    pub file: Option<Box<FileFacts>>,
+}
+
+/// What a file import reads from a file itself, before anything in the library is edited.
+#[derive(Clone, Debug, Default)]
+pub struct FileFacts {
+    /// The metadata the file carries (EXIF, IPTC, embedded XMP).
+    pub meta: lightcraft_catalog::Meta,
+    /// The capture time a file import gives it: the file's, else its XMP sidecar's, else the
+    /// file's modification time.
+    pub captured: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]

@@ -1495,6 +1495,11 @@ fn folders_app_sized(paths: &[&str], size: [f32; 2]) -> Headless {
 }
 
 fn folders_app_with_services(paths: &[&str], size: [f32; 2], services: Services) -> Headless {
+    folders_app_prepared(paths, size, services, |_| {})
+}
+
+/// [`folders_app_with_services`], with `prepare` run on the app before its first frame.
+fn folders_app_prepared(paths: &[&str], size: [f32; 2], services: Services, prepare: impl FnOnce(&mut LightcraftApp)) -> Headless {
     use lightcraft_catalog::{Op, Photo, Source};
     let mut session = lightcraft_engine::Session::new();
     for path in paths {
@@ -1502,7 +1507,8 @@ fn folders_app_with_services(paths: &[&str], size: [f32; 2], services: Services)
         let p = Photo::new(id, Source::File { path: (*path).into() }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let app = LightcraftApp::new(session, services);
+    let mut app = LightcraftApp::new(session, services);
+    prepare(&mut app);
     let mut h = Headless::new(app, size, 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -1598,6 +1604,180 @@ fn a_chain_of_single_folders_starts_open() {
     let h = folders_app(&["/Users/me/Pictures/2024/a.jpg", "/Users/me/Pictures/2025/b.jpg"]);
     assert!(has(&h, "source:libfolder:/Users/me/Pictures"), "Users and me opened by themselves");
     assert!(!has(&h, "source:libfolder:/Users/me/Pictures/2024"), "the branching folder waits to be opened");
+}
+
+/// The sidebar at its narrowest, with fourteen folders open one inside the other, names wider than
+/// the room a row keeps for its name, counts five digits wide all the way up, and a color label on
+/// the deepest folder (a dot just before its count). Returns the deepest folder's path.
+fn folders_app_with_deep_labeled_chain() -> (Headless, String) {
+    let names: Vec<String> = (1..=14).map(|i| format!("level-{i:02}")).collect();
+    let mut paths = Vec::new();
+    let mut dir = String::new();
+    for name in &names {
+        dir.push('/');
+        dir.push_str(name);
+        paths.push(format!("{dir}/1.jpg"));
+    }
+    // (enough photos at the bottom for counts five digits wide all the way up)
+    paths.extend((0..12_000).map(|i| format!("{dir}/more-{i}.jpg")));
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    // (tall enough for every row of the chain to be drawn: rows below the fold are not)
+    let mut h = folders_app_sized(&refs, [1400.0, 1500.0]);
+    let left = widget(&h, "panel:left_panel");
+    drag(&mut h, left.right() - 2.0, -1400.0);
+    assert_eq!(h.app.ui.left_width, crate::state::LEFT_WIDTH.min, "the panel at its narrowest");
+    let mut path = String::new();
+    for name in &names[..names.len() - 1] {
+        path.push('/');
+        path.push_str(name);
+        let toggle = format!("libraryFolderToggle:{path}");
+        assert!(h.step_until(T, |h| has(h, &toggle)), "{toggle} is drawn");
+        let r = h.request("ui.clickWidget", json!({"id": toggle}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        // the frame a new row is first drawn in, before the content has grown to what it asked for
+        h.step();
+        let panel = widget(&h, "panel:left_panel");
+        for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:")) {
+            assert!(r.right() <= panel.right() || r.left() >= panel.right(), "opening {path}: {id} straddles the edge: {r:?} / {panel:?}");
+        }
+        h.step();
+    }
+    h.app.run("folder.label", json!({"path": dir, "label": "red"})).unwrap();
+    h.settle(SETTLE);
+    (h, dir)
+}
+
+/// In a panel too narrow for a deep row, the count gives way: it is drawn after the name, never
+/// over it or over the folder's icon.
+#[test]
+fn a_count_never_covers_the_name_of_a_deep_row() {
+    let (mut h, deep) = folders_app_with_deep_labeled_chain();
+    let deep = deep.as_str();
+    let (label, count) = (widget(&h, &format!("label:libfolder:{deep}")), widget(&h, &format!("count:libfolder:{deep}")));
+    let mark = widget(&h, &format!("labelMark:libfolder:{deep}"));
+    assert!(label.width() > 0.0, "the name is shown: {label:?}");
+    assert!(count.left() >= label.right(), "the count comes after the name: {label:?} {count:?}");
+    assert!(
+        mark.left() >= label.right() && mark.right() <= count.left(),
+        "the color dot sits between the name and the count: {label:?} {mark:?} {count:?}"
+    );
+    // a row with room keeps its count at the panel's visible edge
+    let panel = widget(&h, "panel:left_panel");
+    assert!(widget(&h, "count:all").right() <= panel.right());
+    // and no count is cut in two by that edge (5 digits wide here): it is whole, inside or past it
+    let mut past = 0;
+    for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:")) {
+        assert!(r.right() <= panel.right() || r.left() >= panel.right(), "{id} straddles the edge: {r:?} / {panel:?}");
+        past += usize::from(r.left() >= panel.right());
+    }
+    assert!(past > 0, "the deepest rows' counts are past the edge");
+    // at every width, also where the content is only a little wider than the panel (a count that
+    // gave way used to be held back by the row's own end there, and was cut by the edge)
+    for width in (200..=330).step_by(2) {
+        let r = h.request("ui.set", json!({"leftWidth": width}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        let panel = widget(&h, "panel:left_panel");
+        for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
+            assert!(r.right() <= panel.right() || r.left() >= panel.right(), "at {width} pt {id} straddles the edge: {r:?} / {panel:?}");
+        }
+        // and the deepest row's color dot and count still come after its name
+        let (label, count) = (widget(&h, &format!("label:libfolder:{deep}")), widget(&h, &format!("count:libfolder:{deep}")));
+        let mark = widget(&h, &format!("labelMark:libfolder:{deep}"));
+        assert!(
+            mark.left() >= label.right() && mark.right() <= count.left(),
+            "at {width} pt the dot and count come after the name: {label:?} {mark:?} {count:?}"
+        );
+    }
+}
+
+/// A count or dot that gives way is whole at the panel's edge in every frame, also the one right
+/// after the panel's width changes, before the content has grown to the room the row asked for.
+#[test]
+fn a_count_that_gives_way_is_whole_in_the_frame_the_panel_changes() {
+    let (mut h, _) = folders_app_with_deep_labeled_chain();
+    let up: Vec<i32> = (200..=330).step_by(2).collect();
+    for width in up.iter().chain(up.iter().rev()) {
+        let r = h.request("ui.set", json!({"leftWidth": width}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        // (one frame, not settled)
+        h.step();
+        let panel = widget(&h, "panel:left_panel");
+        for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
+            assert!(r.right() <= panel.right() || r.left() >= panel.right(), "one frame after {width} pt {id} straddles the edge: {r:?} / {panel:?}");
+        }
+    }
+}
+
+/// A sideways scroll of many points in one frame (a flick) does not leave a count or dot cut in
+/// two by the panel's edge in the frame it lands.
+#[test]
+fn a_count_that_gives_way_is_whole_after_a_sideways_flick() {
+    let (mut h, _) = folders_app_with_deep_labeled_chain();
+    h.request("ui.move", json!({"x": 120.0, "y": 400.0}), T);
+    for dx in [-10.0, -20.0, -30.0, -40.0, -60.0, -90.0, 20.0, 40.0, 90.0] {
+        for width in [210, 230, 250, 290] {
+            h.request("ui.set", json!({"leftWidth": width}), T);
+            h.settle(SETTLE);
+            h.request("ui.scroll", json!({"dx": dx}), T);
+            h.step();
+            let panel = widget(&h, "panel:left_panel");
+            for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
+                assert!(
+                    r.right() <= panel.right() || r.left() >= panel.right(),
+                    "flick {dx} at {width} pt: {id} straddles the edge: {r:?} / {panel:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The same when the panel grows by more than a few points in one frame (a window resize, or a
+/// drag that was held up): the content is still as wide as the last frame asked for.
+#[test]
+fn a_count_that_gives_way_is_whole_when_the_panel_grows_in_one_frame() {
+    let (mut h, _) = folders_app_with_deep_labeled_chain();
+    for from in (200..=260).step_by(10) {
+        for by in [8, 16, 24, 32, 48, 64] {
+            for width in [from, from + by] {
+                let r = h.request("ui.set", json!({"leftWidth": width}), T);
+                assert_eq!(r["ok"], true, "{r}");
+                if width == from {
+                    h.settle(SETTLE);
+                } else {
+                    h.step();
+                }
+            }
+            let panel = widget(&h, "panel:left_panel");
+            assert!((panel.width() - (from + by) as f32).abs() < 2.0, "the panel is already {} pt wide in that frame: {panel:?}", from + by);
+            for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
+                assert!(
+                    r.right() <= panel.right() || r.left() >= panel.right(),
+                    "one frame after {from} -> {} pt {id} straddles the edge: {r:?} / {panel:?}",
+                    from + by
+                );
+            }
+        }
+    }
+}
+
+/// Scrolling the sidebar sideways, a frame at a time, never leaves a count or dot cut in two by
+/// the panel's edge, also where the scroll reaches the end of the content.
+#[test]
+fn a_count_that_gives_way_is_whole_while_the_sidebar_scrolls_sideways() {
+    let (mut h, _) = folders_app_with_deep_labeled_chain();
+    h.request("ui.move", json!({"x": 120.0, "y": 400.0}), T);
+    for (dx, frames) in [(-6.0, 80), (6.0, 80)] {
+        for frame in 0..frames {
+            let r = h.request("ui.scroll", json!({"dx": dx}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            h.step();
+            let panel = widget(&h, "panel:left_panel");
+            for (id, r) in h.app.widgets.iter().filter(|(w, _)| w.starts_with("count:libfolder:") || w.starts_with("labelMark:libfolder:")) {
+                assert!(r.right() <= panel.right() || r.left() >= panel.right(), "frame {frame} of {dx}: {id} straddles the edge: {r:?} / {panel:?}");
+            }
+        }
+    }
 }
 
 /// Removing a folder from the library asks first, then moves its photos to Recently Deleted.
@@ -1857,6 +2037,55 @@ fn a_folder_menu_locates_its_missing_tree_only() {
     assert!(sources.contains(&format!("{old}/other/c.jpg")), "another missing folder stays untouched: {sources:?}");
 }
 
+/// The Missing Photos row appears when the background count of missing files lands, and moves
+/// every row below it down. Settling waits for that count, so a click aimed at a folder row from
+/// the settled layout doesn't land on the row above it (on a busy machine, Locate Missing Files…
+/// above ran for `other` instead of `trip`).
+#[test]
+fn settling_waits_for_the_missing_photos_count() {
+    // longer than settling takes without the count (a few hundred ms here)
+    let delay = Duration::from_secs(1);
+    let paths = ["/lc-missing-count/other/a.jpg", "/lc-missing-count/trip/b.jpg"];
+    let services = Services { png: None, ..Default::default() };
+    let mut h = folders_app_prepared(&paths, [1400.0, 900.0], services, |app| app.missing_count_test_delay = Some(delay));
+    assert!(has(&h, "source:missing"), "the Missing Photos row is on screen once the sidebar settled");
+    click(&mut h, "libraryFolderToggle:/lc-missing-count");
+    let settled = widget(&h, "source:libfolder:/lc-missing-count/trip");
+    let t0 = std::time::Instant::now();
+    while t0.elapsed() < delay / 4 {
+        h.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(widget(&h, "source:libfolder:/lc-missing-count/trip"), settled, "nothing moves the folder rows after settling");
+    // the timed refresh of a slow count is not waited for: the fast simulated clock would start
+    // the next one before the last finished, and settling would never end
+    assert!(h.settle(Duration::from_secs(30)), "the sidebar settles while a slow count refreshes");
+}
+
+/// A catalog change while a slow timed refresh of the count runs: its recount starts only when
+/// the refresh ends, but settling waits for it from the frame the change is seen, so the Missing
+/// Photos row it adds is on screen once the sidebar settled.
+#[test]
+fn settling_waits_for_a_recount_owed_during_a_timed_refresh() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = std::env::temp_dir().join(format!("lc-ui-missing-owed-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let here = dir.join("a.jpg");
+    std::fs::write(&here, b"photo").unwrap();
+    // settling takes the first count (2 s), in which the simulated clock passes the 5 s refresh
+    // interval: a timed refresh is running when it returns
+    let delay = Duration::from_secs(2);
+    let services = Services { png: None, ..Default::default() };
+    let mut h = folders_app_prepared(&[&here.to_string_lossy()], [1400.0, 900.0], services, |app| app.missing_count_test_delay = Some(delay));
+    assert!(!has(&h, "source:missing"), "no photo is missing yet");
+    let id = h.app.session.catalog.alloc_photo_id();
+    let gone = Photo::new(id, Source::File { path: "/lc-missing-owed/gone.jpg".into() }, "gone.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+    h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(gone) }).unwrap();
+    assert!(h.settle(Duration::from_secs(30)), "the sidebar settles");
+    assert!(has(&h, "source:missing"), "the Missing Photos row is on screen once the sidebar settled");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Right-click a folder ▸ Set Color Label ▸ a colour: the folder's row shows the label's dot (a
 /// row without a label shows none), and None takes it off again.
 #[test]
@@ -1895,7 +2124,7 @@ fn removing_a_disk_from_the_library_asks_first() {
 /// A library with a photo in every folder down `deep` and two folders below it, in a window
 /// `size` big, with every level but the last opened. (Every level holds a photo, so it has a row
 /// of its own and starts closed, whether or not the sidebar passes over folders that only lead on.)
-fn deep_folders_app(deep: &str, size: [f32; 2]) -> Headless {
+fn narrow_chain_of_folders_app(deep: &str, size: [f32; 2]) -> Headless {
     let mut paths = vec![format!("{deep}/x/1.jpg"), format!("{deep}/y/2.jpg")];
     let mut levels = Vec::new();
     let mut level = String::new();
@@ -1938,7 +2167,7 @@ fn chevron_xs(h: &Headless, path: &str) -> Vec<f32> {
 fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     let deep = "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z";
     // (tall enough for the whole chain: Recently Deleted is above it now)
-    let mut h = deep_folders_app(deep, [1400.0, 1700.0]);
+    let mut h = narrow_chain_of_folders_app(deep, [1400.0, 1700.0]);
     let xs = chevron_xs(&h, deep);
     let step = crate::panels::left::MIN_INDENT_STEP;
     assert_eq!(crate::panels::left::indent_step(&h.view.ctx), step, "26 levels do not fit the default panel even at the narrowest step");
@@ -1964,7 +2193,7 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
 #[test]
 fn a_deep_library_path_narrows_the_indent_instead_of_cutting_the_names() {
     let deep = "/Users/someone/Library/CloudStorage/Nextcloud-cloud.example.com/RAW/Club/2026-09-24 Team/RAW";
-    let mut h = deep_folders_app(deep, [1400.0, 1200.0]);
+    let mut h = narrow_chain_of_folders_app(deep, [1400.0, 1200.0]);
     let full = crate::panels::left::INDENT_STEP;
     let narrow = crate::panels::left::indent_step(&h.view.ctx);
     assert!(narrow < full && narrow >= crate::panels::left::MIN_INDENT_STEP, "the step narrows in the default panel: {narrow}");
@@ -2385,6 +2614,43 @@ fn right_click_add_to_album_offers_a_new_album_when_there_is_none() {
     assert!(h.app.ui.dialog.is_none(), "{:?}", h.app.ui.dialog);
 }
 
+#[test]
+fn alt_while_dragging_an_edit_slider_shows_its_preview() {
+    use crate::state::RightPanel;
+    use lightcraft_pipeline::Overlay;
+    let mut h = demo([1400.0, 900.0], json!({"view": "detail", "right": "edit"}));
+    let id = h.app.session.active().expect("active photo");
+    let d = (*h.app.session.develop_of(id).unwrap_or_default()).clone();
+    let view = |h: &Headless| crate::panels::detail::view_overlay(&h.app, &d);
+    assert_eq!(h.app.ui.right, RightPanel::Edit);
+    h.app.ui.dragging_control = Some("light.blacks".into());
+    assert_eq!(view(&h), Overlay::None, "dragging without Alt shows the photo");
+    h.app.ui.alt_held = true;
+    assert_eq!(view(&h), Overlay::ClipShadows);
+    for (c, o) in [
+        ("light.whites", Overlay::ClipHighlights),
+        ("light.exposure", Overlay::ClipHighlights),
+        ("detail.sharpenAmount", Overlay::Grayscale),
+        ("detail.sharpenRadius", Overlay::SharpenDetail),
+        ("detail.sharpenMasking", Overlay::SharpenMask),
+        ("light.contrast", Overlay::None),
+    ] {
+        h.app.ui.dragging_control = Some(c.into());
+        assert_eq!(view(&h), o, "{c}");
+    }
+    // Alt alone (no drag) or released mid-drag: back to the photo
+    h.app.ui.dragging_control = None;
+    assert_eq!(view(&h), Overlay::None);
+    h.app.ui.dragging_control = Some("light.whites".into());
+    h.app.ui.alt_held = false;
+    assert_eq!(view(&h), Overlay::None);
+    // the Masking panel's local Blacks slider is not a global clipping preview
+    h.app.ui.alt_held = true;
+    h.app.ui.right = RightPanel::Masking;
+    h.app.ui.dragging_control = Some("light.blacks".into());
+    assert_eq!(view(&h), Overlay::None);
+}
+
 /// An album's context menu ▸ Import ▸ Import from Folder… (and Import Photos…, Import from Device)
 /// opens the import review with that album chosen; a folder row doesn't offer it, and an `album`
 /// the review can't offer (a folder, or an album deleted while the scan ran) leaves its album empty.
@@ -2573,6 +2839,30 @@ fn histogram_corners_toggle_clipping_warnings() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(!h.app.ui.show_clipping);
+}
+
+/// Issue #2679: the histogram stays at the top of the Edit panel while its sliders scroll under it.
+#[test]
+fn the_histogram_stays_in_view_while_the_sliders_scroll() {
+    let mut h = demo(
+        [1400.0, 700.0],
+        json!({"view": "detail", "right": "edit", "histogram": true, "openSections": ["light", "color", "effects", "detail", "optics"]}),
+    );
+    let (hist, exposure) = (widget(&h, "histogram"), widget(&h, "slider:light.exposure"));
+    let panel = widget(&h, "panel:right_panel");
+    let r = h.request("ui.move", json!({"x": panel.center().x, "y": panel.bottom() - 40.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..4 {
+        let r = h.request("ui.scroll", json!({"dy": -300.0}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    h.step();
+    let moved = h.app.widgets.iter().find(|(w, _)| w == "slider:light.exposure").map(|(_, r)| *r);
+    assert!(moved.is_none_or(|r| r.top() < exposure.top() - 100.0), "the sliders scrolled: {exposure:?} → {moved:?}");
+    assert_eq!(widget(&h, "histogram"), hist, "the histogram stayed where it was");
+    for id in ["histogram:shadows", "histogram:highlights"] {
+        assert!(hist.contains_rect(widget(&h, id)), "{id} is still on the histogram");
+    }
 }
 
 #[test]

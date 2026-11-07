@@ -46,10 +46,12 @@ impl Session {
             return Err(crate::cmd::bad(C, format!("compares at most {MAX_PHOTOS} photos ({} given)", ids.len())));
         }
         let mut photos = Vec::with_capacity(ids.len());
-        for &id in ids {
+        // a photo that does not own its stem sidecar never reads it (issue #1905)
+        let lookups = self.sidecar_lookups(ids);
+        for (i, &id) in ids.iter().enumerate() {
             let ph = self.catalog.photo(id).ok_or_else(|| crate::cmd::bad(C, format!("no such photo {}", id.0)))?;
             let file = match &ph.source {
-                Source::File { path } => Some((path.clone(), crate::sidecar::find_sidecar(path, self.sidecar_naming(id)))),
+                Source::File { path } => Some((path.clone(), lookups.get(i).copied().unwrap_or_else(|| self.sidecar_lookup(id)).find(path))),
                 _ => None,
             };
             photos.push(MetadataSource { file_name: ph.file_name.clone(), file });
