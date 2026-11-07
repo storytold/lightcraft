@@ -65,9 +65,11 @@
 //!   time both take the next number; the one that lands second takes the number after it (and
 //!   renames its fixture). A number that is spoken for but not in this build yet can have its
 //!   row all the same ([`Format::here`] set to `false`), so nothing else takes it.
-//! - **Every format from 6 on has a fixture**: a small library written by the build of that
-//!   format (`fixtures/v<N>-catalog.*`; `tests_stored::write_this_formats_fixture` writes this
-//!   build's), which every later build must open as it was (`tests_format_version`).
+//! - **Every format from 6 on has a fixture**, but those that came with `main` from builds whose
+//!   libraries are not kept, and a number spoken for that isn't here yet (`tests_format_version`): a
+//!   small library written by the build of that format (`fixtures/v<N>-catalog.*`;
+//!   `tests_stored::write_this_formats_fixture` writes this build's), which every later build must
+//!   open as it was.
 //! - **Opening an older format upgrades it**: right after loading, [`Journal::open`] writes a
 //!   snapshot in this build's format (also for a new library), before anything is appended — so a
 //!   library is never a mix, and older builds refuse it from then on instead of reading part of it.
