@@ -69,6 +69,12 @@ pub(super) fn view_rules(s: &Session) -> lightcraft_catalog::Filter {
                     }
                 }
             }
+            // the rating rule is its stars and operator together: "= no stars" (the unrated
+            // photos) has the default stars, which alone would leave the album's own with "="
+            if s.filter.rating_filters() {
+                patch.insert("rating".into(), cur["rating"].clone());
+                patch.insert("ratingOp".into(), cur["ratingOp"].clone());
+            }
             // the view as it is: a rule that no longer checks (its album was deleted) just matches
             // nothing there, and mustn't cost the filter bar's settings
             merge_filter(&base, &Value::Object(patch), "").unwrap_or(base)
