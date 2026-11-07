@@ -127,7 +127,7 @@ fn move_folder_to_asks_off_the_ui_thread_and_moves_with_the_answer() {
     });
     assert!(moved, "the photo is relinked");
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
-    assert!(toast.contains("1 photo(s) relinked"), "{toast:?}");
+    assert!(toast.contains("“trip” into “dest”. Photos: 1. Edit → Undo moves it back."), "{toast:?}");
 
     // the same from Local (paths written the way the OS does): back to where it was
     let moved_trip = dir.0.join("dest").join("trip").to_string_lossy().to_string();
