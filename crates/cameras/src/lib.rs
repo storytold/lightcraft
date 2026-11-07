@@ -14,9 +14,9 @@
 //!   no platform checks. Linux (PTP over `nusb`) can implement the same three calls: list cameras,
 //!   list a camera's photos, copy one photo.
 //!
-//! This is LightCraft's second crate allowed `unsafe` (after `crates/sysmem`): the system calls live
-//! in the `wpd` (COM) and `ica` (Objective-C) modules, each block with a `// SAFETY:` note, behind
-//! the safe API below.
+//! One of LightCraft's crates allowed `unsafe` (with `crates/sysmem` and `crates/wincolor`, listed
+//! in AGENTS.md and exempt in `cargo xtask roots`): the system calls live in the `wpd` (COM) and
+//! `ica` (Objective-C) modules, each block with a `// SAFETY:` note, behind the safe API below.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::sync::atomic::AtomicBool;
