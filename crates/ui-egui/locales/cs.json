@@ -2472,5 +2472,11 @@
   "Welcome": "Vítejte",
   "Next": "Další",
   "Get Started": "Začít",
-  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "No photo in this folder is in the library yet": "V této složce zatím není žádná fotografie z knihovny",
+  "Select the photos to move in the grid first": "Nejprve v mřížce vyberte fotografie, které chcete přesunout",
+  "This place is kept in Local already": "Toto místo už je v místních souborech ponecháno",
+  "Only a place at the top of Local can be removed from it": "Z místních souborů lze odebrat jen místo na jejich nejvyšší úrovni",
+  "Copy Path": "Kopírovat cestu",
+  "Path copied": "Cesta zkopírována"
 }
