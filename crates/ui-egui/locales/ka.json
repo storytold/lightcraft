@@ -3692,5 +3692,11 @@
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
   "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
-  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის"
+  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "Album name (empty outside an album view)": "Album name (empty outside an album view)",
+  "Export date, UTC (YYYYMMDD)": "Export date, UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "Export time, UTC (HHMM)",
+  "Insert variable": "Insert variable",
+  "Insert…": "Insert…",
+  "none  ({album}, {date}, {hour})": "none  ({album}, {date}, {hour})"
 }

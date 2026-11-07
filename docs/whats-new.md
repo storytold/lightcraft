@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Export subfolder variables
+- The Export dialog's Subfolder field now supports `{album}` (the active album's name, empty outside an album view), `{date}` (export date in YYYYMMDD, UTC), and `{hour}` (export time in HHMM, UTC). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
+
 ### The web build can be embedded
 - A page framing LightCraft in an iframe can open it with `?host=parent` and speak to it over `postMessage`, the
   protocol PdfCraft, GridCraft and DeckCraft share: it hands photos in, receives exports and backups instead of

@@ -69,6 +69,11 @@ pub fn clean_subfolder(s: &str) -> String {
 }
 
 /// Clean an album name so it is safe to use as a directory or path component.
+///
+/// Characters `/ \ : * ? " < > | \0` and control characters become `_`, and surrounding
+/// whitespace and dots are trimmed. Windows-reserved device names (`CON`, `PRN`, `AUX`, `NUL`,
+/// `COM1`–`COM9`, `LPT1`–`LPT9`, case-insensitive) get `_` appended so they remain usable directory
+/// components. The result may be empty if the album name consisted entirely of dots or whitespace.
 pub fn clean_album_name(album: &str) -> String {
     let mut s: String = album
         .chars()
@@ -81,14 +86,54 @@ pub fn clean_album_name(album: &str) -> String {
         }
         s = trimmed.to_string();
     }
+    let base = s.split('.').next().unwrap_or(&s);
+    if matches!(
+        base.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        s.push('_');
+    }
     s
 }
 
 /// Expand `{album}`, `{date}`, `{hour}` variables in a subfolder template, and clean the result
 /// so it stays safely inside the destination folder.
+///
+/// `{date}` and `{hour}` are expanded before `{album}`, so an album name that contains token-like
+/// text (such as `{date}` or `{hour}`) is never double-expanded.
+///
+/// - `album`: the active album name, cleaned with [`clean_album_name`]; `None` expands `{album}` to `""`.
+/// - `now`: the UTC timestamp for `{date}` (YYYYMMDD) and `{hour}` (HHMM); `None` uses current UTC time.
+/// - Unknown tokens are left unchanged. The result passes through [`clean_subfolder`].
+///
+/// Returns immediately without timestamp formatting or album lookup if `template` is empty or has no `{`.
 pub fn expand_subfolder(template: &str, album: Option<&str>, now: Option<chrono::NaiveDateTime>) -> String {
+    if template.is_empty() || !template.contains('{') {
+        return clean_subfolder(template);
+    }
     let now = now.unwrap_or_else(|| {
-        let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let since = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap_or_default();
         let secs = i64::try_from(since.as_secs()).unwrap_or(i64::MAX);
         chrono::DateTime::from_timestamp(secs, 0).map(|dt| dt.naive_utc()).unwrap_or_default()
     });
@@ -96,7 +141,7 @@ pub fn expand_subfolder(template: &str, album: Option<&str>, now: Option<chrono:
     let hour_str = now.format("%H%M").to_string();
     let album_str = album.map(clean_album_name).unwrap_or_default();
 
-    let res = template.replace("{album}", &album_str).replace("{date}", &date_str).replace("{hour}", &hour_str);
+    let res = template.replace("{date}", &date_str).replace("{hour}", &hour_str).replace("{album}", &album_str);
 
     clean_subfolder(&res)
 }
@@ -130,7 +175,7 @@ impl<'a> Placer<'a> {
                 d.to_string()
             }
         };
-        let sub = subfolder.map(str::to_string).unwrap_or_else(|| expand_subfolder(&self.o.subfolder, None, None));
+        let sub = subfolder.map(clean_subfolder).unwrap_or_else(|| expand_subfolder(&self.o.subfolder, None, None));
         Ok(if sub.is_empty() { base } else { join_path(&base, &sub) })
     }
 

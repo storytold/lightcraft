@@ -2383,5 +2383,11 @@
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
   "Bottom bar": "Alapalkki",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Album name (empty outside an album view)": "Album name (empty outside an album view)",
+  "Export date, UTC (YYYYMMDD)": "Export date, UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "Export time, UTC (HHMM)",
+  "Insert variable": "Insert variable",
+  "Insert…": "Insert…",
+  "none  ({album}, {date}, {hour})": "none  ({album}, {date}, {hour})"
 }
