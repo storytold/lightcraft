@@ -407,24 +407,30 @@ impl Session {
     /// Plan a merge of `ids`. Loose ids keep the order given; members of a collapsed stack are in capture order.
     /// A photo named more than once is merged once (issue #1947): it adds nothing to the merge, and each copy would
     /// be decoded and held in memory. Naming a photo in a collapsed stack names all its members (in capture order,
-    /// once per stack), since only its top photo is visible. When the selection holds more than one collapsed
-    /// stack, this plans only the first group's job and validates only that group; use [`Session::plan_merges`]
-    /// for one job per stack.
+    /// once per stack), since only its top photo is visible. A selection holding more than one merge group
+    /// (more than one collapsed stack, or a stack plus loose photos) is refused rather than silently dropping
+    /// groups; use [`Session::plan_merges`] for one job per group.
     pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
         let groups = self.merge_groups(ids);
         let read = self.merge_reader();
         let mut seen = std::collections::HashSet::new();
+        let mut planned: Vec<Vec<(PhotoId, String)>> = Vec::new();
         for group in groups {
             let sources = self.merge_sources(&group, &mut seen)?;
-            if sources.is_empty() {
-                continue;
+            if !sources.is_empty() {
+                planned.push(sources);
             }
-            if sources.len() < kind.min_photos() {
-                return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
-            }
-            return Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read });
         }
-        Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())))
+        if planned.len() > 1 {
+            return Err(EngineError::Other("selection holds more than one merge group; plan one merge per stack with plan_merges".into()));
+        }
+        let Some(sources) = planned.pop() else {
+            return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
+        };
+        if sources.len() < kind.min_photos() {
+            return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
+        }
+        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read })
     }
 
     /// Plan one merge job per collapsed stack in `ids`, plus one job for the photos that are not in a collapsed
@@ -476,26 +482,29 @@ impl Session {
         let mut loose: Option<usize> = None;
         let mut expanded_stacks = std::collections::HashSet::new();
         for id in ids {
-            // Borrow the stack out ahead of the per-member lookup below.
-            let stack = self.catalog.stack_of(*id).filter(|st| st.collapsed).map(|st| (st.id, st.photos.clone()));
-            match stack {
-                Some((stack_id, members)) => {
+            // Check whether this stack was already expanded using only its id, before cloning its members:
+            // naming every member of a large stack must not clone the stack once per member.
+            let stack_id = self.catalog.stack_of(*id).filter(|st| st.collapsed).map(|st| st.id);
+            match stack_id {
+                Some(stack_id) => {
                     if !expanded_stacks.insert(stack_id) {
                         continue;
                     }
+                    let members = self.catalog.stack_of(*id).map(|st| st.photos.clone()).unwrap_or_default();
                     // Capture order, not stack order (top first): an HDR panorama's bracket
                     // detection expects the periodic exposure sequence from the earliest capture.
+                    // File names do not reflect capture sequence (renamed files, several cameras), so
+                    // ties on capture date fall back to PhotoId (catalog order), not the file name.
                     // Keys are computed once per member, not once per comparison.
-                    let mut keyed: Vec<(String, String, PhotoId)> = members
+                    let mut keyed: Vec<(String, PhotoId)> = members
                         .iter()
                         .map(|id| {
-                            let key = self.catalog.photo(*id).map(|p| (p.date().to_string(), p.file_name.clone()));
-                            let (date, file_name) = key.unwrap_or_default();
-                            (date, file_name, *id)
+                            let date = self.catalog.photo(*id).map(|p| p.date().to_string()).unwrap_or_default();
+                            (date, *id)
                         })
                         .collect();
-                    keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| natural_cmp(&a.1, &b.1)).then_with(|| a.2.cmp(&b.2)));
-                    groups.push(keyed.into_iter().map(|(_, _, id)| id).collect());
+                    keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                    groups.push(keyed.into_iter().map(|(_, id)| id).collect());
                 }
                 None => {
                     let at = match loose {
@@ -566,11 +575,16 @@ impl Session {
             let out = job.run(&|_, _| true).map_err(EngineError::Other)?;
             merged.push(self.finish_merge(job, out)?);
         }
+        let first_id = merged.first().and_then(|v| v.get("id")).and_then(Value::as_u64).map(PhotoId);
         let mut first = merged.first().cloned().unwrap_or(Value::Null);
-        if merged.len() > 1
-            && let Some(obj) = first.as_object_mut()
-        {
-            obj.insert("merged".into(), Value::Array(merged));
+        if merged.len() > 1 {
+            // finish_merge selected each result in turn; leave the selection on the returned (first) result.
+            if let Some(id) = first_id {
+                self.selection = crate::Selection::single(id);
+            }
+            if let Some(obj) = first.as_object_mut() {
+                obj.insert("merged".into(), Value::Array(merged));
+            }
         }
         Ok(first)
     }
