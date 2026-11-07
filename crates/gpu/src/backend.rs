@@ -533,8 +533,19 @@ pub fn window_renderer_order(
             // No usable renderer and no glow: never return Glow the build does not
             // have. On Windows and Linux the automatic fallback must not load the
             // Vulkan driver either (issue #136): use the non-Vulkan compiled set
-            // (empty when there is none) as the last resort.
-            let non_vulkan = if matches!(os, "windows" | "linux") { compiled - Backends::VULKAN } else { compiled };
+            // restricted to backends usable as a window backend on this platform
+            // (empty when there is none) as the last resort; an empty set will
+            // fail to create a surface rather than naming an unusable backend
+            // such as Metal on Linux.
+            let non_vulkan = if matches!(os, "windows" | "linux") {
+                let usable = match os {
+                    "windows" => Backends::DX12 | Backends::GL,
+                    _ => Backends::GL,
+                };
+                (compiled & usable) - Backends::VULKAN
+            } else {
+                compiled
+            };
             out.push(WindowRenderer::Wgpu(non_vulkan));
         }
     }
@@ -951,9 +962,12 @@ mod tests {
         assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::empty())));
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN, true);
         assert_eq!(order.first(), Some(&WindowRenderer::Glow));
-        // a non-Vulkan compiled backend is still used when there is one
+        // a non-Vulkan compiled backend usable on Linux is still used when there is one;
+        // Metal is not a Linux window backend, so it does not count as a fallback
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN | Backends::METAL, false);
-        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::METAL)));
+        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::empty())));
+        let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN | Backends::GL, false);
+        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::GL)));
     }
 
     #[test]
