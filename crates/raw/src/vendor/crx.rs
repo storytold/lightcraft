@@ -373,7 +373,7 @@ fn split_dimension(length: usize, before: bool, after: bool) -> (usize, usize) {
 /// low-pass columns (bands 8 and 5, whose low-pass columns the next level transforms again) at an odd
 /// width: an even synthesis width gains one column, which synthesis does not use. Every other band,
 /// including band 2 of the last level, is coded at its synthesis width. Measured on every C-RAW plane
-/// that `tests/cr3_corpus.rs` decodes (CC0 raw.pixls.us files): two-tile files with tile widths 2816,
+/// that `tests/it/cr3_corpus.rs` decodes (CC0 raw.pixls.us files): two-tile files with tile widths 2816,
 /// 3144, 3192, 3444 and 3564 (G5 X Mark II, M50, R100, 250D, RP, R, 90D, M6 Mark II), where bands 5
 /// and 8 gain a column in left tiles exactly when the rule says so, and single-tile `0x100` and
 /// `0x200` files, which never extend a band. In every one of those planes, each band's entropy stream

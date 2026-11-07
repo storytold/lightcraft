@@ -157,7 +157,10 @@ impl CopyrightStatus {
 pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
     let s = s.trim().trim_end_matches(['s', '"']).trim();
     match s.split_once('/') {
-        Some((n, d)) => Some(n.trim().parse::<f64>().ok()? / d.trim().parse::<f64>().ok()?),
+        Some((n, d)) => {
+            let (n, d) = (n.trim().parse::<f64>().ok()?, d.trim().parse::<f64>().ok()?);
+            if n > 0.0 && d > 0.0 { Some(n / d) } else { None }
+        }
         None => s.parse().ok(),
     }
     .filter(|v: &f64| v.is_finite() && *v > 0.0)
@@ -168,11 +171,26 @@ pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
 #[serde(default)]
 pub struct Meta {
     pub camera: String,
+    /// The camera's maker, from Exif `Make` (`camera` is maker and model together).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub make: String,
     pub lens: String,
+    /// The lens's maker, from Exif `LensMake`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub lens_make: String,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,
     pub shutter: String,
     pub iso: Option<u32>,
+    /// Whether the flash fired, from Exif `Flash`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flash: Option<bool>,
+    /// Exposure compensation in EV, from Exif `ExposureBiasValue`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_bias: Option<f32>,
+    /// The camera body's serial number.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub serial_number: String,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
     pub city: String,
@@ -329,7 +347,9 @@ pub struct Analysis {
 /// file's white balance is edited relative to its as-shot look or in Kelvin depends on the camera:
 /// [`relative_wb_camera`].
 pub fn relative_wb_format(format: &str) -> bool {
-    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF"].iter().any(|f| format.eq_ignore_ascii_case(f))
+    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "MRW", "CRW"]
+        .iter()
+        .any(|f| format.eq_ignore_ascii_case(f))
 }
 
 /// Whether a raw of `format` shot on `camera` (Exif make and model, as [`Meta::camera`] keeps them) is developed
@@ -354,6 +374,17 @@ pub fn preview_stamp(preview_only: &Option<String>) -> String {
 }
 
 impl Photo {
+    /// Keep the newest [`HISTORY_LIMIT`](crate::HISTORY_LIMIT) History steps; the cursor moves with
+    /// its step, or to the oldest step kept when its own is dropped. Returns how many were dropped.
+    pub fn trim_history(&mut self) -> usize {
+        let n = self.history.len().saturating_sub(crate::HISTORY_LIMIT);
+        if n > 0 {
+            self.history.drain(..n);
+            self.history_cursor = self.history_cursor.map(|c| c.saturating_sub(n));
+        }
+        n
+    }
+
     /// The History step the settings are at (the cursor, clamped to the list; `None` = no history).
     pub fn history_index(&self) -> Option<usize> {
         let last = self.history.len().checked_sub(1)?;
@@ -423,6 +454,23 @@ impl Photo {
     pub fn relative_wb(&self) -> bool {
         self.develops_raw() && relative_wb_camera(&self.format, &self.meta.camera)
     }
+    /// Every settings holder of this photo that can carry segmentation grids: the develop
+    /// settings, the versions', the history steps' and the import look. A snapshot's shared grid
+    /// table ([`crate::Catalog`]'s `grids`) covers all of them, so a new holder belongs here.
+    pub(crate) fn settings_holders(&self) -> impl Iterator<Item = &Arc<DevelopSettings>> {
+        std::iter::once(&self.develop)
+            .chain(self.versions.iter().map(|v| &v.settings))
+            .chain(self.history.iter().map(|h| &h.settings))
+            .chain(self.import_look.iter())
+    }
+    /// [`Photo::settings_holders`] with mutable access (resolving a snapshot's grid references).
+    pub(crate) fn settings_holders_mut(&mut self) -> impl Iterator<Item = &mut Arc<DevelopSettings>> {
+        let Photo { develop, versions, history, import_look, .. } = self;
+        std::iter::once(develop)
+            .chain(versions.iter_mut().map(|v| &mut v.settings))
+            .chain(history.iter_mut().map(|h| &mut h.settings))
+            .chain(import_look.as_mut())
+    }
     /// The develop settings import gave this photo: [`Photo::camera_defaults`], or the user's
     /// default preset applied on top of them ([`Photo::import_look`]). Like the camera defaults,
     /// in the photo's own rendering process.
@@ -457,6 +505,15 @@ impl Photo {
     /// when the name has none (`README`, a dot file such as `.hidden`).
     pub fn extension(&self) -> &str {
         self.file_name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty()).map_or("", |(_, ext)| ext)
+    }
+    /// A video clip (an MP4, a MOV, …), which the image decoders can't read. Besides the kind, the
+    /// format and the extension count: a Lightroom catalog lists its videos with the format `VIDEO`,
+    /// and libraries made before they were imported as videos hold them as images.
+    pub fn is_video(&self) -> bool {
+        const EXTENSIONS: [&str; 12] = ["mp4", "mov", "m4v", "avi", "mts", "m2ts", "3gp", "mkv", "webm", "wmv", "mpg", "mpeg"];
+        self.kind == MediaKind::Video
+            || self.format.eq_ignore_ascii_case("VIDEO")
+            || EXTENSIONS.iter().any(|e| self.extension().eq_ignore_ascii_case(e))
     }
     /// Width and height in pixels as the photo is shown: turned by its orientation and cut by its
     /// crop. Straightening and Constrain Crop shrink the crop without changing its shape, so the
@@ -555,6 +612,22 @@ mod edited_tests {
     use lightcraft_develop::WbScale;
 
     #[test]
+    fn a_video_is_known_by_its_kind_format_or_extension() {
+        let file = |name: &str, format: &str| Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");
+        let mut clip = file("a.jpg", "JPEG");
+        clip.kind = MediaKind::Video;
+        assert!(clip.is_video(), "by its kind");
+        assert!(file("clip", "video").is_video(), "by the format a Lightroom catalog gives videos");
+        for name in ["VID_1.mp4", "a.MOV", "b.m4v", "c.mts", "d.webm"] {
+            assert!(file(name, "").is_video(), "{name}");
+        }
+        // (a name without an extension, or a dot file, has none)
+        for (name, format) in [("a.jpg", "JPEG"), ("a.arw", "ARW"), ("a.heic", "HEIC"), ("mp4", ""), (".mov", "")] {
+            assert!(!file(name, format).is_video(), "{name}");
+        }
+    }
+
+    #[test]
     fn raw_with_import_settings_is_not_edited() {
         let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.arw", "ARW", 10, 10, "2026-10-01T00:00:00");
         p.as_shot_wb = Some((5200.0, 4.0));
@@ -610,6 +683,7 @@ mod edited_tests {
             ("a.pef", "pef", true),
             ("a.orf", "ORF", true),
             ("a.erf", "ERF", true),
+            ("a.mrw", "MRW", true),
             ("a.dng", "DNG", false),
         ] {
             let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");
@@ -653,6 +727,7 @@ mod edited_tests {
             ("SONY ILCE-1", "ARW", true),
             ("", "ARW", true),
             ("SONY ILCE-7M3", "DNG", false),
+            ("NIKON CORPORATION NIKON Z5_2", "NEF", false),
         ] {
             let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.raw", format, 10, 10, "2026-10-01T00:00:00");
             p.kind = MediaKind::Raw;
@@ -676,5 +751,18 @@ mod edited_tests {
             assert_eq!(p.camera_defaults().wb.mode, WbMode::AsShot);
             assert!(!p.is_edited());
         }
+    }
+}
+
+#[cfg(test)]
+mod shutter_tests {
+    use super::parse_shutter_seconds;
+
+    #[test]
+    fn a_fraction_needs_a_positive_numerator_and_denominator() {
+        for s in ["-1/-250", "1/-250", "-1/250", "0/250"] {
+            assert_eq!(parse_shutter_seconds(s), None, "{s}");
+        }
+        assert_eq!(parse_shutter_seconds("1/250"), Some(0.004));
     }
 }
