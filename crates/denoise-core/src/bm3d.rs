@@ -368,12 +368,59 @@ fn match_blocks(plane: &[f32], t: usize, p: &Params, tau: f32) -> Vec<Vec<u32>> 
     groups
 }
 
+/// The noise of a plane, read from the median absolute difference of neighbouring cells (a median, so edges and
+/// texture do not raise it; a neighbour difference has `√2` times the noise of one cell). 0 for a plane with no
+/// neighbours, no finite difference, or no measurable difference.
+fn plane_noise(plane: &[f32], t: usize) -> f32 {
+    if t < 2 {
+        return 0.0;
+    }
+    let mut diffs = Vec::with_capacity(t * (t - 1));
+    for row in 0..t {
+        for col in 0..t - 1 {
+            let i = row * t + col;
+            if let (Some(&a), Some(&b)) = (plane.get(i), plane.get(i + 1)) {
+                let d = (a - b).abs();
+                if d.is_finite() {
+                    diffs.push(d);
+                }
+            }
+        }
+    }
+    if diffs.is_empty() {
+        return 0.0;
+    }
+    let mid = diffs.len() / 2;
+    diffs.select_nth_unstable_by(mid, |a, b| a.total_cmp(b));
+    // the median of |N(0, √2 σ)| is 0.6745 · √2 σ, so σ is the median times 1 / (0.6745 · √2)
+    diffs.get(mid).copied().unwrap_or(0.0) * 1.048_358
+}
+
+/// `lambda` (the reference plane's absolute threshold) scaled for a plane whose noise is `sigma` where the reference
+/// plane's is `sigma_ref`: the level that keeps the same amount of noise energy above it as the reference plane keeps
+/// (a Gaussian tail's kept energy falls off exponentially in the level, hence the square root), so a noisier plane is
+/// cleaned to the same residual level instead of keeping its extra noise spikes. A plane no noisier than the reference
+/// keeps the level; with no reference noise there is nothing to scale from.
+fn scaled_lambda(lambda: f32, sigma_ref: f32, sigma: f32) -> f32 {
+    if !(sigma_ref > 0.0) || !(sigma > sigma_ref) || !lambda.is_finite() {
+        return lambda;
+    }
+    let ratio = sigma / sigma_ref;
+    let k = lambda / sigma_ref;
+    if !(ratio.is_finite()) || !(k > 0.0) {
+        return lambda;
+    }
+    lambda * ratio * (1.0 + 4.0 * ratio.ln() / (k * k)).sqrt()
+}
+
 /// Filter every plane of `y` over the groups: hard threshold when there is no `pilot`, Wiener shrinkage by it when
 /// there is.
 fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], t: usize, p: &Params, lambda: f32, tf: &Transform) -> Vec<Vec<f32>> {
     let n = tf.n;
     let sigma = p.sigma.max(1e-3);
     let lambda = lambda * sigma;
+    // the first plane is the reference; a plane whose noise is read as larger is shrunk with its own level
+    let sigma_ref = y.first().map_or(sigma, |pl| plane_noise(pl, t).max(sigma));
     let mut s = Scratch::default();
     let (mut buf, mut pbuf) = (Vec::new(), Vec::new());
     let mut out = Vec::with_capacity(y.len());
@@ -382,6 +429,10 @@ fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], 
         let mut den = vec![0f32; t * t];
         let c = out.len();
         let pilot_plane = pilot.and_then(|pl| pl.get(c));
+        let plane_sigma = plane_noise(plane, t).max(sigma);
+        // the colour-difference planes are shrunk a little harder than the brightness plane's own level at the same
+        // noise, as the brightness plane is the one the groups were matched on
+        let plane_lambda = scaled_lambda(lambda, sigma_ref, plane_sigma) * if c == 0 { 1.0 } else { 1.5 };
         for members in groups {
             let m = members.len();
             gather(plane, t, n, members, &mut buf);
@@ -390,7 +441,7 @@ fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], 
                 None => {
                     let mut kept = 0usize;
                     for v in buf.iter_mut() {
-                        if v.abs() < lambda {
+                        if v.abs() < plane_lambda {
                             *v = 0.0;
                         } else {
                             kept += 1;
@@ -403,7 +454,7 @@ fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], 
                     group_transform(tf, &mut pbuf, m, &mut s, true);
                     let mut energy = 0f32;
                     for (v, &q) in buf.iter_mut().zip(&pbuf) {
-                        let w = q * q / (q * q + sigma * sigma);
+                        let w = q * q / (q * q + plane_sigma * plane_sigma);
                         *v *= w;
                         energy += w * w;
                     }
@@ -562,6 +613,26 @@ mod tests {
         // the Hadamard transform keeps the level, so what is left of the spread is the noise that got through
         assert!(spread(&out, 5.0) < 0.35 * spread(&planes, 5.0), "{} vs {}", spread(&out, 5.0), spread(&planes, 5.0));
         assert!(out.iter().flatten().all(|v| v.is_finite()));
+    }
+
+    /// The colour-difference planes, whose noise is scaled up, are cleaned to the same residual level as the
+    /// brightness plane: the shrink accounts for each plane's own noise scaling.
+    #[test]
+    fn chroma_planes_are_denoised_to_the_same_level_as_brightness() {
+        let t = 48;
+        let mut y = noisy(t, 5.0, 11);
+        for plane in &mut y[1..] {
+            for v in plane.iter_mut() {
+                *v = 5.0 + (*v - 5.0) * 3.0;
+            }
+        }
+        let p = Params::default();
+        let tf = Transform::new(p.block);
+        let groups = match_blocks(&y[0], t, &p, p.tau1);
+        let out = collaborate(&y, None, &groups, t, &p, threshold_for(&p.lambda, 0.0152), &tf);
+        let brightness = spread(&out[..1], 5.0);
+        let chroma = spread(&out[1..], 5.0);
+        assert!(chroma <= 1.5 * brightness, "brightness {brightness} chroma {chroma}");
     }
 
     /// A step edge under noise stays a step: a few cells either side of it the values are still near their two levels.
