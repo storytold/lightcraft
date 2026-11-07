@@ -314,15 +314,26 @@ pub(crate) fn reload_ops(
         changed.push(id);
     }
     // virtual copies share the file
+    let mut copy_changed_lookup = false;
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
         let content = content_op(c.id, c, info.clone());
         let lens = lens_ops(c.id, c, info);
+        copy_changed_lookup |= content.is_some() || !lens.is_empty();
         let stamp =
             ((content.is_some() || !lens.is_empty()) && !c.lens_checked.is_empty()).then(|| Op::SetLensChecked { id: c.id, checked: String::new() });
         let theirs: Vec<Op> = content.into_iter().chain(lens).chain(as_shot_wb_op(c.id, c, info)).chain(stamp).collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
+        }
+    }
+    // A copy's read that changed the shared file's lookup inputs stales the original's
+    // remembered miss the same way — the lookup keys on the file, not on the record — so
+    // the original's stamp goes too when its own ops above did not already clear it.
+    if copy_changed_lookup && !lookup_changed && !ph.lens_checked.is_empty() {
+        ops.push(Op::SetLensChecked { id, checked: String::new() });
+        if !changed.contains(&id) {
+            changed.push(id);
         }
     }
 }
