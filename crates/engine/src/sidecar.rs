@@ -26,8 +26,9 @@
 //! the capture time: a time embedded in the file wins, and the sidecar's (`exif:DateTimeOriginal`,
 //! else `photoshop:DateCreated`, else `xmp:CreateDate`) fills in only when the file has none; develop
 //! settings are restored from `lc:settings` when present, else mapped from interoperable `crs:`
-//! fields ([`crate::crs`]). For raw/DNG files without a sidecar the file's embedded XMP is used.
-//! Manual reads also accept the first complete standard XMP APP1 in a bounded JPEG header (see `read_jpeg_xmp`).
+//! fields ([`crate::crs`]). For files without a sidecar the file's embedded XMP is used: a raw's or
+//! DNG's, or the first complete standard XMP APP1 in a bounded JPEG header (see `read_jpeg_xmp`),
+//! on import as on a manual read (#2993).
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -853,6 +854,11 @@ pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Op
         return Some((x, PathBuf::from(original)));
     }
     None
+}
+
+/// The XMP packet embedded in a JPEG's header, read as [`read_packet`] reads it from the file.
+pub(crate) fn jpeg_header_xmp(bytes: &[u8]) -> Option<String> {
+    read_jpeg_xmp(&mut std::io::Cursor::new(bytes), JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)
 }
 
 const JPEG_XMP_HEADER_SPAN: u64 = 16 * 1024 * 1024;

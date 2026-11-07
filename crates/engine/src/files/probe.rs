@@ -228,7 +228,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         as_shot_wb: None,
         content_hash,
         embedded_lens: None,
-        xmp: None,
+        xmp: crate::sidecar::jpeg_header_xmp(bytes),
         orientation: m.orientation,
         preview_only: None,
     })
