@@ -79,9 +79,9 @@ pub struct UiState {
     /// Solo Mode (`view.soloSections`): opening one Edit section closes the others.
     pub single_panel: bool,
     /// Clipping warnings (J, the histogram's corner buttons): clipped pixels painted over the
-    /// photo. For this session only, never saved: a settings file from before #3638 kept it on
-    /// when it only drew a frame, and every photo opened painted after the update (#3888).
-    #[serde(skip)]
+    /// photo. For this session only: [`UiState::sanitized`] turns them off when settings load, as
+    /// a settings file from before #3638 kept them on when they only drew a frame, and every photo
+    /// opened painted after the update (#3888). The control channel still reads and sets them.
     pub show_clipping: bool,
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
@@ -618,6 +618,7 @@ impl UiState {
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
         self.dialog = None;
         self.fullscreen = false;
+        self.show_clipping = false;
         if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {
             self.settings.preview_limit = AppSettings::default().preview_limit;
         }
@@ -689,18 +690,38 @@ impl egui::DroppedFile for InjectedDrop {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+
     use super::UiState;
 
     /// Issue #3888: a settings file saved with the clipping warnings on (as one from before #3638,
-    /// when J only drew a frame) opens with them off, and a save never writes them.
+    /// when J only drew a frame) opens with them off; the other saved view settings still load.
     #[test]
-    fn clipping_warnings_are_not_saved_or_restored() {
-        let saved = serde_json::json!({"showClipping": true, "histogram": false});
-        let ui: UiState = serde_json::from_value(saved).expect("deserialize");
+    fn clipping_warnings_are_not_restored_from_settings() {
+        let saved = json!({"showClipping": true, "histogram": true});
+        let ui = serde_json::from_value::<UiState>(saved).expect("deserialize").sanitized();
         assert!(!ui.show_clipping, "a saved showClipping must not turn the warnings on");
-        assert!(!ui.histogram, "the other saved view settings still load");
-        let on = UiState { show_clipping: true, ..UiState::default() };
-        let written = serde_json::to_value(&on).expect("serialize");
-        assert!(written.get("showClipping").is_none(), "showClipping is never written: {written}");
+        assert!(ui.histogram, "the other saved view settings still load");
+    }
+
+    /// The control channel goes through the same serde as the settings file: `ui.inspect` shows
+    /// the clipping warnings, `ui.set` turns them on and off, and another `ui.set` keeps them.
+    #[test]
+    fn control_channel_reads_and_sets_clipping_warnings() {
+        let app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        let mut h = crate::headless::Headless::new(app, [480.0, 320.0], 1.0);
+        let t = Duration::from_secs(10);
+        let shown = |h: &mut crate::headless::Headless| h.request("ui.inspect", json!({}), t)["result"]["ui"]["showClipping"].clone();
+        assert_eq!(shown(&mut h), json!(false));
+        let r = h.request("ui.set", json!({"showClipping": true}), t);
+        assert_eq!(r["result"]["showClipping"], json!(true), "{r}");
+        assert!(h.app.ui.show_clipping);
+        assert_eq!(shown(&mut h), json!(true));
+        h.request("ui.set", json!({"histogram": true}), t);
+        assert!(h.app.ui.show_clipping, "a ui.set of another field keeps the warnings on");
+        h.request("ui.set", json!({"showClipping": false}), t);
+        assert!(!h.app.ui.show_clipping);
     }
 }
