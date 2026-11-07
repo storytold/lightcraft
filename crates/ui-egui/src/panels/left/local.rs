@@ -73,7 +73,7 @@ fn default_places(home: &str) -> Vec<(&'static str, String)> {
 /// Whether `path` is one of Local's built-in places (the home folder, Pictures, Desktop,
 /// Downloads, or a place the host listed itself). They are the computer's own folders, shown under
 /// a translated label, so Local offers no Rename or Move for them.
-pub(super) fn is_builtin_place(app: &LightcraftApp, path: &str) -> bool {
+pub(crate) fn is_builtin_place(app: &LightcraftApp, path: &str) -> bool {
     builtin_place_in(app.services.local_places.as_deref(), &home_folder(), path)
 }
 
