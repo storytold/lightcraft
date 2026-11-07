@@ -2426,10 +2426,10 @@
   "Welcome": "欢迎",
   "Next": "下一步",
   "Get Started": "开始使用",
-  "Album name (empty outside an album view)": "Album name (empty outside an album view)",
-  "Export date, UTC (YYYYMMDD)": "Export date, UTC (YYYYMMDD)",
-  "Export time, UTC (HHMM)": "Export time, UTC (HHMM)",
-  "Insert variable": "Insert variable",
-  "Insert…": "Insert…",
-  "none  ({album}, {date}, {hour})": "none  ({album}, {date}, {hour})"
+  "Album name (empty outside an album view)": "相册名称（在相册视图外为空）",
+  "Export date, UTC (YYYYMMDD)": "导出日期，UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "导出时间，UTC (HHMM)",
+  "Insert variable": "插入变量",
+  "Insert…": "插入…",
+  "none  ({album}, {date}, {hour})": "无  ({album}, {date}, {hour})"
 }

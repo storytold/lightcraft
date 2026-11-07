@@ -2427,10 +2427,10 @@
   "Welcome": "Bienvenido",
   "Next": "Siguiente",
   "Get Started": "Empezar",
-  "Album name (empty outside an album view)": "Album name (empty outside an album view)",
-  "Export date, UTC (YYYYMMDD)": "Export date, UTC (YYYYMMDD)",
-  "Export time, UTC (HHMM)": "Export time, UTC (HHMM)",
-  "Insert variable": "Insert variable",
-  "Insert…": "Insert…",
-  "none  ({album}, {date}, {hour})": "none  ({album}, {date}, {hour})"
+  "Album name (empty outside an album view)": "Nombre del álbum (vacío fuera de una vista de álbum)",
+  "Export date, UTC (YYYYMMDD)": "Fecha de exportación, UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "Hora de exportación, UTC (HHMM)",
+  "Insert variable": "Insertar variable",
+  "Insert…": "Insertar…",
+  "none  ({album}, {date}, {hour})": "ninguno  ({album}, {date}, {hour})"
 }

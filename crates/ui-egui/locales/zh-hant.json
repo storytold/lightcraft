@@ -2427,10 +2427,10 @@
   "Welcome": "歡迎",
   "Next": "下一步",
   "Get Started": "開始使用",
-  "Album name (empty outside an album view)": "Album name (empty outside an album view)",
-  "Export date, UTC (YYYYMMDD)": "Export date, UTC (YYYYMMDD)",
-  "Export time, UTC (HHMM)": "Export time, UTC (HHMM)",
-  "Insert variable": "Insert variable",
-  "Insert…": "Insert…",
-  "none  ({album}, {date}, {hour})": "none  ({album}, {date}, {hour})"
+  "Album name (empty outside an album view)": "相簿名稱（在相簿檢視外為空）",
+  "Export date, UTC (YYYYMMDD)": "匯出日期，UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "匯出時間，UTC (HHMM)",
+  "Insert variable": "插入變數",
+  "Insert…": "插入…",
+  "none  ({album}, {date}, {hour})": "無  ({album}, {date}, {hour})"
 }

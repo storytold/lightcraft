@@ -2473,10 +2473,10 @@
   "Next": "Další",
   "Get Started": "Začít",
   "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
-  "Album name (empty outside an album view)": "Album name (empty outside an album view)",
-  "Export date, UTC (YYYYMMDD)": "Export date, UTC (YYYYMMDD)",
-  "Export time, UTC (HHMM)": "Export time, UTC (HHMM)",
-  "Insert variable": "Insert variable",
-  "Insert…": "Insert…",
-  "none  ({album}, {date}, {hour})": "none  ({album}, {date}, {hour})"
+  "Album name (empty outside an album view)": "Název alba (prázdné mimo zobrazení alba)",
+  "Export date, UTC (YYYYMMDD)": "Datum exportu, UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "Čas exportu, UTC (HHMM)",
+  "Insert variable": "Vložit proměnnou",
+  "Insert…": "Vložit…",
+  "none  ({album}, {date}, {hour})": "žádné  ({album}, {date}, {hour})"
 }

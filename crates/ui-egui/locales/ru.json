@@ -2633,10 +2633,10 @@
   "Welcome": "Добро пожаловать",
   "Next": "Далее",
   "Get Started": "Начать",
-  "Album name (empty outside an album view)": "Album name (empty outside an album view)",
-  "Export date, UTC (YYYYMMDD)": "Export date, UTC (YYYYMMDD)",
-  "Export time, UTC (HHMM)": "Export time, UTC (HHMM)",
-  "Insert variable": "Insert variable",
-  "Insert…": "Insert…",
-  "none  ({album}, {date}, {hour})": "none  ({album}, {date}, {hour})"
+  "Album name (empty outside an album view)": "Название альбома (пусто вне просмотра альбома)",
+  "Export date, UTC (YYYYMMDD)": "Дата экспорта, UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "Время экспорта, UTC (HHMM)",
+  "Insert variable": "Вставить переменную",
+  "Insert…": "Вставить…",
+  "none  ({album}, {date}, {hour})": "нет  ({album}, {date}, {hour})"
 }

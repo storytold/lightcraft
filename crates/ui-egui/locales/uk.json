@@ -2423,10 +2423,10 @@
   "Welcome": "Ласкаво просимо",
   "Next": "Далі",
   "Get Started": "Почати",
-  "Album name (empty outside an album view)": "Album name (empty outside an album view)",
-  "Export date, UTC (YYYYMMDD)": "Export date, UTC (YYYYMMDD)",
-  "Export time, UTC (HHMM)": "Export time, UTC (HHMM)",
-  "Insert variable": "Insert variable",
-  "Insert…": "Insert…",
-  "none  ({album}, {date}, {hour})": "none  ({album}, {date}, {hour})"
+  "Album name (empty outside an album view)": "Назва альбому (порожньо поза переглядом альбому)",
+  "Export date, UTC (YYYYMMDD)": "Дата експорту, UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "Час експорту, UTC (HHMM)",
+  "Insert variable": "Вставити змінну",
+  "Insert…": "Вставити…",
+  "none  ({album}, {date}, {hour})": "немає  ({album}, {date}, {hour})"
 }
