@@ -258,7 +258,7 @@ fn a_photo_named_twice_is_merged_once() {
 fn two_collapsed_stacks_and_loose_photos_plan_separate_jobs() {
     let dir = temp_dir("multi-stack");
     let mut paths = Vec::new();
-    for (set, evs) in [("A", [-2.0, 0.0, 2.0]), ("B", [-1.5, 0.5, 2.5]), ("C", [-1.0, 1.0])] {
+    for (set, evs) in [("A", &[-2.0, 0.0, 2.0][..]), ("B", &[-1.5, 0.5, 2.5][..]), ("C", &[-1.0, 1.0][..])] {
         for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, &evs).unwrap().into_iter().enumerate() {
             let p = dir.join(format!("{set}_{i}.dng"));
             std::fs::write(&p, b).unwrap();
@@ -280,7 +280,7 @@ fn two_collapsed_stacks_and_loose_photos_plan_separate_jobs() {
     assert_eq!(members(&jobs[0]), vec![ids[6], ids[7]], "loose group keeps given order");
     assert_eq!(members(&jobs[1]), ids[..3].to_vec(), "first stack expands to its members");
     assert_eq!(members(&jobs[2]), ids[3..6].to_vec(), "second stack expands to its members");
-    let err = s.plan_merge(kind, finish, &mixed_ids, true).unwrap_err().to_string();
+    let err = s.plan_merge(kind, finish, &mixed_ids, true).err().unwrap().to_string();
     assert!(err.contains("more than one merge group"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
