@@ -186,7 +186,7 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | Calibration panel, 1:1 |
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
 | `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided; saved `UprightTransform_*` matrices are not imported, so photo import reports that Lightroom geometry was not preserved and the selected mode will be recalculated |
-| `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
+| `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop. A photo's sidecar (import, Read Metadata, Synchronize Folder) places the edges, like its masks' positions, on the stored image before the file's orientation: they are turned into the photo as shown, its own Rotate / Flip included, and the straighten angle turns the other way, as the catalog import does (`lightroom_catalog::catalog_crop`, `catalog_masks`). A portrait raw's crop was cut on the wrong side and its masks drawn a quarter turn away (issue #2239). A preset's are taken as written |
 
 Values pass through our control specs, so anything outside our slider ranges gets clamped.
 
@@ -201,7 +201,7 @@ own (`Adobe Color` → Color, `Adobe Neutral`, `Adobe Vivid`, `Adobe Landscape`,
 `Modern 10`, `Vintage 02`) can't be used here, and a third-party profile not imported yet leaves the photo's profile as it
 is; import reports either per preset (`Profile “Name” (Lightroom's own)` / `(not imported yet)` in `unmapped`).
 References are resolved again whenever profiles are imported or deleted, so a pack's profiles and presets can come in
-either order. The look's embedded `Parameters` are not read.
+either order. A photo's sidecar naming one of the basic profiles selects ours the same way (`Adobe Monochrome` renders it in black and white); any other is reported as `Look` among the fields not carried over. The look's embedded `Parameters` are not read: without the profile's own colour table, which only the other app has, folding them in moved 45 Lightroom exports made with one creative profile further from LightCraft's renders (mean ΔE 8.7 → 8.9).
 
 **Not mapped:** camera profiles (`CameraProfile`; we have our own profile set), red eye, lens blur,
 process-version 2010 field names, and AI features. Local adjustments and spot removal are read as described below.

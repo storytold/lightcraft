@@ -761,7 +761,7 @@ fn lightroom_orientation(code: &str) -> Option<Orientation> {
 /// then the rotation; `stored_aspect` (width / height of the stored image) matters once the
 /// rectangle turns. On a real catalog this reproduced the frame aspect of all 223 straightened crops
 /// in Lightroom's exports within 1%.
-fn catalog_crop(partial: &mut Value, orientation: Orientation, stored_aspect: f64) {
+pub(crate) fn catalog_crop(partial: &mut Value, orientation: Orientation, stored_aspect: f64) {
     let Some(geometry) = partial.pointer_mut("/crop/geometry").and_then(Value::as_object_mut) else { return };
     let edge = |k: &str| geometry.get("rect").and_then(|r| r.get(k)).and_then(Value::as_f64);
     let (Some(x0), Some(y0), Some(x1), Some(y1)) = (edge("x0"), edge("y0"), edge("x1"), edge("y1")) else { return };
@@ -786,7 +786,7 @@ fn catalog_crop(partial: &mut Value, orientation: Orientation, stored_aspect: f6
 /// The catalog's orientation (the stored image to the photo as Lightroom shows it), then the
 /// photo's own Rotate Left / Right and Flip in LightCraft (`user`), which an update of a photo
 /// already in the library keeps: the frame LightCraft draws masks in.
-fn in_photo_frame(catalog: Orientation, user: Orientation) -> Orientation {
+pub(crate) fn in_photo_frame(catalog: Orientation, user: Orientation) -> Orientation {
     let (flip, turns) = user.to_parts();
     let o = if flip { catalog.flipped_h() } else { catalog };
     (0..turns).fold(o, |o, _| o.rotated(true))
@@ -815,7 +815,7 @@ fn alias_catalog_inverted(v: &mut lightcraft_meta::XmpValue) {
 /// image. So the points go through the orientation, a radial's radii (in long-edge units, from the
 /// stored image's aspect) swap when the axes do, and a mirror turns its angle the other way. A
 /// quarter turn keeps the angle: the ellipse turned 90° is the same ellipse with its radii swapped.
-fn catalog_masks(partial: &mut Value, orientation: Orientation) {
+pub(crate) fn catalog_masks(partial: &mut Value, orientation: Orientation) {
     if orientation == Orientation::Normal {
         return;
     }
