@@ -164,10 +164,16 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   typo can't run a command on the selection. This is how the headless-Chrome checks drive the page.
   `await lightcraft.request("ui.inspect", {})` calls any method of the control channel
   (`docs/control-protocol.md`: `engine.execute`, `ui.inspect`, `ui.menu.invoke`, …) and resolves to
-  its result as a JSON value (an object, an array, `null`, …), as VectorCraft's `window.vectorcraft` and PhotoCraft's
-  `window.photocraft` do, so an agent or a host app drives the page with the commands it sends the
-  desktop app. Errors reject with an `Error`, and params that are neither an object nor JSON text
-  (a number, `NaN`, a function) reject without running anything.
+  its result as a JSON value (an object, an array, `null`, …), so an agent or a host app drives the
+  page with the commands it sends the desktop app. `lightcraft.execute(command, params)`
+  (`engine.execute`), `lightcraft.commands()` and `lightcraft.uiInspect(params)` are shortcuts.
+  These come from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api)
+  (storytold/craft-libs#413), the same functions every Craft web build has (`apps/lightcraft-web/src/api.rs`).
+  LightCraft has no `document.inspect`, and `ui.screenshot` without a `path` answers only the size,
+  so there is no `docInspect` or `screenshot` shortcut. Errors reject with an `Error`. Params are an
+  object (absent means `{}`); anything else (a number, a string, `NaN`, an array, a function)
+  rejects without running anything. A call the app doesn't answer within 30 seconds rejects, and the
+  app drops it unrun if it had not started it.
   - **Who can call it**: scripts that run in the page itself (its own scripts, anything it
     includes, the browser console), and a page on the same origin that holds this page's `window`
     (a parent that frames it, or the page that opened it). These are the scripts that can already
