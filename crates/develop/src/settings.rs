@@ -156,6 +156,11 @@ pub struct DevelopSettings {
     pub enhance: Enhance,
     /// Camera calibration: shadows tint and primary hue/saturation (applied before tone mapping).
     pub calibration: Calibration,
+    /// Film negative conversion (`docs/negative-conversion.md`): turns a scanned negative into a scene-linear
+    /// positive before white balance. Not written while it is the default, so photos that aren't film scans keep
+    /// their JSON and `hash64` (and every cached preview stays valid).
+    #[serde(skip_serializing_if = "Negative::is_default")]
+    pub negative: Negative,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
     pub disabled_sections: Vec<String>,
 }
@@ -190,6 +195,7 @@ impl Default for DevelopSettings {
             lens_blur: LensBlur::default(),
             enhance: Enhance::default(),
             calibration: Calibration::default(),
+            negative: Negative::default(),
             disabled_sections: Vec::new(),
         }
     }
@@ -1355,5 +1361,351 @@ impl DevelopSettings {
         s.light.whites = add(s.light.whites, h.sdr_whites);
         s.effects.clarity = add(s.effects.clarity, h.sdr_clarity);
         std::borrow::Cow::Owned(s)
+    }
+}
+
+/// What kind of film a scan shows ([`Negative::film`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilmType {
+    /// Not a film scan: no conversion.
+    #[default]
+    Off,
+    /// Colour negative (C-41): orange mask removed, inverted, each channel's range matched.
+    ColorNegative,
+    /// Black-and-white negative: inverted on one channel.
+    BwNegative,
+    /// Slide (E-6) film: not inverted; each channel's range normalised.
+    Slide,
+    /// A value from a newer LightCraft: renders unconverted.
+    #[serde(other)]
+    Unknown,
+}
+
+impl FilmType {
+    pub const ALL: [FilmType; 4] = [FilmType::Off, FilmType::ColorNegative, FilmType::BwNegative, FilmType::Slide];
+    /// The name shown in the Negative panel and its menus (translated by the UI).
+    pub fn label(self) -> &'static str {
+        match self {
+            FilmType::Off | FilmType::Unknown => "Off",
+            FilmType::ColorNegative => "Color Negative",
+            FilmType::BwNegative => "B&W Negative",
+            FilmType::Slide => "Slide",
+        }
+    }
+}
+
+/// How the density range maps to scene stops ([`Negative::tone`]), like a paper grade.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilmTone {
+    /// Flat: the fewest stops, for grading by hand.
+    Linear,
+    Soft,
+    Hard,
+    /// (Last: an unknown value from a newer LightCraft reads as Standard.)
+    #[default]
+    #[serde(other)]
+    Standard,
+}
+
+impl FilmTone {
+    pub const ALL: [FilmTone; 4] = [FilmTone::Linear, FilmTone::Soft, FilmTone::Standard, FilmTone::Hard];
+    /// The name shown in the Tone menu (translated by the UI).
+    pub fn label(self) -> &'static str {
+        match self {
+            FilmTone::Linear => "Linear",
+            FilmTone::Soft => "Soft",
+            FilmTone::Standard => "Standard",
+            FilmTone::Hard => "Hard",
+        }
+    }
+    /// Stops of scene range the analysed density range spans.
+    pub fn stops(self) -> f64 {
+        match self {
+            FilmTone::Linear => 5.0,
+            FilmTone::Soft => 5.75,
+            FilmTone::Standard => 6.5,
+            FilmTone::Hard => 7.5,
+        }
+    }
+}
+
+/// The colour rendering of the converted positive ([`Negative::color_model`]): generic looks of our own (no film
+/// stock or lab data).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilmColorModel {
+    /// No matrix: the balanced channels as they are.
+    None,
+    /// A little more saturation, white kept.
+    Neutral,
+    /// Neutral, cooler and cleaner.
+    Cool,
+    /// Warm, a touch more saturation: a lab-scanner look, and the default. (Last: an unknown value from a newer
+    /// LightCraft reads as Warm.)
+    #[default]
+    #[serde(other)]
+    Warm,
+}
+
+impl FilmColorModel {
+    pub const ALL: [FilmColorModel; 4] = [FilmColorModel::Warm, FilmColorModel::Neutral, FilmColorModel::Cool, FilmColorModel::None];
+    /// The name shown in the Color menu (translated by the UI).
+    pub fn label(self) -> &'static str {
+        match self {
+            FilmColorModel::None => "None",
+            FilmColorModel::Neutral => "Neutral",
+            FilmColorModel::Warm => "Warm",
+            FilmColorModel::Cool => "Cool",
+        }
+    }
+}
+
+/// The numbers a film analysis measured (`negative.analyze`), stored so the preview, the export, the CLI and MCP
+/// render the same picture. Densities are `log10` units per channel (linear Rec.2020 of the source).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FilmAnalysis {
+    /// Transmittance of the unexposed film (linear), > 0.
+    pub base: [f64; 3],
+    /// Density at the positive's black and white points.
+    pub lo: [f64; 3],
+    pub hi: [f64; 3],
+    /// Median of each channel's normalised density (0..1): auto colour balance matches them.
+    pub mid: [f64; 3],
+    /// Each channel's density at the tone levels [`FILM_TONE_LEVELS`] of the frame: auto colour balance matches the
+    /// channels at every one of them (a neutral at every tone, so no colour crossover between shadows and
+    /// highlights). Analyses from before it existed balance the medians only (`mid`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tones: Option<[[f64; 3]; 9]>,
+    /// Where the base came from.
+    pub base_source: BaseSource,
+    /// The film edge the base was measured on (normalised source coordinates), when detected or sampled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_rect: Option<lightcraft_geom::Rect>,
+    /// The part of the source the range was measured in ([`DevelopSettings::negative_region`] at the time, normalised
+    /// source coordinates): a different crop now means the analysis is out of date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<lightcraft_geom::Rect>,
+    /// The film type the densities were measured for: a negative's statistics don't fit a slide's, nor the reverse,
+    /// so an analysis of another type is measured again ([`FilmAnalysis::fits`]). `None`: written before it existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub film: Option<FilmType>,
+}
+
+/// The fractions of a frame's pixels below each of [`FilmAnalysis::tones`]' densities.
+pub const FILM_TONE_LEVELS: [f64; 9] = [0.02, 0.10, 0.25, 0.50, 0.75, 0.90, 0.96, 0.98, 0.99];
+
+/// Where a film analysis's base ([`FilmAnalysis::base`]) came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BaseSource {
+    /// Found on the unexposed film edge (rebate) inside the frame.
+    Detected,
+    /// Sampled from a region the user picked (`negative.sampleBase`).
+    Sampled,
+    /// Estimated from the brightest part of the picture: no film edge was found. (Last: an unknown value reads
+    /// as this.)
+    #[default]
+    #[serde(other)]
+    Estimated,
+}
+
+impl BaseSource {
+    /// The base is the film's own (measured on unexposed film), not a guess from the picture.
+    pub fn measured(self) -> bool {
+        matches!(self, BaseSource::Detected | BaseSource::Sampled)
+    }
+}
+
+impl Default for FilmAnalysis {
+    /// A placeholder that measured nothing: unit base, the full 0..1 range, medians halfway, no tone samples.
+    fn default() -> Self {
+        Self {
+            base: [1.0; 3],
+            lo: [0.0; 3],
+            hi: [1.0; 3],
+            mid: [0.5; 3],
+            tones: None,
+            base_source: BaseSource::Estimated,
+            base_rect: None,
+            region: None,
+            film: None,
+        }
+    }
+}
+
+impl FilmAnalysis {
+    /// Largest magnitude a stored base or density may have: transmittances and densities of real scans are tiny next
+    /// to it, and it is far inside `f32`'s range.
+    pub const LIMIT: f64 = 1.0e6;
+    /// Smallest film base a stored analysis may have: the conversion never divides by less (its own floor, `EPS` in
+    /// `lightcraft_pipeline::negative`), so a smaller one would convert with a different base than the one stored.
+    pub const MIN_BASE: f64 = 1.0e-6;
+
+    /// Valid ([`Self::is_valid`]) and measured for `film` (or of unknown type, from before the type was recorded).
+    pub fn fits(&self, film: FilmType) -> bool {
+        self.is_valid() && self.film.is_none_or(|f| f == film)
+    }
+
+    /// Every number finite and within [`Self::LIMIT`], the base at least [`Self::MIN_BASE`], each range ordered, the
+    /// medians in 0..1 and the tone samples rising: anything else is measured again instead of rendered.
+    pub fn is_valid(&self) -> bool {
+        // finite and within what a film can measure (and an f32 can hold): a damaged or hand-edited sidecar with values
+        // past that is measured again instead of rendering a channel black or flat
+        let fin = |a: &[f64; 3]| a.iter().all(|v| v.is_finite() && v.abs() <= Self::LIMIT);
+        fin(&self.base)
+            && fin(&self.lo)
+            && fin(&self.hi)
+            && fin(&self.mid)
+            // (medians of normalised density: 0..1)
+            && self.mid.iter().all(|m| (0.0..=1.0).contains(m))
+            && self.tones.is_none_or(|t| t.iter().all(fin))
+            // (each channel's density rises with the tone level, as quantiles do: samples out of order weren't measured)
+            && self.tones.is_none_or(|t| t.iter().zip(t.iter().skip(1)).all(|(a, b)| a.iter().zip(b).all(|(x, y)| x <= y)))
+            // (at least the smallest transmittance the conversion divides by, so the base stored is the base used)
+            && self.base.iter().all(|b| *b >= Self::MIN_BASE)
+            && self.lo.iter().zip(&self.hi).all(|(l, h)| h - l > 1e-4)
+    }
+}
+
+/// Film negative conversion (see `docs/negative-conversion.md`). Sliders are `negative.*` controls.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Negative {
+    pub film: FilmType,
+    pub tone: FilmTone,
+    pub color_model: FilmColorModel,
+    /// Measured base and range; `None`: measured from the photo at render time (the same numbers
+    /// `negative.analyze` would store).
+    pub analysis: Option<FilmAnalysis>,
+    /// Roll-synced (`negative.syncRoll`): the analysis is the roll's, shared with its other frames, and Re-analyze
+    /// leaves it alone until `negative.unlock`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
+    /// Border of the frame left out of the analysis (holder, rebate, light leaks), % of each edge.
+    pub border: f64,
+    /// Contrast of the conversion (−100..100): scales the stops the density range spans.
+    pub contrast: f64,
+    /// Brightness (−100..100): moves the positive's mid grey, ±2 EV.
+    pub brightness: f64,
+    /// Black and white points (−100..100): positive deepens blacks / brightens whites (more clipping).
+    pub black_point: f64,
+    pub white_point: f64,
+    /// Auto colour balance (0..100 %): how much each channel's midtones are matched.
+    pub balance: f64,
+    /// Overall colour balance of the positive (−100..100): blue ↔ yellow, green ↔ magenta.
+    pub temp: f64,
+    pub tint: f64,
+    /// Saturation of the positive (−100..100).
+    pub saturation: f64,
+    /// Shadow and highlight toning (−100..100 each): the colour drift between the ends of the range.
+    pub shadow_temp: f64,
+    pub shadow_tint: f64,
+    pub highlight_temp: f64,
+    pub highlight_tint: f64,
+}
+
+impl Default for Negative {
+    fn default() -> Self {
+        Self {
+            film: FilmType::Off,
+            tone: FilmTone::Standard,
+            color_model: FilmColorModel::Warm,
+            analysis: None,
+            locked: false,
+            border: 5.0,
+            contrast: 0.0,
+            brightness: 0.0,
+            black_point: 0.0,
+            white_point: 0.0,
+            balance: 100.0,
+            temp: 0.0,
+            tint: 0.0,
+            saturation: 0.0,
+            shadow_temp: 0.0,
+            shadow_tint: 0.0,
+            highlight_temp: 0.0,
+            highlight_tint: 0.0,
+        }
+    }
+}
+
+impl Negative {
+    pub fn is_default(&self) -> bool {
+        *self == Negative::default()
+    }
+    /// A film type this build converts.
+    pub fn converts(&self) -> bool {
+        matches!(self.film, FilmType::ColorNegative | FilmType::BwNegative | FilmType::Slide)
+    }
+}
+
+impl DevelopSettings {
+    /// Whether the render converts a film scan: a film type is chosen and the Negative section's eye is on.
+    pub fn negative_active(&self) -> bool {
+        self.negative.converts() && self.section_enabled("negative")
+    }
+
+    /// The edits a film conversion resets, by panel name: the ones made looking at the negative, which would act on the
+    /// positive with values tuned for something else (tone, white balance, colour, effects, the creative profile and
+    /// masks). Crop, rotation, geometry, lens corrections, retouching, detail, grain, vignette and lens blur don't
+    /// depend on which way round the picture is and are kept. Empty for a photo already converted (its edits are on
+    /// the positive) and for one with none of these edits.
+    pub fn negative_conflicts(&self) -> Vec<&'static str> {
+        if self.negative.converts() {
+            return Vec::new();
+        }
+        let d = DevelopSettings::default();
+        let mut out = Vec::new();
+        let mut note = |changed: bool, name: &'static str| {
+            if changed {
+                out.push(name);
+            }
+        };
+        note(self.profile != d.profile, "Profile");
+        note(self.wb.mode != WbMode::AsShot, "White Balance");
+        note(self.light != d.light || self.hdr != d.hdr, "Light");
+        note(self.curve != d.curve, "Tone Curve");
+        note(self.color != d.color, "Color");
+        note(self.mixer != d.mixer || !self.point_colors.is_empty() || self.bw_mix != d.bw_mix, "Color Mixer");
+        note(self.grading != d.grading, "Color Grading");
+        note(self.effects != d.effects, "Effects");
+        note(self.calibration != d.calibration, "Calibration");
+        note(!self.masks.is_empty(), "Masks");
+        out
+    }
+
+    /// Reset the edits [`Self::negative_conflicts`] names (the white balance to As Shot).
+    pub fn reset_negative_conflicts(&mut self) {
+        let d = DevelopSettings::default();
+        self.profile = d.profile;
+        self.wb.mode = WbMode::AsShot;
+        self.light = d.light;
+        self.hdr = d.hdr;
+        self.curve = d.curve;
+        self.color = d.color;
+        self.mixer = d.mixer;
+        self.point_colors.clear();
+        self.bw_mix = d.bw_mix;
+        self.grading = d.grading;
+        self.effects = d.effects;
+        self.calibration = d.calibration;
+        self.masks.clear();
+    }
+
+    /// The part of the source a film analysis measures: the crop (the film frame, once the scan is cropped to it,
+    /// leaving out the holder and whatever else surrounds the film), in normalised coordinates of the source as stored
+    /// (before the photo's rotation and flips). A straightened crop counts as its unturned rectangle; an empty or
+    /// broken crop as the whole photo.
+    pub fn negative_region(&self) -> lightcraft_geom::Rect {
+        let r = self.crop.geometry.rect;
+        let ok = [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite());
+        let r = if ok { r.intersect(&lightcraft_geom::Rect::UNIT) } else { lightcraft_geom::Rect::UNIT };
+        if r.is_empty() {
+            return lightcraft_geom::Rect::UNIT;
+        }
+        self.orientation.inverse().map_norm_rect(r)
     }
 }

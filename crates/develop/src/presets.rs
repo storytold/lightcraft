@@ -42,10 +42,11 @@ pub enum SettingsGroup {
     RedEye,
     LensBlur,
     Calibration,
+    Negative,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 20] = [
+    pub const ALL: [SettingsGroup; 21] = [
         SettingsGroup::Profile,
         SettingsGroup::Treatment,
         SettingsGroup::WhiteBalance,
@@ -66,13 +67,18 @@ impl SettingsGroup {
         SettingsGroup::RedEye,
         SettingsGroup::LensBlur,
         SettingsGroup::Calibration,
+        SettingsGroup::Negative,
     ];
 
-    /// Groups included by default when copying (Lightroom excludes crop, masks and spots by default).
+    /// Groups included by default when copying (Lightroom excludes crop, masks and spots by default). The film
+    /// conversion is left out too: a preset or a copy made from an ordinary photo would otherwise switch a converted
+    /// scan back to its negative; it is one tick away, and Sync Roll gives a roll its conversion.
     pub fn default_copy() -> Vec<SettingsGroup> {
         SettingsGroup::ALL
             .into_iter()
-            .filter(|g| !matches!(g, SettingsGroup::Crop | SettingsGroup::Masks | SettingsGroup::Spots | SettingsGroup::RedEye))
+            .filter(|g| {
+                !matches!(g, SettingsGroup::Crop | SettingsGroup::Masks | SettingsGroup::Spots | SettingsGroup::RedEye | SettingsGroup::Negative)
+            })
             .collect()
     }
 
@@ -98,6 +104,7 @@ impl SettingsGroup {
             SettingsGroup::RedEye => "Red Eye",
             SettingsGroup::LensBlur => "Lens Blur",
             SettingsGroup::Calibration => "Calibration",
+            SettingsGroup::Negative => "Negative Conversion",
         }
     }
 
@@ -124,8 +131,30 @@ impl SettingsGroup {
             SettingsGroup::RedEye => &["red_eye"],
             SettingsGroup::LensBlur => &["lens_blur"],
             SettingsGroup::Calibration => &["calibration"],
+            SettingsGroup::Negative => &["negative"],
         }
     }
+}
+
+/// Take one frame's measured film base and range and its roll lock out of a preset's settings: a preset carries the
+/// conversion's options only, since those numbers would replace the ones measured on the scan it is applied to (and a
+/// lock would keep them there). Every way a preset is made or updated from a photo goes through this.
+pub fn strip_frame_measurements(settings: &mut Value) {
+    if let Some(n) = settings.get_mut("negative").and_then(Value::as_object_mut) {
+        n.remove("analysis");
+        n.remove("locked");
+    }
+}
+
+/// `s`'s Negative group spelled out in full: the saved JSON leaves the group out while it is off, and `locked` while
+/// false, so a copy of an unconverted or unlocked photo would otherwise leave the target converted or locked, and an
+/// amount would have nothing to interpolate from.
+fn negative_json(s: &DevelopSettings) -> Value {
+    let mut n = serde_json::to_value(s.negative).unwrap_or(Value::Null);
+    if let Some(o) = n.as_object_mut() {
+        o.insert("locked".into(), Value::Bool(s.negative.locked));
+    }
+    n
 }
 
 /// The subset of `s` covering `groups`, as a partial JSON object.
@@ -137,6 +166,9 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
             if let Some(v) = full.get(*k) {
                 out.insert((*k).to_string(), v.clone());
             }
+        }
+        if *g == SettingsGroup::Negative {
+            out.insert("negative".into(), negative_json(s));
         }
     }
     Value::Object(out)
@@ -190,7 +222,17 @@ fn scale_patch(base: &Value, patch: &Value, t: f64) -> Value {
 /// Apply a partial settings object with an amount (1.0 = 100 %). Out-of-range values are clamped
 /// through the control specs, as every merge does ([`DevelopSettings::merged`]).
 pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> DevelopSettings {
-    let patch = if (amount - 1.0).abs() < 1e-9 { Cow::Borrowed(partial) } else { Cow::Owned(scale_patch(&s.to_json_for_merge(), partial, amount)) };
+    let patch = if (amount - 1.0).abs() < 1e-9 {
+        Cow::Borrowed(partial)
+    } else {
+        // interpolated against every field of `s`, including the Negative group its saved JSON leaves out while off (a
+        // missing base object would turn the patch's group into null and drop the whole preset)
+        let mut base = s.to_json_for_merge();
+        if let Some(o) = base.as_object_mut() {
+            o.insert("negative".into(), negative_json(s));
+        }
+        Cow::Owned(scale_patch(&base, partial, amount))
+    };
     // (a white balance without a scale keeps its old meaning: `DevelopSettings::merged`)
     s.merged(&patch).unwrap_or_else(|_| s.clone())
 }
@@ -213,6 +255,11 @@ fn compose_named(current: &DevelopSettings, original: &DevelopSettings, settings
     }
     let cur = current.to_json();
     let mut base = original.to_json();
+    // the Negative group is left out of the saved JSON while it is off: interpolate against its fields anyway (a
+    // missing base object would leave the preset's numbers at their full value below 100 %)
+    if let Some(b) = base.as_object_mut() {
+        b.insert("negative".into(), negative_json(original));
+    }
     if let (Some(b), Some(c)) = (base.as_object_mut(), cur.as_object()) {
         for k in REPAIR_KEYS {
             if let Some(v) = c.get(k) {
@@ -279,7 +326,9 @@ pub struct Preset {
 
 impl Preset {
     pub fn from_settings(id: &str, name: &str, group: &str, s: &DevelopSettings, groups: &[SettingsGroup]) -> Preset {
-        Preset { id: id.into(), name: name.into(), group: group.into(), settings: extract_groups(s, groups), favorite: false, builtin: false }
+        let mut settings = extract_groups(s, groups);
+        strip_frame_measurements(&mut settings);
+        Preset { id: id.into(), name: name.into(), group: group.into(), settings, favorite: false, builtin: false }
     }
     /// Apply at `amount` (1.0 = 100 %), with `s` as both the photo's current and its original
     /// settings (see [`Preset::apply_on`]): right for the import default preset and for scratch

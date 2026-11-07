@@ -440,6 +440,22 @@ fn joint_colour_nr_measures_the_noise_of_the_whole_frame() {
     }
 }
 
+// Given a converted film scan, a window's noise model is measured on the positive, as the whole frame's is
+#[test]
+fn joint_colour_nr_of_a_film_scan_measures_the_noise_of_the_positive() {
+    let (w, h, win) = (768, 128, PixelWindow { x: 640, y: 32, w: 64, h: 64 });
+    let src = crate::tests::colour_noise_scene(w, h, w * 2 / 3);
+    let mut s = DevelopSettings::default();
+    s.negative.film = lightcraft_develop::FilmType::ColorNegative;
+    s.detail.nr_color = 25.0;
+    s.detail.nr_color_smoothness = 0.0;
+    let req = RenderRequest::fit(w, h);
+    let f = render(&src, &SourceInfo::default(), &s, &req).image;
+    let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..req }).image;
+    let (max, mean) = compare_inset(&f, &part, win, win.w / 4);
+    assert!(max <= 2 && mean <= 0.1, "max {max}, mean {mean:.3}");
+}
+
 // Given a 16-bit or float render of a window with the joint colour NR, then its edges are the whole
 // render's too: the window is grown by the filter's reach and cut back
 #[test]
@@ -499,4 +515,13 @@ fn diagnostic_overlays_in_a_window_match_the_full_render() {
     hdr.hdr.max_ev = 3.0;
     hdr.light.exposure = 1.5;
     check_overlay("hdr range", &hdr, Overlay::HdrRange, MID, 1, 0.1);
+}
+
+// Given a converted film scan with Dehaze, a window's airlight comes from the positive, as the full render's does
+#[test]
+fn a_converted_negative_with_dehaze_windows_like_the_full_render() {
+    let mut s = DevelopSettings::default();
+    s.negative.film = lightcraft_develop::FilmType::ColorNegative;
+    controls::set(&mut s, "effects.dehaze", 40.0);
+    check("negative + dehaze", &s, MID, 6, 0.8);
 }

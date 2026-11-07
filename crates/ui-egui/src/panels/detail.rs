@@ -1207,7 +1207,7 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
+        "wbPicker" | "filmBase" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {
@@ -1240,6 +1240,21 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         {
             let n = map.norm(q);
             let _ = app.run("develop.wbPick", json!({"x": n.x, "y": n.y}));
+            app.ui.tool.clear();
+        }
+        return;
+    }
+    if app.ui.tool == "filmBase" {
+        // a small square of unexposed film (the rebate) around the click sets the film base
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            const R: f64 = 0.004;
+            let rect = json!({"x0": n.x - R, "y0": n.y - R, "x1": n.x + R, "y1": n.y + R});
+            if let Err(e) = app.run("negative.sampleBase", json!({"rect": rect})) {
+                app.toast(ui.ctx(), e);
+            }
             app.ui.tool.clear();
         }
         return;

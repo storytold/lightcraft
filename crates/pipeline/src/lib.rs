@@ -40,6 +40,7 @@ pub mod local_tone;
 pub mod lut;
 pub mod mask_space;
 pub mod masks;
+pub mod negative;
 pub mod nrc_joint;
 #[cfg(test)]
 mod nrc_joint_reference;
@@ -443,6 +444,9 @@ pub struct Plan<'a> {
     pub keep: Option<PixelWindow>,
     /// The source's segmentation mattes ([`SourceInfo::mattes`]).
     pub mattes: Option<Arc<masks::Mattes>>,
+    /// The film negative conversion, when the photo is a converted film scan ([`negative::resolve`]): measured on
+    /// the whole source, so every window and size of a render converts alike.
+    pub film: Option<negative::Film>,
     /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
     pub full: (geometry::Frame, usize, usize),
 }
@@ -466,6 +470,13 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             sp.source_offset = o;
         }
     }
+    // the film conversion, resolved once: the scene-linear stage and the airlight proxy both convert with it. One that
+    // can't be measured (nothing usable in the picture) renders the scan as it is in every stage, white balance and
+    // tone included, not as a positive that wasn't made
+    let film = negative::resolve(src, &settings);
+    if film.is_none() && settings.negative_active() {
+        settings.to_mut().negative.film = lightcraft_develop::FilmType::Off;
+    }
     let s = &*settings;
     let frame = frame_for(src, info, s, req.apply_crop);
     let (full_w, full_h) = req.size(&frame);
@@ -484,7 +495,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             if s.section_enabled("effects") && (s.effects.dehaze != 0.0 || s.masks.iter().any(|m| m.adjust.dehaze != 0.0)) {
                 let k = (AIRLIGHT_PROXY_EDGE as f64 / full_w.max(full_h) as f64).min(1.0);
                 let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
-                fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
+                fixed_air = Some(local::frame_airlight(src, info, s, film.as_ref(), &frame, pw, ph));
             }
             // (spots grow the rendered window of 8-bit renders; a grown window is cut back to the request)
             let mut work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
@@ -521,6 +532,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // and the local tone mapping
         local_tone::enabled(info, s),
         src_long,
+        // and the film conversion (its analysis is of this source, which keys the cache)
+        format!("{film:?}"),
     ));
     let lin_key = hash_of((
         pre_nr_key,
@@ -547,13 +560,14 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         fixed_air,
         keep,
         mattes: info.mattes.clone(),
+        film,
         full,
     }
 }
 
 /// The joint colour NR's noise model of the whole frame, measured on fixed tiles of it
 /// ([`nrc_joint::tiles`]) so that every window of it is filtered alike. The tiles are resampled,
-/// tone-mapped, white-balanced and luminance-denoised like the frame; the retouching and defringing
+/// film-converted, tone-mapped, white-balanced and luminance-denoised like the frame; the retouching and defringing
 /// are left out. `None` when the joint colour NR is off, or when the render is the whole frame and
 /// that is a single tile: the noise is then measured on the image itself, as the CPU and the GPU do.
 pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc_joint::JointNoise> {
@@ -584,9 +598,15 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 fixed_air: None,
                 keep: None,
                 mattes: None,
+                // (converted below, once per tile)
+                film: None,
                 full: p.full.clone(),
                 ..*p
             };
+            // a film scan's noise is measured on its positive, as the frame's is
+            if let Some(film) = &p.film {
+                negative::apply(&mut img, film);
+            }
             local_tone::apply(&mut img, info, &tile);
             local::white_balance(&mut img, info, s);
             local::apply_nr(&mut img, lum, None);
@@ -604,13 +624,17 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
 pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
     let o = &s.optics;
     let defringe = s.section_enabled("optics") && (o.defringe_purple_amount > 0.0 || o.defringe_green_amount > 0.0);
-    defringe || !s.spots.is_empty() || local_tone::enabled(info, s)
+    defringe || !s.spots.is_empty() || local_tone::enabled(info, s) || s.negative_active()
 }
 
 /// The white-balanced, defringed, retouched image (before noise reduction): the CPU part of the
 /// scene-linear stage, in place.
 pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
+    // a film scan becomes a positive first: everything after works on the positive
+    if let Some(film) = &p.film {
+        negative::apply(img, film);
+    }
     // (before the white balance: the gain's input is the as-shot development, as in the file)
     local_tone::apply(img, info, p);
     local::white_balance(img, info, s);
@@ -848,7 +872,8 @@ fn overlay_alphas_all(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Ve
 /// Convenience: render a before/after pair side by side is up to the UI; this renders "before"
 /// (default look, keeping the crop so framing matches, under the photo's own rendering process).
 pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
-    let mut b = DevelopSettings { crop: s.crop, orientation: s.orientation, process: s.process, ..DevelopSettings::default() };
+    // a converted film scan stays converted: Before compares edits, not the negative with the positive
+    let mut b = DevelopSettings { crop: s.crop, orientation: s.orientation, process: s.process, negative: s.negative, ..DevelopSettings::default() };
     b.wb = lightcraft_develop::WhiteBalance { mode: lightcraft_develop::WbMode::AsShot, ..b.wb };
     b
 }
@@ -914,6 +939,8 @@ mod tests_light;
 mod tests_local;
 #[cfg(test)]
 mod tests_mask_geometry;
+#[cfg(test)]
+mod tests_negative;
 #[cfg(test)]
 mod tests_nr_scale;
 #[cfg(test)]

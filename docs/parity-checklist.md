@@ -31,7 +31,7 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 41 | 5 | 3 | 1 | 25/28 (89%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 42 | 6 | 3 | 1 | 25/28 (89%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -51,11 +51,11 @@ cited here still exists. Formerly docs/parity.md.
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
-| Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
+| Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 417 | 70 | 57 | 35 | 192/203 (95%) | 146/162 (90%) |
+| **Total** | 419 | 71 | 57 | 35 | 193/203 (95%) | 147/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.1%** of 544 in-scope rows — P0 97.3% of 203 · P1 94.1% of 162 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.1%** of 547 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 56.7% of 180.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -229,6 +229,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-RESET | Reset all / section / slider | P0 | ✅ | `cmd:develop.reset`, `cmd:develop.resetSection`, `cmd:develop.resetControl`, `crates/ui-egui/src/widgets.rs` (double-click) | no "reset to open" |
 | LR-EDIT-SHOWORIG | Show original | P0 | ✅ | `cmd:view.showOriginal` | |
 
+| LR-EDIT-NEGATIVE | Film negative conversion (beyond Lightroom: what the Negative Lab Pro plug-in adds) | P2 | 🟡 | `cmd:negative.convert`, `cmd:negative.conflicts`, `cmd:negative.syncRoll`, `cmd:negative.unlock`, `cmd:dialog.syncRoll`, `cmd:dialog.convertNegative`, `cmd:tool.filmBase`, `cmd:negative.analyze`, `cmd:negative.sampleBase`, `cmd:negative.set`, `cmd:negative.reset`, `ctl:negative.brightness`, `ctl:negative.contrast`, `ctl:negative.whitePoint`, `ctl:negative.blackPoint`, `ctl:negative.temp`, `ctl:negative.tint`, `ctl:negative.saturation`, `ctl:negative.balance`, `ctl:negative.shadowTemp`, `ctl:negative.shadowTint`, `ctl:negative.highlightTemp`, `ctl:negative.highlightTint`, `ctl:negative.border`, `crates/pipeline/src/negative.rs`, `crates/engine/src/cmd/negative.rs`, `crates/ui-egui/src/panels/edit/negative.rs`, `docs/negative-conversion.md` | Negative section at the top of Edit: colour negative, B&W negative or slide becomes a scene-linear positive before white balance, so every later slider works the right way round (non-destructive, a settings group like any other: copy / paste / sync / presets / XMP `lc:settings`). Film base found on the film's unexposed edge anywhere around the picture, also on uncropped camera scans with a holder (uniform tiles clearer than the picture, one colour along the edge, edge-shaped; clipped bare light rejected), else estimated, or picked with the Film Base Selector eyedropper; a measured base sets a neutral black. The range is measured inside the crop (or the frame the film edge outlines), so the holder doesn't count; per-channel balance at nine tone levels (no crossover) and median-anchored auto exposure, so a raw and a JPEG scan of one negative render alike. Measured once and stored (preview = export); a changed crop asks for Re-analyze. Converting resets the edits made on the negative (Light, Tone Curve, White Balance, Color, mixers, Color Grading, Effects, Calibration, Profile, Masks) after a dialog that lists them, keeping crop, geometry, lens corrections, retouching, detail, grain, vignette and lens blur; every later slider (and Auto, Auto WB, the WB selector) works on the positive. Raw scans (camera tone curve, Kelvin as-shot white, colour model, local tone map) convert like rendered ones (tested); an opt-in real-scan test (`LC_NEGATIVE_SCANS`) checks base detection and brightness on private scans. Tone (Linear / Soft / Standard / Hard), colour model (Warm default / Neutral / Cool / None) and 13 sliders; 9 Film Conversion presets and 11 Film Stocks looks (our own, named by kind not trademark, with matching grain) that never overwrite a frame's measured base. Roll sync: one pooled, locked analysis for the selected frames, measured in the background (activity stack), with a warning when the frames look scanned differently. GPU renders run the film stage on the CPU (parity). Defaults fitted to one maintainer-supplied 6×6 colour negative against a reference conversion (mean L* 60.5 vs 60.7). Missing: analysis-area overlay, apply on import, batch convert as a background task, camera-native working space for raw scans, GPU kernel, translations of the new labels, more test scans (unclipped bare light can pass for film: the eyedropper covers it) |
 ## G. Profiles (PROF)
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |

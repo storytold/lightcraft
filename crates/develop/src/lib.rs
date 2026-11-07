@@ -12,7 +12,7 @@ pub mod segmask;
 pub mod settings;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
-pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
+pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups, strip_frame_measurements};
 pub use segmask::{SegMask, with_grid_interner};
 pub use settings::*;
 
@@ -67,6 +67,10 @@ impl DevelopSettings {
         let mut v = self.to_json();
         presets::deep_merge(&mut v, partial);
         let mut out = DevelopSettings::from_json(&v)?;
+        // a roll lock belongs to the film type it was measured for: another type is measured on its own
+        if out.negative.film != self.negative.film {
+            out.negative.locked = false;
+        }
         if let Some(wb) = partial.get("wb").and_then(Value::as_object)
             && (wb.contains_key("temp") || wb.contains_key("tint"))
             && !wb.contains_key("scale")

@@ -163,12 +163,19 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("section.detail", "Detail", Some("Cmd+4"), "Window>Edit Sections"),
     ("section.optics", "Optics", Some("Cmd+5"), "Window>Edit Sections"),
     ("section.calibration", "Calibration", None, ""),
+    ("section.negative", "Negative", None, ""),
+    // {film?}: negative.convert, asking first when it would reset edits made on the negative (negative.conflicts)
+    ("dialog.convertNegative", "Convert Negative…", None, "Photo"),
+    // negative.syncRoll on the selection (two frames or more), asking first when it would reset edits
+    ("dialog.syncRoll", "Sync Roll…", None, "Photo"),
     // {on?}; no params toggles. Opening one Edit section closes the others.
     ("view.soloSections", "Solo Mode", None, "Window>Edit Sections"),
     ("tool.brush", "Brush", Some("B"), "Window>Tools"),
     ("tool.linear", "Linear Gradient", Some("L"), "Window>Tools"),
     ("tool.radial", "Radial Gradient", Some("R"), "Window>Tools"),
     ("tool.wbPicker", "White Balance Selector", Some("W"), "Window>Tools"),
+    // the Negative section's eyedropper: a click on unexposed film (the rebate) sets the film base
+    ("tool.filmBase", "Film Base Selector", None, ""),
     ("tool.none", "No Tool", None, ""),
     // brush size / feather of the active brush (Masking brush, Remove tool and its selected spot)
     ("brush.smaller", "Decrease Brush Size", Some("["), "Window>Tools"),

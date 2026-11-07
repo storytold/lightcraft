@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Film negative conversion
+- A new **Negative** section at the top of Edit turns a scanned colour negative, black-and-white negative or slide
+  into a positive (Negative ▸ Color Negative, or Photo ▸ Convert Negative). It finds the film base on
+  the unexposed edge of the film when the scan shows it (otherwise it estimates it, and says so), measures the density
+  range, balances the colours and stores the numbers, so the preview and the export match. Then every other slider
+  works the right way round: Exposure brightens, Temp warms, curves and masks act on the positive.
+- Tone (Linear, Soft, Standard, Hard), a colour model (Warm, Neutral, Cool, None) and sliders for brightness, contrast,
+  white and black points, temp, tint, saturation, auto balance and shadow / highlight toning, plus nine Film Conversion
+  presets. Presets change the look but keep each frame's own measured film base.
+- Converting resets the edits made while looking at the negative (Light, Tone Curve, White Balance, Color, mixers,
+  Color Grading, Effects, Calibration, the creative profile and masks), after a dialog that lists them; crop, lens
+  corrections, retouching, sharpening and noise reduction, grain and vignette are kept. After that every slider,
+  Auto and the white balance selector work on the positive.
+- A raw camera scan and a JPEG scan of the same negative convert alike. Film base detection also finds the film's edge
+  on uncropped camera scans with a holder, and the Film Base Selector eyedropper picks it by hand.
+- **Sync Roll** (Photo ▸ Sync Roll…, or in the Negative section with two frames or more selected) gives a whole roll
+  one film base and range, measured on every frame in the background, so frames shot alike convert alike; each frame
+  keeps it until you unlock it. It warns when the frames look scanned in different setups.
+- **Film Stocks** looks next to the conversion looks: portrait, landscape, everyday, pro and cine colour films,
+  B&W 100 / 400 / 3200 and slide, each with a grain to match.
+- Photos that aren't film scans are unchanged.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

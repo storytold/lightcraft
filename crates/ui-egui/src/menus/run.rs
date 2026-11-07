@@ -154,6 +154,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
     }
+    if id == "negative.syncRoll" {
+        // the frames are read in the background (a raw's decode takes a second or more)
+        return crate::negative_roll::command(app, p);
+    }
     if id == "develop.auto" {
         return Some(crate::auto_settings::command(app, p));
     }
@@ -1096,13 +1100,52 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     app.ui.tool = tool.into();
                     return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
                 }
-                "wbPicker" => {
+                "wbPicker" | "filmBase" => {
                     app.ui.right = RightPanel::Edit;
                     app.ui.view = ViewMode::Detail;
-                    app.ui.tool = "wbPicker".into();
+                    app.ui.tool = tool.into();
                 }
                 other => return Some(Err(format!("unknown tool `{other}`"))),
             }
+            Ok(Value::Null)
+        }
+        "dialog.syncRoll" => {
+            // every selected frame; frames not yet converted lose their edits made on the negative: ask first
+            let ids: Vec<u64> = app.session.selected().iter().map(|id| id.0).collect();
+            if ids.len() < 2 {
+                return Some(Err(crate::i18n::tr("Select at least two frames of the roll").to_string()));
+            }
+            let reset: Vec<String> = match app.session.execute("negative.conflicts", &json!({"ids": ids})) {
+                Ok(r) => r["reset"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            if reset.is_empty() {
+                return Some(app.run("negative.syncRoll", json!({"ids": ids})));
+            }
+            // (no film type chosen here: confirming lets negative.syncRoll infer it from the selection, as it does without
+            // the dialog)
+            let library = app.session.library_generation();
+            app.ui.dialog = Some(Dialog::ConvertNegative { film: String::new(), reset, roll: ids, photo: None, library });
+            Ok(Value::Null)
+        }
+        "dialog.convertNegative" => {
+            // (a film type that isn't one is refused here, as negative.convert refuses it, before any dialog)
+            let film = match p.get("film") {
+                None | Some(Value::Null) => json!("colorNegative"),
+                Some(Value::String(f)) if matches!(f.as_str(), "colorNegative" | "bwNegative" | "slide") => json!(f),
+                Some(other) => return Some(Err(format!("dialog.convertNegative: invalid `film` {other} (colorNegative, bwNegative or slide)"))),
+            };
+            let reset: Vec<String> = match app.session.execute("negative.conflicts", &json!({})) {
+                Ok(r) => r["reset"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            if reset.is_empty() {
+                return Some(app.run("negative.convert", json!({"film": film})));
+            }
+            let film = film.as_str().unwrap_or("colorNegative").to_string();
+            let photo = app.session.active().map(|id| id.0);
+            let library = app.session.library_generation();
+            app.ui.dialog = Some(Dialog::ConvertNegative { film, reset, roll: Vec::new(), photo, library });
             Ok(Value::Null)
         }
         "dialog.newFolder" => {

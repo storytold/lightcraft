@@ -324,6 +324,11 @@
   "Panel move was not applied: {error}": "パネルの移動は適用されませんでした：{error}",
   "{name} is installed": "{name} をインストールしました",
   "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
+  "Converting resets the edits made on the negative: {list}.": "変換すると、ネガに対して行った編集がリセットされます: {list}。",
+  "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "「ロールを同期」は未変換のコマ（{n} 枚選択）を変換し、ネガに対して行った編集をリセットします: {list}。",
+  "Roll synced: {n} frames share one film base and range": "ロールを同期しました: {n} コマでフィルムベースと範囲を共有",
+  "Roll synced: {n} frames ({m} could not be read)": "ロールを同期しました: {n} コマ（{m} 枚は読み込めませんでした）",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "ロールを同期しました: {n} コマ（{m} 枚は読み込めませんでした。同期中に編集された {c} 枚はそのままです）",
   "Bring photos in with File › Import Photos… ({keys}).": "ファイル › 写真を読み込む… ({keys}) で写真を読み込みます。",
   "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。"

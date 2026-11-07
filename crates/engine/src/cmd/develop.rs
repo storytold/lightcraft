@@ -116,8 +116,24 @@ fn wb_mode_ignores_its_numbers(mode: WbMode, info: &lightcraft_pipeline::SourceI
 /// what it says (issue #2910, and its review). `None` when the partial needs no such preparation: it names both
 /// numbers, neither, or a mode of its own. [`merge_settings_for_photo`] and `preset.apply` both start here, and
 /// both finish with `normalize_wb` so the photo ends on the scale it is edited on.
-pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value, info: &lightcraft_pipeline::SourceInfo) -> Option<DevelopSettings> {
+pub(crate) fn prepare_photo_for_wb_partial(
+    d: &DevelopSettings,
+    partial: &Value,
+    after: &DevelopSettings,
+    info: &lightcraft_pipeline::SourceInfo,
+) -> Option<DevelopSettings> {
+    let info = &wb_info_after(info, after);
     let mut d = (*d).clone();
+    // the white the photo renders is read in the conversion state it ends in, `after` (a partial that switches the
+    // conversion off keeps the raw's as-shot white for the field it leaves out, not the positive's neutral); the
+    // settings returned keep the photo's own conversion, since a preset interpolates from them (at 0 % it must change
+    // nothing)
+    let in_final_state = |d: &DevelopSettings| {
+        let mut v = d.clone();
+        v.negative = after.negative;
+        v.set_section_enabled("negative", after.section_enabled("negative"));
+        v
+    };
     let wb = partial.get("wb").and_then(Value::as_object);
     // the partial names one of the two numbers, and not both or neither
     let one_field = wb.is_some_and(|wb| wb.contains_key("temp") != wb.contains_key("tint"));
@@ -137,18 +153,70 @@ pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value,
     // a mode that answers its own white would swallow the partial's number: write the white the photo really
     // renders as Custom values, so the number means what it says and the other field carries that white's look
     if !wb.is_some_and(|wb| wb.contains_key("mode")) && wb_mode_ignores_its_numbers(d.wb.mode, info) {
-        let (t, tint) = lightcraft_pipeline::local::effective_wb(info, &d);
+        let (t, tint) = lightcraft_pipeline::local::effective_wb(info, &in_final_state(&d));
         (d.wb.mode, d.wb.temp, d.wb.tint) = (WbMode::Custom, t, tint);
     }
     if kelvin_source && partial_scale == lightcraft_develop::WbScale::Legacy {
         // and onto the partial's scale, so the field the partial leaves out is the photo's own look read there
         let as_shot = (info.as_shot_temp, info.as_shot_tint);
-        let (kt, ktint) = lightcraft_pipeline::local::effective_wb(info, &d);
+        let (kt, ktint) = lightcraft_pipeline::local::effective_wb(info, &in_final_state(&d));
         if let Some((lt, ltint)) = lightcraft_pipeline::local::kelvin_to_legacy(kt, ktint, as_shot) {
             (d.wb.mode, d.wb.temp, d.wb.tint, d.wb.scale) = (WbMode::Custom, lt, ltint, lightcraft_develop::WbScale::Legacy);
         }
     }
     Some(d)
+}
+
+/// The source facts a white balance partial is read against: a converted film scan's white balance is relative to its
+/// positive, so the photo's conversion state counts, as it is in `after`, the photo once the partial is applied (a
+/// preset that switches the conversion off leaves a raw on its own Kelvin scale, one that switches it on, on the
+/// positive's; below 50 % a preset leaves the conversion as it was).
+fn wb_info_after(info: &lightcraft_pipeline::SourceInfo, after: &DevelopSettings) -> lightcraft_pipeline::SourceInfo {
+    lightcraft_pipeline::local::wb_source(info, after).into_owned()
+}
+
+/// A preset applied to one photo at `amount` (1.0 = 100 %), with the one-field white balance handling of
+/// [`merge_settings_for_photo`], read in the conversion state the photo has at that amount.
+///
+/// A preset that converts a scan not converted yet (a Film Conversion or Film Stocks preset, at 50 % or more) resets
+/// the edits made on the negative first, as `negative.convert` does: they would act the wrong way on the positive.
+pub(crate) fn apply_preset_for_photo(
+    d: &DevelopSettings,
+    original: Option<&DevelopSettings>,
+    preset: &Preset,
+    amount: f64,
+    info: &lightcraft_pipeline::SourceInfo,
+) -> DevelopSettings {
+    // each setting the preset names is computed from the photo's import look when it has one, else from its current
+    // settings (issue #2159)
+    let apply = |current: &DevelopSettings, original: Option<&DevelopSettings>| preset.apply_on(current, original.unwrap_or(current), amount);
+    let mut after = apply(d, original);
+    let mut converted_here = None;
+    if !d.negative.converts() && after.negative.converts() {
+        let mut base = d.clone();
+        base.reset_negative_conflicts();
+        let base_original = original.map(|o| {
+            let mut o = o.clone();
+            o.reset_negative_conflicts();
+            o
+        });
+        after = apply(&base, base_original.as_ref());
+        converted_here = Some((base, base_original));
+    }
+    let (d, original) = match &converted_here {
+        Some((base, base_original)) => (base, base_original.as_ref()),
+        None => (d, original),
+    };
+    let info = wb_info_after(info, &after);
+    let Some(prepared) = prepare_photo_for_wb_partial(d, &preset.settings, &after, &info) else {
+        return after;
+    };
+    let prepared_original = original.map(|o| prepare_photo_for_wb_partial(o, &preset.settings, &after, &info).unwrap_or_else(|| o.clone()));
+    let mut next = apply(&prepared, prepared_original.as_ref());
+    if info.raw && !info.relative_wb {
+        lightcraft_pipeline::local::normalize_wb(&mut next, &info);
+    }
+    next
 }
 
 /// Merge a partial settings JSON into a photo's settings (issue #2910). `DevelopSettings::merged` keeps a white
@@ -167,7 +235,9 @@ pub(crate) fn merge_settings_for_photo(
     partial: &Value,
     info: &lightcraft_pipeline::SourceInfo,
 ) -> std::result::Result<DevelopSettings, serde_json::Error> {
-    let prepared = prepare_photo_for_wb_partial(d, partial, info);
+    let after = d.merged(partial).unwrap_or_else(|_| d.clone());
+    let info = &wb_info_after(info, &after);
+    let prepared = prepare_photo_for_wb_partial(d, partial, &after, info);
     let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
     let mut out = prepared.as_ref().unwrap_or(d).merged(partial)?;
     if on_kelvin_scale {
@@ -320,6 +390,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let apply = |d: &mut DevelopSettings, info: &lightcraft_pipeline::SourceInfo, dims: (f64, f64)| {
                     let before = d.crop.geometry;
                     if vals.iter().any(|(k, _)| k == "wb.temp" || k == "wb.tint") {
+                        // (a converted film scan: relative to the positive, not the camera's as-shot white)
+                        let info = &*lightcraft_pipeline::local::wb_source(info, d);
                         lightcraft_pipeline::local::normalize_wb(d, info);
                         if d.wb.mode == WbMode::AsShot {
                             d.wb.temp = info.as_shot_temp;
@@ -366,7 +438,8 @@ pub fn specs() -> Vec<CommandSpec> {
             edit(s, "develop.adjust", spec.label, |d| {
                 let before = d.crop.geometry;
                 if c == "wb.temp" || c == "wb.tint" {
-                    lightcraft_pipeline::local::normalize_wb(d, &info);
+                    let info = &*lightcraft_pipeline::local::wb_source(&info, d);
+                    lightcraft_pipeline::local::normalize_wb(d, info);
                     if d.wb.mode == WbMode::AsShot {
                         d.wb.temp = info.as_shot_temp;
                         d.wb.tint = info.as_shot_tint;
@@ -500,8 +573,11 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| {
                 let id = active(s, "develop.autoBwMix")?;
                 let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.autoBwMix", e))?;
-                let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
+                // a converted film scan is analysed as its positive
+                let info = s.source_info(id);
+                let info = lightcraft_pipeline::local::wb_source(&info, &d);
+                let src = lightcraft_pipeline::negative::positive_source(&src, &d);
                 let m = lightcraft_pipeline::auto::auto_bw_mix(&src, &info, &d);
                 edit(s, "develop.autoBwMix", "Auto B&W Mix", |d| {
                     d.treatment = Treatment::Bw;
@@ -531,8 +607,11 @@ pub fn specs() -> Vec<CommandSpec> {
                         continue;
                     }
                 };
-                let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
+                // a converted film scan is analysed as its positive
+                let info = s.source_info(id);
+                let info = lightcraft_pipeline::local::wb_source(&info, &d);
+                let src = lightcraft_pipeline::negative::positive_source(&src, &d);
                 let a = lightcraft_pipeline::auto::auto_tone(&src, &info, &d);
                 if first.is_none() {
                     first = Some(serde_json::to_value(a).unwrap_or_default());
@@ -569,12 +648,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mode: WbMode =
                     serde_json::from_value(p.get("mode").cloned().unwrap_or(json!("custom"))).map_err(|e| bad("develop.wb", e.to_string()))?;
                 let id = active(s, "develop.wb")?;
-                let info = s.source_info(id);
+                let d = s.develop_of(id).unwrap_or_default();
+                // a converted film scan's white balance is relative to the positive (as converted = neutral)
+                let raw_info = s.source_info(id);
+                let info = lightcraft_pipeline::local::wb_source(&raw_info, &d).into_owned();
                 let (mut t, mut tint) = match mode {
                     WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
                     WbMode::Auto => {
                         let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.wb", e))?;
-                        lightcraft_pipeline::auto::auto_wb(&src, &info)
+                        lightcraft_pipeline::auto::auto_wb(&lightcraft_pipeline::negative::positive_source(&src, &d), &info)
                     }
                     m => m
                         .preset()
@@ -602,8 +684,11 @@ pub fn specs() -> Vec<CommandSpec> {
             let (x, y) = (f64_req(p, "x", "develop.wbPick")?, f64_req(p, "y", "develop.wbPick")?);
             let id = active(s, "develop.wbPick")?;
             let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad("develop.wbPick", e))?;
-            let info = s.source_info(id);
             let d = s.develop_of(id).unwrap_or_default();
+            // a converted film scan is picked on its positive, on the relative scale
+            let info = s.source_info(id);
+            let info = lightcraft_pipeline::local::wb_source(&info, &d).into_owned();
+            let src = lightcraft_pipeline::negative::positive_source(&src, &d);
             // Sample a small neighbourhood in the oriented source.
             let o = src.oriented(d.orientation);
             let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);
@@ -1093,7 +1178,9 @@ pub fn specs() -> Vec<CommandSpec> {
                         let mut nd = (*d).clone();
                         if ctl == "wb.temp" || ctl == "wb.tint" {
                             // each photo on its own scale: Kelvin (an old relative value converted first) or relative
+                            // (a converted film scan: relative to its positive)
                             let info = s.source_info(id);
+                            let info = lightcraft_pipeline::local::wb_source(&info, &nd).into_owned();
                             lightcraft_pipeline::local::normalize_wb(&mut nd, &info);
                             if nd.wb.mode == WbMode::AsShot {
                                 nd.wb.temp = info.as_shot_temp;
@@ -1183,20 +1270,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     // a hand-written preset may name one white balance number only, and then it means the same as
                     // a partial: bring the photo onto that scale first, with its own as-shot white, and put the
                     // result back on the scale the photo is edited on (issue #2910) — the merge `develop.merge` uses
-                    let info = s.source_info(id);
-                    let prepared = prepare_photo_for_wb_partial(&d, &preset.settings, &info);
-                    let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
-                    let base: &DevelopSettings = prepared.as_ref().unwrap_or(&d);
-                    // Amount is measured from the import look only when the photo has one.
-                    // Otherwise the current settings (on the partial's WB scale) are its baseline.
+                    // (a converted film scan: relative to its positive, as the photo will be after the preset)
+                    // Amount is measured from the import look only when the photo has one; otherwise the current
+                    // settings are its baseline.
                     let imported = s.catalog.photo(id).filter(|p| p.import_look.is_some() && amount != 1.0).map(|p| p.import_defaults());
-                    let prepared_import =
-                        imported.as_ref().map(|d| prepare_photo_for_wb_partial(d, &preset.settings, &info).unwrap_or_else(|| d.clone()));
-                    let original = prepared_import.as_ref().unwrap_or(base);
-                    let mut next = preset.apply_on(base, original, amount);
-                    if on_kelvin_scale {
-                        lightcraft_pipeline::local::normalize_wb(&mut next, &info);
-                    }
+                    let next = apply_preset_for_photo(&d, imported.as_ref(), &preset, amount, &s.source_info(id));
                     s.develop_op(id, next, &format!("Preset: {}", preset.name))
                 })
                 .collect::<Vec<_>>();
@@ -1294,9 +1372,19 @@ pub fn specs() -> Vec<CommandSpec> {
                     // the same keys as before, with the current values
                     None => {
                         let keys: Vec<String> = pr.settings.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
-                        Value::Object(keys.into_iter().filter_map(|k| current.get(&k).cloned().map(|v| (k, v))).collect())
+                        // (the Negative group spelled out in full, as extract_groups gives it: the photo's saved JSON
+                        // leaves it out while it is off, which would drop it from the preset)
+                        let photo: DevelopSettings = serde_json::from_value(current.clone()).unwrap_or_default();
+                        let negative = lightcraft_develop::extract_groups(&photo, &[SettingsGroup::Negative]).get("negative").cloned();
+                        Value::Object(
+                            keys.into_iter()
+                                .filter_map(|k| if k == "negative" { negative.clone() } else { current.get(&k).cloned() }.map(|v| (k, v)))
+                                .collect(),
+                        )
                     }
                 };
+                // (the conversion's options, never this frame's film base, range or roll lock)
+                lightcraft_develop::strip_frame_measurements(&mut pr.settings);
                 ok()
             }
         ),
@@ -1421,6 +1509,96 @@ fn has_history_after(s: &Session) -> std::result::Result<(), String> {
         Ok(())
     } else {
         Err("at the latest History step".into())
+    }
+}
+
+#[cfg(test)]
+mod tests_negative_wb {
+    use lightcraft_develop::{DevelopSettings, FilmType, WbMode, WbScale};
+    use lightcraft_pipeline::SourceInfo;
+    use serde_json::json;
+
+    /// A raw camera scan's source facts (its own Kelvin scale and as-shot white).
+    fn raw() -> SourceInfo {
+        SourceInfo { raw: true, as_shot_temp: 3442.0, as_shot_tint: 22.0, ..Default::default() }
+    }
+
+    fn converted() -> DevelopSettings {
+        let mut d = DevelopSettings::for_raw(3442.0, 22.0);
+        d.negative.film = FilmType::ColorNegative;
+        (d.wb.mode, d.wb.temp, d.wb.tint) = (WbMode::AsShot, 6500.0, 0.0);
+        d
+    }
+
+    /// A one-field white balance partial that also switches the conversion off is read on the raw's own Kelvin scale
+    /// (the field it leaves out is the raw's as-shot white), not the positive's relative one; and one that switches
+    /// it on is read on the positive's.
+    #[test]
+    fn a_partial_that_switches_the_conversion_reads_white_balance_on_the_final_scale() {
+        for (partial, field) in [
+            (json!({"negative": {"film": "off"}, "wb": {"temp": 5000.0, "scale": "kelvin"}}), "temp"),
+            (json!({"negative": {"film": "off"}, "wb": {"tint": 10.0, "scale": "kelvin"}}), "tint"),
+        ] {
+            let out = super::merge_settings_for_photo(&converted(), &partial, &raw()).unwrap();
+            assert!(!out.negative.converts());
+            assert_eq!(out.wb.scale, WbScale::Kelvin, "{field}: on the raw's Kelvin scale");
+            match field {
+                "temp" => assert_eq!((out.wb.temp, out.wb.tint), (5000.0, 22.0), "the raw's as-shot tint kept"),
+                _ => assert_eq!((out.wb.temp, out.wb.tint), (3442.0, 10.0), "the raw's as-shot temperature kept"),
+            }
+        }
+        // switched on by the partial: read against the positive (as converted = 6500 K / 0)
+        let plain = DevelopSettings::for_raw(3442.0, 22.0);
+        let on = super::merge_settings_for_photo(&plain, &json!({"negative": {"film": "colorNegative"}, "wb": {"temp": 7000.0}}), &raw()).unwrap();
+        assert!(on.negative.converts());
+        assert_eq!((on.wb.temp, on.wb.tint), (7000.0, 0.0), "the positive's neutral tint, not the raw's +22");
+    }
+
+    /// A preset that converts a scan resets the edits made on the negative, as Convert does; below 50 % (no
+    /// conversion) and on a photo already converted, they stay.
+    #[test]
+    fn a_preset_that_converts_a_scan_resets_its_negative_edits() {
+        let preset = lightcraft_develop::Preset {
+            id: "p".into(),
+            name: "p".into(),
+            group: "g".into(),
+            settings: json!({"negative": {"film": "colorNegative", "tone": "soft"}}),
+            favorite: false,
+            builtin: false,
+        };
+        let mut scan = DevelopSettings::for_raw(3442.0, 22.0);
+        scan.light.exposure = 1.0;
+        let full = super::apply_preset_for_photo(&scan, None, &preset, 1.0, &raw());
+        assert!(full.negative.converts());
+        assert_eq!(full.light.exposure, 0.0, "set on the negative: reset");
+        let low = super::apply_preset_for_photo(&scan, None, &preset, 0.25, &raw());
+        assert!(!low.negative.converts());
+        assert_eq!(low.light.exposure, 1.0, "not converted: kept");
+        let mut positive = converted();
+        positive.light.exposure = 1.0;
+        let again = super::apply_preset_for_photo(&positive, None, &preset, 1.0, &raw());
+        assert_eq!(again.light.exposure, 1.0, "set on the positive: kept");
+    }
+
+    /// Below 50 % a preset that switches the conversion off leaves it on, so its one white balance number is read
+    /// against the positive the photo still is (the field it leaves out stays the positive's neutral), and at full
+    /// strength against the raw it becomes.
+    #[test]
+    fn a_preset_below_half_strength_reads_white_balance_in_the_conversion_it_keeps() {
+        let preset = lightcraft_develop::Preset {
+            id: "p".into(),
+            name: "p".into(),
+            group: "g".into(),
+            settings: json!({"negative": {"film": "off"}, "wb": {"tint": 10.0, "scale": "kelvin"}}),
+            favorite: false,
+            builtin: false,
+        };
+        let low = super::apply_preset_for_photo(&converted(), None, &preset, 0.25, &raw());
+        assert!(low.negative.converts(), "below 50 % the film type isn't switched");
+        assert_ne!(low.wb.temp, 3442.0, "not the raw's as-shot temperature on a photo that is still a positive");
+        let full = super::apply_preset_for_photo(&converted(), None, &preset, 1.0, &raw());
+        assert!(!full.negative.converts());
+        assert_eq!((full.wb.temp, full.wb.tint), (3442.0, 10.0), "the raw's as-shot temperature kept");
     }
 }
 

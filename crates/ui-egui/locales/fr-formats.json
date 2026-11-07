@@ -324,6 +324,11 @@
   "Panel move was not applied: {error}": "Le déplacement du panneau n'a pas été appliqué : {error}",
   "{name} is installed": "{name} est installé",
   "{name} is installed and in use: face recognition is on": "{name} est installé et utilisé : la reconnaissance des visages est activée",
+  "Converting resets the edits made on the negative: {list}.": "La conversion réinitialise les modifications faites sur le négatif : {list}.",
+  "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "Synchroniser la pellicule convertit les vues pas encore converties ({n} sélectionnées) et réinitialise leurs modifications faites sur le négatif : {list}.",
+  "Roll synced: {n} frames share one film base and range": "Pellicule synchronisée : {n} vues partagent une base de film et une plage",
+  "Roll synced: {n} frames ({m} could not be read)": "Pellicule synchronisée : {n} vues ({m} illisibles)",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Pellicule synchronisée : {n} vues ({m} illisibles ; {c} modifiées pendant la synchronisation, laissées telles quelles)",
   "Bring photos in with File › Import Photos… ({keys}).": "Importez des photos avec Fichier › Importer des photos… ({keys}).",
   "View › Detail View ({keys}).": "Affichage › Vue de détail ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fichier › Exporter… · Fichier › Imprimer… ({keys})."
