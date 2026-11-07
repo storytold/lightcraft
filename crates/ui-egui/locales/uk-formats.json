@@ -326,5 +326,8 @@
   "{name} is installed and in use: face recognition is on": "{name} установлено й використовується: розпізнавання облич увімкнено",
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографії імпортуйте через Файл › Імпортувати фото… ({keys}).",
   "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys}).",
+  "{} selected photos": "Вибрані фото: {}",
+  "Showing the target photo: at most {} selected photos can be compared": "Показано цільове фото: порівняти можна не більше {} вибраних фото",
+  "Not compared, could not be read: {}": "Не порівнювались, не вдалося прочитати: {}"
 }

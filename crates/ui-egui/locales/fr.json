@@ -3609,5 +3609,8 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Démarrez l'application avec --control 7980 (ou LIGHTCRAFT_CONTROL_PORT), puis lightcraft-cli mcp --connect y connecte un agent.",
   "Welcome": "Bienvenue",
   "Next": "Suivant",
-  "Get Started": "Commencer"
+  "Get Started": "Commencer",
+  "Mixed": "Mixte",
+  "Reading metadata": "Lecture des métadonnées",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "Toutes les métadonnées n'a pas été affiché, car une autre boîte de dialogue est ouverte. Choisissez à nouveau Toutes les métadonnées."
 }

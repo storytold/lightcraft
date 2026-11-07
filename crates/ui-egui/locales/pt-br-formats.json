@@ -326,5 +326,8 @@
   "{name} is installed and in use: face recognition is on": "{name} está instalado e em uso: o reconhecimento facial está ativado",
   "Bring photos in with File › Import Photos… ({keys}).": "Traga fotos com Arquivo › Importar fotos… ({keys}).",
   "View › Detail View ({keys}).": "Exibir › Exibição de detalhe ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys}).",
+  "{} selected photos": "{} fotos selecionadas",
+  "Showing the target photo: at most {} selected photos can be compared": "Mostrando a foto de destino: é possível comparar no máximo {} fotos selecionadas",
+  "Not compared, could not be read: {}": "Não comparadas, não foi possível ler: {}"
 }

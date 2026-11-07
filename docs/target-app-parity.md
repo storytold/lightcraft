@@ -299,6 +299,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Gap 30 (multi-select metadata in the UI) closed: All Metadata compares the selected photos; headline numbers, area percentages and hours unchanged (1–3 h, not a beta gap) |
 | 2026-11-04 | minor | Compressed ORF decoded (`crates/raw/src/vendor/orfc.rs`): OM-D E-M1 and E-M10 Mark III verified; 58 bodies newly unlocked (78 total across Olympus and OM); RAW coverage 77% → 80%, weighted camera coverage 94% → 97% |
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |
 | 2026-10-23 | minor | AI Denoise runs without a model (built-in denoiser); percentages unchanged, since it is a classical filter and Bayer-only |

@@ -2348,5 +2348,8 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "Mixed": "Różne",
+  "Reading metadata": "Odczytywanie metadanych",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "Wszystkie metadane nie zostały pokazane, bo jest otwarte inne okno. Wybierz Wszystkie metadane ponownie."
 }

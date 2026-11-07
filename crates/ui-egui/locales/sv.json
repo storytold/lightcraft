@@ -2486,5 +2486,8 @@
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
   "Bottom bar": "Nedre fältet",
-  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "Mixed": "Blandat",
+  "Reading metadata": "Läser metadata",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "Alla metadata visades inte eftersom en annan dialogruta är öppen. Välj Alla metadata igen."
 }
