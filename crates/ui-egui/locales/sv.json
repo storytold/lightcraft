@@ -1796,6 +1796,7 @@
   "Reorder Masks": "Ändra ordning på masker",
   "Reset": "Återställ",
   "Reset All": "Återställ alla",
+  "Delete Control Point": "Ta bort kontrollpunkt",
   "Reset All Curves": "Återställ alla kurvor",
   "Reset all curves: point curves (all channels) and parametric (double-click a channel to reset only that one)": "Återställ alla kurvor: punktkurvor (alla kanaler) och parametrisk (dubbelklicka på en kanal för att bara återställa den)",
   "Reset all edits": "Återställ alla redigeringar",
