@@ -62,3 +62,4 @@ Implemented a clean-room, pure safe-Rust bitstream decoder for compressed Olympu
 - [x] New code has a caller: wired into `crates/raw/src/vendor/orf.rs` and `vendor.rs`.
 - [x] Every new image, icon or other asset has its entry in `assets/ATTRIBUTION.md`; no font or media files added.
 - [x] Ready to merge.
+
