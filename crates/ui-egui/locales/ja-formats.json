@@ -326,5 +326,22 @@
   "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
   "Bring photos in with File › Import Photos… ({keys}).": "ファイル › 写真を読み込む… ({keys}) で写真を読み込みます。",
   "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。",
+  "{n} albums": "{n}個のアルバム",
+  "{n} folders": "{n}個のフォルダ",
+  "Export {n} Albums…": "{n}個のアルバムを書き出す…",
+  "Move {n} Albums to": "{n}個のアルバムの移動先",
+  "Delete {n} Albums…": "{n}個のアルバムを削除…",
+  "Remove {n} Folders from Library…": "{n}個のフォルダをライブラリから除去…",
+  "Add {n} Keywords to Selected Photos": "{n}個のキーワードを選択した写真に追加",
+  "Remove {n} Keywords from Selected Photos": "{n}個のキーワードを選択した写真から削除",
+  "Show Photos with Any of {n} Keywords": "{n}個のキーワードのいずれかを含む写真を表示",
+  "Merge {n} Keywords into…": "{n}個のキーワードの統合先…",
+  "Delete {n} Keywords…": "{n}個のキーワードを削除…",
+  "Delete {n} albums?": "{n}個のアルバムを削除しますか？",
+  "Delete {n} keywords?": "{n}個のキーワードを削除しますか？",
+  "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "いずれかを含む写真: {count}枚。下位のキーワードも削除されます。取り消すと元に戻ります。",
+  "Remove {n} folders from the library? Photos imported from them: {count}.": "{n}個のフォルダをライブラリから除去しますか？ 読み込まれた写真: {count}枚。",
+  "…and {n} more": "…ほか{n}個",
+  "{n} keywords": "{n}個のキーワード"
 }

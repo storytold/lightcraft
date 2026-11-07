@@ -2590,5 +2590,22 @@
   "Welcome": "Benvenuto",
   "Next": "Avanti",
   "Get Started": "Inizia",
-  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto"
+  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto",
+  "Choose one album to rename it": "Scegli un solo album per rinominarlo",
+  "Choose one folder to rename it": "Scegli una sola cartella per rinominarla",
+  "Choose one folder to synchronize it": "Scegli una sola cartella per sincronizzarla",
+  "Choose one keyword to create a keyword inside it": "Scegli una sola parola chiave per crearne una al suo interno",
+  "Choose one keyword to edit it": "Scegli una sola parola chiave per modificarla",
+  "Choose one keyword to rename it": "Scegli una sola parola chiave per rinominarla",
+  "Create Keyword Tag Inside…": "Crea tag parola chiave all'interno…",
+  "Delete Albums": "Elimina album",
+  "Delete Folder": "Elimina cartella",
+  "Delete Keywords": "Elimina parole chiave",
+  "Moves the photos imported from these folders to Recently Deleted; no file is touched": "Sposta le foto importate da queste cartelle in Eliminate di recente; nessun file viene toccato",
+  "No photo has them; the keywords below them go too.": "Nessuna foto le ha; vengono eliminate anche le parole chiave sotto di esse.",
+  "One of them is a whole disk: remove a disk by itself": "Uno di essi è un disco intero: rimuovi un disco da solo",
+  "Remove Folders from Library": "Rimuovi cartelle dalla libreria",
+  "That includes the photos in the folders inside them.": "Sono incluse le foto nelle cartelle al loro interno.",
+  "The photos stay in All Photos. Undo brings the albums back.": "Le foto restano in Tutte le foto. Annulla ripristina gli album.",
+  "Another library was opened since this window appeared: nothing was changed": "Nel frattempo è stata aperta un'altra libreria: non è stato modificato nulla"
 }

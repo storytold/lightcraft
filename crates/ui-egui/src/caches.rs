@@ -263,19 +263,26 @@ impl Caches {
     /// when `now` (the session clock, ISO) enters a new minute, so such counts follow the clock
     /// within a minute without rescanning every frame.
     /// [`RulesView`] for `rules` edited in smart album `editing` (`None`: a new album), within
-    /// `folder` when it was made from a folder view: worked out again only when the catalog, the
+    /// what it carries (`carried`: the albums and folders it was made from, a photo of any of them counts): worked out again only when the catalog, the
     /// rules, the language or (for "in the last…" rules) the minute changes, not every frame.
     pub fn rules_view(
         &mut self,
         cat: &lightcraft_catalog::Catalog,
         rules: &lightcraft_catalog::RuleSet,
         editing: Option<u64>,
-        folder: Option<String>,
+        carried: lightcraft_catalog::Filter,
         now: &str,
     ) -> std::sync::Arc<RulesView> {
         let relative = rules.depends_on_now();
         let minute = if relative { now.get(..16).unwrap_or(now) } else { "" };
-        let k = key_of((cat.revision, serde_json::to_string(rules).unwrap_or_default(), editing, &folder, minute, i18n::language().code()));
+        let k = key_of((
+            cat.revision,
+            serde_json::to_string(rules).unwrap_or_default(),
+            editing,
+            serde_json::to_string(&carried).unwrap_or_default(),
+            minute,
+            i18n::language().code(),
+        ));
         if let Some((key, v)) = &self.rules_view
             && *key == k
         {
@@ -285,7 +292,13 @@ impl Caches {
             lightcraft_catalog::rules::set_now(Some(now.to_string()));
         }
         let problems = rules.check_for(cat, editing.map(lightcraft_catalog::AlbumId));
-        let filter = lightcraft_catalog::Filter { rule_set: Some(rules.clone()), library_folder: folder, ..Default::default() };
+        let filter = lightcraft_catalog::Filter {
+            rule_set: Some(rules.clone()),
+            library_folders: carried.library_folders,
+            album: carried.album,
+            albums: carried.albums,
+            ..Default::default()
+        };
         let count = if problems.is_empty() { cat.query(&filter, &Default::default()).len() } else { 0 };
         let v = std::sync::Arc::new(RulesView { problems, count, albums: panels::dialogs::album_entries(cat, editing) });
         self.rules_view_scans += 1;
@@ -419,6 +432,30 @@ mod cache_tests {
         lightcraft_catalog::rules::set_now(None);
     }
 
+    /// A smart album made from a view of several albums stays limited to them (`album.setRules` with
+    /// `replace` keeps its albums and folders): the editor's count is of the photos the saved album shows.
+    #[test]
+    fn the_rule_dialog_counts_within_the_albums_the_smart_album_was_made_from() {
+        let mut cat = Catalog::default();
+        let mut c = super::Caches::default();
+        for i in 1..=3u64 {
+            cat.apply(photo(i, "2026-09-30T11:00:00", 5)).unwrap();
+        }
+        let mut a = Album::new(AlbumId(20), "Trip");
+        a.photos = vec![PhotoId(1), PhotoId(2)];
+        cat.apply(Op::AddAlbum { album: a }).unwrap();
+        let rules: RuleSet = serde_json::from_value(serde_json::json!({"rules": [{"field": "rating", "op": "gte", "value": 1}]})).unwrap();
+        let now = "2026-09-30T12:00:00";
+        let within = Filter { albums: vec![AlbumId(20)], ..Default::default() };
+        assert_eq!(c.rules_view(&cat, &rules, None, within, now).count, 2, "only the photos of its albums");
+        assert_eq!(
+            c.rules_view(&cat, &rules, None, Filter { album: Some(AlbumId(20)), ..Default::default() }, now).count,
+            2,
+            "also its single album"
+        );
+        assert_eq!(c.rules_view(&cat, &rules, None, Filter::default(), now).count, 3, "none carried: every photo");
+    }
+
     /// The rule dialog's problems, live count and album list are worked out once per change to the
     /// catalog or the rules, not every frame; so are the sidebar's smart-album problems.
     #[test]
@@ -431,16 +468,16 @@ mod cache_tests {
         let rules =
             |v: u64| -> RuleSet { serde_json::from_value(serde_json::json!({"rules": [{"field": "rating", "op": "gte", "value": v}]})).unwrap() };
         let now = "2026-09-30T12:00:00";
-        let view = c.rules_view(&cat, &rules(3), None, None, now);
+        let view = c.rules_view(&cat, &rules(3), None, Filter::default(), now);
         assert_eq!((view.count, view.problems.len()), (1, 0));
         for _ in 0..10 {
-            c.rules_view(&cat, &rules(3), None, None, now);
+            c.rules_view(&cat, &rules(3), None, Filter::default(), now);
         }
         assert_eq!(c.rules_view_scans, 1, "unchanged frames reuse it");
-        assert_eq!(c.rules_view(&cat, &rules(1), None, None, now).count, 3, "a rule change");
-        assert_eq!(c.rules_view(&cat, &rules(9), None, None, now).problems.len(), 1);
+        assert_eq!(c.rules_view(&cat, &rules(1), None, Filter::default(), now).count, 3, "a rule change");
+        assert_eq!(c.rules_view(&cat, &rules(9), None, Filter::default(), now).problems.len(), 1);
         cat.apply(Op::SetRating { id: PhotoId(2), rating: 4 }).unwrap();
-        assert_eq!(c.rules_view(&cat, &rules(3), None, None, now).count, 2, "a catalog change");
+        assert_eq!(c.rules_view(&cat, &rules(3), None, Filter::default(), now).count, 2, "a catalog change");
         assert_eq!(c.rules_view_scans, 4);
         // the sidebar's problems
         cat.apply(Op::AddAlbum { album: lightcraft_catalog::Album::new(AlbumId(20), "Trip") }).unwrap();
