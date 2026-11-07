@@ -1,7 +1,8 @@
 //! How much device memory is free right now, where that can be asked without `unsafe`: the NVIDIA
-//! driver's `nvidia-smi` (Linux and Windows) and the amdgpu driver's sysfs counters (Linux). Other
-//! devices (AMD/Intel on Windows needs DXGI; integrated GPUs share system memory) report `None`, and the
-//! caller keeps its fixed budget. The answer is cached for a few seconds: renders ask often, and the
+//! driver's `nvidia-smi` (Linux and Windows) and the amdgpu driver's sysfs counters (Linux). Integrated
+//! GPUs share system memory, so they answer with the system's available memory where it says (Linux). Other
+//! devices (AMD/Intel on Windows needs DXGI; integrated GPUs elsewhere) report `None`, and the caller keeps
+//! its fixed budget. A driver's answer is cached for a few seconds: renders ask often, and the
 //! query starts a process on NVIDIA. Only the first question for an adapter waits for the query; later
 //! ones get the last answer while a background thread asks again, so no render (and no lock it holds)
 //! waits for `nvidia-smi`. A card is found by its PCI address where the backend reports it, else by its
@@ -23,7 +24,34 @@ static CACHE: Cache = Cache::new(TTL);
 /// Free device memory of the adapter `info` describes, in bytes, or `None` when it cannot be asked.
 pub fn free_bytes(info: &wgpu::AdapterInfo) -> Option<u64> {
     let adapter = Adapter { vendor: info.vendor, device: info.device, bus: pci_address(&info.device_pci_bus_id) };
-    CACHE.get(&adapter, query)
+    free_of(info.device_type, &adapter, &CACHE, query, system_available)
+}
+
+/// [`free_bytes`] with its sources passed in. An AMD APU's sysfs counts only its carve-out (often 512 MB to
+/// 2 GB), not the system memory it also allocates from, and its GTT figure is a driver limit that says nothing
+/// of what other programs hold: a device that shares system memory answers with what the system has.
+fn free_of(t: wgpu::DeviceType, adapter: &Adapter, cache: &'static Cache, ask: Ask, system: fn() -> Option<u64>) -> Option<u64> {
+    if shares_system_memory(t) {
+        return system();
+    }
+    cache.get(adapter, ask)
+}
+
+/// Whether a device of this type allocates from system memory, where free device memory says little.
+pub(crate) fn shares_system_memory(t: wgpu::DeviceType) -> bool {
+    matches!(t, wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu)
+}
+
+/// System memory available to new allocations without swapping, where the system says (Linux). A small file
+/// read, so it is not cached: the answer should be of this moment.
+fn system_available() -> Option<u64> {
+    parse_mem_available(&std::fs::read_to_string("/proc/meminfo").ok()?)
+}
+
+/// The `MemAvailable:   27722228 kB` line of `/proc/meminfo`, in bytes.
+fn parse_mem_available(meminfo: &str) -> Option<u64> {
+    let line = meminfo.lines().find_map(|l| l.strip_prefix("MemAvailable:"))?;
+    line.trim().strip_suffix("kB")?.trim().parse::<u64>().ok()?.checked_mul(1024)
 }
 
 /// Which card: vendor and device id, and the PCI address where the backend reports it.
@@ -331,6 +359,42 @@ mod tests {
         let (a1, a2) = (CACHE.get(&one, ask), CACHE.get(&two, ask));
         assert!(a1.is_some_and(|v| v / 1000 == 1) && a2.is_some_and(|v| v / 1000 == 2), "{a1:?} {a2:?}");
         assert_eq!(ASKED.load(Ordering::SeqCst), asked, "fresh answers are not asked for again");
+    }
+
+    /// An integrated GPU's driver is not asked (an AMD APU reports its small carve-out in sysfs): the answer
+    /// is the system's memory. A discrete card's driver is asked, and the system's memory is not its answer.
+    #[test]
+    fn integrated_gpus_answer_with_system_memory_and_their_driver_is_not_asked() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CACHE: Cache = Cache::new(Duration::from_secs(30));
+        static ASKED: AtomicU64 = AtomicU64::new(0);
+        fn ask(_: &Adapter) -> Option<u64> {
+            ASKED.fetch_add(1, Ordering::SeqCst);
+            Some(7)
+        }
+        let system = || Some(5);
+        let a = adapter(AMD, 1);
+        assert_eq!(free_of(wgpu::DeviceType::IntegratedGpu, &a, &CACHE, ask, system), Some(5));
+        assert_eq!(free_of(wgpu::DeviceType::Cpu, &a, &CACHE, ask, system), Some(5));
+        assert_eq!(ASKED.load(Ordering::SeqCst), 0, "the driver's carve-out figure is not used");
+        // where the system cannot say, nothing is known: the caller keeps its fixed budget
+        assert_eq!(free_of(wgpu::DeviceType::IntegratedGpu, &a, &CACHE, ask, || None), None);
+        assert_eq!(ASKED.load(Ordering::SeqCst), 0);
+        assert_eq!(free_of(wgpu::DeviceType::DiscreteGpu, &a, &CACHE, ask, system), Some(7));
+        assert_eq!(ASKED.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn available_memory_is_read_from_meminfo() {
+        let meminfo = "MemTotal:       30561840 kB\nMemFree:         1000000 kB\nMemAvailable:   27722228 kB\nBuffers: 1 kB\n";
+        assert_eq!(parse_mem_available(meminfo), Some(27722228 * 1024));
+        // kernels without the line, and input that is not what it should be: unknown, never zero or a wrap
+        assert_eq!(parse_mem_available("MemTotal: 30561840 kB\nMemFree: 1000000 kB\n"), None);
+        assert_eq!(parse_mem_available(""), None);
+        assert_eq!(parse_mem_available("MemAvailable: lots kB\n"), None);
+        assert_eq!(parse_mem_available("MemAvailable: -1 kB\n"), None);
+        assert_eq!(parse_mem_available("MemAvailable: 12 MB\n"), None);
+        assert_eq!(parse_mem_available(&format!("MemAvailable: {} kB\n", u64::MAX)), None);
     }
 
     #[test]

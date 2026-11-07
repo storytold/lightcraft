@@ -8,6 +8,8 @@
   R−Y and B−Y, leaving brightness exactly as it was, along edges found in a denoised guide, and takes isolated
   coloured specks out. New photos get it; photos edited before keep their look until Update to Current Process. A zoomed
   view is smoothed like the same part of the whole photo and the export.
+- The filter now takes 25 to 45 % less time on the CPU and on AMD integrated GPUs on Linux, and about a quarter less
+  on an M2 Max's GPU (issue #815).
 
 ### The web build can be embedded
 - A page framing LightCraft in an iframe can open it with `?host=parent` and speak to it over `postMessage`, the
