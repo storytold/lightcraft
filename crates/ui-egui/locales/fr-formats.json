@@ -324,6 +324,8 @@
   "Panel move was not applied: {error}": "Le déplacement du panneau n'a pas été appliqué : {error}",
   "{name} is installed": "{name} est installé",
   "{name} is installed and in use: face recognition is on": "{name} est installé et utilisé : la reconnaissance des visages est activée",
+  "{n} files you opened haven't been imported yet. Quitting discards these requests.": "{n} fichiers que vous avez ouverts n'ont pas encore été importés. Quitter annulera ces demandes.",
+  "File {n} in the open request is not a file URL.": "Le fichier {n} de la demande d'ouverture n'est pas une URL de fichier.",
   "Bring photos in with File › Import Photos… ({keys}).": "Importez des photos avec Fichier › Importer des photos… ({keys}).",
   "View › Detail View ({keys}).": "Affichage › Vue de détail ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fichier › Exporter… · Fichier › Imprimer… ({keys})."
