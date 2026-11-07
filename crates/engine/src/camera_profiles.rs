@@ -116,14 +116,21 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join(file_name(&profile.model));
     let json = serde_json::to_vec_pretty(profile).map_err(|e| e.to_string())?;
-    // a fresh temp file renamed over the profile: never a fixed `.tmp` name, which a planted link
-    // would have written through
-    lightcraft_catalog::safe_file::write_atomic(&path, &json).map_err(|e| format!("{}: {e}", path.display()))?;
     // Drop any cached lookup for this model: an earlier miss must not hide the profile just saved.
     // Other spellings of the model map to the same file (`Foo Bar` and `Foo_Bar`), so drop those too.
     let saved_name = file_name(&profile.model);
-    cache().lock().unwrap_or_else(PoisonError::into_inner).retain(|model, _| file_name(model) != saved_name);
-    refresh_cache_key(dir);
+    // Hold both locks across the write, the lookup invalidation and the render-cache key
+    // refresh, so a concurrent lookup or render key cannot pair the new profile with the
+    // old key (or the reverse). Lock order is cache, then CACHE_KEY, as everywhere here.
+    let mut cache_guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
+    let key_lock = CACHE_KEY.get_or_init(|| Mutex::new(None));
+    let mut key_guard = key_lock.lock().unwrap_or_else(PoisonError::into_inner);
+    // a fresh temp file renamed over the profile: never a fixed `.tmp` name, which a planted link
+    // would have written through
+    lightcraft_catalog::safe_file::write_atomic(&path, &json).map_err(|e| format!("{}: {e}", path.display()))?;
+    cache_guard.retain(|model, _| file_name(model) != saved_name);
+    // The global key always describes dir(), not the directory this save wrote to.
+    *key_guard = Some(cache_key_for(dir().as_deref()));
     Ok(path)
 }
 
@@ -173,20 +180,21 @@ static CACHE_KEY: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
 /// keys, so thumbnails rendered before a profile existed are not reused after.
 pub fn cache_key() -> u64 {
     let lock = CACHE_KEY.get_or_init(|| Mutex::new(None));
+    if let Some(key) = *lock.lock().unwrap_or_else(PoisonError::into_inner) {
+        return key;
+    }
+    // Scan the folder without holding the lock, so a refresh is not blocked on the IO.
+    let key = cache_key_for(dir().as_deref());
     let mut guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
-    *guard.get_or_insert_with(|| cache_key_for(dir().as_deref()))
-}
-
-/// Recompute the cached render-cache key for `directory` (the folder just saved to).
-fn refresh_cache_key(directory: &Path) {
-    let lock = CACHE_KEY.get_or_init(|| Mutex::new(None));
-    *lock.lock().unwrap_or_else(PoisonError::into_inner) = Some(cache_key_for(Some(directory)));
+    *guard.get_or_insert(key)
 }
 
 /// Recompute the cached render-cache key for the current profile directory.
+#[cfg(test)]
 fn refresh_cache_key_from_dir() {
+    let key = cache_key_for(dir().as_deref());
     let lock = CACHE_KEY.get_or_init(|| Mutex::new(None));
-    *lock.lock().unwrap_or_else(PoisonError::into_inner) = Some(cache_key_for(dir().as_deref()));
+    *lock.lock().unwrap_or_else(PoisonError::into_inner) = Some(key);
 }
 
 fn cache_key_for(directory: Option<&Path>) -> u64 {
