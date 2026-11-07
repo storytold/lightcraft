@@ -80,6 +80,14 @@ pub fn check_image(data: &[u8], info: &ImageInfo) -> Result<usize> {
     if available.saturating_mul(2048) < total as u64 {
         return Err(RawError::Corrupt(format!("{available} bytes of image data cannot hold {total} samples")));
     }
+    // Lossless JPEG codes every sample in a bit at least: ljpeg's per-frame check allows 8 samples per entropy byte plus
+    // 64 bytes of slack, which a frame's own headers (over 32 bytes with its Huffman table) cover twice over, so 16
+    // coded samples per byte, and twice that for 4:2:0 YCbCr (half the samples it fills are coded). Without this,
+    // tiles sharing one small payload each pass the per-frame check while the grid claims ~2000 samples per byte
+    // (issue #2554).
+    if info.compression == 7 && available.saturating_mul(32) < total as u64 {
+        return Err(RawError::Corrupt(format!("{available} bytes of lossless JPEG data cannot hold {total} samples")));
+    }
     Ok(total)
 }
 
@@ -213,6 +221,28 @@ fn packed_row_bytes(n: u64, bits: u32, packing: Packing, float: bool) -> u64 {
 /// A chunk's nominal decoded size in samples (per plane, as the decoder builds it).
 fn chunk_samples(c: &Chunk, ccpp: usize) -> usize {
     (c.width as usize).saturating_mul(c.height as usize).saturating_mul(ccpp)
+}
+
+/// Consecutive index ranges of `chunks` whose combined nominal samples (`ccpp` per pixel) stay within the group size
+/// [`read_image`] uses for an image of `total` samples (at least one chunk per range). A decoder that holds its
+/// decoded tiles until it copies them decodes one range at a time, so it holds a group's frames beside the output,
+/// not the whole grid's (issues #1517, #2554).
+pub(crate) fn decode_groups(chunks: &[Chunk], ccpp: usize, total: usize) -> Vec<std::ops::Range<usize>> {
+    let budget = (total / 4).max(1 << 20);
+    let mut groups = Vec::new();
+    let (mut from, mut taken) = (0usize, 0usize);
+    for (i, c) in chunks.iter().enumerate() {
+        let n = chunk_samples(c, ccpp);
+        if i > from && taken.saturating_add(n) > budget {
+            groups.push(from..i);
+            (from, taken) = (i, 0);
+        }
+        taken = taken.saturating_add(n);
+    }
+    if from < chunks.len() {
+        groups.push(from..chunks.len());
+    }
+    groups
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -717,5 +747,63 @@ mod lossy_tests {
         // refused as truncated rather than filled with the predictor's padding
         let zlib = miniz_oxide::deflate::compress_to_vec_zlib(&vec![0u8; 500 * 1000], 6);
         assert!(matches!(read_image(&zlib, &info(zlib.len() as u64), ByteOrder::Little, Packing::Msb), Err(RawError::Corrupt(_))));
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use lightcraft_tiff::image::Layout;
+    use lightcraft_tiff::tags::photometric;
+
+    /// `w`×`h` CFA image in `tile`×`tile` lossless-JPEG tiles that all point at the same `payload` bytes at offset 0.
+    fn aliased(w: u32, h: u32, tile: u32, payload: u64) -> ImageInfo {
+        let n = (w.div_ceil(tile) * h.div_ceil(tile)) as usize;
+        ImageInfo {
+            width: w,
+            height: h,
+            bits_per_sample: vec![14],
+            samples_per_pixel: 1,
+            compression: 7,
+            photometric: photometric::CFA,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Tiles { tile_width: tile, tile_height: tile },
+            offsets: vec![0; n],
+            byte_counts: vec![payload; n],
+        }
+    }
+
+    /// #2554: 16 tiles of 256×256 sharing one 1 KiB payload pass the generic 2048-samples-per-byte bound (1 Mi samples
+    /// from 1 KiB) but no lossless JPEG holds that many samples in those bytes.
+    #[test]
+    fn lossless_jpeg_tiles_sharing_a_payload_are_refused() {
+        let data = vec![0u8; 1024];
+        let info = aliased(1024, 1024, 256, 1024);
+        assert!(matches!(check_image(&data, &info), Err(RawError::Corrupt(_))));
+        // the same grid declared as Deflate (~2000 samples per byte at most) still passes this check
+        let deflate = ImageInfo { compression: 8, ..info };
+        assert!(check_image(&data, &deflate).is_ok());
+    }
+
+    /// #2554: tiled decoders decode the grid in groups of at most a quarter of the image (1 Mi samples at least),
+    /// each group at least one chunk, covering every chunk once and in order.
+    #[test]
+    fn decode_groups_split_the_grid() {
+        let info = aliased(4096, 4096, 512, 64);
+        let chunks = info.chunks(64);
+        assert_eq!(chunks.len(), 64);
+        let groups = decode_groups(&chunks, 1, 4096 * 4096);
+        // a quarter of 16 Mi samples is 4 Mi: 16 tiles of 256 Ki samples per group
+        assert_eq!(groups.len(), 4);
+        assert!(groups.iter().all(|g| g.len() == 16));
+        assert_eq!(groups.first().map(|g| g.start), Some(0));
+        assert!(groups.windows(2).all(|p| p[0].end == p[1].start));
+        assert_eq!(groups.last().map(|g| g.end), Some(64));
+        // a tile larger than the budget is still a group of its own
+        let big = aliased(8192, 8192, 8192, 64);
+        assert_eq!(decode_groups(&big.chunks(64), 1, 1 << 20), vec![0..1]);
     }
 }
