@@ -775,4 +775,27 @@ mod tests {
         assert!(brightness > 0.1, "brightness {brightness}");
         assert!(chroma > 0.5 * brightness, "brightness {brightness} chroma {chroma}");
     }
+
+    /// Textured tiles (a checker of 4-cell blocks, varying in both directions) keep their chroma detail through
+    /// both filtering passes: the texture is not read as noise, so it is not thresholded away.
+    #[test]
+    fn textured_chroma_detail_survives_both_passes() {
+        let t = 48;
+        let mut planes = noisy(t, 5.0, 17);
+        for plane in planes.iter_mut() {
+            for row in 0..t {
+                for col in 0..t {
+                    let sign = if ((col / 4) + (row / 4)) % 2 == 0 { 4.0 } else { -4.0 };
+                    if let Some(v) = plane.get_mut(row * t + col) {
+                        *v += sign;
+                    }
+                }
+            }
+        }
+        let before = spread(planes.get(1..).unwrap_or_default(), 5.0);
+        let out = filter(&planes, t, &Params::default(), 0.5);
+        let chroma = spread(out.get(1..).unwrap_or_default(), 5.0);
+        assert!(chroma > 0.5 * before, "chroma {chroma} before {before}");
+        assert!(out.iter().flatten().all(|v| v.is_finite()));
+    }
 }
