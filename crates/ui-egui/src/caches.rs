@@ -48,7 +48,6 @@ const MAX_REST: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// How long a count that waits for the worker gate (counts of rules since changed, still running) waits before it asks
 /// again: the repaint such a worker asks for as it ends can come before its thread has, and nothing else need repaint.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const GATE_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// What a count was made of: the catalog revision, and the minute "in the last…" rules counted back from.
@@ -574,7 +573,8 @@ impl Caches {
         self.new_smart_album_count.of(cat, what, minute, || filter.clone(), now, ctx)
     }
 
-    /// Whether a dialog's count is running on a worker (a frame may still have to take it).
+    /// Whether a dialog's count is running on a worker (a frame may still have to take it), or a recount is still to
+    /// start for a dialog drawn in the last pass ([`LiveCount::running`]).
     pub fn count_running(&self, ctx: &egui::Context) -> bool {
         self.rules_count.running(ctx) || self.new_smart_album_count.running(ctx)
     }
@@ -943,7 +943,7 @@ mod cache_tests {
     fn a_count_held_back_by_the_workers_let_go_asks_to_be_tried_again() {
         let cat = rated_library();
         let mut c = super::Caches::default();
-        c.rules_count.slow = Some(std::time::Duration::from_millis(600));
+        c.rules_count.slow = Some(std::time::Duration::from_millis(1500));
         let ctx = egui::Context::default();
         let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         ctx.set_repaint_observer({
