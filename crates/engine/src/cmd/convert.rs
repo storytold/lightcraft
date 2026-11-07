@@ -296,13 +296,19 @@ pub(crate) fn reload_ops(
     // nothing already set is overwritten
     let meta_ops = fill_missing_meta(id, ph, info);
     let content = content_op(id, ph, info.clone());
-    // the file's content changed: a lens lookup remembered against the old file
-    // ([`lightcraft_catalog::Photo::lens_checked`]) says nothing about the new one, so the stamp
-    // goes and a later sweep reads the file again (this read may itself have run while no lens
-    // database was there to look the new file up in)
-    let stamp = (content.is_some() && !ph.lens_checked.is_empty()).then(|| Op::SetLensChecked { id, checked: String::new() });
-    let mut mine: Vec<Op> =
-        content.into_iter().chain(meta_ops).chain(lens_ops(id, ph, info)).chain(as_shot_wb_op(id, ph, info)).chain(stamp).collect();
+    let lens = lens_ops(id, ph, info);
+    // A lens lookup remembered against the file as the catalog knew it then
+    // ([`lightcraft_catalog::Photo::lens_checked`]) says nothing once what it keyed on changes:
+    // the file's content, the embedded lens data this read brought, or the camera/lens/focal
+    // fields it filled in — the last two can arrive with the content unchanged (a catalog that
+    // predates the fields being read). The stamp goes in those cases and a later sweep reads
+    // the file again (this read may itself have run while no lens database was there to look
+    // the file up in).
+    let lookup_changed = content.is_some()
+        || !lens.is_empty()
+        || meta_ops.iter().any(|op| matches!(op, Op::SetMeta { meta, .. } if meta.camera != ph.meta.camera || meta.lens != ph.meta.lens || meta.focal_mm != ph.meta.focal_mm));
+    let stamp = (lookup_changed && !ph.lens_checked.is_empty()).then(|| Op::SetLensChecked { id, checked: String::new() });
+    let mut mine: Vec<Op> = content.into_iter().chain(meta_ops).chain(lens).chain(as_shot_wb_op(id, ph, info)).chain(stamp).collect();
     if !mine.is_empty() {
         ops.append(&mut mine);
         changed.push(id);
@@ -310,8 +316,10 @@ pub(crate) fn reload_ops(
     // virtual copies share the file
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
         let content = content_op(c.id, c, info.clone());
-        let stamp = (content.is_some() && !c.lens_checked.is_empty()).then(|| Op::SetLensChecked { id: c.id, checked: String::new() });
-        let theirs: Vec<Op> = content.into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).chain(stamp).collect();
+        let lens = lens_ops(c.id, c, info);
+        let stamp =
+            ((content.is_some() || !lens.is_empty()) && !c.lens_checked.is_empty()).then(|| Op::SetLensChecked { id: c.id, checked: String::new() });
+        let theirs: Vec<Op> = content.into_iter().chain(lens).chain(as_shot_wb_op(c.id, c, info)).chain(stamp).collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);

@@ -282,6 +282,38 @@ fn reload_clears_the_lens_miss_stamp_only_when_the_file_changed() {
     }
 }
 
+/// CodeRabbit's Linked Issues check on #3867 (round 3): the stamp also goes when a reload
+/// changes what a lookup keys on without the file's content changing — here the catalog had
+/// no camera/lens fields for the photo (it predates them being read) and this read fills them
+/// in, so the remembered miss was made without the metadata a lookup needs.
+#[test]
+fn reload_clears_the_lens_miss_stamp_when_lookup_metadata_arrives_without_a_content_change() {
+    let mut s = Session::new();
+    let mut ph0 = raw(1, "", false);
+    ph0.meta.camera = String::new();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(ph0) }).unwrap();
+    s.catalog.apply(Op::SetLensChecked { id: PhotoId(1), checked: "1:old".into() }).unwrap();
+    let ph = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let mut info = crate::media::ProbeInfo {
+        width: ph.width,
+        height: ph.height,
+        file_size: ph.file_size,
+        content_hash: ph.content_hash.clone(),
+        ..Default::default()
+    };
+    info.meta.camera = "Testcam TC-1".into();
+    info.meta.lens = "50mm F1.8".into();
+    let (mut ops, mut changed) = (Vec::new(), Vec::new());
+    crate::cmd::convert::reload_ops(&s.catalog, PhotoId(1), &info, &mut ops, &mut changed);
+    assert_eq!(changed, [PhotoId(1)]);
+    for op in ops {
+        s.catalog.apply(op).unwrap();
+    }
+    let after = s.catalog.photo(PhotoId(1)).unwrap();
+    assert_eq!(after.meta.lens, "50mm F1.8", "the metadata fill landed");
+    assert!(after.lens_checked.is_empty(), "the stamp read the photo without its lens metadata");
+}
+
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-lens-refresh-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
