@@ -249,7 +249,7 @@ impl FinishParams {
         let FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long, air_pre, space } = input;
         let effects = s.section_enabled("effects");
         let (clar, tex, dehaze) = if effects {
-            ((s.effects.clarity / 100.0) as f32, (s.effects.texture / 100.0) as f32, (s.effects.dehaze / 100.0) as f32)
+            ((s.effects.clarity / 100.0) as f32, texture_slider(s.effects.texture, s.process.process()), (s.effects.dehaze / 100.0) as f32)
         } else {
             (0.0, 0.0, 0.0)
         };
@@ -346,6 +346,19 @@ pub fn tone_slider(value: f64, ease: f64, process: lightcraft_develop::Process) 
         return 0.0;
     }
     (a / (1.0 + ease * a.abs())) as f32
+}
+
+/// How much of V6's strength a global negative Texture keeps under V7.
+pub const NEGATIVE_TEXTURE_V7: f64 = 0.67;
+
+/// The global Texture slider (−100..100) as the strength of the texture band (−1..1).
+///
+/// From V7 a negative amount smooths at [`NEGATIVE_TEXTURE_V7`] of V6's strength: at Texture −27, V6 left the
+/// 1–8 px detail of four full-size Lightroom exports of real Canon EOS R6 edits at 0.87–0.94 of the exports' and
+/// 0.67 of the amount brings it to 0.94–1.02. Positive amounts, masks and V1 to V6 are unchanged.
+pub fn texture_slider(value: f64, process: lightcraft_develop::Process) -> f32 {
+    let t = value / 100.0;
+    if process >= lightcraft_develop::Process::V7 && t < 0.0 { (t * NEGATIVE_TEXTURE_V7) as f32 } else { t as f32 }
 }
 
 /// The base tone map (scene → display luminance, with Contrast, Whites and Blacks) of `s`'s
@@ -951,6 +964,16 @@ mod tests {
             assert!(y > last, "monotonic at {i}");
             last = y;
         }
+    }
+
+    #[test]
+    fn v7_eases_negative_texture_only() {
+        for v in [-100.0, -27.0, 0.0, 35.0] {
+            assert_eq!(texture_slider(v, Process::V6), (v / 100.0) as f32);
+        }
+        assert!((texture_slider(-27.0, Process::V7) - (-0.27 * NEGATIVE_TEXTURE_V7) as f32).abs() < 1e-7);
+        assert_eq!(texture_slider(35.0, Process::V7), 0.35);
+        assert_eq!(texture_slider(0.0, Process::V7), 0.0);
     }
 
     #[test]

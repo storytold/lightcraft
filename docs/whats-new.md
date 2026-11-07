@@ -8,6 +8,9 @@
   Strong Shadows no longer lift the darkest tones about 6 L* above Lightroom's render of the same edit, nor strong
   Highlights pull the brightest about 5 L* below it. Masks keep their amounts. New photos get it; photos edited before
   keep their look until Update to Current Process.
+- A negative Texture smooths at two thirds of what it did: at −27 it took about 8 % more fine detail than Lightroom
+  does. The global colour-grading wheel tints at 0.45 of what it did: a Global tint of 16 made a photo visibly pinker
+  and warmer than Lightroom's (+2.8 a*, +2.2 b*). The shadows, midtones and highlights wheels are unchanged.
 - Fitted to 56 Lightroom exports of real portrait edits (Canon EOS R6 and R5 raws): mean ΔE to the exports 9.5 → 8.7,
   and on the 16 landscape photos the sidecar fixes of #2239 don't touch, 8.4 → 7.4.
 
