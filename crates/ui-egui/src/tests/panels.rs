@@ -230,7 +230,7 @@ fn folded_sections_of_an_older_settings_file_stay_folded() {
     assert!(ui.sidebar_section_collapsed("byDate") && ui.sidebar_section_collapsed("keywords") && !ui.sidebar_section_collapsed("albums"));
     let saved = serde_json::to_value(&ui).unwrap();
     assert!(saved.get("collapsedSidebar").is_none(), "{saved}");
-    assert_eq!(saved["sidebar"][2], json!({"id": "byDate", "hidden": false, "collapsed": true}));
+    assert_eq!(saved["sidebar"][3], json!({"id": "byDate", "hidden": false, "collapsed": true}));
 }
 
 /// Given a settings file whose sidebar arrangement is damaged, when it is loaded, then the rest of
@@ -243,6 +243,93 @@ fn a_damaged_sidebar_arrangement_does_not_lose_the_settings() {
         assert_eq!(ui.left_width, 300.0, "{saved}");
         assert_eq!(ui.sidebar.sections().len(), crate::sidebar::SidebarSection::ALL.len(), "{saved}");
     }
+}
+
+/// The sidebar as an older settings file saved it: the old usual order, Local hidden, By Date folded.
+fn old_usual_sidebar() -> serde_json::Value {
+    json!([
+        {"id": "albums", "hidden": false, "collapsed": false},
+        {"id": "local", "hidden": true, "collapsed": false},
+        {"id": "byDate", "hidden": false, "collapsed": true},
+        {"id": "folders", "hidden": false, "collapsed": false},
+        {"id": "keywords", "hidden": false, "collapsed": false}
+    ])
+}
+
+fn order_of(ui: &crate::UiState) -> Vec<&'static str> {
+    ui.sidebar.sections().iter().map(|s| s.id.id()).collect()
+}
+
+/// Given a settings file saved while Folders came after By Date (the old usual order, no order
+/// version), when it is loaded, then Folders sits above Local, with what was hidden or folded
+/// still so; and when the person then drags Folders back down, the next starts keep that order.
+#[test]
+fn a_sidebar_in_the_old_usual_order_gets_folders_above_local_once() {
+    let old = json!({"leftPanel": true, "leftWidth": 300.0, "sidebar": old_usual_sidebar()});
+    let first = serde_json::from_value::<crate::UiState>(old).unwrap().sanitized();
+    assert_eq!(order_of(&first), ["albums", "folders", "local", "byDate", "keywords"]);
+    assert!(first.sidebar_section_collapsed("byDate") && first.sidebar.is_hidden(crate::sidebar::SidebarSection::Local));
+    assert_eq!(first.left_width, 300.0, "the other settings load as they were");
+    let saved = serde_json::to_value(&first).unwrap();
+    assert_eq!(saved["sidebarOrderVersion"], crate::sidebar::ORDER_VERSION, "{saved}");
+    // the person drags Folders back below By Date; it is saved and loaded twice more
+    let mut arranged = first;
+    assert!(arranged.sidebar.move_before(crate::sidebar::SidebarSection::Folders, Some(crate::sidebar::SidebarSection::Keywords)));
+    let mut back = arranged.clone();
+    for _ in 0..2 {
+        back = serde_json::from_value::<crate::UiState>(serde_json::to_value(&back).unwrap()).unwrap().sanitized();
+        assert_eq!(order_of(&back), ["albums", "local", "byDate", "folders", "keywords"]);
+    }
+    assert_eq!(back.sidebar, arranged.sidebar);
+}
+
+/// A sidebar the person arranged before the order version existed, or one that was never saved,
+/// is not rearranged; a new library starts with Folders above Local and records the version.
+#[test]
+fn an_arranged_or_new_sidebar_is_not_moved() {
+    let custom = json!([{"id": "keywords"}, {"id": "albums"}, {"id": "local"}, {"id": "byDate"}, {"id": "folders"}]);
+    let ui = serde_json::from_value::<crate::UiState>(json!({"sidebar": custom})).unwrap().sanitized();
+    assert_eq!(order_of(&ui), ["keywords", "albums", "local", "byDate", "folders"]);
+    let ui = serde_json::from_value::<crate::UiState>(json!({"leftPanel": true})).unwrap().sanitized();
+    assert_eq!(order_of(&ui), ["albums", "folders", "local", "byDate", "keywords"]);
+    let fresh = serde_json::to_value(crate::UiState::default().sanitized()).unwrap();
+    assert_eq!(fresh["sidebarOrderVersion"], crate::sidebar::ORDER_VERSION);
+    assert_eq!(fresh["sidebar"][1]["id"], "folders");
+    // already past the version: the old order is the person's own choice
+    let saved = json!({"sidebar": old_usual_sidebar(), "sidebarOrderVersion": crate::sidebar::ORDER_VERSION});
+    let ui = serde_json::from_value::<crate::UiState>(saved).unwrap().sanitized();
+    assert_eq!(order_of(&ui), ["albums", "local", "byDate", "folders", "keywords"]);
+    // a newer build's generation is kept, not lowered, and moves nothing either
+    let saved = json!({"sidebar": old_usual_sidebar(), "sidebarOrderVersion": crate::sidebar::ORDER_VERSION + 6});
+    let ui = serde_json::from_value::<crate::UiState>(saved).unwrap().sanitized();
+    assert_eq!(order_of(&ui), ["albums", "local", "byDate", "folders", "keywords"]);
+    assert_eq!(ui.sidebar_order_version, crate::sidebar::ORDER_VERSION + 6);
+}
+
+/// Given a settings file whose order version or sidebar list is corrupt or partial, when it is
+/// loaded, then nothing panics, the other settings load and every section is listed once.
+#[test]
+fn a_corrupt_order_version_or_list_does_not_lose_the_settings() {
+    let junk = [json!("x"), json!(null), json!(-1), json!(1.5), json!(4_294_967_296_u64), json!([1]), json!({"a": 1})];
+    for version in junk {
+        for sidebar in [old_usual_sidebar(), json!(["albums", "local"]), json!([{"id": "folders"}, 7, null]), json!("oops")] {
+            let saved = json!({"leftWidth": 300.0, "sidebar": sidebar, "sidebarOrderVersion": version});
+            let ui = serde_json::from_value::<crate::UiState>(saved.clone()).unwrap().sanitized();
+            assert_eq!(ui.left_width, 300.0, "{saved}");
+            assert_eq!(ui.sidebar.sections().len(), crate::sidebar::SidebarSection::ALL.len(), "{saved}");
+            assert_eq!(ui.sidebar_order_version, crate::sidebar::ORDER_VERSION, "{saved}");
+        }
+    }
+}
+
+/// Given a library opened at 1280 × 800 with no saved arrangement, when the sidebar is drawn, then
+/// the Folders section sits above Local, right under Albums.
+#[test]
+fn the_sidebar_lists_folders_above_local() {
+    let h = demo([1280.0, 800.0], json!({"view": "photoGrid", "leftPanel": true}));
+    let drawn = sections_drawn(&h);
+    assert_eq!(drawn, ["albums", "folders", "local", "byDate", "keywords"]);
+    assert!(widget(&h, "sidebarSection:folders").top() < widget(&h, "sidebarSection:local").top());
 }
 
 /// The sections drawn in the sidebar, top to bottom.
@@ -262,7 +349,7 @@ fn the_sidebar_draws_its_sections_as_arranged() {
     // (Local is not on every platform)
     let listed = |drawn: &[String]| drawn.iter().filter(|s| s.as_str() != "local").cloned().collect::<Vec<_>>();
     let usual = sections_drawn(&h);
-    assert_eq!(listed(&usual), ["albums", "byDate", "folders", "keywords"], "{usual:?}");
+    assert_eq!(listed(&usual), ["albums", "folders", "byDate", "keywords"], "{usual:?}");
     // the demo library was imported from no folder: Folders says so in place of rows
     assert!(has(&h, "sidebarEmpty:folders") && !has(&h, "sidebarEmpty:keywords"));
     let r = h.request("ui.set", json!({"sidebar": [{"id": "keywords"}, {"id": "byDate", "hidden": true}, {"id": "albums"}]}), T);
@@ -417,7 +504,7 @@ fn a_new_album_brings_a_hidden_albums_section_back() {
 fn sidebar_commands_refuse_what_they_cannot_read() {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
     for (params, says) in [
-        (json!({}), "`section` is needed (albums|local|byDate|folders|keywords)"),
+        (json!({}), "`section` is needed (albums|folders|local|byDate|keywords)"),
         (json!({"section": 3}), "`section` is needed"),
         (json!({"section": "map"}), "unknown section `map`"),
         (json!({"section": "albums", "show": "no"}), "`show` must be true or false"),
@@ -465,7 +552,7 @@ fn dragging_a_header_moves_its_section() {
     let usual = sections_drawn(&h);
     let with_local = usual.contains(&"local".to_string());
     let listed = |ids: &[&str]| ids.iter().filter(|s| with_local || **s != "local").map(|s| s.to_string()).collect::<Vec<_>>();
-    assert_eq!(usual, listed(&["albums", "local", "byDate", "folders", "keywords"]));
+    assert_eq!(usual, listed(&["albums", "folders", "local", "byDate", "keywords"]));
     assert!(has(&h, "sidebarEmpty:keywords"), "no keywords in this library: the section says so and stays");
     // Folders, dragged to just above Albums
     let (from, to) = (header(&h, "folders").center(), header(&h, "albums").center() - egui::vec2(0.0, 12.0));

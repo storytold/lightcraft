@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Folders sits right under Albums
+- The sidebar now lists Albums, Folders, Local, By Date and Keywords: the folders your photos were imported from come
+  right after Albums, ahead of Local, which stays the way to browse any folder on this computer. A sidebar still in
+  the previous usual order is moved once, the first time this version opens it, keeping what you hid or folded; one
+  you arranged yourself is left as it is, and a Folders you drag back below Local stays there. Reset Sidebar Sections
+  gives the new order.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
