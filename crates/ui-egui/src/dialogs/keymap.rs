@@ -183,11 +183,11 @@ fn fixed_keys(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, nee
     egui::Grid::new("shortcuts-fixed").striped(true).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
         for (sc, label) in fixed {
             ui.label(RichText::new(crate::i18n::tr(label)).color(t.text_label));
-            let mut text = RichText::new(menu_text(&sc, mac)).color(t.text_dim);
+            let mut keys = crate::kbd::Kbd::new(&sc, mac).keycaps();
             if shortcuts::parse(&sc).is_some_and(|k| taken.contains(&k)) {
-                text = text.strikethrough();
+                keys = keys.struck();
             }
-            ui.label(text);
+            keys.show(ui);
             ui.end_row();
         }
     });
