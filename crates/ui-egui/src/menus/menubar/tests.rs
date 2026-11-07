@@ -317,7 +317,10 @@ fn export_with_preset_submenu() {
         })
         .collect();
     assert_eq!(presets.first().map(String::as_str), Some("JPEG (Small)"));
-    assert!(find(children, "dialog.export").is_some(), "Custom… opens the dialog");
+    let Some(MenuNode::Item { label, .. }) = find(children, "dialog.export") else {
+        panic!("Custom… opens the dialog");
+    };
+    assert!(label.contains("Export"), "custom export label: {label:?}");
     // a user preset appears after the built-ins; choosing it exports with its settings
     app.session.execute("export.savePreset", &json!({"name": "Tiny PNG", "params": {"format": "png", "width": 40}})).unwrap();
     let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, Vec<u8>)>::new()));
