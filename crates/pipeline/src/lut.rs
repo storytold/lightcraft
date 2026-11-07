@@ -23,7 +23,7 @@ impl Lut3d {
         let (mut min, mut max) = ([0.0f32; 3], [1.0f32; 3]);
         let mut data = Vec::new();
         let three = |rest: &str| -> Option<[f32; 3]> {
-            let v: Vec<f32> = rest.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+            let v = rest.split_whitespace().map(|x| x.parse::<f32>().ok()).collect::<Option<Vec<f32>>>()?;
             (v.len() == 3 && v.iter().all(|x| x.is_finite())).then(|| [v[0], v[1], v[2]])
         };
         for line in text.lines() {
@@ -130,6 +130,17 @@ mod tests {
             }
         }
         s
+    }
+
+    #[test]
+    fn garbage_token_is_rejected() {
+        let mut s = String::from("LUT_3D_SIZE 2\n0.5 abc 0.25 0.75\n");
+        for _ in 0..7 {
+            s.push_str("0 0 0\n");
+        }
+        assert!(Lut3d::parse_cube(&s).unwrap_err().contains("bad line"));
+        let d = "LUT_3D_SIZE 2\nDOMAIN_MIN 0.0 x 0.0 0.0\n";
+        assert_eq!(Lut3d::parse_cube(d).unwrap_err(), "bad DOMAIN_MIN");
     }
 
     #[test]
