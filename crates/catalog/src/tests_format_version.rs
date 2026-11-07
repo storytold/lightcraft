@@ -664,8 +664,8 @@ fn an_upgrade_is_refused_when_a_hundred_kept_sets_are_in_the_way() {
         m.set(&format!("catalog.snap.v6-8-{copy}"), b"earlier".to_vec());
     }
     let before = m.files.lock().unwrap().clone();
-    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!((r.upgraded_from, r.kept.len()), (None, 0));
+    let e = Journal::open(Box::new(m.clone())).err().expect("refused");
+    assert!(matches!(&e, CatalogError::Io(why) if why.contains("100 sets")), "{e}");
     assert_eq!(*m.files.lock().unwrap(), before, "nothing written or removed");
     assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(log)));
 }
@@ -678,8 +678,8 @@ fn an_upgrade_that_is_not_written_removes_only_what_it_kept() {
     m.set("catalog.snap.v6-8", snap.clone());
     m.set("catalog.log.v6-8", log.clone());
     let store = Refusing { files: m.clone(), refuse: |name| name == SNAPSHOT };
-    let (_, _, r) = Journal::open(Box::new(store)).unwrap();
-    assert_eq!((r.upgraded_from, r.kept.len()), (None, 0));
+    let e = Journal::open(Box::new(store)).err().expect("refused");
+    assert!(matches!(&e, CatalogError::Io(why) if why.contains("can't be upgraded")), "{e}");
     assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(snap), Some(log)), "kept before, and still there");
     assert_eq!(snapshot_version(&m), 6);
 
@@ -688,8 +688,8 @@ fn an_upgrade_that_is_not_written_removes_only_what_it_kept() {
     m.set("catalog.snap.v6-8", b"earlier".to_vec());
     m.set("catalog.log.v6-8", b"earlier".to_vec());
     let store = Refusing { files: m.clone(), refuse: |name| name.starts_with("catalog.log.v") };
-    let (_, _, r) = Journal::open(Box::new(store)).unwrap();
-    assert_eq!((r.upgraded_from, r.kept.len()), (None, 0));
+    let e = Journal::open(Box::new(store)).err().expect("refused");
+    assert!(matches!(&e, CatalogError::Io(why) if why.contains("can't be kept")), "{e}");
     assert_eq!((m.get("catalog.snap.v6-8"), m.get("catalog.log.v6-8")), (Some(b"earlier".to_vec()), Some(b"earlier".to_vec())));
     assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(log)));
     assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [LOG, "catalog.log.v6-8", SNAPSHOT, "catalog.snap.v6-8"], "nothing half kept");
@@ -725,8 +725,8 @@ fn a_kept_file_that_landed_despite_an_error_is_removed() {
         }
     }
     let (m, snap, log) = v6_library();
-    let (_, c, r) = Journal::open(Box::new(Dropped(m.clone()))).unwrap();
-    assert_eq!((c.photos().count(), r.upgraded_from, r.kept.len()), (3, None, 0));
+    let e = Journal::open(Box::new(Dropped(m.clone()))).err().expect("refused");
+    assert!(matches!(&e, CatalogError::Io(why) if why.contains("can't be kept")), "{e}");
     assert_eq!((m.get(SNAPSHOT), m.get(LOG)), (Some(snap), Some(log)));
     assert_eq!(m.files.lock().unwrap().keys().collect::<Vec<_>>(), [LOG, SNAPSHOT], "nothing left of the kept set");
 }
