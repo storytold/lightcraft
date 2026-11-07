@@ -57,6 +57,7 @@ mod slideshow_export;
 mod slow_drive;
 mod spots;
 mod sync;
+mod task_queue;
 mod view_follow;
 pub(super) mod xmp;
 
