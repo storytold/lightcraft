@@ -592,7 +592,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
     }
     if matches!(f, "library.nextUnrated" | "library.prevUnrated") {
         if let Ok(v) = app.run(f, json!({}))
-            && v.get("allRated").and_then(Value::as_bool) == Some(true)
+            && all_rated_toast(&v)
         {
             app.toast(ctx, crate::i18n::tr("All photos are rated"));
         }
@@ -853,3 +853,53 @@ mod enable_filters_tests;
 #[cfg(test)]
 #[path = "shortcuts/tests_filter_bar_key.rs"]
 mod filter_bar_key_tests;
+
+/// Whether a `library.nextUnrated` / `library.prevUnrated` result should show the
+/// "all rated" toast: only the distinct `allRated` result, not an empty view or a move.
+fn all_rated_toast(v: &Value) -> bool {
+    v.get("allRated").and_then(Value::as_bool) == Some(true)
+}
+
+#[cfg(test)]
+mod next_unrated_shortcut_tests {
+    use super::{Keymap, all_rated_toast, assign, parse, shortcut_of};
+    use serde_json::json;
+
+    #[test]
+    fn next_and_prev_unrated_have_cmd_arrow_defaults() {
+        let keymap = Keymap::new();
+        assert_eq!(shortcut_of(&keymap, "library.nextUnrated"), Some("Cmd+Right"));
+        assert_eq!(shortcut_of(&keymap, "library.prevUnrated"), Some("Cmd+Left"));
+        // The two directions are distinct keys, so native ownership of one
+        // (checked per shortcut string in `pressed_commands`) cannot suppress the other.
+        assert_ne!(parse("Cmd+Right"), parse("Cmd+Left"));
+    }
+
+    #[test]
+    fn rebinding_or_removing_next_unrated_drops_cmd_right() {
+        let mut keymap = Keymap::new();
+        assign(&mut keymap, "library.nextUnrated", Some("Alt+N")).unwrap();
+        assert_eq!(shortcut_of(&keymap, "library.nextUnrated"), Some("Alt+N"));
+        assert_ne!(shortcut_of(&keymap, "library.nextUnrated"), Some("Cmd+Right"));
+        assign(&mut keymap, "library.nextUnrated", None).unwrap();
+        assert_eq!(shortcut_of(&keymap, "library.nextUnrated"), None);
+    }
+
+    #[test]
+    fn rebinding_or_removing_prev_unrated_drops_cmd_left() {
+        let mut keymap = Keymap::new();
+        assign(&mut keymap, "library.prevUnrated", Some("Alt+P")).unwrap();
+        assert_eq!(shortcut_of(&keymap, "library.prevUnrated"), Some("Alt+P"));
+        assert_ne!(shortcut_of(&keymap, "library.prevUnrated"), Some("Cmd+Left"));
+        assign(&mut keymap, "library.prevUnrated", None).unwrap();
+        assert_eq!(shortcut_of(&keymap, "library.prevUnrated"), None);
+    }
+
+    #[test]
+    fn all_rated_toast_only_for_all_rated_result() {
+        assert!(all_rated_toast(&json!({"allRated": true})));
+        assert!(!all_rated_toast(&json!({"active": 3})));
+        assert!(!all_rated_toast(&json!({})));
+        assert!(!all_rated_toast(&json!({"allRated": false})));
+    }
+}
