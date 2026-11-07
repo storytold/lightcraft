@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Colour noise reduction (process V6)
+- Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
+  colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
+  R−Y and B−Y, leaving brightness exactly as it was, along edges found in a denoised guide, and takes isolated
+  coloured specks out. New photos get it; photos edited before keep their look until Update to Current Process. A zoomed
+  view is smoothed like the same part of the whole photo and the export.
+
 ### The web build can be embedded
 - A page framing LightCraft in an iframe can open it with `?host=parent` and speak to it over `postMessage`, the
   protocol PdfCraft, GridCraft and DeckCraft share: it hands photos in, receives exports and backups instead of
