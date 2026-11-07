@@ -344,6 +344,9 @@ pub struct UiState {
     /// Transient toast text, expiry (seconds of app time), and optional colour-label styling.
     #[serde(skip)]
     pub toast: Option<(String, f64, Option<lightcraft_catalog::ColorLabel>)>,
+    /// This session already said that Sky ran without SAM 3.
+    #[serde(skip)]
+    pub legacy_sky_noticed: bool,
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
@@ -519,6 +522,7 @@ impl Default for UiState {
             compare: None,
             reference: None,
             toast: None,
+            legacy_sky_noticed: false,
             last_find_missing: None,
             last_find_missing_result: None,
             #[cfg(test)]

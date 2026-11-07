@@ -20,6 +20,9 @@ pub(crate) use frame::import_tick_allowed;
 #[cfg(test)]
 pub(crate) use screenshot::shot_ready;
 
+/// How long the Sky fallback notice stays up, in seconds.
+const LEGACY_SKY_NOTICE_SECONDS: f64 = 6.0;
+
 impl LightcraftApp {
     /// Build the app with default UI, renderer, cache and control state, and move AI segmentation
     /// to a worker so frames apply results instead of waiting.
@@ -241,6 +244,9 @@ impl LightcraftApp {
         {
             self.ui.tool.clear();
         }
+        if matches!(id, "mask.add" | "mask.addComponent") && r.as_ref().is_ok_and(|v| v.get("legacySky") == Some(&Value::Bool(true))) {
+            self.legacy_sky_notice();
+        }
         if r.is_ok() && id == "mask.adjust" {
             // Judge local adjustments on the photo, without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
@@ -461,6 +467,19 @@ impl LightcraftApp {
 
     pub fn toast(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         self.toast_for(ctx, text, TOAST_SECONDS);
+    }
+
+    /// Say once per session that Sky ran without SAM 3: nothing else tells a legacy selection from
+    /// a SAM one. Not in a build that can't use the model, or while it is already downloading.
+    fn legacy_sky_notice(&mut self) {
+        use lightcraft_engine::segment::Segmenter;
+        if self.ui.legacy_sky_noticed || !Segmenter::AVAILABLE || self.session.segmenter.download_status().running {
+            return;
+        }
+        self.ui.legacy_sky_noticed = true;
+        // long enough to read: a sentence with something to do, unlike a one-word confirmation
+        let until = self.tick_now() + LEGACY_SKY_NOTICE_SECONDS;
+        self.ui.toast = Some((i18n::tr("Sky used basic detection. Install the SAM 3 model for better results.").to_string(), until, None));
     }
 
     /// Auto straighten (the crop panel's Auto, a double-click with the Straighten tool), saying so

@@ -92,9 +92,9 @@ search embeddings; generative remove runs in Adobe's cloud.
 |---|---|---|
 | 2026-10-12 | minor | Mamiya MEF decoded (raw-parity.md): 241 verified, 35 unsupported; rounded numbers unchanged |
 | 2026-10-12 | minor | Epson ERF decoded (raw-parity.md): 240 models verified, 229 preview-only; shares and rounded numbers unchanged |
-| Subject / Sky / Background masks | classical heuristics; the file's own DNG semantic mattes | 🟡 |
+| Subject / Background masks | classical heuristics; the file's own DNG semantic mattes | 🟡 |
 | People (faces, body, hair, skin…) and Landscape masks | — | ⬜ |
-| Object / Describe masks | SAM 3 in pure Rust (Metal / CPU); opt-in 3.4 GB download, no mirror configured | 🟡 |
+| Sky / Object / Describe masks | SAM 3 in pure Rust (Metal / CPU); opt-in 3.4 GB download, no mirror configured; Sky falls back to legacy detection without the model; old Sky shapes retain their original rendering | 🟡 |
 | Depth range mask, Lens Blur | — | ⬜ |
 | AI Denoise | Bayer only, built-in classical denoiser out of the box, optional user-installed weights, pure-Rust CPU / GPU | 🟡 |
 | Raw Details, Super Resolution | — | ⬜ |
@@ -299,6 +299,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | New Sky selections prefer SAM 3 with the fixed sky prompt, falling back to legacy detection without the model, including mask components; existing edits keep their rendering. Gap 5 remains open; readiness and checklist status unchanged |
 | 2026-11-04 | minor | Compressed ORF decoded (`crates/raw/src/vendor/orfc.rs`): OM-D E-M1 and E-M10 Mark III verified; 58 bodies newly unlocked (78 total across Olympus and OM); RAW coverage 77% → 80%, weighted camera coverage 94% → 97% |
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |
 | 2026-10-23 | minor | AI Denoise runs without a model (built-in denoiser); percentages unchanged, since it is a classical filter and Bayer-only |

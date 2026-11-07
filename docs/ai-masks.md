@@ -1,4 +1,4 @@
-# AI masks (Object and Describe)
+# AI masks (Sky, Object and Describe)
 
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
@@ -6,13 +6,23 @@ through Metal on macOS, on the CPU elsewhere (for now). If the Mac's GPU can't r
 the CPU (see the worker below).
 
 **The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
-Object and Describe offer to download it, every other feature (and every existing mask, see
+Object and Describe offer to download it; Sky uses the legacy detector. Every other feature (and every existing mask, see
 below) works, and no render, export or command ever waits for it.
 
 ## Using them
 
 In the Masking panel (M):
 
+- **Sky**: selects the sky using SAM 3 with the fixed prompt `sky`, including when adding,
+  subtracting or intersecting a component. It uses the same background worker, stored mask,
+  edge controls and detail refinement as Describe. If no sky is found, no mask is created.
+  Without the model (including builds without SAM support), Sky automatically uses the legacy
+  detector: an embedded DNG sky matte when present, otherwise the sky heuristic. It does not
+  open model setup or start a download: `mask.add` / `mask.addComponent` report `legacySky: true`,
+  and in a build with SAM support the app says so in a toast once per session. A configured remote SAM worker takes precedence over
+  that fallback; errors from an installed model or remote worker remain visible.
+  Existing saved Sky shapes keep their original DNG semantic matte / heuristic rendering;
+  create a new Sky mask to replace one with SAM 3.
 - **Object**: click the thing you want; every click refines the selection. ⌥-click (Alt) a part
   to leave it out. Clicks show as green (include) and red (leave out) dots.
 - **Describe**: type what to select — `sky`, `trees`, `the red car` — and press Return. Every
@@ -42,7 +52,7 @@ In the Masking panel (M):
   in the background); the result is kept as a high-resolution patch (at most 4 per selection),
   so small objects get 5–10× finer edges than one pass over the whole photo gives.
 
-The first Object or Describe on a photo analyzes it (the image encoder runs once per photo and
+The first Sky, Object or Describe on a photo analyzes it (the image encoder runs once per photo and
 look: ~3 s on an Apple M4 Pro, plus a one-time ~6 s for compiling GPU kernels and loading the
 model after launch). That starts in the background as soon as you pick Object; after it, each
 click takes ~35 ms and each description ~0.6 s. Everything the model does runs on its own worker
@@ -196,9 +206,10 @@ Therefore:
 
 | Command | Params | |
 |---|---|---|
+| `mask.add` | `{kind: "sky", seg?}` | SAM 3 with the fixed text `sky` when available, stored as a Prompt shape; otherwise legacy Sky detection |
 | `mask.add` | `{kind: "object", points?: [[x,y],…], exclude?: [[x,y],…], seg?}` | an Object mask (empty until clicked) |
 | `mask.add` | `{kind: "prompt", text, seg?}` | a Describe mask |
-| `mask.addComponent` | `{op: add\|subtract\|intersect, kind: "object"\|"prompt", …}` | the same as a component |
+| `mask.addComponent` | `{op: add\|subtract\|intersect, kind: "sky"\|"object"\|"prompt", …}` | the same as a component |
 | `mask.objectPoint` | `{x, y, exclude?: bool, id?}` | one click on the selected mask's Object selection (≤ 64 clicks) |
 | `mask.refineDetail` | `{id?, component?}` | the zoomed-in detail pass → `{started}` |
 | `segment.prepare` | `{}` | load the model and analyze the active photo → `{busy}` |
@@ -220,7 +231,7 @@ installed" that says how to get it.
 
 In the desktop app the commands don't wait for the model: `mask.objectPoint` returns
 `{pending: true}` and the selection is applied when it's computed (one undo step per settled
-selection); `mask.add {kind: "prompt"}` returns `{pending: true}` and the mask appears when
+selection); `mask.add {kind: "prompt"}` (and `kind: "sky"` when SAM 3 is available) returns `{pending: true}` and the mask appears when
 something is found (or a message says nothing was). `lightcraft-cli` and the headless MCP server
 wait and return the result (when built with the `sam` feature; the default CLI has no AI masks).
 
