@@ -24,8 +24,8 @@ This document tracks the steps and status of the clean-room Olympus ORF decoder 
 | **5** | **Code Auditor:** Audit new implementation for clean-room integrity | **DONE** | Documented in `clean-room/orf/10-code-audit.md` |
 | **6** | Execute LightCraft test suites and verify against CC0 corpus in `corpus/raw` | **DONE** | Tests pass; clippy, layers, roots, assets, wasm, and fmt green |
 | **7** | Run `coderabbit review --agent` and resolve all findings iteratively until 0 findings | **DONE** | CodeRabbit completed with 0 findings |
-| **8** | Git commit with clean task message and attribution compliance | **IN PROGRESS** | Ready to commit |
-| **9** | Git push to origin | **PENDING** | |
+| **8** | Git commit with clean task message and attribution compliance | **DONE** | Committed cleanly as `036f84d9` |
+| **9** | Git push to origin | **DONE** | Pushed branch `orf-clean2` to `origin` |
 
 ---
 
