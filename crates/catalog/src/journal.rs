@@ -204,6 +204,19 @@ enum Upgrade {
     Repair,
 }
 
+impl Upgrade {
+    /// What a library in format `from` needs at open, when this open hasn't upgraded it already. One in a format that writes
+    /// compact records and states its defaults may go on as it is when it can't be upgraded now (the next open tries again):
+    /// what is appended to it reads the same in every build that reads it. One before that (a build of those formats reads a
+    /// missing value as its own default, and a library of format 9 that states defaults is still read so by builds that don't
+    /// know the statement), or one that states other defaults, must not be appended to as it is: a record written from here on
+    /// leaves out what equals this build's defaults. (One that only lacks a setting this build has may: its records are
+    /// written whole until it is restated, `header_incomplete`.)
+    fn at_open(from: u32, report: &LoadReport, states_defaults: bool) -> Upgrade {
+        if report.other_defaults || !states_defaults || from < COMPACT_RECORDS { Upgrade::Must } else { Upgrade::May }
+    }
+}
+
 /// The files kept for one upgrade (see [`Journal::keep_replaced`]).
 #[derive(Default)]
 struct Kept {
@@ -216,7 +229,6 @@ struct Kept {
 /// How many sets of kept files with the same format and change can stand side by side before a
 /// further one is refused (an upgrade that can't keep its files is not done).
 const MAX_KEPT_COPIES: u32 = 100;
-
 /// What happened while loading.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LoadReport {
@@ -542,6 +554,9 @@ fn write_snapshot_owned(store: &mut dyn Store, seq: u64, mut snapshot: Catalog) 
             }
         }
         snapshot.grids = pool;
+        // (the stored form keeps the last difference it worked out for the next equal settings: not into this write, where the masks
+        // refer to the table that is only this snapshot's, and a difference worked out before has the grids inline)
+        crate::stored::forget_last_difference();
         match lightcraft_develop::with_grid_interner(index, || serde_json::to_writer(&mut b, &snapshot)) {
             // no interner can be active here (snapshot writes don't nest), so `None` is a bug:
             // fail the write rather than store a truncated or reference-less snapshot
@@ -768,17 +783,9 @@ impl Journal {
                 .write_atomic(SNAPSHOT, empty.as_bytes())
                 .map_err(|e| CatalogError::Io(format!("can't write the new library's {SNAPSHOT}: {e}")))?;
         } else if let (Some(from), false) = (older, rewritten) {
-            // A library in a format that writes compact records and states its defaults may go on
-            // as it is when it can't be upgraded now (the next open tries again): what is appended
-            // to it reads the same in every build that reads it. One before that (a build of those
-            // formats reads a missing value as its own default, and a library of format 9 that
-            // states defaults is still read so by builds that don't know the statement), or one
-            // that states other defaults, must not be appended to as it is: a record written from
-            // here on leaves out what equals this build's defaults. (One that only lacks a setting
-            // this build has may: its records are written whole until it is restated,
-            // `header_incomplete`.) What is appended is this build's ops; the files kept when a
-            // later snapshot upgrades it are the library as it is here (`behind_at`).
-            let how = if report.other_defaults || !states_defaults || from < COMPACT_RECORDS { Upgrade::Must } else { Upgrade::May };
+            // (What is appended meanwhile, if it can't be upgraded now, is this build's ops; the files kept when a later snapshot
+            // upgrades it are the library as it is here, `behind_at`.)
+            let how = Upgrade::at_open(from, &report, states_defaults);
             if let Some(kept) = j.upgrade(&catalog, from, snap.as_deref(), &log, how)? {
                 rewritten = true;
                 report.upgraded_from = Some(from);
@@ -795,27 +802,29 @@ impl Journal {
             // defaults it states. If it can't be rewritten the library is refused.
             j.snapshot(&catalog)?;
         } else if report.defaults_added && !rewritten {
-            // A setting this build has that the header doesn't state: restate it before a
-            // compact record is appended. If that can't be done now (a full disk, a read-only
-            // volume; or the upgrade just above failed, which keeps no copies behind, so the
-            // snapshot is not tried again at once), the library still opens, and every record is
-            // written whole until a snapshot succeeds (`header_incomplete`). A crash at any point
-            // finds the old files whole, or a header that states every setting before any compact
-            // record was written.
-            j.header_incomplete = true;
-            if j.behind.is_none() {
-                match j.snapshot(&catalog) {
-                    Ok(()) => {}
-                    Err(e) if j.header_incomplete => {
-                        log::warn!("catalog: can't restate the library's defaults ({e}); writing whole records until it can")
-                    }
-                    Err(e) => log::warn!("catalog: the library's defaults were restated, but its log could not be reset: {e}"),
-                }
-            }
+            j.restate_defaults(&catalog);
         }
 
         catalog.revision = 0;
         Ok((j, catalog, report))
+    }
+
+    /// A setting this build has that the header doesn't state: restate it before a compact record is appended. If that can't
+    /// be done now (a full disk, a read-only volume; or the upgrade just before failed, which keeps no copies behind, so the
+    /// snapshot is not tried again at once), the library still opens, and every record is written whole until a snapshot
+    /// succeeds (`header_incomplete`). A crash at any point finds the old files whole, or a header that states every setting
+    /// before any compact record was written.
+    fn restate_defaults(&mut self, catalog: &Catalog) {
+        self.header_incomplete = true;
+        if self.behind.is_none() {
+            match self.snapshot(catalog) {
+                Ok(()) => {}
+                Err(e) if self.header_incomplete => {
+                    log::warn!("catalog: can't restate the library's defaults ({e}); writing whole records until it can")
+                }
+                Err(e) => log::warn!("catalog: the library's defaults were restated, but its log could not be reset: {e}"),
+            }
+        }
     }
 
     /// Bring a library in format `from` to this build's: keep the files it was (`snap` and `log`,

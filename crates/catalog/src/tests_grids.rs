@@ -116,6 +116,29 @@ fn snapshot_deduplicates_shared_grid() {
     }
 }
 
+/// The stored form of settings keeps the last difference it worked out for the next settings equal to them. A record that
+/// just stated some settings (an edit's `SetDevelop`, appended on the thread that then compacts) left it holding them with
+/// their grid inline; a snapshot, whose masks refer to its own table of grids, took it and wrote the grid again beside the
+/// table, for the photo and for the step equal to them.
+#[test]
+fn a_snapshot_shares_the_grid_of_settings_a_record_just_stated() {
+    let (live, ops, _, blob) = masked_catalog(1);
+    let m = MemStore::new();
+    let (mut j, _, _) = open(&m);
+    j.append(&ops).unwrap();
+    j.snapshot(&live).unwrap();
+    drop(j);
+
+    let snap_bytes = m.get(SNAPSHOT).unwrap();
+    let body = std::str::from_utf8(&snap_bytes).unwrap();
+    assert_eq!(body.match_indices(&blob).count(), 1, "the grid is in the table once; the photo and its step refer to it");
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v["catalog"]["grids"].as_array().unwrap().len(), 1);
+    let (_, loaded, report) = open(&m);
+    assert_eq!(report.repaired, Vec::<String>::new(), "{:?}", report.repaired);
+    assert_eq!(loaded.to_snapshot(), live.to_snapshot());
+}
+
 /// A catalog written before the shared table (grids inline everywhere, format v9) loads as it
 /// was and its upgrade rewrite deduplicates.
 #[test]

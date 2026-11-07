@@ -15,6 +15,11 @@ A photo's record states only what was set (`crates/catalog/src/stored.rs`):
 - develop settings (the photo's, and those of its history steps, versions and import look) are stored as their
   difference from the defaults: `{}` for a photo nobody edited.
 
+A snapshot keeps each AI mask's grid once: the masks refer to a table of grids in the snapshot (#2154), however many
+photos, history steps and versions hold the same one. A difference from the defaults can't be read back through such a
+reference, so settings that hold such a mask are written whole in a snapshot; the log's records state them as a
+difference, with the grid inline.
+
 Reading did not change: a missing field reads as its default, so libraries of formats 1 to 12 load as they are and are
 rewritten in format 14 when first opened. Builds before format 14 refuse a format 14 library. A new library whose
 `catalog.snap` can't be written (a full disk, a read-only volume) is not opened either, since what was added to its log
