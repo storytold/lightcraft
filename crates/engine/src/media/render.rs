@@ -2,6 +2,7 @@ use super::quick::QuickSource;
 use super::source::{DecodedSource, SourceLevel, SourceRef, VIEW_REUSE_SLACK};
 use super::{
     Arc, DevelopSettings, Hash128, Histogram, PhotoId, PreviewCache, Quality, RenderRequest, Rendered, Rgb32f, Rgba8, Source, SourceInfo, StageCache,
+    Weak,
 };
 
 /// Everything needed to render one photo, detached from the session.
@@ -10,6 +11,8 @@ pub struct RenderJob {
     /// Assigned by a frontend to distinguish late completions, even for an identical render key.
     pub request_id: u64,
     pub cache_generation: u64,
+    /// The cache object that owned this work; generations can repeat after replacement.
+    pub cache_owner: Weak<PreviewCache>,
     /// Content identity for validating a decoded source returned after a reload.
     pub source_key: Option<Hash128>,
     pub photo: PhotoId,
@@ -72,6 +75,9 @@ pub struct ScreenFrame {
 }
 
 pub struct RenderResult {
+    pub cache_generation: u64,
+    /// The cache object that owned this work; generations can repeat after replacement.
+    pub cache_owner: Weak<PreviewCache>,
     pub request_id: u64,
     pub source_key: Option<Hash128>,
     pub photo: PhotoId,
@@ -205,6 +211,8 @@ impl RenderJob {
     /// This job's result when it fails with `e`.
     fn failed(&self, e: String) -> RenderResult {
         RenderResult {
+            cache_generation: self.cache_generation,
+            cache_owner: self.cache_owner.clone(),
             request_id: self.request_id,
             source_key: self.source_key,
             photo: self.photo,
@@ -285,6 +293,8 @@ impl RenderJob {
                 photo: self.photo,
                 level: self.level,
                 key: self.key,
+                cache_generation: self.cache_generation,
+                cache_owner: self.cache_owner.clone(),
                 rendered: Ok(Rendered { image, histogram, deep: None }),
                 gpu_fallback: None,
                 loaded: None,
@@ -299,6 +309,8 @@ impl RenderJob {
             let image = Arc::unwrap_or_clone(img);
             let histogram = Histogram::of_srgb8(&image);
             return RenderResult {
+                cache_generation: self.cache_generation,
+                cache_owner: self.cache_owner.clone(),
                 request_id: self.request_id,
                 source_key: self.source_key,
                 photo: self.photo,
@@ -320,6 +332,8 @@ impl RenderJob {
             }
             let histogram = Histogram::of_srgb8(&image);
             return RenderResult {
+                cache_generation: self.cache_generation,
+                cache_owner: self.cache_owner.clone(),
                 request_id: self.request_id,
                 source_key: self.source_key,
                 photo: self.photo,
@@ -368,6 +382,8 @@ impl RenderJob {
                             photo: self.photo,
                             level: self.level,
                             key: self.key,
+                            cache_generation: self.cache_generation,
+                            cache_owner: self.cache_owner.clone(),
                             rendered: Ok(Rendered {
                                 image: lightcraft_raster::Rgba8 { width: 0, height: 0, data: Vec::new() },
                                 histogram,
@@ -427,6 +443,8 @@ impl RenderJob {
                     }
                 }
                 RenderResult {
+                    cache_generation: self.cache_generation,
+                    cache_owner: self.cache_owner.clone(),
                     request_id: self.request_id,
                     source_key: self.source_key,
                     photo: self.photo,

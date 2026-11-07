@@ -37,9 +37,9 @@ L5 depends on egui, eframe, winit or rfd, and that each crate only uses lower la
 
 ## Rendering
 
-1. **Decode** (`raw`, `codecs`): raw files to linear camera RGB (demosaic, black/white levels,
-   opcodes, highlight handling) and a camera-to-XYZ colour model; standard images to linear light
-   through their ICC profile.
+1. **Decode** (`raw`, `codecs`): raw files to linear camera RGB (black/white levels, opcodes,
+   demosaic of the mosaic white balanced as shot and divided back after, highlight handling) and a
+   camera-to-XYZ colour model; standard images to linear light through their ICC profile.
 2. **Develop** (`pipeline`): white balance, profile, exposure and tone (local Laplacian
    highlights/shadows), curves, HSL / colour mixer, point colour, colour grading, texture, clarity,
    dehaze, detail (sharpening, NR, AI denoise result), optics (lens profile, CA, defringe,
@@ -88,5 +88,6 @@ the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
+| 2026-10-12 | minor | Rendering, decode: the full-size demosaic runs on the mosaic white balanced as shot, divided back after (issue #1328) |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |
