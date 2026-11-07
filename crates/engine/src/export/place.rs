@@ -30,6 +30,7 @@ pub fn write_file_new(path: &str, bytes: &[u8]) -> Result<(), String> {
     lightcraft_catalog::safe_file::write_new(p, bytes).map_err(|e| format!("{path}: {e}"))
 }
 
+/// Write a complete file atomically, optionally syncing it to durable storage.
 fn write_with(path: &str, bytes: &[u8], durable: bool) -> Result<(), String> {
     use lightcraft_catalog::safe_file::{write_atomic, write_atomic_nosync};
     let p = std::path::Path::new(path);

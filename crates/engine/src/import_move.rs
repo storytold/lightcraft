@@ -253,7 +253,7 @@ pub(crate) fn finish(p: &Placed) -> Result<Vec<(String, String)>, String> {
     if injected(Fault::FailRemove) {
         return Err("could not remove the original (injected): it stays where it was".into());
     }
-    crate::file_access::check_write(&p.src)?;
+    crate::file_access::check_write_pair(&p.src, &p.dst)?;
     fs::remove_file(&p.src).map_err(|e| format!("could not remove the original ({e}): it stays where it was"))?;
     let mut kept = Vec::new();
     for sc in &p.sidecars {
@@ -268,7 +268,7 @@ pub(crate) fn finish(p: &Placed) -> Result<Vec<(String, String)>, String> {
             kept.push((path, format!("also the sidecar of {other}: kept beside it")));
             continue;
         }
-        if let Err(e) = crate::file_access::check_write(&sc.src).and_then(|()| fs::remove_file(&sc.src).map_err(|e| e.to_string())) {
+        if let Err(e) = crate::file_access::check_write_pair(&sc.src, &sc.dst).and_then(|()| fs::remove_file(&sc.src).map_err(|e| e.to_string())) {
             kept.push((path, format!("could not remove the sidecar ({e})")));
         }
     }

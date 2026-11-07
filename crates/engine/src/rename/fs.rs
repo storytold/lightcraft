@@ -112,6 +112,7 @@ impl MoveFs for RealFs {
         }
     }
 
+    /// Rename a file without replacing an existing destination.
     fn rename_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
         crate::file_access::check_write(a).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         crate::file_access::check_write(b).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
@@ -132,6 +133,7 @@ impl MoveFs for RealFs {
         }
     }
 
+    /// Copy a file without replacing an existing destination.
     fn copy_no_replace(&self, a: &Path, b: &Path) -> std::io::Result<()> {
         crate::file_access::check_read(a).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         crate::file_access::check_write(b).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
@@ -168,6 +170,7 @@ impl MoveFs for RealFs {
         placed
     }
 
+    /// Remove a file after checking that its path is permitted.
     fn remove_file(&self, p: &Path) -> std::io::Result<()> {
         crate::file_access::check_write(p).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         std::fs::remove_file(p)

@@ -1122,6 +1122,7 @@ impl Session {
         self.save_sidecar_with(id, &StemOwners::among(&self.catalog, &[id]))
     }
 
+    /// Save sidecar data using the supplied atomic writer.
     pub(crate) fn save_sidecar_with(&mut self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         if p.copy_of.is_some() {

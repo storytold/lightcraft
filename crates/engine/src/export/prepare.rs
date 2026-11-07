@@ -208,6 +208,7 @@ pub(super) fn render_weight(full_px: usize, long: usize, level: crate::media::So
 }
 
 impl PreparedExport {
+    /// Run the prepared export work and return its completed output.
     pub fn run(self) -> Result<Exported, String> {
         let file_name = self.file_name;
         match self.work {

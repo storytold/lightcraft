@@ -49,7 +49,7 @@ pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path
         return Err(format!("{path}: the DNG written for it doesn't hold the same raw data; the raw is kept"));
     }
     drop((raw, back));
-    crate::file_access::check_write(crate::merge::output_dir(path))?;
+    crate::file_access::check_write_container(crate::merge::output_dir(path))?;
     let out = lightcraft_catalog::safe_file::write_new_unique(&mut dng_names(path), &dng)
         .map_err(|e| format!("{path}: could not write its DNG ({e}); the raw is kept"))?;
     Ok(out.to_string_lossy().to_string())
@@ -61,12 +61,13 @@ fn check_beside_originals(s: &Session, ids: &[lightcraft_catalog::PhotoId], c: &
     for id in ids {
         if let Some(Source::File { path }) = s.catalog.photo(*id).map(|ph| &ph.source) {
             crate::file_access::check_read(path).map_err(|e| bad(c, e))?;
-            crate::file_access::check_write(crate::merge::output_dir(path)).map_err(|e| bad(c, e))?;
+            crate::file_access::check_write_container(crate::merge::output_dir(path)).map_err(|e| bad(c, e))?;
         }
     }
     Ok(())
 }
 
+/// Convert selected supported raw photos to DNG beside their originals.
 fn convert(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.convertToDng";
     let ids = s.targets(p)?;

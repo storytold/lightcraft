@@ -300,6 +300,8 @@ pub fn to_file(presets: &[CurvePreset]) -> String {
     serde_json::to_string_pretty(&json!({"format": FILE_FORMAT, "version": 1, "presets": presets})).unwrap_or_default()
 }
 
+/// Import curve presets from the named preset files.
+/// Import curve presets from the supplied files.
 fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "curve.importPresets";
     let mut paths: Vec<String> =

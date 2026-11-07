@@ -41,6 +41,7 @@ impl Default for Headless {
 }
 
 impl Headless {
+    /// Create a headless backend for the supplied session.
     pub fn new(session: Session) -> Self {
         Self { session, progress: None, roots: None }
     }
@@ -147,6 +148,7 @@ impl Backend for Headless {
         self.progress = hook;
     }
 
+    /// Dispatch a control method to the confined headless session.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let roots = self.roots.clone();
         lightcraft_engine::file_access::confine(roots.as_ref(), || {
@@ -199,6 +201,7 @@ impl Backend for Headless {
         false
     }
 
+    /// Describe this backend and its configured automation roots.
     fn describe(&self) -> String {
         match &self.roots {
             Some(r) => {

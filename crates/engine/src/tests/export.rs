@@ -1253,6 +1253,7 @@ mod apple_photos {
         }
     }
 
+    /// Verify that confined exports cannot add files to Apple Photos.
     #[test]
     fn photos_is_refused_inside_automation_roots() {
         let dir = temp_dir("photos-confined");

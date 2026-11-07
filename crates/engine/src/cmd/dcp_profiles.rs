@@ -164,10 +164,7 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
                 }
                 // a copy that fails (disk full, no access) fails this file only: the profiles
                 // copied before it stay imported, and nothing half-written is left behind
-                if let Err(e) = std::fs::write(&to, &bytes) {
-                    if to.is_file() {
-                        let _ = std::fs::remove_file(&to);
-                    }
+                if let Err(e) = lightcraft_catalog::safe_file::write_atomic(&to, &bytes) {
                     failed.push(json!([shown, format!("{}: {e}", to.display())]));
                     continue;
                 }
@@ -183,6 +180,8 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
     Ok((imported, failed))
 }
 
+/// Delete a camera profile from the selected library.
+/// Delete the selected DCP profile.
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "profile.deleteCamera";
     let id = str_param(p, "id").ok_or_else(|| bad(C, "missing id"))?.to_string();
