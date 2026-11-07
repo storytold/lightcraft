@@ -460,8 +460,9 @@ pub(super) fn reusable_probes(
 
 /// Copy `src` into `dir` as `name` (default: its own name), made unique with -1, -2…; returns the
 /// new path. The copy is verified ([`crate::import_move::copy_new`]: a new file, synced and
-/// checked against `probe_hash`, the content hash the probe computed — or compared byte for byte
-/// with the source when there is none); a bad one is removed and the photo reported as failed.
+/// checked against the hash taken while the source was read, and against `probe_hash`, the hash the
+/// probe computed, when there is one); a bad one is removed and the photo reported as failed. The
+/// second value is the copy's content hash.
 pub(super) fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: Option<&str>) -> Result<(String, String), String> {
     let name = name
         .map(str::to_string)

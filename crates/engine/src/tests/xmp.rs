@@ -1481,7 +1481,8 @@ fn reload_picks_up_changed_files() {
 }
 
 /// A photo with no content hash on record (a Lightroom catalog's originals are added from their
-/// headers) is left alone by Reload while its file is the same: no undo step, the same render key.
+/// headers) is not changed by Reload while its file is the same: no undo step, but the hash read on
+/// the way is kept and becomes its render key.
 /// A file that did change is picked up as before, hash included.
 #[test]
 fn reload_leaves_an_unchanged_photo_without_a_hash_alone() {

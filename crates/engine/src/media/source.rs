@@ -109,7 +109,8 @@ pub type ReducedLoader = Arc<dyn Fn(&str, usize, RawDecode<'_>) -> Result<(Rgb32
 pub type PreviewLoader = Arc<dyn Fn(&str, usize) -> Option<Rgba8> + Send + Sync>;
 
 /// Makes a photo's denoised picture when it is not cached yet (an export does not wait for the background queue):
-/// `Ok(true)` once it is there, `Ok(false)` when denoise does not apply to this photo (render it plain), `Err` when it
+/// `Ok(Some(spec))` names the product once it is there, `Ok(None)` when denoise does not apply to this photo (render it
+/// plain), `Err` when it
 /// should have worked and did not.
 pub type MakeProduct = Arc<dyn Fn() -> Result<Option<DenoiseSpec>, String> + Send + Sync>;
 

@@ -25,6 +25,10 @@ mod windows {
     pub(super) fn identity(file: &File) -> io::Result<(u64, [u8; 16])> {
         let mut info = MaybeUninit::<FILE_ID_INFO>::uninit();
         let size = u32::try_from(size_of::<FILE_ID_INFO>()).map_err(|_| io::Error::other("FILE_ID_INFO exceeds the OS buffer size"))?;
+        // SAFETY: `file` is borrowed for this synchronous call, so its HANDLE stays open. `info` is
+        // a properly aligned FILE_ID_INFO and `size` is its exact size, as FileIdInfo requires.
+        // Windows fills all of it when the call returns nonzero; on zero we return before reading
+        // it. The call changes no handle ownership, file position, file bytes or other memory.
         let info = unsafe {
             if GetFileInformationByHandleEx(file.as_raw_handle(), FileIdInfo, info.as_mut_ptr().cast(), size) == 0 {
                 return Err(io::Error::last_os_error());
