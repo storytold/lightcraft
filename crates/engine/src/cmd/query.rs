@@ -265,10 +265,12 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
         }),
         cmd!(query "app.memoryBudget", "Memory Budget", [], None, "{mb?: number} — set the memory budget shared by the caches (default: a quarter of RAM, at most 1536 MB); returns the report", always, |s, p| {
-            if let Some(mb) = p.get("mb").and_then(Value::as_f64) {
-                if !(64.0..=1_048_576.0).contains(&mb) {
-                    return Err(bad("app.memoryBudget", "mb must be 64..1048576"));
-                }
+            // missing or null: the report only; anything else must be a number in range (issue #3706)
+            if let Some(v) = p.get("mb").filter(|v| !v.is_null()) {
+                let mb = v
+                    .as_f64()
+                    .filter(|mb| (64.0..=1_048_576.0).contains(mb))
+                    .ok_or_else(|| bad("app.memoryBudget", "`mb` must be a number of megabytes from 64 to 1048576, or null"))?;
                 s.set_memory_budget((mb * 1048576.0) as usize);
             }
             Ok(serde_json::to_value(s.memory_report()).unwrap_or_default())
@@ -307,5 +309,77 @@ mod pagination_tests {
         assert_eq!(pagination_usize(u64::MAX), usize::MAX);
         #[cfg(target_pointer_width = "32")]
         assert_eq!(pagination_usize(u64::from(u32::MAX) + 1), usize::MAX);
+    }
+}
+
+#[cfg(test)]
+mod memory_budget_tests {
+    use serde_json::json;
+
+    use crate::{EngineError, Session};
+
+    /// Issue #3706: an `mb` that is there but isn't a number is refused, not taken as "report only".
+    #[test]
+    fn a_memory_budget_that_is_not_a_number_is_refused() {
+        let mut s = Session::new();
+        let before = crate::memory::budget();
+        for mb in [json!("512"), json!(true), json!([512]), json!({"mb": 512})] {
+            let r = s.execute("app.memoryBudget", &json!({ "mb": mb }));
+            assert!(
+                matches!(&r, Err(EngineError::BadParams { cmd, msg }) if cmd == "app.memoryBudget" && msg.contains("64") && msg.contains("1048576")),
+                "{mb}: {r:?}"
+            );
+        }
+        assert_eq!(crate::memory::budget(), before, "a refused call changes nothing");
+    }
+
+    /// Missing or null `mb`: the report only; numbers out of 64..1048576 (0 included) are refused.
+    #[test]
+    fn a_missing_null_or_out_of_range_memory_budget_changes_nothing() {
+        let mut s = Session::new();
+        let before = crate::memory::budget();
+        for p in [json!({}), json!({"mb": null})] {
+            let r = s.execute("app.memoryBudget", &p).unwrap();
+            assert_eq!(r["budget"].as_u64(), Some(before as u64), "{p}: {r}");
+        }
+        for mb in [json!(0), json!(63), json!(1_048_577), json!(-1)] {
+            let r = s.execute("app.memoryBudget", &json!({ "mb": mb }));
+            assert!(matches!(&r, Err(EngineError::BadParams { cmd, .. }) if cmd == "app.memoryBudget"), "{mb}: {r:?}");
+        }
+        assert_eq!(crate::memory::budget(), before, "nothing changed");
+    }
+
+    /// A number in range is applied: the process-wide budget and this session's cache share. Run
+    /// in a process of its own, so the other tests in this one keep their budget.
+    #[test]
+    fn a_memory_budget_in_range_is_applied() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "cmd::query::memory_budget_tests::applies_a_memory_budget_in_its_own_process", "--ignored", "--test-threads=1"])
+            .env("LC_MEMORY_BUDGET_CHILD", "1")
+            .output()
+            .unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && text.contains("1 passed"), "{text}");
+    }
+
+    /// The child of [`a_memory_budget_in_range_is_applied`].
+    #[test]
+    #[ignore = "run by a_memory_budget_in_range_is_applied in a process of its own"]
+    fn applies_a_memory_budget_in_its_own_process() {
+        if std::env::var_os("LC_MEMORY_BUDGET_CHILD").is_none() {
+            return;
+        }
+        let mut s = Session::new();
+        // a budget other than the one the process has, in whole MB (and a fractional one), and both
+        // ends of the range, which are accepted: setting a budget only moves limits (nothing is
+        // allocated, even for 1 TiB), and this process runs nothing else
+        let mb = if crate::memory::budget() == 512 << 20 { 768.0 } else { 512.0 };
+        for mb in [mb, mb + 0.5, 64.0, 1_048_576.0] {
+            let r = s.execute("app.memoryBudget", &json!({ "mb": mb })).unwrap();
+            let bytes = (mb * 1_048_576.0) as u64;
+            assert_eq!(r["budget"].as_u64(), Some(bytes), "{r}");
+            assert_eq!(r["cacheBudget"].as_u64(), Some(bytes / 2), "{r}");
+            assert_eq!(crate::memory::budget() as u64, bytes);
+        }
     }
 }
