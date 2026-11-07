@@ -137,7 +137,7 @@ fn refresh(app: &mut LightcraftApp) {
     app.ui.lens_refreshed = Some(key);
     let Some(probe) = recheck::file_probe(&app.session) else { return };
     let Some(db) = lens_profiles::database() else { return };
-    let listed = lens_refresh::missing(&app.session.catalog, &db, ids.as_deref(), again);
+    let lens_refresh::Listing { list: listed, recheck, .. } = lens_refresh::listing(&app.session.catalog, &db, ids.as_deref(), again);
     if listed.is_empty() {
         return;
     }
@@ -150,14 +150,36 @@ fn refresh(app: &mut LightcraftApp) {
             return;
         }
         match lens_refresh::apply(&mut app.session, results) {
-            Ok(found) if found.len() == 1 => app.toast(ctx, crate::i18n::tr("1 photo got its lens profile")),
-            Ok(found) if found.len() > 1 => app.toast(ctx, crate::i18n::tr_format!("{n} photos got their lens profile", n = found.len())),
-            Ok(_) => {}
+            Ok(found) => {
+                if let Some(text) = lookup_notice(recheck, found.len()) {
+                    app.toast(ctx, text);
+                }
+            }
             Err(e) => log::warn!("lens profile lookup: {e}"),
         }
     };
     if let Err(e) = crate::tasks::spawn(app, LABEL, Some("lensLookup"), work, done) {
         log::warn!("{e}");
+    }
+}
+
+/// What a finished lookup says: the photos that got a profile, and, when photos already looked up were read again
+/// because the lens database changed (`recheck`, [`lens_refresh::Listing::recheck`]), why they were read. Nothing when
+/// neither happened.
+pub(crate) fn lookup_notice(recheck: usize, found: usize) -> Option<String> {
+    if recheck > 0 {
+        let s = crate::i18n::plural_s(recheck);
+        return Some(crate::i18n::tr_format!(
+            "The lens database changed: {n} photo{s} looked up again, {found} got a lens profile",
+            n = recheck,
+            s = s,
+            found = found
+        ));
+    }
+    match found {
+        0 => None,
+        1 => Some(crate::i18n::tr("1 photo got its lens profile").to_string()),
+        n => Some(crate::i18n::tr_format!("{n} photos got their lens profile", n = n)),
     }
 }
 
@@ -226,6 +248,17 @@ mod tests {
         // the database's name for it, or the file's own without a database (LIGHTCRAFT_LENSFUN_DIR may be set)
         let r = super::readout(&app, &p);
         assert!(r.starts_with("Profile: ") && r.contains("70-200mm f/2.8L IS II USM") && r.ends_with(" (lens database)"), "{r}");
+    }
+
+    /// A lookup that read photos again because the lens database changed says so; an ordinary one names only what it
+    /// found, and says nothing when it found nothing (eliets2 on #3867).
+    #[test]
+    fn a_lookup_that_rechecks_photos_says_the_database_changed() {
+        assert_eq!(super::lookup_notice(0, 0), None);
+        assert_eq!(super::lookup_notice(0, 1).as_deref(), Some("1 photo got its lens profile"));
+        assert_eq!(super::lookup_notice(0, 3).as_deref(), Some("3 photos got their lens profile"));
+        assert_eq!(super::lookup_notice(1, 0).as_deref(), Some("The lens database changed: 1 photo looked up again, 0 got a lens profile"));
+        assert_eq!(super::lookup_notice(4, 2).as_deref(), Some("The lens database changed: 4 photos looked up again, 2 got a lens profile"));
     }
 
     /// A first-run download that failed says so, instead of "no profile" for every lens.

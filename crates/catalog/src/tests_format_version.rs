@@ -97,6 +97,29 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// eliets2 on #3867: a library from the build before this one's format (v11, before lens lookups were stamped) reports
+/// the upgrade, so the app can say once that older builds no longer open it; the same library loaded again, now in
+/// this format, reports none.
+#[test]
+fn previous_format_library_reports_the_upgrade_and_a_current_one_does_not() {
+    let (base, log, full) = legacy_parts();
+    let previous = VERSION - 1;
+    let m = MemStore::new();
+    m.set(
+        SNAPSHOT,
+        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{previous},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes(),
+    );
+    m.set(LOG, log.into_bytes());
+    let (j, c, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(c.to_snapshot(), full.to_snapshot());
+    assert_eq!(r.upgraded_from, Some(previous));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    drop(j);
+    let (_, c, r) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(c.to_snapshot(), full.to_snapshot());
+    assert_eq!(r.upgraded_from, None, "a library in this format reports no upgrade");
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();

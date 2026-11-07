@@ -96,6 +96,44 @@ fn unreadable_settings_are_not_overwritten() {
     assert_eq!(files.files.get("prefs.json").unwrap(), prefs);
 }
 
+/// eliets2 on #3867: opening a library written in an older catalog format rewrites it in this build's, after which
+/// older builds refuse it. The user is told once, through the library warnings the app's notices and the CLI show,
+/// and `library.info` → `load.upgradedFrom` names the old format. The same library opened again (now in this
+/// format) says nothing, and neither does a new library.
+#[test]
+fn opening_an_older_format_library_warns_once_that_older_builds_cant_open_it() {
+    let older = lightcraft_catalog::journal::VERSION - 1;
+    let catalog = MemStore::new();
+    let snap = lightcraft_catalog::Catalog::new().to_snapshot();
+    catalog.set("catalog.snap", format!("{{\"format\":\"lightcraft-catalog\",\"version\":{older},\"seq\":0,\"catalog\":{snap}}}\n").into_bytes());
+    let open = |s: &mut Session| {
+        let stores = LibraryStores { dir: "older".into(), catalog: Box::new(catalog.clone()), files: Box::new(MemStore::new()), on_disk: false };
+        s.open_library_in(stores, false).unwrap().upgraded_from
+    };
+    let mut s = Session::new();
+    assert_eq!(open(&mut s), Some(older));
+    let info = s.execute("library.info", &json!({})).unwrap();
+    assert_eq!(info["load"]["upgradedFrom"], json!(older), "{info}");
+    let warnings = s.take_library_warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains(&format!("from catalog format v{older}")) && warnings[0].contains("Older versions of LightCraft can no longer open it"),
+        "{warnings:?}"
+    );
+    assert!(s.take_library_warnings().is_empty(), "told once");
+    drop(s);
+    // opened again: already in this format, so no upgrade and no warning
+    let mut again = Session::new();
+    assert_eq!(open(&mut again), None);
+    assert!(again.take_library_warnings().is_empty());
+    assert_eq!(again.execute("library.info", &json!({})).unwrap()["load"]["upgradedFrom"], json!(null));
+    // a new library is written in this format from the start: nothing to warn about
+    let mut new = Session::new();
+    let stores = LibraryStores { dir: "new".into(), catalog: Box::new(MemStore::new()), files: Box::new(MemStore::new()), on_disk: false };
+    assert_eq!(new.open_library_in(stores, false).unwrap().upgraded_from, None);
+    assert!(new.take_library_warnings().is_empty());
+}
+
 /// Issue #171: a library whose `catalog.lock` can't be locked (stood in for here by a directory
 /// of that name, which takes the same path as a file system without locks) still opens, and the
 /// user is told it is unprotected — in `library.info` and once through the library warnings the

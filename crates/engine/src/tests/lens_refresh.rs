@@ -222,6 +222,44 @@ fn a_lookup_that_found_nothing_is_not_repeated_until_the_database_changes() {
     assert_eq!(ids(&missing(&s, &db, None, false)), [3], "an unread file is not remembered as looked up");
 }
 
+/// eliets2 on #3867: a library-wide listing that leaves out a photo for its current stamp says so (`skipped`), so
+/// "nothing to check" is told apart from "already checked"; a photo asked for by id is read, not skipped. A photo
+/// stamped by another database is listed and counted as read again because the database changed (`recheck`); an
+/// unstamped one is not.
+#[test]
+fn a_listing_counts_photos_skipped_for_their_stamp_and_rechecked_for_a_new_database() {
+    use crate::cmd::lens_refresh::listing;
+    let mut s = Session::new();
+    let mut copy = raw(11, "50mm F1.8", false);
+    copy.copy_of = Some(PhotoId(1));
+    for p in [raw(1, "50mm F1.8", false), copy, raw(2, "50mm F1.8", false), raw(3, "50mm F1.8", false)] {
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let db = lightcraft_lensdb::LensDb::parse(DB).unwrap();
+    let current = crate::lens_profiles::stamp(&db);
+    s.catalog.apply(Op::SetLensChecked { id: PhotoId(1), checked: current.clone() }).unwrap();
+    s.catalog.apply(Op::SetLensChecked { id: PhotoId(2), checked: "1:another-database".into() }).unwrap();
+    let ids = |v: &[crate::cmd::lens_refresh::Missing]| v.iter().map(|m| m.id.0).collect::<Vec<_>>();
+
+    let sweep = listing(&s.catalog, &db, None, false);
+    assert_eq!(ids(&sweep.list), [2, 3], "the photo with a current stamp is left out");
+    assert_eq!(sweep.skipped, 1, "and counted once, though its virtual copy names it too");
+    assert_eq!(sweep.recheck, 1, "photo 2's stamp is another database's: read again for the new one");
+
+    let asked = listing(&s.catalog, &db, Some(&[PhotoId(1)]), false);
+    assert_eq!(ids(&asked.list), [1], "asked for by id: read regardless of its stamp");
+    assert_eq!((asked.skipped, asked.recheck), (0, 0), "not a skip, and its stamp is current");
+
+    // only the stamped photo, swept: nothing listed, but not "nothing to look up"
+    let mut only = Session::new();
+    only.catalog.apply(Op::AddPhoto { photo: Box::new(raw(1, "50mm F1.8", false)) }).unwrap();
+    only.catalog.apply(Op::SetLensChecked { id: PhotoId(1), checked: current }).unwrap();
+    let swept = listing(&only.catalog, &db, None, false);
+    assert!(swept.list.is_empty());
+    assert_eq!(swept.skipped, 1);
+    assert!(crate::cmd::lens_refresh::missing(&only.catalog, &db, None, false).is_empty(), "missing() is the listing's list");
+}
+
 /// CodeRabbit round 1 on #3867: a probe that fell back to the file's embedded preview ran no lens
 /// lookup (the raw couldn't be decoded, so nothing was looked up in the database), so its result
 /// must not be remembered as a lookup: no stamp is set, and a stamp the photo already carries is
