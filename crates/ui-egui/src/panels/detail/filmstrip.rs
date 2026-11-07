@@ -252,3 +252,21 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
         paint(p, Rect::from_min_size(pos2(bar.right() - 13.0, y - 5.0), vec2(10.0, 10.0)), Icon::Sliders, t.text_label);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::visible_cells;
+
+    /// A strip of millions of cells visits the few its viewport reaches (and a margin), wherever it is scrolled.
+    #[test]
+    fn only_the_cells_near_the_viewport_are_visited() {
+        let (first, last) = visible_cells(1_200_000.0, 1_201_600.0, 120.0, 2_000_000);
+        assert!(first <= 10_000 && last >= 10_013, "reaches the viewport: {first}..{last}");
+        assert!(last - first < 40, "{first}..{last}");
+        assert_eq!(visible_cells(0.0, 1600.0, 120.0, 3), (0, 3), "a short strip is all of it");
+        assert_eq!(visible_cells(0.0, 1600.0, 120.0, 0), (0, 0), "an empty one nothing");
+        let (first, last) = visible_cells(-50.0, 100.0, 120.0, 10);
+        assert_eq!(first, 0);
+        assert!(last >= 2);
+    }
+}
