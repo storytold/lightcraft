@@ -71,8 +71,9 @@ fn corrections_become_masks() {
 fn masks_render() {
     let (s, _) = settings();
     let img = lightcraft_scenes::demo_library()[0].render(96, 64);
-    let render =
-        |d: &DevelopSettings| lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(96, 64)).image.data;
+    let render = |d: &DevelopSettings| {
+        lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(96, 64)).unwrap().image.data
+    };
     assert_ne!(render(&DevelopSettings { light: s.light, ..Default::default() }), render(&s), "the masks change the picture");
 }
 
@@ -170,8 +171,9 @@ fn radial_of(s: &DevelopSettings) -> (bool, f64, bool) {
 /// How much brighter the mask makes the centre and a corner of a flat grey frame (8-bit green).
 fn lift_inside_outside(s: &DevelopSettings) -> (i32, i32) {
     let img = lightcraft_raster::Image { width: 90, height: 60, data: vec![[0.18f32; 3]; 90 * 60] };
-    let render =
-        |d: &DevelopSettings| lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(90, 60)).image;
+    let render = |d: &DevelopSettings| {
+        lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(90, 60)).unwrap().image
+    };
     let (with, without) = (render(s), render(&DevelopSettings { light: s.light, ..Default::default() }));
     let g = |im: &lightcraft_raster::Rgba8, x: usize, y: usize| i32::from(im.data[y * im.width + x][1]);
     (g(&with, 45, 30) - g(&without, 45, 30), g(&with, 3, 3) - g(&without, 3, 3))
@@ -323,7 +325,8 @@ fn spots_render() {
     let (partial, _) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
     let s = DevelopSettings::default().merged(&partial).unwrap();
     let img = lightcraft_scenes::demo_library()[0].render(96, 64);
-    let render =
-        |d: &DevelopSettings| lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(96, 64)).image.data;
+    let render = |d: &DevelopSettings| {
+        lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(96, 64)).unwrap().image.data
+    };
     assert_ne!(render(&DevelopSettings { light: s.light, ..Default::default() }), render(&s), "the spots change the picture");
 }

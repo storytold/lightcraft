@@ -55,11 +55,8 @@ fn thumbnail_throughput() {
                 sc.spawn(move || {
                     for i in 0..per_thread {
                         let src = &sources[(k * per_thread + i) % sources.len()];
-                        let r = if gpu {
-                            lightcraft_gpu::render(src, info, s, &req, None)
-                        } else {
-                            Some(lightcraft_pipeline::render(src, info, s, &req))
-                        };
+                        let r =
+                            if gpu { lightcraft_gpu::render(src, info, s, &req, None) } else { lightcraft_pipeline::render(src, info, s, &req).ok() };
                         assert!(r.is_some());
                     }
                 });
