@@ -109,7 +109,7 @@ pub type ReducedLoader = Arc<dyn Fn(&str, usize, RawDecode<'_>) -> Result<(Rgb32
 pub type PreviewLoader = Arc<dyn Fn(&str, usize) -> Option<Rgba8> + Send + Sync>;
 
 /// Makes a photo's denoised picture when it is not cached yet (an export does not wait for the background queue):
-/// `Ok(Some(spec))` names the ready product; `Ok(None)` when denoise does not apply (render it plain), `Err` when it
+/// `Ok(true)` once it is there, `Ok(false)` when denoise does not apply to this photo (render it plain), `Err` when it
 /// should have worked and did not.
 pub type MakeProduct = Arc<dyn Fn() -> Result<Option<DenoiseSpec>, String> + Send + Sync>;
 
@@ -279,7 +279,7 @@ pub enum SourceRef {
         /// UI thread never checks whether the original is there; the render worker finds out.
         fallback: Option<Vec<std::path::PathBuf>>,
         /// The photo has a cached denoised picture: load it with the plain one (see [`PairLoader`]).
-        denoise: Option<(DenoiseSpec, PairLoader)>,
+        denoise: Option<Box<(DenoiseSpec, PairLoader)>>,
         ticket: Option<crate::cache_identity::SourceTicket>,
         /// The photo's imported camera profile (id and profile): its raw file is developed with it.
         camera_profile: Option<(String, Arc<DcpProfile>)>,
@@ -335,7 +335,7 @@ impl SourceRef {
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
                 // pair loader gives the plain picture alone (the cached file is never a reason to fail a render)
-                let r = match denoise {
+                let r = match denoise.as_deref() {
                     Some((spec, pair)) => {
                         // a job that needs the denoised picture has it made first; if that fails the job fails (no smart
                         // preview stands in: an export must not quietly come out without the denoise it was asked for)
@@ -377,7 +377,7 @@ impl SourceRef {
                 // An offline original renders from its smart preview (no decoder facts: header ones).
                 let result = match (r, fallback) {
                     #[cfg(not(target_arch = "wasm32"))]
-                    (Err(e), Some(paths)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) => {
+                    (Err(e), Some(paths)) if denoise.as_deref().is_none_or(|(spec, _)| spec.make.is_none()) => {
                         match paths.iter().find(|sp| crate::smart::is_valid(sp)) {
                             Some(sp) => crate::smart::load(sp).map_err(|e2| format!("{e}; smart preview: {e2}")),
                             None => Err(e),
@@ -435,7 +435,6 @@ pub struct ProbeInfo {
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
     pub head_hash: Option<String>,
-    /// Native same-read provenance. Custom and browser hooks supply their own authoritative facts.
     pub native_read: Option<crate::originals::ProbeEvidence>,
 }
 

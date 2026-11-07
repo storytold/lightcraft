@@ -250,8 +250,6 @@ pub fn is_current(path: &Path, key: &str) -> bool {
     check().unwrap_or(false)
 }
 
-/// Stage a complete product with a new key, retaining the old address for active readers.
-/// `publish` atomically places the completed temporary file while the caller validates its source.
 pub fn copy_rekey(
     from: &Path,
     to: &Path,

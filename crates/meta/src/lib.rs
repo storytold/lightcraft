@@ -299,7 +299,6 @@ pub fn extract(bytes: &[u8]) -> Metadata {
     extract_embedded(&e)
 }
 
-/// Extract metadata from collected blocks, with the same precedence as [`extract`].
 pub fn extract_embedded(e: &Embedded) -> Metadata {
     let exif = e.exif.as_deref().map(read_exif).unwrap_or_default();
     let xmp = e.xmp.as_deref().and_then(|xmp| parse_xmp(xmp).ok());

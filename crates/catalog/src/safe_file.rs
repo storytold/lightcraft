@@ -226,10 +226,6 @@ pub fn write_new_unique(candidates: &mut dyn Iterator<Item = PathBuf>, data: &[u
     r
 }
 
-/// Write synced bytes under a new name, remove the temporary alias, then verify the final path once.
-/// Unlike [`write_new_unique`], the new file is visible before verification. Callers must not
-/// catalog it or retire their source before this returns. `same` must compare live file identities,
-/// not names or timestamps. Unproven names are left for inspection on error.
 pub fn write_new_unique_verified<T>(
     candidates: &mut dyn Iterator<Item = PathBuf>,
     data: &[u8],
@@ -256,7 +252,6 @@ fn write_new_unique_verified_with<T>(
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "no file name to write"));
     };
     let (tmp, _, written) = write_temp_owned(&first, true, &mut |w| w.write_all(data))?;
-    // Keep the actual exclusive-created object alive while obtaining a read-only ownership handle.
     let owned = File::open(&tmp)
         .and_then(|read| if same(&written, &read) { Ok(read) } else { Err(io::Error::other("temporary file identity could not be verified")) });
     let owned = match owned {

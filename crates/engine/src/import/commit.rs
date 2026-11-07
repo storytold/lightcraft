@@ -211,6 +211,62 @@ fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool 
 
 /// The catalog half of an import: add the photos [`ImportJob::prepare`] readied (one undoable op;
 /// a Move's sources are removed once it is saved). On a failed commit a Move's placed files are
+type ByKey = HashMap<String, PhotoId>;
+
+fn trashed_by_content_and_path(s: &Session) -> (ByKey, ByKey) {
+    let (mut by_hash, mut by_path) = (ByKey::new(), ByKey::new());
+    for p in s.catalog.photos().filter(|p| p.deleted) {
+        if let Some(h) = &p.content_hash {
+            by_hash.insert(h.clone(), p.id);
+        }
+        if let Source::File { path } = &p.source {
+            by_path.insert(path.clone(), p.id);
+        }
+    }
+    (by_hash, by_path)
+}
+
+fn existing_no_longer_matches(s: &Session, existing: Option<PhotoId>, hash: Option<&str>) -> bool {
+    let (Some(id), Some(hash)) = (existing, hash) else { return false };
+    s.catalog.photo(id).is_some_and(|p| {
+        p.content_hash.as_deref().is_none_or(|known| crate::sync::base_hash(known) != crate::sync::base_hash(hash)) || !s.source_hash_authorized(id)
+    })
+}
+
+fn native_read_expired(info: &crate::media::ProbeInfo) -> bool {
+    let Some(proof) = info.native_read.as_ref().filter(|proof| proof.stale()) else { return false };
+    proof.release();
+    true
+}
+
+fn learned_identities(s: &Session, hashes: &[(PhotoId, String)], learned_paths: &HashMap<String, String>) -> HashMap<String, PhotoId> {
+    let holds = |p: &lightcraft_catalog::Photo, hash: &str| {
+        p.content_hash.as_deref().is_some_and(|known| crate::sync::base_hash(known) == crate::sync::base_hash(hash)) && s.source_hash_authorized(p.id)
+    };
+    let mut out = HashMap::new();
+    for (id, hash) in hashes {
+        if s.catalog.photo(*id).is_some_and(|p| holds(p, hash)) {
+            out.insert(hash.clone(), *id);
+        }
+    }
+    for p in s.catalog.photos() {
+        let Source::File { path } = &p.source else { continue };
+        if let Some(hash) = learned_paths.get(path)
+            && holds(p, hash)
+        {
+            out.insert(hash.clone(), p.id);
+        }
+    }
+    out
+}
+
+fn duplicate_proof_expired(s: &Session, path: &str, reason: &str, hash: Option<&str>, proof: Option<&crate::originals::ProbeEvidence>) -> bool {
+    let Some(proof) = proof else { return false };
+    let expired = proof.stale() || (reason == "content" && !hash.is_some_and(|hash| proof.confirms_hash(&s.originals, path, hash)));
+    proof.release();
+    expired
+}
+
 /// taken back.
 pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepared: Prepared) -> crate::Result<ImportReport> {
     if prepared.origin.as_ref().is_some_and(|origin| !s.originals.accepts_origin(origin)) {
@@ -227,36 +283,10 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     // photos added by this batch, by content (a duplicate of a file earlier in the import names it)
     let mut new_hash: HashMap<String, PhotoId> = HashMap::new();
     // Fresh: trashed photos a new import replaces (by content or by file), each removed once
-    let (mut trash_hash, mut trash_path): (HashMap<String, PhotoId>, HashMap<String, PhotoId>) = Default::default();
-    if opts.on_deleted == OnDeleted::Fresh {
-        for p in s.catalog.photos().filter(|p| p.deleted) {
-            if let Some(h) = &p.content_hash {
-                trash_hash.insert(h.clone(), p.id);
-            }
-            if let Source::File { path } = &p.source {
-                trash_path.insert(path.clone(), p.id);
-            }
-        }
-    }
+    let (trash_hash, trash_path) = if opts.on_deleted == OnDeleted::Fresh { trashed_by_content_and_path(s) } else { Default::default() };
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
-    for (id, hash) in &prepared.hashes {
-        if s.catalog.photo(*id).is_some_and(|p| {
-            p.content_hash.as_deref().is_some_and(|known| crate::sync::base_hash(known) == crate::sync::base_hash(hash))
-                && s.source_hash_authorized(*id)
-        }) {
-            new_hash.insert(hash.clone(), *id);
-        }
-    }
-    for p in s.catalog.photos() {
-        let Source::File { path } = &p.source else { continue };
-        if let Some(hash) = prepared.learned_paths.get(path)
-            && p.content_hash.as_deref().is_some_and(|known| crate::sync::base_hash(known) == crate::sync::base_hash(hash))
-            && s.source_hash_authorized(p.id)
-        {
-            new_hash.insert(hash.clone(), p.id);
-        }
-    }
+    new_hash.extend(learned_identities(s, &prepared.hashes, &prepared.learned_paths));
     for it in prepared.items {
         match it {
             PreparedItem::Promote(id) => {
@@ -266,13 +296,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 report.imported.push(id.0);
             }
             PreparedItem::Duplicate { path, existing, reason, hash, file, evidence: proof } => {
-                let stale = proof.as_ref().is_some_and(|proof| {
-                    proof.stale() || (reason == "content" && !hash.as_deref().is_some_and(|hash| proof.confirms_hash(&s.originals, &path, hash)))
-                });
-                if let Some(proof) = &proof {
-                    proof.release();
-                }
-                if stale {
+                if duplicate_proof_expired(s, &path, reason, hash.as_deref(), proof.as_deref()) {
                     s.import_probes.remove(&path);
                     report.failed.push((path, "the source changed or its native read proof expired; retry the import".into()));
                     continue;
@@ -282,13 +306,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     let h = hash?;
                     new_hash.get(&h).copied().or_else(|| s.catalog.photos().find(|p| p.content_hash.as_deref() == Some(h.as_str())).map(|p| p.id))
                 });
-                if reason == "content"
-                    && let (Some(id), Some(hash)) = (existing, expected.as_deref())
-                    && s.catalog.photo(id).is_some_and(|p| {
-                        p.content_hash.as_deref().is_none_or(|known| crate::sync::base_hash(known) != crate::sync::base_hash(hash))
-                            || !s.source_hash_authorized(id)
-                    })
-                {
+                if reason == "content" && existing_no_longer_matches(s, existing, expected.as_deref()) {
                     report.failed.push((path, "the original changed during duplicate comparison; retry the import".into()));
                     continue;
                 }
@@ -315,10 +333,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             PreparedItem::Kept(k) => report.kept.push(k),
             PreparedItem::Ready(r) => {
                 let ReadyFile { path, stored, info, sidecar, placed: pl } = *r;
-                if info.native_read.as_ref().is_some_and(|proof| proof.stale()) {
-                    if let Some(proof) = &info.native_read {
-                        proof.release();
-                    }
+                if native_read_expired(&info) {
                     report
                         .failed
                         .push((path, format!("the stored file changed after probing; original retained; inspect {stored} and retry the import")));
