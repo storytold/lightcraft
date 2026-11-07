@@ -406,16 +406,28 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
 impl Session {
     /// Plan a merge of `ids` (catalog order of the given ids is kept). A photo named more than once is merged once
     /// (issue #1947): it adds nothing to the merge, and each copy would be decoded and held in memory. Naming a photo
-    /// in a collapsed stack names all its members (in stack order), since only its top photo is visible.
+    /// in a collapsed stack names all its members (in capture order, once per stack), since only its top photo is visible.
     pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
         let mut sources = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut expanded: Vec<PhotoId> = Vec::new();
+        let mut expanded_stacks = std::collections::HashSet::new();
         for id in ids {
             // Borrow the stack out ahead of the per-member lookup below.
-            let members = self.catalog.stack_of(*id).filter(|st| st.collapsed).map(|st| st.photos.clone());
-            match members {
-                Some(members) => expanded.extend(members),
+            let stack = self.catalog.stack_of(*id).filter(|st| st.collapsed).map(|st| (st.id, st.photos.clone()));
+            match stack {
+                Some((stack_id, mut members)) => {
+                    if !expanded_stacks.insert(stack_id) {
+                        continue;
+                    }
+                    // Capture order, not stack order (top first): an HDR panorama's bracket
+                    // detection expects the periodic exposure sequence from the earliest capture.
+                    members.sort_by(|a, b| {
+                        let key = |id: PhotoId| self.catalog.photo(id).map(|p| (p.date().to_string(), p.file_name.clone(), p.id));
+                        key(*a).cmp(&key(*b))
+                    });
+                    expanded.extend(members);
+                }
                 None => expanded.push(*id),
             }
         }
