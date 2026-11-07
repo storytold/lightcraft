@@ -528,6 +528,64 @@ impl Backend for Recorder {
     }
 }
 
+/// Reject the whole malformed import request before discovering files or dispatching a partial batch.
+#[test]
+fn import_rejects_non_string_paths_before_dispatch() {
+    for mode in ["add", "copy", "move"] {
+        for invalid in [json!(null), json!(false), json!(7), json!(1.5), json!({"path": "photo.png"}), json!(["photo.png"])] {
+            for paths in [json!(["photo.png", invalid]), json!([invalid, "photo.png"])] {
+                let mut b = Recorder(vec![]);
+                let r = call_tool(&mut b, "import", &json!({"paths": paths, "mode": mode}));
+                assert!(r.is_error, "{mode} {paths}: {r:?}");
+                assert!(r.content[0]["text"].as_str().unwrap().contains("paths["), "{r:?}");
+                assert!(b.0.is_empty(), "{mode} {paths} dispatched a partial batch: {:?}", b.0);
+            }
+        }
+    }
+    // Existing single-string and array requests retain their path order and mode.
+    for paths in [json!("photo.png"), json!(["photo.png", "second.png"])] {
+        let mut b = Recorder(vec![]);
+        let r = call_tool(&mut b, "import", &json!({"paths": paths, "mode": "copy"}));
+        assert!(!r.is_error, "{r:?}");
+        assert_eq!(b.0.len(), 1);
+        assert_eq!(b.0[0].1["command"], "library.import");
+        assert_eq!(b.0[0].1["params"]["mode"], "copy");
+        let expected = if paths.is_string() { vec!["photo.png".to_string()] } else { vec!["photo.png".into(), "second.png".into()] };
+        assert_eq!(b.0[0].1["params"]["paths"], json!(crate::expand_paths(&expected)));
+    }
+}
+
+#[test]
+fn malformed_import_paths_leave_files_and_catalog_unchanged() {
+    let dir = std::env::temp_dir().join(format!("lc-mcp-invalid-import-paths-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.png");
+    let destination = dir.join("destination");
+    let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[20, 3, 9, 255]; 64] };
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(&source, &png).unwrap();
+    let mut s = Server::new(Box::new(Headless::new(lightcraft_engine::Session::new().with_fs())));
+    for mode in ["move", "copy", "add"] {
+        let args = json!({"paths": [source.to_string_lossy(), null], "mode": mode, "destination": destination.to_string_lossy(), "organize": "flat"});
+        let r = rpc(&mut s, 1, "tools/call", json!({"name": "import", "arguments": args}));
+        assert_eq!(r["result"]["isError"], true, "{mode}: {r}");
+        assert_eq!(std::fs::read(&source).unwrap(), png);
+        assert!(!destination.exists(), "{mode} created a destination for an invalid batch");
+        let r = rpc(&mut s, 2, "tools/call", json!({"name": "query_photos"}));
+        assert_eq!(r["result"]["structuredContent"]["total"], 0, "{r}");
+    }
+    let r = rpc(
+        &mut s,
+        3,
+        "tools/call",
+        json!({"name": "import", "arguments": {"paths": [source.to_string_lossy()], "mode": "copy", "destination": destination.to_string_lossy(), "organize": "flat"}}),
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(std::fs::read(destination.join("source.png")).unwrap(), png);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// With the app attached, agents cut, copy and paste in its text fields (`clipboard`).
 #[test]
 fn the_clipboard_tool_cuts_copies_and_pastes_in_the_app() {
