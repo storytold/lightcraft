@@ -672,7 +672,10 @@ pub fn specs() -> Vec<CommandSpec> {
             masks_edit(s, "mask.delete", "Delete Mask", |masks, active| {
                 let i = find(masks, mid, "mask.delete")?;
                 masks.remove(i);
-                *active = masks.last().map(|m| m.id);
+                // deleting another mask (by id) keeps the selection
+                if *active == Some(mid) {
+                    *active = masks.last().map(|m| m.id);
+                }
                 Ok(())
             })
         }),
