@@ -509,11 +509,17 @@ fn catalog_crops_without_has_crop_are_imported() {
 
 #[test]
 fn catalog_partial_crops_are_refused_without_guessing_edges() {
-    for settings in ["s = { CropLeft = 0.1, CropTop = 0.2, CropRight = 0.8 }", "s = { CropAngle = -1.5 }"] {
+    for (settings, keys) in [
+        ("s = { CropLeft = 0.1, CropTop = 0.2, CropRight = 0.8 }", &["CropLeft", "CropTop", "CropRight"][..]),
+        ("s = { CropAngle = -1.5 }", &["CropAngle"][..]),
+    ] {
         let (partial, unknown) =
             mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
         assert!(partial.get("crop").is_none(), "{partial}");
-        assert!(unknown.iter().any(|k| k.starts_with("Crop")), "{unknown:?}");
+        // every crop key given is reported unused, not just one of them
+        for key in keys {
+            assert!(unknown.iter().any(|k| k == key), "{settings}: {key} not reported in {unknown:?}");
+        }
     }
 }
 
