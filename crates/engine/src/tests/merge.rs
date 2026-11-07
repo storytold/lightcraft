@@ -349,6 +349,24 @@ fn collapsed_stack_top_expands_to_stack_members() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// When every merge job fails, `merge_now` is an error (not an empty `merged` list), so
+/// `merge.hdrBatch` reports the set under `failed` instead of as a merged entry.
+#[test]
+fn a_merge_that_fails_every_job_is_an_error() {
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for i in 0..3 {
+        let id = s.catalog.alloc_photo_id();
+        let name = format!("IMG_{i}.dng");
+        let p =
+            lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path: name.clone() }, &name, "DNG", 96, 64, "2026-01-01T00:00:00");
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        ids.push(id);
+    }
+    let err = s.execute("merge.hdr", &json!({"ids": ids})).unwrap_err().to_string();
+    assert!(err.contains("all merges failed"), "{err}");
+}
+
 /// An undersized group is skipped before its sources are validated: a demo photo alone is too
 /// few to merge, so it must not reject a valid collapsed stack selected with it.
 #[test]
@@ -358,28 +376,14 @@ fn undersized_group_is_skipped_before_source_validation() {
     for i in 0..3 {
         let id = s.catalog.alloc_photo_id();
         let name = format!("IMG_{i}.dng");
-        let p = lightcraft_catalog::Photo::new(
-            id,
-            lightcraft_catalog::Source::File { path: name.clone() },
-            &name,
-            "DNG",
-            96,
-            64,
-            "2026-01-01T00:00:00",
-        );
+        let p =
+            lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path: name.clone() }, &name, "DNG", 96, 64, "2026-01-01T00:00:00");
         s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
         ids.push(id);
     }
     let demo = s.catalog.alloc_photo_id();
-    let demo_photo = lightcraft_catalog::Photo::new(
-        demo,
-        lightcraft_catalog::Source::Demo { scene: 1 },
-        "demo.jpg",
-        "JPEG",
-        96,
-        64,
-        "2026-01-01T00:00:00",
-    );
+    let demo_photo =
+        lightcraft_catalog::Photo::new(demo, lightcraft_catalog::Source::Demo { scene: 1 }, "demo.jpg", "JPEG", 96, 64, "2026-01-01T00:00:00");
     s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(demo_photo) }).unwrap();
     let op = s.catalog.group_ops(ids[0], &ids, true).unwrap();
     s.catalog.apply(op).unwrap();
