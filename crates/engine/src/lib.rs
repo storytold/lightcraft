@@ -363,6 +363,8 @@ pub struct Session {
     /// The user's point-curve presets (`curve.*`; built-ins: [`cmd::curves::builtin_presets`]),
     /// persisted in prefs.json.
     pub curve_presets: Vec<cmd::curves::CurvePreset>,
+    /// The crop tool's saved and hidden aspect ratios (`crop.saveAspect`…), persisted in prefs.json.
+    pub crop_aspects: cmd::crop_aspects::CropAspects,
     /// Imported camera profiles (`.dcp`).
     pub dcp_profiles: Vec<cmd::dcp_profiles::DcpEntry>,
     /// Mask effect presets (the Masking panel's Effect menu).
@@ -532,6 +534,7 @@ impl Session {
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
             curve_presets: Vec::new(),
+            crop_aspects: Default::default(),
             dcp_profiles: Vec::new(),
             mask_effects: Vec::new(),
             mask_tool_effects: Default::default(),
