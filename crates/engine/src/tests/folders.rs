@@ -272,13 +272,14 @@ fn a_folder_criterion_of_the_filter_follows_the_folder_when_it_moves() {
     s.filter.folder = Some("/a/b".into());
     crate::cmd::browse::follow_folder(&mut s, "/a/b", "/a/c");
     same_folder(s.filter.folder.as_deref(), "/a/c", "the moved folder itself is followed too");
-    assert_eq!(s.filter.library_folder, None, "the library folder criterion is not set by it");
     // other folders are left alone, a sibling sharing only a name prefix among them
     for other in ["/elsewhere/b", "/a/bc/sub"] {
         let mut s = Session::new();
         s.filter.folder = Some(other.into());
+        s.filter.library_folder = Some("/elsewhere/lib".into());
         crate::cmd::browse::follow_folder(&mut s, "/a/b", "/a/c");
         assert_eq!(s.filter.folder.as_deref(), Some(other), "{other} is left alone");
+        assert_eq!(s.filter.library_folder.as_deref(), Some("/elsewhere/lib"), "a library folder outside the move is left alone");
     }
 }
 
