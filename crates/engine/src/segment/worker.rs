@@ -1,5 +1,5 @@
 //! The SAM 3 worker thread: it owns the model and the last encoded photo, and runs every
-//! request (load, render the model input, encode, clicks, descriptions, detail passes) in
+//! request (load, render the model input, encode, clicks, descriptions, people, detail passes) in
 //! turn. The session only sends jobs and receives outcomes over channels, so no thread ever
 //! waits on a lock the model holds, and the UI thread never runs the model.
 //!
@@ -29,8 +29,13 @@ use lightcraft_segment::{
     remote::{self, Operation, Request, text_logits},
 };
 
+use super::people::{self, Candidate, Part};
 use super::{Input, Prompt, Tag};
 use crate::media::RenderJob;
+
+/// Picking one person needs every instance the detector finds, which the remote worker's
+/// protocol doesn't send (it returns one merged mask).
+const REMOTE_PEOPLE: &str = "People masks need the SAM 3 model on this computer: the remote SAM 3 worker can't select one person yet.";
 
 /// Unload the model after this long without a request.
 pub const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
@@ -42,6 +47,11 @@ pub enum Kind {
     Prepare,
     Clicks(Vec<lightcraft_segment::Click>),
     Text(String),
+    /// The parts of the person whose face box is `face` (normalized).
+    People {
+        face: [f64; 4],
+        parts: Vec<Part>,
+    },
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
         prompt: Prompt,
@@ -421,6 +431,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
         Kind::Prepare => Operation::Prepare,
         Kind::Text(text) => Operation::Text(text),
         Kind::Clicks(clicks) => Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect()),
+        Kind::People { .. } => return Err(REMOTE_PEOPLE.into()),
         Kind::Detail { prompt, region: r } => {
             region = Some(r);
             let (rw, rh) = (r[2] - r[0], r[3] - r[1]);
@@ -429,6 +440,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
             }
             match prompt {
                 Prompt::Text(text) => Operation::Text(text),
+                Prompt::People { .. } => return Ok(None),
                 Prompt::Clicks(clicks) => {
                     let inside: Vec<_> = clicks
                         .iter()
@@ -459,6 +471,10 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
 
 fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<Option<SegMask>, Failure> {
     if let Some(endpoint) = remote::configured() {
+        if matches!(job.kind, Kind::People { .. }) {
+            // (not the remote worker's failure: keep its connection)
+            return Err(REMOTE_PEOPLE.into());
+        }
         let result = remote_job(state, shared, job, &endpoint);
         if result.is_err() {
             state.remote = None;
@@ -479,6 +495,10 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
         Kind::Text(text) => {
             let (m, enc) = encoded(state, shared, job, placement)?;
             Ok(text_logits(m, enc, &text)?.map(|l| SegMask::from_logits(side, &l)))
+        }
+        Kind::People { face, parts } => {
+            let (m, enc) = encoded(state, shared, job, placement)?;
+            Ok(people_logits(m, enc, face, &parts)?.map(|l| SegMask::from_logits(side, &l)))
         }
         #[cfg(test)]
         #[allow(clippy::panic)]
@@ -513,11 +533,40 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
                     Some(m.segment_clicks(&mut enc, &inside)?.logits)
                 }
                 Prompt::Text(text) => text_logits(m, &mut enc, &text)?,
+                Prompt::People { face, parts } => match people::face_in(face, region) {
+                    Some(face) => people_logits(m, &mut enc, face, &parts)?,
+                    None => None,
+                },
             };
             log::info!("SAM 3 detail pass ({}×{}) in {:?}", input.w, input.h, t.elapsed());
             Ok(logits.map(|l| SegMask::from_logits_in(side, &l, region)))
         }
     }
+}
+
+/// The selection of `parts` of the person whose face is `face` (normalized to the encoded
+/// image), in one pass over it: `None` when nobody is at the face. Only the detections the
+/// parts need run ([`people::needs`]).
+fn people_logits(m: &mut Sam3, enc: &mut Encoded, face: [f64; 4], parts: &[Part]) -> Result<Option<Vec<f32>>, String> {
+    let t = web_time::Instant::now();
+    let side = lightcraft_segment::MASK_SIDE;
+    let found = m.instances(enc, "person", people::PERSON_THRESHOLD).map_err(|e| e.to_string())?;
+    let cands: Vec<Candidate> = found.into_iter().map(|i| Candidate { logits: i.logits, score: i.score, bbox: i.bbox }).collect();
+    let Some(person) = people::pick_person(&cands, side, face).and_then(|i| cands.get(i)) else { return Ok(None) };
+    let needs = people::needs(parts);
+    let mut detect = |want: bool, text: &str| -> Result<Option<Vec<f32>>, String> {
+        if !want {
+            return Ok(None);
+        }
+        Ok(m.segment_text(enc, text, people::PART_THRESHOLD).map_err(|e| e.to_string())?.map(|p| p.logits))
+    };
+    let hair = detect(needs.hair, people::HAIR_PROMPT)?;
+    let clothes = detect(needs.clothes, people::CLOTHES_PROMPT)?;
+    let skin = detect(needs.skin, people::SKIN_PROMPT)?;
+    let face = detect(needs.face, people::FACE_PROMPT)?;
+    log::info!("SAM 3 people ({} candidates) in {:?}", cands.len(), t.elapsed());
+    let found = people::Found { hair: hair.as_deref(), clothes: clothes.as_deref(), skin: skin.as_deref(), face: face.as_deref() };
+    Ok(Some(people::compose(&person.logits, &found, parts)))
 }
 
 #[cfg(test)]
