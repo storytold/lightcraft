@@ -200,7 +200,8 @@ fn read_preview(bytes: &[u8], tiff: &Tiff) -> Option<Preview> {
         return None;
     }
     let n = w.checked_mul(h)?.checked_mul(3)?;
-    if n == 0 || n > 1 << 24 {
+    // uncompressed 16-bit samples: more than the whole file holds is refused before the buffer is reserved
+    if n == 0 || n > 1 << 24 || n * 2 > bytes.len() {
         return None;
     }
     let mut raw: Vec<u8> = Vec::with_capacity(n * 2);
