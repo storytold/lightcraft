@@ -708,4 +708,4 @@ fn min_filter(p: &Plane, r: usize, max: bool) -> Plane {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
