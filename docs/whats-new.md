@@ -1,5 +1,16 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### A CR2 opens in the aspect ratio set in the camera
+- A Canon CR2 shot at an in-camera aspect ratio, such as 3:2 on a PowerShot with a 4:3 sensor, now opens in that
+  shape, as a CR3 already did. The raw always holds the whole sensor image; the camera records the rectangle you
+  framed in its maker note, and LightCraft now uses it as the photo's default crop. Photos shot at the sensor's own
+  shape are unchanged, and thumbnails are rendered again once. Photos imported before this render in the new shape
+  too; Photo ▸ Reload from Disk also updates the size the library keeps for them (shown in the Info panel, and used
+  for grid cells and export sizes). A crop or local adjustment made on such a photo before keeps its position
+  relative to the frame, so on the smaller frame it covers a slightly different part of the picture.
+
 ## Unreleased
 
 ### Colour noise reduction (process V6)
@@ -342,7 +353,6 @@
   about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
-
 
 ## 2026-10-24
 
