@@ -313,6 +313,19 @@
   declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
   sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
 
+### A folder's menu has one order, in Folders and in Local
+- Right-clicking a folder in Folders or in Local opens a menu in the same order, in groups: what it does with the
+  library's photos (Synchronize Folder…, Locate Missing Files…), then reorganizing the disk (New Folder on Disk…,
+  Rename Folder…, Move Folder To…, Move Selected Photos Here), Set Color Label, Show in Finder, and removal last. A
+  disk's row and a Local place keep that order with the groups that apply to them.
+- An item that can't apply right now is grayed out, and its tooltip says why, instead of disappearing: Move Selected
+  Photos Here until photos are selected, Synchronize Folder… in Local for a folder with no library photo, Keep in
+  Local on a place already kept, Remove from Local for a folder inside a place.
+- A folder row that holds other disks as well (such as a Volumes folder with a disk mounted below it) has no Move
+  Selected Photos Here at all, as dropping photos on it is refused too.
+- Show in Finder on a folder, and Keep in Local, now say why when they fail.
+- Rename Folder… in Local starts from the folder's own name on disk, as in Folders.
+
 
 ## 2026-10-25
 

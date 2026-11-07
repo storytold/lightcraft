@@ -2632,5 +2632,9 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Запустите приложение с --control 7980 (или LIGHTCRAFT_CONTROL_PORT), и команда lightcraft-cli mcp --connect подключит к нему одного агента.",
   "Welcome": "Добро пожаловать",
   "Next": "Далее",
-  "Get Started": "Начать"
+  "Get Started": "Начать",
+  "No photo in this folder is in the library yet": "Ни одного фото из этой папки пока нет в библиотеке",
+  "Select the photos to move in the grid first": "Сначала выберите в сетке фото, которые нужно переместить",
+  "This place is kept in Local already": "Это место уже оставлено в «Локальном»",
+  "Only a place at the top of Local can be removed from it": "Убрать из «Локального» можно только место верхнего уровня"
 }

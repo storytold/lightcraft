@@ -2348,5 +2348,9 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "No photo in this folder is in the library yet": "Żadne zdjęcie z tego folderu nie jest jeszcze w bibliotece",
+  "Select the photos to move in the grid first": "Najpierw zaznacz w siatce zdjęcia do przeniesienia",
+  "This place is kept in Local already": "To miejsce jest już zachowane w lokalnych",
+  "Only a place at the top of Local can be removed from it": "Z lokalnych można usunąć tylko miejsce z ich najwyższego poziomu"
 }
