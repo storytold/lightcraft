@@ -242,8 +242,13 @@ pub fn staging_dir(camera: &str) -> PathBuf {
 
 /// `path` is in a camera's staging folder ([`staging_dir`]): a Copy or Move import takes it out
 /// even when the destination or the library holds the temp folder, which the system clears.
+/// Judged by where the file really is (`..` and links resolved): a path that only passes through
+/// the staging folder is not staged, and neither is one that can't be resolved.
 pub(crate) fn is_staged(path: &Path) -> bool {
-    crate::import_move::inside(path, &std::env::temp_dir().join(STAGING))
+    match (path.canonicalize(), std::env::temp_dir().join(STAGING).canonicalize()) {
+        (Ok(file), Ok(staging)) => file.starts_with(staging),
+        _ => false,
+    }
 }
 
 /// A device-supplied name as one safe file name: no separators, no characters Windows forbids, no
