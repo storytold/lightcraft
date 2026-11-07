@@ -520,9 +520,7 @@ impl Session {
                         .photos
                         .iter()
                         .copied()
-                        .filter(|id| {
-                            self.catalog.photo(*id).is_none_or(|p| lightcraft_catalog::query::merged_kind(&p.file_name).is_none())
-                        })
+                        .filter(|id| self.catalog.photo(*id).is_none_or(|p| lightcraft_catalog::query::merged_kind(&p.file_name).is_none()))
                         .collect();
                     // Capture order, not stack order (top first): an HDR panorama's bracket
                     // detection expects the periodic exposure sequence from the earliest capture.
@@ -614,7 +612,8 @@ impl Session {
             }
         }
         if merged.is_empty() {
-            return Ok(json!({"merged": merged, "failed": failed}));
+            let msg = failed.iter().map(|f| format!("{}: {}", f["photos"], f["error"])).collect::<Vec<_>>().join("; ");
+            return Err(EngineError::Other(format!("all merges failed: {msg}")));
         }
         let first_id = merged.first().and_then(|v| v.get("id")).and_then(Value::as_u64).map(PhotoId);
         let mut first = merged.first().cloned().unwrap_or(Value::Null);
