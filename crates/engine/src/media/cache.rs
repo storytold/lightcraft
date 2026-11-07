@@ -337,7 +337,7 @@ impl MediaCache {
             *ticket = Some(self.identities.ticket(p));
         }
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
-            *denoise = Some((spec.clone(), loader.clone()));
+            *denoise = Some(Box::new((spec.clone(), loader.clone())));
         }
         r
     }

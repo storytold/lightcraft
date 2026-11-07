@@ -23,9 +23,8 @@ fn dng_names(path: &str) -> impl Iterator<Item = std::path::PathBuf> {
 ///
 /// The DNG is checked before anyone relies on it (Convert to DNG relinks the photo to it, Copy as
 /// DNG deletes the raw copy): the encoded file must decode to the same raw data, and it is
-/// written to a synced temp file and published under a free name. After removing the temp alias,
-/// its final bytes are verified once before any catalog change or raw-copy removal. On failure
-/// the raw stays in use; cleanup removes only a final file whose identity is still ours.
+/// written to a temp file, synced, read back identical and only then given its name — never
+/// replacing an existing file. On any failure no DNG is left behind and the raw stays in use.
 pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::result::Result<String, String> {
     let reader = s.media.file_bytes.clone().unwrap_or_else(|| s.originals.reader());
     write_dng_with(Some(&reader), path, packet)
@@ -229,9 +228,7 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 /// `None` when nothing changed. Covers a raw that became decodable (or stopped being: a different
 /// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`], and a
 /// preview-only photo this version hasn't checked yet: its stamp is refreshed so it isn't probed
-/// again (see [`lightcraft_catalog::Photo::preview_checked`]). Learning a missing hash alone is
-/// owner bookkeeping from the validated whole read, so Reload adds no undo step for it and keeps
-/// the decoded source and authorized preview aliases.
+/// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
     let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
     let same = (ph.content_hash.is_none()
@@ -340,7 +337,7 @@ pub(crate) fn reload_ops(
         ops.append(&mut mine);
         changed.push(id);
     }
-    // All records of this physical file share its refreshed content facts.
+    // virtual copies share the file
     for c in cat.photos().filter(|c| c.id != id && c.source == ph.source) {
         let theirs: Vec<Op> =
             content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();

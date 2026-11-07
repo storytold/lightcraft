@@ -146,7 +146,6 @@ impl ScanProgress {
     pub fn run_id(&self) -> Option<u64> {
         self.started.get().map(|s| s.0)
     }
-    /// Defer the worker terminal until its result has been offered to the UI owner.
     pub fn track_delivery(&self) {
         self.delivery_tracked.store(true, std::sync::atomic::Ordering::Relaxed);
     }

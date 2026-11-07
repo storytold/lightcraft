@@ -145,7 +145,6 @@ impl HeaderObservation {
     }
 }
 
-/// Transient evidence from a native read; never part of the catalog format.
 #[derive(Clone, Debug)]
 pub struct ProbeEvidence {
     origin: ReaderOrigin,
@@ -499,7 +498,6 @@ impl Originals {
     pub(crate) fn revoke_under(&self, root: &std::path::Path) {
         let under = |path: &str| std::path::Path::new(path).starts_with(root);
         let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Opens not registered yet must not publish a proof across this mutation fence.
         state.registration = Arc::new(());
         state.wanted.retain(|path, _| !under(path));
         self.proofs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(path, weak)| {
@@ -698,7 +696,6 @@ impl Originals {
                     {
                         return;
                     }
-                    // A hard link publishes an immutable derived product without replacing another writer's file.
                     let _ = std::fs::hard_link(source, target);
                 });
             }
@@ -1106,7 +1103,6 @@ impl crate::Session {
                     preview_checked: target.preview_checked,
                 };
                 if hash_only_reconciliation {
-                    // This source was already retired; its validated read changes bookkeeping, not its lifecycle.
                     self.catalog.apply(op.clone())?;
                     self.pending_log.push(op);
                 } else {

@@ -711,7 +711,6 @@ impl Session {
         let identities = self.media.identities.clone();
         let ids: Vec<_> = self.catalog.photos().filter(|p| p.source == old.source || p.id == old.id).map(|p| p.id).collect();
         let invalidation = identities.invalidate(old, expected, || {
-            self.media.rendered.clear();
             for id in ids {
                 self.media.forget(id);
                 self.media.denoise.remove(id);

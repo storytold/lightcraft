@@ -367,7 +367,6 @@ fn f_repair_failed_marker_write_drops_populated_sources() {
         assert!(!s.media.has_source(id, SourceLevel::Full));
         assert!(!s.faces.scanned.contains(id.0));
         assert!(!s.media.content_keys(s.catalog.photo(id).unwrap()).contains(&"before".to_string()));
-        // Retained files simulate failed best-effort deletion of both old hash and path products.
         s.media.rendered.put(old_key, Arc::new(Rgba8::new(8, 8)));
         for path in &stale_paths {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();

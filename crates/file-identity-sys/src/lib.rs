@@ -1,10 +1,6 @@
-//! Query a borrowed Windows file handle without opening, reading or owning it.
 #![deny(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-/// The volume serial number and complete 128-bit file ID of an open handle.
-/// Unsupported providers and OS failures retain their original `io::Error`; there is no legacy-ID fallback.
-/// The borrowed file remains open and its cursor is unchanged.
 pub fn identity(file: &std::fs::File) -> std::io::Result<(u64, [u8; 16])> {
     #[cfg(windows)]
     {
@@ -29,10 +25,6 @@ mod windows {
     pub(super) fn identity(file: &File) -> io::Result<(u64, [u8; 16])> {
         let mut info = MaybeUninit::<FILE_ID_INFO>::uninit();
         let size = u32::try_from(size_of::<FILE_ID_INFO>()).map_err(|_| io::Error::other("FILE_ID_INFO exceeds the OS buffer size"))?;
-        // SAFETY: the borrowed File keeps its HANDLE live for this synchronous documented call.
-        // The binding's aligned FILE_ID_INFO storage and exact size match FileIdInfo. Windows
-        // initializes that entire output on nonzero success; failure returns before it is read.
-        // No handle ownership, cursor, file bytes or caller memory beyond this output is changed.
         let info = unsafe {
             if GetFileInformationByHandleEx(file.as_raw_handle(), FileIdInfo, info.as_mut_ptr().cast(), size) == 0 {
                 return Err(io::Error::last_os_error());

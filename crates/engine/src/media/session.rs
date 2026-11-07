@@ -643,7 +643,7 @@ impl crate::Session {
             let p = self.cache_photo(id).ok_or("no such photo")?;
             job.source = self.media.source_ref_uncached(&p, job.level);
             if let SourceRef::File { denoise, .. } = &mut job.source {
-                *denoise = Some(wanted);
+                *denoise = Some(Box::new(wanted));
             }
         }
         job.request.space = space;
