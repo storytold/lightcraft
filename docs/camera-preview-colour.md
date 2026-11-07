@@ -136,7 +136,18 @@ it (Enable Profile Corrections). The camera applied the same correction to its J
 (`fit_preview`, `monochrome_look`, the near-black tone fallback) therefore takes its sensor proxy through
 `look_proxies`, which multiplies it by that gain as `fit_dng_tone` already did (`correct_vignetting`). Before
 `LOOK_VERSION` 13 the RAF fit saw the uncorrected sensor: the tone curve learned the JPEG's corrected brightness, and
-the render added the correction again. Lens-database corrections (`LIGHTCRAFT_LENSFUN_DIR`) reach the fit the same way.
+the render added the correction again. A lens-database profile (`LIGHTCRAFT_LENSFUN_DIR`, the downloaded lensfun data)
+describes the lens, not what the camera did to its JPEG, so since `LOOK_VERSION` 14 it reaches the fit only in the
+share the JPEG shows (`camera_vignetting_amount`): the camera's tone curve is monotone, so the share whose corrected
+sensor ranks its pixels' luminance most like the JPEG wins (0 to 100 % in 5 % steps). With the whole profile, an
+ILCE-7M3 frame at f/2 with an FE 28mm F2 (lensfun: corners at 16 % of the centre) fitted 0.062 held-out RMS instead
+of 0.027 and rendered darker and orange. Its camera JPEG, with vignetting correction Auto in the maker note, shows
+none of that correction relative to the raw (rank correlation 0.991 at 0 % down to 0.903 at 100 %), like the A7CR
+JPEGs in [sony-lens-corrections.md](sony-lens-corrections.md). Of 91 CC0 corpus raws (all 37 ARWs, 19 ORFs, 15
+PEFs, 20 NEFs), 10 get a lens database vignetting profile into their fit (7 Sony, 2 Olympus, 1 Nikon); the shares
+measured were 0 % on six, 10–45 % on four, and the mean CIEDE2000 of the central half of the render against the
+camera JPEG went from 4.69 to 3.96 (6 better, 3 within 0.05, an SLT-A33 0.12 worse). The whole profile had made 9 of
+the 10 darker (0.4 to 8.5 L*), with small, scene-dependent colour shifts (mostly lost chroma).
 `proxies` applies the gain before it moves the sensor into the JPEG's lens geometry, so each pixel gets the gain of the
 position it samples, as in the render. The choice between the warped and the plain sensor (`alignment`) leaves out
 the pixels the warp finds no sensor for. It used to read them as black, a false edge along the border that made the
