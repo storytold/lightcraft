@@ -8,7 +8,7 @@
 //! pinned only (its small JPEG gives r 0.59); its render was inspected by eye.
 //! Missing files are reported as skipped.
 
-use lightcraft_raw::{RawData, RawError, RawFormat, decode, embedded_preview, probe, probe_info};
+use lightcraft_raw::{RawData, RawFormat, decode, embedded_preview, probe, probe_info};
 use std::path::{Path, PathBuf};
 
 fn corpus() -> PathBuf {
@@ -113,20 +113,30 @@ fn olympus_and_samsung_bodies_decode_like_the_camera_jpeg() {
     eprintln!("Olympus / Samsung bodies checked on {seen} files");
 }
 
-/// The withdrawn compressed decoder must stay out of both sensor-decode and import-probe paths.
-/// Camera JPEG extraction is independent of sensor decoding and remains available for preview-only imports.
+/// Compressed Olympus ORF and ORI files decode correctly and correlate with the camera embedded JPEG preview.
 #[test]
-fn compressed_olympus_bodies_are_unsupported_with_embedded_previews() {
-    for name in ["orf-olympus-em1.orf", "orf-olympus-em10iii.orf"] {
+fn compressed_olympus_bodies_decode_like_camera_jpeg() {
+    let cases = [
+        ("orf-olympus-em1.orf", (4640, 3472)),
+        ("orf-olympus-em10iii.orf", (4640, 3472)),
+        ("Olympus - E-M1MarkII - 16bit (4_3).ORI", (5240, 3912)),
+        ("Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI", (4640, 3472)),
+    ];
+    for &(name, (expected_w, expected_h)) in &cases {
         let path = corpus().join("raw").join(name);
         let Ok(bytes) = std::fs::read(&path) else {
             lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
             continue;
         };
         assert_eq!(probe(&bytes), Some(RawFormat::Orf), "{name}");
-        assert!(matches!(decode(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"), "{name}");
-        assert!(matches!(probe_info(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"), "{name}");
+        let raw = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        raw.validate().unwrap();
+        assert_eq!((raw.width, raw.height), (expected_w, expected_h), "{name}: sensor size mismatch");
+        assert_eq!(raw.info(), probe_info(&bytes).unwrap(), "{name}: probe and decode disagree");
+
         let jpeg = embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG"));
-        assert!(jpeg.starts_with(&[0xff, 0xd8]) && jpeg.ends_with(&[0xff, 0xd9]), "{name}: invalid camera JPEG");
+        let r = green_vs_camera_jpeg(&raw, &jpeg, 24, 16);
+        eprintln!("{name:55} {}x{}: green follows the camera JPEG, r = {r:.3}", raw.width, raw.height);
+        assert!(r > 0.6, "{name}: decoded mosaic does not follow the camera JPEG (r = {r:.3})");
     }
 }

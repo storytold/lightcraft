@@ -1,4 +1,4 @@
-//! Olympus ORF — uncompressed variants; compressed sensor data is unsupported.
+//! Olympus ORF — uncompressed and compressed variants.
 //!
 //! Sources: TIFF 6.0 (the `IIRO`/`MMOR` container is a TIFF with a different magic number), Exif 2.3 (`CFAPattern`,
 //! tag `0xa302`), the ExifTool Olympus tag-name documentation (maker-note sub-directories `0x2020` CameraSettings —
@@ -28,8 +28,8 @@
 //!   (last), the bit order and the pixel order were fixed by measurement on the CC0 files 2878 (E-300), 3540 (E-500)
 //!   and 3624 (E-330), as was the sensor-origin RGGB anchoring (the maker-note crop offsets are odd). The E-M5 Mark II
 //!   and PEN-F files were only checked for smoothness, not for CFA anchoring or black level.
-//! - Compressed ORF sensor data is unsupported. The previous decoder was removed pending provenance
-//!   resolution; embedded previews remain available. See `docs/orf-compression.md`.
+//! - Olympus's compressed ORF: clean-room pure-Rust implementation in `orf_compressed.rs`, derived from US patents
+//!   US7333035B2 and US7715639B2 (predictive edge-directed spatial model and adaptive Golomb-Rice entropy coding).
 //! - The colour-filter layout is the file's Exif `CFAPattern`: GRBG on the E-1 and E-400, RGGB on the XZ-2, where
 //!   the colours of the decoded mosaic follow the embedded JPEG best with exactly that layout
 //!   (`corpus_orf_cfa_patterns`). The samples' active areas start at even offsets, so they can't tell whether the
@@ -271,6 +271,16 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             Vec::new()
         };
         (RawData::U16(d), 12, false)
+    } else if let Some(config) = ip.as_ref().and_then(|i| super::orf_compressed::OrfCompressionConfig::from_subifd(i, mn.as_ref())) {
+        let chunk = chunks.first().ok_or_else(|| RawError::Corrupt("ORF missing raw strip".into()))?;
+        let src = chunk_bytes(bytes, chunk).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+        if !super::orf_compressed::verify_stream_header(src, config.header_prefix_len) {
+            return Err(RawError::Corrupt("ORF compressed header mismatch".into()));
+        }
+        let stream =
+            src.get(config.header_prefix_len.saturating_add(2)..).ok_or_else(|| RawError::Corrupt("ORF compressed stream truncated".into()))?;
+        let d = if mode == Mode::Full || stated.is_none() { super::orf_compressed::decompress_stream(stream, w, h, &config)? } else { Vec::new() };
+        (RawData::U16(d), config.sensor_bits, false)
     } else {
         return Err(RawError::Unsupported("Olympus compressed ORF".into()));
     };
