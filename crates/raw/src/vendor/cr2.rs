@@ -226,16 +226,19 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let widths: Vec<usize> = match &slices {
         Some(s) => {
             let n = s[0].min(64) as usize;
-            let mut v = vec![s[1] as usize; n];
-            v.push(s[2] as usize);
+            // `as usize` would truncate a 64-bit width on 32-bit targets (wasm32, x86) and hide the overflow
+            let width = |w: u64| usize::try_from(w).map_err(|_| RawError::Corrupt("CR2 slice widths overflow".into()));
+            let mut v = vec![width(s[1])?; n];
+            v.push(width(s[2])?);
             v
         }
         None => {
             let w = (fw as u64).checked_mul(nc as u64).ok_or_else(|| RawError::Corrupt("bad CR2 frame size".into()))?;
-            vec![w as usize]
+            vec![usize::try_from(w).map_err(|_| RawError::Corrupt("bad CR2 frame size".into()))?]
         }
     };
-    let width: usize = widths.iter().sum();
+    // slice widths come from the file: a sum that overflows is a corrupt file, not a wrapped width
+    let width = widths.iter().try_fold(0usize, |acc, &w| acc.checked_add(w)).ok_or_else(|| RawError::Corrupt("CR2 slice widths overflow".into()))?;
     if width == 0 || total % width != 0 {
         return Err(RawError::Corrupt(format!("CR2 slices ({width}) do not divide the frame ({total} samples)")));
     }
@@ -247,7 +250,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         let mut x0 = 0;
         for &sw in &widths {
             for y in 0..height {
-                data[y * width + x0..y * width + x0 + sw].copy_from_slice(&frame.data[i..i + sw]);
+                // sums to `width`, so these are in range; `get` keeps a surprise an error, not a panic
+                let (Some(dst), Some(src)) = (data.get_mut(y * width + x0..y * width + x0 + sw), frame.data.get(i..i + sw)) else {
+                    return Err(RawError::Corrupt("CR2 slices outside the frame".into()));
+                };
+                dst.copy_from_slice(src);
                 i += sw;
             }
             x0 += sw;
