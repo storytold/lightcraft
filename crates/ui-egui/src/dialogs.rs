@@ -1033,28 +1033,35 @@ fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
         });
     } else {
         ui.label(egui::RichText::new(crate::i18n::tr("Fix the marked rules to save this album.")).color(t.caution));
-        ui.label(egui::RichText::new(" ").small());
+        reserve_row(ui, egui::TextStyle::Small);
     }
+}
+
+/// Room for one row of `style` text with nothing in it (not an empty label: that is a node with no name).
+fn reserve_row(ui: &mut egui::Ui, style: egui::TextStyle) {
+    let height = ui.text_style_height(&style);
+    ui.allocate_space(egui::vec2(1.0, height));
 }
 
 /// A live count line: `text` of the count, or "Counting…" before the first one is made; below it, "updating…" while the
 /// catalog has changed under the count shown, until the next one is made. (Both rows stay when there is nothing to
 /// say, so the dialog doesn't change height as counts come and go.)
 fn count_line(ui: &mut egui::Ui, t: &Tokens, count: crate::caches::Count, text: impl FnOnce(usize) -> String) {
-    let line = match count.n {
-        Some(n) => text(n),
-        None if count.updating => crate::i18n::tr("Counting…").to_string(),
+    match count.n {
+        Some(n) => {
+            ui.label(egui::RichText::new(text(n)).color(t.text_dim));
+        }
+        None if count.updating => {
+            ui.label(egui::RichText::new(crate::i18n::tr("Counting…")).color(t.text_dim));
+        }
         // (a count that failed has said so in the log)
-        None => " ".to_string(),
-    };
-    ui.label(egui::RichText::new(line).color(t.text_dim));
-    let (mark, shown) = match (count.n, count.updating) {
-        (Some(_), true) => (crate::i18n::tr("updating…"), true),
-        _ => (" ", false),
-    };
-    let row = ui.label(egui::RichText::new(mark).small().italics().color(t.text_dim));
-    if shown {
+        None => reserve_row(ui, egui::TextStyle::Body),
+    }
+    if count.n.is_some() && count.updating {
+        let row = ui.label(egui::RichText::new(crate::i18n::tr("updating…")).small().italics().color(t.text_dim));
         crate::widgets::register(ui, "label:countUpdating", row.rect);
+    } else {
+        reserve_row(ui, egui::TextStyle::Small);
     }
 }
 

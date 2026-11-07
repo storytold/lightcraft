@@ -728,7 +728,7 @@ mod cache_tests {
         assert_eq!(c.smart_problem_scans, 2);
     }
 
-    const SLOW: std::time::Duration = std::time::Duration::from_millis(40);
+    const SLOW: std::time::Duration = std::time::Duration::from_millis(120);
 
     /// Counting every photo takes seconds in a large library: it runs on a worker, never on the UI thread, and
     /// while the catalog changes (an import commits a batch per frame) the count made before stays, marked as
