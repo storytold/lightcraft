@@ -86,7 +86,10 @@ fn partial_crop_edges_are_refused() {
             }
             let (partial, skipped) = to_partial_report(&p, None, Target::RawAbsolute, 1.5);
             assert!(partial.get("crop").is_none(), "{missing}, {has_crop}: {partial}");
-            assert!(skipped.iter().any(|k| k.starts_with("Crop")), "{skipped:?}");
+            // every crop key still in the sidecar is reported unused, not just one of them
+            for key in ["CropLeft", "CropTop", "CropRight", "CropBottom", "CropAngle"].into_iter().filter(|k| *k != missing) {
+                assert!(skipped.iter().any(|k| k == key), "{missing}, {has_crop}: {key} not reported in {skipped:?}");
+            }
             let existing = apply_partial(&DevelopSettings::default(), &to_partial(&props(SIDECAR), Target::RawAbsolute), 1.0);
             assert_eq!(apply_partial(&existing, &partial, 1.0).crop.geometry, existing.crop.geometry);
         }
