@@ -36,8 +36,8 @@ use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation
 pub(crate) use look_fit::fit_preview;
 #[cfg(test)]
 use look_fit::{
-    FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, at_most, clips_more, correct_vignetting, fit_look, fit_look_with, sony_dro_off_tone, with_dro_off_tone,
-    without_clipped,
+    FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, at_most, clips_more, correct_vignetting, fit_look, fit_look_with, measured_colour, sony_dro_off_tone,
+    with_dro_off_tone, without_clipped,
 };
 #[cfg(test)]
 use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophoto};
@@ -84,7 +84,8 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// 13: the sensor proxy of every per-file fit gets the embedded vignetting correction the render applies (Fujifilm
 /// RAF; other makes with a lens database), so the render no longer applies it twice, at the position a lens warp samples;
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
-pub const LOOK_VERSION: u32 = 13;
+/// 14: a partial look of a model with measured spectral matrices takes their colour instead of the generic one.
+pub const LOOK_VERSION: u32 = 14;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

@@ -28,6 +28,14 @@
   hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
   loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
 
+### Truer colour for hard-to-match raws from cameras with measured colour
+- Some raws, often night shots under coloured LED or neon light, are too hard for LightCraft to match to the camera's
+  own JPEG. Until now they opened with generic colour and could look washed out and shifted in hue: on a Canon EOS
+  R50, a wall lit magenta came out blue-violet. When the camera model has measured colour matrices (the EOS R50 and
+  dozens of other Canon, Nikon, Sony and Fujifilm bodies), these photos can now start from that measured colour, with the
+  brightness and contrast matched to the camera's JPEG when that fit succeeds. Photos whose full colour match to the
+  camera's JPEG already worked are unchanged.
+
 ### Raising Exposure keeps raw highlights (process 5)
 - Raising Exposure on a raw no longer turns the brightest tones the sensor recorded white (issue #1632). The tone
   curve now eases into white a stop at a time instead of reaching it within about a stop of the sensor's white: at
