@@ -65,6 +65,23 @@ const MODULES: &[Module] = &[
         ],
     },
     Module {
+        src: include_str!("wgsl/nrcj.wgsl"),
+        bindings: &[("a", false, "f32"), ("b", false, "f32"), ("dst", true, "f32")],
+        entries: &[
+            "nrcj_yuv",
+            "nrcj_uv",
+            "nrcj_samples",
+            "nrcj_speck",
+            "nrcj_pilot",
+            "nrcj_links1",
+            "nrcj_paths",
+            "nrcj_links",
+            "nrcj_dh",
+            "nrcj_dv",
+            "nrcj_recon",
+        ],
+    },
+    Module {
         src: include_str!("wgsl/spot.wgsl"),
         bindings: &[("img", true, "f32"), ("pts", false, "f32"), ("al", true, "f32"), ("sp", true, "f32"), ("df", true, "f32"), ("wt", true, "f32")],
         entries: &["spot_prep", "spot_apply", "spot_score"],
@@ -294,7 +311,8 @@ pub(crate) struct Tracked(wgpu::Buffer);
 
 impl Tracked {
     fn new(b: wgpu::Buffer) -> Tracked {
-        ALLOCATED.fetch_add(b.size(), Ordering::Relaxed);
+        let now = ALLOCATED.fetch_add(b.size(), Ordering::Relaxed) + b.size();
+        PEAK.fetch_max(now, Ordering::Relaxed);
         Tracked(b)
     }
 }
@@ -317,6 +335,15 @@ thread_local! {
 
 /// Bytes of device buffers that exist (in use, retired or pooled).
 static ALLOCATED: AtomicU64 = AtomicU64::new(0);
+/// Most bytes allocated since [`take_peak`] (profiling).
+static PEAK: AtomicU64 = AtomicU64::new(0);
+
+/// The most bytes allocated since the last call; starts over from what is allocated now.
+pub(crate) fn take_peak() -> (u64, u64) {
+    let now = ALLOCATED.load(Ordering::Relaxed);
+    (PEAK.swap(now, Ordering::Relaxed), now)
+}
+
 /// Bytes waiting in per-thread retired lists.
 static RETIRED_BYTES: AtomicU64 = AtomicU64::new(0);
 /// The render device is lost: wgpu's `poll` panics from then on, so [`Gpu::poll`] stops calling it.
@@ -403,6 +430,7 @@ fn constants() -> String {
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }
+    s += &format!("const DEEP_WRITTEN: u32 = {}u;\n", crate::params::DEEP_WRITTEN);
     for (name, idx) in crate::params::finish_fields() {
         s += &format!("const F_{name}: u32 = {idx}u;\n");
     }
@@ -556,8 +584,12 @@ impl Gpu {
     }
 
     /// Submit command buffers, then make the buffers this thread dropped before reusable.
+    /// Nothing is submitted once this render has failed: the render is discarded and recomputed
+    /// on the CPU, and the failure contract says no further GPU work runs after a fatal failure.
     pub fn submit(&self, cmds: impl IntoIterator<Item = wgpu::CommandBuffer>) {
-        self.queue.submit(cmds);
+        if !failed() {
+            self.queue.submit(cmds);
+        }
         let retired = take_retired();
         self.pool(retired);
     }
@@ -610,6 +642,12 @@ impl Gpu {
     pub fn upload<T: bytemuck::Pod>(&self, data: &[T]) -> Buf {
         let bytes: &[u8] = bytemuck::cast_slice(data);
         let len = bytes.len() / 4;
+        // A failed render runs no further GPU work (`Gpu::submit` skips the submission and the
+        // render is redone on the CPU): staging the bytes would still queue a copy for the next
+        // submission, so the caller gets the placeholder with the requested length instead.
+        if failed() {
+            return Buf { buf: Some(Tracked::new(self.placeholder())), len };
+        }
         if bytes.is_empty() {
             return self.buffer(1);
         }
@@ -715,7 +753,12 @@ impl Gpu {
             fail(FailKind::Fatal, format!("unknown kernel {name}"));
             return;
         };
-        assert_eq!(bufs.len(), k.nbuf, "{name}: binding count");
+        if bufs.len() != k.nbuf {
+            // a caller/kernel mismatch would bind the wrong buffers: fail this render over to the
+            // CPU instead of crashing
+            fail(FailKind::Fatal, format!("{name}: binding count {} != {}", bufs.len(), k.nbuf));
+            return;
+        }
         let params = self.init_buffer(bytemuck::cast_slice(if p.is_empty() { &[0u32] } else { p }), wgpu::BufferUsages::STORAGE);
         let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: params.as_entire_binding() }];
         for (i, b) in bufs.iter().enumerate() {
@@ -731,13 +774,25 @@ impl Gpu {
 
     /// Submit `enc`, then read back the first `len` 32-bit values of `src`.
     ///
-    /// A failed readback (device lost, map error, timeout) fails the render ([`FailKind::Fatal`])
-    /// and returns zeros, which the caller discards; after an earlier failure in the same render
-    /// nothing more is submitted.
+    /// A failed readback (device lost, map error, timeout) or a `len` past the buffer's end fails
+    /// the render ([`FailKind::Fatal`]) and returns zeros, which the caller discards; after an
+    /// earlier failure in the same render nothing more is submitted. `T` is always a 32-bit type
+    /// at the call sites (the copy and the readback tail are defined in 32-bit words).
     pub fn finish_and_read<T: bytemuck::Pod>(&self, mut enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
-        assert!(len <= src.len, "readback of {len} values from a buffer of {}", src.len);
         let zeros = || vec![<T as bytemuck::Zeroable>::zeroed(); len];
         if failed() {
+            return zeros();
+        }
+        // a zero-length readback would issue a `copy_buffer_to_buffer` of size 0, which wgpu
+        // rejects as an invalid copy: submit the (possibly staged) work untouched and return
+        // zeros instead
+        if len == 0 {
+            self.submit([enc.finish()]);
+            return zeros();
+        }
+        if len > src.len {
+            // a caller bug would read past the buffer: fail this render over to the CPU
+            fail(FailKind::Fatal, format!("readback of {len} values from a buffer of {}", src.len));
             return zeros();
         }
         let size = (len * 4) as u64;
@@ -1193,6 +1248,25 @@ mod tests {
         let back: Vec<[u32; 3]> = g.finish_and_read(g.encoder(), &b, data.len());
         assert!(back.len() == 1 << 20 && back.as_flattened() == data.as_slice());
     }
+    /// An upload after this render has failed keeps the failure contract (`Gpu::submit` skips the
+    /// submission, so nothing further runs on the GPU): the caller gets the placeholder with the
+    /// requested length instead of a staging buffer holding a copy of the data for a submission
+    /// that will never happen.
+    #[test]
+    fn an_upload_after_a_failure_returns_the_placeholder() {
+        let Some(g) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        super::fail(super::FailKind::Fatal, "simulated failure before an upload".into());
+        assert!(super::failed());
+        let b = g.upload(&[7u32; 1024]);
+        assert_eq!(b.buf.as_ref().map(|t| t.0.size()), Some(16), "the placeholder, not a staged 4 KiB buffer");
+        assert_eq!(b.len, 1024, "the requested length is preserved");
+        // leave this thread's failure for nobody: later tests on the thread start unfailed
+        assert_eq!(super::take_failure().map(|f| f.kind), Some(super::FailKind::Fatal));
+    }
+
     /// Issue #1858: once a Vulkan or DX12 device is lost, wgpu 30 panics in `Device::poll` instead of
     /// returning an error. A render's readback panicked; while it unwound, a buffer's way back to
     /// the pool polls again from a destructor, and that second panic aborted the app.
