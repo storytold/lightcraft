@@ -660,3 +660,57 @@ fn a_thumbnail_is_cut_from_the_decoded_full_source() {
     let cached = s.media.get(p.id, SourceLevel::Thumb).unwrap();
     assert_eq!((cached.width, cached.height), (512, 341), "a thumbnail-sized source is kept, not the full source");
 }
+
+/// The grid builds a source for every photo it shows, and each one used to put the photo's smart
+/// preview, a file most photos don't have, in the file-availability cache as found gone: a library
+/// of a million photos grew the cache by a million files, all counted as missing. A smart preview
+/// is asked about only once its original is known to be offline, which is when it is of use.
+#[test]
+fn a_smart_preview_is_asked_about_only_once_its_original_is_known_to_be_offline() {
+    use std::time::{Duration, Instant};
+    let smart = std::path::Path::new("/smart");
+    let photo = |id: u64, path: &str| {
+        let mut p = Photo::new(PhotoId(id), Source::File { path: path.into() }, "x.jpg", "JPEG", 60, 40, "");
+        p.content_hash = Some(format!("{id:032x}"));
+        p
+    };
+    let (here, away) = (photo(1, "/library/x.jpg"), photo(2, "/away/x.jpg"));
+    let here_name = crate::smart::file_name(&here);
+    let (here_proxy, away_proxy) = (crate::smart::sharded_file_path(smart, &here), crate::smart::sharded_file_path(smart, &away));
+    let asked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let (log, no_proxy) = (asked.clone(), here_name.clone());
+    let mut m = MediaCache::default();
+    // the drive `/away` is unplugged, and only the photo on it has a smart preview
+    m.availability.set_probe(Arc::new(move |p| {
+        log.lock().unwrap().push(p.to_string());
+        !p.starts_with("/away/") && !p.ends_with(&no_proxy)
+    }));
+    m.availability.run_in_background(Arc::new(|| {}));
+    m.smart_dir = Some(smart.into());
+    let wait = |done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for the file-availability check");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    // nothing is known yet: both are read from their files
+    for p in [&here, &away] {
+        assert!(matches!(m.source_ref(p, SourceLevel::Thumb), SourceRef::File { .. }));
+    }
+    wait(&|| m.availability.is_offline("/away/x.jpg"));
+    let asked_about_its_proxy = || asked.lock().unwrap().iter().any(|p| p.ends_with(&here_name));
+    assert!(!asked_about_its_proxy(), "the online photo's smart preview was asked about: {:?}", asked.lock().unwrap());
+    assert_eq!(m.availability.gone_len(), 1, "only the original that is gone is found gone");
+    // the photo on the drive that is away now asks about its smart preview, and uses it once it is there
+    assert!(matches!(m.source_ref(&away, SourceLevel::Thumb), SourceRef::File { .. }), "not known to be there yet");
+    // (that call itself asked about it: the poll below would queue the check whether it had or not)
+    let away_proxy_path = away_proxy.to_string_lossy().into_owned();
+    wait(&|| asked.lock().unwrap().contains(&away_proxy_path));
+    wait(&|| m.availability.exists(&away_proxy.to_string_lossy()) == Some(true));
+    assert!(matches!(m.source_ref(&away, SourceLevel::Thumb), SourceRef::Smart { path } if path == away_proxy));
+    // the other one is read from its file, with the proxy left for the render worker to find
+    assert!(matches!(m.source_ref(&here, SourceLevel::Thumb), SourceRef::File { fallback: Some(f), .. } if f == here_proxy));
+    assert!(!asked_about_its_proxy(), "its smart preview is still not asked about");
+    assert_eq!(m.availability.gone_len(), 1);
+}

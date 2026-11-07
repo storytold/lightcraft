@@ -364,21 +364,31 @@ impl MediaCache {
             _ => usize::MAX,
         });
         // the original is offline: its smart preview, when there is one. Only cached answers are
-        // used here (no file-system call on the UI thread in the app); an original not known to
-        // be offline is tried first and its smart preview is the render worker's fallback.
+        // used here (no file-system call on the UI thread in the app). An original not known to be
+        // offline is tried first and its smart preview is the render worker's fallback: asking about
+        // the preview of every photo shown would fill the cache with a file most photos don't have.
         #[cfg(not(target_arch = "wasm32"))]
         if let (Source::File { path }, Some(dir)) = (&p.source, &self.smart_dir) {
             let sharded = crate::smart::sharded_file_path(dir, p);
-            let legacy = dir.join(crate::smart::file_name(p));
-            let sp = if self.availability.exists(&sharded.to_string_lossy()) == Some(true) { sharded } else { legacy };
-            // (a proxy cut short fails to load, like the offline original; the worker's fallback
-            // in `SourceRef::load` only uses a proxy that passes `smart::is_valid`)
-            if self.availability.is_offline(path) && self.availability.exists(&sp.to_string_lossy()) == Some(true) {
-                return SourceRef::Smart { path: sp };
+            if self.availability.is_offline(path) {
+                // (a proxy cut short fails to load, like the offline original; the worker's fallback
+                // in `SourceRef::load` only uses a proxy that passes `smart::is_valid`)
+                let known = |f: &std::path::Path| self.availability.exists(&f.to_string_lossy());
+                match known(&sharded) {
+                    Some(true) => return SourceRef::Smart { path: sharded },
+                    // (the folders of the older releases have the proxies flat)
+                    Some(false) => {
+                        let flat = dir.join(crate::smart::file_name(p));
+                        if known(&flat) == Some(true) {
+                            return SourceRef::Smart { path: flat };
+                        }
+                    }
+                    None => {}
+                }
             }
             let mut r = self.origin_ref(&p.source, max_edge);
             if let SourceRef::File { fallback, camera_profile, outliers: o, .. } = &mut r {
-                *fallback = Some(sp);
+                *fallback = Some(sharded);
                 *camera_profile = wanted;
                 *o = outliers;
             }
