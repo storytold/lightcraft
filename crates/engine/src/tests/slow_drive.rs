@@ -315,3 +315,36 @@ fn a_reopen_after_a_snapshot_that_holds_everything_goes_ahead() {
     assert_eq!(open(&dir).catalog.photo(all[0]).unwrap().flag, Flag::Reject);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A quit while the log's thread holds what it couldn't write still writes the closing snapshot of a
+/// large catalog, whose log a quit otherwise leaves short (`close_bytes`): the snapshot is what
+/// saves the held changes.
+#[test]
+fn a_quit_snapshots_a_large_catalog_when_the_log_thread_holds_changes() {
+    let dir = temp_dir("quit-large-held");
+    let mut s = open(&dir);
+    let all = ids(&s);
+    s.library.as_mut().unwrap().journal_mut().policy.close_bytes = 0;
+    let fail = Arc::new(AtomicBool::new(false));
+    // (the write fails only after a while, so the log's thread reports it after `close_library` has started: the
+    // flush before the decision is what makes the quit see it)
+    let failing = fail.clone();
+    fault::install(
+        &dir,
+        Arc::new(move |_step| {
+            if failing.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(300));
+                return Err(std::io::Error::other("the drive is gone (test)"));
+            }
+            Ok(())
+        }),
+    );
+    fail.store(true, Ordering::SeqCst);
+    s.execute("photo.flag", &json!({"flag": "reject", "ids": [all[0].0]})).unwrap();
+    let _ = s.close_library();
+    assert!(s.snapshot_holds_everything());
+    fault::remove(&dir);
+    drop(s);
+    assert_eq!(open(&dir).catalog.photo(all[0]).unwrap().flag, Flag::Reject);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -59,7 +59,8 @@ fn edits_survive_restart_without_close() {
 fn threshold_compaction_runs_in_the_background() {
     let dir = temp_dir("bg-compact");
     let mut s = open(&dir, true);
-    s.library.as_mut().unwrap().journal_mut().policy = lightcraft_catalog::SnapshotPolicy { max_records: 8, max_bytes: u64::MAX };
+    s.library.as_mut().unwrap().journal_mut().policy =
+        lightcraft_catalog::SnapshotPolicy { max_records: 8, max_bytes: u64::MAX, snapshot_share: 0, ..Default::default() };
     let ids: Vec<_> = s.catalog.photos().map(|p| p.id).collect();
     let mut background = 0;
     for k in 0..60usize {
