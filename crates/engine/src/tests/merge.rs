@@ -251,6 +251,40 @@ fn a_photo_named_twice_is_merged_once() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Two collapsed stacks plus loose photos plan one job per group via `plan_merges`, in the order
+/// their first member appears, and `plan_merge` refuses such a multi-group selection instead of
+/// silently dropping all but the first group.
+#[test]
+fn two_collapsed_stacks_and_loose_photos_plan_separate_jobs() {
+    let dir = temp_dir("multi-stack");
+    let mut paths = Vec::new();
+    for (set, evs) in [("A", [-2.0, 0.0, 2.0]), ("B", [-1.5, 0.5, 2.5]), ("C", [-1.0, 1.0])] {
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, &evs).unwrap().into_iter().enumerate() {
+            let p = dir.join(format!("{set}_{i}.dng"));
+            std::fs::write(&p, b).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    assert_eq!(ids.len(), 8);
+    s.execute("stack.group", &json!({"ids": ids[..3]})).unwrap();
+    s.execute("stack.group", &json!({"ids": ids[3..6]})).unwrap();
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    // Interleave the groups: loose photos first, then a member of each stack.
+    let mixed = vec![ids[6], ids[0], ids[3], ids[7], ids[1], ids[4]];
+    let mixed_ids: Vec<lightcraft_catalog::PhotoId> = mixed.iter().map(|id| lightcraft_catalog::PhotoId(*id)).collect();
+    let jobs = s.plan_merges(kind.clone(), finish.clone(), &mixed_ids, true).unwrap();
+    assert_eq!(jobs.len(), 3, "one job per group");
+    let members = |job: &crate::merge::MergeJob| job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>();
+    assert_eq!(members(&jobs[0]), vec![ids[6], ids[7]], "loose group keeps given order");
+    assert_eq!(members(&jobs[1]), ids[..3].to_vec(), "first stack expands to its members");
+    assert_eq!(members(&jobs[2]), ids[3..6].to_vec(), "second stack expands to its members");
+    let err = s.plan_merge(kind, finish, &mixed_ids, true).unwrap_err().to_string();
+    assert!(err.contains("more than one merge group"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A collapsed stack contributes all its members to a merge, not just its visible top photo:
 /// naming the top of a collapsed bracket stack plans the merge of its members.
 #[test]
