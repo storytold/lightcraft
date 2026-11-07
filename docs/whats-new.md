@@ -38,6 +38,12 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### The targeted-adjustment button is a plain ring with a dot
+- The Tone Curve's targeted-adjustment button (and the label before the Color Mixer's Hue / Saturation / Luminance
+  tabs) drew a ring with a pair of arrows jammed against it, which looked like one blob and sat off-centre in its
+  button. It is now a ring with a dot, centred, as the tool looks in Lightroom Classic. The tooltip and the message
+  shown when the tool is on still say to drag up or down on the photo.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
