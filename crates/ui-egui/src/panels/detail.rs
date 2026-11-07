@@ -796,10 +796,13 @@ fn whole_frame_edge(app: &LightcraftApp, interacting: bool, plan: &crate::region
     if interacting || plan.window_edge.is_some() {
         plan.main_edge
     } else {
-        // (a user's explicit Preview size below the preview level still caps it)
-        let limit = if app.ui.settings.preview_limit == 0 { usize::MAX } else { app.ui.settings.preview_limit as usize };
-        let floor = lightcraft_engine::SourceLevel::Preview.max_edge().min(limit).min(native_long);
-        plan.main_edge.max(floor).min(texture_side.max(crate::state::MIN_TEXTURE_SIDE))
+        // The floor is the preview source level, or the user's explicit Preview size when one is
+        // set: a size below the preview level caps it, a size above it raises it.
+        let explicit = app.ui.settings.preview_limit;
+        let limit = if explicit == 0 { usize::MAX } else { explicit as usize };
+        let preview_edge = if explicit == 0 { lightcraft_engine::SourceLevel::Preview.max_edge() } else { explicit as usize };
+        let floor = preview_edge.min(native_long);
+        plan.main_edge.max(floor).min(texture_side.max(crate::state::MIN_TEXTURE_SIDE)).min(limit)
     }
 }
 
@@ -1515,5 +1518,19 @@ mod tests {
         assert_eq!(flipped_corners(&h, true, false), screen);
         assert_eq!(flipped_corners(&v, false, true), screen);
         assert_eq!(flipped_corners(&hv, true, true), screen);
+    }
+
+    /// Given a preview size above the preview source level, the whole-frame render at rest is
+    /// raised to that size rather than staying at the preview level.
+    #[test]
+    fn preview_limit_raises_whole_frame_render_edge() {
+        use super::whole_frame_edge;
+        use crate::region::LoupePlan;
+        use lightcraft_engine::SourceLevel;
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        app.ui.settings.preview_limit = 3840;
+        let plan = LoupePlan { main_edge: SourceLevel::Preview.max_edge(), window_edge: None };
+        let edge = whole_frame_edge(&app, false, &plan, 6000, 16384);
+        assert_eq!(edge, 3840, "raising the preview size raises the whole-frame render edge");
     }
 }
