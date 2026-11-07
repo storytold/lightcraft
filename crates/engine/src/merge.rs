@@ -436,7 +436,7 @@ impl Session {
         }
         // the merged file goes next to the first photo: refused before the work, not after it
         if !preview && let Some((_, first)) = sources.first() {
-            crate::file_access::check_write(output_dir(first)).map_err(EngineError::Other)?;
+            crate::file_access::check_write_container(output_dir(first)).map_err(EngineError::Other)?;
         }
         let host = self.media.file_bytes.clone();
         let read: ByteReader = Arc::new(move |path: &str| read_file(host.as_ref(), path));
@@ -447,7 +447,7 @@ impl Session {
     /// apply Auto Settings / the auto crop. Returns `{id, path, …info}`.
     pub fn finish_merge(&mut self, job: &MergeJob, out: MergeOutput) -> Result<Value> {
         let first = &job.sources.first().ok_or_else(|| EngineError::Other("nothing merged".into()))?.1;
-        crate::file_access::check_write(output_dir(first)).map_err(EngineError::Other)?;
+        crate::file_access::check_write_container(output_dir(first)).map_err(EngineError::Other)?;
         // a new file under a free name (never replacing one), complete and synced before it appears
         let path = lightcraft_catalog::safe_file::write_new_unique(&mut output_names(first, job.kind.suffix()), &out.dng)
             .map_err(|e| EngineError::Other(format!("could not write the merged DNG next to {first}: {e}")))?

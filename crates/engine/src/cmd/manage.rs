@@ -7,6 +7,8 @@ use lightcraft_catalog::{ColorLabel, Op};
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, has_selection, str_param};
 use crate::Result;
 
+/// Read the selected photos and destination naming parameters for a rename command.
+/// Parse and validate the shared photo rename arguments.
 fn rename_args(s: &crate::Session, p: &Value, c: &str) -> Result<(Vec<lightcraft_catalog::PhotoId>, String, usize)> {
     let template = str_param(p, "template").ok_or_else(|| bad(c, "missing `template`"))?.to_string();
     let start = p.get("start").and_then(Value::as_u64).unwrap_or(1);

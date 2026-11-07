@@ -1220,6 +1220,30 @@ fn convert_to_dng_checks_the_working_folder_for_a_bare_file_name() {
     assert_eq!(r["skipped"][0][1], "not a raw photo", "{r}");
 }
 
+/// A photo reached through a folder link may be duplicated into the resolved write root.
+#[cfg(unix)]
+#[test]
+fn duplicate_accepts_a_folder_link_into_the_write_root() {
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("duplicate-folder-link");
+    let root = base.join("photos");
+    let alias = base.join("alias");
+    std::fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(&root, &alias).unwrap();
+    let source = alias.join("shot.png");
+    write_png(&source, 3);
+
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [source.to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    let result = confine(Some(&roots), || s.execute("photo.duplicate", &json!({"ids": [id.0]}))).unwrap();
+
+    assert_eq!(result["ids"].as_array().unwrap().len(), 1, "{result}");
+    assert!(root.join("shot-copy.png").exists(), "the copy is created inside the resolved write root");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// One refused photo in a batch leaves nothing behind for the photos before it: no DNG the library
 /// doesn't know about, no copy and no edit copy.
 #[test]

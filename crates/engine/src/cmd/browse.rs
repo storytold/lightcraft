@@ -20,6 +20,8 @@ use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
 use crate::import::{ImportMode, ImportOptions, import_with, is_supported};
 use crate::{Browse, LibrarySource, Result, Session};
 
+/// Browse a folder and return its visible photos and child folders.
+/// Browse photos or folders using the supplied command parameters.
 fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.browse";
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
@@ -250,6 +252,8 @@ fn add_to_library(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"added": n}))
 }
 
+/// Describe the library browsing commands and their parameters.
+/// Describe the parameters accepted by the browse command.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(

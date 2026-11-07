@@ -382,6 +382,7 @@ struct PartFile {
 }
 
 impl PartFile {
+    /// Create a staging file beside the requested slideshow output.
     fn new(target: &Path) -> Result<(PartFile, std::fs::File), String> {
         crate::file_access::check_write(target)?;
         if let Some(dir) = target.parent().filter(|d| !d.as_os_str().is_empty()) {

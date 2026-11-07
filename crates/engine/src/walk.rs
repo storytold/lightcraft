@@ -126,6 +126,7 @@ pub fn files_in_noting(root: &Path, skip: Option<&Path>, limits: Limits, keep: i
     walk(root, skip, limits, keep, |_| true, Some(note))
 }
 
+/// Walk a folder tree while applying the supplied inclusion and traversal rules.
 fn walk(
     root: &Path,
     skip: Option<&Path>,

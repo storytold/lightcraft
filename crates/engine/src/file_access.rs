@@ -60,6 +60,7 @@ struct Root {
 impl Root {
     /// The folder at `path`, which must exist.
     fn open(path: &Path, access: Access) -> Result<Self, String> {
+        reject_unsafe_prefix(path)?;
         let kind = match access {
             Access::Read => "read",
             Access::Write => "write",
@@ -101,6 +102,33 @@ impl AutomationRoots {
     /// count includes `.`, `..` and child directories rather than extra names of the directory.
     pub fn check(&self, path: impl AsRef<Path>, access: Access) -> Result<(), String> {
         let path = path.as_ref();
+        self.check_location(path, access)?;
+        one_name(path)
+    }
+
+    /// May `path` and its known placed destination be written/removed without another name
+    /// escaping the roots? A same-file pair is allowed only when those are its exactly two names.
+    pub fn check_write_pair(&self, path: impl AsRef<Path>, placed: impl AsRef<Path>) -> Result<(), String> {
+        let path = path.as_ref();
+        let placed = placed.as_ref();
+        self.check_location(path, Access::Write)?;
+        self.check_location(placed, Access::Write)?;
+        let same = lightcraft_catalog::safe_file::same_file_strict(path, placed)
+            .map_err(|e| format!("automation path rejected: cannot verify the placed file pair ({path:?}, {placed:?}): {e}"))?;
+        if same {
+            match lightcraft_catalog::safe_file::link_count(path) {
+                Ok(2) => Ok(()),
+                Ok(count) => Err(format!("automation path rejected: the placed file pair has {count} names, not two: {}", path.display())),
+                Err(e) => Err(format!("automation path rejected: cannot verify the names of the placed file pair at {}: {e}", path.display())),
+            }
+        } else {
+            one_name(path)?;
+            one_name(placed)
+        }
+    }
+
+    /// Check root membership and link-entry location without applying the multiple-name rule.
+    fn check_location(&self, path: &Path, access: Access) -> Result<(), String> {
         let roots: Vec<&Root> = match access {
             Access::Read => self.read.iter().chain(self.write.iter()).collect(),
             Access::Write => self.write.iter().collect(),
@@ -121,8 +149,7 @@ impl AutomationRoots {
             allowed = in_roots(&resolve(folder)?);
         }
         if allowed {
-            // A second name can sit outside the roots and still share this file's bytes.
-            return one_name(path);
+            return Ok(());
         }
         let shown: Vec<String> = roots.iter().map(|r| r.shown.display().to_string()).collect();
         let kind = match access {
@@ -130,6 +157,20 @@ impl AutomationRoots {
             Access::Write => "write",
         };
         Err(format!("automation path rejected: outside the {kind} root {}: {}", shown.join(", "), path.display()))
+    }
+
+    /// May a new file be created inside this folder, following a folder link to its target?
+    /// Unlike [`Self::check`] for a link being changed, only the destination folder matters.
+    pub fn check_container(&self, path: impl AsRef<Path>) -> Result<(), String> {
+        let path = path.as_ref();
+        let Some(root) = &self.write else {
+            return Err(format!("automation filesystem access is not granted: write authority is absent: {}", path.display()));
+        };
+        if inside(&resolve(path)?, &root.resolved) {
+            // The destination is a folder; its link count is not an extra file name.
+            return one_name(path);
+        }
+        Err(format!("automation path rejected: outside the write root {}: {}", root.shown.display(), path.display()))
     }
 }
 
@@ -222,6 +263,16 @@ pub fn check_write(path: impl AsRef<Path>) -> Result<(), String> {
     current().map_or(Ok(()), |r| r.check(path, Access::Write))
 }
 
+/// May a new file be created inside this folder, following a folder link to its target?
+pub fn check_write_container(path: impl AsRef<Path>) -> Result<(), String> {
+    current().map_or(Ok(()), |r| r.check_container(path))
+}
+
+/// Check source removal when its only other name may be the move's verified destination.
+pub fn check_write_pair(path: impl AsRef<Path>, placed: impl AsRef<Path>) -> Result<(), String> {
+    current().map_or(Ok(()), |r| r.check_write_pair(path, placed))
+}
+
 /// Reject `path` when it is a file with another name, or when that count cannot be read.
 ///
 /// `Ok(())` when the path has one name, names a directory, or does not exist yet. A directory is
@@ -272,8 +323,9 @@ fn resolve(path: &Path) -> Result<PathBuf, String> {
     if path.as_os_str().is_empty() {
         return Err("automation path rejected: path is empty".into());
     }
+    reject_unsafe_prefix(path)?;
     // Checked as given: making `…\NUL` absolute gives the device path `\\.\NUL` on Windows.
-    if cfg!(windows) && path.components().any(|c| matches!(c, Component::Normal(n) if is_device_name(&n.to_string_lossy()))) {
+    if cfg!(windows) && path.components().any(|c| matches!(c, Component::Normal(n) if n.to_str().is_none_or(is_device_name))) {
         return Err(format!("automation path rejected: reserved device names are not allowed: {}", path.display()));
     }
     let absolute = std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {}: {e}", path.display()))?;
@@ -312,6 +364,22 @@ fn resolve(path: &Path) -> Result<PathBuf, String> {
             }
         }
     }
+}
+
+/// Refuse Windows network and device namespaces before path resolution can contact them.
+fn reject_unsafe_prefix(path: &Path) -> Result<(), String> {
+    #[cfg(not(windows))]
+    let _ = path;
+    #[cfg(windows)]
+    if let Some(Component::Prefix(prefix)) = path.components().next()
+        && matches!(
+            prefix.kind(),
+            std::path::Prefix::UNC(..) | std::path::Prefix::VerbatimUNC(..) | std::path::Prefix::DeviceNS(..) | std::path::Prefix::Device(..)
+        )
+    {
+        return Err(format!("automation path rejected: network and device paths are not allowed: {}", path.display()));
+    }
+    Ok(())
 }
 
 /// Is `path` (resolved) `root` or inside it, component by component? Exactly, on Windows too: what
@@ -403,8 +471,15 @@ mod tests {
         let link = |target: &Path, at: &Path| std::os::unix::fs::symlink(target, at).unwrap();
         link(&root.join("file"), &outside.join("back"));
         link(&root.join("sub"), &outside.join("backdir"));
+        link(&root, &outside.join("root-alias"));
         link(&root.join("file"), &root.join("near"));
         let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+        assert!(roots.check_container(outside.join("root-alias")).is_ok(), "new files go into the resolved destination folder");
+        assert!(
+            roots.check(outside.join("root-alias"), Access::Write).unwrap_err().contains("outside the write root"),
+            "changing the link itself is still refused"
+        );
 
         for refused in ["outside/back", "outside/backdir", "outside/backdir/", "outside/backdir/."] {
             let e = roots.check(base.join(refused), Access::Write).unwrap_err();
@@ -638,5 +713,15 @@ mod tests {
         for f in ["console", "com10", "COM0", "lpt", "a.jpg", "nul-x"] {
             assert!(!is_device_name(f), "{f}");
         }
+    }
+
+    /// Network and device prefixes are refused without trying to resolve them.
+    #[cfg(windows)]
+    #[test]
+    fn network_and_device_prefixes_are_refused_before_resolution() {
+        for path in [r"\\server\share\file", r"\\?\UNC\server\share\file", r"\\.\NUL"] {
+            assert!(reject_unsafe_prefix(Path::new(path)).is_err(), "{path}");
+        }
+        assert!(reject_unsafe_prefix(Path::new(r"C:\photos\file.jpg")).is_ok());
     }
 }

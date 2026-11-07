@@ -12,6 +12,8 @@ fn strings(p: &Value, key: &str) -> Option<Vec<String>> {
     p.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
 }
 
+/// Import development presets from the supplied files.
+/// Import presets from the supplied files.
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let paths = strings(p, "paths").filter(|v| !v.is_empty()).ok_or_else(|| bad("preset.import", "no paths"))?;
     let group = str_param(p, "group").map(str::trim).filter(|g| !g.is_empty()).map(str::to_string);

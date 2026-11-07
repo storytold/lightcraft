@@ -475,6 +475,7 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    /// Detects when two different names refer to the same file.
     #[test]
     fn same_file_sees_a_hard_link_under_another_name() {
         let d = temp("same-link");

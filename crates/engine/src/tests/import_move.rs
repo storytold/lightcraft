@@ -504,6 +504,7 @@ fn copies_run_side_by_side_with_the_same_outcome() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Verify that changed copies never cause the original import to be removed.
 #[test]
 fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
     use crate::import_move::{finish, place};
@@ -528,6 +529,59 @@ fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
     assert!(finish(&placed).is_err());
     assert_eq!(std::fs::read(&src).unwrap(), b"edited  bytes!");
     inject(Fault::None);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A confined same-volume move may remove a source with exactly one placed hard-link name.
+#[test]
+fn a_confined_move_removes_its_placed_photo_and_sidecar_hard_links() {
+    use crate::file_access::{AutomationRoots, confine};
+    use crate::import_move::{finish, place};
+    let base = temp_dir("move-hard-links-confined");
+    let root = base.join("root");
+    let src = root.join("card/a.png");
+    let dst_dir = root.join("library");
+    std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&dst_dir).unwrap();
+    write_png(&src, 1);
+    let sidecar = src.with_extension("png.xmp");
+    std::fs::write(&sidecar, xmp(1)).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let placed = confine(Some(&roots), || place(&src, &dst_dir, "a.png")).unwrap();
+    assert!(lightcraft_catalog::safe_file::same_file(&src, &placed.dst), "the photo was linked on the same volume");
+    assert!(lightcraft_catalog::safe_file::same_file(&sidecar, &placed.sidecars[0].dst), "the sidecar was linked too");
+    assert!(confine(Some(&roots), || finish(&placed)).unwrap().is_empty());
+    assert!(!src.exists() && !sidecar.exists(), "both source names were removed");
+    assert!(placed.dst.exists() && placed.sidecars[0].dst.exists(), "both placed files remain");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A third hard-link name outside the roots keeps a placed sidecar's source in place.
+#[test]
+fn a_confined_move_keeps_a_sidecar_with_an_unknown_hard_link_name() {
+    use crate::file_access::{AutomationRoots, confine};
+    use crate::import_move::{finish, place};
+    let base = temp_dir("move-hard-link-escape");
+    let root = base.join("root");
+    let outside = base.join("outside");
+    let src = root.join("card/a.png");
+    let dst_dir = root.join("library");
+    std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&dst_dir).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    write_png(&src, 1);
+    let sidecar = src.with_extension("png.xmp");
+    std::fs::write(&sidecar, xmp(1)).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let placed = confine(Some(&roots), || place(&src, &dst_dir, "a.png")).unwrap();
+    let unknown = outside.join("a.png.xmp");
+    std::fs::hard_link(&sidecar, &unknown).unwrap();
+    let kept = confine(Some(&roots), || finish(&placed)).unwrap();
+    assert!(!src.exists(), "the photo pair is wholly inside the roots and is removed");
+    assert!(sidecar.exists() && unknown.exists(), "the sidecar's untrusted third name is preserved");
+    assert!(kept.iter().any(|(_, why)| why.contains("has 3 names")), "{kept:?}");
     let _ = std::fs::remove_dir_all(&base);
 }
 

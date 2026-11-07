@@ -334,6 +334,7 @@ fn a_smooth_proxy_keeps_the_scene_closer_than_the_old_quality() {
     );
 }
 
+/// Check that a proxy created by an older encoder version is stale.
 #[test]
 fn a_proxy_from_an_older_encode_is_stale() {
     let dir = temp("encode-version");

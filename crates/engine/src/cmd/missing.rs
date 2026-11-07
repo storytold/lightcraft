@@ -126,6 +126,8 @@ pub(crate) fn relink_op(id: PhotoId, path: &str) -> Op {
     Op::Relink { id, file_name, source: Source::File { path: path.to_string() }, format: None }
 }
 
+/// Relink the selected missing photo to an existing file.
+/// Relink missing photos to the supplied file paths.
 fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.relink";
     let id = super::photo_id(p, C)?.or(s.active()).ok_or_else(|| bad(C, "no photo (give `id`)"))?;

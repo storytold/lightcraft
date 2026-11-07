@@ -325,6 +325,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Run the MCP server with optional headless session and filesystem roots.
 fn mcp(args: &[String]) -> Result<(), String> {
     let (auto_args, remaining) = automation_args::AutomationArgs::parse(args)?;
     let mut connect: Option<String> = None;

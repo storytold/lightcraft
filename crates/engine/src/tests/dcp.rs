@@ -661,6 +661,38 @@ fn a_library_outside_the_roots_keeps_its_own_profiles() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Importing over a hard-linked library profile replaces its name without truncating the other name.
+#[cfg(unix)]
+#[test]
+fn importing_over_a_hard_linked_library_profile_preserves_the_other_name() {
+    use crate::cmd::dcp_profiles::import_files;
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("profile-hard-link");
+    let (root, lib, outside) = (base.join("root"), base.join("lib"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let source = root.join("Swap.dcp");
+    let bytes = write_dcp(&swapping_profile("Swap")).unwrap();
+    std::fs::write(&source, &bytes).unwrap();
+    let secret = outside.join("secret.dcp");
+    std::fs::write(&secret, b"preserve this linked file").unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let paths = [source.to_string_lossy().to_string()];
+    let (first, failed) = confine(Some(&roots), || import_files(&mut s, &paths)).unwrap();
+    assert_eq!(first.len(), 1, "{failed:?}");
+    let profile = PathBuf::from(&s.dcp_profiles[0].file);
+    std::fs::remove_file(&profile).unwrap();
+    std::fs::hard_link(&secret, &profile).unwrap();
+    s.dcp_profiles.clear();
+    let (again, failed) = confine(Some(&roots), || import_files(&mut s, &paths)).unwrap();
+    assert_eq!(again.len(), 1, "{failed:?}");
+    assert_eq!(std::fs::read(&secret).unwrap(), b"preserve this linked file");
+    assert_eq!(std::fs::read(&profile).unwrap(), bytes);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A `Profiles` folder that is a link out of the automation roots: deleting a profile leaves the file it leads to alone.
 #[cfg(unix)]
 #[test]
