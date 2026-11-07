@@ -452,7 +452,8 @@ impl Catalog {
             return;
         };
         if !(touched.is_empty() && kept.order.ids.len() == self.len()) {
-            let moved = self.merge_new(sort, &mut kept.order, &touched) || (touched.len() <= IN_PLACE && self.move_in_place(sort, &mut kept.order, &touched));
+            let moved =
+                self.merge_new(sort, &mut kept.order, &touched) || (touched.len() <= IN_PLACE && self.move_in_place(sort, &mut kept.order, &touched));
             if !moved {
                 kept.order = Arc::new(self.rebuilt(sort, &kept.order, &touched));
             }
@@ -471,7 +472,9 @@ impl Catalog {
             return false;
         }
         let (Ok(base), Ok(top)) = (u32::try_from(n), u32::try_from(self.len())) else { return false };
-        let Some(mut new) = touched.iter().zip(base..top).map(|(id, at)| self.photo(*id).map(|p| (at, p.as_ref()))).collect::<Option<Vec<(u32, &Photo)>>>() else {
+        let Some(mut new) =
+            touched.iter().zip(base..top).map(|(id, at)| self.photo(*id).map(|p| (at, p.as_ref()))).collect::<Option<Vec<(u32, &Photo)>>>()
+        else {
             return false;
         };
         new.sort_unstable_by(|a, b| sort.order(a.1, b.1));
@@ -527,7 +530,8 @@ impl Catalog {
     pub fn latest_import(&self) -> Option<String> {
         if let Some(order) = self.order_now(&Sort { key: SortKey::ImportDate, ascending: true, ..Sort::default() }) {
             // (the photos deleted or only browsed are skipped: the last import is mostly there)
-            let mut newest = order.sorted.iter().rev().filter_map(|at| order.ids.get(*at as usize)).filter_map(|id| self.photo(*id)).filter(|p| p.in_library());
+            let mut newest =
+                order.sorted.iter().rev().filter_map(|at| order.ids.get(*at as usize)).filter_map(|id| self.photo(*id)).filter(|p| p.in_library());
             return newest.next().map(|p| p.imported.clone());
         }
         self.index.orders.4.fetch_add(1, Ordering::Relaxed);
@@ -555,8 +559,11 @@ impl Catalog {
         let photo_at = |at: &u32| order.ids.get(*at as usize).and_then(|id| self.photo(*id));
         let start = order.sorted.partition_point(|at| photo_at(at).is_some_and(|p| p.imported.as_str() < from));
         // (held photos from before that day come first in the import order: older than all the others)
-        let mut ordered: Vec<&Photo> = keep.iter().filter_map(|id| self.photo(*id)).map(|p| p.as_ref()).filter(|p| p.imported.as_str() < from && wanted(p)).collect();
-        ordered.sort_unstable_by(|a, b| a.imported.cmp(&b.imported).then_with(|| crate::query::cmp_name(&a.file_name, &b.file_name)).then(a.id.cmp(&b.id)));
+        let mut ordered: Vec<&Photo> =
+            keep.iter().filter_map(|id| self.photo(*id)).map(|p| p.as_ref()).filter(|p| p.imported.as_str() < from && wanted(p)).collect();
+        ordered.sort_unstable_by(|a, b| {
+            a.imported.cmp(&b.imported).then_with(|| crate::query::cmp_name(&a.file_name, &b.file_name)).then(a.id.cmp(&b.id))
+        });
         ordered.extend(order.sorted.get(start..).unwrap_or_default().iter().filter_map(photo_at).map(|p| p.as_ref()).filter(|p| wanted(p)));
         // the batches newest first, each in the order it is in
         let mut ids = Vec::with_capacity(ordered.len());

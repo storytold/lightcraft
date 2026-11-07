@@ -521,7 +521,11 @@ fn recently_added_in_a_big_library_does_not_pass_over_every_photo() {
     assert!(shown.len() > 10_000, "{} shown", shown.len());
     assert_eq!(shown, recently_added_from_every_photo(&s));
     assert_eq!(s.source_total(), Some(shown.len()), "its count");
-    assert_eq!((s.catalog.library_scans(), s.catalog.full_sorts(), s.catalog.order_remakes()), (scans, sorts, remakes), "switching to it passed over every photo");
+    assert_eq!(
+        (s.catalog.library_scans(), s.catalog.full_sorts(), s.catalog.order_remakes()),
+        (scans, sorts, remakes),
+        "switching to it passed over every photo"
+    );
     // an import going on: batches of 16, one after the other, each followed by the view
     for batch in 0..5usize {
         let ops: Vec<Op> = (0..16).map(|j| imported_on(&mut s, 50_000 + batch * 16 + j, 100 + batch)).collect();
@@ -530,5 +534,9 @@ fn recently_added_in_a_big_library_does_not_pass_over_every_photo() {
         assert_eq!(shown, recently_added_from_every_photo(&s), "after batch {batch}");
         assert_eq!(s.source_total(), Some(shown.len()), "its count after batch {batch}");
     }
-    assert_eq!((s.catalog.library_scans(), s.catalog.full_sorts(), s.catalog.order_remakes()), (scans, sorts, remakes), "following the import passed over every photo");
+    assert_eq!(
+        (s.catalog.library_scans(), s.catalog.full_sorts(), s.catalog.order_remakes()),
+        (scans, sorts, remakes),
+        "following the import passed over every photo"
+    );
 }

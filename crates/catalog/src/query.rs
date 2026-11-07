@@ -578,7 +578,8 @@ impl Catalog {
         // (the list is in order without the touched photos: each goes in at its place, the last first, with the part
         // after it shifted once for all of them, not once for each)
         put.sort_unstable_by(|a, b| sort.order(a, b));
-        let points: Vec<usize> = put.iter().map(|p| ids.partition_point(|other| self.photo(*other).is_some_and(|o| sort.order(o, p).is_lt()))).collect();
+        let points: Vec<usize> =
+            put.iter().map(|p| ids.partition_point(|other| self.photo(*other).is_some_and(|o| sort.order(o, p).is_lt()))).collect();
         let n = ids.len();
         ids.resize(n + put.len(), PhotoId(0));
         let mut end = n;

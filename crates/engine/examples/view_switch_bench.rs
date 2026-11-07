@@ -19,7 +19,7 @@ fn photo(s: &mut Session, i: usize, imported: &str) -> Photo {
     p.captured = Some(format!("{}-{:02}-{:02}T10:{:02}:{:02}", 2000 + i % 25, 1 + i % 12, 1 + i % 28, i % 60, (i / 60) % 60));
     p.rating = (i % 6) as u8;
     p.file_size = (i as u64 * 31) % 5_000_000;
-    if i % 40 == 0 {
+    if i.is_multiple_of(40) {
         p.flag = Flag::Pick;
     }
     p
@@ -146,6 +146,11 @@ fn main() {
             v.push(ms(t.elapsed()));
         }
         let total: f64 = v.iter().sum();
-        println!("{name:<28} median {:>9.2}  worst {:>9.1}  total for 120 batches {:>9.0}", median(&mut v.clone()), v.iter().cloned().fold(0.0, f64::max), total);
+        println!(
+            "{name:<28} median {:>9.2}  worst {:>9.1}  total for 120 batches {:>9.0}",
+            median(&mut v.clone()),
+            v.iter().cloned().fold(0.0, f64::max),
+            total
+        );
     }
 }

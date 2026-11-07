@@ -638,7 +638,8 @@ fn imported_photos_are_merged_into_every_order_without_remaking_it() {
 
 /// What Recently Added lists, worked out from every photo: newest import first, a batch in file order.
 fn recent_from_every_photo(c: &Catalog, filter: &Filter, keep: &std::collections::HashSet<PhotoId>, within: &Filter) -> Vec<PhotoId> {
-    let mut v: Vec<&Photo> = c.photos().map(|p| p.as_ref()).filter(|p| filter.matches(p, c) || (keep.contains(&p.id) && within.matches(p, c))).collect();
+    let mut v: Vec<&Photo> =
+        c.photos().map(|p| p.as_ref()).filter(|p| filter.matches(p, c) || (keep.contains(&p.id) && within.matches(p, c))).collect();
     v.sort_by(|a, b| b.imported.cmp(&a.imported).then_with(|| crate::query::cmp_name(&a.file_name, &b.file_name)).then(a.id.cmp(&b.id)));
     v.into_iter().map(|p| p.id).collect()
 }
@@ -657,7 +658,9 @@ fn the_recently_added_are_the_end_of_the_import_order() {
     let held: std::collections::HashSet<PhotoId> = (1..=9).map(PhotoId).collect();
     let everything = Filter::default();
     let check = |c: &Catalog| {
-        for (filter, keep, within) in [(&since, &nothing, &since), (&rated, &nothing, &rated), (&since, &held, &everything), (&Filter::default(), &nothing, &Filter::default())] {
+        for (filter, keep, within) in
+            [(&since, &nothing, &since), (&rated, &nothing, &rated), (&since, &held, &everything), (&Filter::default(), &nothing, &Filter::default())]
+        {
             assert_eq!(c.query_recent(filter, keep, within), recent_from_every_photo(c, filter, keep, within), "{filter:?}, {} held", keep.len());
         }
         let latest = c.photos().filter(|p| p.in_library()).map(|p| p.imported.clone()).max();
@@ -689,8 +692,14 @@ fn a_list_followed_through_added_and_edited_photos_equals_the_query() {
             let steps: Vec<Vec<Op>> = vec![
                 (301..=360).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) }).collect(),
                 // old photos edited with new ones added, and some removed
-                (1..=30u64).map(|i| Op::SetRating { id: PhotoId(i * 7 % 300 + 1), rating: (i % 6) as u8 }).chain((361..=380).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) })).collect(),
-                (1..=20u64).map(|i| Op::RemovePhoto { id: PhotoId(i * 11) }).chain((381..=383).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) })).collect(),
+                (1..=30u64)
+                    .map(|i| Op::SetRating { id: PhotoId(i * 7 % 300 + 1), rating: (i % 6) as u8 })
+                    .chain((361..=380).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) }))
+                    .collect(),
+                (1..=20u64)
+                    .map(|i| Op::RemovePhoto { id: PhotoId(i * 11) })
+                    .chain((381..=383).map(|i| Op::AddPhoto { photo: Box::new(incoming(i)) }))
+                    .collect(),
             ];
             for ops in steps {
                 c.apply(Op::Batch { ops }).unwrap();
