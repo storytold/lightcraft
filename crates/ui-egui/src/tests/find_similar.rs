@@ -2,9 +2,9 @@
 //! responding for as long as that took (issue #3468): the photos are read on a worker thread under a
 //! row of the activity stack.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use lightcraft_catalog::{Op, Photo, PhotoId, Source};
@@ -28,6 +28,7 @@ struct Drive {
     open: Arc<AtomicBool>,
     reads: Arc<AtomicUsize>,
     on_ui: Arc<AtomicUsize>,
+    similar_paths: Arc<Mutex<Vec<String>>>,
 }
 
 fn app_on_a_slow_drive(guard: Duration) -> (Headless, Drive) {
@@ -37,13 +38,20 @@ fn app_on_a_slow_drive(guard: Duration) -> (Headless, Drive) {
         let p = Photo::new(PhotoId(i + 1), Source::File { path }, &format!("IMG_{i:04}.arw"), "ARW", 64, 64, "2026-01-01T00:00:00");
         app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let drive = Drive { open: Arc::new(AtomicBool::new(false)), reads: Arc::new(AtomicUsize::new(0)), on_ui: Arc::new(AtomicUsize::new(0)) };
-    let (ui, open, reads, on_ui) = (std::thread::current().id(), drive.open.clone(), drive.reads.clone(), drive.on_ui.clone());
+    let drive = Drive {
+        open: Arc::new(AtomicBool::new(false)),
+        reads: Arc::new(AtomicUsize::new(0)),
+        on_ui: Arc::new(AtomicUsize::new(0)),
+        similar_paths: Arc::new(Mutex::new(Vec::new())),
+    };
+    let (ui, open, reads, on_ui, similar_paths) =
+        (std::thread::current().id(), drive.open.clone(), drive.reads.clone(), drive.on_ui.clone(), drive.similar_paths.clone());
     let deadline = Instant::now() + guard;
     app.session.media.file_loader = Some(Arc::new(move |path: &str, _, _| {
         // (the grid reads the photos for its thumbnails too, on threads of its own)
         let thread = std::thread::current();
         if thread.name().is_some_and(|n| n.starts_with("similar-") || n.contains(LABEL)) {
+            similar_paths.lock().unwrap().push(path.to_string());
             reads.fetch_add(1, Ordering::SeqCst);
         }
         if thread.id() == ui {
@@ -155,6 +163,7 @@ fn stopping_leaves_the_view_alone_and_the_next_search_reads_only_the_rest() {
     h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
     // stopped while the searched photo is being read: that one read is all it does
     assert!(h.step_until(T, |_| drive.reads.load(Ordering::SeqCst) == 1), "the first read never started");
+    let first_read = drive.similar_paths.lock().unwrap().first().cloned().expect("the first similar-photo read is recorded");
     h.app.session.activity.cancel(rows(&h)[0].id).unwrap();
     drive.open.store(true, Ordering::SeqCst);
     until_done(&mut h);
@@ -167,7 +176,11 @@ fn stopping_leaves_the_view_alone_and_the_next_search_reads_only_the_rest() {
     let r = h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
     assert_eq!(r["count"], PHOTOS - 1, "what was read isn't read again");
     until_done(&mut h);
-    assert_eq!(drive.reads.load(Ordering::SeqCst), PHOTOS as usize);
+    let paths = drive.similar_paths.lock().unwrap();
+    let mut unique = std::collections::HashSet::new();
+    assert!(paths.iter().all(|path| unique.insert(path)), "a similar-photo scan read a file more than once: {paths:?}");
+    assert_eq!(paths.iter().filter(|path| path.as_str() == first_read).count(), 1, "the cancelled search's completed read is reused");
+    assert_eq!(drive.reads.load(Ordering::SeqCst), paths.len());
     assert_eq!(h.app.session.filter.only.len(), PHOTOS as usize / 2);
 }
 

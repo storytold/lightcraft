@@ -474,8 +474,12 @@ mod tests {
         let source = job.source.load_source().unwrap();
         let b = lightcraft_engine::pipeline::render(&source.image, &source.info_or(job.info), &job.settings, &job.request);
         assert_eq!((a.image.width, a.image.height), (b.image.width, b.image.height));
-        assert_eq!(a.image.data, b.image.data);
-        assert_eq!(a.histogram, b.histogram);
+        // The worker renders on the CPU and the engine job may use the GPU. Allow the
+        // documented display-pipeline bound instead of requiring bit-identical pixels.
+        let max = a.image.data.iter().zip(&b.image.data).flat_map(|(p, q)| (0..3).map(move |c| p[c].abs_diff(q[c]))).max();
+        assert!(max.is_some_and(|m| m <= 3), "max channel difference {max:?}");
+        assert_eq!(a.histogram, lightcraft_raster::Histogram::of_srgb8(&a.image));
+        assert_eq!(b.histogram, lightcraft_raster::Histogram::of_srgb8(&b.image));
     }
 
     #[test]

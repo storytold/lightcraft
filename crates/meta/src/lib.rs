@@ -31,7 +31,9 @@ mod xmp_merge;
 
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
 pub use datetime::DateTime;
-pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
+pub use exif::{
+    exif_embeds_gps_location, from_tiff, read_exif, source_embeds_exif_gps_location, strip_exif_header, try_read_exif, try_read_exif_with, write_exif,
+};
 pub use focus::FocusPoint;
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
@@ -296,7 +298,10 @@ impl Metadata {
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {
     let e = embedded(bytes);
-    let exif = e.exif.as_deref().map(read_exif).unwrap_or_default();
+    let mut exif = e.exif.as_deref().map(read_exif).unwrap_or_default();
+    if exif.gps.is_none() {
+        exif.gps = container::source_jpeg_exif_gps(bytes);
+    }
     let xmp = e.xmp.as_deref().and_then(|xmp| parse_xmp(xmp).ok());
     extract_embedded(e, exif, xmp)
 }
@@ -306,11 +311,14 @@ pub fn extract(bytes: &[u8]) -> Metadata {
 pub fn try_extract(bytes: &[u8]) -> Result<Metadata, ExtractError> {
     let e = container::try_embedded(bytes)?;
     let is_psd = bytes.starts_with(b"8BPS");
-    let exif = match e.exif.as_deref() {
+    let mut exif = match e.exif.as_deref() {
         Some(exif) if is_psd => try_read_exif(exif).map_err(|_| ExtractError::MalformedPsd)?,
         Some(exif) => read_exif(exif),
         None => Metadata::default(),
     };
+    if exif.gps.is_none() {
+        exif.gps = container::source_jpeg_exif_gps(bytes);
+    }
     let xmp = match e.xmp.as_deref() {
         Some(xmp) if is_psd => Some(parse_xmp(xmp).map_err(|_| ExtractError::MalformedPsd)?),
         Some(xmp) => parse_xmp(xmp).ok(),

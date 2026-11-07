@@ -92,6 +92,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | patch | LR-META-EXIF-FULL: reject invalid EXIF GPS subdivisions and preserve Original-export location-removal refusal for GPS-bearing or unverifiable EXIF across containers; MPF multi-picture JPEGs fail closed while secondary-image EXIF is unchecked; readiness and roadmap counts unchanged |
 | 2026-11-04 | minor | Gap 6 closed: Compressed ORF decoded (`crates/raw/src/vendor/orfc.rs`), OM-D E-M1 and E-M10 Mark III verified; 58 bodies newly unlocked (78 total across Olympus and OM; OM / Olympus fully working 6% → 81%) |
 | 2026-11-05 | minor | Gap 3: process V5 rolls a raw's tone curve off into white in stops, so raising Exposure keeps the highlights the sensor recorded (#1632); the gap stays open (no Lightroom comparison) and hours are unchanged |
 | 2026-10-27 | minor | Gap 26: the loupe shows built previews (they were rendered again), photos ahead and the whole view are prepared in the background with settings per mode; gap not closed |

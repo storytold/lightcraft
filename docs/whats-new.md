@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### EXIF GPS coordinates stay valid and Original exports protect location data
+- Invalid EXIF GPS minutes or seconds no longer fold into plausible coordinates. Written coordinates round to
+  thousandths of a second before splitting DMS, carrying across minute and degree boundaries. Original exports with
+  Remove Location Info refuse GPS-bearing or unverifiable EXIF, including JPEG APP1 packets, PNG `eXIf` and WebP
+  `EXIF` chunks, raw CR3 `CMT4` metadata, and MPF multi-picture JPEGs while secondary-image EXIF is not scanned.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

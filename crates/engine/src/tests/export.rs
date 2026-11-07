@@ -759,6 +759,57 @@ fn remove_location_holds_for_original_and_dng_exports() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A second EXIF APP1 packet with malformed coordinates still blocks a privacy-sensitive copy.
+#[test]
+fn malformed_exif_gps_still_blocks_original_when_removing_location() {
+    use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+    let dir = temp_dir("export-malformed-exif-gps");
+    let source = dir.join("Malformed.jpg");
+    let mut first_ifd0 = IfdBuilder::new();
+    first_ifd0.set(t::MAKE, Value::Ascii("No GPS camera".into()));
+    let first_exif = TiffWriter::default().write(&[first_ifd0]).unwrap();
+    let mut gps = IfdBuilder::new();
+    gps.set(t::GPS_LATITUDE_REF, Value::Ascii("N".into()));
+    gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (60, 1), (0, 1)]));
+    gps.set(t::GPS_LONGITUDE_REF, Value::Ascii("E".into()));
+    gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(10, 1), (0, 1), (0, 1)]));
+    let mut ifd0 = IfdBuilder::new();
+    ifd0.set_child(t::GPS_IFD, gps);
+    let second_exif = TiffWriter::default().write(&[ifd0]).unwrap();
+    let pixels = [90u8; 12];
+    let image = lightcraft_codecs::EncodeImage::new(2, 2, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let jpeg = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
+    let mut original = vec![0xff, 0xd8];
+    for exif in [&first_exif, &second_exif] {
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(exif);
+        let segment_len = (payload.len() + 2) as u16;
+        original.extend_from_slice(&[0xff, 0xe1]);
+        original.extend_from_slice(&segment_len.to_be_bytes());
+        original.extend_from_slice(&payload);
+    }
+    original.extend_from_slice(jpeg.get(2..).expect("encoded JPEG has an SOI marker"));
+    std::fs::write(&source, &original).unwrap();
+
+    assert!(lightcraft_meta::embedded(&original).exif.as_deref().is_some_and(|first| !lightcraft_meta::exif_embeds_gps_location(first)));
+    assert!(lightcraft_meta::source_embeds_exif_gps_location(&original), "the second EXIF APP1 contains GPS tags");
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [source.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    assert!(session.catalog.photo(id).unwrap().meta.gps.is_none(), "invalid subdivisions are not projected into the imported photo");
+    let parsed = lightcraft_meta::try_extract(&original).unwrap();
+    assert!(parsed.gps.is_none(), "the malformed coordinate is not projected after validation");
+
+    let destination = crate::export::Destination { dir: dir.join("out").to_string_lossy().into(), exact: None };
+    let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
+    let error = disk_batch(&mut session, id, &options, &destination).expect_err("Original must not preserve embedded EXIF GPS");
+    assert!(error.contains("can't remove the location"), "{error}");
+    assert!(!dir.join("out/Malformed.jpg").exists(), "no copy was written");
+    assert_eq!(std::fs::read(&source).unwrap(), original, "source bytes remain unchanged");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn remove_location_refuses_original_with_embedded_place_names() {
     let dir = temp_dir("export-noloc-place-fields");
@@ -999,6 +1050,71 @@ fn remove_location_refuses_a_psd_that_embeds_gps() {
     let id = session.catalog.photos().next().unwrap().id;
     let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
     assert!(err.contains("can't remove the location") && err.contains("export as JPEG"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An unparseable embedded EXIF block cannot authorize a privacy-sensitive Original copy.
+#[test]
+fn remove_location_refuses_original_with_unparseable_embedded_exif() {
+    let dir = temp_dir("export-noloc-unparseable-exif");
+    let path = dir.join("UnreadableExif.png");
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let encoded = lightcraft_codecs::EncodeMeta { exif: Some(b"not a TIFF stream"), ..Default::default() };
+    let original = lightcraft_codecs::encode_png(&image, &encoded).unwrap();
+    assert!(lightcraft_meta::embedded(&original).exif.is_some());
+    assert!(lightcraft_meta::source_embeds_exif_gps_location(&original));
+    std::fs::write(&path, &original).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't remove the location"), "{err}");
+    assert!(err.contains("location data could not be verified"), "unparseable EXIF must not be described as verified GPS: {err}");
+    assert_eq!(std::fs::read(&path).unwrap(), original, "the source is left byte-for-byte unchanged");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A later GPS-free PNG EXIF chunk cannot hide GPS in an earlier chunk from Original export.
+#[test]
+fn remove_location_refuses_original_with_gps_in_an_earlier_png_exif_chunk() {
+    let dir = temp_dir("export-noloc-duplicate-png-exif");
+    let path = dir.join("DuplicateExif.png");
+    let pixels = [40, 80, 120];
+    let image = lightcraft_codecs::EncodeImage::new(1, 1, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let gps_meta =
+        lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.5, longitude: 10.5, altitude: None }), ..Default::default() };
+    let gps_exif = lightcraft_meta::write_exif(&gps_meta);
+    let no_gps_meta = lightcraft_meta::Metadata { make: Some("Procedural camera".into()), ..Default::default() };
+    let no_gps_exif = lightcraft_meta::write_exif(&no_gps_meta);
+    let gps_png = lightcraft_codecs::encode_png(&image, &lightcraft_codecs::EncodeMeta { exif: Some(&gps_exif), ..Default::default() }).unwrap();
+    let no_gps_png =
+        lightcraft_codecs::encode_png(&image, &lightcraft_codecs::EncodeMeta { exif: Some(&no_gps_exif), ..Default::default() }).unwrap();
+    let exif_chunk = |png: &[u8]| {
+        let type_at = png.windows(4).position(|window| window == b"eXIf").unwrap();
+        let start = type_at.checked_sub(4).unwrap();
+        let length_bytes: [u8; 4] = png.get(start..type_at).unwrap().try_into().unwrap();
+        let length = usize::try_from(u32::from_be_bytes(length_bytes)).unwrap();
+        let end = type_at.checked_add(4).and_then(|at| at.checked_add(length)).and_then(|at| at.checked_add(4)).unwrap();
+        (start, png.get(start..end).unwrap().to_vec())
+    };
+    let (_, gps_chunk) = exif_chunk(&gps_png);
+    let (no_gps_chunk_at, _) = exif_chunk(&no_gps_png);
+    let mut original = no_gps_png;
+    original.splice(no_gps_chunk_at..no_gps_chunk_at, gps_chunk);
+
+    assert_eq!(lightcraft_meta::embedded(&original).exif.as_deref(), Some(no_gps_exif.as_slice()));
+    assert!(!lightcraft_meta::exif_embeds_gps_location(&no_gps_exif));
+    assert!(lightcraft_meta::source_embeds_exif_gps_location(&original));
+    std::fs::write(&path, &original).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
+    assert!(err.contains("can't remove the location"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), original, "the source is left byte-for-byte unchanged");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

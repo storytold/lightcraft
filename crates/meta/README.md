@@ -25,6 +25,18 @@ with more than three colon-separated components is rejected as a whole, allowing
 fallback to supply the capture time. The original tag remains available in All Metadata. JPEG ICC data is exposed only when its APP2 chunks form a complete, consistent, uniquely numbered sequence;
 malformed or truncated ICC sequences leave unrelated readable metadata available and produce no profile.
 
+EXIF GPS degrees, minutes and seconds are validated before decimal conversion: each component must be finite and
+nonnegative, and minutes / seconds must be below 60. The writer rounds total coordinates to thousandths of a second
+before splitting DMS, carrying rounding across minute and degree boundaries. Malformed subdivisions do not create a
+typed location, while the source tags remain available in All Metadata. Original export with Remove Location Info
+refuses files with location-bearing EXIF tags, a GPS IFD pointer whose child could not be read, or an embedded EXIF
+block that could not be parsed. CR3 `CMT4` GPS metadata is checked directly as well as through merged EXIF, and an
+unreadable `CMT4` fails closed. PNG `eXIf` and WebP `EXIF` chunks are all checked, not just the one exposed by
+`embedded()`. Every JPEG EXIF APP1 before SOS is checked, including all EXIF packets in a RAF preview, and TIFF
+JPEG-thumbnail EXIF is checked recursively with a depth bound. Containers without a separate EXIF block retain the
+whole-file TIFF fallback. MPF multi-picture JPEGs are refused for Original copying because secondary-image EXIF is
+not scanned.
+
 ## XMP namespaces
 
 Written: `dc`, `xmp`, `photoshop`, `exif`, `exifEX`, `tiff`, `lr` (`hierarchicalSubject`) and ours,

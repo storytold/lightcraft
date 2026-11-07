@@ -100,6 +100,8 @@ pub const GPS_ALTITUDE: u16 = 6;
 pub const GPS_TIME_STAMP: u16 = 7;
 pub const GPS_IMG_DIRECTION_REF: u16 = 16;
 pub const GPS_IMG_DIRECTION: u16 = 17;
+pub const GPS_DEST_LATITUDE: u16 = 20;
+pub const GPS_DEST_LONGITUDE: u16 = 22;
 pub const GPS_DATE_STAMP: u16 = 29;
 
 // --- DNG
