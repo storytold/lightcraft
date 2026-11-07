@@ -78,6 +78,26 @@ impl Reader {
             .collect())
     }
 
+    /// Fill `out` with the as-shot white of each image in `wanted`, from the last of its history steps that
+    /// has one. Streamed: on a large catalog this table is over what [`Self::table`] holds in memory.
+    fn as_shot_whites(&self, wanted: &HashSet<i64>, cancel: &AtomicBool, out: &mut HashMap<i64, (f64, f64)>) -> Result<(), String> {
+        const TABLE: &str = "Adobe_libraryImageDevelopHistoryStep";
+        let Some(t) = self.tables.iter().find(|t| t.name == TABLE) else { return Ok(()) };
+        let columns = t.column_names.as_ref().ok_or_else(|| format!("cannot read {TABLE} columns"))?;
+        let at = |name: &str| columns.iter().position(|c| c == name).ok_or_else(|| format!("{TABLE}: no {name} column"));
+        let (image, text) = (at("image")?, at("text")?);
+        self.db.for_each_record(t.rootpage, columns.len(), &mut |record| {
+            ensure_read_active(cancel)?;
+            if let Some(SqlValue::Integer(id)) = record.values.get(image)
+                && wanted.contains(id)
+                && let Some(white) = record.values.get(text).and_then(step_as_shot_white)
+            {
+                out.insert(*id, white);
+            }
+            Ok(())
+        })
+    }
+
     fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
         match self.table(name, false) {
             Ok(rows) => Ok(rows),
@@ -149,6 +169,10 @@ pub struct CatalogPhoto {
     /// Whether `path` may be looked at (derived when the catalog is read; not archived).
     #[serde(skip)]
     pub original: Original,
+    /// Lightroom's as-shot `(Temperature, Tint)` for a Custom white balance, from its history:
+    /// what the Kelvin in `settings` is measured from ([`custom_as_shot`]).
+    #[serde(default)]
+    pub as_shot_white: Option<(f64, f64)>,
 }
 
 /// Whether the original a catalog lists may be looked at. Its path is resolved with the catalog
@@ -321,6 +345,48 @@ fn xmp(v: Option<&Value>) -> Result<String, String> {
         }
         _ => Ok(String::new()),
     }
+}
+
+/// The `(Temperature, Tint)` of a history step whose white balance is As Shot. Lightroom writes them there as it
+/// read them from the file, and keeps them nowhere else once the photo has a Custom white balance. `None` for any
+/// other step, and for the first steps of a photo, which say As Shot without the values.
+fn step_as_shot_white(step: &SqlValue) -> Option<(f64, f64)> {
+    let decoded;
+    let text = match step {
+        SqlValue::Text(s) => s.as_str(),
+        SqlValue::Blob(b) => {
+            decoded = decode_xmp_bytes(b).ok()?;
+            decoded.as_str()
+        }
+        _ => return None,
+    };
+    let props = settings_with_white_balance(text, "As Shot")?;
+    let number = |k: &str| props.get(k)?.first()?.parse::<f64>().ok().filter(|v| v.is_finite());
+    Some((number("crs:Temperature").filter(|t| *t > 0.0)?, number("crs:Tint")?))
+}
+
+/// The parsed develop settings in `text` when their white balance is `mode`; `None` for another mode or text
+/// that does not parse. The substring test only skips parsing text that cannot match.
+fn settings_with_white_balance(text: &str, mode: &str) -> Option<crate::crs::Props> {
+    if !text.contains(mode) {
+        return None;
+    }
+    let root = crate::preset_import::parse_lua(text).ok()?;
+    let (props, _) = crate::preset_import::lua_settings_props(&root).ok()?;
+    (props.get("crs:WhiteBalance")?.first()?.as_str() == mode).then_some(props)
+}
+
+/// The as-shot white of each photo with a Custom white balance (issue #510: without it a raw developed relative
+/// to its as-shot look can't take the Kelvin). Optional: what was read before a failure is kept.
+fn custom_as_shot(reader: &Reader, develops: &HashMap<i64, String>, cancel: &AtomicBool, warnings: &mut Vec<String>) -> HashMap<i64, (f64, f64)> {
+    let wanted: HashSet<i64> = develops.iter().filter(|(_, t)| settings_with_white_balance(t, "Custom").is_some()).map(|(id, _)| *id).collect();
+    let mut found = HashMap::new();
+    if !wanted.is_empty()
+        && let Err(error) = reader.as_shot_whites(&wanted, cancel, &mut found)
+    {
+        warnings.push(format!("as-shot white balance from Lightroom history: {error}"));
+    }
+    found
 }
 
 fn decode_xmp_bytes(bytes: &[u8]) -> Result<String, String> {
@@ -546,6 +612,8 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     }
     let mut history = group(optional_table("Adobe_libraryImageDevelopHistoryStep", &mut warnings)?);
     let mut snapshots = group(optional_table("Adobe_libraryImageDevelopSnapshot", &mut warnings)?);
+    let as_shot_whites = custom_as_shot(&reader, &develops, cancel, &mut warnings);
+    ensure_read_active(cancel)?;
     let mut out = CatalogImport {
         source: path.to_string_lossy().into(),
         photos: Vec::new(),
@@ -608,6 +676,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
             history: history.remove(&id).unwrap_or_default(),
             snapshots: snapshots.remove(&id).unwrap_or_default(),
             original,
+            as_shot_white: as_shot_whites.get(&id).copied(),
         });
     }
     drop_copies_of(&mut out, &orphans);
@@ -695,8 +764,22 @@ fn ensure_read_active(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) { Err("Lightroom import cancelled".into()) } else { Ok(()) }
 }
 
+#[cfg(test)]
 fn mapped_settings(
     text: &str,
+    target: crate::crs::Target,
+    aspect: f64,
+    orientation: Orientation,
+    stored_aspect: f64,
+    user: Orientation,
+) -> Result<(Value, Vec<String>), String> {
+    mapped_settings_from(text, None, target, aspect, orientation, stored_aspect, user)
+}
+
+/// Map a catalog's develop settings; `as_shot` is the white their Kelvin is measured from, when known.
+fn mapped_settings_from(
+    text: &str,
+    as_shot: Option<(f64, f64)>,
     target: crate::crs::Target,
     aspect: f64,
     orientation: Orientation,
@@ -706,6 +789,10 @@ fn mapped_settings(
     let mut root = crate::preset_import::parse_lua(text)?;
     let deferred = strip_lua_sentinels(&mut root);
     let (mut props, values) = crate::preset_import::lua_settings_props(&root)?;
+    if let Some((temperature, tint)) = as_shot {
+        props.entry("crs:AsShotTemperature".into()).or_insert_with(|| vec![temperature.to_string()]);
+        props.entry("crs:AsShotTint".into()).or_insert_with(|| vec![tint.to_string()]);
+    }
     // A catalog's develop settings carry the crop edges and angle but no `HasCrop` (XMP has it):
     // any crop field means the photo is cropped.
     const CROP: [&str; 5] = ["crs:CropLeft", "crs:CropTop", "crs:CropRight", "crs:CropBottom", "crs:CropAngle"];
@@ -1278,8 +1365,9 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.meta.keywords = src.keywords.clone();
         }
         if !src.settings.is_empty() && !keep_develop {
-            match mapped_settings(
+            match mapped_settings_from(
                 &src.settings,
+                src.as_shot_white,
                 crate::crs::Target::for_photo(&p),
                 p.width.max(1) as f64 / p.height.max(1) as f64,
                 orientation,

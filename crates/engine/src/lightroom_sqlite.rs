@@ -133,10 +133,21 @@ enum TextEncoding {
     Utf16Be,
 }
 
-struct WalkState {
+struct WalkState<'a> {
     seen: HashSet<u32>,
     out: Vec<Record>,
+    /// Records handed to `sink` or kept in `out`.
+    rows: usize,
     payload_total: usize,
+    payload_limit: usize,
+    /// Takes each record instead of `out`, so a table too big to keep can still be read.
+    sink: Option<&'a mut dyn FnMut(Record) -> Result<(), String>>,
+}
+
+impl WalkState<'_> {
+    fn new() -> Self {
+        WalkState { seen: HashSet::new(), out: Vec::new(), rows: 0, payload_total: 0, payload_limit: MAX_TABLE_PAYLOAD, sink: None }
+    }
 }
 
 struct WalOverlay {
@@ -251,9 +262,26 @@ impl Database {
             return Err("table has too many columns".into());
         }
         let alias = self.rowid_aliases.get(&rootpage).copied();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
+        let mut state = WalkState::new();
         self.visit_table(rootpage, ncols, alias, 0, &mut state)?;
         Ok(state.out)
+    }
+
+    /// Hand each record of a table B-tree to `visit`, keeping none: for a table over the size [`Self::read_table`]
+    /// holds in memory. The row and per-record limits still apply; an error from `visit` stops the walk, as does a
+    /// payload total over the database's size. A real table's payloads sit on pages of their own, so they never
+    /// reach it; records that share overflow pages would otherwise read the same bytes again and again.
+    pub fn for_each_record(&self, rootpage: u32, ncols: usize, visit: &mut dyn FnMut(Record) -> Result<(), String>) -> Result<(), String> {
+        if !(1..=MAX_PAGE_ID).contains(&rootpage) || rootpage > self.page_count {
+            return Err("table root page is outside database".into());
+        }
+        if ncols > MAX_COLUMNS {
+            return Err("table has too many columns".into());
+        }
+        let alias = self.rowid_aliases.get(&rootpage).copied();
+        let database_bytes = usize::try_from(self.page_count).unwrap_or(usize::MAX).saturating_mul(self.page_size);
+        let mut state = WalkState { payload_limit: database_bytes, sink: Some(visit), ..WalkState::new() };
+        self.visit_table(rootpage, ncols, alias, 0, &mut state)
     }
 
     fn page(&self, page_id: u32) -> Result<Cow<'_, [u8]>, String> {
@@ -272,7 +300,7 @@ impl Database {
         self.main.get(start..end).map(Cow::Borrowed).ok_or_else(|| format!("page {page_id} is truncated"))
     }
 
-    fn visit_table(&self, page_id: u32, ncols: usize, alias: Option<usize>, depth: usize, state: &mut WalkState) -> Result<(), String> {
+    fn visit_table(&self, page_id: u32, ncols: usize, alias: Option<usize>, depth: usize, state: &mut WalkState<'_>) -> Result<(), String> {
         if depth > MAX_BTREE_DEPTH {
             return Err("SQLite B-tree is too deep".into());
         }
@@ -285,7 +313,7 @@ impl Database {
         let content = page.get(..usable).ok_or("truncated usable SQLite page")?;
         let kind = *content.get(base).ok_or("truncated B-tree header")?;
         let cells = usize::from(be_u16_at(content, base + 3)?);
-        if cells > MAX_CELLS || state.out.len().saturating_add(cells) > MAX_ROWS.saturating_add(MAX_CELLS) {
+        if cells > MAX_CELLS || state.rows.saturating_add(cells) > MAX_ROWS.saturating_add(MAX_CELLS) {
             return Err("SQLite B-tree contains too many cells".into());
         }
         match kind {
@@ -309,7 +337,7 @@ impl Database {
                     }
                     let rowid = i64::from_be_bytes(read_varint(content, &mut at)?.to_be_bytes());
                     state.payload_total = state.payload_total.checked_add(payload_len).ok_or("SQLite table payload total overflow")?;
-                    if state.payload_total > MAX_TABLE_PAYLOAD {
+                    if state.payload_total > state.payload_limit {
                         return Err("SQLite table payload exceeds bounded import size".into());
                     }
                     let payload = self.payload(&page, at, payload_len)?;
@@ -322,10 +350,14 @@ impl Database {
                             *value = Value::Integer(rowid);
                         }
                     }
-                    if state.out.len() >= MAX_ROWS {
+                    if state.rows >= MAX_ROWS {
                         return Err("SQLite table contains more than one million records".into());
                     }
-                    state.out.push(Record { values });
+                    state.rows += 1;
+                    match &mut state.sink {
+                        Some(visit) => visit(Record { values })?,
+                        None => state.out.push(Record { values }),
+                    }
                 }
                 Ok(())
             }
@@ -427,7 +459,7 @@ impl Database {
     fn parse_schema(&self) -> Result<SchemaInfo, String> {
         let mut tables = Vec::new();
         let mut aliases = HashMap::new();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
+        let mut state = WalkState::new();
         self.visit_table(1, 5, None, 0, &mut state)?;
         for record in state.out {
             if record.values.len() < 5 {

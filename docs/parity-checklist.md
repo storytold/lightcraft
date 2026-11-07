@@ -802,6 +802,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | LRC-LIB-CATALOG-IMPORT: a Custom white balance on a raw developed relative to its as-shot look is shifted from the as-shot white in the photo's history, read record by record past the table size limit (#510); status and counts unchanged |
 | 2026-11-04 | minor | LR-IMP-FORMATS / LR-IMP-CAMERA-COVERAGE: Olympus compressed ORF bitstream decoder implemented (`crates/raw/src/vendor/orfc.rs`); OM-D E-M1 and E-M10 Mark III verified on CC0 files; 58 bodies newly unlocked (78 total across Olympus and OM) |
 | 2026-10-28 | minor | KEY-HIDEPINS ✅ → 🟡: in the Masking panel an unmodified H toggles the mask pins (`view.maskPins`, the View ▸ Show Mask Pins switch) instead of opening Remove; the toggle yields only to an explicit assignment of H itself, a Remove key reassigned to anything else still opens Remove there, and outside Masking — and the full-screen preview, where no panel shows — H keeps its own binding (Remove, by default). Remove's spot pins keep ⇧H as their only hide toggle (`tests/keymap` `h_toggles_the_mask_pins_while_masking`, `a_remapped_remove_key_still_opens_remove_while_masking`, `h_still_toggles_the_pins_when_remove_moves_to_another_key`) |
 | 2026-11-06 | minor | LR-EDIT-DETAIL-CNR, LRC-DEV-PROCESS: process V6 takes colour noise reduction to the joint method on linear R−Y / B−Y (issue #815); status unchanged |
