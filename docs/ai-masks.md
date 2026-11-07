@@ -81,11 +81,27 @@ stay in the local library, so later adjustments and exports work without the con
 
 The worker requires Metal and accepts one editing connection at a time. It loads weights
 on demand and releases them when the client disconnects or remains idle for ten minutes.
-Both endpoints require loopback addresses: SSH provides authentication and encryption.
-The listener has no independent authentication; do not expose it through a public proxy. Any
+Without a token both endpoints require loopback addresses: SSH provides authentication and
+encryption. Such a listener has no independent authentication; do not expose it through a public
+proxy. Any
 process of any user on the worker Mac can connect to it, and on the editing computer a local
 process listening on the port while the tunnel is down receives the rendered model input, so use
 this only on machines whose local users you trust.
+
+To reach the worker without a tunnel, inside a private network or a cluster, give both ends the
+same secret of at least 16 characters in `LIGHTCRAFT_SAM3_WORKER_TOKEN`:
+
+```sh
+LIGHTCRAFT_SAM3_WORKER_TOKEN=… lightcraft-sam3-worker /models/sam3 0.0.0.0:8793
+LIGHTCRAFT_SAM3_WORKER_TOKEN=… LIGHTCRAFT_SAM3_REMOTE=sam3-worker:8793 lightcraft
+```
+
+`LIGHTCRAFT_SAM3_REMOTE` then takes a host name or an address. A worker off loopback refuses to
+start without the token, and a client refuses to send anything off this machine without it. On
+every connection both ends prove they know the token, with an HMAC over fresh nonces, before any
+pixels move; the token itself never crosses the network. That keeps strangers off the GPU and
+photos away from an impostor, nothing more: the model input and the masks cross the network
+unencrypted, so use this only where the network itself is private or encrypted.
 
 No local weights are required in remote mode. An unavailable worker produces an explicit
 error, not a silent CPU fallback. Restore the tunnel and retry. Unset
