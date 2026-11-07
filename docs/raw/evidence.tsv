@@ -576,5 +576,5 @@ Canon	EOS 300D (EOS Digital Rebel, EOS Kiss Digital)	verified	corpus: crates/raw
 Canon	PowerShot G1	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Canon	PowerShot G6	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Canon	PowerShot G5	preview	CRW entropy anomaly (craft-libs crates/crw/clean-room/02-crw-format.md section 4); embedded JPEG
-Olympus	OM-D E-M1	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	OM-D E-M10 Mark III	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
+Olympus	OM-D E-M1	preview	compressed ORF support withdrawn pending provenance review; embedded JPEG
+Olympus	OM-D E-M10 Mark III	preview	compressed ORF support withdrawn pending provenance review; embedded JPEG
