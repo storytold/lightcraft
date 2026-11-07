@@ -127,6 +127,24 @@ thumbnails of another shape and the grey masks an iPhone ProRAW DNG keeps at the
 Sources for editing (an unsupported raw's JPEG, `load_embedded_preview`) and the camera-look fit still
 use the largest JPEG, so their geometry and colour do not depend on the size level.
 
+A Canon CR3 picks the same way among its three JPEGs: an EOS R5 C file keeps an 8192 × 5464 JPEG
+track, a 1620 × 1080 `PRVW` box and a 160 × 120 `THMB`. Decoding the 8192 px one costs about 100 ms
+of entropy decoding however small it is asked for (DCT scaling only saves the inverse transform),
+against a few milliseconds for the 1620 px one. So a grid thumbnail and a loupe up to 1620 px read
+the `PRVW`, and a bigger loupe still reads the track (`cr3_preview_box_list` lists the boxes for
+`embedded_preview_covering`).
+
+A plain 8-bit sRGB JPEG (no ICC profile, no Adobe RGB declaration from the container) is then decoded
+straight to 8-bit (`lightcraft_codecs::decode_jpeg_srgb8_fit`: DCT-scaled, box-averaged in linear
+light) without the float image the general decode builds; anything else keeps the general path.
+
+`lightcraft-cli bench-cull FOLDER` times these steps (and the rest of a culling pass) on a real
+folder; `tools/cull-bench.py` times them in the running app.
+
+Measured on 20 EOS R5 C CR3s from a wedding (local NVMe SSD, machine shared with other work): the
+loader at 1280 px went from 168–322 ms to **31 ms** a photo; at 2560 px the decode of the 8192 px
+JPEG went from 182 to 151 ms (minimum of 15 runs; most of what remains is entropy decoding).
+
 ## Tests
 
 - `crates/raw/src/preview.rs`: the header-only range matches `embedded_preview` byte for byte; a

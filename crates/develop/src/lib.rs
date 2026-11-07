@@ -13,7 +13,7 @@ pub mod settings;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
-pub use segmask::SegMask;
+pub use segmask::{SegMask, with_grid_interner};
 pub use settings::*;
 
 use serde_json::Value;
@@ -27,6 +27,7 @@ impl DevelopSettings {
         s.wb.tint = as_shot_tint;
         s.detail.sharpen_amount = 40.0;
         s.detail.nr_color = 25.0;
+        s.detail.nr_outliers = true;
         s
     }
 
@@ -34,20 +35,25 @@ impl DevelopSettings {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
-    /// `to_json` with the channel mixer written out even when it is the identity (which `to_json`
-    /// leaves out to keep old settings' hashes): a partial merged onto it then means "this
-    /// coefficient only", not "the missing ones are zero", and copying or syncing the Color Mixer
-    /// group resets a mixed photo.
-    pub fn to_json_with_mixer(&self) -> Value {
+    pub fn from_json(v: &Value) -> Result<DevelopSettings, serde_json::Error> {
+        serde_json::from_value(v.clone())
+    }
+
+    /// [`Self::to_json`] with the settings it leaves out at their defaults stated, for JSON that is copied, merged,
+    /// scaled or compared key by key (copy / paste, presets, Auto Sync): Remove Hot Pixels (`detail.nr_outliers`)
+    /// when off, and the channel mixer when it is the identity. The stored JSON leaves them out, so settings saved
+    /// before them keep their hash; a merge needs them, or copying Detail would not turn the box off, a partial
+    /// `channel_mixer` would zero the coefficients it doesn't name, a mix returning to the identity would not sync,
+    /// and a preset applied at an amount would not find its base value (issue #2158).
+    pub fn to_json_for_merge(&self) -> Value {
         let mut v = self.to_json();
+        if let Some(detail) = v.get_mut("detail").and_then(Value::as_object_mut) {
+            detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
+        }
         if let (Some(o), Ok(m)) = (v.as_object_mut(), serde_json::to_value(self.channel_mixer)) {
             o.entry("channel_mixer").or_insert(m);
         }
         v
-    }
-
-    pub fn from_json(v: &Value) -> Result<DevelopSettings, serde_json::Error> {
-        serde_json::from_value(v.clone())
     }
 
     /// [`Self::from_json`] for settings from outside the app, such as a sidecar's `lc:settings`
@@ -61,11 +67,11 @@ impl DevelopSettings {
     /// Merge a partial JSON object into these settings (fields not mentioned are kept). A white balance that
     /// names no [`WbScale`] keeps the meaning it always had (`Legacy`), whatever scale these settings were on: a
     /// partial from before the scale existed, or one that never said, must not become Kelvin by landing on
-    /// Kelvin settings. The base materializes the channel mixer ([`Self::to_json_with_mixer`]), so a partial
+    /// Kelvin settings. The base states what stored JSON leaves out ([`Self::to_json_for_merge`]), so a partial
     /// `channel_mixer` names single coefficients, not zero-filled rows. Out-of-range values are brought back
     /// into range ([`DevelopSettings::keep_in_range`]).
     pub fn merged(&self, partial: &Value) -> Result<DevelopSettings, serde_json::Error> {
-        let mut v = self.to_json_with_mixer();
+        let mut v = self.to_json_for_merge();
         presets::deep_merge(&mut v, partial);
         let mut out = DevelopSettings::from_json(&v)?;
         if let Some(wb) = partial.get("wb").and_then(Value::as_object)
@@ -155,6 +161,12 @@ impl DevelopSettings {
         std::borrow::Cow::Owned(d)
     }
 
+    /// Whether a raw is decoded with its single outlier photosites replaced: Remove Hot Pixels is on and the Detail
+    /// section's eye is too (an Edit-panel section that is off contributes nothing, as in [`Self::effective`]).
+    pub fn removes_hot_pixels(&self) -> bool {
+        self.detail.nr_outliers && self.section_enabled("detail")
+    }
+
     /// How much of the AI-denoised picture to mix in, 0 (none) to 1 (all of it): the Denoise amount, unless the Detail
     /// section is switched off or the value is not a number.
     pub fn denoise_amount(&self) -> f32 {
@@ -181,7 +193,11 @@ impl DevelopSettings {
                 self.curve = d;
             }
             Section::Color => self.wb.mode = WbMode::AsShot,
-            Section::Detail => self.enhance.denoise_on = None,
+            Section::Detail => {
+                self.enhance.denoise_on = None;
+                // not a slider: reset like them, to the general default (off)
+                self.detail.nr_outliers = false;
+            }
             // the creative profile is not a control: the chosen look goes back to the default one,
             // and so does the camera's own local tone mapping
             Section::Profile => {
@@ -215,6 +231,37 @@ mod tests_process;
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Remove Hot Pixels (#1345) is on for a newly imported raw and off for everything else, and an edit saved
+    /// before the box existed reads as off, so it renders as it did.
+    #[test]
+    fn hot_pixel_box_is_on_for_new_raws_only() {
+        assert!(DevelopSettings::for_raw(5500.0, 10.0).detail.nr_outliers);
+        assert!(!DevelopSettings::default().detail.nr_outliers);
+        let mut saved = DevelopSettings::for_raw(5500.0, 10.0).to_json();
+        let detail = saved.get_mut("detail").and_then(|d| d.as_object_mut()).unwrap();
+        assert!(detail.remove("nr_outliers").is_some());
+        let read = DevelopSettings::from_json(&saved).unwrap();
+        assert!(!read.detail.nr_outliers);
+        assert_eq!(read.detail.nr_color, 25.0, "the rest of the saved edit is kept");
+        assert_ne!(read.hash64(), DevelopSettings::for_raw(5500.0, 10.0).hash64(), "cached renders are told apart");
+        // off is omitted: an edit saved before the box keeps its JSON, and so its hash and cached thumbnails
+        assert_eq!(read.to_json(), saved);
+        // copying Detail still carries the box when it is off
+        let copied = crate::extract_groups(&read, &[crate::SettingsGroup::Detail]);
+        assert_eq!(copied["detail"]["nr_outliers"], false);
+        let mut target = DevelopSettings::for_raw(5500.0, 10.0).to_json();
+        crate::presets::deep_merge(&mut target, &copied);
+        assert!(!DevelopSettings::from_json(&target).unwrap().detail.nr_outliers);
+        // the Detail eye switches it off for the decode too, and Reset Detail resets it like the sliders
+        let mut raw = DevelopSettings::for_raw(5500.0, 10.0);
+        assert!(raw.removes_hot_pixels());
+        raw.set_section_enabled("detail", false);
+        assert!(!raw.removes_hot_pixels());
+        raw.set_section_enabled("detail", true);
+        raw.reset_section(Section::Detail);
+        assert!(!raw.detail.nr_outliers && !raw.removes_hot_pixels());
+    }
 
     #[test]
     fn serde_roundtrip_default_and_edited() {
