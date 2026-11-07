@@ -125,7 +125,6 @@ impl Duplicates {
         self.by_hash.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn knows_hash(&self, hash: &str) -> bool {
         self.by_hash.contains_key(base_hash(hash))
     }

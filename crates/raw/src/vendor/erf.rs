@@ -95,11 +95,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         _ => Rect::new(0, 0, w, h),
     };
     // the white balance is measured from the samples, so the header probe reads them too
+    // the strip length is the tag value, so a short file must fail before the sample buffer is sized from it
     let chunks = info.chunks(bytes.len() as u64);
-    let src = chunks.first().and_then(|c| chunk_bytes(bytes, c)).ok_or_else(|| RawError::Corrupt("Erf strip outside file".into()))?;
-    if chunks.first().is_none_or(|c| src.len() as u64 != c.len) {
-        return Err(RawError::Corrupt("Erf strip shorter than its declared size".into()));
-    }
+    let src = chunks
+        .first()
+        .and_then(|c| chunk_bytes(bytes, c).filter(|s| s.len() as u64 == c.len))
+        .ok_or_else(|| RawError::Corrupt("Erf strip outside file".into()))?;
     let mut d = vec![0u16; n];
     unpack(src, &mut d);
     let white = super::white_from_data(&d, 12);
@@ -200,29 +201,34 @@ mod tests {
         }
     }
 
+    /// Rewrite the raw IFD's height, rows per strip and strip length in place (the strip data stays as written).
+    fn declare(f: &mut [u8], rows: u32, strip_len: u32) {
+        let tiff = Tiff::parse(f).unwrap();
+        let raw = &tiff.ifds[0].sub_ifds[0];
+        let spots: Vec<_> = [(t::IMAGE_LENGTH, rows), (t::ROWS_PER_STRIP, rows), (t::STRIP_BYTE_COUNTS, strip_len)]
+            .into_iter()
+            .map(|(tag, v)| {
+                let e = raw.entries.iter().find(|e| e.tag == tag).unwrap();
+                (e.offset as usize, matches!(e.value, Value::Short(_)), v)
+            })
+            .collect();
+        for (at, short, v) in spots {
+            if short {
+                f[at..at + 2].copy_from_slice(&u16::try_from(v).unwrap().to_be_bytes());
+            } else {
+                f[at..at + 4].copy_from_slice(&v.to_be_bytes());
+            }
+        }
+    }
+
     #[test]
-    fn an_erf_declaring_more_samples_than_it_holds_is_refused_without_allocating() {
-        let (w, h) = (32760u32, 32768u32);
-        let mut raw = IfdBuilder::new();
-        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
-        raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
-        raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
-        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![12]));
-        raw.set(t::COMPRESSION, Value::Short(vec![BLOCKS16]));
-        raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
-        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
-        raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
-        raw.set(t::ROWS_PER_STRIP, Value::Long(vec![h]));
-        raw.set(t::STRIP_OFFSETS, Value::Long(vec![8]));
-        raw.set(t::STRIP_BYTE_COUNTS, Value::Long(vec![w * 8 / 5 * h]));
-        let mut ifd0 = IfdBuilder::new();
-        ifd0.set(t::MAKE, Value::Ascii("SEIKO EPSON CORP.".into()));
-        ifd0.set(t::MODEL, Value::Ascii("R-D1".into()));
-        ifd0.add_sub_ifd(raw);
-        let mut f = TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[ifd0]).unwrap();
-        f.resize(4096, 0);
+    fn a_strip_longer_than_the_file_is_an_error() {
+        // #2119: the declared strip length matched the size, so a few bytes of data were decoded as a full frame
+        let px: Vec<u16> = (0..40).map(|i| (i * 13 % 4096) as u16).collect();
+        let mut f = sample(20, 2, &px);
+        declare(&mut f, 2000, 32 * 2000);
         assert_eq!(crate::probe(&f), Some(RawFormat::Erf));
-        assert!(matches!(crate::probe_info(&f), Err(RawError::Corrupt(_))), "{:?}", crate::probe_info(&f).map(|_| ()));
+        assert!(matches!(crate::probe_info(&f), Err(RawError::Corrupt(_))));
         assert!(matches!(crate::decode(&f), Err(RawError::Corrupt(_))));
     }
 }

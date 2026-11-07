@@ -180,11 +180,11 @@ fn a_later_batch_learns_the_committed_photos_hash_and_existing_id() {
     let mut job = ImportJob::new(&mut s, opts.clone()).unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let ready = job.prepare_files(vec![first], &cancel);
-    let a = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    let a = commit_prepared(&mut s, &opts, job.now(), ready).unwrap();
     let id = PhotoId(a.imported[0]);
     assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
     let ready = job.prepare_files(vec![second], &cancel);
-    let b = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    let b = commit_prepared(&mut s, &opts, job.now(), ready).unwrap();
     assert!(b.imported.is_empty());
     assert_eq!(b.duplicates[0].existing, Some(id.0));
     let expected = lightcraft_preview::hash_bytes(&data).to_string();
@@ -207,10 +207,10 @@ fn a_later_move_batch_compares_the_surviving_destination() {
     let mut job = ImportJob::new(&mut s, opts.clone()).unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let ready = job.prepare_files(vec![first.clone()], &cancel);
-    let a = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    let a = commit_prepared(&mut s, &opts, job.now(), ready).unwrap();
     assert!(!Path::new(&first).exists());
     let ready = job.prepare_files(vec![second.clone()], &cancel);
-    let b = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    let b = commit_prepared(&mut s, &opts, job.now(), ready).unwrap();
     assert!(b.imported.is_empty(), "{b:?}");
     assert_eq!(b.duplicates[0].existing, Some(a.imported[0]));
     assert!(Path::new(&second).exists());
@@ -227,10 +227,10 @@ fn add_registers_distinct_candidates_once_across_batches() {
     let mut job = ImportJob::new(&mut s, opts.clone()).unwrap();
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let ready = job.prepare_files(paths, &cancel);
-    let a = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    let a = commit_prepared(&mut s, &opts, job.now(), ready).unwrap();
     assert_eq!(a.imported.len(), 129);
     let ready = job.prepare_files(vec![copy], &cancel);
-    let b = commit_prepared(&mut s, &opts, &job.now, ready).unwrap();
+    let b = commit_prepared(&mut s, &opts, job.now(), ready).unwrap();
     assert!(b.imported.is_empty(), "{b:?}");
     assert_eq!(b.duplicates[0].existing, Some(a.imported[0]));
     let _ = std::fs::remove_dir_all(dir);
@@ -252,7 +252,7 @@ fn f_repair_undo_import_learning_preserves_existing_photo_sources_and_faces() {
     let proxy = s.smart_preview_paths(s.catalog.photo(id).unwrap())[0].clone();
     std::fs::create_dir_all(proxy.parent().unwrap()).unwrap();
     std::fs::write(&proxy, crate::smart::encode(&decoded, None).unwrap()).unwrap();
-    s.media.file_loader = Some(Arc::new(|_, _| Err("must retain decoded original".into())));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("must retain decoded original".into())));
     s.faces.scanned.insert(id.0);
     let ticket = s.media.identities.ticket(s.catalog.photo(id).unwrap());
     s.execute("library.select", &serde_json::json!({"ids": [id.0]})).unwrap();

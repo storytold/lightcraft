@@ -320,7 +320,7 @@ fn g_completed_render_replaced_before_accept_cannot_become_current_source() {
     std::fs::rename(replacement, &path).unwrap();
     s.accept(&result);
     assert!(s.catalog.photo(id).unwrap().content_hash.is_none());
-    s.media.file_loader = Some(Arc::new(|_, _| Err("replacement decoder must run".into())));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("replacement decoder must run".into())));
     assert!(s.render_now(id, 512, 512).is_err(), "old decoded pixels cannot be accepted under current lifecycle");
     drop(s);
     std::fs::remove_dir_all(base).unwrap();
@@ -600,10 +600,10 @@ fn g_paired_original_read_rejects_reload_but_accepts_hash_learning() {
         let (resume_tx, resume_rx) = std::sync::mpsc::channel();
         let resume = std::sync::Mutex::new(resume_rx);
         let loader = s.media.file_loader.clone().unwrap();
-        s.media.denoise.loader = Some(Arc::new(move |path, edge, _| {
+        s.media.denoise.loader = Some(Arc::new(move |path, edge, _, raw| {
             started_tx.send(()).unwrap();
             resume.lock().unwrap().recv().unwrap();
-            let (image, info) = loader(path, edge)?;
+            let (image, info) = loader(path, edge, raw)?;
             let twin = lightcraft_raster::Rgb32f::filled(image.width, image.height, [0.25; 3]);
             Ok((image, Some(twin), info))
         }));

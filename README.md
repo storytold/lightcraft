@@ -8,17 +8,22 @@
 </p>
 
 
+<p align="center">
+  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.lightcraft.png" width="128" height="128" alt="LightCraft icon: an engraved lynx on an amber tile">
+</p>
+
 <h1 align="center">LightCraft</h1>
 
 <h3 align="center">Your photos. Your pixels. Your machine.</h3>
 
 <p align="center">
   <a href="README.md">English</a> ·
-  <a href="README.zh-hans.md">简体中文</a>
+  <a href="README.zh-hans.md">简体中文</a> ·
+  <a href="README.zh-hant.md">繁體中文</a>
 </p>
 
 <p align="center">
-  <b>Photo library and raw development; an open-source, clean-room reimplementation of Adobe Lightroom, rebuilt in pure Rust.</b><br>
+  <b>Photo library and raw development; an open-source, non-destructive photo library and raw developer, built in pure Rust.</b><br>
   Native on macOS, Windows and Linux. In the browser via WebAssembly. Drivable end to end by AI agents over MCP.
 </p>
 
@@ -28,6 +33,9 @@
   <img alt="MCP server included" src="https://img.shields.io/badge/MCP-ready-8a5800?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-8a5800?style=flat-square">
   <a href="ROADMAP.md"><img alt="Status: young and moving fast" src="https://img.shields.io/badge/status-young%20%26%20moving%20fast-f2a516?style=flat-square"></a>
+  <br>
+  <a href="https://sonarcloud.io/project/overview?id=storytold_lightcraft"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+  <a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/storytold/lightcraft?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 </p>
 
 <p align="center">
@@ -209,7 +217,8 @@ Then tone it with Color Grading for selenium, sepia or split-tone prints.
 A library that stays out of your way: **All Photos**, **Recently Added**, **Picks**, **By Date**, **Albums** nested in
 **Folders**, and **Recently Deleted**. Rate with <kbd>0</kbd>–<kbd>5</kbd>, flag with <kbd>P</kbd> / <kbd>X</kbd> /
 <kbd>U</kbd>, colour-label with <kbd>6</kbd>–<kbd>9</kbd>. Search understands fields:
-`rating:>3 flag:pick iso:>800 camera:x2 date:2026-04 keyword:mountains`. Every view sorts by capture date,
+`rating:>3 flag:pick iso:>800 camera:x2 date:2026-04 keyword:mountains person:"Jane Doe"`; plain words also match
+the people named on faces, and quotes keep several words together. Every view sorts by capture date,
 import date, edit date, name, rating, size or at random (a stable shuffle; View → Sort → Reshuffle for a new one). The justified **Photo Grid** and **Square Grid** views are virtualized,
 so they stay smooth whether you have forty photos or forty thousand.
 
@@ -250,7 +259,8 @@ lightcraft --control 7980 ~/Pictures/trip
 - **Command registry.** `engine.commands` lists the available commands; `develop.controls` lists every slider's
   range, default and current value.
 - **MCP server.** `lightcraft-cli mcp` exposes the command registry to Claude (or any MCP client), alongside
-  helpers for import, query, develop, mask, render (returned as an image) and export. It runs headless, or attached
+  helpers for import, query, develop, render (returned as an image) and export. Masks have no helper of their own:
+  create and edit them through `run_command` (e.g. `mask.add`). It runs headless, or attached
   to the running app with screenshots, clicks and gestures. See [docs/mcp.md](docs/mcp.md).
 
   ```sh
@@ -333,14 +343,14 @@ lightcraft --control 7980 ~/Pictures/trip
 LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (details in the [roadmap](ROADMAP.md) and
 [docs/target-app-parity.md](docs/target-app-parity.md)):
 
-- **By feature count we're at ~82%** of Lightroom (core features 98%), tracked row by row in
+- **By feature count we're at ~82%** (core features 98%), tracked row by row in
   [docs/parity-checklist.md](docs/parity-checklist.md).
-- **As a day-to-day Lightroom replacement we're nearer 61% for the whole product, ~51% for a typical working photographer and ~65% for
+- **As a day-to-day tool we're nearer 61% for the whole product, ~51% for a typical working photographer and ~65% for
   casual use.** It's great for JPEG/DNG and most Sony / Panasonic /
   Fujifilm / Nikon / older-Canon raws on one machine; see [docs/raw-parity.md](docs/raw-parity.md) for your camera.
 - **The biggest gaps:**
-  - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 raws have guarded estimates from their camera JPEGs, with built-in ILCA-99M2, ILCE-7CR, ILCE-7M4, X-H2S, X-T4, Nikon Z 6II, Z 8 and D5300 profiles; measured calibration is missing, and other raws or rejected fits retain a neutral matrix;
-  - **compressed Olympus raws and unsupported CR3 variants:** these use embedded JPEG previews when present. Fujifilm lossless/lossy compressed RAF now decodes sensor data; [verification and existing-library reload instructions](docs/raf-compression.md);
+  - **camera colour calibration:** Sony, Nikon, Panasonic, Fujifilm and Canon CR3 and CRW raws have guarded estimates from their camera JPEGs, with built-in Canon EOS D60, ILCA-99M2, ILCE-7CR, ILCE-7M4, ILCE-7RM5, X-H2S, X-T4, Nikon Z 6II, Z 8 and D5300 profiles; measured calibration covers one model so far (chart-measured matrices for the Canon EOS D60), and other raws or rejected fits retain a neutral matrix;
+  - **unsupported CR3 variants and Nikon High Efficiency NEFs:** these use embedded JPEG previews when present. Olympus compressed ORF now decodes sensor data on 58 more bodies (2 verified) ([docs/orf-compression.md](docs/orf-compression.md)); Fujifilm lossless/lossy compressed RAF now decodes sensor data; [verification and existing-library reload instructions](docs/raf-compression.md);
   - **AI quality and model setup:** Subject and Sky selection are classical heuristics; Object/Describe use an
     optional SAM 3 model. AI Denoise supports Bayer RAW with separately installed weights, while X-Trans and
     linear-RGB denoise and Super Resolution remain missing; see [AI masks](docs/ai-masks.md) and [AI Denoise](docs/denoise.md);
@@ -360,7 +370,7 @@ LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (det
 | Profiles (Color, Neutral, Vivid, Landscape, Portrait, Monochrome: our own looks), presets, versions, history, copy/paste/sync settings | ✅ |
 | Camera colour: DNG matrices, guarded camera-JPEG look fits and built-in profiles for selected cameras | 🚧 measured calibration and per-model coverage remain incomplete ([raw parity](docs/raw-parity.md)) |
 | Native macOS menu bar (generated from the command registry), control channel + every widget addressable, headless UI snapshots | ✅ |
-| RAW: DNG, CR2, CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), ARW, NEF (uncompressed + lossless/lossy compressed, incl. lossy after split), Fujifilm RAF (uncompressed + lossless/lossy compressed, Bayer + X-Trans), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format, DMC-LX1 to DC-S1RM2), Pentax PEF, Olympus ORF (uncompressed, 12.8 bpp), Samsung SRW (uncompressed); embedded previews for every format incl. CR3 | 🚧 · other CR3 variants, compressed ORF / SRW and Nikon HE NEF decode ⬜ ([raw parity](docs/raw-parity.md)) |
+| RAW: DNG, CR2, CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), ARW, NEF (uncompressed + lossless/lossy compressed, incl. lossy after split), Fujifilm RAF (uncompressed + lossless/lossy compressed, Bayer + X-Trans), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format, DMC-LX1 to DC-S1RM2), Pentax PEF, Olympus ORF (uncompressed, 12.8 bpp, compressed), Samsung SRW (uncompressed); embedded previews for every format incl. CR3 | 🚧 · other CR3 variants, compressed SRW and Nikon HE NEF decode ⬜ ([raw parity](docs/raw-parity.md)) |
 | Detail: sharpening, luminance + colour noise reduction | ✅ · AI Denoise 🚧 (Bayer, user-installed weights; [setup](docs/denoise.md)), Super Resolution ⬜ |
 | Remove / Heal / Clone spots (auto source), non-generative Fill, editable spot pins, Visualize Spots, Red Eye and Pet Eye | ✅ · Fill uses PatchMatch; no generative fill |
 | Export: JPEG / PNG / TIFF / flat PSD / WebP / AVIF / JPEG XL / raw or rendered DNG / original, sizing, file-size limit, output sharpening, naming templates, batch, metadata policy, text or image watermark | ✅ |
@@ -396,15 +406,26 @@ cargo run --release -p lightcraft -- --control 7980     # with the automation ch
 cargo xtask web --serve                                 # the same app in the browser: http://127.0.0.1:8080/
 cargo run --release -p lightcraft-cli -- render photo.jpg -o out.jpg --set light.exposure=0.5
 cargo xtask ci                                          # fmt, clippy, HEIF, tests, parity, layers, assets, WASM
+cargo xtask ci --quick                                  # only what your branch's changes can break (minutes)
 ```
+
+`cargo xtask ci --quick` compares with the merge base of `origin/main` (`--base REF` for another)
+and runs fmt, clippy, the tests of the changed packages, layers and assets, plus HEIF, parity and
+the wasm check when the changes touch them; a change to `Cargo.toml`, `Cargo.lock` or the lint
+config tests everything. GitHub runs the full `cargo xtask ci` on every pull request
+(`.github/workflows/ci.yml`). Only one `ci` runs at a time per machine: a second one, from another
+worktree say, waits for the first and names it, since several at once take longer in total than in
+turn. `LIGHTCRAFT_CI_SLOTS=2` allows two; `LIGHTCRAFT_CI_LOCK=off` skips the lock.
 
 CI defaults to line-table debug information and one build job per 1.5 GB of RAM
 available when it starts (at most one per CPU; 4 if memory can't be read), so an
 8 GB machine with 6 GB free builds with 4, and a busy machine with little free
-builds with fewer. Test threads follow, capped at 4. Full-debuginfo linkers, one
-per CPU, otherwise exhaust RAM before any test runs. GPU coverage is unchanged. Explicit
-`CARGO_PROFILE_DEV_DEBUG`, `CARGO_BUILD_JOBS` and `RUST_TEST_THREADS` settings
-override these defaults. Ordinary development commands keep their own settings.
+builds with fewer. Test threads follow, capped at 4.
+Full-debuginfo linkers, one per CPU, otherwise exhaust RAM before any test runs. GPU coverage is
+unchanged. Explicit `CARGO_PROFILE_DEV_DEBUG`, `CARGO_BUILD_JOBS`, `RUST_TEST_THREADS` and
+`NEXTEST_TEST_THREADS` settings override these defaults. The tests run under
+`cargo test`; `LIGHTCRAFT_NEXTEST=1` runs them under [cargo-nextest](https://nexte.st) instead (one
+process per test, slower here because each regenerates the demo scenes). Ordinary development commands keep their own settings.
 
 **Release builds on memory-constrained machines:** [#1196](https://github.com/storytold/lightcraft/issues/1196)
 reports Arch/AUR release-link OOM kills on a 16 GB machine when the desktop and CLI build concurrently
@@ -431,6 +452,36 @@ information combined with LTO and one codegen unit on low-memory builders. A PKG
 its own profile settings can override inherited variables; adjust the packaging recipe locally or
 contact its maintainer rather than assuming an environment prefix on `makepkg` will take precedence.
 
+**Linux/Arch build troubleshooting: rustc SIGILL with ThinLTO.**
+In [#2811](https://github.com/storytold/lightcraft/issues/2811), an Arch Linux x86_64 build on an
+AMD Ryzen 9 7900X3D with 64 GB RAM failed with rustc 1.99.0 / LLVM 23.1.1, AUR `lightcraft`
+`0.7.1-1` and `0.13.0-1`, `RUSTFLAGS="-C opt-level=3 -C target-cpu=native"`, and release settings
+`opt-level=3`, `lto=thin`, `codegen-units=1`. `cargo build --frozen --release` reached the executable
+crates before rustc crashed with signal 4 (`SIGILL` / `ILL_ILLOPN`). The core dumps point into LLVM's
+SelectionDAG / vector-combine optimization path; the exact compiler root cause has not been isolated.
+This does not mean every machine with that hardware or toolchain will fail. It is a different observed
+failure from the 16 GB OOM kills in [#1196](https://github.com/storytold/lightcraft/issues/1196) above;
+there is no evidence establishing a shared root cause.
+
+For a direct Cargo source build, the equivalent command-local LTO override is:
+
+```sh
+CARGO_PROFILE_RELEASE_LTO=off cargo build --frozen --release
+```
+
+Reporter @rwarmstr verified the workaround by exporting `CARGO_PROFILE_RELEASE_LTO=off` **inside the
+AUR PKGBUILD's `_srcenv()` function** and rebuilding both package versions, without changing
+`RUSTFLAGS`. The reporter tested the AUR recipe, not the direct Cargo invocation above.
+A variable prefixed to `makepkg` alone may be overwritten by the PKGBUILD's own exports; the recipe
+must honor or set the override. The AUR `!lto` opt-out behavior is tracked separately in
+[#2813](https://github.com/storytold/lightcraft/issues/2813).
+
+[Cargo's LTO documentation](https://doc.rust-lang.org/cargo/reference/profiles.html#lto) distinguishes
+`false` from `off`: `false` can still perform thin local LTO across codegen units (unless
+`codegen-units=1` or `opt-level=0`); `off` disables LTO explicitly. The low-memory recipe above is
+unchanged. This workaround is for affected builds, not a new default; disabling LTO may change
+performance, binary size and build behavior.
+
 Tests that need a GPU, the corpus, the craft-fonts faces or a model pass without checking anything when
 those are missing (libtest has no "skipped" status), so `cargo xtask ci` lists them: tests record a skip
 with `lightcraft_testkit::skip!`, and the run ends with what the machine offered (OS, CPUs, RAM, GPU
@@ -446,9 +497,9 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p lightcraft
 ```
 
 Without it LightCraft builds and runs the same, but Chinese and Japanese text have no glyphs. Fonts are never committed to this
-repo — the standard for what goes there lives with it: see the [craft-fonts README](https://github.com/storytold/craft-fonts#readme).
+repo — what goes there is described in the [craft-fonts README](https://github.com/storytold/craft-fonts#readme).
 
-**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Polski, Čeština, Italiano, ქართული) or **Settings → General →
+**Interface language:** **Edit → Language** (English, 简体中文, 繁體中文（台灣）, 日本語, Português (Brasil), Español, Deutsch, Русский, Français, Українська, Polski, Čeština, Italiano, ქართული, Svenska, Suomi, Bahasa Indonesia, Tiếng Việt) or **Settings → General →
 Language**; the choice applies immediately and persists. See [docs/localization.md](docs/localization.md).
 
 **Logs:** the desktop app writes its log to standard error and to `logs/lightcraft.log` in its settings folder
@@ -513,9 +564,9 @@ egui frontend is one swappable crate; nothing below it knows a UI exists. `mcp` 
 
 Humans and agents follow the same rules, so read [AGENTS.md](AGENTS.md) first. The short version:
 
-- **Clean-room.** Never read Adobe binaries or GPL raw/photo code (darktable, RawTherapee, LibRaw, rawspeed, dcraw…);
+- **Clean-room.** Never read proprietary binaries or GPL raw/photo code (darktable, RawTherapee, LibRaw, rawspeed, dcraw…);
   work from public specs and black-box observation.
-- **No Adobe assets, ever:** no icons, screenshots, presets, profiles, LUTs or fonts from Adobe products. Every
+- **No proprietary assets, ever:** no icons, screenshots, presets, profiles, LUTs or fonts from commercial products. Every
   image, icon and font in the repo is original, public domain, Creative Commons, OFL or permissively licensed, and has
   an entry in [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) added in the same commit. New fonts go to
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts), not here.
@@ -543,9 +594,20 @@ Questions, ideas or a bug you'd like to talk through first? Bring them to [Disco
 | arm64 (Snapdragon and other ARM PCs) | `lightcraft-<ver>-windows-arm64.msi` | `lightcraft-<ver>-windows-arm64-portable.zip` |
 | x86 (32-bit) | `lightcraft-<ver>-windows-x86.msi` | `lightcraft-<ver>-windows-x86-portable.zip` |
 
-Installers and executables are code-signed. The installer asks where to install (`C:\Program Files\LightCraft` by
-default; upgrades stay in the folder you chose) and ends on a page confirming LightCraft was installed, with an
+Installers and executables are code-signed. The installer asks who to install for and where (for your account only, in
+`%LOCALAPPDATA%\Programs\ArtCraft\LightCraft`, by default; "Everyone on this computer" uses
+`C:\Program Files\ArtCraft\LightCraft` (`Program Files (x86)` for the 32-bit build); upgrades stay in the folder you chose) and ends on a page confirming LightCraft was installed, with an
 option to start it. For unattended installs: `msiexec /i lightcraft-<ver>-windows-x64.msi /qn INSTALLFOLDER="D:\Apps\LightCraft\"`.
+A silent install is per-user by default. `INSTALLFOLDER` chooses the folder, not who it is installed for;
+add `ALLUSERS=1`, from an elevated terminal or deployment tool, for an all-users install.
+
+**Update or uninstall asks for an old `.msi`, or stops with error 1612 or 1714?** Windows removes the installed version
+with its own cached copy of that version's installer; if the copy is gone, it asks for the original file and stops
+(an update then ends with error 1603). Download the release MSI of the version and build you have installed from
+[all releases](https://github.com/storytold/lightcraft/releases) and run
+`msiexec /fv "<path to that .msi>" /qb+ /norestart`, approving the permission prompt if Windows shows one. That restores
+the cached copy; then retry the update or uninstall. Opening the MSI, or choosing Repair or Uninstall on it, may still
+fail. Error 1603 has other causes too; if this doesn't help, open an issue with the error message.
 
 ### macOS
 
@@ -594,10 +656,19 @@ stand on its own.
 | <img src="https://raw.githubusercontent.com/storytold/photocraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.photocraft.png" alt="" width="32" height="32"> | **PhotoCraft** | Image editing: layers, masks, type and real PSD files | [GitHub](https://github.com/storytold/photocraft) | [Website](https://getartcraft.com/apps/photocraft) |
 | <img src="https://raw.githubusercontent.com/storytold/vectorcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.vectorcraft.png" alt="" width="32" height="32"> | **VectorCraft** | Vector illustration | [GitHub](https://github.com/storytold/vectorcraft) | [Website](https://getartcraft.com/apps/vectorcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/filmcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.filmcraft.png" alt="" width="32" height="32"> | **FilmCraft** | Video editing, color and sound | [GitHub](https://github.com/storytold/filmcraft) | [Website](https://getartcraft.com/apps/filmcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/lightcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.lightcraft.png" alt="" width="32" height="32"> | **LightCraft** | **Photo library and raw development · you are here** | [GitHub](https://github.com/storytold/lightcraft) | [Website](https://getartcraft.com/apps/lightcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/lightcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.lightcraft.png" alt="" width="32" height="32"> | **LightCraft** | Photo library and raw development | [GitHub](https://github.com/storytold/lightcraft) | [Website](https://getartcraft.com/apps/lightcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/pdfcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.pdfcraft.png" alt="" width="32" height="32"> | **PdfCraft** | Reading, organizing and protecting PDFs | [GitHub](https://github.com/storytold/pdfcraft) | [Website](https://getartcraft.com/apps/pdfcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/effectcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.effectcraft.png" alt="" width="32" height="32"> | **EffectCraft** | Motion graphics and visual effects | [GitHub](https://github.com/storytold/effectcraft) | [Website](https://getartcraft.com/apps/effectcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/designcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.designcraft.png" alt="" width="32" height="32"> | **DesignCraft** | Page layout and publishing | [GitHub](https://github.com/storytold/designcraft) | [Website](https://getartcraft.com/apps/designcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/figcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.figcraft.png" alt="" width="32" height="32"> | **FigCraft** | Interface design and prototyping | [GitHub](https://github.com/storytold/figcraft) | [Website](https://getartcraft.com/apps/figcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/wordcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.wordcraft.png" alt="" width="32" height="32"> | **WordCraft** | Word processing and documents | [GitHub](https://github.com/storytold/wordcraft) | [Website](https://getartcraft.com/apps/wordcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/soundcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.soundcraft.png" alt="" width="32" height="32"> | **SoundCraft** | Audio recording and editing | [GitHub](https://github.com/storytold/soundcraft) | [Website](https://getartcraft.com/apps/soundcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/deckcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.deckcraft.png" alt="" width="32" height="32"> | **DeckCraft** | Presentations and slide decks | [GitHub](https://github.com/storytold/deckcraft) | [Website](https://getartcraft.com/apps/deckcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/cadcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.cadcraft.png" alt="" width="32" height="32"> | **CADCraft** | Computer-aided design | [GitHub](https://github.com/storytold/cadcraft) | [Website](https://getartcraft.com/apps/cadcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/gridcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.gridcraft.png" alt="" width="32" height="32"> | **GridCraft** | Spreadsheets and data | [GitHub](https://github.com/storytold/gridcraft) | [Website](https://getartcraft.com/apps/gridcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/texturecraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.texturecraft.png" alt="" width="32" height="32"> | **TextureCraft** | 3D texture painting | [GitHub](https://github.com/storytold/texturecraft) | [Website](https://getartcraft.com/apps/texturecraft) |
+| <img src="https://raw.githubusercontent.com/storytold/craft-anything/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.craft-anything.png" alt="" width="32" height="32"> | **Craft Anything** | See how any software works, then build your own | [GitHub](https://github.com/storytold/craft-anything) | [Website](https://getartcraft.com/apps/craft-anything) |
+| <img src="https://raw.githubusercontent.com/tangency-labs/solidcraft/main/assets/icons/app/linux/exports/hicolor/64x64/apps/io.tangencylabs.solidcraft.png" alt="" width="32" height="32"> | **SolidCraft** | Parametric 3D CAD by Tangency Labs (community app) | [GitHub](https://github.com/tangency-labs/solidcraft) | |
 
 And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video studio for artists who want real control.
 
@@ -644,8 +715,6 @@ The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are tradem
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
 part of this repository and LightCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
 Forks and modified versions must remove them.
-
-<sub>Adobe, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. LightCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
 
 <p align="center">
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
