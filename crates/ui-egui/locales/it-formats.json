@@ -325,5 +325,6 @@
   "View › Detail View ({keys}).": "Visualizza › Vista dettaglio ({keys}).",
   "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
   "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}",
+  "Photos waiting: {n}": "Foto in attesa: {n}"
 }
