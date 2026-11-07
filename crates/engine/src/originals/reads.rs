@@ -102,7 +102,7 @@ impl ReadProof {
         if held.metadata().ok().as_ref().and_then(Stamp::of).as_ref() != Some(stamp) || physical_identity(held).ok() != Some(self.identity) {
             return false;
         }
-        let Ok((current, true)) = open_read(path, true) else { return false };
+        let Ok((current, true)) = open_read(path, Open::DenyingWrites) else { return false };
         current.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(stamp) && physical_identity(&current).ok() == Some(self.identity)
     }
 }
@@ -241,7 +241,7 @@ impl HeaderRead {
     pub(crate) fn open(path: &str) -> io::Result<Self> {
         let reader = current_reader()?;
         let registration = reader.registration();
-        let (file, share_safe) = open_read(path, true)?;
+        let (file, share_safe) = open_read(path, Open::DenyingWrites)?;
         let before = file.metadata().ok().as_ref().and_then(Stamp::of);
         Ok(Self { file, path: path.to_owned(), before, share_safe, reader, registration })
     }
@@ -629,7 +629,12 @@ impl Originals {
     fn read_buffer(&self, path: &str, force: bool) -> io::Result<(Vec<u8>, Option<Fingerprint>, Option<Hash128>)> {
         let registration = self.registration();
         let watch = if force { self.watch_any(path) } else { self.watch(path) };
-        let (mut file, share_safe) = open_read(path, watch.is_some() || force)?;
+        let open = match (&watch, force) {
+            (Some(_), _) => Open::SharingWrites,
+            (None, true) => Open::DenyingWrites,
+            (None, false) => Open::Plain,
+        };
+        let (mut file, share_safe) = open_read(path, open)?;
         let before = file.metadata().ok().as_ref().and_then(Stamp::of);
         if before.as_ref().is_some_and(|stamp| stamp.len > MAX_ORIGINAL_BYTES as u64) {
             return Err(io::Error::other("original exceeds supported 4 GiB buffer size"));
@@ -710,7 +715,7 @@ impl Originals {
     fn copy_stream(&self, path: &str, out: &mut impl Write, observe: bool) -> io::Result<Fingerprint> {
         let registration = self.registration();
         let watch = observe.then(|| self.watch(path)).flatten();
-        let (mut file, share_safe) = open_read(path, observe)?;
+        let (mut file, share_safe) = open_read(path, if observe { Open::DenyingWrites } else { Open::Plain })?;
         let before = file.metadata().ok().as_ref().and_then(Stamp::of);
         let mut hash = Hasher128::new();
         let mut buf = vec![0; 1 << 20];
@@ -876,18 +881,27 @@ fn physical_identity(file: &File) -> io::Result<(u64, [u8; 16])> {
     lightcraft_file_identity_sys::identity(file)
 }
 
-fn open_read(path: &str, observe: bool) -> io::Result<(File, bool)> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Open {
+    Plain,
+    SharingWrites,
+    DenyingWrites,
+}
+
+fn open_read(path: &str, open: Open) -> io::Result<(File, bool)> {
     regular(&std::fs::metadata(path)?)?;
     #[cfg(windows)]
-    if observe {
+    if open != Open::Plain {
         use std::os::windows::fs::OpenOptionsExt;
         const SHARE_READ_AND_DELETE: u32 = 0x1 | 0x4;
-        if let Ok(file) = File::options().read(true).share_mode(SHARE_READ_AND_DELETE).open(path) {
+        const SHARE_WRITE: u32 = 0x2;
+        let share = if open == Open::SharingWrites { SHARE_READ_AND_DELETE | SHARE_WRITE } else { SHARE_READ_AND_DELETE };
+        if let Ok(file) = File::options().read(true).share_mode(share).open(path) {
             regular(&file.metadata()?)?;
             return Ok((file, true));
         }
     }
-    let _ = observe;
+    let _ = open;
     let file = File::open(path)?;
     regular(&file.metadata()?)?;
     Ok((file, cfg!(unix)))
@@ -1724,7 +1738,7 @@ impl Originals {
     pub(crate) fn compare_open(&self, a: &str, b: &str, fa: &mut File, fb: &mut File) -> io::Result<bool> {
         let registration = self.registration();
         #[cfg(windows)]
-        let ((mut leased_a, safe_a), (mut leased_b, safe_b)) = (open_read(a, true)?, open_read(b, true)?);
+        let ((mut leased_a, safe_a), (mut leased_b, safe_b)) = (open_read(a, Open::DenyingWrites)?, open_read(b, Open::DenyingWrites)?);
         #[cfg(windows)]
         let safe_a = safe_a && physical_identity(fa).ok().is_some_and(|id| physical_identity(&leased_a).ok() == Some(id));
         #[cfg(windows)]
@@ -1905,7 +1919,7 @@ mod windows_tests {
     #[test]
     fn full_identity_rejects_a_difference_only_in_the_high_64_bits() {
         let (_, dir, path) = source("g-windows-high-id");
-        let (file, safe) = open_read(&path, true).unwrap();
+        let (file, safe) = open_read(&path, Open::DenyingWrites).unwrap();
         let mut proof = ReadProof::new(file, safe).unwrap();
         let stamp = Stamp::of(&File::open(&path).unwrap().metadata().unwrap()).unwrap();
         assert!(proof.matches_path(&path, &stamp));
