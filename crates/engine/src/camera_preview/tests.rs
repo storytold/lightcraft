@@ -229,6 +229,12 @@ fn unreliable_dark_pairs_keep_the_original_tone_and_colour() {
     }
 }
 
+/// The curve the toe fit settles on for a scene.
+fn toe_of((sensor, reference): &(Rgb32f, Rgb32f)) -> CameraTone {
+    let (pairs, _) = collect_pairs(sensor, reference, f32::NEG_INFINITY, None, false).unwrap();
+    fit_tone_with_shadows(ToneFit::Quantile, &pairs, sensor, reference, None, |x| x).unwrap()
+}
+
 /// A scene with dark fine detail the JPEG shows one pixel off, above larger smooth dark areas it shows in place (or,
 /// with `smooth_related` false, in reverse), with the midtones that teach the original curve. The camera's toe is steep,
 /// as in [`steep_toe_scene`].
@@ -263,10 +269,6 @@ fn misregistered_dark_detail(smooth_related: bool) -> (Rgb32f, Rgb32f) {
 /// of 0.015, which rendered its blacks at sRGB 22 for the JPEG's 8.
 #[test]
 fn camera_toe_judges_dark_pairs_away_from_edges_when_fine_detail_is_misregistered() {
-    let tone = |(sensor, reference): &(Rgb32f, Rgb32f)| {
-        let (pairs, _) = collect_pairs(sensor, reference, f32::NEG_INFINITY, None, false).unwrap();
-        fit_tone_with_shadows(ToneFit::Quantile, &pairs, sensor, reference, None, |x| x).unwrap()
-    };
     let scene = misregistered_dark_detail(true);
     let all_dark: Pairs = scene
         .0
@@ -278,12 +280,84 @@ fn camera_toe_judges_dark_pairs_away_from_edges_when_fine_detail_is_misregistere
         .collect();
     assert!(rank_correlation_ties(&all_dark) < 0.5, "{}", rank_correlation_ties(&all_dark));
     // the JPEG shows scene 0.006 at about 0.001, which the original curve lifts: it knows nothing below display 0.015
-    let toe = tone(&scene).apply(0.006);
+    let toe = toe_of(&scene).apply(0.006);
     assert!(toe < 0.002, "the toe reaches the JPEG's blacks: {toe}");
 
     // Smooth dark areas that don't follow the JPEG are no evidence: the original curve stays.
-    let lifted = tone(&misregistered_dark_detail(false)).apply(0.006);
+    let lifted = toe_of(&misregistered_dark_detail(false)).apply(0.006);
     assert!(lifted > 0.002, "no toe from pairs unrelated away from edges too: {lifted}");
+}
+
+/// Smooth shadows where the original curve is right, below a larger area of fine detail the JPEG shows far darker and one
+/// pixel off. The detail's error falls with any curve that darkens, which must not pay for the smooth shadows getting worse.
+#[test]
+fn camera_toe_must_improve_the_pairs_away_from_edges_that_admitted_it() {
+    let (mut sensor, mut reference) = (Rgb32f::new(96, 96), Rgb32f::new(96, 96));
+    for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+        let (x, y) = (i % 96, i / 96);
+        let along = x as f32 / 95.0;
+        let (scene, shown) = match y {
+            0..24 => {
+                let s = 0.03 + 0.25 * along;
+                (s, 3.0 * s)
+            }
+            24..72 => {
+                let lit = |x: usize| (x + y).is_multiple_of(2);
+                (
+                    if lit(x) { 0.02 + 0.01 * along } else { 0.005 + 0.002 * along },
+                    if lit(x + 1) { 0.002 + 0.001 * along } else { 0.0005 + 0.0002 * along },
+                )
+            }
+            _ => {
+                let s = 0.001 + 0.0035 * along;
+                (s, 3.0 * s)
+            }
+        };
+        *src = [scene; 3];
+        *dst = [shown; 3];
+    }
+    let tone = toe_of(&(sensor, reference));
+    let at = tone.apply(0.003);
+    assert!(at > 0.006, "the smooth shadows keep the original curve: {at}");
+}
+
+/// Dark areas the sensor shows smoothly and the JPEG with hard edges of its own are left out as well: they tell nothing of
+/// how the smooth areas relate, and would otherwise outvote them.
+#[test]
+fn camera_toe_leaves_out_edges_only_the_jpeg_has() {
+    let camera = |s: f32| 3.0 * s * (s / (s + 0.02)).powi(2);
+    let (mut sensor, mut reference) = (Rgb32f::new(96, 96), Rgb32f::new(96, 96));
+    for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+        let (x, y) = (i % 96, i / 96);
+        let along = x as f32 / 95.0;
+        let (scene, shown) = match y {
+            0..24 => {
+                let s = 0.03 + 0.25 * along;
+                (s, camera(s))
+            }
+            24..72 => {
+                let s = 0.006 + 0.013 * along;
+                (s, if (x + y).is_multiple_of(2) { 0.012 - 0.004 * along } else { 0.001 + 0.0005 * along })
+            }
+            _ => {
+                let s = 0.006 + 0.013 * along;
+                (s, camera(s))
+            }
+        };
+        *src = [scene; 3];
+        *dst = [shown; 3];
+    }
+    let toe = toe_of(&(sensor, reference)).apply(0.006);
+    assert!(toe < 0.002, "the toe reaches the JPEG's blacks: {toe}");
+}
+
+#[test]
+fn dark_pairs_are_related_only_from_32_pairs() {
+    let rising = |n: usize| -> Pairs { (1..=n).map(|i| ([i as f64; 3], [i as f64; 3])).collect() };
+    assert!(!dark_pairs_related(&rising(31)));
+    assert!(dark_pairs_related(&rising(32)));
+    let falling: Pairs = (1..=32).map(|i| ([f64::from(i); 3], [f64::from(33 - i); 3])).collect();
+    assert!(!dark_pairs_related(&falling));
 }
 
 #[test]

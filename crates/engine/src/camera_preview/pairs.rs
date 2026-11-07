@@ -152,36 +152,41 @@ pub(super) fn fit_tone_with_shadows(
     let held: Pairs = eligible.iter().filter(|(_, y, held)| *held && *y < 0.015).map(|(x, y, _)| ([*x; 3], [*y; 3])).collect();
     // Sparse or uncorrelated shadow noise cannot teach a toe. Tied JPEG levels share a rank,
     // so a single quantized grey also keeps the original curve.
-    if dark < 96 || held.len() < 32 || !dark_pairs_related(&held, &held_away_from_edges) {
+    let related = dark_pairs_related(&held);
+    if dark < 96 || !(related || dark_pairs_related(&held_away_from_edges)) {
         return original;
     }
     let training = eligible.iter().filter(|(_, _, held)| !held).map(|(x, y, _)| (*x, *y)).collect();
     let Some(candidate) = fit.fit(training) else { return original };
-    let error = |tone: &CameraTone| -> f64 {
+    let error = |held: &[Pair], tone: &CameraTone| -> f64 {
         held.iter().map(|(x, y)| (f64::from(tone.apply(x[0] as f32)).powf(1.0 / 2.2) - y[0].powf(1.0 / 2.2)).powi(2)).sum()
     };
     // A wider histogram must also help independent dark pixels, not just redistribute the
     // knots. The usual held-out gates still check the completed look on the colour pairs.
     if let Some(old) = original {
-        let (before, after) = (error(&old), error(&candidate));
-        if lightcraft_pipeline::profiling() {
-            eprintln!("[profile] camera toe: {dark} dark pairs, held-out error {before:.5} -> {after:.5}");
-        }
-        if !after.is_finite() || after >= before * 0.99 {
+        let lowers_error = |held: &[Pair]| {
+            let (before, after) = (error(held, &old), error(held, &candidate));
+            if lightcraft_pipeline::profiling() {
+                eprintln!("[profile] camera toe: {dark} dark pairs, {} held out, error {before:.5} -> {after:.5}", held.len());
+            }
+            after.is_finite() && after < before * 0.99
+        };
+        // Pairs too far off to rank alike are no better at judging the error, so the pairs that admitted the toe must
+        // improve too: a mismatched edge's gain must not pay for smooth shadows further from the JPEG.
+        if !lowers_error(&held) || (!related && !lowers_error(&held_away_from_edges)) {
             return original;
         }
     }
     Some(candidate)
 }
 
-/// Whether the held-out dark pairs show the same picture in the sensor and the JPEG: on all of them, or, as the fit's
-/// own retries do ([`EDGE_CONTRAST`]), away from edges. Fine detail decides the first: on dark foliage against a white
-/// sky (E-M10 II, a black-and-white JPEG) a small geometric mismatch left a rank correlation of 0.40 on all dark
-/// pairs and 0.63 away from edges, so the photo kept a curve that stops at the colour pairs' floor and lifts its
-/// blacks. The curve itself matches the histograms, which the mismatch doesn't change.
-fn dark_pairs_related(held: &[Pair], held_away_from_edges: &[Pair]) -> bool {
-    rank_correlation_ties(held) >= PARTIAL_MIN_RANK_CORRELATION
-        || (held_away_from_edges.len() >= 32 && rank_correlation_ties(held_away_from_edges) >= PARTIAL_MIN_RANK_CORRELATION)
+/// Whether these held-out dark pairs show the same picture in the sensor and the JPEG. The fit asks this of all of them,
+/// then of those away from edges ([`EDGE_CONTRAST`], as its own retries do), because fine detail decides the first: on dark
+/// foliage against a white sky (E-M10 II, a black-and-white JPEG) a small geometric mismatch left a rank correlation of
+/// 0.40 on all dark pairs and 0.63 away from edges, so the photo kept a curve that stops at the colour pairs' floor and
+/// lifts its blacks. The curve itself matches the histograms, which the mismatch doesn't change.
+pub(super) fn dark_pairs_related(held: &[Pair]) -> bool {
+    held.len() >= 32 && rank_correlation_ties(held) >= PARTIAL_MIN_RANK_CORRELATION
 }
 
 /// Ridge-regularised 3×3 chromaticity matrix (luminance-normalised RGB) on the training pairs.

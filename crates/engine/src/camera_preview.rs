@@ -43,8 +43,8 @@ use look_fit::{
 use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophoto};
 #[cfg(test)]
 use pairs::{
-    Attempt, Pairs, TONE_FITS, collect_pairs, colour_pair, displayed, fit_attempt, fit_pairs, fit_pairs_ordered, fit_pairs_with, fit_partial,
-    fit_tone_with_shadows, luma, rank_correlation_ties, search_ordered,
+    Attempt, Pairs, TONE_FITS, collect_pairs, colour_pair, dark_pairs_related, displayed, fit_attempt, fit_pairs, fit_pairs_ordered, fit_pairs_with,
+    fit_partial, fit_tone_with_shadows, luma, rank_correlation_ties, search_ordered,
 };
 #[cfg(test)]
 pub(crate) use proxy::LensGeometry;
