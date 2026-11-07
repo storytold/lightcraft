@@ -938,6 +938,16 @@ fn camera_jpeg_shown(app: &LightcraftApp, photo: &lightcraft_catalog::Photo, sho
     !drawn.any && (shown == "embedded" || (shown == "thumb" && app.session.embedded_thumb_is_final(photo)))
 }
 
+/// Rejects a cached view that does not cover the job's requested edge: the display-fit
+/// shortcut must not let a small cached image satisfy a large request.
+fn reject_undersized_cached_view(job: &mut lightcraft_engine::media::RenderJob) {
+    if let Some(cached) = job.cached_view()
+        && cached.width.max(cached.height) < job.request.max_w.max(job.request.max_h)
+    {
+        job.view_cache = None;
+    }
+}
+
 /// Request the loupe's own render at `[rw, rh]` (drafts during drags).
 fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: [usize; 2], whole_draft: bool) {
     let (id, interacting, fit_px, overlay) = (a.id, a.interacting, a.fit_px, a.overlay);
@@ -951,7 +961,10 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         // at rest the render is shrunk to exactly the size it is drawn at with a Lanczos filter on
         // the worker, so the window draws it texel for texel instead of shrinking it with 2-tap
         // sampling (the render is up to a 64 px step larger, or the preview level)
-        let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
+        let mut job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
+        if !interacting {
+            reject_undersized_cached_view(&mut job);
+        }
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
         app.renderer.request(Slot::Main, job, 100);
@@ -1532,5 +1545,22 @@ mod tests {
         let plan = LoupePlan { main_edge: SourceLevel::Preview.max_edge(), window_edge: None };
         let edge = whole_frame_edge(&app, false, &plan, 6000, 16384);
         assert_eq!(edge, 3840, "raising the preview size raises the whole-frame render edge");
+    }
+
+    /// An explicit preview limit of 3840 must not be satisfied by a cached view built at 2560
+    /// just because it covers the drawn Fit size: the higher-resolution render is still owed.
+    #[test]
+    fn explicit_preview_limit_rejects_undersized_cached_view() {
+        use super::reject_undersized_cached_view;
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        app.ui.settings.preview_limit = 3840;
+        let id = app.session.active().unwrap();
+        app.session
+            .execute("library.buildPreviews", &serde_json::json!({"ids": [id.0], "edge": 2560, "wait": true}))
+            .unwrap();
+        let mut job = app.session.loupe_job(id, 3840, 3840, true).unwrap().with_display_fit(256, 256);
+        assert!(job.cached_view().is_some(), "the 2560 cached view is present before the check");
+        reject_undersized_cached_view(&mut job);
+        assert!(job.cached_view().is_none(), "a 2560 cached view must not satisfy a 3840 preview_limit request via the display fit alone");
     }
 }
