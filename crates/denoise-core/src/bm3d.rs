@@ -66,7 +66,7 @@ pub fn threshold_for(curve: &[(f32, f32)], noise: f32) -> f32 {
         return y0;
     }
     for pair in curve.windows(2) {
-        let ((xa, ya), (xb, yb)) = (pair[0], pair[1]);
+        let [(xa, ya), (xb, yb)] = pair else { continue };
         if xa.is_finite() && xb.is_finite() && xa > 0.0 && xb > xa && noise <= xb {
             return ya + (yb - ya) * (noise / xa).ln() / (xb / xa).ln();
         }
@@ -627,17 +627,18 @@ mod tests {
     fn chroma_planes_are_denoised_to_the_same_level_as_brightness() {
         let t = 48;
         let mut y = noisy(t, 5.0, 11);
-        for plane in &mut y[1..] {
+        for plane in y.iter_mut().skip(1) {
             for v in plane.iter_mut() {
                 *v = 5.0 + (*v - 5.0) * 3.0;
             }
         }
         let p = Params::default();
         let tf = Transform::new(p.block);
-        let groups = match_blocks(&y[0], t, &p, p.tau1);
+        let Some(brightness_plane) = y.first() else { return };
+        let groups = match_blocks(brightness_plane, t, &p, p.tau1);
         let out = collaborate(&y, None, &groups, t, &p, threshold_for(&p.lambda, 0.0152), &tf);
-        let brightness = spread(&out[..1], 5.0);
-        let chroma = spread(&out[1..], 5.0);
+        let brightness = spread(out.get(..1).unwrap_or_default(), 5.0);
+        let chroma = spread(out.get(1..).unwrap_or_default(), 5.0);
         assert!(chroma <= 1.5 * brightness, "brightness {brightness} chroma {chroma}");
     }
 
@@ -719,8 +720,8 @@ mod tests {
         let y = vec![plane.clone(), plane.clone(), plane.clone(), plane];
         let groups = vec![vec![0u32]];
         let out = collaborate(&y, None, &groups, t, &p, 2.0, &tf);
-        let brightness = spread(&out[..1], 0.0);
-        let chroma = spread(&out[1..], 0.0);
+        let brightness = spread(out.get(..1).unwrap_or_default(), 0.0);
+        let chroma = spread(out.get(1..).unwrap_or_default(), 0.0);
         assert!(brightness > 0.1, "brightness {brightness}");
         assert!(chroma > 0.5 * brightness, "brightness {brightness} chroma {chroma}");
     }
