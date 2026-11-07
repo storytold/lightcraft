@@ -390,34 +390,39 @@ pub fn migrate(from: &Path, to: &Path, what: Existing) -> (usize, Vec<String>) {
 /// start marker to its end marker. A file cut short by a crash, a full drive or an unplugged one
 /// fails it (and is then rebuilt by Build Smart Previews, not counted as there).
 pub fn is_valid(path: &Path) -> bool {
-    use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut f) = std::fs::File::open(path) else { return false };
+    proxy_header(path).is_ok_and(|header| header.is_some())
+}
+
+/// Read and validate the proxy header and JPEG end marker. Missing and malformed
+/// files have no valid header, while I/O errors leave the refresh pending.
+fn proxy_header(path: &Path) -> std::io::Result<Option<serde_json::Value>> {
+    use std::io::{ErrorKind, Read, Seek, SeekFrom};
+    let mut f = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
     let mut head = Vec::with_capacity(1024);
-    if (&mut f).take(HEADER_MAX).read_to_end(&mut head).is_err() {
-        return false;
-    }
-    let Some(rest) = head.strip_prefix(MAGIC) else { return false };
-    let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
-    let json = rest.get(..nl).and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok());
-    let size_ok = json.as_ref().is_some_and(|h| h["w"].as_u64().is_some_and(|w| w > 0) && h["h"].as_u64().is_some_and(|h| h > 0));
+    (&mut f).take(HEADER_MAX).read_to_end(&mut head)?;
+    let Some(rest) = head.strip_prefix(MAGIC) else { return Ok(None) };
+    let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return Ok(None) };
+    let Some(json) = rest.get(..nl).and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok()) else { return Ok(None) };
+    let size_ok = json["w"].as_u64().is_some_and(|w| w > 0) && json["h"].as_u64().is_some_and(|h| h > 0);
     if !size_ok || rest.get(nl + 1..nl + 3) != Some(&[0xFF, 0xD8][..]) {
-        return false;
+        return Ok(None);
     }
-    let tail = json.and_then(|h| h.get("tail").and_then(serde_json::Value::as_u64)).and_then(|t| usize::try_from(t).ok()).unwrap_or(0);
-    if tail == 0 {
-        // no tail: the file ends at the JPEG's end marker
-        let mut end = [0u8; 2];
-        return f.seek(SeekFrom::End(-2)).is_ok() && f.read_exact(&mut end).is_ok() && end == [0xFF, 0xD9];
-    }
-    // with a tail, the JPEG must end right before it and the tail must be there in full
-    let Ok(meta) = f.metadata() else { return false };
-    let Ok(file_len) = usize::try_from(meta.len()) else { return false };
-    let Some(jpeg_end) = file_len.checked_sub(tail) else { return false };
-    if jpeg_end <= MAGIC.len() + nl + 3 {
-        return false;
+    let tail = json.get("tail").and_then(serde_json::Value::as_u64).unwrap_or(0);
+    let Some(jpeg_end) = f.metadata()?.len().checked_sub(tail) else { return Ok(None) };
+    if jpeg_end <= (MAGIC.len() + nl + 3) as u64 {
+        return Ok(None);
     }
     let mut end = [0u8; 2];
-    f.seek(SeekFrom::Start((jpeg_end - 2) as u64)).is_ok() && f.read_exact(&mut end).is_ok() && end == [0xFF, 0xD9]
+    f.seek(SeekFrom::Start(jpeg_end - 2))?;
+    match f.read_exact(&mut end) {
+        Ok(()) => Ok((end == [0xFF, 0xD9]).then_some(json)),
+        Err(e) if e.kind() == ErrorKind::UnexpectedEof => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// The fit version a header records: a missing, negative, fractional or otherwise malformed value
@@ -441,20 +446,24 @@ fn header_encode_version(head: &serde_json::Value) -> u64 {
 /// left alone (rebuilding it here would only undo that build's work), as is one that can't be
 /// read: those are [`is_valid`]'s business.
 pub fn is_stale_for(path: &Path, look: bool) -> bool {
-    use std::io::Read;
-    if !is_valid(path) {
-        return false;
-    }
-    let Ok(f) = std::fs::File::open(path) else { return false };
-    let mut head = Vec::with_capacity(1024);
-    if f.take(HEADER_MAX).read_to_end(&mut head).is_err() {
-        return false;
-    }
-    let Some(rest) = head.strip_prefix(MAGIC) else { return false };
-    let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
-    rest.get(..nl).and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok()).is_some_and(|h| {
+    stale_status(path, look).unwrap_or(false)
+}
+
+/// Check whether a valid proxy needs rebuilding, propagating transient file I/O errors.
+pub(crate) fn stale_status(path: &Path, look: bool) -> std::io::Result<bool> {
+    Ok(proxy_header(path)?.is_some_and(|h| {
         header_encode_version(&h) < ENCODE_VERSION || (look && header_look_version(&h) < u64::from(crate::camera_preview::LOOK_VERSION))
-    })
+    }))
+}
+
+/// Check both layouts without treating inaccessible files as missing.
+pub(crate) fn checked_file_path(dir: &Path, sharded: PathBuf) -> std::io::Result<PathBuf> {
+    if !sharded.try_exists()?
+        && let Some(name) = sharded.file_name()
+    {
+        return Ok(dir.join(name));
+    }
+    Ok(sharded)
 }
 
 /// [`is_stale_for`] for a photo that takes the per-file camera look: both conditions apply.
