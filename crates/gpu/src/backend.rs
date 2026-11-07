@@ -567,9 +567,15 @@ pub fn initial_window_renderer(
 ) -> WindowRenderer {
     // Without a marker a remembered Vulkan renderer on Linux would be tried
     // first with no retry possible (issue #136): only a remembered non-Vulkan
-    // wgpu renderer is kept, anything else starts with glow.
+    // wgpu renderer is kept, anything else starts with glow. A renderer the
+    // last start died in is never retried first: with no marker there is no
+    // retry, so a failed glow falls through to `window_renderer_order`, which
+    // puts it last.
     let remembered_vulkan = matches!(remembered, Some(WindowRenderer::Wgpu(b)) if b.contains(Backends::VULKAN));
-    if glow_without_marker(forced, marker_available, os, glow) && (remembered_vulkan || !matches!(remembered, Some(WindowRenderer::Wgpu(_)))) {
+    if glow_without_marker(forced, marker_available, os, glow)
+        && failed != Some(WindowRenderer::Glow)
+        && (remembered_vulkan || !matches!(remembered, Some(WindowRenderer::Wgpu(_))))
+    {
         return WindowRenderer::Glow;
     }
     window_renderer_order(forced, remembered, failed, os, compiled, glow).first().copied().unwrap_or(WindowRenderer::Glow)
@@ -901,6 +907,9 @@ mod tests {
         assert!(!glow_without_marker(None, false, "linux", false));
         assert!(!glow_without_marker(None, false, "windows", true));
         assert_eq!(initial_window_renderer(None, None, None, false, "linux", all, true), WindowRenderer::Glow);
+        // a glow the last start died in is not retried first without a marker
+        assert_eq!(initial_window_renderer(None, None, Some(WindowRenderer::Glow), false, "linux", all, true), gl);
+        assert_eq!(initial_window_renderer(None, Some(vk), Some(WindowRenderer::Glow), false, "linux", all, true), gl);
         // a remembered wgpu renderer that worked is kept even without a marker
         assert_eq!(initial_window_renderer(None, Some(gl), None, false, "linux", all, true), gl);
         // a remembered Vulkan renderer is not kept without a marker: it would be
