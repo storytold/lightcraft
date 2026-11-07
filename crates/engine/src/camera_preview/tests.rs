@@ -2225,20 +2225,26 @@ fn a_lens_database_vignetting_reaches_the_fit_as_far_as_the_camera_jpeg_shows_it
     assert!((with_profile - without).abs() < 0.01, "as without the profile: {with_profile} vs {without}");
 
     // the same in colour: the tinted JPEG takes the colour fit, whose curve the whole profile darkened
-    let (raw, bytes) = grey_raw_with_jpeg((w, h), vignetted, vignetted, [1.0, 0.9, 0.8]);
-    let colour_at_quarter = |embedded: Option<&EmbeddedLens>| {
-        let (_, _, look) = starting_colour(&mut raw.clone(), &bytes, None, embedded);
+    let tint = [1.0, 0.9, 0.8];
+    let (raw, bytes) = grey_raw_with_jpeg((w, h), vignetted, vignetted, tint);
+    let colour_at_quarter = |raw: &RawImage, bytes: &[u8], embedded: Option<&EmbeddedLens>| {
+        let (_, _, look) = starting_colour(&mut raw.clone(), bytes, None, embedded);
         let look = look.expect("a colour look");
         assert!(look.matrix != Mat3::IDENTITY || look.hue_sat.is_some(), "the colour fit, not the black-and-white one");
         ToneMap::camera(&look.tone, 0.0, 0.0, 0.0).apply(0.25)
     };
-    let (with_profile, without) = (colour_at_quarter(Some(&database)), colour_at_quarter(None));
+    let (with_profile, without) = (colour_at_quarter(&raw, &bytes, Some(&database)), colour_at_quarter(&raw, &bytes, None));
     assert!((with_profile - without).abs() < 0.01, "the colour fit's curve as without the profile: {with_profile} vs {without}");
 
     // a camera JPEG with the whole correction applied: the whole correction reaches the fit
     let (raw, bytes) = grey_raw_with_jpeg((w, h), vignetted, scene, [1.0; 3]);
     let corrected = at_quarter(&raw, &bytes, Some(&database));
     assert!((corrected - camera).abs() < 0.03, "the camera's curve at 0.25: {corrected} vs {camera}");
+
+    // and in colour: the colour fit keeps the database profile, whose correction it would otherwise learn into the curve
+    let (raw, bytes) = grey_raw_with_jpeg((w, h), vignetted, scene, tint);
+    let (with_profile, without) = (colour_at_quarter(&raw, &bytes, Some(&database)), colour_at_quarter(&raw, &bytes, None));
+    assert!(without > with_profile + 0.03, "without the profile the colour fit's curve brightens: {without} vs {with_profile}");
 }
 
 /// A lens-warped sensor proxy gets the vignetting gain of the position it samples, as the render applies it: the
@@ -2493,6 +2499,40 @@ fn dng_tone_gates_follow_the_files_own_tags() {
     assert!(looked.profile.look_table.is_some() && eligible(RawFormat::Dng, looked), "a look table defines colour, not tone");
 }
 
+/// A DNG's tone fit takes a lens database's vignetting correction in the share its camera JPEG shows, as the other
+/// raws' fits do: none for a JPEG left uncorrected (the curve as without the profile), all of it for a corrected one.
+#[test]
+fn dng_tone_fit_takes_a_lens_database_vignetting_as_far_as_the_camera_jpeg_shows_it() {
+    use lightcraft_develop::{EmbeddedLens, EmbeddedVignette, LensSource};
+    let (w, h) = (384usize, 256usize);
+    let vignette = EmbeddedVignette { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let gain = |x: usize, y: usize| {
+        let point = lightcraft_geom::Point::new(x as f64 + 0.5, y as f64 + 0.5);
+        lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, point, w as f64, h as f64) as f32
+    };
+    // a gradient with blocks of texture, so the preview shows the same picture (`structure_agrees`)
+    let texture = |x: usize, y: usize| ((x / 6).wrapping_mul(2_654_435_761) ^ (y / 6).wrapping_mul(40_503)) % 7;
+    let scene = |x: usize, y: usize| (0.01 + 0.5 * (x as f32 / w as f32) * (0.3 + 0.7 * y as f32 / h as f32)) * (0.55 + 0.075 * texture(x, y) as f32);
+    let vignetted = |x: usize, y: usize| scene(x, y) / gain(x, y);
+    let database = EmbeddedLens { vignette: Some(vignette), source: LensSource::Database, ..Default::default() };
+    let at_quarter = |jpeg_scene: &dyn Fn(usize, usize) -> f32, embedded: Option<&EmbeddedLens>| {
+        // tinted: a fit's pairs need some colour (`collect_pairs`)
+        let (mut raw, bytes) = grey_raw_with_jpeg((w, h), vignetted, jpeg_scene, [1.0, 0.95, 0.9]);
+        raw.format = RawFormat::Dng;
+        // a camera whose RGB is linear sRGB (XYZ to sRGB under D65): the grey sensor stays grey
+        let xyz_to_camera = Mat3([[3.2406, -1.5372, -0.4986], [-0.9689, 1.8758, 0.0415], [0.0557, -0.2040, 1.0570]]);
+        raw.color = lightcraft_raw::ColorData { illuminant: [21, 0], color_matrix: [Some(xyz_to_camera), None], ..Default::default() };
+        let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+        assert!(dng_tone_eligible(&raw, &t), "a DNG whose tone the fit defines");
+        let look = fit_dng_tone(&raw, &bytes, &t, embedded).expect("a DNG tone fit");
+        ToneMap::camera(&look.tone, 0.0, 0.0, 0.0).apply(0.25)
+    };
+    let (with_profile, without) = (at_quarter(&vignetted, Some(&database)), at_quarter(&vignetted, None));
+    assert!((with_profile - without).abs() < 0.01, "an uncorrected JPEG, as without the profile: {with_profile} vs {without}");
+    let (with_profile, without) = (at_quarter(&scene, Some(&database)), at_quarter(&scene, None));
+    assert!(without > with_profile + 0.03, "a corrected JPEG: without the profile the curve brightens: {without} vs {with_profile}");
+}
+
 /// The 1024 px preview Lightroom Classic writes into a 7008 px DNG is fitted; a 256 px thumbnail is not.
 #[test]
 fn dng_tone_fit_takes_lightroom_sized_previews() {
@@ -2709,9 +2749,76 @@ fn camera_vignetting_amount_measures_the_share_the_jpeg_shows() {
             let g = 1.0 + (gain(i) - 1.0) * shown;
             *p = p.map(|c| (c * g).powf(1.0 / 2.2).min(1.0));
         }
-        let amount = camera_vignetting_amount(&sensor, &reference, &clipped, &vignette, lightcraft_geom::Orientation::Normal);
+        let amount = camera_vignetting_amount(&sensor, &reference, &clipped, &vignette, ProxyFrame::new(lightcraft_geom::Orientation::Normal));
         assert!((amount - f64::from(shown)).abs() < 0.051, "the JPEG shows {shown}, measured {amount}");
     }
-    let tiny = Rgb32f::new(8, 8);
-    assert_eq!(camera_vignetting_amount(&tiny, &tiny, &[false; 64], &vignette, lightcraft_geom::Orientation::Normal), 1.0);
+    // too few pixels to measure on: the whole correction, although this JPEG shows none of it
+    let (tw, th) = (8, 8);
+    let mut tiny = Rgb32f::new(tw, th);
+    for (i, p) in tiny.data.iter_mut().enumerate() {
+        let g = lightcraft_pipeline::optics::embedded_vignette_gain(
+            &vignette,
+            lightcraft_geom::Point::new((i % tw) as f64 + 0.5, (i / tw) as f64 + 0.5),
+            tw as f64,
+            th as f64,
+        ) as f32;
+        let v = 0.05 + 0.05 * ((i * 7) % 8) as f32;
+        *p = [v, v * 0.9, v * 0.7].map(|c| c / g);
+    }
+    let mut tiny_reference = tiny.clone();
+    tiny_reference.map_in_place(|p| p.map(|c| c.powf(1.0 / 2.2)));
+    let frame = ProxyFrame::new(lightcraft_geom::Orientation::Normal);
+    assert_eq!(camera_vignetting_amount(&tiny, &tiny_reference, &[false; 64], &vignette, frame), 1.0);
+}
+
+/// A camera that renders some hues brighter than others doesn't read as vignetting where those hues gather toward
+/// the corners: the JPEG without any correction, whose blue pixels (more of them toward the corners) the camera
+/// renders brighter, is measured as showing none of it.
+#[test]
+fn camera_vignetting_amount_is_not_misled_by_hues_gathered_in_the_corners() {
+    use lightcraft_develop::EmbeddedVignette;
+    let vignette = EmbeddedVignette { k: [2.0, 1.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let (w, h) = (96, 64);
+    let mut seed = 54321u32;
+    let mut random = || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as f32 / (1u32 << 24) as f32
+    };
+    let mut sensor = Rgb32f::new(w, h);
+    let mut reference = Rgb32f::new(w, h);
+    for (i, (s, r)) in sensor.data.iter_mut().zip(reference.data.iter_mut()).enumerate() {
+        let point = lightcraft_geom::Point::new((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
+        let gain = lightcraft_pipeline::optics::embedded_vignette_gain(&vignette, point, w as f64, h as f64) as f32;
+        let radius = ((point.x / w as f64 - 0.5).hypot(point.y / h as f64 - 0.5) / 0.5f64.hypot(0.5)) as f32;
+        let v = (0.02 + 0.4 * random()) / gain;
+        let blue = random() < radius;
+        *s = if blue { [0.4 * v, 0.6 * v, v] } else { [v, 0.6 * v, 0.4 * v] };
+        let brightness = if blue { 1.6 } else { 1.0 };
+        *r = s.map(|c| (c * brightness).powf(1.0 / 2.2).min(1.0));
+    }
+    let clipped = vec![false; w * h];
+    let amount = camera_vignetting_amount(&sensor, &reference, &clipped, &vignette, ProxyFrame::new(lightcraft_geom::Orientation::Normal));
+    assert!(amount < 0.051, "the JPEG shows no correction, measured {amount}");
+}
+
+/// A CR3 sensor proxy moved to its camera JPEG's framing gets the vignetting gain of the position each pixel shows,
+/// not of where it lands.
+#[test]
+fn the_vignetting_gain_of_a_framed_proxy_is_taken_where_its_pixels_come_from() {
+    use lightcraft_develop::EmbeddedVignette;
+    let vignette = EmbeddedVignette { k: [2.0, 1.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.5, 0.5), radius: 0.6 };
+    let (w, h) = (96, 64);
+    let framing = Cr3Framing { scale: 0.92, offset: [0.02, -0.015] };
+    let frame = ProxyFrame { orientation: lightcraft_geom::Orientation::Normal, framing: Some(framing) };
+    let gains = vignetting_gains(&Rgb32f::new(w, h), &vignette, frame);
+    for i in [0, w - 1, w * h / 2 + w / 3, w * h - 1] {
+        let (x, y) = framing.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
+        let expected = lightcraft_pipeline::optics::embedded_vignette_gain(
+            &vignette,
+            lightcraft_geom::Point::new(f64::from(x), f64::from(y)),
+            w as f64,
+            h as f64,
+        );
+        assert!((gains[i] - expected).abs() < 1e-9, "pixel {i}: {} vs {expected}", gains[i]);
+    }
 }

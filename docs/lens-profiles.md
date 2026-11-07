@@ -83,7 +83,7 @@ stage (one resample), orientation handling and DNG export. A conversion whose ra
 half diagonal, or that would fold the image, is not applied.
 
 A raw whose look is fitted to its own camera JPEG (Sony, Nikon, Pentax, Olympus and others without a colour
-matrix, [camera-preview-colour.md](camera-preview-colour.md)) has that fit made on the sensor with only the
+matrix, and a DNG whose tone is fitted to its preview, [camera-preview-colour.md](camera-preview-colour.md)) has that fit made on the sensor with only the
 share of a profile's vignetting correction its camera JPEG shows, measured per photo: the profile describes the
 lens, not what the camera did to its JPEG relative to the raw (a Sony JPEG with shading compensation Auto can show
 none of it). The render

@@ -1,7 +1,7 @@
 use super::colour::{PROXY, file_local_look};
 use super::mono::{fit_tone_only_with, monochrome};
 use super::pairs::{Attempt, TONE_FITS, fit_attempt, fit_partial, search_ordered};
-use super::proxy::{CLIP_TOLERANCE, LensGeometry, MIN_PREVIEW_FRACTION, proxies, structure_agrees};
+use super::proxy::{CLIP_TOLERANCE, Cr3Framing, LensGeometry, MIN_PREVIEW_FRACTION, framed_proxies, proxies, structure_agrees};
 use super::tone::{HighlightCheck, highlights};
 use super::{CameraLook, CameraTone, CameraTransform, HsvTable, Mat3, RawImage, Rgb32f, ToneMap, luminance_2020};
 
@@ -228,9 +228,13 @@ pub(super) fn fit_dng_tone(
         let gain = 2f32.powf(transform.baseline_exposure as f32);
         sensor.map_in_place(|p| tables.apply(p.map(|v| v / gain), gain));
     }
-    correct_vignetting(&mut sensor, lens, raw.orientation);
     if (sensor.width, sensor.height) != (reference.width, reference.height) {
         return refuse("preview");
+    }
+    // a lens database's correction in the share the camera JPEG shows, as for the other raws (`look_proxies`)
+    match lens.filter(|l| l.source == lightcraft_develop::LensSource::Database).and_then(|l| l.vignette) {
+        Some(vignette) => database_vignetting(&mut sensor, &reference, &clipped, &vignette, ProxyFrame::new(raw.orientation)),
+        None => correct_vignetting(&mut sensor, lens, raw.orientation),
     }
     if !structure_agrees(&sensor, &reference) {
         return refuse("structure");
@@ -294,15 +298,43 @@ pub(super) fn look_proxies(
     let Some(vignette) = database.and_then(|e| e.vignette) else {
         return proxies(raw, bytes, transform, PROXY, 0.0, lens, embedded);
     };
-    let (mut sensor, reference, clipped) = proxies(raw, bytes, transform, PROXY, 0.0, lens, None)?;
+    let (mut sensor, reference, clipped, framing) = framed_proxies(raw, bytes, transform, PROXY, 0.0, lens, None)?;
     // CR3 proxies come back oriented like the JPEG (their framing aligned to it), the others in sensor orientation
     let orientation = if raw.format == lightcraft_raw::RawFormat::Cr3 { lightcraft_geom::Orientation::Normal } else { raw.orientation };
-    let amount = camera_vignetting_amount(&sensor, &reference, &clipped, &vignette, orientation);
-    apply_vignetting(&mut sensor, &vignette, orientation, amount);
+    database_vignetting(&mut sensor, &reference, &clipped, &vignette, ProxyFrame { orientation, framing });
+    Some((sensor, reference, clipped))
+}
+
+/// Multiply `sensor` by the share of a lens database's `vignette` correction that the camera JPEG `reference` shows
+/// ([`camera_vignetting_amount`]).
+fn database_vignetting(
+    sensor: &mut Rgb32f,
+    reference: &Rgb32f,
+    clipped: &[bool],
+    vignette: &lightcraft_develop::EmbeddedVignette,
+    frame: ProxyFrame,
+) {
+    let amount = camera_vignetting_amount(sensor, reference, clipped, vignette, frame);
+    apply_vignetting(sensor, vignette, frame, amount);
     if lightcraft_pipeline::profiling() {
         eprintln!("[profile] camera look: the camera JPEG shows {:.0} % of the lens database's vignetting correction", amount * 100.0);
     }
-    Some((sensor, reference, clipped))
+}
+
+/// Where a sensor proxy's pixels sit in the oriented, cropped frame a lens's vignetting is in: `framing` (a CR3 proxy
+/// moved to its camera JPEG's framing, [`framed_proxies`]) takes each pixel to the position it shows, and
+/// `orientation` maps that position to the oriented frame.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ProxyFrame {
+    pub(super) orientation: lightcraft_geom::Orientation,
+    pub(super) framing: Option<Cr3Framing>,
+}
+
+impl ProxyFrame {
+    /// A proxy whose pixels are where they were sampled, in the frame `orientation` maps to the oriented one.
+    pub(super) fn new(orientation: lightcraft_geom::Orientation) -> Self {
+        Self { orientation, framing: None }
+    }
 }
 
 /// Steps between none and all of a lens database's vignetting correction that [`camera_vignetting_amount`] tries.
@@ -311,32 +343,76 @@ const VIGNETTING_STEPS: u32 = 20;
 /// Fewest usable proxy pixels [`camera_vignetting_amount`] measures on; with fewer it keeps the whole correction.
 const MIN_VIGNETTING_PIXELS: usize = 256;
 
+/// Hue sectors of the sensor's chromaticity that [`camera_vignetting_amount`] ranks within, besides the near-neutral
+/// class ([`NEUTRAL_CHROMA`]).
+const HUE_SECTORS: usize = 8;
+
+/// Distance from grey (in `r - g`, `(r + g) / 2 - b` of the sensor's rgb chromaticity) below which a pixel counts as
+/// near-neutral in [`camera_vignetting_amount`].
+const NEUTRAL_CHROMA: f64 = 0.03;
+
+/// Fewest pixels a chromaticity class needs to take part in [`camera_vignetting_amount`].
+const MIN_CLASS_PIXELS: usize = 32;
+
+/// The chromaticity class of a sensor pixel in [`camera_vignetting_amount`]: 0 near-neutral, else 1 + its hue sector.
+fn chromaticity_class(p: [f64; 3]) -> usize {
+    let p = p.map(|v| v.max(0.0));
+    let sum = p[0] + p[1] + p[2];
+    if sum.is_nan() || sum <= 0.0 {
+        return 0;
+    }
+    let [r, g, b] = p.map(|v| v / sum);
+    let (a, yb) = (r - g, (r + g) * 0.5 - b);
+    if a.hypot(yb) < NEUTRAL_CHROMA {
+        return 0;
+    }
+    let sector = ((yb.atan2(a) + std::f64::consts::PI) / std::f64::consts::TAU * HUE_SECTORS as f64) as usize;
+    1 + sector.min(HUE_SECTORS - 1)
+}
+
 /// The share (0..=1, as the Vignetting amount slider scales it: `1 + (gain - 1) · amount`) of `vignette` that the
 /// camera JPEG `reference` shows relative to the uncorrected `sensor` proxy. The camera's tone curve is monotone, so
 /// with the share the camera applied, the corrected sensor orders its pixels by brightness as the JPEG does: the
-/// share with the highest rank correlation of luminance. Clipped and non-finite pixels are left out.
+/// share with the highest rank correlation of luminance. A camera's rendering also brightens or darkens some hues
+/// more than others, and where those hues gather toward the corners (a blue sky above, a darker foreground), the
+/// ranks across hues would read that as vignetting: the correlation is taken within classes of similar sensor
+/// chromaticity ([`chromaticity_class`]), averaged by their pixel counts. Clipped and non-finite pixels are left out.
 pub(super) fn camera_vignetting_amount(
     sensor: &Rgb32f,
     reference: &Rgb32f,
     clipped: &[bool],
     vignette: &lightcraft_develop::EmbeddedVignette,
-    orientation: lightcraft_geom::Orientation,
+    frame: ProxyFrame,
 ) -> f64 {
     if sensor.data.len() != reference.data.len() {
         return 1.0;
     }
-    let gains = vignetting_gains(sensor, vignette, orientation);
+    let gains = vignetting_gains(sensor, vignette, frame);
     let usable = |p: &[f32; 3]| p.iter().all(|v| v.is_finite()) && luminance_2020(*p) > 0.0;
-    let pixels: Vec<(f64, [f64; 3], [f64; 3])> = (sensor.data.iter().zip(&reference.data).zip(gains).enumerate())
-        .filter(|(i, ((s, r), _))| !clipped.get(*i).copied().unwrap_or(false) && usable(s) && usable(r))
-        .map(|(_, ((s, r), g))| (g, s.map(f64::from), r.map(f64::from)))
-        .collect();
-    if pixels.len() < MIN_VIGNETTING_PIXELS {
+    let mut classes: Vec<Vec<(f64, [f64; 3], [f64; 3])>> = vec![Vec::new(); HUE_SECTORS + 1];
+    for (i, ((s, r), g)) in sensor.data.iter().zip(&reference.data).zip(gains).enumerate() {
+        if clipped.get(i).copied().unwrap_or(false) || !usable(s) || !usable(r) {
+            continue;
+        }
+        let s = s.map(f64::from);
+        if let Some(class) = classes.get_mut(chromaticity_class(s)) {
+            class.push((g, s, r.map(f64::from)));
+        }
+    }
+    classes.retain(|c| c.len() >= MIN_CLASS_PIXELS);
+    let total: usize = classes.iter().map(Vec::len).sum();
+    if total < MIN_VIGNETTING_PIXELS {
         return 1.0;
     }
     let agreement = |amount: f64| {
-        let pairs: Vec<([f64; 3], [f64; 3])> = pixels.iter().map(|(g, s, r)| (s.map(|v| v * (1.0 + (g - 1.0) * amount)), *r)).collect();
-        super::pairs::rank_correlation_ties(&pairs)
+        let weighted: f64 = classes
+            .iter()
+            .map(|class| {
+                let pairs: Vec<([f64; 3], [f64; 3])> = class.iter().map(|(g, s, r)| (s.map(|v| v * (1.0 + (g - 1.0) * amount)), *r)).collect();
+                super::pairs::rank_correlation_ties(&pairs) * class.len() as f64
+            })
+            .sum();
+        weighted / total as f64
     };
     // ties keep the larger share, the correction a camera JPEG usually has (the file's own data always gets all of it)
     (0..=VIGNETTING_STEPS)
@@ -346,23 +422,31 @@ pub(super) fn camera_vignetting_amount(
         .0
 }
 
-/// The render's vignetting gain (`optics::embedded_vignette_gain`) at each pixel of `sensor` (in the frame
-/// `orientation` maps to the oriented, cropped frame `vignette` is in).
-fn vignetting_gains(sensor: &Rgb32f, vignette: &lightcraft_develop::EmbeddedVignette, orientation: lightcraft_geom::Orientation) -> Vec<f64> {
+/// The render's vignetting gain (`optics::embedded_vignette_gain`) at each pixel of `sensor`, at the position `frame`
+/// gives it in the oriented, cropped frame `vignette` is in.
+pub(super) fn vignetting_gains(sensor: &Rgb32f, vignette: &lightcraft_develop::EmbeddedVignette, frame: ProxyFrame) -> Vec<f64> {
     let (w, h) = (sensor.width as f64, sensor.height as f64);
-    let (ow, oh) = if orientation.swaps_axes() { (h, w) } else { (w, h) };
+    let (ow, oh) = if frame.orientation.swaps_axes() { (h, w) } else { (w, h) };
     let width = sensor.width.max(1);
     (0..sensor.data.len())
         .map(|i| {
-            let (x, y) = orientation.map((i % width) as f64 + 0.5, (i / width) as f64 + 0.5, w, h);
+            let (px, py) = ((i % width) as f64 + 0.5, (i / width) as f64 + 0.5);
+            let (px, py) = match frame.framing {
+                Some(framing) => {
+                    let (x, y) = framing.source(px as f32, py as f32, sensor.width, sensor.height);
+                    (f64::from(x), f64::from(y))
+                }
+                None => (px, py),
+            };
+            let (x, y) = frame.orientation.map(px, py, w, h);
             lightcraft_pipeline::optics::embedded_vignette_gain(vignette, lightcraft_geom::Point::new(x, y), ow, oh)
         })
         .collect()
 }
 
 /// Multiply `sensor` by `amount` of `vignette`'s correction, as the Vignetting amount slider scales it.
-fn apply_vignetting(sensor: &mut Rgb32f, vignette: &lightcraft_develop::EmbeddedVignette, orientation: lightcraft_geom::Orientation, amount: f64) {
-    let gains = vignetting_gains(sensor, vignette, orientation);
+fn apply_vignetting(sensor: &mut Rgb32f, vignette: &lightcraft_develop::EmbeddedVignette, frame: ProxyFrame, amount: f64) {
+    let gains = vignetting_gains(sensor, vignette, frame);
     for (p, g) in sensor.data.iter_mut().zip(gains) {
         let gain = (1.0 + (g - 1.0) * amount) as f32;
         *p = p.map(|v| v * gain);
@@ -374,5 +458,5 @@ fn apply_vignetting(sensor: &mut Rgb32f, vignette: &lightcraft_develop::Embedded
 /// camera JPEG has it applied, so a tone fitted without it brightens the render's corners twice.
 pub(super) fn correct_vignetting(sensor: &mut Rgb32f, lens: Option<&lightcraft_develop::EmbeddedLens>, orientation: lightcraft_geom::Orientation) {
     let Some(vignette) = lens.and_then(|l| l.vignette) else { return };
-    apply_vignetting(sensor, &vignette, orientation, 1.0);
+    apply_vignetting(sensor, &vignette, ProxyFrame::new(orientation), 1.0);
 }

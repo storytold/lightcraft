@@ -139,7 +139,11 @@ it (Enable Profile Corrections). The camera applied the same correction to its J
 the render added the correction again. A lens-database profile (`LIGHTCRAFT_LENSFUN_DIR`, the downloaded lensfun data)
 describes the lens, not what the camera did to its JPEG, so since `LOOK_VERSION` 14 it reaches the fit only in the
 share the JPEG shows (`camera_vignetting_amount`): the camera's tone curve is monotone, so the share whose corrected
-sensor ranks its pixels' luminance most like the JPEG wins (0 to 100 % in 5 % steps). With the whole profile, an
+sensor ranks its pixels' luminance most like the JPEG wins (0 to 100 % in 5 % steps). The ranks are compared within
+classes of similar sensor chromaticity (near-neutral and eight hue sectors), weighted by their pixel counts: a camera
+that renders some hues brighter than others would otherwise read as vignetting where those hues gather toward the
+corners. A CR3 proxy moved to its JPEG's framing gets the gain of the position each pixel shows, and a DNG's tone fit
+(`fit_dng_tone`) takes a database profile in the measured share too. With the whole profile, an
 ILCE-7M3 frame at f/2 with an FE 28mm F2 (lensfun: corners at 16 % of the centre) fitted 0.062 held-out RMS instead
 of 0.027 and rendered darker and orange. Its camera JPEG, with vignetting correction Auto in the maker note, shows
 none of that correction relative to the raw (rank correlation 0.991 at 0 % down to 0.903 at 100 %), like the A7CR
@@ -147,7 +151,9 @@ JPEGs in [sony-lens-corrections.md](sony-lens-corrections.md). Of 91 CC0 corpus 
 PEFs, 20 NEFs), 10 get a lens database vignetting profile into their fit (7 Sony, 2 Olympus, 1 Nikon); the shares
 measured were 0 % on six, 10–45 % on four, and the mean CIEDE2000 of the central half of the render against the
 camera JPEG went from 4.69 to 3.96 (6 better, 3 within 0.05, an SLT-A33 0.12 worse). The whole profile had made 9 of
-the 10 darker (0.4 to 8.5 L*), with small, scene-dependent colour shifts (mostly lost chroma).
+the 10 darker (0.4 to 8.5 L*), with small, scene-dependent colour shifts (mostly lost chroma). These figures predate
+the chromaticity classes, which moved four of the ten shares by one step: three of the six at 0 % to 5 % (SLT-A33,
+ILCE-7SM2, DSC-RX1RM3) and the PEN-F from 10 to 15 %.
 `proxies` applies the gain before it moves the sensor into the JPEG's lens geometry, so each pixel gets the gain of the
 position it samples, as in the render. The choice between the warped and the plain sensor (`alignment`) leaves out
 the pixels the warp finds no sensor for. It used to read them as black, a false edge along the border that made the
