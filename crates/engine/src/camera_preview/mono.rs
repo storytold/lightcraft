@@ -6,7 +6,7 @@ use super::pairs::{
     rank_correlation_ties,
 };
 use super::proxy::LensGeometry;
-use super::tone::{HighlightCheck, ToneFit, fit_tone, highlights, highlights_hold};
+use super::tone::{HighlightCheck, ToneFit, clipped_highlights, fit_tone, highlights, highlights_hold};
 use super::{CameraLook, CameraTransform, D50, D65, HsvTable, Mat3, PROPHOTO, REC2020, RawImage, Rgb32f, ToneMap, bradford, luminance_2020};
 
 /// A camera JPEG pixel's channels may differ by this much (linear) and still count as grey.
@@ -44,14 +44,20 @@ pub(super) fn monochrome_look(
     if !file_local_look(raw.format) {
         return None;
     }
-    let (sensor, reference, clipped) = look_proxies(raw, bytes, transform, lens, embedded)?;
+    let (sensor, reference, clipped, jpeg_space) = look_proxies(raw, bytes, transform, lens, embedded)?;
     if !monochrome(&reference) {
         return None;
     }
     // Sony's Dynamic Range Optimizer brightens a B/W JPEG as much as a colour one
     let dro = lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes) == Some(true);
     let unclipped = without_clipped(&sensor, &clipped);
-    let bright = HighlightCheck { pairs: highlights(&sensor, &reference), dro, grey: true };
+    let bright = HighlightCheck {
+        jpeg_space,
+        pairs: highlights(&sensor, &reference),
+        clipped: clipped_highlights(&sensor, &reference, &clipped),
+        dro,
+        grey: true,
+    };
     let look = fit_tone_only_with(unclipped.as_ref().unwrap_or(&sensor), &reference, None, &bright)?;
     let look = if dro { with_dro_off_tone(look) } else { look };
     if lightcraft_pipeline::profiling() {
@@ -83,7 +89,12 @@ pub(super) fn fit_tone_only_with(
 /// [`fit_tone_only_with`] for a photo without Sony's DRO, checked against its own bright areas.
 #[cfg(test)]
 pub(super) fn fit_tone_only(sensor: &Rgb32f, reference: &Rgb32f, colour: Option<(Mat3, Option<HsvTable>)>) -> Option<CameraLook> {
-    fit_tone_only_with(sensor, reference, colour, &HighlightCheck { pairs: highlights(sensor, reference), dro: false, grey: true })
+    fit_tone_only_with(
+        sensor,
+        reference,
+        colour,
+        &HighlightCheck { jpeg_space: None, pairs: highlights(sensor, reference), clipped: Vec::new(), dro: false, grey: true },
+    )
 }
 
 fn fit_tone_only_on(
@@ -117,7 +128,7 @@ pub(super) fn fit_dark_tone(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool
         return None;
     }
     // no JPEG pixel reaches 0.85 here, so the bright-area check has nothing to hold
-    let bright = HighlightCheck { pairs: highlights(sensor, reference), dro: false, grey: true };
+    let bright = HighlightCheck { jpeg_space: None, pairs: highlights(sensor, reference), clipped: Vec::new(), dro: false, grey: true };
     [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| {
         let pairs: Pairs = sensor
             .data
@@ -182,7 +193,7 @@ fn fit_tone_only_pairs(
             pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| (luma(coloured(*x).map(|v| v.max(0.0))), luma(*y))).collect(),
         )?
     } else {
-        fit_tone_with_shadows(ToneFit::Quantile, pairs, sensor, reference, edge_limit, coloured)?
+        fit_tone_with_shadows(ToneFit::Quantile, pairs, &[], sensor, reference, edge_limit, coloured)?
     };
     let look = CameraLook { matrix, tone, hue_sat: hue_sat.clone() };
     if !highlights_hold(&look.tone, highlights, coloured) {
