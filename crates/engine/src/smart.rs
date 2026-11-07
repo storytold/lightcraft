@@ -59,6 +59,9 @@ const HEADER_MAX: u64 = 4096;
 /// wrote the proxy's pixels (colour matrix and profile are baked into them) and stored tone curve.
 const LOOK_FIELD: &str = "look_version";
 
+/// Geometry database used by the camera-look fit baked into the proxy's pixels.
+const LENS_FIELD: &str = "lens_db";
+
 /// The JPEG quality a smart preview's pixels are stored at. The original 92 left the 8×8 DCT's
 /// quantised DC — each block's own mean, luma and chroma — visible as block steps across the frame
 /// and as a small constant colour shift; that is the largest part of what a proxy gets wrong
@@ -141,6 +144,12 @@ fn stored_facts(head: &serde_json::Value, bytes: &[u8]) -> Option<(SmartFacts, M
 /// Encode a source image and its decoder facts (the camera tone curve and the [`SourceInfo`] the
 /// render interprets settings against, if given) as a smart preview.
 pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String> {
+    encode_with_lens_key(img, info, crate::lens_profiles::cache_key())
+}
+
+/// Encode pixels with the database identity captured by their producer, rather than a later
+/// database that may have replaced it while the image was decoded or encoded.
+pub(crate) fn encode_with_lens_key(img: &Rgb32f, info: Option<&SourceInfo>, lens_key: u64) -> Result<Vec<u8>, String> {
     // scale so all but the brightest 0.05 % fit into 0..1
     let mut lum: Vec<f32> = img.data.iter().map(|c| c[0].max(c[1]).max(c[2])).filter(|v| v.is_finite()).collect();
     let scale = if lum.is_empty() {
@@ -173,6 +182,7 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
         "h": img.height,
         "scale": scale,
         LOOK_FIELD: crate::camera_preview::LOOK_VERSION,
+        LENS_FIELD: lens_key,
         ENC_FIELD: ENCODE_VERSION,
     });
     // The tail: the decoder facts (and the file's semantic mattes) after the JPEG, so the header
@@ -437,7 +447,8 @@ fn header_encode_version(head: &serde_json::Value) -> u64 {
 /// reaches every proxy — or, when the photo takes the per-file camera look (`look`,
 /// [`lightcraft_catalog::Photo::fitted_look`]), by an older camera-look fit than this build's (so
 /// its stored curve, and the colour baked into its pixels, are out of date; the fit only reaches
-/// those raws, so a JPEG's or DNG's proxy is never stale for it). A proxy from a newer build is
+/// those raws, so a JPEG's or DNG's proxy is never stale for it), or a different loaded lens
+/// database used to align that fit. A proxy from a newer build is
 /// left alone (rebuilding it here would only undo that build's work), as is one that can't be
 /// read: those are [`is_valid`]'s business.
 pub fn is_stale_for(path: &Path, look: bool) -> bool {
@@ -452,9 +463,21 @@ pub fn is_stale_for(path: &Path, look: bool) -> bool {
     }
     let Some(rest) = head.strip_prefix(MAGIC) else { return false };
     let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
-    rest.get(..nl).and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok()).is_some_and(|h| {
-        header_encode_version(&h) < ENCODE_VERSION || (look && header_look_version(&h) < u64::from(crate::camera_preview::LOOK_VERSION))
-    })
+    rest.get(..nl)
+        .and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok())
+        .is_some_and(|h| header_is_stale(&h, look, crate::lens_profiles::cache_key()))
+}
+
+/// Compare only identities from the same fit/encoding generation. Newer proxies remain usable,
+/// including offline: staleness is a rebuild hint, never a decoding requirement.
+fn header_is_stale(head: &serde_json::Value, look: bool, lens_key: u64) -> bool {
+    let enc = header_encode_version(head);
+    let fit = header_look_version(head);
+    let current_fit = u64::from(crate::camera_preview::LOOK_VERSION);
+    enc < ENCODE_VERSION
+        || (look
+            && (fit < current_fit
+                || (fit == current_fit && enc == ENCODE_VERSION && head.get(LENS_FIELD).and_then(serde_json::Value::as_u64) != Some(lens_key))))
 }
 
 /// [`is_stale_for`] for a photo that takes the per-file camera look: both conditions apply.
@@ -463,14 +486,13 @@ pub fn is_stale(path: &Path) -> bool {
 }
 
 /// The marker file in a smart previews folder: the camera-look fit version and encode version its
-/// proxies were last checked at ([`look_checked`]).
+/// proxies were last checked at, plus the loaded lens database identity ([`look_checked`]).
 const LOOK_MARKER: &str = "look-version";
 
 /// Whether the smart previews folder `dir` has been checked for out-of-date proxies at this build's
 /// camera-look fit version and encode version (or newer ones). A missing or unreadable marker counts
-/// as not, and so does one written before the encode version was recorded — it only says the look
-/// was checked, so this build scans the folder once more and rebuilds the proxies [`is_stale`]
-/// finds.
+/// as not, as does one without the loaded lens database identity. Changes to that identity force
+/// another scan, so unchanged fit/encode versions cannot hide stale fitted previews.
 pub fn look_checked(dir: &Path) -> bool {
     use std::io::Read;
     let Ok(f) = std::fs::File::open(dir.join(LOOK_MARKER)) else { return false };
@@ -478,19 +500,33 @@ pub fn look_checked(dir: &Path) -> bool {
     if f.take(64).read_to_string(&mut text).is_err() {
         return false;
     }
+    marker_is_current(&text, crate::lens_profiles::cache_key())
+}
+
+fn marker_is_current(text: &str, lens_key: u64) -> bool {
     let mut versions = text.split_whitespace();
     let (Some(look), Some(enc)) = (versions.next(), versions.next()) else { return false };
     match (look.parse::<u64>(), enc.parse::<u64>()) {
-        (Ok(look), Ok(enc)) => look >= u64::from(crate::camera_preview::LOOK_VERSION) && enc >= ENCODE_VERSION,
+        (Ok(look), Ok(enc)) => {
+            let current_fit = u64::from(crate::camera_preview::LOOK_VERSION);
+            look >= current_fit
+                && enc >= ENCODE_VERSION
+                && (look > current_fit || enc > ENCODE_VERSION || versions.next().and_then(|v| v.parse::<u64>().ok()) == Some(lens_key))
+        }
         _ => false,
     }
 }
 
 /// Record that the proxies in `dir` were checked at this build's camera-look fit version and encode
-/// version.
+/// version and loaded lens database identity.
 pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
+    mark_look_checked_with_lens_key(dir, crate::lens_profiles::cache_key())
+}
+
+/// Stamp the identity captured before scanning, so a later database is never marked checked.
+pub(crate) fn mark_look_checked_with_lens_key(dir: &Path, lens_key: u64) -> Result<(), String> {
     let path = dir.join(LOOK_MARKER);
-    let text = format!("{} {}\n", crate::camera_preview::LOOK_VERSION, ENCODE_VERSION);
+    let text = format!("{} {} {}\n", crate::camera_preview::LOOK_VERSION, ENCODE_VERSION, lens_key);
     lightcraft_catalog::safe_file::write_atomic(&path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 

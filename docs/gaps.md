@@ -194,3 +194,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-20 | minor | Opt-in Windows DirectComposition preference added; VRR hardware verification pending; parity counts unchanged |
 | 2026-10-25 | minor | Gap 1: first chart-calibrated model, the Canon EOS D60 (ColorChecker Classic under tungsten and sun, `crates/raw/src/chart_table.rs`); the gap stays open, hours unchanged |
 | 2026-11-05 | minor | Gap 9: a Windows leg runs clippy and the tests of the crates with Windows-only code when a pull request or push changes that code, or a pull request is labelled `full-ci`; gap not closed (macOS, GPU tests) |
+
+## Proposed external-profile correspondence geometry
+
+Camera colour calibration remains open. PR #2675 proposes geometry-gated external-profile alignment for file-local RAW colour fitting and pooled calibration, plus unique exact-mount lookup for unnamed fixed lenses. It preserves in-file geometry and the established CR3 framing path, applies source-position vignetting before geometry, and uses held-out edge agreement rather than RGB error to accept a candidate. Historical private-file observations and their limits are recorded in [Camera preview colour](camera-preview-colour.md); they are not a claim of validation of this rebased source.
