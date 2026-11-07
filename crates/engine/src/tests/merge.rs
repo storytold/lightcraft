@@ -395,3 +395,31 @@ fn undersized_group_is_skipped_before_source_validation() {
     assert_eq!(jobs.len(), 1, "the valid stack is kept");
     assert_eq!(jobs[0].sources.iter().map(|(p, _)| *p).collect::<Vec<_>>(), ids);
 }
+
+/// A multi-group preview with `previewPath` is refused instead of silently dropping the path:
+/// there is no single file to write for several groups.
+#[test]
+fn multi_group_preview_with_preview_path_is_an_error() {
+    let dir = temp_dir("multi-preview-path");
+    let mut paths = Vec::new();
+    for (set, evs) in [("A", &[-2.0, 0.0, 2.0][..]), ("B", &[-1.5, 0.5, 2.5][..])] {
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, evs).unwrap().into_iter().enumerate() {
+            let p = dir.join(format!("{set}_{i}.dng"));
+            std::fs::write(&p, b).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    assert_eq!(ids.len(), 6);
+    s.execute("stack.group", &json!({"ids": ids[..3]})).unwrap();
+    s.execute("stack.group", &json!({"ids": ids[3..]})).unwrap();
+    let png = dir.join("preview.png");
+    let err = s.execute("merge.hdr", &json!({"ids": [ids[0], ids[3]], "preview": true, "previewPath": png})).unwrap_err().to_string();
+    assert!(err.contains("previewPath"), "{err}");
+    assert!(!png.exists(), "no preview file is written for multiple groups");
+    // Without previewPath the multi-group preview still works and reports each group.
+    let r = s.execute("merge.hdr", &json!({"ids": [ids[0], ids[3]], "preview": true})).unwrap();
+    assert_eq!(r["previews"].as_array().unwrap().len(), 2, "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

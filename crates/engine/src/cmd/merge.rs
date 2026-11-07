@@ -25,6 +25,9 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
         return s.merge_now(kind, finish, &ids);
     }
     let jobs = s.plan_merges(kind, finish, &ids, true)?;
+    if jobs.len() > 1 && str_param(p, "previewPath").is_some() {
+        return Err(bad(id, "previewPath is only supported for a single merge group; remove it to preview all groups"));
+    }
     let single = jobs.len() == 1;
     let mut previews = Vec::new();
     let mut first_preview = None;
