@@ -81,7 +81,7 @@ fn null_as_empty<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) ->
     Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SortKey {
     #[default]
@@ -533,11 +533,12 @@ impl Catalog {
         let prepared = filter.prepare(self);
         // `within` only decides for the few kept photos: worked out per photo, not hashed
         let within_prepared = within.prepare_one(self);
-        let mut v: Vec<&Photo> = self
-            .photos()
-            .map(|p| p.as_ref())
-            .filter(|p| filter.matches_in(p, self, &prepared) || (keep.contains(&p.id) && within.matches_in(p, self, &within_prepared)))
-            .collect();
+        let wanted = |p: &Photo| filter.matches_in(p, self, &prepared) || (keep.contains(&p.id) && within.matches_in(p, self, &within_prepared));
+        // the whole library is kept in order ([`crate::order`]): what matches is picked out of it, not sorted
+        if let Some(ids) = self.pick_in_order(sort, wanted) {
+            return ids;
+        }
+        let mut v: Vec<&Photo> = self.photos().map(|p| p.as_ref()).filter(|p| wanted(p)).collect();
         v.sort_by(|a, b| sort.order(a, b));
         v.into_iter().map(|p| p.id).collect()
     }
@@ -548,23 +549,54 @@ impl Catalog {
     /// touched photo that was in the list and still matches `within` stays, as `query_keeping` would keep it. What
     /// the query would give, without asking every photo again.
     pub fn follow(&self, was: &[PhotoId], touched: &[PhotoId], filter: &Filter, sort: &Sort, within: Option<&Filter>) -> Vec<PhotoId> {
-        let listed: std::collections::HashSet<PhotoId> = was.iter().copied().filter(|id| touched.binary_search(id).is_ok()).collect();
-        let mut ids: Vec<PhotoId> = was.iter().copied().filter(|id| !listed.contains(id)).collect();
+        // (photos that came after every photo in the list were never in it: an import's, whose ids go upward. Then
+        // none of the others is looked for, and the list is not told apart from the touched photos id by id)
+        let all_new = touched.first().is_some_and(|first| was.iter().all(|id| id < first));
+        let mut listed: std::collections::HashSet<PhotoId> = std::collections::HashSet::new();
+        let mut ids: Vec<PhotoId> = if all_new {
+            was.to_vec()
+        } else {
+            let mut rest = Vec::with_capacity(was.len());
+            for id in was {
+                if touched.binary_search(id).is_ok() {
+                    listed.insert(*id);
+                } else {
+                    rest.push(*id);
+                }
+            }
+            rest
+        };
         let (prepared, within_prepared) = (filter.prepare_one(self), within.map(|w| w.prepare_one(self)));
+        let mut put: Vec<&Photo> = Vec::new();
         for id in touched {
             let Some(p) = self.photo(*id) else { continue };
             let kept = within.zip(within_prepared.as_ref()).is_some_and(|(w, wp)| listed.contains(id) && w.matches_in(p, self, wp));
             if filter.matches_in(p, self, &prepared) || kept {
-                // (the list is in order without the touched photos, and stays so as each is put back)
-                let at = ids.partition_point(|other| self.photo(*other).is_some_and(|o| sort.order(o, p).is_lt()));
-                ids.insert(at, *id);
+                put.push(p.as_ref());
             }
+        }
+        // (the list is in order without the touched photos: each goes in at its place, the last first, with the part
+        // after it shifted once for all of them, not once for each)
+        put.sort_unstable_by(|a, b| sort.order(a, b));
+        let points: Vec<usize> =
+            put.iter().map(|p| ids.partition_point(|other| self.photo(*other).is_some_and(|o| sort.order(o, p).is_lt()))).collect();
+        let n = ids.len();
+        ids.resize(n + put.len(), PhotoId(0));
+        let mut end = n;
+        for (j, (p, point)) in put.iter().zip(&points).enumerate().rev() {
+            let at = (*point).min(end);
+            ids.copy_within(at..end, at + j + 1);
+            if let Some(slot) = ids.get_mut(at + j) {
+                *slot = p.id;
+            }
+            end = at;
         }
         ids
     }
 
     /// How many photos match `filter`: [`Catalog::query`]'s length without its sorting.
     pub fn count(&self, filter: &Filter) -> usize {
+        self.note_scan();
         let prepared = filter.prepare(self);
         self.photos().filter(|p| filter.matches_in(p, self, &prepared)).count()
     }
