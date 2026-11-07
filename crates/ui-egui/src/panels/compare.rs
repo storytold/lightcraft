@@ -185,13 +185,25 @@ pub fn target_active(app: &LightcraftApp, params: &mut Value) {
     }
 }
 
+/// Reserve the visible filmstrip height while keeping at least 120 points for the Survey canvas.
 fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
-    let film_h = if app.ui.filmstrip { t.film_h } else { 0.0 };
+    let survey = app.ui.view == ViewMode::Survey;
+    let film_h = if !app.ui.filmstrip {
+        0.0
+    } else if survey {
+        // Keep at least 120 points of canvas in short windows. Below 72 points the strip itself
+        // would no longer have room for its labels and thumbnail, so leave it hidden until resized.
+        let available = if full.height().is_finite() { (full.height() - 120.0).max(0.0) } else { 0.0 };
+        let allocated = crate::state::normalize_survey_filmstrip_size(app.ui.survey_filmstrip_size).min(available);
+        if allocated >= 72.0 { allocated } else { 0.0 }
+    } else {
+        t.film_h
+    };
     let canvas = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - film_h));
     app.canvas_rect = Some(canvas);
-    if app.ui.filmstrip {
+    if film_h > 0.0 {
         super::detail::filmstrip(app, ui, Rect::from_min_max(pos2(full.left(), canvas.bottom()), full.max));
     }
     canvas

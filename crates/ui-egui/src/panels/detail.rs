@@ -35,6 +35,8 @@ use filmstrip::film_label;
 pub(crate) use filmstrip::film_spoken;
 pub(crate) use filmstrip::filmstrip;
 use filmstrip::navigator;
+#[cfg(test)]
+pub(crate) use filmstrip::survey_filmstrip_thumbnail_size;
 pub use geometry::CanvasMap;
 #[cfg(test)]
 pub(crate) use geometry::focus_box;

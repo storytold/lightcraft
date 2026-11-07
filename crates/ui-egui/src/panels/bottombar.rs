@@ -192,7 +192,19 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         let _ = app.run("view.autoAdvance", json!({}));
     }
     if app.ui.view == ViewMode::Survey {
-        // no zoom or thumbnail size in Survey
+        if icon_button(&mut child, "filmstrip", Icon::Filmstrip, vec2(30.0, 30.0), app.ui.filmstrip, true, "Filmstrip (/)").clicked() {
+            let _ = app.run("view.filmstrip", json!({}));
+        }
+        child.add_space(10.0);
+        size_slider(
+            &mut child,
+            "slider:surveyFilmstripSize",
+            "Filmstrip size",
+            &mut app.ui.survey_filmstrip_size,
+            crate::state::SURVEY_FILMSTRIP_SIZE_MIN,
+            crate::state::SURVEY_FILMSTRIP_SIZE_MAX,
+            crate::state::SURVEY_FILMSTRIP_SIZE_STEP,
+        );
     } else if matches!(app.ui.view, ViewMode::Detail | ViewMode::Compare) {
         if icon_button(&mut child, "beforeAfter", Icon::BeforeAfter, vec2(30.0, 30.0), app.ui.before_after.is_layout(), true, "Before/After (Y)")
             .clicked()
@@ -241,57 +253,65 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
             egui::Popup::menu(&cz).show(|ui| click_zoom_menu(app, ui));
         }
     } else {
-        // thumbnail size slider
-        let (r, resp) = child.allocate_exact_size(vec2(110.0, 20.0), Sense::click_and_drag());
-        let (min, max) = (crate::state::THUMB_SIZE_MIN, crate::state::THUMB_SIZE_MAX);
-        // screen readers: a slider with its value and range, which Increment / Decrement (VoiceOver's
-        // Ctrl-Option-Up / Down) and the arrow keys move one step, as the Edit panel's sliders do
-        resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(app.ui.thumb_size), crate::i18n::tr("Thumbnail size")));
-        child.ctx().accesskit_node_builder(resp.id, |node| {
-            node.set_min_numeric_value(f64::from(min));
-            node.set_max_numeric_value(f64::from(max));
-            node.set_numeric_value_step(f64::from(crate::state::THUMB_SIZE_STEP));
-            node.add_action(egui::accesskit::Action::Increment);
-            node.add_action(egui::accesskit::Action::Decrement);
-        });
-        register(&child, "slider:thumbSize", r);
-        let (inc, dec) = crate::widgets::accessibility_nudge(&child, &resp);
-        let (up, down) = if resp.has_focus() {
-            // ↑ and ↓ step the size instead of moving the focus to the thumbnail above
-            child.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { vertical_arrows: true, ..Default::default() }));
-            let keys = child.input_mut(|i| {
-                (i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp), i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown))
-            });
-            if keys.0 || keys.1 {
-                // egui picked the neighbour to focus from this same key before the lock above could apply (the
-                // first arrow after Tab): cancel that move
-                child.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
-            }
-            keys
-        } else {
-            (false, false)
-        };
-        if inc || up {
-            app.ui.thumb_size = (app.ui.thumb_size + crate::state::THUMB_SIZE_STEP).min(max);
-        } else if dec || down {
-            app.ui.thumb_size = (app.ui.thumb_size - crate::state::THUMB_SIZE_STEP).max(min);
-        }
-        let p = child.painter();
-        let y = r.center().y;
-        p.line_segment([pos2(r.left(), y), pos2(r.right(), y)], egui::Stroke::new(2.0, t.track));
-        if resp.has_focus() {
-            crate::widgets::focus_ring(p, r, &t);
-        }
-        let f = (app.ui.thumb_size - min) / (max - min);
-        let x = r.left() + f * r.width();
-        p.rect_filled(Rect::from_center_size(pos2(x, y), vec2(3.0, 14.0)), 1.0, t.thumb_hover);
-        if let Some(pp) = resp.interact_pointer_pos()
-            && (resp.dragged() || resp.clicked())
-        {
-            app.ui.thumb_size = min + ((pp.x - r.left()) / r.width()).clamp(0.0, 1.0) * (max - min);
-        }
+        size_slider(
+            &mut child,
+            "slider:thumbSize",
+            "Thumbnail size",
+            &mut app.ui.thumb_size,
+            crate::state::THUMB_SIZE_MIN,
+            crate::state::THUMB_SIZE_MAX,
+            crate::state::THUMB_SIZE_STEP,
+        );
     }
     if child.min_rect().width() > 0.0 { child.min_rect().left() } else { full.right() }
+}
+
+/// The bottom-bar size slider shared by the independent Grid and Survey preferences.
+fn size_slider(ui: &mut egui::Ui, id: &str, label: &str, value: &mut f32, min: f32, max: f32, step: f32) {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(110.0, 20.0), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(*value), crate::i18n::tr(label)));
+    ui.ctx().accesskit_node_builder(resp.id, |node| {
+        node.set_min_numeric_value(f64::from(min));
+        node.set_max_numeric_value(f64::from(max));
+        node.set_numeric_value_step(f64::from(step));
+        node.add_action(egui::accesskit::Action::Increment);
+        node.add_action(egui::accesskit::Action::Decrement);
+    });
+    register(ui, id, r);
+    let (inc, dec) = crate::widgets::accessibility_nudge(ui, &resp);
+    let (up, down) = if resp.has_focus() {
+        // ↑ and ↓ step the size instead of moving the focus to the thumbnail above.
+        ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { vertical_arrows: true, ..Default::default() }));
+        let keys =
+            ui.input_mut(|i| (i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp), i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)));
+        if keys.0 || keys.1 {
+            // egui picked the neighbour to focus from this same key before the lock above could apply.
+            ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
+        keys
+    } else {
+        (false, false)
+    };
+    if inc || up {
+        *value = (*value + step).min(max);
+    } else if dec || down {
+        *value = (*value - step).max(min);
+    }
+    let p = ui.painter();
+    let y = r.center().y;
+    p.line_segment([pos2(r.left(), y), pos2(r.right(), y)], egui::Stroke::new(2.0, t.track));
+    if resp.has_focus() {
+        crate::widgets::focus_ring(p, r, &t);
+    }
+    let f = (*value - min) / (max - min);
+    let x = r.left() + f * r.width();
+    p.rect_filled(Rect::from_center_size(pos2(x, y), vec2(3.0, 14.0)), 1.0, t.thumb_hover);
+    if let Some(pp) = resp.interact_pointer_pos()
+        && (resp.dragged() || resp.clicked())
+    {
+        *value = min + ((pp.x - r.left()) / r.width()).clamp(0.0, 1.0) * (max - min);
+    }
 }
 
 fn click_zoom_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {

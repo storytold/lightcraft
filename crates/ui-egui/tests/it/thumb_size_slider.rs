@@ -5,15 +5,33 @@ use egui::vec2;
 use egui_kittest::{Harness, kittest::NodeT};
 use lightcraft_ui_egui::{
     LightcraftApp, Services,
-    state::{RightPanel, THUMB_SIZE_MAX, THUMB_SIZE_MIN, THUMB_SIZE_STEP, ViewMode},
+    i18n::Locale,
+    state::{RightPanel, SURVEY_FILMSTRIP_SIZE_MAX, SURVEY_FILMSTRIP_SIZE_MIN, THUMB_SIZE_MAX, THUMB_SIZE_MIN, THUMB_SIZE_STEP, ViewMode},
 };
 
 const NAME: &str = "Thumbnail size";
+const SURVEY_NAME: &str = "Filmstrip size";
 
 fn grid() -> Harness<'static, LightcraftApp> {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     app.headless_host = true;
     app.ui.view = ViewMode::PhotoGrid;
+    app.ui.right = RightPanel::None;
+    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
+        |ui, app: &mut LightcraftApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(10);
+    h
+}
+
+fn survey() -> Harness<'static, LightcraftApp> {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.headless_host = true;
+    app.ui.view = ViewMode::Survey;
     app.ui.right = RightPanel::None;
     let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
         |ui, app: &mut LightcraftApp| {
@@ -48,6 +66,33 @@ fn the_thumbnail_size_is_a_slider_with_its_value_and_range() {
     assert_eq!(value, Some(f64::from(h.state().ui.thumb_size)));
     assert_eq!((min, max), (Some(f64::from(THUMB_SIZE_MIN)), Some(f64::from(THUMB_SIZE_MAX))));
     assert!(inc && dec, "a screen reader can raise and lower it");
+}
+
+#[test]
+fn the_survey_slider_is_named_for_the_filmstrip_it_resizes() {
+    let h = survey();
+    let slider = h
+        .root()
+        .children_recursive()
+        .map(|node| node.accesskit_node())
+        .find(|node| node.role() == Role::Slider && node.label().as_deref() == Some(SURVEY_NAME))
+        .expect("Survey's filmstrip size control is exposed by its purpose");
+    assert_eq!(slider.min_numeric_value(), Some(f64::from(SURVEY_FILMSTRIP_SIZE_MIN)));
+    assert_eq!(slider.max_numeric_value(), Some(f64::from(SURVEY_FILMSTRIP_SIZE_MAX)));
+    assert!(
+        !h.root()
+            .children_recursive()
+            .any(|node| { node.accesskit_node().role() == Role::Slider && node.accesskit_node().label().as_deref() == Some(NAME) }),
+        "Survey must not announce the filmstrip control as a grid thumbnail size"
+    );
+}
+
+/// Every non-English locale translates the Survey filmstrip-size slider label.
+#[test]
+fn the_filmstrip_size_label_is_translated_in_every_catalog() {
+    for locale in Locale::ALL.iter().filter(|locale| **locale != Locale::En) {
+        assert_ne!(locale.tr(SURVEY_NAME), SURVEY_NAME, "{locale:?}");
+    }
 }
 
 #[test]

@@ -12,10 +12,12 @@ pub use settings::{
     LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP, LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, PREVIEW_LIMITS, RECENT_LIBRARIES,
     STANDARD_PREVIEW_EDGE, StartupView, WINDOW_FRAME_CEILING,
 };
+pub(crate) use view::normalize_survey_filmstrip_size;
 pub use view::{
     BRIEF_INFO_SECS, BeforeAfter, BriefInfo, CLICK_ZOOMS, CropOverlay, FOCUS_KEYWORDS_PASSES, InfoOverlay, KeywordingView, LEFT_WIDTH, LayoutImage,
-    LightsOut, LoupeInfo, LoupeInfoField, MIN_PHOTO_WIDTH, PanelWidth, RIGHT_WIDTH, RightPanel, THUMB_SIZE_MAX, THUMB_SIZE_MIN, THUMB_SIZE_STEP,
-    ToolOverlay, ViewMode, Zoom,
+    LightsOut, LoupeInfo, LoupeInfoField, MIN_PHOTO_WIDTH, PanelWidth, RIGHT_WIDTH, RightPanel, SURVEY_FILMSTRIP_SIZE_DEFAULT,
+    SURVEY_FILMSTRIP_SIZE_MAX, SURVEY_FILMSTRIP_SIZE_MIN, SURVEY_FILMSTRIP_SIZE_STEP, THUMB_SIZE_MAX, THUMB_SIZE_MIN, THUMB_SIZE_STEP, ToolOverlay,
+    ViewMode, Zoom,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,6 +72,8 @@ pub struct UiState {
     pub zoom_anim: bool,
     pub before_after: BeforeAfter,
     pub thumb_size: f32,
+    /// Survey filmstrip height in points, independent of the library grid's thumbnail size.
+    pub survey_filmstrip_size: f32,
     /// Import review thumbnail size in points, independent of the library grid.
     pub import_thumb_size: f32,
     /// Open Edit sections by id.
@@ -410,6 +414,7 @@ impl Default for UiState {
             zoom_anim: false,
             before_after: BeforeAfter::Off,
             thumb_size: 220.0,
+            survey_filmstrip_size: SURVEY_FILMSTRIP_SIZE_DEFAULT,
             import_thumb_size: crate::import::THUMB_SIZE_DEFAULT,
             open_sections: vec!["light".into()],
             open_flyouts: vec![],
@@ -604,9 +609,14 @@ impl UiState {
             self.open_flyouts.push(id.to_string());
         }
     }
+    /// Bound the Survey filmstrip preference, including non-finite values restored from settings.
+    pub(crate) fn normalize_survey_filmstrip_size(&mut self) {
+        self.survey_filmstrip_size = view::normalize_survey_filmstrip_size(self.survey_filmstrip_size);
+    }
     /// Clamp values restored from disk.
     pub fn sanitized(mut self) -> Self {
         self.thumb_size = self.thumb_size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX);
+        self.normalize_survey_filmstrip_size();
         self.import_thumb_size = crate::import::thumb_size(self.import_thumb_size);
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);

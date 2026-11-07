@@ -343,6 +343,17 @@ pub const THUMB_SIZE_MAX: f32 = 480.0;
 
 pub const THUMB_SIZE_STEP: f32 = 30.0;
 
+/// Survey filmstrip height in points. The default preserves the existing 142-point strip.
+pub const SURVEY_FILMSTRIP_SIZE_DEFAULT: f32 = 142.0;
+pub const SURVEY_FILMSTRIP_SIZE_MIN: f32 = 100.0;
+pub const SURVEY_FILMSTRIP_SIZE_MAX: f32 = 240.0;
+pub const SURVEY_FILMSTRIP_SIZE_STEP: f32 = 10.0;
+
+/// Normalize a Survey filmstrip preference restored from disk or supplied through the control API.
+pub(crate) fn normalize_survey_filmstrip_size(size: f32) -> f32 {
+    if size.is_finite() { size.clamp(SURVEY_FILMSTRIP_SIZE_MIN, SURVEY_FILMSTRIP_SIZE_MAX) } else { SURVEY_FILMSTRIP_SIZE_DEFAULT }
+}
+
 /// Width limits of a side panel the user resizes (points).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PanelWidth {

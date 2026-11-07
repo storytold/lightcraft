@@ -258,6 +258,8 @@ pub struct Renderer {
     #[cfg(test)]
     pub(crate) thumb_jobs_built: usize,
     #[cfg(test)]
+    pub(crate) last_thumb_request: Option<(PhotoId, usize)>,
+    #[cfg(test)]
     pub(crate) import_jobs_built: usize,
     requests: HashMap<Slot, Requested>,
     /// Only jobs actually accepted by an offload: queued replacements retain identity in the job.
@@ -399,6 +401,8 @@ impl Renderer {
         Renderer {
             #[cfg(test)]
             thumb_jobs_built: 0,
+            #[cfg(test)]
+            last_thumb_request: None,
             #[cfg(test)]
             import_jobs_built: 0,
             requests: HashMap::new(),
