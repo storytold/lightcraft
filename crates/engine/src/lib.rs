@@ -268,6 +268,15 @@ pub struct Session {
     /// Photos in the current source with no filter on (cached like `visible`).
     total: Option<((u64, String), usize, Option<String>)>,
     pub undo: Vec<UndoEntry>,
+    /// While a long run (a synchronize) is still putting its steps into the history, the run's
+    /// token: the history keeps every step then, so the run can fold them into one whole step
+    /// before the bound applies ([`Session::hold_undo`]). Dead (or never set) when no run holds it.
+    undo_hold: std::sync::Weak<()>,
+    /// Set while a run puts one of its own steps into the history ([`Session::run_step`]).
+    in_run_step: bool,
+    /// A run has put a step into the history under the current hold: from then on any other
+    /// commit (an edit between its steps) ends the hold at once, as the steps can't be folded.
+    hold_stepped: bool,
     /// Undo steps committed in this session, ever (the history drops its oldest past 1000, so
     /// its length can't tell how many steps a command just made; see [`Session::commits`]).
     commits: u64,
@@ -486,6 +495,9 @@ impl Session {
             visible_gen: 0,
             total: None,
             undo: Vec::new(),
+            undo_hold: std::sync::Weak::new(),
+            in_run_step: false,
+            hold_stepped: false,
             commits: 0,
             redo: Vec::new(),
             pending_sidecar_repairs: Vec::new(),
@@ -664,14 +676,60 @@ impl Session {
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
-        if self.undo.len() > 1000 {
-            let mut dropped = self.undo.remove(0);
-            self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
+        if self.hold_stepped && !self.in_run_step {
+            // an edit between a run's steps: they can't be folded any more (the run sees it on
+            // its next step or at its end), so the history is cut now, not when the next step comes
+            self.undo_hold = std::sync::Weak::new();
+            self.hold_stepped = false;
         }
+        self.trim_undo();
         for mut dropped in self.redo.drain(..) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
         }
         Ok(())
+    }
+
+    /// Drop the oldest undo steps past [`UNDO_STEPS`], keeping the sidecar repairs they owed;
+    /// nothing while a run holds the history ([`Session::hold_undo`]).
+    pub(crate) fn trim_undo(&mut self) {
+        if self.undo_hold.strong_count() > 0 {
+            return;
+        }
+        let excess = self.undo.len().saturating_sub(UNDO_STEPS);
+        for mut dropped in self.undo.drain(..excess) {
+            self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
+        }
+    }
+
+    /// Do `f`, a run's own step ([`Session::hold_undo`]): the commits it makes keep the hold, and
+    /// any other commit after the run's first one ends it. Every commit a run makes for the hold
+    /// goes through here.
+    pub(crate) fn run_step<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let (was, commits) = (std::mem::replace(&mut self.in_run_step, true), self.commits);
+        // a panic in `f` (caught further up, at the command) must not leave the flag set
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        self.in_run_step = was;
+        self.hold_stepped |= self.commits != commits;
+        match out {
+            Ok(out) => out,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
+    /// Let a long run that commits many steps (a synchronize) fold them into one step: while the
+    /// returned token lives, the history is not cut to [`UNDO_STEPS`], so the run's first steps
+    /// are still there when it merges them ([`Session::merge_undo`]) and one Undo takes back the
+    /// whole run. The run drops the token when it is done (or abandoned) and calls
+    /// [`Session::trim_undo`]; a commit after the token died does it too. Runs that overlap
+    /// share one token: the history is cut once the last of them lets go.
+    pub(crate) fn hold_undo(&mut self) -> std::sync::Arc<()> {
+        if let Some(token) = self.undo_hold.upgrade() {
+            return token;
+        }
+        let token = std::sync::Arc::new(());
+        self.undo_hold = std::sync::Arc::downgrade(&token);
+        self.hold_stepped = false;
+        token
     }
 
     /// [`Catalog::apply`] for what brings back what was (an undo or a redo).
@@ -1452,6 +1510,9 @@ impl Session {
         if self.selection.ids.is_empty() { self.selection.active.into_iter().collect() } else { self.selection.ids.clone() }
     }
 }
+
+/// Undo steps kept; the oldest go first.
+pub const UNDO_STEPS: usize = 1000;
 
 /// Automatic versions kept per photo.
 pub const AUTO_VERSIONS: usize = 20;
