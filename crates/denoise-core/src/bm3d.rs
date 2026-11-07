@@ -796,4 +796,64 @@ mod tests {
         assert!(chroma > 0.5 * before, "chroma {chroma} before {before}");
         assert!(out.iter().flatten().all(|v| v.is_finite()));
     }
+
+    /// Textured colour-difference planes keep their detail: the checker differs
+    /// between the input planes, so it does not cancel in the transformed
+    /// colour-difference planes, and the transformed output is measured there.
+    #[test]
+    fn textured_chroma_detail_survives_in_the_transformed_planes() {
+        let t = 48;
+        let mut planes = noisy(t, 5.0, 17);
+        // Amplitudes differ per input plane, so every transformed
+        // colour-difference plane carries the checker (at amplitude 4).
+        let amplitudes = [10.0f32, 2.0, 2.0, 2.0];
+        for (plane, &amplitude) in planes.iter_mut().zip(&amplitudes) {
+            for row in 0..t {
+                for col in 0..t {
+                    let sign = if ((col / 4) + (row / 4)) % 2 == 0 { amplitude } else { -amplitude };
+                    if let Some(v) = plane.get_mut(row * t + col) {
+                        *v += sign;
+                    }
+                }
+            }
+        }
+        let before = spread(hadamard(&planes).get(1..).unwrap_or_default(), 5.0);
+        let out = filter(&planes, t, &Params::default(), 0.5);
+        let chroma = spread(hadamard(&out).get(1..).unwrap_or_default(), 5.0);
+        assert!(chroma > 0.4 * before, "transformed chroma {chroma} before {before}");
+        assert!(out.iter().flatten().all(|v| v.is_finite()));
+    }
+
+    /// A near-flat brightness plane with a small but nonzero noise estimate
+    /// still caps the colour-difference scaling at a ratio of 4, and the
+    /// colour detail survives both filtering passes. The pattern varies in
+    /// both directions, so neither neighbour direction reads zero.
+    #[test]
+    fn near_flat_nonzero_reference_caps_the_ratio_and_keeps_chroma_detail() {
+        let t = 4;
+        let p = Params::default();
+        let tf = Transform::new(p.block);
+        let amplitude = 40.0f32;
+        let mut pattern = vec![0f32; t * t];
+        for j in 0..t {
+            for i in 0..t {
+                let u = tf.c.get(t + i).copied().unwrap_or(0.0);
+                let v = tf.c.get(t + j).copied().unwrap_or(0.0);
+                if let Some(cell) = pattern.get_mut(j * t + i) {
+                    *cell = amplitude * u * v;
+                }
+            }
+        }
+        let brightness: Vec<f32> = pattern.iter().map(|v| v * 0.001).collect();
+        let ref_noise = plane_noise(&brightness, t);
+        let chroma_noise = plane_noise(&pattern, t);
+        assert!(ref_noise > 0.0, "reference noise {ref_noise}");
+        assert_eq!(noise_ratio(ref_noise, chroma_noise), 4.0, "ratio reaches the cap");
+        let y = vec![brightness, pattern.clone(), pattern.clone(), pattern];
+        let before = spread(y.get(1..).unwrap_or_default(), 0.0);
+        let out = filter(&hadamard(&y), t, &p, 0.0152);
+        let chroma = spread(hadamard(&out).get(1..).unwrap_or_default(), 0.0);
+        assert!(chroma > 0.4 * before, "transformed chroma {chroma} before {before}");
+        assert!(out.iter().flatten().all(|v| v.is_finite()));
+    }
 }
