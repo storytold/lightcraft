@@ -37,13 +37,15 @@ log = { workspace = true }
 # Icon + VERSIONINFO for lightcraft.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
 
-[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Retain X11 fallback and use font-free Wayland client-side decorations.
+winit = { version = "0.30", default-features = false, features = ["x11", "wayland-csd-adwaita-notitle"] }
 zbus = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
