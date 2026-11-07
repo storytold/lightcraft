@@ -108,7 +108,7 @@ pub(super) fn slideshow_export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, 
 
 /// How many photos are in view, how many slides they make with the intro and ending screens, and how long it plays.
 fn slideshow_counts(app: &mut LightcraftApp) -> (usize, usize, f64) {
-    let photos = app.session.visible_cloned().len();
+    let photos = app.session.visible().len();
     let slide = app.session.slideshow.slide_duration;
     let (intro, ending) = app.session.slide_titles.durations(slide);
     let titles = usize::from(intro.is_some()) + usize::from(ending.is_some());

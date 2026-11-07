@@ -5238,3 +5238,40 @@ fn export_sizes_keep_the_pixels_typed() {
     type_value(&mut h, "sliderValue:export.sizeH", "1350");
     assert_eq!((resize(&h).value, resize(&h).height), (1080.0, 1350));
 }
+
+/// A frame of the loupe costs what the screen shows, not what the view holds: with thousands of photos in
+/// view the filmstrip and the look-ahead work on the shared list (no copy of it per frame) and the strip
+/// draws only the cells near its viewport, following the active photo all the same.
+#[test]
+fn a_loupe_frame_does_not_copy_the_view_or_walk_all_of_it() {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    const N: u64 = 3000;
+    let mut h = demo([1400.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let first = h.app.session.catalog.photos().map(|p| p.id.0).max().unwrap_or(0) + 1;
+    let ops: Vec<Op> = (0..N)
+        .map(|i| {
+            let name = format!("IMG_{i:05}.jpg");
+            let p = Photo::new(PhotoId(first + i), Source::File { path: name.clone() }, &name, "JPG", 600, 400, "2026-10-01T00:00:00");
+            Op::AddPhoto { photo: Box::new(p) }
+        })
+        .collect();
+    h.app.session.commit("setup", Op::Batch { ops }).unwrap();
+    let vis = h.app.session.visible_shared().1;
+    assert!(vis.len() >= N as usize, "a big view: {}", vis.len());
+    let active = vis[vis.len() / 2];
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [active.0], "active": active.0}}), t);
+    h.request("ui.set", json!({"view": "detail", "filmstrip": true}), t);
+    h.settle(SETTLE);
+    for _ in 0..4 {
+        h.step();
+    }
+    let copies = h.app.session.visible_copies();
+    for _ in 0..6 {
+        h.step();
+    }
+    assert_eq!(h.app.session.visible_copies(), copies, "a frame with the loupe open copies the visible list");
+    let cells: Vec<String> = h.app.widgets.iter().filter(|(w, _)| w.starts_with("film:")).map(|(w, _)| w.clone()).collect();
+    assert!(!cells.is_empty() && cells.len() < 100, "only the cells near the viewport are drawn: {}", cells.len());
+    assert!(cells.contains(&format!("film:{}", active.0)), "the strip followed the active photo");
+}

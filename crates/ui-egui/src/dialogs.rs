@@ -847,7 +847,7 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
     let scope = if n > 1 {
         crate::i18n::tr_format!("the {n} selected photos", n = n)
     } else {
-        crate::i18n::tr_format!("the {} photos in view", app.session.visible_cloned().len())
+        crate::i18n::tr_format!("the {} photos in view", app.session.visible().len())
     };
     ui.label(
         egui::RichText::new(crate::i18n::tr_format!(

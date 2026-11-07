@@ -633,3 +633,66 @@ fn a_build_that_cant_start_waits_before_trying_again() {
     let _ = wait_finished(&b);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A background build's photos are planned a slice at a time, a frame each ([`crate::cmd::previews::jobs_for`]
+/// costs every photo a settings hash and a cache key: all of a big view in one frame froze the app for
+/// seconds), and the build starts once every photo is planned.
+#[test]
+fn a_background_build_plans_a_slice_of_photos_a_frame() {
+    let (mut s, root, ids) = library("prep-slices", 7);
+    s.prep.slice = Some(2);
+    let mode = crate::prep::Mode::Library;
+    let hold = crate::prep::TestHold::new();
+    s.prep_tick(mode, None, false);
+    for id in &ids[..3] {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    assert_eq!(s.prep.planned, 2, "the first slice, not the view");
+    assert!(s.preview_build.is_none() && s.prep_planning(), "still planning");
+    let mut planned = s.prep.planned;
+    for _ in 0..10 {
+        s.prep_tick(mode, Some(ids[2]), false);
+        assert!(s.prep.planned - planned <= 2, "a frame plans a slice at most");
+        planned = s.prep.planned;
+        if s.preview_build.is_some() {
+            break;
+        }
+    }
+    let b = s.preview_build.clone().expect("every photo planned: the build starts");
+    assert_eq!((planned, b.total), (7, 7));
+    assert!(!s.prep_planning(), "nothing left to plan");
+    drop(hold);
+    b.cancel.store(true, Ordering::Relaxed);
+    assert!(wait_finished(&b), "a cancelled build stops");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A tick with the loupe open over a view that did not change neither copies the visible list nor
+/// hashes it again: a frame asks every time, and a view of millions made every frame cost seconds.
+#[test]
+fn a_tick_over_an_unchanged_view_neither_copies_nor_hashes_it() {
+    let (mut s, root, ids) = library("prep-signature", 4);
+    let mode = crate::prep::Mode::Library;
+    let copies = s.visible_copies();
+    let hold = crate::prep::TestHold::new();
+    for id in &ids[..3] {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    let b = s.preview_build.clone().expect("the view is prepared");
+    assert_eq!(s.prep.signatures, 1, "the view is hashed once");
+    for k in 0..20 {
+        s.prep_tick(mode, Some(ids[k % 3]), false);
+    }
+    assert_eq!((s.prep.signatures, s.visible_copies() - copies), (1, 0), "20 more frames: the same view is not hashed or copied again");
+    // an edit that leaves the same photos in view is one more look at it, and no other view
+    s.execute("photo.rate", &json!({"ids": [ids[1].0], "rating": 3})).unwrap();
+    s.prep_tick(mode, Some(ids[2]), false);
+    assert_eq!(s.prep.signatures, 2);
+    assert!(!b.cancel.load(Ordering::Relaxed), "the same view: its build goes on");
+    drop(hold);
+    b.cancel.store(true, Ordering::Relaxed);
+    assert!(wait_finished(&b), "a cancelled build stops");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}

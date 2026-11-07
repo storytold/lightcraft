@@ -522,6 +522,10 @@ impl LightcraftApp {
         if self.session.preview_build.as_ref().is_some_and(|b| b.running()) {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
+        // the build's photos are planned a slice a frame: the next frame goes on with them
+        if self.session.prep_planning() {
+            ctx.request_repaint();
+        }
         // a build that couldn't start tries again at its time, also when nothing else draws a frame
         if let Some(wait) = self.session.prep_retry_in() {
             ctx.request_repaint_after(wait);

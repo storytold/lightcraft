@@ -480,6 +480,104 @@ pub fn standard_edge(s: &Session) -> usize {
     STANDARD_EDGE.max(s.loupe_edge.min(8192))
 }
 
+/// What starts a build once its photos' jobs are planned.
+pub(crate) struct Launch {
+    pub edge: Option<usize>,
+    pub background: bool,
+    pub force: bool,
+    /// `false`: the job that asked shows the progress in its own row.
+    pub row: bool,
+    pub wait: bool,
+    /// Where the user is (photo, stepping backward): the build goes from there.
+    pub from: Option<(lightcraft_catalog::PhotoId, bool)>,
+    /// Tests: this invocation's gate, consumed when the request comes in so that an early error
+    /// cannot attach it to a later build.
+    #[cfg(test)]
+    pub gate: Option<Arc<test_gate::PreviewGate>>,
+}
+
+/// The photos of a background build whose jobs are planned a slice at a time ([`jobs_for`] costs
+/// each photo a settings hash and a cache key: all of a big view in one frame is seconds), by
+/// [`Session::prep_tick`], which starts the build once every photo is planned.
+pub(crate) struct BuildPlan {
+    ids: Arc<[lightcraft_catalog::PhotoId]>,
+    /// Plan only the photos [`crate::prep::marked`] says are (the "marked" scope).
+    marked_only: bool,
+    edge: Option<usize>,
+    next: usize,
+    /// Photos the build is for (marked ones only, in the "marked" scope), planned or not yet.
+    pub selected: usize,
+    jobs: Vec<PhotoJobs>,
+}
+
+/// Photos planned in one slice (one frame), at most.
+pub(crate) const PLAN_SLICE: usize = 256;
+/// Photos looked at in one slice, planned or not (a "marked" scope skips most of the view).
+const PLAN_LOOKED_AT: usize = 8192;
+/// A slice stops after this long, once it has done a few photos' worth.
+const PLAN_SLICE_TIME: std::time::Duration = std::time::Duration::from_millis(3);
+
+impl BuildPlan {
+    pub(crate) fn new(ids: Arc<[lightcraft_catalog::PhotoId]>, marked_only: bool, edge: Option<usize>) -> Self {
+        BuildPlan { ids, marked_only, edge, next: 0, selected: 0, jobs: Vec::new() }
+    }
+
+    pub(crate) fn edge(&self) -> Option<usize> {
+        self.edge
+    }
+
+    /// Plan up to `slice` more photos (and no more than a few ms of work). `true`: all are planned.
+    pub(crate) fn advance(&mut self, s: &mut Session, slice: usize) -> bool {
+        let start = web_time::Instant::now();
+        let (mut planned, mut looked_at) = (0usize, 0usize);
+        while let Some(&id) = self.ids.get(self.next) {
+            if planned >= slice || looked_at >= PLAN_LOOKED_AT {
+                return false;
+            }
+            // (a clock read every 64 photos: a few photos' worth of work is never cut short)
+            if looked_at % 64 == 63 && start.elapsed() >= PLAN_SLICE_TIME {
+                return false;
+            }
+            self.next += 1;
+            looked_at += 1;
+            if self.marked_only && !crate::prep::marked(s, id) {
+                continue;
+            }
+            self.selected += 1;
+            planned += 1;
+            #[cfg(test)]
+            {
+                s.prep.planned += 1;
+            }
+            let jobs = jobs_for(s, id, self.edge);
+            if !jobs.is_empty() {
+                self.jobs.push((id.0, jobs));
+            }
+        }
+        true
+    }
+}
+
+/// Start the build of a finished plan (the same as `library.buildPreviews` of the same photos).
+pub(crate) fn start_planned(s: &mut Session, plan: BuildPlan, launch: Launch) -> Result<Value> {
+    let gives_way = give_way(s, launch.background)?;
+    s.fit_disk_cache();
+    launch_build(s, plan.jobs, launch, gives_way)
+}
+
+/// The background preparation gives way to a build that was asked for; nothing replaces a build
+/// that was asked for (it carries on, and the photos it built are skipped by the next). The
+/// background one is stopped only once the request is known to be good (in [`launch_build`]): a
+/// request with bad ids leaves it running (CodeRabbit on #3544). The cancel flag of the build to
+/// give way to, if any.
+fn give_way(s: &Session, background: bool) -> Result<Option<Arc<AtomicBool>>> {
+    match s.preview_build.as_ref().filter(|b| b.running()) {
+        Some(b) if b.background && !background => Ok(Some(b.cancel.clone())),
+        Some(_) => Err(bad("library.buildPreviews", "a preview build is already running")),
+        None => Ok(None),
+    }
+}
+
 fn build(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.buildPreviews";
     // tests: this invocation's gate, consumed here so an early error cannot attach it to a later build
@@ -492,20 +590,20 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false);
     let force = p.get("force").and_then(Value::as_bool).unwrap_or(false);
-    // (`row: false`: the job that asked shows the progress in its own row)
-    let row = p.get("row").and_then(Value::as_bool).unwrap_or(true);
-    // the background preparation gives way to a build that was asked for; nothing replaces a build
-    // that was asked for (it carries on, and the photos it built are skipped by the next). The
-    // background one is stopped only once this request is known to be good (below): a request
-    // with bad ids leaves it running (CodeRabbit on #3544)
-    let mut gives_way = None;
-    if let Some(b) = s.preview_build.as_ref().filter(|b| b.running()) {
-        if b.background && !background {
-            gives_way = Some(b.cancel.clone());
-        } else {
-            return Err(bad(C, "a preview build is already running"));
-        }
-    }
+    let launch = Launch {
+        edge,
+        background,
+        force,
+        row: p.get("row").and_then(Value::as_bool).unwrap_or(true),
+        wait: p.get("wait").and_then(Value::as_bool).unwrap_or(false) || cfg!(target_arch = "wasm32"),
+        from: p
+            .get("from")
+            .and_then(Value::as_u64)
+            .map(|at| (lightcraft_catalog::PhotoId(at), p.get("backward").and_then(Value::as_bool).unwrap_or(false))),
+        #[cfg(test)]
+        gate,
+    };
+    let gives_way = give_way(s, background)?;
     s.fit_disk_cache();
     // explicit ids, else the selected photos (more than one: as the menu says), else everything in
     // view (a single photo selected is the one open, not a choice of photos: "Visible" in the menu)
@@ -515,6 +613,13 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
         s.visible_cloned()
     };
     let jobs: Vec<PhotoJobs> = ids.iter().map(|id| (id.0, jobs_for(s, *id, edge))).filter(|j| !j.1.is_empty()).collect();
+    launch_build(s, jobs, launch, gives_way)
+}
+
+/// Run the build of `jobs` as `launch` says, on a worker (or here with `wait`).
+fn launch_build(s: &mut Session, jobs: Vec<PhotoJobs>, launch: Launch, gives_way: Option<Arc<AtomicBool>>) -> Result<Value> {
+    const C: &str = "library.buildPreviews";
+    let (edge, background, force, row, wait, from) = (launch.edge, launch.background, launch.force, launch.row, launch.wait, launch.from);
     // the background build stays the session's until this one has started (a worker that can't
     // start leaves it running and in place: CodeRabbit on #3544)
     let previous = s.preview_build.clone();
@@ -523,17 +628,16 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     let mut build_state = PreviewBuild { total: jobs.len(), background, order, ..Default::default() };
     #[cfg(test)]
     {
-        build_state.gate = gate;
+        build_state.gate = launch.gate;
     }
     let state = Arc::new(build_state);
-    if let Some(at) = p.get("from").and_then(Value::as_u64) {
-        state.focus_on(lightcraft_catalog::PhotoId(at), p.get("backward").and_then(Value::as_bool).unwrap_or(false));
+    if let Some((at, backward)) = from {
+        state.focus_on(at, backward);
     }
     s.preview_build = Some(state.clone());
     let task = row.then(|| task_for(s, &state));
     // the background preparation leaves most of the machine to the photo on screen and the user
     let lanes = if background { crate::prep::background_lanes() } else { lanes(jobs.len(), edge.is_none()) };
-    let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false) || cfg!(target_arch = "wasm32");
     if wait {
         if let Some(cancel) = gives_way {
             cancel.store(true, Ordering::Relaxed);

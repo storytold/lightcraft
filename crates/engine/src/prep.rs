@@ -227,6 +227,26 @@ pub struct PrepState {
     steps_in: Option<u64>,
     last_at: Option<PhotoId>,
     steps: usize,
+    /// The signature of the visible list of a generation ([`Session::view_signature`]).
+    signed: Option<(u64, Scope, u64)>,
+    /// The build whose photos are being planned a slice at a time, and whether the last slice left
+    /// photos to plan (the app draws another frame for the next).
+    plan: Option<Planning>,
+    advancing: bool,
+    /// Tests: signatures worked out, photos planned, and the photos a slice plans.
+    #[cfg(test)]
+    pub(crate) signatures: usize,
+    #[cfg(test)]
+    pub(crate) planned: usize,
+    #[cfg(test)]
+    pub(crate) slice: Option<usize>,
+}
+
+/// A background build whose photos are being planned ([`crate::cmd::previews::BuildPlan`]): the
+/// view it is for (its signature), and the plan.
+struct Planning {
+    sig: u64,
+    plan: crate::cmd::previews::BuildPlan,
 }
 
 impl std::fmt::Debug for PrepState {
@@ -364,7 +384,7 @@ impl Session {
             if b.running() {
                 if !wanted {
                     b.cancel.store(true, Ordering::Relaxed);
-                } else if self.prep.started_for.is_some_and(|sig| sig != signature(&self.visible_cloned(), self, want.scope)) {
+                } else if self.prep.started_for.is_some_and(|sig| sig != self.view_signature(want.scope).0) {
                     // another view (a folder, a filter, another library): this build's photos are
                     // not the ones shown; stopped, and the view now shown is prepared in its place
                     // (not counted as stopped by the user)
@@ -388,11 +408,19 @@ impl Session {
             }
         }
         if !wanted {
+            self.drop_plan();
             return;
         }
-        let Some(at) = at else { return };
-        let ids = self.visible_cloned();
-        let sig = signature(&ids, self, want.scope);
+        let Some(at) = at else {
+            // (the grid: no photo to build from, and no frame wanted for it)
+            self.prep.advancing = false;
+            return;
+        };
+        let (sig, ids) = self.view_signature(want.scope);
+        if self.prep.plan.as_ref().is_some_and(|p| p.sig != sig) {
+            // the view changed while its photos were being planned: the plan is of another view
+            self.drop_plan();
+        }
         if self.prep.steps_in != Some(sig) {
             self.prep.steps_in = Some(sig);
             self.prep.steps = 0;
@@ -403,6 +431,15 @@ impl Session {
             self.prep.steps = self.prep.steps.saturating_add(1);
         }
         let busy = self.preview_build.as_ref().is_some_and(|b| b.running());
+        if self.prep.plan.is_some() {
+            if busy {
+                // a build that was asked for began: this one starts over once it is done
+                self.drop_plan();
+            } else {
+                self.advance_plan(at, backward);
+            }
+            return;
+        }
         if busy
             || self.prep.steps < STEPS_BEFORE_BUILD
             || self.prep.started_for == Some(sig)
@@ -412,24 +449,84 @@ impl Session {
         {
             return;
         }
-        let ids: Vec<u64> = match want.scope {
-            Scope::Marked => ids.into_iter().filter(|id| marked(self, *id)).map(|id| id.0).collect(),
-            _ => ids.into_iter().map(|id| id.0).collect(),
-        };
         self.prep.started_for = Some(sig);
-        if ids.is_empty() {
-            return;
+        let edge = Some(crate::cmd::previews::standard_edge(self));
+        let plan = crate::cmd::previews::BuildPlan::new(ids, want.scope == Scope::Marked, edge);
+        self.prep.plan = Some(Planning { sig, plan });
+        self.advance_plan(at, backward);
+    }
+
+    /// Whether the build's photos are still being planned: the app asks for another frame to go on.
+    pub fn prep_planning(&self) -> bool {
+        self.prep.advancing
+    }
+
+    /// The view's identity ([`signature`]) with its photos. Worked out once per generation of the
+    /// visible list, not on every call: a frame asks every time, a whole view hashed each time
+    /// is what a big library can't afford.
+    fn view_signature(&mut self, scope: Scope) -> (u64, Arc<[PhotoId]>) {
+        let (generation, ids) = self.visible_shared();
+        if let Some((g, sc, sig)) = self.prep.signed
+            && g == generation
+            && sc == scope
+        {
+            return (sig, ids);
         }
-        let p = json!({"ids": ids, "background": true, "from": at.0, "backward": backward});
-        // (tests: a start made to fail, as a build thread that can't be spawned fails)
+        let sig = signature(&ids, self, scope);
+        self.prep.signed = Some((generation, scope, sig));
         #[cfg(test)]
-        let fail = self.prep.fail_starts.checked_sub(1).map(|left| self.prep.fail_starts = left).is_some();
+        {
+            self.prep.signatures += 1;
+        }
+        (sig, ids)
+    }
+
+    /// Give up the plan under way; its view is prepared afresh when it is next due.
+    fn drop_plan(&mut self) {
+        if self.prep.plan.take().is_some() {
+            self.prep.started_for = None;
+        }
+        self.prep.advancing = false;
+    }
+
+    /// Plan one more slice of the build's photos; once all are planned, start the build.
+    fn advance_plan(&mut self, at: PhotoId, backward: bool) {
+        let Some(Planning { sig, mut plan }) = self.prep.plan.take() else { return };
+        #[cfg(test)]
+        let slice = self.prep.slice.unwrap_or(crate::cmd::previews::PLAN_SLICE);
         #[cfg(not(test))]
-        let fail = false;
-        let started = if fail {
-            Err(crate::EngineError::Disabled("library.buildPreviews".into(), "test: the build couldn't start".into()))
-        } else {
-            self.execute("library.buildPreviews", &p)
+        let slice = crate::cmd::previews::PLAN_SLICE;
+        let done = crate::guard::catch("preparing photos", || plan.advance(self, slice));
+        self.prep.advancing = matches!(done, Ok(false));
+        let started = match done {
+            Ok(false) => {
+                self.prep.plan = Some(Planning { sig, plan });
+                return;
+            }
+            Ok(true) if plan.selected == 0 => return,
+            Ok(true) => {
+                let launch = crate::cmd::previews::Launch {
+                    edge: plan.edge(),
+                    background: true,
+                    force: false,
+                    row: true,
+                    wait: cfg!(target_arch = "wasm32"),
+                    from: Some((at, backward)),
+                    #[cfg(test)]
+                    gate: crate::cmd::previews::test_gate::take(),
+                };
+                // (tests: a start made to fail, as a build thread that can't be spawned fails)
+                #[cfg(test)]
+                let fail = self.prep.fail_starts.checked_sub(1).map(|left| self.prep.fail_starts = left).is_some();
+                #[cfg(not(test))]
+                let fail = false;
+                if fail {
+                    Err(crate::EngineError::Disabled("library.buildPreviews".into(), "test: the build couldn't start".into()))
+                } else {
+                    self.execute_fn("library.buildPreviews", |s| crate::cmd::previews::start_planned(s, plan, launch))
+                }
+            }
+            Err(e) => Err(crate::EngineError::Other(e)),
         };
         match started {
             Ok(_) => {
