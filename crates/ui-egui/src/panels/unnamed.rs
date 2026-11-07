@@ -267,8 +267,15 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
         name(app, &[key], who);
         return;
     }
+    // a right click offers to open the photo, for a face too small or too odd to tell from its tile
+    let mut open = false;
+    crate::widgets::context_menu(&resp, |ui| {
+        let item = ui.button(crate::i18n::tr("Open Photo"));
+        register(ui, "unnamed-face-menu:open", item.rect);
+        open = item.clicked();
+    });
     // a double click opens the photo, as in the grid; its second click must not undo the first one's selection
-    if resp.double_clicked() {
+    if open || resp.double_clicked() {
         let _ = app.run("library.select", json!({"ids": [f.photo], "active": f.photo}));
         let _ = app.run("view.detail", json!({}));
         // Escape comes back to the faces
