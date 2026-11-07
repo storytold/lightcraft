@@ -335,6 +335,56 @@ fn reserved_page_trailer_cannot_supply_cells() {
 }
 
 #[test]
+fn streamed_records_sharing_an_overflow_page_stop_at_the_database_size() {
+    // Five 600-byte records whose overflow chains all point at page 3: 3,000 bytes of payload in a
+    // 1,536-byte database. The walk hands over the first two, then stops instead of rereading page 3.
+    let page_size = 512;
+    let mut main = vec![0u8; 3 * page_size];
+    let mut record = vec![3];
+    record.extend(varint(13 + 2 * 597));
+    record.extend(vec![b'r'; 597]);
+    assert_eq!(record.len(), 600);
+    let leaf = &mut main[page_size..2 * page_size];
+    leaf[0] = 0x0d;
+    leaf[3..5].copy_from_slice(&5u16.to_be_bytes());
+    let mut end = page_size;
+    for i in 0..5u64 {
+        // SQLite keeps 92 bytes of a 600-byte payload on a 512-byte leaf, then the overflow pointer
+        let mut cell = varint(600);
+        cell.extend(varint(i + 1));
+        cell.extend(&record[..92]);
+        cell.extend(3u32.to_be_bytes());
+        end -= cell.len();
+        leaf[end..end + cell.len()].copy_from_slice(&cell);
+        let pointer = 8 + usize::try_from(i).unwrap() * 2;
+        leaf[pointer..pointer + 2].copy_from_slice(&u16::try_from(end).unwrap().to_be_bytes());
+    }
+    leaf[5..7].copy_from_slice(&u16::try_from(end).unwrap().to_be_bytes());
+    main[2 * page_size + 4..2 * page_size + 4 + 508].copy_from_slice(&record[92..]);
+    let db = Database {
+        file: None,
+        main,
+        overlay: HashMap::new(),
+        page_size,
+        reserved: 0,
+        encoding: TextEncoding::Utf8,
+        page_count: 3,
+        tables: Vec::new(),
+        rowid_aliases: HashMap::new(),
+    };
+    let mut seen = 0;
+    let error = db
+        .for_each_record(2, 1, &mut |r| {
+            assert_eq!(r.values, vec![Value::Text("r".repeat(597))]);
+            seen += 1;
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(error.contains("payload exceeds"), "{error}");
+    assert_eq!(seen, 2);
+}
+
+#[test]
 fn utf16_and_overflow_payloads_are_supported() {
     let mut payload = vec![2, 17, b'A', 0];
     assert_eq!(decode_record(&payload, 1, TextEncoding::Utf16Le).unwrap(), vec![Value::Text("A".into())]);
