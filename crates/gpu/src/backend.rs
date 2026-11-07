@@ -578,7 +578,10 @@ pub fn initial_window_renderer(
     {
         return WindowRenderer::Glow;
     }
-    window_renderer_order(forced, remembered, failed, os, compiled, glow).first().copied().unwrap_or(WindowRenderer::Glow)
+    window_renderer_order(forced, remembered, failed, os, compiled, glow)
+        .first()
+        .copied()
+        .unwrap_or_else(|| if glow { WindowRenderer::Glow } else { WindowRenderer::Wgpu(default_window_backends(os) & compiled) })
 }
 
 #[cfg(test)]
