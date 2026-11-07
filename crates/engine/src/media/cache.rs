@@ -63,6 +63,7 @@ impl Default for MediaCache {
             file_loader: None,
             reduced_loader: None,
             file_probe: None,
+            header_probe: None,
             preview_loader: None,
             file_bytes: None,
             smart_dir: None,

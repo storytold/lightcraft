@@ -1,5 +1,23 @@
 use super::*;
 
+/// A copy that fails part way (a full disk) leaves no partial proxy at the new key, which a
+/// later carry-over would take for a finished one (review of #1735).
+#[test]
+fn a_failed_copy_leaves_no_partial_proxy() {
+    let dir = temp("copy-fault");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (from, to) = (dir.join("old.lcproxy"), dir.join("new.lcproxy"));
+    std::fs::write(&from, b"proxy bytes").unwrap();
+    {
+        let _fault = lightcraft_catalog::safe_file::fail_writes_after(3);
+        assert!(copy_whole(&from, &to).is_err());
+    }
+    assert!(!to.exists(), "nothing at the new key");
+    copy_whole(&from, &to).unwrap();
+    assert_eq!(std::fs::read(&to).unwrap(), b"proxy bytes");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn temp(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lc-smart-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
