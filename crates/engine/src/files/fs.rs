@@ -1,6 +1,6 @@
+use super::header_probe::{full_probe, header_probe, os_opener};
 use super::load::{load_vec, load_vec_pair, load_vec_reduced};
 use super::preview::{fit_box, fs_preview_loader, preview_orientation};
-use super::probe::probe_bytes;
 use super::{Arc, DenoiseSpec, FileLoader, FileProbe, Filter, PairLoader, ReducedLoader, fit};
 use crate::media::RawDecode;
 
@@ -83,21 +83,14 @@ pub fn fs_pair_loader() -> PairLoader {
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader =
         Arc::new(|path: &str, max_edge: usize, with: RawDecode<'_>| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge, with)));
-    let probe: FileProbe = Arc::new(|path: &str| {
-        use std::io::Read;
-        // one open, then everything from the open file: its size and modification time are not
-        // round trips of their own (on a network share each of them is one)
-        let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-        let meta = file.metadata().ok();
-        let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
-        let _permit = crate::memory::work_gate().acquire(len);
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
-        let mut info = probe_bytes(path, &bytes)?;
-        info.file_modified = meta.as_ref().and_then(modified_iso);
-        Ok(info)
-    });
+    let probe = full_probe(os_opener());
     (loader, probe)
+}
+
+/// The import scan's probe (see [`header_probe`]): a raw is described from the parts of it its headers are in, without a
+/// content hash; whatever that can't describe is read whole, as [`fs_hooks`]' probe reads it.
+pub fn fs_header_probe() -> FileProbe {
+    header_probe(os_opener())
 }
 
 /// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
@@ -118,14 +111,6 @@ fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<
     r
 }
 
-/// The modification time in `meta` as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the
-/// filesystem doesn't say or the time is before 1970.
-fn modified_iso(meta: &std::fs::Metadata) -> Option<String> {
-    let t = meta.modified().ok()?;
-    let secs = i64::try_from(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs()).ok()?;
-    Some(crate::import::civil(secs))
-}
-
 impl crate::Session {
     /// Install the filesystem file hooks (desktop, CLI, MCP headless), and on macOS the Apple Photos
     /// runner ([`crate::apple_photos::osascript`]; installed, not run).
@@ -133,7 +118,8 @@ impl crate::Session {
         let (l, p) = fs_hooks();
         self.media.file_loader = Some(l);
         self.media.reduced_loader = Some(fs_reduced_loader());
-        self.media.file_probe = Some(p);
+        self.media.file_probe = Some(p.clone());
+        self.media.file_probe_headers = Some((p, fs_header_probe()));
         self.media.preview_loader = Some(fs_preview_loader());
         self.media.denoise.loader = Some(fs_pair_loader());
         #[cfg(target_os = "macos")]

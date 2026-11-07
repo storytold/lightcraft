@@ -195,12 +195,16 @@ pub(crate) fn place(src: &Path, dir: &Path, name: &str) -> Result<Placed, String
 /// disk and verified; a bad copy is removed and reported, so a card is never wiped on the strength
 /// of it. Returns the new path.
 ///
-/// `expect` is the content hash the import's probe computed from its full read of the source
-/// ([`lightcraft_preview::hash_bytes`]): the copy is read back and checked against it, which spares
-/// a third read of the card (issue #134). It also catches a source that changed since the probe
-/// (whose recorded metadata and hash would be stale). Without one the copy is compared byte for
-/// byte with the source.
-pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, expect: Option<lightcraft_preview::Hash128>) -> Result<PathBuf, String> {
+/// `check` says what the copy is verified against ([`Check`]). With [`Check::Hash`], `expect` is the content hash a
+/// probe computed from a full read of the source ([`lightcraft_preview::hash_bytes`]): the copy is read back and
+/// checked against it, which spares a third read of the card (issue #134). It also catches a source that changed
+/// since the probe (whose recorded metadata and hash would be stale). With [`Check::Read`] the hash comes from the
+/// copy's own read of the source (the source is read once, not before the copy as well); a source that changed size since
+/// it was listed is refused, but one that changed content at the same size between the header probe and the copy is
+/// recorded with the old file's description and the new file's hash (a known limit). With [`Check::Bytes`] the
+/// copy is compared byte for byte with the source. Returns the new path and, unless the check was
+/// [`Check::Bytes`], the content hash the copy was verified against.
+pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, check: Check) -> Result<(PathBuf, Option<lightcraft_preview::Hash128>), String> {
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
@@ -208,8 +212,8 @@ pub(crate) fn copy_new(src: &Path, dir: &Path, name: &str, expect: Option<lightc
     };
     for i in 0..100_000u32 {
         let d = if i == 0 { dir.join(name) } else { dir.join(format!("{stem}-{i}{ext}")) };
-        match copy_verified(src, &d, expect) {
-            Ok(()) => return Ok(d),
+        match copy_checked(src, &d, check) {
+            Ok(hash) => return Ok((d, hash)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(format!("copy {}: {e} (nothing was imported from it; the original is untouched)", src.display())),
         }
@@ -294,10 +298,21 @@ fn link_or_copy(src: &Path, dst: &Path) -> io::Result<()> {
     copy_verified(src, dst, None)
 }
 
-/// Copy into a new file, sync it to disk and verify it: against `expect` (the probe's hash of the
-/// source) when given, else byte for byte against the source. On any failure the partial copy is
-/// removed.
-pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_preview::Hash128>) -> io::Result<()> {
+/// What a copy is verified against.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Check {
+    /// Byte for byte against the source.
+    Bytes,
+    /// The content hash a probe computed from a full read of the source.
+    Hash(lightcraft_preview::Hash128),
+    /// The hash of what the copy itself read from the source, which must be this many bytes (the file's size when it
+    /// was listed: a different length means the file changed since).
+    Read { len: u64 },
+}
+
+/// Copy into a new file, sync it to disk and verify it ([`Check`]), returning the hash the copy was verified against
+/// (none for [`Check::Bytes`]). On any failure the partial copy is removed.
+pub(crate) fn copy_checked(src: &Path, dst: &Path, check: Check) -> io::Result<Option<lightcraft_preview::Hash128>> {
     let mut out = OpenOptions::new().write(true).create_new(true).open(dst)?;
     let r = (|| {
         let mut inp = File::open(src)?;
@@ -305,7 +320,13 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
             out.write_all(b"partial")?;
             return Err(io::Error::other("write failed (injected)"));
         }
-        io::copy(&mut inp, &mut out)?;
+        let read = match check {
+            Check::Read { .. } => Some(copy_hashing(&mut inp, &mut out)?),
+            _ => {
+                io::copy(&mut inp, &mut out)?;
+                None
+            }
+        };
         #[cfg(test)]
         if injected(Fault::Slow) {
             COPY_THREADS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(std::thread::current().id());
@@ -318,13 +339,19 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
         if let Ok(m) = fs::metadata(src).and_then(|m| m.modified()) {
             let _ = out.set_modified(m);
         }
-        match expect {
-            Some(h) if hash_file(dst)? != h => {
+        match (check, read) {
+            (Check::Hash(h), _) if hash_file(dst)? != h => {
                 Err(io::Error::other("the copy differs from the original as it was read for the import (a bad copy, or the file changed meanwhile)"))
             }
-            Some(_) => Ok(()),
-            None if !same_bytes(src, dst)? => Err(io::Error::other("the copy differs from the original")),
-            None => Ok(()),
+            (Check::Hash(h), _) => Ok(Some(h)),
+            (Check::Read { len }, Some((_, read_len))) if read_len != len => {
+                Err(io::Error::other("the file changed size since it was listed: it was not imported (scan again)"))
+            }
+            (Check::Read { .. }, Some((h, _))) if hash_file(dst)? != h => Err(io::Error::other("the copy differs from the original (a bad copy)")),
+            (Check::Read { .. }, Some((h, _))) => Ok(Some(h)),
+            (Check::Read { .. }, None) => Err(io::Error::other("the copy was not read")),
+            (Check::Bytes, _) if !same_bytes(src, dst)? => Err(io::Error::other("the copy differs from the original")),
+            (Check::Bytes, _) => Ok(None),
         }
     })();
     drop(out);
@@ -334,8 +361,31 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
     r
 }
 
+/// Copy into a new file as [`copy_checked`] with the probe's hash, or byte for byte when there is none.
+pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_preview::Hash128>) -> io::Result<()> {
+    copy_checked(src, dst, expect.map_or(Check::Bytes, Check::Hash)).map(|_| ())
+}
+
+/// Write `inp` to `out`, hashing it as it is read ([`lightcraft_preview::hash_bytes`] of the whole): the hash and the
+/// number of bytes copied.
+fn copy_hashing(inp: &mut File, out: &mut File) -> io::Result<(lightcraft_preview::Hash128, u64)> {
+    let mut h = lightcraft_preview::Hasher128::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut total = 0u64;
+    loop {
+        let n = fill(inp, &mut buf)?;
+        let chunk = buf.get(..n).unwrap_or(&[]);
+        if chunk.is_empty() {
+            return Ok((h.finish(), total));
+        }
+        h.update(chunk);
+        out.write_all(chunk)?;
+        total = total.saturating_add(n as u64);
+    }
+}
+
 /// [`lightcraft_preview::hash_bytes`] of a file's content, read in chunks.
-fn hash_file(path: &Path) -> io::Result<lightcraft_preview::Hash128> {
+pub(crate) fn hash_file(path: &Path) -> io::Result<lightcraft_preview::Hash128> {
     let mut f = File::open(path)?;
     let mut h = lightcraft_preview::Hasher128::new();
     let mut buf = vec![0u8; 1 << 20];

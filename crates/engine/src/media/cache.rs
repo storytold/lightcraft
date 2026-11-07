@@ -63,6 +63,7 @@ impl Default for MediaCache {
             file_loader: None,
             reduced_loader: None,
             file_probe: None,
+            file_probe_headers: None,
             preview_loader: None,
             file_bytes: None,
             smart_dir: None,
@@ -83,6 +84,13 @@ pub(crate) fn rendered_budget(share: usize) -> usize {
 }
 
 impl MediaCache {
+    /// The import scan's probe ([`Self::file_probe_headers`]) while the [`Self::file_probe`] it was made beside is the
+    /// one installed.
+    pub fn header_probe(&self) -> Option<super::FileProbe> {
+        let (full, headers) = self.file_probe_headers.as_ref()?;
+        self.file_probe.as_ref().is_some_and(|p| Arc::ptr_eq(p, full)).then(|| headers.clone())
+    }
+
     /// Keep rendered thumbnails on disk in `dir` as well. The cache this replaces is retired
     /// (its files stay): render jobs still holding it can't write through it any more, even
     /// into a directory a later clear emptied (`dir` may be the same one).

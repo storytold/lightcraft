@@ -1,5 +1,6 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
 use super::files::{Seen, expand, probe_all, reusable_probes, sidecars_of};
+use super::scan::{TwinKey, twin_key};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -42,6 +43,15 @@ pub struct ImportJob {
     /// content hash → the photo that has it (`None`: a file earlier in this import)
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
     pub(super) probe: Option<crate::media::FileProbe>,
+    /// Describes a file from the parts of it its headers are in, without hashing it ([`crate::media::MediaCache::file_probe_headers`]).
+    header_probe: Option<crate::media::FileProbe>,
+    /// The sizes of the library's photos (as recorded: [`lightcraft_catalog::Photo::file_size`]) and whether a photo has
+    /// none recorded, like [`ImportJob::by_hash`] looked up with the library: a file can only be a duplicate by content
+    /// of a photo of its size.
+    sizes: std::collections::HashSet<u64>,
+    unsized_photo: bool,
+    /// What the files this import has accepted so far were described as ([`twin_key`]), which the next ones may duplicate.
+    seen_keys: std::collections::HashSet<TwinKey>,
     file_bytes: Option<crate::merge::ByteReader>,
     /// Probes from a preceding scan (not read again).
     pub(super) cache: HashMap<String, ProbeInfo>,
@@ -195,6 +205,10 @@ impl ImportJob {
             by_path: HashMap::new(),
             by_hash: HashMap::new(),
             probe: s.media.file_probe.clone(),
+            header_probe: s.media.header_probe(),
+            sizes: Default::default(),
+            unsized_photo: false,
+            seen_keys: Default::default(),
             file_bytes: s.media.file_bytes.clone(),
             cache: std::mem::take(&mut s.import_probes),
             naming: s.xmp.naming,
@@ -242,11 +256,85 @@ impl ImportJob {
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local));
             }
+            // (a photo with no hash recorded is no duplicate by content, whatever its size)
             if let Some(h) = &p.content_hash {
                 self.by_hash.insert(h.clone(), Some(p.id));
+                if p.file_size == 0 {
+                    self.unsized_photo = true;
+                } else {
+                    self.sizes.insert(p.file_size);
+                }
             }
         }
         Some(library)
+    }
+
+    /// Whether this file's content is only worked out where the file is copied (Import → Copy reads it in full anyway),
+    /// rather than when it is probed.
+    fn defers_hash(&self, path: &str) -> bool {
+        let inside = |dir: &Path| crate::import_move::inside(Path::new(path), dir);
+        !self.opts.local
+            && self.mode == ImportMode::Copy
+            && self.copy_root.as_deref().is_some_and(|root| !inside(root) && !self.lib_dir.as_deref().is_some_and(inside))
+    }
+
+    /// Probe `files` that no scan probed: a file whose copy will hash it is only described from its headers
+    /// ([`crate::media::MediaCache::file_probe_headers`]); any other is read in full.
+    fn probe_fresh(&self, files: &[String], cancel: &std::sync::atomic::AtomicBool) -> Vec<Result<ProbeInfo, String>> {
+        let Some(header) = self.header_probe.as_ref() else {
+            return probe_all(self.probe.as_ref(), files, &self.read_done, cancel);
+        };
+        let (by_headers, whole): (Vec<usize>, Vec<usize>) = (0..files.len()).partition(|&i| files.get(i).is_some_and(|f| self.defers_hash(f)));
+        let paths = |at: &[usize]| at.iter().filter_map(|&i| files.get(i).cloned()).collect::<Vec<String>>();
+        let mut out: Vec<Result<ProbeInfo, String>> = (0..files.len()).map(|_| Err("not probed".to_string())).collect();
+        for (at, probe) in [(&by_headers, header), (&whole, self.probe.as_ref().unwrap_or(header))] {
+            for (&i, r) in at.iter().zip(probe_all(Some(probe), &paths(at), &self.read_done, cancel)) {
+                if let Some(slot) = out.get_mut(i) {
+                    *slot = r;
+                }
+            }
+        }
+        out
+    }
+
+    /// Read in full (and so hash) the files of `todo` whose `probed` description has no content hash and that need one
+    /// before they are planned: any file that is not copied (it is added where it is: its hash is part of its record),
+    /// and any that might be a duplicate by content. A file can only be a duplicate of a library photo of its size
+    /// ([`ImportJob::sizes`]), or of a file earlier in this import or in this batch with its size and its description
+    /// in the headers ([`twin_key`]); a library photo with no size recorded rules nothing out. The other files are
+    /// hashed as they are copied ([`run_transfers`]).
+    fn read_in_full(&self, todo: &[String], probed: &mut [Result<ProbeInfo, String>], cancel: &std::sync::atomic::AtomicBool) {
+        // (no header probe: every file was probed whole, whatever its probe made of a hash)
+        let (Some(full), Some(_)) = (self.probe.as_ref(), self.header_probe.as_ref()) else { return };
+        let mut count: HashMap<TwinKey, usize> = HashMap::new();
+        for info in probed.iter().flatten() {
+            *count.entry(twin_key(info)).or_default() += 1;
+        }
+        let may_duplicate = |info: &ProbeInfo| {
+            let key = twin_key(info);
+            !self.opts.local
+                && (self.unsized_photo
+                    || self.sizes.contains(&info.file_size)
+                    || self.seen_keys.contains(&key)
+                    || count.get(&key).is_some_and(|n| *n > 1))
+        };
+        let again: Vec<usize> = (0..todo.len())
+            .filter(|&i| match (todo.get(i), probed.get(i)) {
+                (Some(f), Some(Ok(info))) => info.content_hash.is_none() && (!self.defers_hash(f) || may_duplicate(info)),
+                _ => false,
+            })
+            .collect();
+        let paths: Vec<String> = again.iter().filter_map(|&i| todo.get(i).cloned()).collect();
+        // (counted again: the progress shows these reads, which are what is slow now)
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            self.read_total.fetch_add(paths.len(), Relaxed);
+        }
+        for (&i, r) in again.iter().zip(probe_all(Some(full), &paths, &self.read_done, cancel)) {
+            if let Some(slot) = probed.get_mut(i) {
+                *slot = r;
+            }
+        }
     }
 
     /// [`ImportJob::prepare`] for files [`ImportJob::expand`] returned.
@@ -284,9 +372,10 @@ impl ImportJob {
         // Reading the files is the slow part of adding them where they are: it is counted on its
         // own, and `cancel` stops it too (a large library takes long enough to want both).
         self.read_total.fetch_add(missing.len(), Relaxed);
-        let mut fresh = probe_all(self.probe.as_ref(), &missing, &self.read_done, cancel).into_iter();
-        let probed: Vec<Result<ProbeInfo, String>> =
+        let mut fresh = self.probe_fresh(&missing, cancel).into_iter();
+        let mut probed: Vec<Result<ProbeInfo, String>> =
             cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
+        self.read_in_full(&todo, &mut probed, cancel);
         crate::memory::release();
         // Who owns the shared stem sidecar (`IMG_0001.xmp`) among the library's files and the ones
         // arriving with this import: a JPEG or a TIFF arriving beside its raw reads its own sidecar
@@ -375,6 +464,8 @@ impl ImportJob {
                 }));
                 continue;
             }
+            // (a later file described like this one might be its duplicate: it is read in full to find out)
+            self.seen_keys.insert(twin_key(&info));
             let stored = match (mode, &self.copy_root) {
                 (ImportMode::Copy | ImportMode::Move, Some(root))
                     if !crate::import_move::inside(Path::new(&path), root)

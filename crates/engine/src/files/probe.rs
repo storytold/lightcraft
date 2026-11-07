@@ -128,7 +128,12 @@ fn ext_upper(name: &str) -> String {
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
-    let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
+    describe(name, bytes, Some(lightcraft_preview::hash_bytes(bytes).to_string()))
+}
+
+/// [`probe_bytes`] with the content hash given: `None` for a buffer that holds only the parts of a file its headers are
+/// in (see [`super::header_probe`]), whose bytes are not the file's.
+pub(super) fn describe(name: &str, bytes: &[u8], content_hash: Option<String>) -> Result<ProbeInfo, String> {
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
     if lightcraft_raw::probe(bytes).is_some() {

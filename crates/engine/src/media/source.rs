@@ -385,6 +385,8 @@ pub struct ProbeInfo {
     /// Hash of the file's bytes (hex), for duplicate detection. When it is a 32-digit
     /// [`lightcraft_preview::hash_bytes`] of the whole file (as the native probe computes it),
     /// Import → Copy verifies each copy against it instead of reading the source again.
+    /// `None`: not worked out, because the file was described from the parts of it its headers are in
+    /// ([`crate::media::MediaCache::file_probe_headers`]): the import makes it where it reads the file in full.
     pub content_hash: Option<String>,
     /// Lens corrections embedded in the file (DNG opcodes).
     pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
