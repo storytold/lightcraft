@@ -229,6 +229,63 @@ fn unreliable_dark_pairs_keep_the_original_tone_and_colour() {
     }
 }
 
+/// A scene with dark fine detail the JPEG shows one pixel off, above larger smooth dark areas it shows in place (or,
+/// with `smooth_related` false, in reverse), with the midtones that teach the original curve. The camera's toe is steep,
+/// as in [`steep_toe_scene`].
+fn misregistered_dark_detail(smooth_related: bool) -> (Rgb32f, Rgb32f) {
+    let camera = |s: f32| 3.0 * s * (s / (s + 0.02)).powi(2);
+    let (mut sensor, mut reference) = (Rgb32f::new(96, 72), Rgb32f::new(96, 72));
+    for (i, (src, dst)) in sensor.data.iter_mut().zip(&mut reference.data).enumerate() {
+        let (x, y) = (i % 96, i / 96);
+        let along = x as f32 / 95.0;
+        let (scene, shown) = match y {
+            0..24 => {
+                let s = 0.03 + 0.25 * along;
+                (s, s)
+            }
+            24..40 => {
+                let detail = |x: usize| if (x + y).is_multiple_of(2) { 0.016 + 0.003 * along } else { 0.005 + 0.001 * along };
+                (detail(x), detail(x + 1))
+            }
+            _ => {
+                let s = 0.006 + 0.013 * along;
+                (s, if smooth_related { s } else { 0.019 - 0.013 * along })
+            }
+        };
+        *src = [scene; 3];
+        *dst = [camera(shown); 3];
+    }
+    (sensor, reference)
+}
+
+/// An E-M10 II ORF with a black-and-white JPEG: dark foliage the JPEG shows slightly off from the raw failed the dark
+/// pairs' rank correlation (0.40), though its smooth parts agree (0.63), and the curve stopped at the colour pairs' floor
+/// of 0.015, which rendered its blacks at sRGB 22 for the JPEG's 8.
+#[test]
+fn camera_toe_judges_dark_pairs_away_from_edges_when_fine_detail_is_misregistered() {
+    let tone = |(sensor, reference): &(Rgb32f, Rgb32f)| {
+        let (pairs, _) = collect_pairs(sensor, reference, f32::NEG_INFINITY, None, false).unwrap();
+        fit_tone_with_shadows(ToneFit::Quantile, &pairs, sensor, reference, None, |x| x).unwrap()
+    };
+    let scene = misregistered_dark_detail(true);
+    let all_dark: Pairs = scene
+        .0
+        .data
+        .iter()
+        .zip(&scene.1.data)
+        .filter(|(_, y)| luminance_2020(**y) < 0.015)
+        .map(|(x, y)| (x.map(f64::from), y.map(f64::from)))
+        .collect();
+    assert!(rank_correlation_ties(&all_dark) < 0.5, "{}", rank_correlation_ties(&all_dark));
+    // the JPEG shows scene 0.006 at about 0.001, which the original curve lifts: it knows nothing below display 0.015
+    let toe = tone(&scene).apply(0.006);
+    assert!(toe < 0.002, "the toe reaches the JPEG's blacks: {toe}");
+
+    // Smooth dark areas that don't follow the JPEG are no evidence: the original curve stays.
+    let lifted = tone(&misregistered_dark_detail(false)).apply(0.006);
+    assert!(lifted > 0.002, "no toe from pairs unrelated away from edges too: {lifted}");
+}
+
 #[test]
 fn camera_jpeg_matches_the_sensor_proxy_size_exactly() {
     // An ILCE-7RM4 ARW (9504×6336 crop) embeds a 1616×1080 preview; for the camera-profile proxy

@@ -121,6 +121,7 @@ pub(super) fn fit_tone_with_shadows(
     let luminances = |x: [f64; 3], y: [f64; 3]| (luma(colour(x).map(|v| v.max(0.0))), luma(y));
     let original = fit.fit(pairs.iter().enumerate().filter(|(i, _)| i % 3 != 0).map(|(_, (x, y))| luminances(*x, *y)).collect());
     let mut eligible = Vec::new();
+    let mut held_away_from_edges: Pairs = Vec::new();
     let (mut colour_index, mut extra_index) = (0, 0);
     for (i, (input, output)) in sensor.data.iter().zip(&reference.data).enumerate() {
         if edge_limit.is_some_and(|limit| local_contrast(sensor, i) > limit || local_contrast(reference, i) > limit) {
@@ -142,13 +143,16 @@ pub(super) fn fit_tone_with_shadows(
         let (x, y) = luminances(input.map(f64::from), output.map(f64::from));
         if x.is_finite() && x > 0.0 {
             eligible.push((x, y, held));
+            if held && y < 0.015 && local_contrast(sensor, i) <= EDGE_CONTRAST && local_contrast(reference, i) <= EDGE_CONTRAST {
+                held_away_from_edges.push(([x; 3], [y; 3]));
+            }
         }
     }
     let dark = eligible.iter().filter(|(_, y, _)| *y < 0.015).count();
     let held: Pairs = eligible.iter().filter(|(_, y, held)| *held && *y < 0.015).map(|(x, y, _)| ([*x; 3], [*y; 3])).collect();
     // Sparse or uncorrelated shadow noise cannot teach a toe. Tied JPEG levels share a rank,
     // so a single quantized grey also keeps the original curve.
-    if dark < 96 || held.len() < 32 || rank_correlation_ties(&held) < PARTIAL_MIN_RANK_CORRELATION {
+    if dark < 96 || held.len() < 32 || !dark_pairs_related(&held, &held_away_from_edges) {
         return original;
     }
     let training = eligible.iter().filter(|(_, _, held)| !held).map(|(x, y, _)| (*x, *y)).collect();
@@ -168,6 +172,16 @@ pub(super) fn fit_tone_with_shadows(
         }
     }
     Some(candidate)
+}
+
+/// Whether the held-out dark pairs show the same picture in the sensor and the JPEG: on all of them, or, as the fit's
+/// own retries do ([`EDGE_CONTRAST`]), away from edges. Fine detail decides the first: on dark foliage against a white
+/// sky (E-M10 II, a black-and-white JPEG) a small geometric mismatch left a rank correlation of 0.40 on all dark
+/// pairs and 0.63 away from edges, so the photo kept a curve that stops at the colour pairs' floor and lifts its
+/// blacks. The curve itself matches the histograms, which the mismatch doesn't change.
+fn dark_pairs_related(held: &[Pair], held_away_from_edges: &[Pair]) -> bool {
+    rank_correlation_ties(held) >= PARTIAL_MIN_RANK_CORRELATION
+        || (held_away_from_edges.len() >= 32 && rank_correlation_ties(held_away_from_edges) >= PARTIAL_MIN_RANK_CORRELATION)
 }
 
 /// Ridge-regularised 3×3 chromaticity matrix (luminance-normalised RGB) on the training pairs.
