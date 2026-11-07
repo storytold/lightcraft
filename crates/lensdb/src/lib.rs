@@ -509,6 +509,35 @@ fn by_focal<T: Copy>(points: &[(f64, T)], focal: f64, eval: impl Fn(&T) -> f64) 
     Some(a + (b - a) * t)
 }
 
+/// The warp `planes` (R, G, B, DNG `WarpRectilinear` with radius 1 at the half diagonal of the `w × h` image) zoomed
+/// in so the corrected picture fills the frame, as the camera's own corrections do: without it, a distortion that
+/// stretches the frame (pincushion, or a wave that turns outward toward the corners) reads past the image's edges
+/// and leaves an empty border (issue #3547). The zoom is the one [`lightcraft_geom::fill_zoom_in`] finds for the green
+/// plane, the one without TCA; every plane becomes `f(r / z) / z`, so red and blue keep their scale to green, and
+/// the vignetting, which is evaluated at the source position, is unchanged. Only a zoom in is applied: a
+/// distortion whose border already reads inside the image (barrel) is left as converted, and so is one no zoom up to
+/// 2 can fill.
+fn fill_frame(planes: [[f64; 6]; 3], w: f64, h: f64) -> [[f64; 6]; 3] {
+    let [k0, k1, k2, k3, ..] = planes[1];
+    let source = |r: f64| {
+        let r2 = r * r;
+        r * (k0 + r2 * (k1 + r2 * (k2 + r2 * k3)))
+    };
+    let d = w.hypot(h);
+    match lightcraft_geom::fill_zoom_in(&source, w / d, h / d) {
+        Some(z) if z > 1.0 => planes.map(|p| {
+            let mut s = 1.0 / z;
+            let mut out = p;
+            for k in out.iter_mut().take(4) {
+                *k *= s;
+                s /= z * z;
+            }
+            out
+        }),
+        _ => planes,
+    }
+}
+
 /// A lens name built from a lens specification (min / max focal length, f-number at each), for files that name
 /// no lens model, only its specification (Nikon DSLRs' maker note): "24-70mm f/2.8", "18-55mm f/3.5-5.6",
 /// "85mm f/1.8". Such a name says nothing about the maker, so [`Profile::names_exactly`] must confirm a match.
@@ -574,7 +603,8 @@ impl Profile {
 
     /// The correction for `shot`, as the DNG opcode polynomials the pipeline applies, centred on the image.
     /// Distortion and TCA are combined per plane (R, G, B); a model the polynomial can't follow closely
-    /// ([`MAX_WARP_ERROR`], [`MAX_VIGNETTE_ERROR`]) or that would fold the image is left out.
+    /// ([`MAX_WARP_ERROR`], [`MAX_VIGNETTE_ERROR`]) or that would fold the image is left out. A distortion that
+    /// stretches the frame past its edges is zoomed in until it fills the frame again ([`fill_frame`]).
     /// An unknown or invalid calibration crop factor cannot be converted.
     pub fn correction(&self, shot: &Shot) -> Option<EmbeddedLens> {
         let (w, h) = (shot.width, shot.height);
@@ -602,7 +632,7 @@ impl Profile {
                 (err <= MAX_WARP_ERROR).then_some([k[0], k[1], k[2], k[3], 0.0, 0.0])
             };
             if let (Some(r), Some(g), Some(b)) = (plane(0), plane(1), plane(2)) {
-                lens.warp = Some(EmbeddedWarp { planes: [r, g, b], center, radius });
+                lens.warp = Some(EmbeddedWarp { planes: fill_frame([r, g, b], w, h), center, radius });
             }
         }
         if !self.vignetting.is_empty() {
