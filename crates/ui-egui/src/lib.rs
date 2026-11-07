@@ -331,6 +331,8 @@ pub struct LightcraftApp {
     pub(crate) scans_stopping: import::StoppingScans,
     /// Files that waited for a library and wait for the running import or Synchronize Folder too.
     pub waiting_import: panels::library_problem::WaitingImport,
+    /// The folders the scan of the review on screen listed, for the import that review starts (and no other).
+    pub review_listed: Option<lightcraft_engine::import::ListedFolders>,
     /// A Synchronize Folder scan in progress (feeds its dialog).
     pub sync: Option<sync::SyncTask>,
     /// `session.folder_changes` came from the Synchronize Folder dialog (and goes with it).
@@ -345,6 +347,8 @@ pub struct LightcraftApp {
     pub(crate) lightroom_result: Option<state::Dialog>,
     /// The import review of a finished scan, waiting for another dialog to close.
     pub(crate) review_pending: Option<state::Dialog>,
+    /// The folders that review's scan listed; they become [`Self::review_listed`] when the review opens.
+    pub(crate) review_pending_listed: Option<lightcraft_engine::import::ListedFolders>,
     /// The library generation the window title and the recent list were last updated for.
     pub shown_library: Option<u64>,
     /// A background export in progress.
