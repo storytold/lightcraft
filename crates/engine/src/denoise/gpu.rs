@@ -49,21 +49,56 @@ pub(super) fn card_is_faster(card_ms: f64, cpu_ms: f64, threads: usize) -> bool 
 pub(super) static SETTING_UP: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 /// Removes a set-up's marker when the set-up ends, however it ends — but not when the process dies inside the driver.
+/// The file holds an operating-system lock for as long as the set-up runs, so that another LightCraft process can tell a
+/// set-up under way (locked) from one that a crash left behind (not locked: the system frees the lock of a dead process).
 #[cfg(feature = "denoise")]
-struct SetUpEnded(PathBuf);
+struct SetUpEnded(PathBuf, Option<std::fs::File>);
 
 #[cfg(feature = "denoise")]
 impl Drop for SetUpEnded {
     fn drop(&mut self) {
+        drop(self.1.take()); // release the lock before the file goes
         let _ = std::fs::remove_file(&self.0);
         SETTING_UP.lock().unwrap_or_else(PoisonError::into_inner).retain(|m| m != &self.0);
     }
 }
 
+/// A marker that another process holds locked is that process's set-up under way, not a crash's: wait for it to end (up to
+/// `limit`). It returns `Ok` when the marker is gone. A marker that nobody holds is one a crash left behind — unless it
+/// disappears within a moment, which is the process that has just ended removing it (it unlocks before it deletes: Windows
+/// cannot delete a file another handle still holds open, so the two are not atomic).
+#[cfg(feature = "denoise")]
+fn wait_for_other_set_up(marker: &Path, limit: Duration) -> Result<(), String> {
+    let began = web_time::Instant::now();
+    loop {
+        let Ok(file) = std::fs::OpenOptions::new().read(true).open(marker) else { return Ok(()) };
+        match file.try_lock() {
+            Ok(()) => {
+                // nobody holds it: either it is about to go or a crash left it
+                drop(file);
+                if began.elapsed() >= Duration::from_secs(1) {
+                    return Err(GPU_CRASHED.into());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if began.elapsed() >= limit {
+                    return Err(GPU_STUCK.into());
+                }
+                drop(file);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            // locks are not supported here: the marker alone decides, as before
+            Err(std::fs::TryLockError::Error(_)) => return Err(GPU_CRASHED.into()),
+        }
+    }
+}
+
 /// Set the graphics card up with `card` on a thread of its own while `meanwhile` runs here, and give up on the card when
 /// it takes longer than `limit` (a driver building kernels for minutes, or stuck). The `marker` file exists while `card`
-/// runs: one found before it starts was left by a LightCraft that closed during a set-up (a driver crash takes the app
-/// with it), so the card is not tried again until the user chooses where denoise runs (`denoise.settings {runOn}`).
+/// runs: one found before it starts is another process's set-up, waited for (see `wait_for_other_set_up`), or one left by
+/// a LightCraft that closed during a set-up (a driver crash takes the app with it), so the card is not tried again until
+/// the user chooses where denoise runs (`denoise.settings {runOn}`).
 #[cfg(feature = "denoise")]
 pub(super) fn set_up_card<T: Send + 'static, R>(
     marker: &Path,
@@ -71,22 +106,35 @@ pub(super) fn set_up_card<T: Send + 'static, R>(
     card: impl FnOnce() -> Result<T, String> + Send + 'static,
     meanwhile: impl FnOnce() -> R,
 ) -> Result<(T, R), String> {
-    let ended = {
-        let mut running = SETTING_UP.lock().unwrap_or_else(PoisonError::into_inner);
-        if running.iter().any(|m| m == marker) {
-            return Err(GPU_STUCK.into());
+    // the models folder may not exist yet; a marker that cannot be written only loses the crash guard
+    if let Some(parent) = marker.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let ended = loop {
+        {
+            let mut running = SETTING_UP.lock().unwrap_or_else(PoisonError::into_inner);
+            if running.iter().any(|m| m == marker) {
+                return Err(GPU_STUCK.into());
+            }
+            // the marker is made new and locked at once; one that exists is another process's (see wait_for_other_set_up)
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(marker) {
+                Ok(mut file) => {
+                    use std::io::Write;
+                    let _ = file.lock();
+                    let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                    let _ = file.write_all(format!("setting up the graphics card for AI Denoise (unix time {secs})\n").as_bytes());
+                    running.push(marker.to_path_buf());
+                    break SetUpEnded(marker.to_path_buf(), Some(file));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(_) => {
+                    // a marker that cannot be written only loses the crash guard
+                    running.push(marker.to_path_buf());
+                    break SetUpEnded(marker.to_path_buf(), None);
+                }
+            }
         }
-        if marker.exists() {
-            return Err(GPU_CRASHED.into());
-        }
-        let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        // the models folder may not exist yet; a marker that cannot be written only loses the crash guard
-        if let Some(parent) = marker.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(marker, format!("setting up the graphics card for AI Denoise (unix time {secs})\n"));
-        running.push(marker.to_path_buf());
-        SetUpEnded(marker.to_path_buf())
+        wait_for_other_set_up(marker, limit)?;
     };
     let started = web_time::Instant::now();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -132,7 +180,11 @@ pub(super) fn card_tile_ms(runner: &dyn TileRunner, input: &[f32]) -> f64 {
 /// Set the card up for the model at `path`: kernels built, the check tile run on both and compared, both timed.
 #[cfg(feature = "denoise")]
 pub(super) fn make_gpu(cpu: &lightcraft_denoise::runtime::CpuRunner, path: &Path, tile: usize) -> Result<GpuSide, String> {
-    let input = Arc::new(lightcraft_denoise::runtime::check_tile(tile));
+    let input = if cpu.net().in_channels == 3 {
+        Arc::new(lightcraft_denoise::runtime::check_tile_linear_rgb(tile))
+    } else {
+        Arc::new(lightcraft_denoise::runtime::check_tile(tile))
+    };
     let (on_card, net) = (input.clone(), cpu.net().clone());
     let card = move || -> Result<_, String> {
         let runner = lightcraft_gpu::nn::runner(&net, tile)?;

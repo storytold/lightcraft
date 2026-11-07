@@ -1,5 +1,5 @@
 use super::*;
-use lightcraft_denoise::manifest::{Domain, Gain};
+use lightcraft_denoise::manifest::{Domain, Gain, LinearSpace};
 
 /// A folder of the test's own: the card's set-up leaves its marker beside the model.
 fn folder(name: &str) -> PathBuf {
@@ -24,6 +24,7 @@ fn model(name: &str, tile: u64) -> (Arc<dyn Model>, lightcraft_denoise::runtime:
         size_bytes: None,
         provenance: String::new(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: tile as u32,
         overlap: 16,
         gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.05 },
@@ -87,6 +88,7 @@ fn with_remote(path: &Path, tile: u64, addr: &str, sha256: &str) -> Network {
         size_bytes: None,
         provenance: String::new(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: tile as u32,
         overlap: 16,
         gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.05 },
@@ -323,5 +325,50 @@ fn a_set_up_that_takes_too_long_is_given_up_on() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(set_up_card(&marker, Duration::from_secs(5), || Ok(1), || 2), Ok((1, 2)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_marker_that_another_process_holds_locked_is_waited_for_not_taken_for_a_crash() {
+    // another LightCraft process is setting the card up: it made the marker and holds its lock (a second handle stands for it)
+    let dir = folder("otherprocess");
+    let marker = dir.join(GPU_SETUP_MARKER);
+    use std::io::Write;
+    let mut other = std::fs::OpenOptions::new().write(true).create_new(true).open(&marker).unwrap();
+    other.write_all(b"setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    other.lock().unwrap();
+    // it ends after a moment: the lock goes, then the file
+    let m = marker.clone();
+    let ender = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
+        drop(other);
+        let _ = std::fs::remove_file(&m);
+    });
+    let started = web_time::Instant::now();
+    let r = set_up_card(&marker, Duration::from_secs(10), || Ok(3), || 4);
+    ender.join().unwrap();
+    assert_eq!(r, Ok((3, 4)), "the card is set up once the other set-up has ended");
+    assert!(started.elapsed() >= Duration::from_millis(300), "it waited for the other set-up");
+    // a lock that is not released in time: the card is not used, and the reason says why
+    let mut other = std::fs::OpenOptions::new().write(true).create_new(true).open(&marker).unwrap();
+    other.write_all(b"setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    other.lock().unwrap();
+    let r = set_up_card(&marker, Duration::from_millis(250), || Ok(()), || ());
+    assert_eq!(r, Err(super::gpu::GPU_STUCK.to_string()));
+    drop(other);
+    let _ = std::fs::remove_file(&marker);
+    // a marker that a set-up has unlocked but not yet deleted (Windows deletes after closing) is not a crash either
+    let mut leaving = std::fs::OpenOptions::new().write(true).create_new(true).open(&marker).unwrap();
+    leaving.write_all(b"setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    leaving.lock().unwrap();
+    drop(leaving);
+    let m = marker.clone();
+    let remover = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        let _ = std::fs::remove_file(&m);
+    });
+    let r = set_up_card(&marker, Duration::from_secs(10), || Ok(5), || 6);
+    remover.join().unwrap();
+    assert_eq!(r, Ok((5, 6)), "a marker on its way out is waited for, not taken for a crash");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -61,6 +61,8 @@ rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-deno
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+# the pinned model catalog, so the download → install path is tested without the `rawnind-model` product switch
+lightcraft-denoise-core = { workspace = true, features = ["rawnind-model"] }
 # HDR JPEG XL tests read the file's colour encoding
 jxl-oxide = { workspace = true }
 # Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).

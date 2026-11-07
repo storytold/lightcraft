@@ -158,10 +158,31 @@ background installation worker. `denoise.models.downloads` and `denoise.pump` re
 Command clients can request the same asynchronous path with `background: true`.
 The synchronous command remains available for scripts that require the result immediately.
 
-The current contract is `bayerToRgb`: normalized, black-subtracted, non-white-balanced
-RGGB planes `[1, 4, tile, tile]` produce camera RGB `[1, 3, 2*tile, 2*tile]`.
-RawNIND uses a 512-cell tile, 64-cell overlap and a mean-matched nominal gain of 1e6.
+The supported model contracts are `bayerToRgb` and `linearRgb`:
+- `bayerToRgb`: normalized, black-subtracted, non-white-balanced RGGB planes `[1, 4, tile, tile]` produce camera RGB `[1, 3, 2*tile, 2*tile]`. RawNIND uses a 512-cell tile, 64-cell overlap and a mean-matched nominal gain of 1e6.
+- `linearRgb`: demosaiced linear camera RGB planes `[1, 3, tile, tile]` produce denoised camera RGB `[1, 3, tile, tile]`. Supports Fujifilm X-Trans (aperiodic $6 \times 6$ sensor mosaic, directional demosaicing) as well as Bayer and monochrome/linear RAW files. Models can specify optional `space`: `"cameraRgb"` (default, native sensor camera RGB) or `"linRec2020"` (standardized Linear Rec. 2020; mapped from as-shot balanced Camera RGB before inference and inverted back after denoising). Each colour plane's output scale is matched to its input on its own, within the model's deviation limit, so a model whose channels drift apart in dark tones does not leave a colour cast; see `docs/denoise.md` → *Gain matching*.
 See `DenoiserManifest` for the validated JSON schema.
+
+## Gain matching
+
+A model's output is not on its input's scale, and that scale drifts across the picture, so
+each tile's output is multiplied back onto its input: the mean of the tile's interior (away
+from the edges that blend into a neighbour) is measured per colour plane and the gain is
+clamped to the model's nominal value ± its deviation limit. Each plane is matched on its
+own. One gain for the whole tile turns a difference between the channels' scales into a
+colour cast: on X-Trans night shots the 1600 px render came out with red 7–9 levels down and
+green 3 up (8-bit sRGB), and on two ISO 3200/6400 X-T1 files a render at Amount 100 now
+moves each plane by at most 0.2 of a level against the plain render, where one gain moved
+red by 1.7–1.9. Where a model scales the planes equally, the three gains are equal and the
+result is the same as before.
+
+## Highlight clipping
+
+Where the sensor clipped, a tile's output is replaced by its input, so highlight recovery
+sees the camera's clipped values. Clipping is decided in the camera's own domain, before
+the white balance and colour matrix a model's `space` applies: a converted channel at white
+does not mean the sensor clipped, and a camera channel at white can convert to less than
+white. The values blended back are always the model's own input.
 
 ## Photos, previews and exports
 
@@ -202,7 +223,9 @@ One idle CPU workspace is retained, and cache costs reserve room for the blended
 
 The GPU executor uses our WGSL kernels through wgpu. It checks a real model's output
 against the CPU and falls back on errors, unsupported networks or a slower device.
-Setup has a time limit and a crash marker. Automatic selection estimates throughput
+Setup has a time limit and a crash marker that holds an operating-system lock while a set-up runs,
+so a second LightCraft process waits for that set-up instead of taking its marker for a crash.
+Automatic selection estimates throughput
 from a check tile; this estimate can choose imperfectly on unmeasured hardware.
 Settings offers Automatic, Graphics card and Processor. GPU tests cover supported
 synthetic networks against the scalar executor; a real-model test compares CPU/GPU.
@@ -213,6 +236,12 @@ of the same shared vector from different invocations is not safe under WGSL
 ([component references](https://www.w3.org/TR/WGSL/#vector-component-reference));
 this caused incorrect Metal results (issue #479). Synthetic equivalence tests include
 repeated partial tiles and concurrent calls, and reject non-finite outputs.
+
+A full-size X-Trans denoise on a 4 GB laptop card (RTX 3050 Ti, DX12) held about 1.7 GB of
+graphics memory at Amount 50 and 2.5 GB at Amount 100, and two full-size exports started at
+once stalled with the graphics card on while they did not with it off. The cause is not
+established (the reported memory was not in the processes' own counters); on cards that
+small, run one full-size export at a time.
 
 ### Historical performance, measured 2026-10-07
 
@@ -296,7 +325,4 @@ Native apps enable inference through their `denoise` feature. A build without it
 the web build report inference unavailable. Manifest/cache primitives still compile
 for WASM. Settings and models remain opt-in; nothing is downloaded on launch.
 
-This implementation supports **Bayer RAW only**. X-Trans, Foveon, demosaiced DNG and
-non-RAW images remain unsupported by this model contract. No measured quality parity
-with Lightroom is claimed. Apple/Metal and wider hardware verification, model policy,
-a linear-RGB contract and a side-by-side fidelity suite remain future work.
+This implementation supports **Bayer and Fujifilm X-Trans RAW** (X-Trans supported via models implementing the `linearRgb` domain contract). Foveon and non-RAW images remain unsupported by this model contract. No measured quality parity with Lightroom is claimed. The graphics-card path is verified on Metal (Apple M3 Max and M4 Pro) and on DX12 (RTX 4090 Laptop and RTX 3050 Ti Laptop); Vulkan is not yet. Model policy and a side-by-side fidelity suite remain future work.
