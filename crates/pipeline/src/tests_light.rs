@@ -38,10 +38,16 @@ fn check_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     s.light.contrast = 100.0;
     s.light.blacks = 80.0;
     let image = render(&src, &info, &s, &RenderRequest::fit(64, 64)).image;
-    // (8-bit output is dithered: a flat source varies by a level)
-    assert!(image.data.iter().all(|p| p.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1)));
-    for (actual, expected) in image.data[0].into_iter().zip(expected) {
-        assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {:?}, expected {expected}", image.data[0]);
+    // Ordered dithering can vary a uniform source by one quantization level.
+    for channel in 0..4 {
+        let min = image.data.iter().map(|p| p[channel]).min().unwrap();
+        let max = image.data.iter().map(|p| p[channel]).max().unwrap();
+        assert!(max - min <= 1, "chroma {chroma}: channel {channel} spans {min}..{max}");
+    }
+    for pixel in &image.data {
+        for (actual, expected) in pixel.iter().zip(expected) {
+            assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {pixel:?}, expected {expected}");
+        }
     }
 }
 
@@ -129,11 +135,11 @@ fn golden(process: ProcessVersion) -> u64 {
     h
 }
 
-/// V1 and V2 render byte for byte as they do on main before adding process V3. The hashes were captured
-/// on main at e2d18b5fb (before `light_v3`) on macOS aarch64, where they are checked: the renders
-/// call the platform's `powf` / `exp2` / `log2`, whose last bit can differ on other platforms, so
-/// elsewhere the test only prints them. Before updating them during a rebase, run this exact fixture
-/// on main and confirm that both hashes match. This PR must not change V1 or V2 rendering.
+/// V1 and V2 render byte for byte as on main. The hashes originally captured before `light_v3`
+/// at e2d18b5fb were refreshed by running this exact fixture on clean main at 56d1cc2865,
+/// after the shared 8-bit Bayer quantization change. They are checked on macOS aarch64: the
+/// renders call the platform's `powf` / `exp2` / `log2`, whose last bit can differ elsewhere.
+/// Before updating them during a rebase, run this exact fixture on main and confirm both hashes.
 #[test]
 fn v1_and_v2_render_as_before_v3() {
     let got = [golden(ProcessVersion(1)), golden(ProcessVersion(2))];
@@ -143,7 +149,7 @@ fn v1_and_v2_render_as_before_v3() {
     }
 }
 
-const GOLDEN: [u64; 2] = [0x5bf0_a7c8_579f_3f34, 0x87a3_598c_1597_9e4d];
+const GOLDEN: [u64; 2] = [0x4830_59a3_ad92_326c, 0x9653_aed0_ea32_aff3];
 
 fn on(process: Process, s: &DevelopSettings) -> DevelopSettings {
     DevelopSettings { process: process.version(), ..s.clone() }
@@ -312,8 +318,8 @@ fn v3_sliders_move_a_grey_ramp_their_way() {
         ("light.blacks", -60.0),
     ] {
         let r = shot(id, v);
-        // (within a level of 8-bit dither)
-        assert!(r.windows(2).all(|w| luma(w[1]) >= luma(w[0]) - 1), "{id} {v}: the ramp is no longer increasing");
+        // Adjacent ordered-dither thresholds can lower a sample by one 8-bit level.
+        assert!(r.windows(2).all(|w| luma(w[1]) + 1 >= luma(w[0])), "{id} {v}: the ramp decreases beyond the dither floor");
         assert!(r.iter().all(|p| p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1), "{id} {v}: the ramp is no longer grey");
         let diff = |lo: usize, hi: usize| (lo..hi).map(|x| luma(r[x]) - luma(plain[x])).sum::<i32>();
         let (dark, light) = (diff(40, 90), diff(170, 220));

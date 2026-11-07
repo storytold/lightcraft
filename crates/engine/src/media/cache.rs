@@ -307,11 +307,17 @@ impl MediaCache {
         self.source_ref_with(p, level, false)
     }
 
-    /// [`Self::source_ref`] without the photo's imported camera profile (keeping its denoised picture): a smart
-    /// preview keeps the file's own colour, and a cached source developed with the profile doesn't stand in for it.
+    /// The original without an imported camera profile, keeping denoise and hot-pixel settings.
+    /// Smart-preview builds must retry the file after reconnect, independently of cached decoded
+    /// proxies or offline availability. A cached look must never be stamped as the current fit.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn source_ref_without_profile(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        self.source_ref_for(p, level, true, None)
+        let mut source = self.origin_ref(&p.source, level.max_edge());
+        if let SourceRef::File { denoise, outliers, .. } = &mut source {
+            *outliers = p.develop.removes_hot_pixels();
+            *denoise = self.denoise.get(p.id).map(|(spec, loader)| (spec.clone(), loader.clone()));
+        }
+        source
     }
 
     fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {

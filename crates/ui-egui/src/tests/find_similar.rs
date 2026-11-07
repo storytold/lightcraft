@@ -164,6 +164,8 @@ fn stopping_leaves_the_view_alone_and_the_next_search_reads_only_the_rest() {
     assert!(h.app.ui.toast.is_none(), "{:?}", h.app.ui.toast);
     assert_eq!(drive.reads.load(Ordering::SeqCst), 1);
 
+    // The loupe can have decoded a photo meanwhile. Measure signature reuse without its pixel cache.
+    h.app.session.media.clear_sources();
     let r = h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
     assert_eq!(r["count"], PHOTOS - 1, "what was read isn't read again");
     until_done(&mut h);
