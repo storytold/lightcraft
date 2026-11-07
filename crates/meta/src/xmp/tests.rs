@@ -556,3 +556,12 @@ fn malformed_capture_time_without_fallback_is_not_projected() {
     assert_eq!(parsed.metadata.capture_time, None);
     assert_eq!(parsed.properties["exif:DateTimeOriginal"], vec!["2026-01-01T".to_string()]);
 }
+
+#[test]
+fn a_start_tag_with_thousands_of_namespace_declarations_is_refused() {
+    let decls: String = (0..2000).map(|i| format!(" xmlns:p{i}=\"urn:x{i}\"")).collect();
+    let xmp = format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description{decls} p1:a=\"1\"/></rdf:RDF></x:xmpmeta>"
+    );
+    assert!(matches!(parse_xmp(&xmp), Err(XmpError::TooComplex)));
+}

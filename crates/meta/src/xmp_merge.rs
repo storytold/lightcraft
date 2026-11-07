@@ -23,7 +23,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use quick_xml::events::Event;
 
-use crate::xmp::{MAX_OPAQUE_NAME_BYTES, XmpError, canonical_name, parse_xmp, unescape_attr};
+use crate::xmp::{MAX_OPAQUE_NAME_BYTES, XmpError, canonical_name, check_scopes, parse_xmp, unescape_attr};
 
 /// Which properties [`merge_xmp`] takes from the fresh packet. Names are canonical
 /// `prefix:name` (prefixes as [`crate::parse_xmp`] reports them); `prefix:*` is a whole namespace.
@@ -132,6 +132,7 @@ fn scan(s: &str) -> Result<Scan, XmpError> {
                     raw_attrs.push((k, v));
                 }
                 scopes.push(scope);
+                check_scopes(&scopes)?;
                 let raw_name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
                 let name = canonical_name(&raw_name, &scopes, &mut opaque_budget)?;
                 let kind = match stack.last() {
