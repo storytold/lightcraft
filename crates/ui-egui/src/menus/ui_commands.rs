@@ -83,6 +83,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.filmstrip", "Filmstrip", Some("/"), "View"),
     ("view.leftPanel", "My Photos Panel", Some("Cmd+Shift+L"), "View"),
     ("view.rightPanel", "Right Panel", None, "View"),
+    ("view.allPanels", "Hide All Panels", None, "View"),
     ("view.beforeAfter", "Before/After Side by Side", Some("Y"), "View"),
     ("view.beforeAfterSplit", "Before/After Split", Some("Shift+Y"), "View"),
     ("view.beforeAfterTopBottom", "Before/After Top/Bottom", Some("Alt+Y"), "View"),

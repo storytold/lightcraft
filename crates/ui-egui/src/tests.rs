@@ -68,6 +68,7 @@ mod missing_sweep;
 mod move_folder;
 mod offline;
 mod open_lightroom;
+mod panel_keys;
 pub(super) mod panels;
 mod preset_favorites;
 mod preset_import;

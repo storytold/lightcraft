@@ -203,6 +203,9 @@ impl LightcraftApp {
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
+            // a panel this command showed drops Hide All Panels' snapshot at once, so a batch that
+            // shows and closes a panel within one frame doesn't leave it stale
+            self.ui.forget_hidden_panels_once_shown();
             if r.is_ok() {
                 docking::reveal_command(self, id)?;
             }
