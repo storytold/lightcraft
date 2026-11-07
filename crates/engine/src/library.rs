@@ -704,6 +704,7 @@ impl Session {
             crate::cmd::previews::refresh_stale_smart_previews(self);
         }
         self.library_identity = std::sync::Arc::new(());
+        self.sync_frames = Default::default();
         // a library open is a new session for the low-disk alert: look at the drive now
         self.disk_alert.reset();
         self.check_disk_space(true);
@@ -855,6 +856,7 @@ impl Session {
         };
         if result.is_ok() {
             self.library_identity = std::sync::Arc::new(());
+            self.sync_frames = Default::default();
         }
         result
     }

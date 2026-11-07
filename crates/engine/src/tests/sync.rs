@@ -757,3 +757,101 @@ fn removing_missing_photos_takes_them_out_of_their_stacks() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(s.catalog.stack_of(b).is_some(), "one undo step puts b back in its stack");
 }
+
+#[test]
+fn review_synchronize_keeps_new_photo_import_warnings() {
+    let dir = Scratch::new("review-import-warnings");
+    let mut s = library(&dir);
+    let path = dir.path("trip/new.png");
+    write_png(&path, 3);
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:UprightVersion="151388160" crs:UprightCenterMode="0" crs:UprightFocalMode="0" crs:UprightPreview="False" crs:UprightTransformCount="1" crs:UprightFourSegmentsCount="0" crs:UprightTransform_0="unsupported" crs:PerspectiveUpright="1"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(Path::new(&path).with_extension("xmp"), xmp).unwrap();
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let report = crate::sync::synchronize(&mut s, changes, Default::default()).unwrap();
+    assert_eq!(report.imported, 1);
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert!(report.warnings.iter().any(|w| w.path == path && w.code == crate::import::ImportWarningCode::UprightGeometry), "{report:?}");
+}
+
+#[test]
+fn review_a_sidecar_that_cannot_be_applied_reports_no_warnings() {
+    let dir = Scratch::new("review-unapplied-warnings");
+    let mut s = library(&dir);
+    write_png(&dir.path("trip/c.png"), 3);
+    let (_, mut commit) = readied(&mut s, &dir, Default::default());
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:UprightVersion="151388160" crs:UprightCenterMode="0" crs:UprightFocalMode="0" crs:UprightPreview="False" crs:UprightTransformCount="1" crs:UprightFourSegmentsCount="0" crs:UprightTransform_0="unsupported" crs:PerspectiveUpright="1"/></rdf:RDF></x:xmpmeta>"#;
+    let a = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap();
+    let sc = crate::sidecar::parse_sidecar(xmp, crate::crs::Target::for_photo(a)).unwrap();
+    assert!(!sc.warnings.is_empty(), "the packet warns about its Upright geometry");
+    // a photo that is gone by the time the step lands (sidecar_op fails for it)
+    let gone = lightcraft_catalog::PhotoId(u64::MAX);
+    let path = dir.path("trip/gone.png");
+    commit.apply(&mut s, crate::sync::SyncStep::Sidecars(vec![(gone, path.clone(), Ok(sc))]));
+    let r = commit.finish(&mut s);
+    assert!(r.failed.iter().any(|(p, _)| *p == path), "{r:?}");
+    assert!(r.warnings.iter().all(|w| w.path != path), "no warnings for metadata that never landed: {r:?}");
+}
+
+#[test]
+fn review_synchronize_reuses_only_unchanged_photo_frame_probes() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for changed in [false, true] {
+        let dir = Scratch::new(if changed { "review-frame-changed" } else { "review-frame-reuse" });
+        let mut s = library(&dir);
+        let path = dir.path("trip/a.png");
+        let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:HasCrop="True" crs:CropLeft="0.1" crs:CropRight="0.6" crs:CropTop="0.2" crs:CropBottom="0.9"/></rdf:RDF></x:xmpmeta>"#;
+        std::fs::write(Path::new(&path).with_extension("xmp"), xmp).unwrap();
+        let count = Arc::new(AtomicUsize::new(0));
+        let calls = count.clone();
+        let probe = s.media.frame_probe.take().unwrap();
+        s.media.frame_probe = Some(Arc::new(move |p| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            probe(p)
+        }));
+        let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+        assert_eq!(changes.metadata.len(), 1);
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+        if changed {
+            let file = std::fs::File::options().write(true).open(&path).unwrap();
+            let modified = file.metadata().unwrap().modified().unwrap();
+            file.set_modified(modified + Duration::from_secs(1)).unwrap();
+        }
+        let report = crate::sync::synchronize(&mut s, changes, crate::sync::SyncChoice { read_metadata: true, ..Default::default() }).unwrap();
+        assert_eq!(report.read, 1, "{report:?}");
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert_eq!(count.load(Ordering::Relaxed), if changed { 2 } else { 1 });
+    }
+}
+
+#[test]
+fn review_pending_crop_scans_reuse_the_unchanged_file_frame() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let dir = Scratch::new("review-pending-crop");
+    let mut s = library(&dir);
+    let path = dir.path("trip/a.png");
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:HasCrop="True" crs:CropLeft="0.1" crs:CropRight="0.6" crs:CropTop="0.2" crs:CropBottom="0.9"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(Path::new(&path).with_extension("xmp"), xmp).unwrap();
+    let count = Arc::new(AtomicUsize::new(0));
+    let calls = count.clone();
+    let probe = s.media.frame_probe.take().unwrap();
+    s.media.frame_probe = Some(Arc::new(move |p| {
+        calls.fetch_add(1, Ordering::Relaxed);
+        probe(p)
+    }));
+    for _ in 0..3 {
+        let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+        assert_eq!(changes.metadata.len(), 1);
+    }
+    assert_eq!(count.load(Ordering::Relaxed), 1);
+    let file = std::fs::File::options().write(true).open(&path).unwrap();
+    let modified = file.metadata().unwrap().modified().unwrap();
+    file.set_modified(modified + Duration::from_secs(1)).unwrap();
+    crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+}

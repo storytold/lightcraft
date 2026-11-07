@@ -342,6 +342,15 @@ impl Orientation {
         // flipH ∘ rot(t) = rot(-t) ∘ flipH
         Orientation::from_parts(!f, (4 - t) % 4)
     }
+    /// This orientation, then `next` applied to its result (`a.then(b).map(p) == b.map(a.map(p))`,
+    /// each with its own image size): e.g. a file's EXIF orientation, then the user's Rotate Right.
+    pub fn then(self, next: Orientation) -> Orientation {
+        let (f1, t1) = self.to_parts();
+        let (f2, t2) = next.to_parts();
+        // a flip reverses the turns before it: F·R^t = R^-t·F
+        let turns = if f2 { (4 + t2 - t1 % 4) % 4 } else { (t1 + t2) % 4 };
+        Orientation::from_parts(f1 != f2, turns)
+    }
     /// The orientation that undoes this one (`o.inverse().map(o.map(p)) == p`). Flips and half turns
     /// are their own inverses; quarter turns swap.
     pub fn inverse(self) -> Orientation {
@@ -442,6 +451,24 @@ mod tests {
         assert_eq!(Orientation::Normal.rotated(false), Orientation::Rotate270);
         assert_eq!(Orientation::Normal.flipped_h(), Orientation::FlipH);
         assert_eq!(Orientation::Rotate90.flipped_h().flipped_h(), Orientation::Rotate90);
+    }
+
+    #[test]
+    fn orientations_compose() {
+        let (w, h) = (4.0, 2.0);
+        for a in 1..=8 {
+            for b in 1..=8 {
+                let (a, b) = (Orientation::from_exif(a), Orientation::from_exif(b));
+                let ab = a.then(b);
+                let (aw, ah) = if a.swaps_axes() { (h, w) } else { (w, h) };
+                for (x, y) in [(0.0, 0.0), (1.0, 0.5), (3.5, 1.5), (4.0, 2.0)] {
+                    let (u, v) = a.map(x, y, w, h);
+                    assert_eq!(b.map(u, v, aw, ah), ab.map(x, y, w, h), "{a:?} then {b:?}");
+                }
+            }
+        }
+        assert_eq!(Orientation::Rotate270.then(Orientation::Rotate90), Orientation::Normal);
+        assert_eq!(Orientation::Rotate90.then(Orientation::Normal.flipped_h()), Orientation::Rotate90.flipped_h());
     }
 
     #[test]
