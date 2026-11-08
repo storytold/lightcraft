@@ -376,7 +376,10 @@ fn chromaticity_class(p: [f64; 3]) -> usize {
 /// share with the highest rank correlation of luminance. A camera's rendering also brightens or darkens some hues
 /// more than others, and where those hues gather toward the corners (a blue sky above, a darker foreground), the
 /// ranks across hues would read that as vignetting: the correlation is taken within classes of similar sensor
-/// chromaticity ([`chromaticity_class`]), averaged by their pixel counts. Clipped and non-finite pixels are left out.
+/// chromaticity ([`chromaticity_class`]), averaged by their pixel counts. Within a class the camera's rendering is
+/// taken as alike: two saturations of one hue that it renders differently, one gathered toward the corners, can still
+/// read as vignetting. Clipped, black and non-finite pixels are left out. Proxies of different sizes, or fewer than
+/// [`MIN_VIGNETTING_PIXELS`] usable pixels, keep the whole correction.
 pub(super) fn camera_vignetting_amount(
     sensor: &Rgb32f,
     reference: &Rgb32f,
