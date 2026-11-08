@@ -876,6 +876,28 @@ fn on_macos_the_window_full_screen_row_flips_its_label_and_takes_the_system_key(
     assert_eq!(window_full_screen_row(&a), ("Exit Full Screen".into(), Some("Ctrl+Cmd+F".into()), None));
 }
 
+/// Given a non-English language, When the window is full screen, Then the macOS row's label is the
+/// message key "Exit Full Screen" and the menu shows its translation, as for every other row
+/// ([`display_item_label`] translates what [`live_label`] returns).
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_the_exit_full_screen_row_is_shown_in_the_users_language() {
+    struct RestoreLanguage(crate::i18n::Locale);
+    impl Drop for RestoreLanguage {
+        fn drop(&mut self) {
+            crate::i18n::set_language(self.0);
+        }
+    }
+    let _restore = RestoreLanguage(crate::i18n::language());
+    let mut a = app();
+    a.window_is_fullscreen = true;
+    let (label, ..) = window_full_screen_row(&a);
+    crate::i18n::set_language(crate::i18n::Locale::De);
+    let shown = display_item_label("view.enterFullScreen", &Value::Null, &label);
+    assert_eq!(shown, crate::i18n::Locale::De.tr("Exit Full Screen"));
+    assert_ne!(shown, "Exit Full Screen", "the German catalog translates it");
+}
+
 /// Given the in-window menu of Windows and Linux, Then the row keeps its label, its ⇧Ctrl+F key
 /// and its check mark.
 #[cfg(not(target_os = "macos"))]
