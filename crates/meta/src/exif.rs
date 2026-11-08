@@ -801,6 +801,46 @@ pub(crate) mod tests {
         );
     }
 
+    /// Writer rounding carries through minute and degree boundaries without emitting a 60 component.
+    #[test]
+    fn exif_gps_writer_rounds_before_splitting_dms() {
+        let minute_carry = 12.0 + 59.9996 / 3600.0;
+        let degree_carry = 45.0 + 59.0 / 60.0 + 59.9996 / 3600.0;
+        let bytes =
+            write_exif(&Metadata { gps: Some(Gps { latitude: degree_carry, longitude: minute_carry, altitude: None }), ..Default::default() });
+
+        let tiff = Tiff::parse(&bytes).expect("writer emits a valid TIFF stream");
+        let gps = tiff.gps().expect("valid coordinates are written");
+        let Value::Rational(latitude) = gps.value(t::GPS_LATITUDE).expect("latitude is present") else { panic!("latitude must be rational") };
+        let Value::Rational(longitude) = gps.value(t::GPS_LONGITUDE).expect("longitude is present") else { panic!("longitude must be rational") };
+        assert_eq!(latitude, &[(46, 1), (0, 1), (0, 1000)]);
+        assert_eq!(longitude, &[(12, 1), (1, 1), (0, 1000)]);
+        for components in [latitude, longitude] {
+            assert!(components.get(1).is_some_and(|(minutes, _)| *minutes < 60));
+            assert!(components.get(2).is_some_and(|(seconds, denominator)| *seconds < 60 * denominator));
+        }
+        let round_trip = read_exif(&bytes).gps.expect("rounded output remains readable");
+        assert_eq!(round_trip.latitude, 46.0);
+        assert!((round_trip.longitude - (12.0 + 1.0 / 60.0)).abs() < 1e-10);
+    }
+
+    /// Direct TIFF sources without a container EXIF block use their own GPS IFD for the privacy check.
+    #[test]
+    fn source_exif_gps_guard_checks_whole_file_tiff() {
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("Procedural camera".into()));
+        let without_gps = TiffWriter::default().write(&[ifd0]).unwrap();
+
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (0, 1), (0, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::GPS_IFD, gps);
+        let with_gps = TiffWriter::default().write(&[ifd0]).unwrap();
+
+        assert!(!source_embeds_exif_gps_location(&without_gps));
+        assert!(source_embeds_exif_gps_location(&with_gps));
+    }
+
     #[test]
     fn exif_prefix_and_garbage() {
         let mut b = b"Exif\0\0".to_vec();
@@ -847,6 +887,20 @@ fn reciprocal(v: Option<f64>) -> Option<lightcraft_tiff::Value> {
     let v = v.filter(|v| v.is_finite() && *v > 0.0 && *v < 1.0)?;
     let inv = 1.0 / v;
     ((inv - inv.round()).abs() < 1e-6 && inv.round() <= u32::MAX as f64).then(|| lightcraft_tiff::Value::Rational(vec![(1, inv.round() as u32)]))
+}
+
+/// Convert a valid decimal coordinate to DMS, rounding total milliseconds before splitting so
+/// rounding carries cannot emit 60 seconds or minutes.
+fn gps_dms(value: f64, max_degrees: u32) -> Option<lightcraft_tiff::Value> {
+    let magnitude = value.abs();
+    if !magnitude.is_finite() || magnitude > f64::from(max_degrees) {
+        return None;
+    }
+    let total_millis = (magnitude * 3_600_000.0).round() as u64;
+    let degrees = (total_millis / 3_600_000) as u32;
+    let minutes = ((total_millis % 3_600_000) / 60_000) as u32;
+    let seconds_millis = (total_millis % 60_000) as u32;
+    Some(lightcraft_tiff::Value::Rational(vec![(degrees, 1), (minutes, 1), (seconds_millis, 1000)]))
 }
 
 /// Serialise the interchange subset of `meta` as a TIFF-structured Exif block (little-endian, no
@@ -904,20 +958,15 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
         }
     }
     ifd0.set_child(t::EXIF_IFD, ex);
-    if let Some(g) = meta.gps {
-        let dms = |v: f64| {
-            let v = v.abs();
-            let d = v.floor();
-            let m = ((v - d) * 60.0).floor();
-            let s = (v - d - m / 60.0) * 3600.0;
-            Value::Rational(vec![(d as u32, 1), (m as u32, 1), ((s * 1000.0).round() as u32, 1000)])
-        };
+    if let Some(g) = meta.gps
+        && let (Some(latitude), Some(longitude)) = (gps_dms(g.latitude, 90), gps_dms(g.longitude, 180))
+    {
         let mut gps = IfdBuilder::new();
         gps.set(t::GPS_VERSION_ID, Value::Byte(vec![2, 3, 0, 0]));
         gps.set(t::GPS_LATITUDE_REF, Value::Ascii(if g.latitude < 0.0 { "S" } else { "N" }.into()));
-        gps.set(t::GPS_LATITUDE, dms(g.latitude));
+        gps.set(t::GPS_LATITUDE, latitude);
         gps.set(t::GPS_LONGITUDE_REF, Value::Ascii(if g.longitude < 0.0 { "W" } else { "E" }.into()));
-        gps.set(t::GPS_LONGITUDE, dms(g.longitude));
+        gps.set(t::GPS_LONGITUDE, longitude);
         if let Some(a) = g.altitude {
             gps.set(t::GPS_ALTITUDE_REF, Value::Byte(vec![u8::from(a < 0.0)]));
             gps.set(t::GPS_ALTITUDE, Value::Rational(vec![rational(a.abs())]));

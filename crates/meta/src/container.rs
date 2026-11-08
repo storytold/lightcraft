@@ -676,6 +676,44 @@ mod tests {
         let no_gps = [exif(false), exif(false)];
         assert!(!crate::source_embeds_exif_gps_location(&png(&no_gps)));
         assert!(!crate::source_embeds_exif_gps_location(&webp(&no_gps)));
+
+        let truncated_png = b"\x89PNG\r\n\x1a\n\0\0\0\x08eXIf".to_vec();
+        assert!(crate::source_embeds_exif_gps_location(&truncated_png), "truncated PNG chunk fails closed");
+        let mut missing_iend = png(&[exif(false)]);
+        missing_iend.truncate(missing_iend.len().saturating_sub(12));
+        assert!(crate::source_embeds_exif_gps_location(&missing_iend), "missing PNG IEND fails closed");
+        let mut invalid_iend = png(&[exif(false)]);
+        let iend_length = invalid_iend.len().saturating_sub(12);
+        invalid_iend[iend_length..iend_length + 4].copy_from_slice(&1u32.to_be_bytes());
+        assert!(crate::source_embeds_exif_gps_location(&invalid_iend), "nonempty PNG IEND fails closed");
+        let mut trailing_png = png(&[exif(false)]);
+        trailing_png.push(0);
+        assert!(crate::source_embeds_exif_gps_location(&trailing_png), "data after PNG IEND fails closed");
+
+        let mut riff_mismatch = webp(&[exif(false)]);
+        let declared_riff_size = u32::from_le_bytes(riff_mismatch[4..8].try_into().unwrap_or([0; 4]));
+        riff_mismatch[4..8].copy_from_slice(&declared_riff_size.saturating_add(1).to_le_bytes());
+        assert!(crate::source_embeds_exif_gps_location(&riff_mismatch), "WebP RIFF size mismatch fails closed");
+        let mut odd_chunk_without_padding = b"RIFF\0\0\0\0WEBPEXIF\x01\0\0\0x".to_vec();
+        let riff_size = u32::try_from(odd_chunk_without_padding.len().saturating_sub(8)).unwrap_or(u32::MAX);
+        odd_chunk_without_padding[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        assert!(crate::source_embeds_exif_gps_location(&odd_chunk_without_padding), "missing odd-size WebP padding fails closed");
+    }
+
+    /// Malformed JPEG marker streams fail closed; SOS and EOI without GPS terminate the metadata scan.
+    #[test]
+    fn jpeg_gps_guard_fails_closed_on_malformed_segments() {
+        let malformed = [
+            ("truncated segment", vec![0xff, 0xd8, 0xff, 0xe1, 0, 8]),
+            ("invalid segment length", vec![0xff, 0xd8, 0xff, 0xe1, 0, 1]),
+            ("missing marker", vec![0xff, 0xd8, 0]),
+        ];
+        for (name, bytes) in malformed {
+            assert!(crate::source_embeds_exif_gps_location(&bytes), "{name} must fail closed");
+        }
+        for (name, bytes) in [("SOS", vec![0xff, 0xd8, 0xff, 0xda, 0, 2]), ("EOI", vec![0xff, 0xd8, 0xff, 0xd9])] {
+            assert!(!crate::source_embeds_exif_gps_location(&bytes), "{name} without GPS ends the scan");
+        }
     }
 
     #[test]

@@ -829,7 +829,7 @@ fn remove_location_refuses_original_with_embedded_place_names() {
         };
         assert_eq!(place_name, Some(value), "{name} fixture should be parsed");
         let error = export_photo(&mut session, photo_id, &options, 1).err().expect("embedded place name should refuse Original export");
-        assert!(error.contains("place names") && error.contains("export as JPEG or TIFF"), "{name}: {error}");
+        assert!(error.contains("can't remove the location") && error.contains("export as JPEG or TIFF"), "{name}: {error}");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -883,7 +883,7 @@ fn remove_location_original_place_refusal_writes_no_files() {
     let result = run_batch(items, &options, &destination, &mut write, &exists, true, &mut |_, _| true);
 
     let error = result.unwrap_err();
-    assert!(error.contains("place names"), "{error}");
+    assert!(error.contains("can't remove the location"), "{error}");
     assert!(writes.is_empty(), "refused export called the writer: {writes:?}");
     assert!(!output.join("City.jpg").exists());
     assert!(!output.join("City.xmp").exists());
@@ -907,7 +907,7 @@ fn remove_location_checks_embedded_places_after_catalog_clear() {
 
     let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
     let error = export_photo(&mut session, id, &options, 1).err().expect("embedded place name should refuse Original export");
-    assert!(error.contains("place names"), "{error}");
+    assert!(error.contains("can't remove the location"), "{error}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

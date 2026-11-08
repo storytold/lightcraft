@@ -176,11 +176,11 @@ fn original_folder(source: &lightcraft_catalog::Source) -> Option<String> {
     (!dir.is_empty()).then_some(dir)
 }
 
-/// Whether the source's parsed EXIF GPS IFD contains location-bearing tags. This complements
-/// `Metadata::gps`: invalid coordinate subdivisions are intentionally not projected as a typed
-/// location, but an Original copy would still preserve those source tags unchanged.
+/// Whether source EXIF may contain location data or cannot be verified. This complements
+/// `Metadata::gps`: malformed coordinates are not projected, but an Original copy would still
+/// preserve their source bytes unchanged.
 fn original_embeds_exif_gps(bytes: &[u8]) -> bool {
-    lightcraft_meta::embedded(bytes).exif.as_deref().is_some_and(lightcraft_meta::exif_embeds_gps_location)
+    lightcraft_meta::source_embeds_exif_gps_location(bytes)
 }
 
 /// Why an export of `out` pixels (`w`, `h`), from a photo of `native_px` pixels at its own size,
@@ -258,7 +258,7 @@ impl PreparedExport {
                                 .any(|value| !value.trim().is_empty());
                         if metadata.gps.is_some() || original_embeds_exif_gps(&bytes) || embeds_place_name {
                             return Err(format!(
-                                "{label}: can't remove the location from an original file that embeds GPS or place names; export as JPEG or TIFF, or as DNG for a raw photo"
+                                "{label}: can't remove the location from an original file that may contain location data, or whose location data could not be verified; export as JPEG or TIFF, or as DNG for a raw photo"
                             ));
                         }
                     }
