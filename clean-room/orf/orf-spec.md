@@ -102,13 +102,16 @@ Using the current Golomb-Rice parameter $k \in [0, k_{max}]$:
 
 ## 5. Context Adaptation & Rice Parameter $k$
 
-At the beginning of each row, local context tracking state is reset:
-- Preceding magnitude $M_{prev} = 0$.
-- Flatness history delay registers $C_{flat}[0..3] = 0$.
+Because the Bayer CFA arranges identical color filters at 2-photosite horizontal strides, context adaptation maintains a two-position magnitude history $(M_{pipe}[0], M_{pipe}[1])$ corresponding to $(x - 2, x - 1)$:
+- At the start of each row, local context tracking state is reset:
+  - Magnitude delay pipeline registers: $M_{pipe}[0] = 0, M_{pipe}[1] = 0$.
+  - Flatness history delay registers: $C_{flat}[0..3] = 0$.
 
-For each column $x$ in row $y$:
-1. Save previous magnitude: $p = M_{prev}$.
-2. Store current pixel's magnitude for next step: $M_{prev} = M$.
+For each column $x$ in row $y$, prior to entropy decoding the photosite's symbol:
+1. Retrieve preceding same-Bayer-channel magnitude:
+   $$p = M_{pipe}[0]$$
+2. Shift the two-position magnitude pipeline:
+   $$M_{pipe}[0] \leftarrow M_{pipe}[1]$$
 3. If $x > 1$:
    - Check flatness condition: if $p \le 2^{T_{flat}}$, increment flat count:
      $$sel = C_{flat}[3] + 1$$
@@ -127,6 +130,9 @@ For each column $x$ in row $y$:
    - Clamp $k = \min(k_{cand}, k_{max})$.
 4. If $x \le 1$:
    - Set $k = B_0$.
+5. After calculating $k$, entropy-decode the current symbol per Section 4 to obtain magnitude $M$ and signed residual $\Delta$.
+6. Store current magnitude into the delay pipeline for subsequent steps:
+   $$M_{pipe}[1] \leftarrow M$$
 
 ---
 
@@ -165,7 +171,9 @@ The directional predicted baseline $\hat{P}$ is selected as:
 
 ### Step 7.1: Sub-Bit Adjustment
 If $S_R > 0$:
-- Let $v$ be the feedback predictor: $v = 0$ if $x < 2$, else previous feedback value $v_{pred}$.
+- To match identical Bayer color positions, feedback predictor values are delayed by two photosites using a two-stage shift register $(v_{pipe}[0], v_{pipe}[1])$:
+  - At the start of each row: $v_{pipe}[0] = 0, v_{pipe}[1] = 0$.
+  - Let feedback predictor $v = 0$ if $x < 2$, else $v = v_{pipe}[0]$ (retaining feedback from two photosites earlier).
 - Let sum $s = v + \Delta$.
 - If $S_R == 1$:
   $$\Delta_{adj} = u_{sub} + 2 \cdot s$$
@@ -173,7 +181,9 @@ If $S_R > 0$:
 - If $S_R == 2$:
   $$\Delta_{adj} = u_{sub} + 4 \cdot s$$
   $$v_{res} = ((\Delta_{adj} \gg 1) \ \& \ \sim 1) + v + (\Delta_{adj} \gg 2)$$
-- Update feedback register: $v_{pred} \leftarrow v_{res} \gg D_{fb}$.
+- Shift and update feedback pipeline:
+  $$v_{pipe}[0] \leftarrow v_{pipe}[1]$$
+  $$v_{pipe}[1] \leftarrow v_{res} \gg D_{fb}$$
 If $S_R == 0$:
 - $\Delta_{adj} = \Delta$.
 
