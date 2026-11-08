@@ -46,6 +46,84 @@ fn mouse_back_and_forward_buttons_step_through_the_photos() {
     assert_eq!(h.app.session.active(), Some(first));
 }
 
+/// Whatever keeps the arrow keys keeps the buttons too: a notice such as the quit prompt, the
+/// blocking library window, shortcut recording and a text field with the keyboard. Each case is
+/// checked with the buttons doing nothing while it holds, then stepping again once it is gone, so
+/// the case really was in force when the button was pressed (issue #3303).
+#[test]
+fn whatever_keeps_the_arrow_keys_keeps_the_buttons() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    let ids = h.app.session.visible_cloned();
+    let first = ids[2];
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [first.0], "active": first.0}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.active(), Some(first));
+    // with nothing in the way Forward steps on and Back comes back, so each case below starts on `first`
+    let steps_again = |h: &mut Headless, case: &str| {
+        press(h, egui::PointerButton::Extra2);
+        assert_ne!(h.app.session.active(), Some(first), "{case}: once it is gone, Forward steps again");
+        press(h, egui::PointerButton::Extra1);
+        assert_eq!(h.app.session.active(), Some(first), "{case}: and Back comes back");
+    };
+
+    // a notice: the quit prompt owns every key
+    h.app.quit_prompt = Some(crate::QuitPrompt::Tasks("1 task is still running: Import. Quitting stops it.".into()));
+    h.settle(SETTLE);
+    assert!(crate::panels::notices::blocks_input(&h.app));
+    for button in [egui::PointerButton::Extra2, egui::PointerButton::Extra1] {
+        press(&mut h, button);
+        assert_eq!(h.app.session.active(), Some(first), "the quit prompt keeps {button:?}");
+    }
+    h.app.quit_prompt = None;
+    h.settle(SETTLE);
+    steps_again(&mut h, "quit prompt");
+
+    // the blocking library window (here the launch list)
+    h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem::choose_later(&h.app.ui.settings));
+    h.settle(SETTLE);
+    assert!(crate::panels::library_problem::blocks_dialog_input(&h.app));
+    for button in [egui::PointerButton::Extra2, egui::PointerButton::Extra1] {
+        press(&mut h, button);
+        assert_eq!(h.app.session.active(), Some(first), "the library window keeps {button:?}");
+    }
+    h.app.library_problem = None;
+    h.settle(SETTLE);
+    steps_again(&mut h, "library window");
+
+    // shortcut recording, in the Keyboard Shortcuts window
+    h.app.run("app.shortcuts", json!({})).unwrap();
+    h.settle(SETTLE);
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)));
+    h.app.recording_shortcut = Some("view.survey".into());
+    for button in [egui::PointerButton::Extra2, egui::PointerButton::Extra1] {
+        press(&mut h, button);
+        assert_eq!(h.app.session.active(), Some(first), "shortcut recording keeps {button:?}");
+        assert!(h.app.recording_shortcut.is_some(), "{button:?} does not end the recording");
+    }
+    h.app.recording_shortcut = None;
+    h.app.ui.dialog = None;
+    h.settle(SETTLE);
+    steps_again(&mut h, "shortcut recording");
+
+    // a text field with the keyboard: the search field
+    h.app.ui.focus_search = true;
+    h.settle(SETTLE);
+    let search = crate::text_field::id("field:search");
+    assert!(h.view.ctx.memory(|m| m.has_focus(search)), "the search field has the keyboard");
+    for button in [egui::PointerButton::Extra2, egui::PointerButton::Extra1] {
+        press(&mut h, button);
+        assert_eq!(h.app.session.active(), Some(first), "a focused text field keeps {button:?}");
+        assert!(h.view.ctx.memory(|m| m.has_focus(search)), "{button:?} leaves the search field focused");
+    }
+    h.view.ctx.memory_mut(|m| m.surrender_focus(search));
+    h.settle(SETTLE);
+    steps_again(&mut h, "text field");
+}
+
 /// Each press steps once, in the order pressed, also when several arrive in one frame's input
 /// (a fast double press, or a frame that took long): two Forward presses show the photo two
 /// on, and on the last photo Forward (which stays there) then Back shows the one before it

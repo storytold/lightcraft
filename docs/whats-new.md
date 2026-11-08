@@ -1,14 +1,12 @@
 # What's new in LightCraft
 
-## 2026-10-29
+## Unreleased
 
 ### The mouse's Back and Forward buttons go to the previous and next photo
 - The side buttons of a mouse now do what ← and → do: Forward shows the next photo and Back the previous one, in
   Loupe and Develop as in the grids and slideshows. Before, LightCraft ignored them. Like the arrow keys, they do
   nothing while a dialog or a text field has the keyboard. Pressed over a slider or another control, they only
   change the photo: the control under the pointer is left as it was.
-
-## Unreleased
 
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
@@ -350,6 +348,7 @@
   about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
+
 
 ## 2026-10-24
 
