@@ -233,10 +233,13 @@ impl ImmichImportJob {
     }
 
     /// What the session needs to commit the batch the worker readied: the options the import
-    /// runs with, its timestamp, and the album the run joins.
-    pub fn commit_parts(&self) -> (crate::import::ImportOptions, String, Option<u64>, Option<String>) {
-        let phase = self.commit.as_ref().expect("the commit is running");
-        (phase.opts.clone(), phase.now.clone(), self.album, self.album_name.clone())
+    /// runs with, its timestamp, and the album the run joins. Missing when the commit worker is
+    /// not running — a session should not be asking.
+    pub fn commit_parts(&self) -> crate::Result<(crate::import::ImportOptions, String, Option<u64>, Option<String>)> {
+        let Some(phase) = self.commit.as_ref() else {
+            return Err(crate::EngineError::Other("the Immich import's commit is not running".into()));
+        };
+        Ok((phase.opts.clone(), phase.now.clone(), self.album, self.album_name.clone()))
     }
 
     /// The commit worker's outcome, once it is in (the session commits the batch — the catalog

@@ -287,12 +287,7 @@ fn effect_index(s: &Session, name: &str, c: &str) -> Result<usize> {
 /// The selected mask's adjustments on the active photo.
 fn selected_mask(s: &Session, p: &Value, c: &str) -> Result<Mask> {
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
-    let mid = p
-        .get("id")
-        .and_then(Value::as_u64)
-        .and_then(|v| u32::try_from(v).ok())
-        .or(s.active_mask)
-        .ok_or_else(|| bad(c, "no mask selected (give `id`)"))?;
+    let mid = super::masks::mask_id(p, s.active_mask, c)?;
     let d = s.develop_of(id).unwrap_or_default();
     d.masks.iter().find(|m| m.id == mid).cloned().ok_or_else(|| bad(c, format!("no mask {mid}")))
 }
@@ -341,10 +336,12 @@ fn apply_effect(s: &mut Session, p: &Value) -> Result<Value> {
     // the masks: `ids`, `all`, else `id` or the selected one
     let ids: Vec<u32> = if p.get("all").and_then(Value::as_bool).unwrap_or(false) {
         d.masks.iter().map(|m| m.id).collect()
-    } else if let Some(a) = p.get("ids").and_then(Value::as_array) {
-        a.iter().filter_map(Value::as_u64).filter_map(|v| u32::try_from(v).ok()).collect()
     } else {
-        vec![selected_mask(s, p, C)?.id]
+        match p.get("ids") {
+            None | Some(Value::Null) => vec![selected_mask(s, p, C)?.id],
+            Some(Value::Array(a)) => a.iter().map(|v| super::masks::parse_mask_id(v, C)).collect::<Result<_>>()?,
+            Some(_) => return Err(bad(C, "`ids` must be a list of mask IDs")),
+        }
     };
     if ids.is_empty() {
         return Err(bad(C, "no masks to apply the effect to"));

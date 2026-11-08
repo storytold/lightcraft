@@ -1,0 +1,35 @@
+{
+  "id": "lightcraft",
+  "name": "LightCraft",
+  "upgradeCode": "229BB552-5EFD-479A-BA86-8CB6D926390C",
+  "sources": [
+    "lightcraft.wxs"
+  ],
+  "icon": "assets/app-icon/lightcraft.ico",
+  "localization": [],
+  "extensions": [
+    "UI",
+    "Util"
+  ],
+  "payloads": [
+    "FONT-LICENCES.txt",
+    "NOTICE",
+    "lightcraft-cli.exe",
+    "lightcraft.exe"
+  ],
+  "registry": [
+    [
+      "-1",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\lightcraft.exe",
+      "",
+      "[#LightcraftExe]"
+    ],
+    [
+      "-1",
+      "Software\\LightCraft",
+      "InstallFolder",
+      "[INSTALLFOLDER]"
+    ]
+  ],
+  "mode": "dualScope"
+}

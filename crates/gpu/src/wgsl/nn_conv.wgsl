@@ -27,7 +27,8 @@ struct P {
     cout: u32,
     leaky: u32,
     alpha: f32,
-    pad: u32,
+    // always 0: the output stores step by 1u + zero, see the end of main
+    zero: u32,
 }
 
 @group(0) @binding(0) var<uniform> p: P;
@@ -122,6 +123,11 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
         return;
     }
     let bv = bias[n / 4u];
+    // Four channels that follow each other are stored one by one, `one` apart. With a literal 1u, FXC
+    // (DX12) merges them into one 16-byte store, and NVIDIA's DX12 driver ran mode 0's wrong on a
+    // GTX 1070: every second pixel's channels came out shifted. Mode 1's merged store ran right
+    // there, but it is the same instruction, so it steps the same way. FXC cannot see that `one` is 1.
+    let one = 1u + p.zero;
     for (var i = 0u; i < 4u; i++) {
         let m = m0 + ty * 4u + i;
         if (m >= hw) {
@@ -135,9 +141,9 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
         if (p.mode == 0u) {
             let o = m * p.n + n;
             dst[o] = v.x;
-            dst[o + 1u] = v.y;
-            dst[o + 2u] = v.z;
-            dst[o + 3u] = v.w;
+            dst[o + one] = v.y;
+            dst[o + 2u * one] = v.z;
+            dst[o + 3u * one] = v.w;
         } else if (p.mode == 1u) {
             let q = n / p.cout;
             let co = n % p.cout;
@@ -146,9 +152,9 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
             let opix = (2u * y + q / 2u) * (2u * p.w) + 2u * x + q % 2u;
             let o = opix * p.cout + co;
             dst[o] = v.x;
-            dst[o + 1u] = v.y;
-            dst[o + 2u] = v.z;
-            dst[o + 3u] = v.w;
+            dst[o + one] = v.y;
+            dst[o + 2u * one] = v.z;
+            dst[o + 3u * one] = v.w;
         } else {
             let c = n / 4u;
             let y = m / p.w;

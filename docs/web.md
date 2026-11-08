@@ -111,7 +111,9 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     grant it, a notice says the library may be evicted under storage pressure.
   - **File ▸ Back Up Library…** downloads a zip of the library files and every stored original
     (`originals/<hash>/<file name>`, so an unzipped backup is browsable; entries are stored, not
-    compressed; at most 4 GB). **File ▸ Restore Library from Backup…** reads such a zip into a
+    compressed; at most 4 GB). While a save is failing it refuses to start and says how many
+    changes are unsaved and why: the zip copies the stored library files, so it would miss them
+    (issue #1508). **File ▸ Restore Library from Backup…** reads such a zip into a
     new library folder (`library-restored-<time>/`; originals already stored are skipped, every
     entry's checksum is verified, and each restored original must match its content hash) and
     only then switches to it (`active-library` names the folder in use) and reloads: the previous
@@ -121,6 +123,11 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     writes, so commands report `saved in memory but not written`, the top bar shows the unsaved
     warning (as on the desktop, see `docs/control-protocol.md`), and saving is retried every
     2 s until it works (`web.stats` → `saveError`).
+  - A failed read at start-up is not taken for a missing file: only `NotFoundError` means absent.
+    When a stored library file (or the `active-library` pointer) exists but can't be read, the
+    library isn't opened and nothing is saved, so the stored copy stays as it was; the window says
+    which file failed (issue #1507). A thumbnail index that can't be read keeps the stored
+    thumbnails instead of deleting them as unindexed.
   - A picked or dropped photo whose bytes can't be stored is not added (it would be gone after
     a reload); a notice says why.
   - One tab at a time: the page holds a Web Lock (`navigator.locks`, `lightcraft-library`); a
@@ -131,7 +138,7 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
     is saved; the stored library is left as it was.
   - A panic (wasm is built with `panic = "abort"`) replaces the page with a message saying the
     stored library is kept and to reload, instead of a frozen canvas.
-- **Importing photos with no filesystem.** *File ▸ Import Photos…* (<kbd>⌘⇧I</kbd>) opens the
+- **Importing photos with no filesystem.** *File ▸ Import Photos…* (<kbd>⇧⌘I</kbd>) opens the
   browser's file picker. You can also drop files anywhere on the page. The bytes are written to
   storage, then imported and decoded by the same engine code as the desktop app
   (`lightcraft_engine::files::{probe_bytes, load_bytes}`): JPEG/PNG/TIFF/WebP and the supported
@@ -146,12 +153,45 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   threads or `SharedArrayBuffer`. If no worker starts, rendering falls back to the main thread.
 - **Every develop control** (sliders, curves, mixer, grading, masking, crop…) works as it does
   on the desktop, since it's the same crate.
-- **Export downloads the file.** *Export…* (<kbd>⌘⇧E</kbd>) runs the same `app.export` path as
+- **Export downloads the file.** *Export…* (<kbd>⇧⌘E</kbd>) runs the same `app.export` path as
   the desktop app (`lightcraft_engine::export`: JPEG/PNG/TIFF/WebP, sizing, naming). The host's
   `write` service hands each file to the browser as a download instead of writing it to disk.
 - **Automation.** `await lightcraft.command("library.info", "{}")` runs any engine or UI command
   by id on the next frame and resolves to the JSON result (`web.stats` reports storage, workers
-  and the render queue). This is how the headless-Chrome checks drive the page.
+  and the render queue). The params are a JSON object; empty text and JSON `null` mean `{}`
+  (no params: a command that takes photo ids then acts on the selection). Any other text that
+  isn't an object rejects the promise and runs nothing, as the control channel and MCP do, so a
+  typo can't run a command on the selection. This is how the headless-Chrome checks drive the page.
+- **Embedding (`?host=parent`).** A same-origin page framing LightCraft in an `<iframe>` speaks
+  to it over `postMessage`, the protocol PdfCraft, GridCraft and DeckCraft share
+  (`apps/lightcraft-web/src/host.rs`, issue #2270). LightCraft posts `lightcraft:ready`
+  `{version}` once it listens (`lightcraft:failed` `{error}` if it couldn't start); the page sends
+  `lightcraft:open` `{name, bytes}` to add a photo (as one dropped on the window; `name` gives the
+  format) and `lightcraft:cmd` `{id, params}` to run a command, answered by `lightcraft:response`
+  `{ok, value}` (no request id, as in the sibling bridges: responses come back in the order the
+  commands were sent, one per `cmd` that had an id). Everything that would be downloaded (exports and the library backup; the
+  preset, keyword and curve file dialogs have no web implementation yet) reaches the page as
+  `lightcraft:save` `{name, bytes}` (a transferred `ArrayBuffer`) instead, and `lightcraft:dirty`
+  `{dirty}` says, whenever it changes, whether closing now would lose something (a write to
+  browser storage still queued or running, or changes storage refused), so the page can ask
+  before closing a window with edits. Only the parent window on the page's own origin is heard or
+  answered. A page with an opaque origin (`"null"`: a sandboxed iframe, a `data:` page), or a
+  parent on another origin, gets no bridge, and exports keep downloading. The library still lives
+  in the iframe's browser storage.
+- **Embedding in the page's own document (`data-host="page"`).** A page that loads LightCraft into its own
+  document, with no iframe, puts `data-host="page"` on the app's canvas. The same messages then travel as
+  non-bubbling `CustomEvent`s on the canvas: LightCraft dispatches `lightcraft:ready`, `lightcraft:failed`,
+  `lightcraft:dirty`, `lightcraft:save` and `lightcraft:response` with the message's fields as `detail`, and the page
+  dispatches `lightcraft:open` and `lightcraft:cmd` on the canvas (`detail` is the fields; the event name is the
+  type). Add the listeners before the module starts, because `lightcraft:ready` is sent as soon as the app listens.
+  Only the exact value `page` turns it on. When the page asks for both, `?host=parent` wins. In this mode the page
+  and LightCraft share one document, so any script on the page can drive the app and receive what it saves: use it
+  only on a page you control. A photo handed in is held to the same size limit as in the iframe mode and refused
+  before its bytes are copied.
+- **The page title names the open photo**: `<file name> — LightCraft`, with ` •` after the name while
+  changes are not yet written to browser storage (`LightcraftApp::page_title`). eframe's web runner
+  ignores the window title the desktop app sets, and a host that embeds the page reads this title to
+  tell which photo a drop opened and whether it is saved (issue #2397).
 
 ## Not yet
 
@@ -174,7 +214,8 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
 
 ## Measuring
 
-Open `http://127.0.0.1:8080/?bench` to run a scripted measurement:
+Open `http://127.0.0.1:8080/?bench` to run a scripted measurement. It always runs on the generated demo photos in an unsaved library
+(`?bench` implies `?store=memory`), so it never edits the library kept in browser storage:
 
 1. Wait for the grid thumbnails.
 2. Open the first photo in Detail.

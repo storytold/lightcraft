@@ -12,7 +12,7 @@ Run the evidence without private samples:
 
 ```sh
 cargo test -p lightcraft-pipeline tint_ -- --nocapture
-cargo test -p lightcraft-gpu --test equivalence tint_directions -- --nocapture
+cargo test -p lightcraft-gpu --test it equivalence::tint_directions -- --nocapture
 cargo test -p lightcraft-color cct
 ```
 

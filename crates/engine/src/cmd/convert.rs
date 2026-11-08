@@ -206,7 +206,7 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 /// preview-only photo this version hasn't checked yet: its stamp is refreshed so it isn't probed
 /// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
-    let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
+    let preview_checked = ph.preview_stamp(&info.preview_only);
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
@@ -233,12 +233,23 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m.lens.is_empty() {
         m.lens = src.lens.clone();
     }
+    if m.make.is_empty() {
+        m.make = src.make.clone();
+    }
+    if m.lens_make.is_empty() {
+        m.lens_make = src.lens_make.clone();
+    }
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
     }
     m.focal_mm = m.focal_mm.or(src.focal_mm);
     m.aperture = m.aperture.or(src.aperture);
     m.iso = m.iso.or(src.iso);
+    m.flash = m.flash.or(src.flash);
+    m.exposure_bias = m.exposure_bias.or(src.exposure_bias);
+    if m.serial_number.is_empty() {
+        m.serial_number = src.serial_number.clone();
+    }
     m.gps = m.gps.or(src.gps);
     // the camera's focus point: photos imported before it was read get it here
     if m.focus.is_none() {
@@ -313,30 +324,15 @@ pub(crate) fn reload_ops(
 }
 
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
-/// dimensions and content hash, cached sources dropped. → {reloaded: [ids]}
+/// dimensions and content hash, cached sources dropped. The app runs the same steps
+/// ([`crate::cmd::reload`]) with the files read on a worker thread. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = s.targets(p)?;
-    let paths: Vec<(lightcraft_catalog::PhotoId, String)> = ids
-        .iter()
-        .filter_map(|id| match s.catalog.photo(*id).map(|ph| ph.source.clone()) {
-            Some(Source::File { path }) => Some((*id, path)),
-            _ => None,
-        })
-        .collect();
-    let probed = crate::import::probe_paths(s, &paths.iter().map(|(_, p)| p.clone()).collect::<Vec<_>>());
-    let mut ops = Vec::new();
-    let mut reloaded = Vec::new();
-    for ((id, _), info) in paths.into_iter().zip(probed) {
-        let Ok(info) = info else { continue };
-        reload_ops(&s.catalog, id, &info, &mut ops, &mut reloaded);
-    }
-    for id in &reloaded {
-        s.media.forget(*id);
-    }
-    if !ops.is_empty() {
-        s.commit("Reload Changed Files", Op::Batch { ops })?;
-    }
-    Ok(json!({"reloaded": reloaded.iter().map(|i| i.0).collect::<Vec<_>>()}))
+    use crate::cmd::reload as r;
+    let items = r::plan(s, p)?;
+    let probe = r::file_probe(s);
+    let results = r::probe(probe.as_ref(), &items, &std::sync::atomic::AtomicBool::new(false), &|_| {});
+    let reloaded = r::apply(s, items, results)?;
+    Ok(r::to_json(&reloaded))
 }
 
 /// Duplicate: copy the file next to itself (`<name>-copy`, never overwriting) and add it with the
@@ -401,7 +397,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings) → {reloaded}",
+            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
             has_selection,
             reload
         ),
@@ -471,6 +467,7 @@ mod tests {
             warp: Some(lightcraft_develop::EmbeddedWarp { planes: [[1.0, -0.1, 0.03, 0.0, 0.0, 0.0]; 3], ..Default::default() }),
             vignette: None,
             stages: Default::default(),
+            source: Default::default(),
         }
     }
     fn old_rw2() -> lightcraft_catalog::Photo {

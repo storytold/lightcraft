@@ -62,6 +62,28 @@ fn leftover_lock_files_are_not_a_lock() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A link planted at the owner note's name (`catalog.lock.owner`) in a library folder someone else
+/// prepared is removed, never written through: the file it points to keeps its bytes, and the note
+/// still lands in the library (as for the catalog's staging files, issue #1502).
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_owner_note_is_never_written_through() {
+    let _serial = serial();
+    let dir = temp_dir("owner-link");
+    let victim = dir.join("victim.txt");
+    std::fs::write(&victim, b"keep").unwrap();
+    std::os::unix::fs::symlink(&victim, dir.join(OWNER)).unwrap();
+    let l = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    assert!(l.held());
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+    assert!(!std::fs::symlink_metadata(dir.join(OWNER)).unwrap().file_type().is_symlink(), "the link was replaced by the note");
+    let owner: LockOwner = serde_json::from_slice(&std::fs::read(dir.join(OWNER)).unwrap()).unwrap();
+    assert_eq!(owner.pid, std::process::id());
+    drop(l);
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Another process holds the lock; when it is killed (a crash), the OS releases it.
 #[test]
 fn lock_held_by_another_process_is_released_when_it_dies() {

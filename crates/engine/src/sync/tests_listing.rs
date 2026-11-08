@@ -8,6 +8,11 @@
 use super::*;
 use crate::walk::EntryKind::{File, Folder, Other};
 
+/// The lookup of a photo that owns its stem sidecar, as every photo in these listings does.
+fn owner(naming: SidecarNaming) -> SidecarLookup {
+    SidecarLookup { naming, owns_stem: true }
+}
+
 fn listing(folders: &[(&str, &[(&str, crate::walk::EntryKind)], bool)]) -> Listing {
     let mut l = Listing::default();
     for (dir, names, complete) in folders {
@@ -146,28 +151,33 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
             .collect();
     // (`dir.jpg` is gone, though a sidecar of its name is there)
     let mut l = Listing::default();
-    let walked =
-        crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| l.note(d, names, complete));
+    let walked = crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| {
+        l.note(d, names, complete);
+        true
+    });
     assert_eq!(walked.files.len(), 12);
     let nothing = Listing::default();
     for naming in [SidecarNaming::Stem, SidecarNaming::Full] {
         for p in &photos {
-            let from_disk = check_photo(p, naming, &c, &nothing);
-            assert_eq!(check_photo(p, naming, &c, &l), from_disk, "{:?} {naming:?}", p.file_name);
+            let from_disk = check_photo(p, owner(naming), &c, &nothing);
+            assert_eq!(check_photo(p, owner(naming), &c, &l), from_disk, "{:?} {naming:?}", p.file_name);
         }
     }
     let expected = [Check::Nothing, Check::News, Check::News, Check::News, Check::News, Check::News, Check::Missing, Check::Missing, Check::Missing];
-    assert_eq!(photos.iter().map(|p| check_photo(p, SidecarNaming::Stem, &c, &l)).collect::<Vec<_>>(), expected);
+    assert_eq!(photos.iter().map(|p| check_photo(p, owner(SidecarNaming::Stem), &c, &l)).collect::<Vec<_>>(), expected);
 
     // what the disk was asked about the same photos, with the listing and without: fewer questions with it
     let asked = |l: &Listing| {
         for p in &photos {
-            check_photo(p, SidecarNaming::Stem, &c, l);
+            check_photo(p, owner(SidecarNaming::Stem), &c, l);
         }
         l.asked.load(std::sync::atomic::Ordering::Relaxed)
     };
     let mut with = Listing::default();
-    crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| with.note(d, names, complete));
+    crate::walk::files_in_noting(&dir, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| {
+        with.note(d, names, complete);
+        true
+    });
     let (with, without) = (asked(&with), asked(&Listing::default()));
     // (without: each photo's file, and the names of its sidecar up to the one that is there: 20 questions where
     // names are found in any case, 21 where they are not)
@@ -181,11 +191,14 @@ fn a_check_from_the_listing_is_the_check_from_the_disk() {
     // a folder of plain names only: the disk is asked nothing at all
     let sub = dir.join("sub");
     let mut only_plain = Listing::default();
-    crate::walk::files_in_noting(&sub, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| only_plain.note(d, names, complete));
+    crate::walk::files_in_noting(&sub, None, crate::walk::Limits::default(), |_| true, &mut |d, names, complete| {
+        only_plain.note(d, names, complete);
+        true
+    });
     let mut c2 = Catalog::new();
     for (name, expected) in [("deep.jpg", Check::News), ("gone.jpg", Check::Missing), ("gone.jpg.xmp", Check::Missing)] {
         let p = photo(&mut c2, &sub.join(name));
-        assert_eq!(check_photo(&p, SidecarNaming::Stem, &c2, &only_plain), expected, "{name}");
+        assert_eq!(check_photo(&p, owner(SidecarNaming::Stem), &c2, &only_plain), expected, "{name}");
     }
     assert_eq!(only_plain.asked.load(std::sync::atomic::Ordering::Relaxed), 0, "every answer came from the listing");
     let _ = std::fs::remove_dir_all(&dir);

@@ -624,16 +624,16 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog) {
     let mut picked_server: Option<String> = None;
     field(ui, "Server", |ui| {
         let cur = if d.server.is_empty() { crate::i18n::tr("None").to_string() } else { d.server.clone() };
-        let combo = egui::ComboBox::from_id_salt("immich-server").selected_text(cur).show_ui(ui, |ui| {
+        let combo = crate::widgets::combo_box("immich-server").selected_text(cur).show_ui(ui, |ui| {
             for name in &servers {
                 let r = ui.selectable_label(&d.server == name, name);
-                register(ui.ctx(), format!("button:immichServer-{name}"), r.rect);
+                register(ui, format!("button:immichServer-{name}"), r.rect);
                 if r.clicked() {
                     picked_server = Some(name.clone());
                 }
             }
         });
-        register(ui.ctx(), "combo:immichServer", combo.response.rect);
+        register(ui, "combo:immichServer", combo.response.rect);
     });
     if let Some(name) = picked_server {
         d.server = name;
@@ -666,21 +666,21 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog) {
     let mut picked_album: Option<Option<(String, String)>> = None;
     field(ui, "Album", |ui| {
         let cur = if d.album_id.is_empty() { crate::i18n::tr("All").to_string() } else { d.album_name.clone() };
-        let combo = egui::ComboBox::from_id_salt("immich-album").selected_text(cur).height(260.0).show_ui(ui, |ui| {
+        let combo = crate::widgets::combo_box("immich-album").selected_text(cur).height(260.0).show_ui(ui, |ui| {
             let r = ui.selectable_label(d.album_id.is_empty(), crate::i18n::tr("All albums"));
-            register(ui.ctx(), "button:immichAlbum-all", r.rect);
+            register(ui, "button:immichAlbum-all", r.rect);
             if r.clicked() {
                 picked_album = Some(None);
             }
             for (id, name, count) in &albums {
                 let r = ui.selectable_label(&d.album_id == id, format!("{name} ({count})"));
-                register(ui.ctx(), format!("button:immichAlbum-{id}"), r.rect);
+                register(ui, format!("button:immichAlbum-{id}"), r.rect);
                 if r.clicked() {
                     picked_album = Some(Some((id.clone(), name.clone())));
                 }
             }
         });
-        register(ui.ctx(), "combo:immichAlbum", combo.response.rect);
+        register(ui, "combo:immichAlbum", combo.response.rect);
     });
     match picked_album {
         Some(None) => {
@@ -697,10 +697,10 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog) {
     let mut search_page: Option<u32> = None;
     ui.horizontal(|ui| {
         let r = ui.checkbox(&mut d.favorite, crate::i18n::tr("Favorites only"));
-        register(ui.ctx(), "check:immichFavorite", r.rect);
+        register(ui, "check:immichFavorite", r.rect);
         let cur = if d.rating == 0 { crate::i18n::tr("Any rating").to_string() } else { "★".repeat(d.rating as usize) };
         let mut rate: Option<u32> = None;
-        egui::ComboBox::from_id_salt("immich-rating").selected_text(cur).show_ui(ui, |ui| {
+        crate::widgets::combo_box("immich-rating").selected_text(cur).show_ui(ui, |ui| {
             if ui.selectable_label(d.rating == 0, crate::i18n::tr("Any rating")).clicked() {
                 rate = Some(0);
             }
@@ -715,9 +715,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog) {
         }
         let r = ui
             .add(egui::TextEdit::singleline(&mut d.from_date).hint_text(crate::i18n::tr("From (YYYY, YYYY-MM or YYYY-MM-DD)")).desired_width(170.0));
-        register(ui.ctx(), "field:immichFrom", r.rect);
+        register(ui, "field:immichFrom", r.rect);
         let r = ui.add_enabled(!searching, egui::Button::new(crate::i18n::tr("Search")));
-        register(ui.ctx(), "button:immichSearch", r.rect);
+        register(ui, "button:immichSearch", r.rect);
         if r.clicked() {
             if !d.from_date.trim().is_empty() && parse_date(&d.from_date).is_none() {
                 d.error = Some(crate::i18n::tr("Enter the date as YYYY, YYYY-MM or YYYY-MM-DD, or leave it empty.").to_string());
@@ -729,9 +729,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog) {
     // paging and the status lines
     ui.horizontal(|ui| {
         let prev = ui.add_enabled(d.page > 1 && !searching, egui::Button::new("‹"));
-        register(ui.ctx(), "button:immichPrev", prev.rect);
+        register(ui, "button:immichPrev", prev.rect);
         let next = ui.add_enabled(d.maybe_more && !searching, egui::Button::new("›"));
-        register(ui.ctx(), "button:immichNext", next.rect);
+        register(ui, "button:immichNext", next.rect);
         ui.label(egui::RichText::new(crate::i18n::tr_format!("Page {}", d.page)).color(t.text_dim));
         if searching {
             ui.label(egui::RichText::new(crate::i18n::tr("Searching…")).color(t.text_dim));
@@ -759,7 +759,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog) {
     }
     if let Some(e) = &d.error {
         let r = ui.label(egui::RichText::new(e.as_str()).color(t.caution));
-        register(ui.ctx(), "label:immichError", r.rect);
+        register(ui, "label:immichError", r.rect);
     }
     if let Some(s) = &d.info {
         ui.label(egui::RichText::new(s.as_str()).color(t.text_dim));
@@ -775,7 +775,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog) {
     let h = ui.spacing().interact_size.y.max(24.0);
     ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), h), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let r = ui.add_enabled(n > 0 && !searching, egui::Button::new(label.as_str()));
-        register(ui.ctx(), "button:immichImport", r.rect);
+        register(ui, "button:immichImport", r.rect);
         clicked = r.clicked();
     });
     if clicked {
@@ -789,12 +789,12 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog) {
 /// Set a button's request flag (egui memory, so it belongs to this app — a second app in the
 /// same process, like a parallel test, never sees it).
 fn request_flag(ctx: &egui::Context, flag: &str) {
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(flag), true));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(flag), true));
 }
 
 /// Read and clear a request flag.
 fn take_flag(ctx: &egui::Context, flag: &str) -> bool {
-    let id = egui::Id::new(flag);
+    let id = egui::Id::unique(flag);
     let v = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
     if v {
         ctx.data_mut(|d| d.insert_temp(id, false));
@@ -819,10 +819,10 @@ fn import_progress(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         crate::i18n::tr_format!("Adding photos… {} of {}", task.done, task.total)
     };
     let r = ui.label(egui::RichText::new(head).color(t.text));
-    register(ui.ctx(), "label:immichProgressHead", r.rect);
+    register(ui, "label:immichProgressHead", r.rect);
     let summary = crate::i18n::tr_format!("Imported {} · {} already in the library · {} failed", task.imported, task.skipped, task.failed.len());
     let r = ui.label(egui::RichText::new(summary).color(t.text_dim));
-    register(ui.ctx(), "label:immichSummary", r.rect);
+    register(ui, "label:immichSummary", r.rect);
     if !task.failed.is_empty() {
         egui::ScrollArea::vertical().id_salt("immich-failed").max_height(90.0).show(ui, |ui| {
             for line in &task.failed {
@@ -832,7 +832,7 @@ fn import_progress(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     if !task.import_done {
         let r = ui.add_enabled(!task.cancelled, egui::Button::new(crate::i18n::tr("Cancel")));
-        register(ui.ctx(), "button:immichCancel", r.rect);
+        register(ui, "button:immichCancel", r.rect);
         if r.clicked() {
             request_flag(ui.ctx(), CANCEL_FLAG);
         }
@@ -868,8 +868,8 @@ fn asset_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog, 
     let t = Tokens::get(ui.ctx());
     let Some(a) = d.assets.get(i).cloned() else { return };
     let img = Rect::from_min_size(rect.min, vec2(rect.width(), rect.width()));
-    let resp = ui.interact(img, egui::Id::new(("immich-cell", i)), Sense::click());
-    register(ui.ctx(), format!("immich:{i}"), img);
+    let resp = ui.interact(img, egui::Id::unique(("immich-cell", i)), Sense::click());
+    register(ui, format!("immich:{i}"), img);
     let p = ui.painter();
     p.rect_filled(img, 3.0, Color32::from_gray(30));
     // thumbnail (a worker job; the grid only asks for the cells in view)
@@ -931,7 +931,7 @@ struct SettingsTest {
 
 /// The tab's test outcomes, in egui memory so they live as long as the app (never on disk).
 fn settings_tests(ctx: &egui::Context) -> Option<Arc<Mutex<HashMap<String, SettingsTest>>>> {
-    ctx.data(|d| d.get_temp::<Arc<Mutex<HashMap<String, SettingsTest>>>>(egui::Id::new("immich-settings-tests")))
+    ctx.data(|d| d.get_temp::<Arc<Mutex<HashMap<String, SettingsTest>>>>(egui::Id::unique("immich-settings-tests")))
 }
 
 /// Settings ▸ Integrations: the Immich servers — add one, test it, remove it. A server that
@@ -956,11 +956,11 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             .size(11.0)
             .color(t.text_dim),
         );
-        register(ui.ctx(), "label:immichSettingsHeifHint", r.rect);
+        register(ui, "label:immichSettingsHeifHint", r.rect);
     }
 
     let tests = {
-        let id = egui::Id::new("immich-settings-tests");
+        let id = egui::Id::unique("immich-settings-tests");
         let tests = ui.data(|d| d.get_temp::<Arc<Mutex<HashMap<String, SettingsTest>>>>(id)).unwrap_or_else(|| Arc::new(Mutex::new(HashMap::new())));
         ui.data_mut(|d| d.insert_temp(id, tests.clone()));
         tests
@@ -984,14 +984,14 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         row(ui, t, name, |ui| {
             ui.label(egui::RichText::new(url.as_str()).color(t.text_dim));
             let r = ui.label(egui::RichText::new(status).color(if ok { t.text_dim } else { t.caution }));
-            register(ui.ctx(), format!("label:immichSettingsStatus-{name}"), r.rect);
+            register(ui, format!("label:immichSettingsStatus-{name}"), r.rect);
             let r = ui.add_enabled(!pending, egui::Button::new(crate::i18n::tr("Test")));
-            register(ui.ctx(), format!("button:immichSettingsTest-{name}"), r.rect);
+            register(ui, format!("button:immichSettingsTest-{name}"), r.rect);
             if r.clicked() {
                 run_test = Some((name.clone(), url.clone(), key.clone()));
             }
             let r = ui.add(egui::Button::new(crate::i18n::tr("Remove")));
-            register(ui.ctx(), format!("button:immichSettingsRemove-{name}"), r.rect);
+            register(ui, format!("button:immichSettingsRemove-{name}"), r.rect);
             if r.clicked() {
                 remove = Some(name.clone());
             }
@@ -1000,7 +1000,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
     // the add form: the address and the key the user created in Immich (never shown, never saved
     // anywhere but the engine's prefs once Add succeeds)
-    let (url_id, key_id) = (egui::Id::new("immich-settings-url"), egui::Id::new("immich-settings-key"));
+    let (url_id, key_id) = (egui::Id::unique("immich-settings-url"), egui::Id::unique("immich-settings-key"));
     let mut add_url = ui.data(|d| d.get_temp::<String>(url_id)).unwrap_or_default();
     let mut add_key = ui.data(|d| d.get_temp::<String>(key_id)).unwrap_or_default();
     let mut add_clicked = false;
@@ -1008,18 +1008,18 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     hint(ui, t, "Create the key in Immich under Settings ▸ API keys.");
     row(ui, t, "Server address", |ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut add_url).hint_text("https://photos.example.com:2283").desired_width(300.0));
-        register(ui.ctx(), "field:immichSettingsUrl", r.rect);
+        register(ui, "field:immichSettingsUrl", r.rect);
     });
     row(ui, t, "API key", |ui| {
         // plain text, not a password field: the user is copying a key they just created, and
         // a masked field invites paste mistakes that only surface as a 401 later
         let r = ui.add(egui::TextEdit::singleline(&mut add_key).desired_width(300.0));
-        register(ui.ctx(), "field:immichSettingsKey", r.rect);
+        register(ui, "field:immichSettingsKey", r.rect);
     });
     row(ui, t, "", |ui| {
         let ready = !add_url.trim().is_empty() && !add_key.trim().is_empty();
         let r = ui.add_enabled(ready, egui::Button::new(crate::i18n::tr("Add server")));
-        register(ui.ctx(), "button:immichSettingsAdd", r.rect);
+        register(ui, "button:immichSettingsAdd", r.rect);
         add_clicked = r.clicked();
     });
 
@@ -1071,15 +1071,15 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         d.insert_temp(url_id, add_url);
         d.insert_temp(key_id, add_key);
     });
-    if let Some((ok, text)) = ui.data(|d| d.get_temp::<Option<(bool, String)>>(egui::Id::new("immich-settings-msg"))).flatten() {
+    if let Some((ok, text)) = ui.data(|d| d.get_temp::<Option<(bool, String)>>(egui::Id::unique("immich-settings-msg"))).flatten() {
         let r = ui.label(egui::RichText::new(text).color(if ok { t.text_dim } else { t.caution }));
-        register(ui.ctx(), "label:immichSettingsMessage", r.rect);
+        register(ui, "label:immichSettingsMessage", r.rect);
     }
 }
 
 /// The tab's status line (the last action's outcome), in egui memory.
 fn settings_message(ui: &mut egui::Ui, ok: bool, text: String) {
-    ui.data_mut(|d| d.insert_temp(egui::Id::new("immich-settings-msg"), Some((ok, text))));
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique("immich-settings-msg"), Some((ok, text))));
 }
 
 /// A settings-tab Test that finished successfully gets its `immich.verify` here — every frame,

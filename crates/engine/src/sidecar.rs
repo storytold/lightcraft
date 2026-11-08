@@ -17,15 +17,20 @@
 //! **Shared names** (Stem naming): `IMG_0001.CR3` and `IMG_0001.JPG` would share `IMG_0001.xmp`.
 //! When two catalogued files map to one stem sidecar, it belongs to one of them (a raw first, then
 //! the first by file name — [`Session::sidecar_naming`]); the others use `<file>.xmp`
-//! (`IMG_0001.JPG.xmp`) for writing and reading, so neither overwrites the other.
+//! (`IMG_0001.JPG.xmp`) for writing and reading, so neither overwrites the other. An import ranks
+//! the files it is adding against the library the same way ([`ImportStems`]): a JPEG or a TIFF
+//! arriving beside its raw's `IMG_0001.xmp` reads its own `<file>.xmp`, never the raw's packet
+//! (issue #1905).
 //!
 //! **Read** (on import, and `photo.readMetadataFromFile`): the sidecar wins for metadata, except
 //! the capture time: a time embedded in the file wins, and the sidecar's (`exif:DateTimeOriginal`,
 //! else `photoshop:DateCreated`, else `xmp:CreateDate`) fills in only when the file has none; develop
 //! settings are restored from `lc:settings` when present, else mapped from interoperable `crs:`
 //! fields ([`crate::crs`]). For raw/DNG files without a sidecar the file's embedded XMP is used.
+//! Manual reads also accept the first complete standard XMP APP1 in a bounded JPEG header (see `read_jpeg_xmp`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -71,6 +76,39 @@ pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
     sidecar_candidates(original, naming).find(|p| p.is_file())
 }
 
+/// Where to look for a catalogued photo's sidecar: how the library names it, and whether the photo
+/// may read the shared stem sidecar (`IMG_0001.xmp`) of its stem. A photo that shares its stem
+/// with a file that owns that sidecar (see [`Session::sidecar_naming`]) reads its own `<file>.xmp`
+/// and never the packet of the sibling that owns the stem one (issue #1523).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SidecarLookup {
+    pub naming: SidecarNaming,
+    /// False when another file with the same stem owns the stem sidecar.
+    pub owns_stem: bool,
+}
+
+impl SidecarLookup {
+    /// The names a sidecar for `original` can have, in the order they are looked for: those of
+    /// [`sidecar_candidates`], without the shared stem sidecar when the photo does not own it.
+    pub(crate) fn candidates(self, original: &str) -> impl Iterator<Item = PathBuf> {
+        let shared = (!self.owns_stem).then(|| xmp_cases(sidecar_path(original, SidecarNaming::Stem)));
+        sidecar_candidates(original, self.naming).filter(move |p| shared.as_ref().is_none_or(|shared| !shared.contains(p)))
+    }
+
+    /// [`find_sidecar`], except that a photo that does not own its stem sidecar never reads it.
+    pub fn find(self, original: &str) -> Option<PathBuf> {
+        self.candidates(original).find(|p| p.is_file())
+    }
+}
+
+/// Find the sidecar for a file an import is adding, by the ownership [`ImportStems`] worked out
+/// (issue #1905): [`find_sidecar`] with the library's naming, except that a file which does not
+/// own its stem sidecar reads its own `<file>.xmp` (the name it writes) and never the packet of
+/// the sibling that owns the stem one.
+pub(crate) fn find_sidecar_for_import(stems: &ImportStems, naming: SidecarNaming, original: &str) -> Option<PathBuf> {
+    SidecarLookup { naming, owns_stem: stems.owns(original) }.find(original)
+}
+
 /// The names `original`'s sidecar can have, in the order they are looked for: under `naming`,
 /// then under the other naming (the full name also with the photo extension in the other case),
 /// each as `.xmp`, `.XMP` and `.Xmp`.
@@ -89,7 +127,12 @@ pub(crate) fn sidecar_candidates(original: &str, naming: SidecarNaming) -> impl 
             }
             v
         })
-        .flat_map(|p| [p.clone(), p.with_extension("XMP"), p.with_extension("Xmp")])
+        .flat_map(xmp_cases)
+}
+
+/// The three ways one sidecar name can be written: `.xmp`, `.XMP` and `.Xmp`.
+fn xmp_cases(p: PathBuf) -> [PathBuf; 3] {
+    [p.clone(), p.with_extension("XMP"), p.with_extension("Xmp")]
 }
 
 /// What a sidecar (or embedded XMP packet) says about a photo. `None` = not stated.
@@ -116,6 +159,12 @@ pub struct SidecarData {
     pub extended_description: Option<String>,
     pub keywords: Option<Vec<String>>,
     pub regions: Option<Vec<lightcraft_meta::Region>>,
+    /// The size the regions were drawn on, when they don't say how the photo was turned
+    /// ([`lightcraft_meta::XmpData::regions_drawn_on`]), and how the photo's stored pixels turn upright: the
+    /// sidecar's `tiff:Orientation`, or the file's own Exif orientation where the caller knows it. With both,
+    /// [`merge_into`] puts boxes drawn on the photo as stored where the upright photo has them (#2674).
+    pub regions_drawn_on: Option<(f64, f64)>,
+    pub orientation: Option<lightcraft_meta::Orientation>,
     /// Capture time (ISO 8601) from `exif:DateTimeOriginal`, `photoshop:DateCreated` or
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
@@ -162,6 +211,9 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         // `mwg-rs:Regions` byte for byte but never writes one) says nothing about regions, and the
         // photo's are kept.
         regions: d.values.contains_key("mwg-rs:Regions").then(|| m.regions.clone()),
+        regions_drawn_on: d.regions_drawn_on(),
+        // (only what the regions need: a packet that says nothing else still says nothing)
+        orientation: d.regions_drawn_on().and(m.orientation),
         captured: m.capture_time.map(|d| d.to_iso()),
         ..Default::default()
     };
@@ -180,7 +232,8 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         out.label = Some(ColorLabel::parse(l.trim()));
         out.label_text = Some(l.trim().to_string());
     }
-    let full = d.lc_settings.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()).and_then(|v| DevelopSettings::from_json(&v).ok());
+    let full =
+        d.lc_settings.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()).and_then(|v| DevelopSettings::from_untrusted_json(&v).ok());
     out.develop = match full {
         Some(s) => Some(DevelopPatch::Full(Box::new(s))),
         None if crate::crs::has_adjustments(&d.properties) => {
@@ -291,6 +344,11 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
     }
     if let Some(r) = &sc.regions {
         m.regions = r.clone();
+        // (the photo's size is the upright one)
+        if let (Some(drawn_on), Some(o)) = (sc.regions_drawn_on, sc.orientation) {
+            let stored = if o.swaps_axes() { (p.height, p.width) } else { (p.width, p.height) };
+            lightcraft_meta::upright_regions(&mut m.regions, drawn_on, o, stored);
+        }
     }
     let develop = match &sc.develop {
         Some(DevelopPatch::Full(s)) => (**s).clone(),
@@ -320,7 +378,276 @@ impl SidecarData {
         }
         self
     }
+
+    /// Take the orientation of the photo file at `original` (LightCraft shows the photo turned by it, and the packet
+    /// may not repeat it) when the regions need it: they were drawn on a stated size ([`SidecarData::regions_drawn_on`]).
+    /// Only then is the file read ([`file_orientation`]).
+    pub fn with_file_orientation(self, original: &str) -> Self {
+        if self.regions_drawn_on.is_none() {
+            return self;
+        }
+        SidecarData { orientation: file_orientation(original).or(self.orientation), ..self }
+    }
 }
+
+/// The orientation the photo file at `path` states, matching what the import stores on [`crate::media::ProbeInfo`]:
+/// for a raw, the decoder's (`lightcraft_raw::probe_info`: CIFF for a CRW, the raw IFD for a MEF, …); otherwise Exif,
+/// else XMP, as [`lightcraft_meta::extract`] reads it. A file shorter than [`ORIENTATION_SPAN`] is read whole. Most
+/// non-raws state it in the Exif of their first [`ORIENTATION_SPAN`]; when that part doesn't, the Exif may come later
+/// ([`late_orientation`]). A WebP's or PNG's chunks are always walked, since the last Exif chunk is the one that counts
+/// ([`webp_orientation`], [`png_orientation`]).
+fn file_orientation(path: &str) -> Option<lightcraft_meta::Orientation> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut head = Vec::new();
+    (&mut file).take(ORIENTATION_SPAN).read_to_end(&mut head).ok()?;
+    // Import takes a raw's orientation from the decoder, not from Exif IFD0 / XMP alone. Re-read and sync must do the
+    // same, or face boxes turned at import are put back and Synchronize Folder reports changes every pass (#2857).
+    if lightcraft_raw::probe(&head).is_some() {
+        let bytes = if (head.len() as u64) < ORIENTATION_SPAN {
+            head
+        } else {
+            file.rewind().ok()?;
+            let mut all = Vec::new();
+            file.read_to_end(&mut all).ok()?;
+            all
+        };
+        return match lightcraft_raw::probe_info(&bytes) {
+            Ok(raw) => Some(raw.orientation),
+            // unsupported / preview-only: same fallback the import uses (`ProbeInfo::orientation` from meta)
+            Err(_) => lightcraft_meta::extract(&bytes).orientation,
+        };
+    }
+    if (head.len() as u64) < ORIENTATION_SPAN {
+        return lightcraft_meta::extract(&head).orientation;
+    }
+    if head.get(..4) == Some(b"RIFF") && head.get(8..12) == Some(b"WEBP") {
+        return webp_orientation(&mut file);
+    }
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return png_orientation(&mut file);
+    }
+    if let Some(o) = exif_orientation(&head) {
+        return Some(o);
+    }
+    late_orientation(&mut file, &head).or_else(|| lightcraft_meta::extract(&head).orientation)
+}
+
+/// The orientation the Exif in `bytes` (a file, or the start of one) states, leaving out a separate XMP packet (the
+/// one the Exif holds in tag 700 counts, as in [`lightcraft_meta::read_exif`]).
+fn exif_orientation(bytes: &[u8]) -> Option<lightcraft_meta::Orientation> {
+    lightcraft_meta::embedded(bytes).exif.as_deref().map(lightcraft_meta::read_exif).and_then(|m| m.orientation)
+}
+
+/// The orientation of a JPEG, TIFF or PSD whose `head` has no Exif stating it, found by the file's structure without
+/// reading its image data (a JPEG's Exif can follow other long segments, many TIFF writers put the first IFD after the
+/// strips, and a PSD's image resources can outgrow `head`). As the import does, a JPEG takes its first Exif segment,
+/// else its first XMP segment.
+fn late_orientation(file: &mut (impl Read + Seek), head: &[u8]) -> Option<lightcraft_meta::Orientation> {
+    let len = file.seek(SeekFrom::End(0)).ok()?;
+    file.rewind().ok()?;
+    match head.get(..4)? {
+        [0xff, 0xd8, ..] => {
+            let (mut exif_seen, mut xmp) = (false, None);
+            let exif = read_jpeg_app1(file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS, |segment| {
+                let embedded = lightcraft_meta::embedded(segment);
+                if let Some(exif) = embedded.exif
+                    && !exif_seen
+                {
+                    // the first Exif segment ends the walk if it states one; later ones don't count
+                    exif_seen = true;
+                    return lightcraft_meta::read_exif(&exif).orientation;
+                }
+                if xmp.is_none() {
+                    xmp = embedded.xmp.map(|x| lightcraft_meta::parse_xmp(&x).ok().and_then(|x| x.metadata.orientation));
+                }
+                None
+            });
+            exif.or(xmp.flatten())
+        }
+        b"II*\0" | b"MM\0*" => tiff_orientation(file, 0, len),
+        b"8BPS" => psd_orientation(file),
+        _ => None,
+    }
+}
+
+/// A WebP's orientation as the import takes it: from its last `EXIF` chunk, else its last `XMP ` chunk, in whichever
+/// order they come. The chunk headers are walked from the start of `file` (at most [`WEBP_CHUNK_STEPS`], ending at a
+/// chunk that runs past the end of the file); then only the first IFD of the EXIF chunk is read, whatever its size
+/// ([`tiff_orientation`]), and the XMP chunk if it is at most [`ORIENTATION_SPAN`].
+fn webp_orientation(file: &mut (impl Read + Seek)) -> Option<lightcraft_meta::Orientation> {
+    let len = file.seek(SeekFrom::End(0)).ok()?;
+    let (mut exif, mut xmp) = (None, None);
+    let mut at = 12u64;
+    for _ in 0..WEBP_CHUNK_STEPS {
+        let mut header = [0; 8];
+        if file.seek(SeekFrom::Start(at)).is_err() || file.read_exact(&mut header).is_err() {
+            break;
+        }
+        let [a, b, c, d, s0, s1, s2, s3] = header;
+        let size = u64::from(u32::from_le_bytes([s0, s1, s2, s3]));
+        let Some(end) = at.checked_add(8 + size).filter(|&end| end <= len) else { break };
+        match &[a, b, c, d] {
+            b"EXIF" => exif = Some((at + 8, end)),
+            b"XMP " => xmp = Some((at + 8, size)),
+            _ => {}
+        }
+        // chunks are padded to an even size
+        at = end + (size & 1);
+    }
+    if let Some(o) = exif.and_then(|(start, end)| exif_chunk_orientation(file, start, end)) {
+        return Some(o);
+    }
+    let (start, size) = xmp?;
+    xmp_orientation(file, start, size)
+}
+
+/// How many chunks [`webp_orientation`] passes over (an animated WebP has one per frame).
+const WEBP_CHUNK_STEPS: usize = 4096;
+
+/// The orientation the Exif chunk from `start` to `end` in `file` states: its TIFF stream comes after an `Exif\0\0` if
+/// the chunk starts with one (as `strip_exif_header` takes it).
+fn exif_chunk_orientation(file: &mut (impl Read + Seek), start: u64, end: u64) -> Option<lightcraft_meta::Orientation> {
+    let mut prefix = [0; 5];
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let prefixed = start + 6 <= end && file.read_exact(&mut prefix).is_ok() && &prefix == b"Exif\0";
+    tiff_orientation(file, if prefixed { start + 6 } else { start }, end)
+}
+
+/// A PNG's orientation as the import takes it: from its last `eXIf` chunk, else its last uncompressed XMP `iTXt` chunk,
+/// wherever they come (a writer may put them after the image data). The chunk headers are walked from the start of
+/// `file` to `IEND` (at most [`png_chunk_steps`], ending at a chunk that runs past the end of the file); then only the
+/// first IFD of the `eXIf` chunk is read, whatever its size ([`tiff_orientation`]), and the `iTXt` chunk if it is at
+/// most [`ORIENTATION_SPAN`].
+fn png_orientation(file: &mut (impl Read + Seek)) -> Option<lightcraft_meta::Orientation> {
+    let len = file.seek(SeekFrom::End(0)).ok()?;
+    let (mut exif, mut xmp) = (None, None);
+    let mut at = 8u64;
+    for _ in 0..png_chunk_steps(len) {
+        let (mut header, mut key) = ([0; 8], [0; 19]);
+        if at + 12 > len || file.seek(SeekFrom::Start(at)).is_err() || file.read_exact(&mut header).is_err() {
+            break;
+        }
+        let [s0, s1, s2, s3, a, b, c, d] = header;
+        let size = u64::from(u32::from_be_bytes([s0, s1, s2, s3]));
+        let Some(end) = at.checked_add(8 + size).filter(|&end| end <= len) else { break };
+        match &[a, b, c, d] {
+            b"eXIf" => exif = Some((at + 8, end)),
+            // the keyword, then compression flag 0
+            b"iTXt" if size >= 20 && file.read_exact(&mut key).is_ok() && &key == b"XML:com.adobe.xmp\0\0" => xmp = Some((at + 8, size)),
+            b"IEND" => break,
+            _ => {}
+        }
+        // past the chunk's CRC
+        at = end + 4;
+    }
+    if let Some(o) = exif.and_then(|(start, end)| exif_chunk_orientation(file, start, end)) {
+        return Some(o);
+    }
+    let (start, size) = xmp?;
+    let chunk = read_within_span(file, start, size)?;
+    // keyword\0 compression-flag compression-method language\0 translated\0 text
+    let text = chunk.get(20..)?.splitn(3, |&c| c == 0).nth(2)?;
+    lightcraft_meta::parse_xmp(&String::from_utf8_lossy(text)).ok()?.metadata.orientation
+}
+
+/// How many chunks [`png_orientation`] passes over in a file of `len` bytes: 4096 and one per KiB of the file, at most
+/// 2^20. Image data is often split into many `IDAT` chunks (libpng writes 8 KiB ones by default), so the limit grows
+/// with the file; each chunk costs two system calls, so a short file of empty chunks can't hold a worker for seconds.
+fn png_chunk_steps(len: u64) -> u64 {
+    (4096 + len / 1024).min(1 << 20)
+}
+
+/// A PSD's or PSB's orientation as the import takes it, from its image resources: the file's start up to their end is
+/// read if it is at most [`PSD_RESOURCES_SPAN`]. They come before the layers and the image data, after the 26-byte
+/// header and the colour-mode data; each of those two sections starts with its length.
+fn psd_orientation(file: &mut (impl Read + Seek)) -> Option<lightcraft_meta::Orientation> {
+    let mut length = [0; 4];
+    file.seek(SeekFrom::Start(26)).ok()?;
+    file.read_exact(&mut length).ok()?;
+    let resources = 30 + u64::from(u32::from_be_bytes(length));
+    file.seek(SeekFrom::Start(resources)).ok()?;
+    file.read_exact(&mut length).ok()?;
+    let end = resources + 4 + u64::from(u32::from_be_bytes(length));
+    if end > PSD_RESOURCES_SPAN {
+        return None;
+    }
+    file.rewind().ok()?;
+    let mut bytes = Vec::new();
+    (&mut *file).take(end).read_to_end(&mut bytes).ok()?;
+    lightcraft_meta::extract(&bytes).orientation
+}
+
+/// How far into a PSD or PSB [`psd_orientation`] reads.
+const PSD_RESOURCES_SPAN: u64 = 16 * 1024 * 1024;
+
+/// The orientation the TIFF stream from `start` to `end` in `file` states in its first IFD (a TIFF file, or the Exif
+/// block of a WebP's EXIF chunk; its offsets count from `start`, and nothing past `end` is read). Only the IFD's 12-byte
+/// entries are read (at most 65535 of them, under 1 MiB): its orientation tag, else (as [`lightcraft_meta::read_exif`]
+/// does) the XMP packet its tag 700 holds, read if it is at most [`ORIENTATION_SPAN`].
+fn tiff_orientation(file: &mut (impl Read + Seek), start: u64, end: u64) -> Option<lightcraft_meta::Orientation> {
+    // where the `len` bytes at `offset` in the stream are in the file, when all of them are in the stream
+    let within = |offset: u32, len: u64| {
+        let at = start.checked_add(u64::from(offset))?;
+        (at.checked_add(len)? <= end).then_some(at)
+    };
+    file.seek(SeekFrom::Start(within(0, 8)?)).ok()?;
+    let mut header = [0; 8];
+    file.read_exact(&mut header).ok()?;
+    let [b0, b1, b2, b3, i0, i1, i2, i3] = header;
+    let le = match &[b0, b1, b2, b3] {
+        b"II*\0" => true,
+        b"MM\0*" => false,
+        _ => return None,
+    };
+    let u16_of = |b: [u8; 2]| if le { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) };
+    let u32_of = |b: [u8; 4]| if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) };
+    let ifd = u32_of([i0, i1, i2, i3]);
+    file.seek(SeekFrom::Start(within(ifd, 2)?)).ok()?;
+    let mut count = [0; 2];
+    file.read_exact(&mut count).ok()?;
+    let count = u16_of(count);
+    within(ifd, 2 + 12 * u64::from(count))?;
+    let mut entries = vec![0; usize::from(count) * 12];
+    file.read_exact(&mut entries).ok()?;
+    let mut xmp = None;
+    for &[t0, t1, y0, y1, c0, c1, c2, c3, v0, v1, v2, v3] in entries.as_chunks::<12>().0 {
+        let (tag, kind, count) = (u16_of([t0, t1]), u16_of([y0, y1]), u32_of([c0, c1, c2, c3]));
+        match (tag, kind) {
+            // exactly one SHORT (with more, the field also holds a second value, or an offset to them all)
+            (274, 3) if count == 1 => {
+                let v = u16_of([v0, v1]);
+                if (1..=8).contains(&v) {
+                    return Some(lightcraft_meta::Orientation::from_exif(v));
+                }
+            }
+            // BYTE or UNDEFINED, at an offset (a packet longer than the field's four bytes)
+            (700, 1 | 7) if count > 4 => xmp = Some((u32_of([v0, v1, v2, v3]), u64::from(count))),
+            _ => {}
+        }
+    }
+    let (offset, len) = xmp?;
+    xmp_orientation(file, within(offset, len)?, len)
+}
+
+/// The orientation the XMP packet of `len` bytes at `at` in `file` states, read if it is at most [`ORIENTATION_SPAN`].
+fn xmp_orientation(file: &mut (impl Read + Seek), at: u64, len: u64) -> Option<lightcraft_meta::Orientation> {
+    let packet = read_within_span(file, at, len)?;
+    lightcraft_meta::parse_xmp(&String::from_utf8_lossy(&packet)).ok()?.metadata.orientation
+}
+
+/// The `len` bytes at `at` in `file`, read if they are at most [`ORIENTATION_SPAN`].
+fn read_within_span(file: &mut (impl Read + Seek), at: u64, len: u64) -> Option<Vec<u8>> {
+    if len > ORIENTATION_SPAN {
+        return None;
+    }
+    file.seek(SeekFrom::Start(at)).ok()?;
+    let mut bytes = Vec::new();
+    (&mut *file).take(len).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// How much of a photo file [`file_orientation`] reads first.
+const ORIENTATION_SPAN: u64 = 1 << 20;
 
 /// The sidecar packet for a photo; the colour label is written by its name in `cat` (custom
 /// label names included, as other editors do).
@@ -332,6 +659,8 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
 /// `remove_location` is set (an export with "Remove location info").
 pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
+    // Names in `dc:subject`, paths in `lr:hierarchicalSubject` (`keywords::to_file`).
+    let keywords = lightcraft_catalog::keywords::to_file(&p.meta.keywords);
     let meta = lightcraft_meta::Metadata {
         software: Some("LightCraft".into()),
         title: nz(&p.meta.title),
@@ -347,7 +676,8 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         usage_terms: nz(&p.meta.usage_terms),
         copyright_url: nz(&p.meta.copyright_url),
         artist: nz(&p.meta.creator),
-        keywords: p.meta.keywords.clone(),
+        keywords: keywords.flat,
+        hierarchical_keywords: keywords.hierarchical,
         rating: Some(p.rating.min(5) as i8),
         label: p.label.map(|l| cat.label_name(l)),
         capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
@@ -382,6 +712,7 @@ pub const OWNED: &[&str] = &[
     "dc:rights",
     "dc:creator",
     "dc:subject",
+    "lr:hierarchicalSubject",
     "Iptc4xmpCore:Location",
     "Iptc4xmpCore:AltTextAccessibility",
     "Iptc4xmpCore:ExtDescrAccessibility",
@@ -407,6 +738,11 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 /// Copy `path` to a new `<name>.bak-<stamp>` (`-1`, `-2`… if taken; never overwriting).
 fn backup(path: &Path, stamp: &str) -> std::io::Result<PathBuf> {
     use std::io::Write;
+    // only a plain file is copied aside: a link under the sidecar's name would have its target's
+    // contents copied into a new, readable file
+    if !std::fs::symlink_metadata(path)?.is_file() {
+        return Err(std::io::Error::other(format!("{} is not a regular file", path.display())));
+    }
     let bytes = std::fs::read(path)?;
     let stamp: String = stamp.chars().filter(char::is_ascii_alphanumeric).collect();
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -500,17 +836,81 @@ fn file_path(p: &Photo) -> Option<&str> {
     }
 }
 
-/// The XMP packet that describes a photo on disk: its sidecar, else (raw/DNG) the embedded XMP.
-pub fn read_packet(original: &str, kind: MediaKind, naming: SidecarNaming) -> Option<(String, PathBuf)> {
-    if let Some(sc) = find_sidecar(original, naming)
-        && let Ok(s) = std::fs::read_to_string(&sc)
-    {
-        return Some((s, sc));
+/// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
+pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
+    if let Some(sc) = lookup.find(original) {
+        // A discovered sidecar keeps precedence even when reading it fails.
+        return std::fs::read_to_string(&sc).ok().map(|s| (s, sc));
     }
     if kind == MediaKind::Raw {
         let bytes = std::fs::read(original).ok()?;
         let x = lightcraft_meta::embedded(&bytes).xmp?;
         return Some((x, PathBuf::from(original)));
+    }
+    if kind == MediaKind::Image {
+        let mut file = std::fs::File::open(original).ok()?;
+        let x = read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)?;
+        return Some((x, PathBuf::from(original)));
+    }
+    None
+}
+
+const JPEG_XMP_HEADER_SPAN: u64 = 16 * 1024 * 1024;
+const JPEG_XMP_HEADER_STEPS: usize = 4096;
+
+/// Read from SOI at the current position, stopping at the first standard XMP packet or SOS/EOI.
+/// The span includes SOI, segment headers and skipped payloads; each marker/fill step after SOI
+/// consumes one iteration. Only a complete APP1 payload (at most 65533 bytes) reaches the shared
+/// parser, in a single SOI+APP1 wrapper (at most 65539 bytes). This does not validate the whole JPEG.
+fn read_jpeg_xmp(reader: &mut (impl Read + Seek), header_span: u64, marker_steps: usize) -> Option<String> {
+    read_jpeg_app1(reader, header_span, marker_steps, |segment| lightcraft_meta::jpeg_segments(segment).xmp)
+}
+
+/// Like [`read_jpeg_xmp`], stopping at the first APP1 segment (in its SOI+APP1 wrapper) that `pick` finds something in.
+fn read_jpeg_app1<T>(reader: &mut (impl Read + Seek), header_span: u64, marker_steps: usize, mut pick: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
+    let mut header = reader.take(header_span);
+    let mut soi = [0; 2];
+    header.read_exact(&mut soi).ok()?;
+    if soi != [0xff, 0xd8] {
+        return None;
+    }
+    let mut filled = false;
+    for _ in 0..marker_steps {
+        if !filled {
+            let mut prefix = [0];
+            header.read_exact(&mut prefix).ok()?;
+            if prefix != [0xff] {
+                return None;
+            }
+        }
+        let mut code = [0];
+        header.read_exact(&mut code).ok()?;
+        let [marker] = code;
+        filled = marker == 0xff;
+        match marker {
+            0xff | 0xd8 | 0xd0..=0xd7 | 0x01 => continue,
+            0xd9 | 0xda => return None,
+            _ => {}
+        }
+        let mut length = [0; 2];
+        header.read_exact(&mut length).ok()?;
+        let payload_len = u16::from_be_bytes(length).checked_sub(2)?;
+        let remaining = header.limit().checked_sub(u64::from(payload_len))?;
+        if marker != 0xe1 {
+            // Seeking must spend the same span budget as reading, before the seek is attempted.
+            header.set_limit(remaining);
+            header.get_mut().seek(SeekFrom::Current(i64::from(payload_len))).ok()?;
+            continue;
+        }
+        let segment_len = 6usize.checked_add(usize::from(payload_len))?;
+        let [hi, lo] = length;
+        let mut segment = Vec::with_capacity(segment_len);
+        segment.extend_from_slice(&[0xff, 0xd8, 0xff, 0xe1, hi, lo]);
+        segment.resize(segment_len, 0);
+        header.read_exact(segment.get_mut(6..)?).ok()?;
+        if let Some(found) = pick(&segment) {
+            return Some(found);
+        }
     }
     None
 }
@@ -528,6 +928,16 @@ pub(crate) fn op_photos(op: &Op, out: &mut Vec<PhotoId>) {
     }
 }
 
+/// Where a file stands in the order a shared stem sidecar is owned by: a raw first, then the file
+/// name in lower case, then the catalog id (a file an import is adding has no id yet, and ranks
+/// last among files of its kind and name: see [`ImportStems`]).
+type Rank = (bool, String, u64);
+
+/// The rank of the file at `path`, of kind `kind`, catalogued as `id`.
+fn rank_of(path: &str, kind: MediaKind, id: u64) -> Rank {
+    (kind != MediaKind::Raw, path.to_lowercase(), id)
+}
+
 /// Which photo owns each stem sidecar that several catalogued files map to (see
 /// [`Session::sidecar_naming`]).
 pub(crate) struct StemOwners(HashMap<String, PhotoId>);
@@ -538,10 +948,10 @@ impl StemOwners {
     /// owners were worked out before, for every write).
     #[cfg(test)]
     pub(crate) fn of(cat: &lightcraft_catalog::Catalog) -> StemOwners {
-        let mut best: HashMap<String, ((bool, String, u64), PhotoId, usize)> = HashMap::new();
+        let mut best: HashMap<String, (Rank, PhotoId, usize)> = HashMap::new();
         for p in cat.photos().filter(|p| p.copy_of.is_none()) {
             let Some(path) = file_path(p) else { continue };
-            let rank = (p.kind != MediaKind::Raw, path.to_lowercase(), p.id.0);
+            let rank = rank_of(path, p.kind, p.id.0);
             let e = best.entry(stem_key(path)).or_insert_with(|| (rank.clone(), p.id, 0));
             e.2 += 1;
             if rank < e.0 {
@@ -566,7 +976,7 @@ impl StemOwners {
     /// The owners of the shared stems in `wanted`.
     fn where_wanted(cat: &lightcraft_catalog::Catalog, wanted: &std::collections::HashSet<String>) -> StemOwners {
         // per stem: (raw first, then file name, then id) of the best candidate; and how many
-        let mut best: HashMap<String, ((bool, String, u64), PhotoId, usize)> = HashMap::new();
+        let mut best: HashMap<String, (Rank, PhotoId, usize)> = HashMap::new();
         let mut key = String::new();
         for p in cat.photos().filter(|p| p.copy_of.is_none()) {
             let Some(path) = file_path(p) else { continue };
@@ -574,7 +984,7 @@ impl StemOwners {
             if !wanted.contains(key.as_str()) {
                 continue;
             }
-            let rank = (p.kind != MediaKind::Raw, path.to_lowercase(), p.id.0);
+            let rank = rank_of(path, p.kind, p.id.0);
             let e = best.entry(key.clone()).or_insert_with(|| (rank.clone(), p.id, 0));
             e.2 += 1;
             if rank < e.0 {
@@ -582,6 +992,11 @@ impl StemOwners {
             }
         }
         StemOwners(best.into_iter().filter(|(_, v)| v.2 > 1).map(|(k, v)| (k, v.1)).collect())
+    }
+
+    /// Whether photo `p` may read the shared stem sidecar of its stem: no other file owns it.
+    fn owns(&self, p: &Photo) -> bool {
+        file_path(p).is_none_or(|path| self.0.get(&stem_key(path)).is_none_or(|owner| *owner == p.id))
     }
 
     /// `naming` for photo `p`, except that a stem sidecar another file owns becomes Full.
@@ -593,14 +1008,79 @@ impl StemOwners {
     }
 }
 
+/// Which of the files an import is adding may read the shared stem sidecar (`IMG_0001.xmp`) of
+/// their stem, and which read their own `<file>.xmp` (`IMG_0001.TIF.xmp`) instead (issue #1905:
+/// before, a JPEG or a TIFF imported beside its raw read the raw's packet and took its rating,
+/// metadata and develop settings). The order is the one [`StemOwners`] applies to writing, with
+/// the arriving files ranked against the library and against each other: a raw first, then the
+/// file name in lower case. A file that is not catalogued yet has no id, and the id it draws when
+/// the import commits is above every id in the library, so it loses a tie against a catalogued
+/// file; between arriving files the order they arrive in stands for it.
+pub(crate) struct ImportStems {
+    /// The arriving files that own the stem sidecar of their stem, by path as it arrives.
+    owners: HashSet<String>,
+}
+
+impl ImportStems {
+    /// Work out [`ImportStems`] for the files `incoming`, in the order they arrive. `None` for a
+    /// library already looked over (a job prepared twice): there is nothing to rank against, so
+    /// every arriving file reads as it did before. The library is passed over once, and only the
+    /// stems the arriving files map to are looked at closer.
+    pub(crate) fn for_import<'a>(cat: Option<&lightcraft_catalog::Catalog>, incoming: impl Iterator<Item = (&'a str, MediaKind)>) -> ImportStems {
+        // per stem: the best of the library's files, and the best arriving file with its path
+        let mut best: HashMap<String, (Option<Rank>, Option<(Rank, &'a str)>)> = HashMap::new();
+        let mut arriving_paths = HashSet::new();
+        for (arriving, (path, kind)) in incoming.enumerate() {
+            arriving_paths.insert(path);
+            let e = best.entry(stem_key(path)).or_default();
+            let rank = rank_of(path, kind, arriving as u64);
+            if e.1.as_ref().is_none_or(|(b, _)| rank < *b) {
+                e.1 = Some((rank, path));
+            }
+        }
+        if let Some(cat) = cat {
+            let mut key = String::new();
+            for p in cat.photos().filter(|p| p.copy_of.is_none()) {
+                // the arriving file's own record (a trashed photo imported again) is not a rival
+                let Some(path) = file_path(p).filter(|path| !arriving_paths.contains(*path)) else { continue };
+                stem_key_into(&mut key, path);
+                let Some(e) = best.get_mut(key.as_str()) else { continue };
+                let rank = rank_of(path, p.kind, p.id.0);
+                if e.0.as_ref().is_none_or(|b| rank < *b) {
+                    e.0 = Some(rank);
+                }
+            }
+        }
+        let owners = best
+            .into_values()
+            .filter_map(|(in_library, arriving)| {
+                let (rank, path) = arriving?;
+                let wins = in_library.as_ref().is_none_or(|b| (rank.0, rank.1.as_str()) < (b.0, b.1.as_str()));
+                wins.then(|| path.to_string())
+            })
+            .collect();
+        ImportStems { owners }
+    }
+
+    /// Whether the arriving file at `original` owns the stem sidecar of its stem.
+    pub(crate) fn owns(&self, original: &str) -> bool {
+        self.owners.contains(original)
+    }
+}
+
 /// How the sidecar of each of photos `ids` is named in library `cat`, whose naming is `naming`
 /// ([`Session::sidecar_namings`], for a thread that has the library and not the session).
 pub(crate) fn namings_in(cat: &lightcraft_catalog::Catalog, naming: SidecarNaming, ids: &[PhotoId]) -> Vec<SidecarNaming> {
-    let owners = (naming == SidecarNaming::Stem).then(|| StemOwners::among(cat, ids));
+    lookups_in(cat, naming, ids).into_iter().map(|l| l.naming).collect()
+}
+
+/// [`namings_in`], with whether each photo may read the stem sidecar of its stem.
+pub(crate) fn lookups_in(cat: &lightcraft_catalog::Catalog, naming: SidecarNaming, ids: &[PhotoId]) -> Vec<SidecarLookup> {
+    let owners = StemOwners::among(cat, ids);
     ids.iter()
-        .map(|id| match (cat.photo(*id), &owners) {
-            (Some(p), Some(o)) => o.naming(p, naming),
-            _ => naming,
+        .map(|id| match cat.photo(*id) {
+            Some(p) => SidecarLookup { naming: owners.naming(p, naming), owns_stem: owners.owns(p) },
+            None => SidecarLookup { naming, owns_stem: true },
         })
         .collect()
 }
@@ -614,6 +1094,16 @@ impl Session {
     /// photo that is a pass over the whole catalog).
     pub fn sidecar_namings(&self, ids: &[PhotoId]) -> Vec<SidecarNaming> {
         namings_in(&self.catalog, self.xmp.naming, ids)
+    }
+
+    /// [`Session::sidecar_naming`] and the stem-sidecar ownership of photo `id`, for reading its sidecar.
+    pub fn sidecar_lookup(&self, id: PhotoId) -> SidecarLookup {
+        lookups_in(&self.catalog, self.xmp.naming, &[id]).into_iter().next().unwrap_or(SidecarLookup { naming: self.xmp.naming, owns_stem: true })
+    }
+
+    /// [`Session::sidecar_lookup`] for many photos, their stems' owners worked out once.
+    pub fn sidecar_lookups(&self, ids: &[PhotoId]) -> Vec<SidecarLookup> {
+        lookups_in(&self.catalog, self.xmp.naming, ids)
     }
 
     pub fn sidecar_naming(&self, id: PhotoId) -> SidecarNaming {
@@ -679,8 +1169,9 @@ impl Session {
     pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
-        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_naming(id)) else { return Ok(None) };
+        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else { return Ok(None) };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
+        let sc = sc.with_file_orientation(orig);
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
             warning.path = orig.to_string();
@@ -792,6 +1283,291 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    /// Issue #2674: a WebP keeps its EXIF and XMP chunks after the image data, a TIFF's first IFD can follow its strips
+    /// and a JPEG's Exif other long segments, so the orientation can be past the first [`super::ORIENTATION_SPAN`] of
+    /// the file. Every file gives what the import gives reading it whole: Exif over XMP wherever each is, a WebP's last
+    /// EXIF chunk and a JPEG's first Exif segment, and none for a file that states none.
+    #[test]
+    fn the_file_orientation_is_found_after_the_image_data() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-file-orientation-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata {
+            orientation: Some(lightcraft_meta::Orientation::Rotate90),
+            ..Default::default()
+        });
+        let span = super::ORIENTATION_SPAN as usize;
+        let (o6, o8) = (Some(lightcraft_meta::Orientation::Rotate90), Some(lightcraft_meta::Orientation::Rotate270));
+        // a WebP: VP8X, then `chunks`
+        let webp = |chunks: &[(&[u8], Vec<u8>)]| {
+            let mut w = b"RIFF\0\0\0\0WEBP".to_vec();
+            for (id, data) in [(&b"VP8X"[..], vec![0; 10])].iter().chain(chunks) {
+                w.extend_from_slice(id);
+                w.extend_from_slice(&(data.len() as u32).to_le_bytes());
+                w.extend_from_slice(data);
+                if data.len() % 2 == 1 {
+                    w.push(0);
+                }
+            }
+            w
+        };
+        let image = |len: usize| (&b"VP8L"[..], vec![0; len]);
+        let exif_chunk = (&b"EXIF"[..], [&b"Exif\0\0"[..], &exif].concat());
+        // an EXIF chunk over the span (orientation 6 too), one stating no orientation, and an XMP packet stating 8
+        let huge_exif = (&b"EXIF"[..], [&b"Exif\0\0"[..], &exif, &vec![0; span]].concat());
+        let plain = lightcraft_meta::write_exif(&lightcraft_meta::Metadata::default());
+        let plain_chunk = (&b"EXIF"[..], [&b"Exif\0\0"[..], &plain].concat());
+        let packet = lightcraft_meta::write_xmp(&lightcraft_meta::Metadata { orientation: o8, ..Default::default() }, None);
+        let xmp_chunk = (&b"XMP "[..], packet.clone().into_bytes());
+        // the XMP packet padded with whitespace to `len` bytes
+        let padded_xmp = |len: usize| {
+            let mut p = packet.clone().into_bytes();
+            p.resize(len, b' ');
+            (&b"XMP "[..], p)
+        };
+        // an EXIF chunk holding only a TIFF header, whose IFD offset (16) points past the chunk's end into the next
+        // chunk's data, where an IFD stating orientation 6 sits
+        let stray_exif = (&b"EXIF"[..], b"II*\0\x10\0\0\0".to_vec());
+        let stray_ifd = (&b"JUNK"[..], vec![1, 0, 0x12, 1, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0]);
+        // a TIFF whose first IFD follows more than the first MiB of image data: an orientation tag of `values` values
+        // whose field starts with `value` (with more than two, it is an offset), a tag pointing elsewhere, and an XMP
+        // packet (tag 700) stored after the IFD
+        let tiff = |le: bool, orientation: Option<(u32, u16)>, xmp: Option<&str>| {
+            let (u16_of, u32_of): (fn(u16) -> [u8; 2], fn(u32) -> [u8; 4]) =
+                if le { (u16::to_le_bytes, u32::to_le_bytes) } else { (u16::to_be_bytes, u32::to_be_bytes) };
+            let strips = span + 64;
+            let mut entries = Vec::new();
+            if let Some((values, value)) = orientation {
+                entries.push((274u16, 3u16, values, [u16_of(value), [0, 0]].concat()));
+            }
+            entries.push((305, 2, 64, u32_of(4).to_vec()));
+            let packet_at = 8 + strips + 2 + 12 * (entries.len() + usize::from(xmp.is_some())) + 4;
+            if let Some(x) = xmp {
+                entries.push((700, 7, x.len() as u32, u32_of(packet_at as u32).to_vec()));
+            }
+            let mut t = if le { b"II*\0".to_vec() } else { b"MM\0*".to_vec() };
+            t.extend_from_slice(&u32_of(8 + strips as u32));
+            t.resize(8 + strips, 0);
+            t.extend_from_slice(&u16_of(entries.len() as u16));
+            for (tag, kind, count, value) in entries {
+                t.extend_from_slice(&u16_of(tag));
+                t.extend_from_slice(&u16_of(kind));
+                t.extend_from_slice(&u32_of(count));
+                t.extend_from_slice(&value);
+            }
+            t.extend_from_slice(&[0; 4]);
+            t.extend_from_slice(xmp.unwrap_or_default().as_bytes());
+            t
+        };
+        // a JPEG: the APP1 payloads `early`, more than the first MiB of other segments, `late`, the image data
+        let jpeg = |early: &[Vec<u8>], late: &[Vec<u8>]| {
+            let app1 = |j: &mut Vec<u8>, payload: &Vec<u8>| {
+                j.extend_from_slice(&[0xff, 0xe1]);
+                j.extend_from_slice(&(payload.len() as u16 + 2).to_be_bytes());
+                j.extend_from_slice(payload);
+            };
+            let mut j = vec![0xff, 0xd8];
+            early.iter().for_each(|p| app1(&mut j, p));
+            for _ in 0..17 {
+                j.extend_from_slice(&[0xff, 0xef, 0xff, 0xff]);
+                j.resize(j.len() + 0xfffd, 0);
+            }
+            late.iter().for_each(|p| app1(&mut j, p));
+            j.extend_from_slice(&[0xff, 0xda, 0, 2, 0xff, 0xd9]);
+            j
+        };
+        let exif_app1 = [&b"Exif\0\0"[..], &exif].concat();
+        let plain_app1 = [&b"Exif\0\0"[..], &plain].concat();
+        let xmp_app1 = [&b"http://ns.adobe.com/xap/1.0/\0"[..], packet.as_bytes()].concat();
+        for (name, bytes, want) in [
+            ("small.webp", webp(&[image(64), exif_chunk.clone()]), o6),
+            ("large.webp", webp(&[image(span + 64), exif_chunk.clone(), xmp_chunk.clone()]), o6),
+            // EXIF wins in whichever order the chunks come, and an XMP in the first MiB doesn't stop the search
+            ("reversed.webp", webp(&[image(span + 64), xmp_chunk.clone(), exif_chunk.clone()]), o6),
+            ("xmp-first.webp", webp(&[xmp_chunk.clone(), image(span + 64), exif_chunk.clone()]), o6),
+            ("none.webp", webp(&[image(span + 64), exif_chunk.clone()])[..span + 100].to_vec(), None),
+            ("xmp.webp", webp(&[image(span + 64), xmp_chunk.clone()]), o8),
+            // an EXIF chunk of any size is read by its IFD: one over the span, one (without `Exif\0\0`, big-endian)
+            // whose IFD is more than the span into it
+            ("huge.webp", webp(&[image(span + 64), huge_exif, xmp_chunk.clone()]), o6),
+            ("late-ifd.webp", webp(&[image(span + 64), (&b"EXIF"[..], tiff(false, Some((1, 6)), None)), xmp_chunk.clone()]), o6),
+            // nothing outside the EXIF chunk is read for its IFD
+            ("outside.webp", webp(&[image(span + 64), stray_exif, stray_ifd, xmp_chunk.clone()]), o8),
+            // the last EXIF chunk counts, here a late one stating no orientation after one in the first MiB
+            ("last-exif.webp", webp(&[exif_chunk, image(span + 64), plain_chunk, xmp_chunk]), o8),
+            // an XMP chunk of the span is read
+            ("span-xmp.webp", webp(&[image(64), padded_xmp(span)]), o8),
+            ("le.tif", tiff(true, Some((1, 8)), None), o8),
+            ("be.tif", tiff(false, Some((1, 8)), None), o8),
+            ("offset.tif", tiff(true, Some((3, 8)), None), None),
+            // the tag wins over the IFD's XMP; XMP fills in for no tag or an invalid one
+            ("both.tif", tiff(true, Some((1, 6)), Some(&packet)), o6),
+            ("xmp.tif", tiff(false, None, Some(&packet)), o8),
+            ("invalid.tif", tiff(true, Some((1, 0)), Some(&packet)), o8),
+            ("none.jpg", jpeg(&[], &[]), None),
+            ("xmp-first.jpg", jpeg(std::slice::from_ref(&xmp_app1), std::slice::from_ref(&exif_app1)), o6),
+            ("xmp-only.jpg", jpeg(&[], std::slice::from_ref(&xmp_app1)), o8),
+            // the first Exif segment counts, though it states no orientation
+            ("two-exif.jpg", jpeg(&[plain_app1], &[exif_app1, xmp_app1]), o8),
+        ] {
+            assert_eq!(lightcraft_meta::extract(&bytes).orientation, want, "import: {name}");
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(super::file_orientation(&path.to_string_lossy()), want, "{name}");
+        }
+        // a larger XMP chunk isn't read, where the import (reading the whole file) takes its orientation
+        let over = webp(&[image(64), padded_xmp(span + 1)]);
+        assert_eq!(lightcraft_meta::extract(&over).orientation, o8);
+        std::fs::write(dir.join("over-xmp.webp"), over).unwrap();
+        assert_eq!(super::file_orientation(&dir.join("over-xmp.webp").to_string_lossy()), None);
+        assert_eq!(super::file_orientation(&dir.join("missing.webp").to_string_lossy()), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Issue #2674: the same for a PNG, whose `eXIf` and XMP `iTXt` chunks can follow the image data, and a PSD, whose
+    /// image resources can outgrow the first [`super::ORIENTATION_SPAN`].
+    #[test]
+    fn a_png_or_psd_gives_the_orientation_the_import_gives() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-png-psd-orientation-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let span = super::ORIENTATION_SPAN as usize;
+        let (o6, o8) = (Some(lightcraft_meta::Orientation::Rotate90), Some(lightcraft_meta::Orientation::Rotate270));
+        let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { orientation: o6, ..Default::default() });
+        let plain = lightcraft_meta::write_exif(&lightcraft_meta::Metadata::default());
+        let packet = lightcraft_meta::write_xmp(&lightcraft_meta::Metadata { orientation: o8, ..Default::default() }, None);
+        // a PNG: its IHDR, then `chunks`, each with a CRC (nothing checks it)
+        let png = |chunks: &[(&[u8], Vec<u8>)]| {
+            let mut p = b"\x89PNG\r\n\x1a\n".to_vec();
+            for (id, data) in [(&b"IHDR"[..], vec![0; 13])].iter().chain(chunks) {
+                p.extend_from_slice(&(data.len() as u32).to_be_bytes());
+                p.extend_from_slice(id);
+                p.extend_from_slice(data);
+                p.extend_from_slice(&[0; 4]);
+            }
+            p
+        };
+        let idat = |len: usize| (&b"IDAT"[..], vec![0; len]);
+        let iend = (&b"IEND"[..], Vec::new());
+        let exif_chunk = (&b"eXIf"[..], exif.clone());
+        let plain_chunk = (&b"eXIf"[..], plain.clone());
+        // an `iTXt` chunk: the keyword, compression flag `flag`, method, no language, no translated keyword, the text
+        let itxt = |keyword: &[u8], flag: u8, text: &[u8]| (&b"iTXt"[..], [keyword, &[0, flag, 0, 0, 0], text].concat());
+        let xmp_key = &b"XML:com.adobe.xmp"[..];
+        let xmp_chunk = itxt(xmp_key, 0, packet.as_bytes());
+        // the XMP packet padded with whitespace, in a chunk of `len` bytes
+        let padded_xmp = |len: usize| {
+            let mut p = packet.clone().into_bytes();
+            p.resize(len - 22, b' ');
+            itxt(xmp_key, 0, &p)
+        };
+        // a big-endian TIFF stream whose IFD, stating orientation 6, is more than the span into it
+        let ifd = [0u8, 1, 1, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0];
+        let late_ifd = [&b"MM\0*"[..], &(8 + span as u32).to_be_bytes(), &vec![0; span], &ifd].concat();
+        // an `eXIf` holding only a TIFF header, whose IFD offset (20) points past the chunk's end into the next chunk's
+        // data, where an IFD stating orientation 6 sits
+        let stray_exif = (&b"eXIf"[..], b"II*\0\x14\0\0\0".to_vec());
+        let stray_ifd = (&b"juNK"[..], vec![1, 0, 0x12, 1, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0]);
+        // a PSD: its header, `colour` bytes of colour-mode data, the image resources (id, data), `pixels` other bytes
+        let psd = |colour: usize, resources: &[(u16, &[u8])], pixels: usize| {
+            let mut section = Vec::new();
+            for (id, data) in resources {
+                section.extend_from_slice(b"8BIM");
+                section.extend_from_slice(&id.to_be_bytes());
+                section.extend_from_slice(&[0, 0]);
+                section.extend_from_slice(&(data.len() as u32).to_be_bytes());
+                section.extend_from_slice(data);
+                if data.len() % 2 == 1 {
+                    section.push(0);
+                }
+            }
+            let mut p = b"8BPS\0\x01".to_vec();
+            p.resize(26, 0);
+            p.extend_from_slice(&(colour as u32).to_be_bytes());
+            p.resize(p.len() + colour, 0);
+            p.extend_from_slice(&(section.len() as u32).to_be_bytes());
+            p.extend_from_slice(&section);
+            p.resize(p.len() + pixels, 0);
+            p
+        };
+        let long = vec![0; span + 64];
+        let (exif_res, plain_res, xmp_res, long_res) = ((1058, &exif[..]), (1058, &plain[..]), (1060, packet.as_bytes()), (1039, &long[..]));
+        let late_png = png(&[idat(span + 64), exif_chunk.clone()]);
+        let late_psd = psd(0, &[long_res, exif_res], 0);
+        for (name, bytes, want) in [
+            ("early.png", png(&[exif_chunk.clone(), idat(span + 64), iend.clone()]), o6),
+            ("late.png", png(&[idat(span + 64), exif_chunk.clone(), xmp_chunk.clone(), iend.clone()]), o6),
+            // the `eXIf` wins in whichever order the chunks come, and an XMP in the first MiB doesn't stop the search
+            ("reversed.png", png(&[idat(span + 64), xmp_chunk.clone(), exif_chunk.clone(), iend.clone()]), o6),
+            ("xmp-first.png", png(&[xmp_chunk.clone(), idat(span + 64), exif_chunk.clone(), iend.clone()]), o6),
+            ("xmp.png", png(&[idat(span + 64), xmp_chunk.clone(), iend.clone()]), o8),
+            ("none.png", png(&[idat(span + 64), iend.clone()]), None),
+            // the `eXIf` is cut short, or comes after the end of the image
+            ("cut.png", late_png[..late_png.len() - 6].to_vec(), None),
+            ("after-iend.png", png(&[idat(span + 64), iend.clone(), exif_chunk.clone()]), None),
+            // an `eXIf` of any size is read by its IFD: with `Exif\0\0`, over the span, and with its IFD past the span
+            ("prefixed.png", png(&[idat(span + 64), (&b"eXIf"[..], [&b"Exif\0\0"[..], &exif].concat())]), o6),
+            ("huge.png", png(&[idat(64), (&b"eXIf"[..], [&exif[..], &vec![0; span]].concat()), xmp_chunk.clone()]), o6),
+            ("late-ifd.png", png(&[idat(span + 64), (&b"eXIf"[..], late_ifd), xmp_chunk.clone()]), o6),
+            // nothing outside the `eXIf` is read for its IFD
+            ("outside.png", png(&[idat(span + 64), stray_exif, stray_ifd, xmp_chunk.clone()]), o8),
+            // the last `eXIf` counts, here a late one stating no orientation after one in the first MiB
+            ("last-exif.png", png(&[exif_chunk.clone(), idat(span + 64), plain_chunk, xmp_chunk.clone()]), o8),
+            // a compressed packet or another keyword isn't the XMP; a chunk of the span is read
+            ("compressed.png", png(&[idat(span + 64), xmp_chunk.clone(), itxt(xmp_key, 1, packet.as_bytes())]), o8),
+            ("only-compressed.png", png(&[idat(span + 64), itxt(xmp_key, 1, packet.as_bytes())]), None),
+            ("other-text.png", png(&[idat(span + 64), itxt(b"Comment", 0, packet.as_bytes())]), None),
+            ("short-text.png", png(&[idat(span + 64), xmp_chunk.clone(), (&b"iTXt"[..], b"XML:com.adobe.xmp\0\0".to_vec())]), o8),
+            ("span-xmp.png", png(&[idat(64), padded_xmp(span)]), o8),
+            ("late.psd", late_psd.clone(), o6),
+            ("early.psd", psd(0, &[exif_res], span + 64), o6),
+            // Exif wins in whichever order the resources come; XMP fills in for none, or none stating an orientation
+            ("both.psd", psd(0, &[xmp_res, long_res, exif_res], 0), o6),
+            ("xmp.psd", psd(768, &[long_res, xmp_res], 0), o8),
+            ("plain.psd", psd(0, &[long_res, plain_res, xmp_res], 0), o8),
+            ("none.psd", psd(0, &[long_res], span), None),
+            // as at import, nothing is taken from resources that are cut short or state their Exif twice
+            ("cut.psd", late_psd[..late_psd.len() - 1].to_vec(), None),
+            ("two-exif.psd", psd(0, &[long_res, exif_res, exif_res], 0), None),
+        ] {
+            assert_eq!(lightcraft_meta::extract(&bytes).orientation, want, "import: {name}");
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(super::file_orientation(&path.to_string_lossy()), want, "{name}");
+        }
+        // a larger XMP chunk isn't read, where the import (reading the whole file) takes its orientation
+        let over = png(&[idat(64), padded_xmp(span + 1)]);
+        assert_eq!(lightcraft_meta::extract(&over).orientation, o8);
+        std::fs::write(dir.join("over-xmp.png"), over).unwrap();
+        assert_eq!(super::file_orientation(&dir.join("over-xmp.png").to_string_lossy()), None);
+        std::fs::remove_dir_all(dir).unwrap();
+
+        // the `eXIf` as the last chunk walked, and as the first one not: IHDR, `chunks` of empty `IDAT`, the `eXIf`
+        let steps = super::png_chunk_steps;
+        let split = |chunks: usize| png(&[vec![idat(0); chunks], vec![exif_chunk.clone()]].concat());
+        let len = |chunks: usize| (8 + 25 + 12 * chunks + 12 + exif.len()) as u64;
+        let walked = (0..).find(|&n| n as u64 + 2 == steps(len(n)) && n as u64 + 3 > steps(len(n + 1))).unwrap();
+        let (last, past) = (split(walked), split(walked + 1));
+        assert_eq!(last.len() as u64, len(walked));
+        assert_eq!(super::png_orientation(&mut std::io::Cursor::new(&last)), o6);
+        assert_eq!(lightcraft_meta::extract(&past).orientation, o6);
+        assert_eq!(super::png_orientation(&mut std::io::Cursor::new(&past)), None);
+        // image data split into chunks of a KiB is walked whatever its length, up to the limit
+        let kib_chunks = png(&[vec![idat(1012); 6000], vec![exif_chunk.clone()]].concat());
+        assert_eq!(super::png_orientation(&mut std::io::Cursor::new(&kib_chunks)), o6);
+        assert_eq!(steps(u64::MAX), 1 << 20);
+
+        // image resources that end exactly at the limit, and a byte past it
+        let limit = super::PSD_RESOURCES_SPAN as usize;
+        let padding = vec![0; limit - 58 - exif.len().next_multiple_of(2)];
+        let within = psd(0, &[(1039, &padding[..]), exif_res], 0);
+        assert_eq!(within.len(), limit);
+        assert_eq!(super::psd_orientation(&mut std::io::Cursor::new(&within)), o6);
+        let past = psd(1, &[(1039, &padding[..]), exif_res], 0);
+        assert_eq!(lightcraft_meta::extract(&past).orientation, o6);
+        assert_eq!(super::psd_orientation(&mut std::io::Cursor::new(&past)), None);
+    }
+
     #[test]
     fn sidecars_are_written_only_beside_an_existing_original() {
         let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-local-{}", std::process::id()));
@@ -827,6 +1603,23 @@ mod tests {
         };
         let sc = super::parse_sidecar(&lightcraft_meta::write_xmp(&m, None), crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.keywords, Some(vec!["Places|Lisbon".to_string()]));
+    }
+
+    /// Issue #2556: a sidecar's `lc:settings` colour-range mask keeps at most `MAX_COLOR_RANGE_SAMPLES` samples.
+    #[test]
+    fn sidecar_color_range_samples_are_capped() {
+        use lightcraft_develop::{MAX_COLOR_RANGE_SAMPLES, Mask, MaskComponent, MaskOp, MaskShape};
+        let samples: Vec<[f64; 3]> = (0..1000).map(|i| [i as f64 / 1000.0, 0.1, -0.1]).collect();
+        let mut d = DevelopSettings::default();
+        let shape = MaskShape::ColorRange { samples: samples.clone(), refine: 50.0 };
+        d.masks.push(Mask { id: 1, components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }], ..Default::default() });
+        let xmp = lightcraft_meta::write_xmp(&lightcraft_meta::Metadata::default(), Some(&d.to_json().to_string()));
+        let sc = super::parse_sidecar(&xmp, crate::crs::Target::Rendered).unwrap();
+        let Some(DevelopPatch::Full(s)) = sc.develop else { panic!("expected full settings") };
+        let Some(MaskShape::ColorRange { samples: got, .. }) = s.masks.first().and_then(|m| m.components.first()).map(|c| &c.shape) else {
+            panic!("expected a colour range")
+        };
+        assert_eq!(got.as_slice(), &samples[..MAX_COLOR_RANGE_SAMPLES]);
     }
 
     use super::*;
@@ -929,3 +1722,220 @@ mod tests_repair_provenance;
 #[cfg(test)]
 #[path = "sidecar/tests_stem_owners.rs"]
 mod tests_stem_owners;
+
+#[cfg(test)]
+mod jpeg_header_tests {
+    use super::{JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS, read_jpeg_xmp};
+    use std::io::{self, Cursor, Read, Seek, SeekFrom};
+
+    struct CountedReader {
+        cursor: Cursor<Vec<u8>>,
+        bytes_read: usize,
+        largest_read: usize,
+        seeks: usize,
+        chunk: usize,
+        read_error_at: Option<u64>,
+        seek_error: bool,
+    }
+
+    impl CountedReader {
+        fn new(bytes: Vec<u8>) -> Self {
+            Self { cursor: Cursor::new(bytes), bytes_read: 0, largest_read: 0, seeks: 0, chunk: usize::MAX, read_error_at: None, seek_error: false }
+        }
+    }
+
+    impl Read for CountedReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.largest_read = self.largest_read.max(buf.len());
+            if self.read_error_at.is_some_and(|at| self.cursor.position() >= at) {
+                return Err(io::Error::other("injected header read failure"));
+            }
+            let len = buf.len().min(self.chunk);
+            let read = self.cursor.read(&mut buf[..len])?;
+            self.bytes_read += read;
+            Ok(read)
+        }
+    }
+
+    impl Seek for CountedReader {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.seeks += 1;
+            if self.seek_error {
+                return Err(io::Error::other("injected header seek failure"));
+            }
+            self.cursor.seek(pos)
+        }
+    }
+
+    fn segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+        let len = u16::try_from(payload.len() + 2).unwrap();
+        let mut bytes = vec![0xff, marker];
+        bytes.extend_from_slice(&len.to_be_bytes());
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    fn packet(rating: i8) -> String {
+        lightcraft_meta::write_xmp(&lightcraft_meta::Metadata { rating: Some(rating), ..Default::default() }, None)
+    }
+
+    fn xmp_segment(packet: &str) -> Vec<u8> {
+        let mut payload = b"http://ns.adobe.com/xap/1.0/\0".to_vec();
+        payload.extend_from_slice(packet.as_bytes());
+        segment(0xe1, &payload)
+    }
+
+    fn jpeg(packet: &str) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(xmp_segment(packet));
+        bytes
+    }
+
+    #[test]
+    fn first_standard_packet_skips_other_segments_and_stops_before_tail() {
+        let first = packet(2);
+        let first_payload_len = xmp_segment(&first).len() - 4;
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[7; 17]));
+        bytes.extend(segment(0xe1, b"Exif\0\0tiny"));
+        let mut extended = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
+        extended.extend_from_slice(&[0; 40]);
+        extended.extend_from_slice(b"not a standard packet");
+        bytes.extend(segment(0xe1, &extended));
+        bytes.extend(xmp_segment(&first));
+        let end = bytes.len();
+        bytes.extend(xmp_segment(&packet(5)));
+        bytes.extend_from_slice(&[0xff, 0xda, 0, 2]);
+        bytes.extend_from_slice(&[3; 128]);
+        let mut reader = CountedReader::new(bytes);
+        reader.read_error_at = Some(end as u64);
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), Some(first));
+        assert_eq!(reader.cursor.position(), end as u64, "later packets and image bytes are not read");
+        assert_eq!(reader.bytes_read, end - 17, "APP0 payload is skipped, not buffered");
+        assert_eq!(reader.seeks, 1);
+        assert_eq!(reader.largest_read, first_payload_len, "reads at most one complete APP1 payload at a time");
+    }
+
+    #[test]
+    fn stops_at_sos_or_eoi_without_reading_later_xmp() {
+        for stop in [0xda, 0xd9] {
+            let mut bytes = vec![0xff, 0xd8, 0xff, stop];
+            bytes.extend(xmp_segment(&packet(3)));
+            let mut reader = CountedReader::new(bytes);
+            reader.read_error_at = Some(4);
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+            assert_eq!((reader.bytes_read, reader.cursor.position(), reader.seeks), (4, 4, 0));
+        }
+    }
+
+    #[test]
+    fn rejects_incomplete_app1_even_when_partial_xmp_parses() {
+        let expected = packet(4);
+        let mut bytes = jpeg(&expected);
+        let declared = u16::from_be_bytes([bytes[4], bytes[5]]) + 7;
+        bytes[4..6].copy_from_slice(&declared.to_be_bytes());
+        let partial = lightcraft_meta::jpeg_segments(&bytes).xmp.unwrap();
+        assert_eq!(partial, expected, "the shared extractor tolerates a truncated declared payload");
+        assert_eq!(super::parse_sidecar(&partial, crate::crs::Target::Rendered).unwrap().rating, Some(4));
+        let len = bytes.len();
+        let mut reader = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!(reader.bytes_read, len);
+    }
+
+    #[test]
+    fn span_budget_counts_soi_headers_and_skipped_payloads() {
+        let expected = packet(3);
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[9; 23]));
+        bytes.extend(xmp_segment(&expected));
+        let end = bytes.len();
+        let mut exact = CountedReader::new(bytes.clone());
+        assert_eq!(read_jpeg_xmp(&mut exact, end as u64, JPEG_XMP_HEADER_STEPS), Some(expected));
+        assert_eq!(exact.cursor.position(), end as u64, "a complete early APP1 does not require EOI");
+        assert_eq!(exact.bytes_read, end - 23);
+        let mut short = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut short, (end - 1) as u64, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((short.bytes_read, short.cursor.position(), short.seeks), (10, 33, 1), "reject before APP1 payload read");
+        assert_eq!(short.largest_read, 2);
+    }
+
+    #[test]
+    fn span_budget_rejects_skip_before_seeking() {
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[8; 18]));
+        bytes.extend(xmp_segment(&packet(1)));
+        let mut reader = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut reader, 6, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((reader.bytes_read, reader.cursor.position(), reader.seeks), (6, 6, 0));
+    }
+
+    #[test]
+    fn marker_budget_counts_fill_and_standalone_markers() {
+        let expected = packet(1);
+        // Two fill steps, SOI, TEM, RST3, then APP1: six steps after the initial SOI.
+        let mut bytes = vec![0xff, 0xd8, 0xff, 0xff, 0xff, 0xd8, 0xff, 0x01, 0xff, 0xd3];
+        bytes.extend(xmp_segment(&expected));
+        for (steps, end) in [(0, 2), (5, 10)] {
+            let mut reader = CountedReader::new(bytes.clone());
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, steps), None);
+            assert_eq!((reader.bytes_read, reader.cursor.position()), (end, end as u64));
+        }
+        let mut reader = CountedReader::new(bytes);
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, 6), Some(expected));
+    }
+
+    #[test]
+    fn rejects_invalid_headers_and_segment_lengths() {
+        for bytes in [
+            vec![],
+            vec![0xff],
+            b"\x89PNG\r\n\x1a\n".to_vec(),
+            vec![0xff, 0xd8, 0, 0xe1, 0, 2],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0, 0],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0, 1],
+            vec![0xff, 0xd8, 0xff, 0xe1, 0, 3],
+        ] {
+            let len = bytes.len();
+            let mut reader = CountedReader::new(bytes);
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+            assert!(reader.bytes_read <= len);
+        }
+    }
+
+    #[test]
+    fn propagates_read_and_seek_failures() {
+        for at in [0, 6] {
+            let mut reader = CountedReader::new(jpeg(&packet(4)));
+            reader.read_error_at = Some(at);
+            assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+            assert_eq!(reader.bytes_read as u64, at);
+        }
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(segment(0xe0, &[1]));
+        bytes.extend(xmp_segment(&packet(4)));
+        let mut reader = CountedReader::new(bytes);
+        reader.seek_error = true;
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((reader.bytes_read, reader.seeks), (6, 1));
+    }
+
+    #[test]
+    fn handles_short_reads_without_bypassing_span_limit() {
+        let expected = packet(2);
+        let bytes = jpeg(&expected);
+        let end = bytes.len();
+        let mut exact = CountedReader::new(bytes.clone());
+        exact.chunk = 1;
+        assert_eq!(read_jpeg_xmp(&mut exact, end as u64, JPEG_XMP_HEADER_STEPS), Some(expected));
+        assert_eq!(exact.bytes_read, end);
+        for (span, read) in [(0, 0), (1, 1), (end - 1, 6)] {
+            let mut reader = CountedReader::new(bytes.clone());
+            reader.chunk = 1;
+            assert_eq!(read_jpeg_xmp(&mut reader, span as u64, JPEG_XMP_HEADER_STEPS), None);
+            assert_eq!(reader.bytes_read, read);
+            assert!(reader.cursor.position() <= span as u64);
+        }
+    }
+}

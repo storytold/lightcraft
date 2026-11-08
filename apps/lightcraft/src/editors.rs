@@ -31,22 +31,14 @@ pub fn check(app: &str) -> Result<(), String> {
 /// Open `path` in `app` (see [`check`]). Spawned, never waited for: the editor runs alongside.
 pub fn open_with(path: &str, app: &str) -> Result<(), String> {
     let mut c = match launcher(app)? {
-        Launcher::Default if cfg!(target_os = "macos") => {
-            let mut c = Command::new("open");
-            c.arg(path);
-            c
-        }
+        Launcher::Default if cfg!(target_os = "macos") => return run_open(&[path]),
         Launcher::Default if cfg!(target_os = "windows") => windows_default_command(path),
         Launcher::Default => {
             let mut c = Command::new("xdg-open");
             c.arg(path);
             c
         }
-        Launcher::MacApp(app) => {
-            let mut c = Command::new("open");
-            c.args(["-a", &app, path]);
-            c
-        }
+        Launcher::MacApp(app) => return run_open(&["-a", &app, path]),
         Launcher::Program(p) => {
             let mut c = Command::new(p);
             c.arg(path);
@@ -59,6 +51,22 @@ pub fn open_with(path: &str, app: &str) -> Result<(), String> {
         }
     };
     c.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// macOS: run `open` and wait for it (it returns as soon as LaunchServices has handed the file
+/// over), so an application it can't find or start is reported instead of silently doing nothing.
+fn run_open(args: &[&str]) -> Result<(), String> {
+    let out = Command::new("open").args(args).output().map_err(|e| e.to_string())?;
+    open_result(out.status.success(), &String::from_utf8_lossy(&out.stderr))
+}
+
+/// What `open` said, as a result: its own message when it failed.
+fn open_result(ok: bool, stderr: &str) -> Result<(), String> {
+    if ok {
+        return Ok(());
+    }
+    let msg = stderr.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("the application couldn't be started");
+    Err(msg.to_string())
 }
 
 /// Open every file in `paths` with one start of `app`, as a file manager hands over a selection:
@@ -119,10 +127,15 @@ fn launcher(app: &str) -> Result<Launcher, String> {
 fn find_photocraft() -> Option<Launcher> {
     let env = |k: &str| std::env::var_os(k).map(|v| v.to_string_lossy().to_string());
     if cfg!(target_os = "macos") {
-        // LaunchServices finds the app wherever it is; these are only the usual places
+        // the usual places, then wherever Spotlight knows it (by bundle id or bundle name)
         let home = env("HOME").map(|h| Path::new(&h).join("Applications/PhotoCraft.app"));
-        let found = [Some(PathBuf::from("/Applications/PhotoCraft.app")), home].into_iter().flatten().find(|p| p.is_dir());
-        return Some(Launcher::MacApp(found.map_or_else(|| PHOTOCRAFT.to_string(), |p| p.to_string_lossy().to_string())));
+        let usual = [Some(PathBuf::from("/Applications/PhotoCraft.app")), home].into_iter().flatten().find(|p| p.is_dir());
+        let spotlight = || {
+            let query = format!("kMDItemCFBundleIdentifier == '{PHOTOCRAFT_ID}' || kMDItemFSName == 'PhotoCraft.app'");
+            let out = Command::new("mdfind").arg(query).output().ok().filter(|o| o.status.success())?;
+            mdfind_app(&String::from_utf8_lossy(&out.stdout))
+        };
+        return usual.or_else(spotlight).map(|p| Launcher::MacApp(p.to_string_lossy().to_string()));
     }
     if cfg!(target_os = "windows") {
         let install_dir = reg_query(r"HKLM\Software\PhotoCraft", Some("InstallDir"));
@@ -130,16 +143,34 @@ fn find_photocraft() -> Option<Launcher> {
         return windows_candidates(install_dir, app_path, env).into_iter().find(|p| p.is_file()).map(Launcher::Program);
     }
     // Linux, FreeBSD: on the PATH (.deb, .rpm, tarball), a desktop entry (AppImage, which
-    // registers one on first run), else the Flatpak
-    let on_path =
-        env("PATH").into_iter().flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).map(|d| d.join("photocraft")).find(|p| p.is_file());
+    // registers one on first run; its Exec a path or a name on the PATH), an AppImage where people
+    // keep them, else the Flatpak
+    let path_dirs: Vec<PathBuf> = env("PATH").into_iter().flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).collect();
+    let on_path = |name: &Path| resolve_program(name, &path_dirs);
     let from_entry = || {
         desktop_entry_dirs(env).into_iter().find_map(|d| {
             let text = std::fs::read_to_string(d.join(format!("{PHOTOCRAFT_ID}.desktop"))).ok()?;
-            desktop_exec(&text).filter(|p| p.is_file())
+            desktop_exec(&text)
+                // a wrapper (`Exec=env VAR=1 /opt/PhotoCraft/photocraft %F`) would be started with the photo only:
+                // skip it and look further
+                .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().contains("photocraft")))
+                .and_then(|p| on_path(&p))
         })
     };
-    if let Some(p) = on_path.or_else(from_entry) {
+    let appimage = || {
+        let home = env("HOME")?;
+        let dirs = [Path::new(&home).join("Applications"), Path::new(&home).join(".local/bin")];
+        // both folders, so the newest version wins whichever it is in
+        let mut found: Vec<PathBuf> = dirs
+            .iter()
+            .filter_map(|d| std::fs::read_dir(d).ok())
+            .flat_map(|rd| rd.flatten().map(|e| e.path()).filter(|p| is_photocraft_appimage(p) && p.is_file()).collect::<Vec<_>>())
+            .collect();
+        // the newest version by name (1.10 after 1.9)
+        found.sort_by_key(|p| version_key(&p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default()));
+        found.pop()
+    };
+    if let Some(p) = on_path(Path::new("photocraft")).or_else(from_entry).or_else(appimage) {
         return Some(Launcher::Program(p));
     }
     let flatpak = Command::new("flatpak").args(["info", PHOTOCRAFT_ID]).output().is_ok_and(|o| o.status.success());
@@ -205,10 +236,44 @@ fn desktop_exec(entry: &str) -> Option<PathBuf> {
         Some(rest) => rest.split('"').next()?,
         None => exec.split_whitespace().next()?,
     };
-    // a bare name (`photocraft %F`) was already looked for on the PATH. Desktop entries are a
-    // freedesktop (POSIX) format: absolute means a leading `/` on every platform the parser runs on
-    // (`Path::is_absolute` wants a drive letter on Windows, where the tests run too)
-    program.starts_with('/').then(|| PathBuf::from(program))
+    // a path, or a bare name (`photocraft %F`) the caller looks for on the PATH
+    (!program.is_empty()).then(|| PathBuf::from(program))
+}
+
+/// A program from a desktop entry or the PATH: a path as it is (if it is a file), a bare name
+/// looked for in `dirs`. A leading `/` counts as absolute on every platform (desktop entries are
+/// a POSIX format; `Path::is_absolute` wants a drive letter on Windows, where the tests run too).
+fn resolve_program(name: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
+    if name.is_absolute() || name.starts_with("/") {
+        return Some(name.to_path_buf()).filter(|p| p.is_file());
+    }
+    dirs.iter().map(|d| d.join(name)).find(|p| p.is_file())
+}
+
+/// A sort key that orders the digit runs in a name by value (`1.9` before `1.10`).
+fn version_key(name: &str) -> Vec<(u64, String)> {
+    let mut out = Vec::new();
+    let mut rest = name;
+    while !rest.is_empty() {
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let (num, tail) = rest.split_at(digits);
+        let text_len = tail.find(|c: char| c.is_ascii_digit()).unwrap_or(tail.len());
+        let (text, next) = tail.split_at(text_len);
+        out.push((num.parse().unwrap_or(u64::MAX), text.to_string()));
+        rest = next;
+    }
+    out
+}
+
+/// An AppImage of PhotoCraft by its file name (`PhotoCraft-1.2-x86_64.AppImage`, any case).
+fn is_photocraft_appimage(p: &Path) -> bool {
+    let name = p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    name.contains("photocraft") && name.ends_with(".appimage")
+}
+
+/// The first application bundle in `mdfind` output (one path per line).
+fn mdfind_app(output: &str) -> Option<PathBuf> {
+    output.lines().map(str::trim).find(|l| l.ends_with(".app")).map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -275,11 +340,57 @@ mod tests {
         let appimage = "[Desktop Entry]\nName=PhotoCraft\nExec=\"/home/simon/Apps/photocraft-1.2-linux-x86_64.AppImage\" %F\n";
         assert_eq!(desktop_exec(appimage), Some(PathBuf::from("/home/simon/Apps/photocraft-1.2-linux-x86_64.AppImage")));
         assert_eq!(desktop_exec("Exec=/opt/photocraft/photocraft %F\n"), Some(PathBuf::from("/opt/photocraft/photocraft")));
-        assert_eq!(desktop_exec("Exec=photocraft %F\nTryExec=photocraft\n"), None, "a bare name is a PATH lookup");
+        assert_eq!(desktop_exec("Exec=photocraft %F\nTryExec=photocraft\n"), Some(PathBuf::from("photocraft")), "a bare name, for a PATH lookup");
         assert_eq!(desktop_exec("[Desktop Entry]\n"), None);
         let dirs = desktop_entry_dirs(|k| (k == "HOME").then(|| "/home/simon".to_string()));
         assert_eq!(dirs[0], PathBuf::from("/home/simon/.local/share/applications"));
         assert!(dirs.contains(&PathBuf::from("/usr/share/applications")));
+    }
+
+    #[test]
+    fn a_bare_exec_name_is_found_on_the_path() {
+        let a = std::env::temp_dir().join(format!("lc-editors-a-{}", std::process::id()));
+        let b = std::env::temp_dir().join(format!("lc-editors-b-{}", std::process::id()));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(b.join("photocraft"), b"").unwrap();
+        let dirs = vec![a.clone(), b.clone()];
+        assert_eq!(resolve_program(Path::new("photocraft"), &dirs), Some(b.join("photocraft")));
+        assert_eq!(resolve_program(Path::new("nothere"), &dirs), None);
+        let abs = b.join("photocraft");
+        assert_eq!(resolve_program(&abs, &[]), Some(abs.clone()), "a path needs no PATH");
+        assert_eq!(resolve_program(&b.join("missing"), &dirs), None);
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
+    #[test]
+    fn appimage_versions_sort_numerically() {
+        let mut names = ["photocraft-1.10-x86_64.appimage", "photocraft-1.9-x86_64.appimage", "photocraft-1.2-x86_64.appimage"];
+        names.sort_by_key(|n| version_key(n));
+        assert_eq!(names[2], "photocraft-1.10-x86_64.appimage");
+        assert_eq!(names[0], "photocraft-1.2-x86_64.appimage");
+    }
+
+    #[test]
+    fn a_failed_open_is_an_error() {
+        assert!(open_result(true, "").is_ok());
+        assert!(open_result(false, "Unable to find application\n").is_err());
+        assert!(open_result(false, "").is_err(), "even when it says nothing");
+    }
+
+    #[test]
+    fn odd_detection_input_does_not_panic() {
+        for text in ["", "Exec=", "Exec=\"", "Exec=\"\"", "\u{0}\u{fffd}", "Exec= %F", "[Desktop Entry]\nExec=\u{e9}\u{301}"] {
+            let _ = desktop_exec(text);
+            let _ = mdfind_app(text);
+            let _ = reg_value(text);
+        }
+        for p in ["", "/", ".AppImage", "\u{e9}.appimage", "a/../b"] {
+            let _ = is_photocraft_appimage(Path::new(p));
+        }
+        let _ = desktop_entry_dirs(|_| None);
+        let _ = windows_candidates(None, Some("\"".into()), |_| None);
     }
 
     #[test]

@@ -169,6 +169,21 @@ pub fn decode(bytes: &[u8], opts: DecodeOptions) -> Result<Decoded> {
     std::panic::catch_unwind(|| decode_unguarded(bytes, format, &opts)).unwrap_or_else(|_| Err(Error::Malformed(format, "decoder panicked".into())))
 }
 
+/// A JPEG for display, fast: fitted within `max_w × max_h` (never enlarged) as 8-bit sRGB with its
+/// EXIF orientation (1..=8, not applied), the picture `decode(bytes, DecodeOptions::fit(..))
+/// .to_srgb8()` gives within a few levels, in about half the time for a large camera preview.
+/// `Ok(None)` when the file is not a plain 8-bit sRGB JPEG (an ICC profile or an Adobe RGB EXIF
+/// hint, CMYK, 12-bit, lossless or arithmetic coding) or its headers can't be read: use
+/// [`decode`], which reports a malformed header as an error. Bad scan data is an error here, and
+/// nothing is ever a panic.
+pub fn decode_jpeg_srgb8_fit(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<(lightcraft_raster::Rgba8, u16)>> {
+    if sniff(bytes) != Some(Format::Jpeg) {
+        return Ok(None);
+    }
+    std::panic::catch_unwind(|| jpeg::srgb8_fit(bytes, max_w, max_h))
+        .unwrap_or_else(|_| Err(Error::Malformed(Format::Jpeg, "decoder panicked".into())))
+}
+
 /// What a file's headers say about its image: enough to catalogue it without decoding pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
@@ -207,6 +222,7 @@ pub fn read_header_unguarded(bytes: &[u8], format: Format) -> Result<Header> {
         Format::WebP => webp::header(bytes)?,
         Format::Psd => psd::header(bytes)?,
         Format::Heif => heif::header(bytes)?,
+        Format::Gif | Format::Bmp => other::header(bytes, format)?,
         // rare here (or, for JPEG XL, without a header reader yet): a small decode, as before
         _ => {
             let d = decode_unguarded(bytes, format, &DecodeOptions::fit(64, 64))?;
@@ -337,4 +353,30 @@ pub fn decode_thumbnail_with(bytes: &[u8], opts: &ThumbnailOptions) -> Result<Th
         source_width: d.source_width,
         source_height: d.source_height,
     })
+}
+
+/// Checked sample-buffer length `width × height × ch`, in u64: `None` on overflow or a zero
+/// dimension. Image size is capped by `DecodeOptions::max_pixels` alone; once the buffer is known to
+/// hold this many samples, every later `usize` product is bounded by an allocation that exists.
+pub(crate) fn checked_sample_buf_len(width: usize, height: usize, ch: usize) -> Option<u64> {
+    (width as u64).checked_mul(height as u64).and_then(|n| n.checked_mul(ch as u64)).filter(|&n| n > 0)
+}
+
+#[cfg(test)]
+mod checked_arithmetic_tests {
+    use super::*;
+
+    #[test]
+    fn checked_sample_buf_len_wrap_inputs_rejected() {
+        assert_eq!(checked_sample_buf_len(usize::MAX, usize::MAX, 4), None);
+        assert_eq!(checked_sample_buf_len(0, 1, 3), None);
+    }
+
+    #[test]
+    fn checked_sample_buf_len_normal_accepted() {
+        assert_eq!(checked_sample_buf_len(100, 1, 3), Some(300));
+        assert_eq!(checked_sample_buf_len(1, 1, 1), Some(1));
+        // 300 Mpx RGBA is within the default pixel limit, so it must not be refused by sample count.
+        assert_eq!(checked_sample_buf_len(20_000, 15_000, 4), Some(1_200_000_000));
+    }
 }
