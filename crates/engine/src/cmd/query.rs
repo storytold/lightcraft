@@ -14,7 +14,7 @@ pub fn photo_summary(p: &Photo) -> Value {
         "id": p.id.0,
         "fileName": p.file_name,
         "format": p.format,
-        "kind": p.kind,
+        "kind": p.effective_kind(),
         "width": p.width,
         "height": p.height,
         "captured": p.captured,
@@ -73,19 +73,30 @@ fn photo_arg(s: &Session, p: &Value, c: &str) -> crate::Result<PhotoId> {
 
 /// The All Metadata rows of a video whose file can't be read: what its catalog record holds.
 fn recorded_video_rows(ph: &lightcraft_catalog::Photo) -> Vec<Value> {
-    let mut rows: Vec<(&str, String)> = Vec::new();
+    let mut rows: Vec<(&str, &str, String)> = Vec::new();
     if let Some(d) = ph.duration.filter(|d| d.is_finite()) {
-        rows.push(("Duration", format!("{d:.2} s")));
+        rows.push(("Video", "Duration", format!("{d:.2} s")));
     }
-    rows.push(("Width", ph.width.to_string()));
-    rows.push(("Height", ph.height.to_string()));
+    rows.push(("Video", "Width", ph.width.to_string()));
+    rows.push(("Video", "Height", ph.height.to_string()));
     if let Some(c) = &ph.captured {
-        rows.push(("Created", c.clone()));
+        rows.push(("Video", "Created", c.clone()));
     }
     if !ph.meta.camera.is_empty() {
-        rows.push(("Camera", ph.meta.camera.clone()));
+        rows.push(("Video", "Camera", ph.meta.camera.clone()));
     }
-    rows.into_iter().map(|(name, value)| json!({"group": "Video", "tag": 0, "name": name, "value": value})).collect()
+    // What import read from the clip's XMP: the place it names and its coordinates, a fixed
+    // handful of rows, never the whole packet.
+    if let Some((lat, lon)) = ph.meta.gps {
+        rows.push(("GPS", "Latitude", format!("{lat:.6}")));
+        rows.push(("GPS", "Longitude", format!("{lon:.6}")));
+    }
+    for (name, value) in [("Location", &ph.meta.location), ("City", &ph.meta.city), ("State", &ph.meta.state), ("Country", &ph.meta.country)] {
+        if !value.is_empty() {
+            rows.push(("Location", name, value.clone()));
+        }
+    }
+    rows.into_iter().map(|(group, name, value)| json!({"group": group, "tag": 0, "name": name, "value": value})).collect()
 }
 
 /// The All Metadata rows of a video, from its metadata boxes ([`crate::files::read_video_metadata_file`]):

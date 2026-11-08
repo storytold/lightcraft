@@ -653,10 +653,18 @@ impl crate::Session {
     /// held decoded until this returns).
     pub(crate) fn sources_now(&mut self, ids: &[PhotoId], level: SourceLevel) -> Vec<(PhotoId, Result<(Arc<Rgb32f>, SourceInfo), String>)> {
         use rayon::prelude::*;
-        let refs: Vec<(PhotoId, Option<SourceRef>)> =
-            ids.iter().map(|&id| (id, self.catalog.photo(id).cloned().map(|p| self.media.source_ref(&p, level)))).collect();
+        let refs: Vec<(PhotoId, Result<SourceRef, String>)> = ids
+            .iter()
+            .map(|&id| {
+                let Some(p) = self.catalog.photo(id) else { return (id, Err("no such photo".to_string())) };
+                if p.is_video() {
+                    return (id, Err("a video has no frame to sample".into()));
+                }
+                (id, Ok(self.media.source_ref(p, level)))
+            })
+            .collect();
         let loaded: Vec<(PhotoId, Result<super::source::DecodedSource, String>)> =
-            refs.into_par_iter().map(|(id, r)| (id, r.ok_or_else(|| "no such photo".to_string()).and_then(|r| r.load_source()))).collect();
+            refs.into_par_iter().map(|(id, r)| (id, r.and_then(|r| r.load_source()))).collect();
         loaded
             .into_iter()
             .map(|(id, r)| {

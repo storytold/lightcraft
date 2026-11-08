@@ -4180,11 +4180,20 @@ fn all_metadata_of_a_clip_without_a_file_shows_the_recorded_values() {
         Photo::new(PhotoId(1), Source::File { path: "/lightcraft-web/clip.mp4".into() }, "clip.mp4", "MP4", 1920, 1080, "2026-05-04T10:00:00");
     p.kind = MediaKind::Video;
     p.duration = Some(12.5);
+    p.meta.gps = Some((37.7749, -122.4194));
+    p.meta.location = "Golden Gate Park".into();
+    p.meta.city = "San Francisco".into();
+    p.meta.state = "CA".into();
+    p.meta.country = "USA".into();
     s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     let r = s.execute("photo.allMetadata", &json!({"id": 1})).unwrap();
     let rows = r["exif"].as_array().unwrap();
     assert!(rows.iter().any(|row| row["name"] == "Duration" && row["value"] == "12.50 s"), "{r}");
     assert!(rows.iter().any(|row| row["name"] == "Width" && row["value"] == "1920"), "{r}");
+    assert!(rows.iter().any(|row| row["group"] == "GPS" && row["name"] == "Latitude" && row["value"] == "37.774900"), "{r}");
+    assert!(rows.iter().any(|row| row["group"] == "GPS" && row["name"] == "Longitude" && row["value"] == "-122.419400"), "{r}");
+    assert!(rows.iter().any(|row| row["group"] == "Location" && row["name"] == "City" && row["value"] == "San Francisco"), "{r}");
+    assert!(rows.iter().any(|row| row["group"] == "Location" && row["name"] == "Country" && row["value"] == "USA"), "{r}");
     assert!(r["note"].as_str().is_some());
 }
 

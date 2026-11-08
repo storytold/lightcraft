@@ -250,7 +250,9 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     }
     let format = match ext_upper(name).as_str() {
         "JPG" | "JPEG" => "JPEG".to_string(),
-        "" | "MP4" | "MOV" | "M4V" => format!("{fmt:?}").to_uppercase(),
+        // Every extension `Photo::is_video` recognizes takes the sniffed format: a JPEG merely
+        // named .avi is an image, not a video.
+        "" | "MP4" | "MOV" | "M4V" | "AVI" | "MTS" | "M2TS" | "3GP" | "MKV" | "WEBM" | "WMV" | "MPG" | "MPEG" => format!("{fmt:?}").to_uppercase(),
         e => e.to_string(),
     };
     Ok(ProbeInfo {

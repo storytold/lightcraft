@@ -143,7 +143,7 @@ async fn read_file(originals: Originals, backend: Option<Backend>, file: web_sys
     };
     let format = lightcraft_codecs::sniff(&head);
     if format.as_ref().is_some_and(|f| f.is_video()) || (format.is_none() && lightcraft_engine::files::looks_like_video_container(&head)) {
-        if let Err(e) = store_video(&originals, backend.as_ref(), &file).await {
+        if let Err(e) = store_video(&originals, backend.as_ref(), &file.name(), &file).await {
             notice(format!("{} was not added: {e}", file.name()));
         }
         ctx.request_repaint();
@@ -257,34 +257,34 @@ async fn video_blob_metadata(blob: &web_sys::Blob, include_fragments: bool) -> R
     if at == size { Ok(out) } else { Err("video metadata scan exceeded its box budget".into()) }
 }
 
-async fn store_video(originals: &Originals, backend: Option<&Backend>, file: &web_sys::File) -> Result<(), String> {
+async fn store_video(originals: &Originals, backend: Option<&Backend>, name: &str, blob: &web_sys::Blob) -> Result<(), String> {
     // Import only needs the movie header; fragmented metadata matters for the location check.
-    let metadata = video_blob_metadata(file, false).await?;
-    let mut probe = lightcraft_engine::files::probe_bytes(&file.name(), &metadata)?;
+    let metadata = video_blob_metadata(blob, false).await?;
+    let mut probe = lightcraft_engine::files::probe_bytes(name, &metadata)?;
     if probe.kind != lightcraft_engine::catalog::MediaKind::Video {
         return Err("no readable video track in this container".into());
     }
-    let size = file.size() as u64;
+    let size = blob.size() as u64;
     let mut hash = lightcraft_preview::Hasher128::new();
     let mut at = 0;
     while at < size {
         let length = (size - at).min(1 << 20);
-        hash.update(&blob_range(file, at, length).await?);
+        hash.update(&blob_range(blob, at, length).await?);
         at += length;
     }
     let hash = hash.finish().to_string();
     if let Some(b) = backend {
-        bounded(b.write_original_blob(&storage_key(&hash), file), file.size()).await?;
+        bounded(b.write_original_blob(&storage_key(&hash), blob), blob.size()).await?;
     }
     probe.content_hash = Some(hash.clone());
     probe.file_size = size;
     // The copier trusts this result, so it must see fragment metadata too (as a reload does).
-    let location_check = match video_blob_metadata(file, true).await {
+    let location_check = match video_blob_metadata(blob, true).await {
         Ok(full) => lightcraft_meta::verify_video_location_absent(&full),
         Err(e) => Err(format!("cannot verify video location: {e}")),
     };
-    VIDEO_BLOBS.with(|b| b.borrow_mut().insert(hash.clone(), BlobOriginal { blob: file.clone().into(), location_check }));
-    originals.added_video(&file.name(), &hash, probe);
+    VIDEO_BLOBS.with(|b| b.borrow_mut().insert(hash.clone(), BlobOriginal { blob: blob.clone(), location_check }));
+    originals.added_video(name, &hash, probe);
     Ok(())
 }
 
@@ -893,7 +893,30 @@ impl WebApp {
         for m in bridge.take_incoming() {
             match m {
                 Incoming::Open { name, bytes } => {
-                    wasm_bindgen_futures::spawn_local(store_file(self.originals.clone(), self.backend.clone(), name, None, bytes, ctx.clone()));
+                    let (originals, backend, ctx) = (self.originals.clone(), self.backend.clone(), ctx.clone());
+                    wasm_bindgen_futures::spawn_local(async move {
+                        // A clip goes through the video path: its Original copier reads the Blob
+                        // from `VIDEO_BLOBS`, and the image path never registers one.
+                        let head = bytes.get(..bytes.len().min(4096)).unwrap_or(&bytes);
+                        let format = lightcraft_codecs::sniff(head);
+                        let video = format.as_ref().is_some_and(|f| f.is_video())
+                            || (format.is_none() && lightcraft_engine::files::looks_like_video_container(head));
+                        if video {
+                            let parts = js_sys::Array::new();
+                            parts.push(&js_sys::Uint8Array::from(bytes.as_slice()));
+                            match web_sys::Blob::new_with_u8_array_sequence(&parts) {
+                                Ok(blob) => {
+                                    if let Err(e) = store_video(&originals, backend.as_ref(), &name, &blob).await {
+                                        notice(format!("{name} was not added: {e}"));
+                                    }
+                                }
+                                Err(e) => notice(format!("{name} was not added: {e:?}")),
+                            }
+                        } else {
+                            store_file(originals, backend, name, None, bytes, ctx.clone()).await;
+                        }
+                        ctx.request_repaint();
+                    });
                 }
                 Incoming::Refused(error) => {
                     if !bridge.post(&Outgoing::Failed(error)) {
@@ -1195,6 +1218,21 @@ impl WebApp {
         }
     }
 
+    /// The directory an export would write to now: the previous export's, when it names one, else
+    /// the default. A waiting export freezes this so a later export cannot move its destination.
+    fn effective_export_dir(&self) -> String {
+        self.app
+            .session
+            .last_export
+            .as_ref()
+            .and_then(|l| l.get("dir"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(lightcraft_ui_egui::control::default_export_dir)
+    }
+
     fn run_inbox(&mut self, ctx: &egui::Context) {
         use lightcraft_engine::export::{ExportFormat, ExportOptions};
         let mut queue = PENDING_COMMANDS.with(|q| std::mem::take(&mut *q.borrow_mut()));
@@ -1233,10 +1271,12 @@ impl WebApp {
                 let copies_original =
                     resolved.as_ref().is_some_and(|r| ExportOptions::export_format(r, ExportFormat::default()) == ExportFormat::Original);
                 let must_wait = export_waiting || (copies_original && !self.export_videos_loaded(&p));
-                // Freeze the settings too: a preset or the previous export may change during the wait.
+                // Freeze the settings too: a preset, the previous export or `last_export.dir` may
+                // change during the wait.
                 if must_wait && let Some(r) = &resolved {
                     id = "app.export".into();
-                    p = crate::automation::frozen_export(r, &p);
+                    let destination = self.effective_export_dir();
+                    p = crate::automation::frozen_export(r, &p, Some(&destination));
                     params = p.to_string();
                 }
                 if export_waiting {

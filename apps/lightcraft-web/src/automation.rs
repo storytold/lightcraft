@@ -31,14 +31,25 @@ pub fn waits_behind_export(id: &str) -> bool {
 }
 
 /// The `app.export` params an export that has to wait runs with later: its `resolved` settings
-/// (a preset expanded, or the previous export's), with the targets frozen in `params`. A preset or
-/// a previous export changed during the wait no longer changes what this export writes.
-pub fn frozen_export(resolved: &Value, params: &Value) -> Value {
+/// (a preset expanded, or the previous export's), with the targets frozen in `params` and the
+/// destination it resolved now. A preset, the previous export or `last_export.dir` changed during
+/// the wait no longer changes what this export writes.
+pub fn frozen_export(resolved: &Value, params: &Value, destination: Option<&str>) -> Value {
     let mut frozen = resolved.clone();
     if let Some(o) = frozen.as_object_mut() {
         o.remove("preset");
         if let Some(ids) = params.get("ids").filter(|ids| !ids.is_null()) {
             o.insert("ids".into(), ids.clone());
+        }
+        // `export_active` falls back to `last_export.dir` when the call names none: freeze that
+        // now, so an export that runs later still writes where it was asked to.
+        if o.get("dir").is_none_or(Value::is_null)
+            && o.get("path").is_none_or(Value::is_null)
+            && params.get("dir").is_none_or(Value::is_null)
+            && params.get("path").is_none_or(Value::is_null)
+            && let Some(dir) = destination
+        {
+            o.insert("dir".into(), Value::String(dir.to_string()));
         }
     }
     frozen
@@ -56,9 +67,24 @@ mod tests {
     #[test]
     fn a_waiting_export_keeps_its_resolved_settings_and_targets() {
         let resolved = json!({"format": "original", "dir": "out", "preset": "Mine"});
-        let frozen = frozen_export(&resolved, &json!({"preset": "Mine", "ids": [4, 5]}));
+        let frozen = frozen_export(&resolved, &json!({"preset": "Mine", "ids": [4, 5]}), None);
         assert_eq!(frozen, json!({"format": "original", "dir": "out", "ids": [4, 5]}));
-        assert_eq!(frozen_export(&json!({"format": "original"}), &json!({})), json!({"format": "original"}));
+        assert_eq!(frozen_export(&json!({"format": "original"}), &json!({}), None), json!({"format": "original"}));
+    }
+
+    #[test]
+    fn a_waiting_export_keeps_the_destination_it_resolved() {
+        // no `dir` in the call or its settings: the directory it would use now is frozen
+        assert_eq!(frozen_export(&json!({"format": "original"}), &json!({}), Some("/out")), json!({"format": "original", "dir": "/out"}));
+        // an explicit directory or exact path still wins
+        assert_eq!(
+            frozen_export(&json!({"format": "original", "dir": "/preset"}), &json!({}), Some("/out")),
+            json!({"format": "original", "dir": "/preset"})
+        );
+        assert_eq!(
+            frozen_export(&json!({"format": "original", "path": "/a.jpg"}), &json!({}), Some("/out")),
+            json!({"format": "original", "path": "/a.jpg"})
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
             let c = ImportCandidate {
                 path: path.clone(),
                 format: p.format.clone(),
-                kind: p.kind,
+                kind: p.effective_kind(),
                 width: p.width,
                 height: p.height,
                 file_size: p.file_size,

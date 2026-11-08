@@ -362,7 +362,9 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         // round trips of their own (on a network share each of them is one)
         let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
         let meta = file.metadata().ok();
-        let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
+        // the probe takes the file's real length; only the memory weight is a `usize`
+        let file_len = meta.as_ref().map_or(0, |m| m.len());
+        let len = usize::try_from(file_len).unwrap_or(usize::MAX);
         // A video container is read box by box, never whole: a clip cut off before its moov (or
         // with a moov over the cap) is an error, not a multi-gigabyte read. A file merely named
         // .mp4 whose bytes are another format is probed as what it is.
@@ -371,7 +373,7 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         let weight = if video.is_some() { len.saturating_mul(2).min(2 * 64 * 1024 * 1024) } else { len };
         let _permit = crate::memory::work_gate().acquire(weight);
         let mut info = if let Some(format) = video {
-            probe_video_file(&mut file, path, u64::try_from(len).unwrap_or(u64::MAX), format)?
+            probe_video_file(&mut file, path, file_len, format)?
         } else {
             let mut bytes = Vec::new();
             file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;

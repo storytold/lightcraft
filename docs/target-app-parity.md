@@ -46,7 +46,7 @@ phase #85, duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 
 | Dimension | Breadth | Ready for real work | Remaining | Doc |
 |---|---:|---:|---:|---|
-| Features (weighted areas below) | ~77% (checklist 83.2%, measured) | ~62% | 600–1,100 h | [Features](#features) |
+| Features (weighted areas below) | ~77% (checklist 83.2%, measured) | ~62% | 583–1,080 h | [Features](#features) |
 | ↳ RAW cameras, colour and lens profiles (part of features) | 85% of Adobe's 1,446 models decode (39% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
 | UI/UX fidelity | ~85% | ~70% | 32–54 h | [ui-parity.md](ui-parity.md) |
 | File formats (non-raw: images, sidecars, presets, catalogs) | ~85% | ~70% | 30–55 h | [file-format-parity.md](file-format-parity.md) |
@@ -78,8 +78,8 @@ from the checklist sections and the deep-dive documents.
 | Merge and HDR | 3% | 85% | 60% | 20–35 h | merge 88% (HDR merge 🟡: AI Denoise on merged DNGs, JPEG response, memory; gap 29), HDR 70% (no HDR display) |
 | Views, compare, zoom, culling | 5% | 90% | 70% | 15–30 h | zoom detail P0 gap |
 | Classic output modules (Map, Book, Slideshow, Print, Web, publish, tethering) | 4% | 15% | 10% | 90–150 h | Classic extras 48% counts many small keys; the modules themselves are mostly ⬜ |
-| Video | 1% | 10% | 10% | 20–40 h | imported and catalogued (kind, duration, dimensions, date, camera/GPS), with format/duration badges and a loupe card; no playback, trim, edits or export |
-| **Weighted** | 100% | **~77%** | **~62%** (62.3%) | **600–1,100 h** | |
+| Video | 1% | 10% | 10% | 20–40 h | imported and catalogued (kind, duration, dimensions, date, camera/GPS), with format/duration badges and a loupe card; copying catalogued videos unchanged is available; no playback, trim, edits or rendered export |
+| **Weighted** | 100% | **~77%** | **~62%** (62.0%) | **583–1,080 h** | |
 
 ## AI
 
@@ -299,6 +299,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | correction | Feature-work totals reconciled with the area estimates: remaining 600–1,100 h → 583–1,080 h and weighted readiness 62.3% → 62.0%; the Video row now says unchanged Original copies are available, while rendered video export is not. |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-11-01 | patch | Gap 18 review: Remove Location reads the QuickTime metadata layouts the catalog reads (`trak`/`mdia` `udta`, mdta `meta`), treats cleared location atoms as no location, and refuses an XMP property inventory a size limit cut short (video and image Originals) instead of reading the omission as absence. Scope, hours and headline counts unchanged |

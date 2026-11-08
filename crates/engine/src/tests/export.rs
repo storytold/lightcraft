@@ -938,6 +938,9 @@ fn a_failed_sidecar_write_keeps_the_previous_clip_and_metadata() {
     let o = ExportOptions { format: ExportFormat::Original, naming: "{name}".into(), conflict: Conflict::Overwrite, ..Default::default() };
     disk_batch(&mut s, id, &o, &to).unwrap();
     let (clip, side) = (out.join("IMG_1.jpg"), out.join("IMG_1.xmp"));
+    // Make the existing clip differ from what this export would write: a bug that replaced it
+    // before its sidecar failed would otherwise leave the same bytes and go unnoticed.
+    std::fs::write(&clip, b"an earlier export").unwrap();
     let (previous_clip, previous_side) = (std::fs::read(&clip).unwrap(), std::fs::read(&side).unwrap());
     let err = crate::export::export_batch(
         &mut s,

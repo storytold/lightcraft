@@ -661,7 +661,7 @@ fn verify_location_boxes(bytes: &[u8], top_level: &mut usize, nested: &mut usize
     Ok(())
 }
 
-const LOCATION_KEY: &[u8] = b"com.apple.quicktime.location.ISO6709";
+const LOCATION_KEYS: [&[u8]; 2] = [b"com.apple.quicktime.location.ISO6709", b"com.apple.quicktime.location.name"];
 
 /// Verify a `meta` box's mdta pairs: `keys` names each `ilst` item by its 1-based index, and a
 /// location key that carries a value refuses the copy. A key whose item is missing or blank names
@@ -687,7 +687,7 @@ fn verify_meta_location(body: &[u8], budget: &mut usize) -> Result<(), String> {
                     let n = be32(b.body, offset).filter(|n| *n >= 8).ok_or("can't verify video location: invalid metadata key")? as usize;
                     let end = offset.checked_add(n).ok_or("can't verify video location: metadata key overflow")?;
                     let key = b.body.get(offset.saturating_add(8)..end).ok_or("can't verify video location: truncated metadata key")?;
-                    if key == LOCATION_KEY {
+                    if LOCATION_KEYS.contains(&key) {
                         location_keys.push(index);
                     }
                     offset = end;
@@ -711,7 +711,8 @@ fn verify_meta_location(body: &[u8], budget: &mut usize) -> Result<(), String> {
                                 return Err("can't verify video location: unreadable location metadata value".into());
                             }
                             let value = data.body.get(8..).ok_or("can't verify video location: truncated metadata value")?;
-                            if !value.iter().all(u8::is_ascii_whitespace) {
+                            // A blank value (UTF-8 or UTF-16, BOM and whitespace included) names no place.
+                            if !decode_atom_text(value).trim().is_empty() {
                                 return Err(
                                     "can't remove embedded GPS or embedded location metadata from an original video; export without Remove Location only to share the unchanged clip"
                                         .into(),
@@ -738,7 +739,8 @@ fn verify_meta_location(body: &[u8], budget: &mut usize) -> Result<(), String> {
                     }
                     // type and locale precede the value; a short or unreadable item could hide one
                     let value = data.body.get(8..).ok_or("can't verify video location: truncated metadata value")?;
-                    if !value.iter().all(u8::is_ascii_whitespace) {
+                    // A blank value (UTF-8 or UTF-16, BOM and whitespace included) names no place.
+                    if !decode_atom_text(value).trim().is_empty() {
                         return Err(
                             "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip"
                                 .into(),
@@ -758,7 +760,9 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
         return None;
     }
 
-    let mut budget = MAX_BOXES;
+    // Top-level fragments and the boxes inside them have separate budgets: a movie with many
+    // fragments must not spend the traversal budget its own metadata needs.
+    let (mut top_level, mut nested) = (MAX_BOXES, MAX_BOXES);
     let mut duration = None;
     let mut timescale = None;
     let mut fragment_duration = None;
@@ -767,12 +771,12 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
     let mut meta = Metadata::default();
     let mut xmp = None;
 
-    for b in read_boxes(bytes, &mut budget) {
+    for b in read_boxes(bytes, &mut top_level) {
         if &b.kind == b"uuid" && b.uuid == Some(XMP_UUID) {
             take_xmp(b.body, &mut xmp);
         }
         if &b.kind == b"moov" {
-            for child in read_boxes(b.body, &mut budget) {
+            for child in read_boxes(b.body, &mut nested) {
                 match &child.kind {
                     b"mvhd" => {
                         let Some(&ver) = child.body.first() else { continue };
@@ -806,7 +810,7 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                         }
                     }
                     b"trak" => {
-                        if let Some(t) = parse_trak(child.body, &mut budget, 0, &mut meta, &mut xmp)
+                        if let Some(t) = parse_trak(child.body, &mut nested, 0, &mut meta, &mut xmp)
                             && t.is_video
                             && t.enabled
                         {
@@ -823,7 +827,7 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                     // A fragmented movie (`empty_moov`: the file is a series of fragments) writes
                     // 0 in `mvhd`; its whole duration is the fragment duration in `mvex` → `mehd`.
                     b"mvex" => {
-                        for grand in read_boxes(child.body, &mut budget) {
+                        for grand in read_boxes(child.body, &mut nested) {
                             if &grand.kind == b"mehd" {
                                 let ver = grand.body.first().copied().unwrap_or(0);
                                 let d = if ver == 0 {
@@ -838,10 +842,10 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                         }
                     }
                     b"udta" => {
-                        parse_udta(child.body, &mut meta, &mut xmp, &mut budget, 0);
+                        parse_udta(child.body, &mut meta, &mut xmp, &mut nested, 0);
                     }
                     b"meta" => {
-                        parse_meta(child.body, &mut meta, &mut xmp, &mut budget, 0);
+                        parse_meta(child.body, &mut meta, &mut xmp, &mut nested, 0);
                     }
                     b"XMP_" => take_xmp(child.body, &mut xmp),
                     b"uuid" if child.uuid == Some(XMP_UUID) => take_xmp(child.body, &mut xmp),
@@ -849,11 +853,25 @@ pub fn probe_video(bytes: &[u8]) -> Option<VideoMeta> {
                 }
             }
         }
-        if &b.kind == b"meta" {
-            parse_meta(b.body, &mut meta, &mut xmp, &mut budget, 0);
-        }
-        if &b.kind == b"XMP_" {
-            take_xmp(b.body, &mut xmp);
+        // Some recorders write the place and other metadata beside the movie header rather than
+        // inside it; the import probe retains those boxes, so read them here too.
+        match &b.kind {
+            b"udta" => parse_udta(b.body, &mut meta, &mut xmp, &mut nested, 0),
+            b"loci" => {
+                if let Some(gps) = parse_loci(b.body) {
+                    meta.gps = Some(gps);
+                }
+            }
+            b"\xa9xyz" => {
+                if let Some(s) = read_udta_text(b.body)
+                    && let Some(gps) = parse_iso6709(&s)
+                {
+                    meta.gps = Some(gps);
+                }
+            }
+            b"meta" => parse_meta(b.body, &mut meta, &mut xmp, &mut nested, 0),
+            b"XMP_" => take_xmp(b.body, &mut xmp),
+            _ => {}
         }
     }
 
@@ -1452,6 +1470,13 @@ mod tests {
     }
 
     /// 90-degree matrix rotation in the display matrix is detected and mapped to EXIF orientation.
+    /// Append a box beside `ftyp` and `moov`, where some recorders write metadata.
+    fn with_top_level_box(bytes: &[u8], kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = bytes.to_vec();
+        write_box(&mut out, kind, body);
+        out
+    }
+
     /// Append child boxes to the synthetic file's `moov` (the `meta` box, for the mdta test).
     fn with_moov_children(bytes: &[u8], children: &[u8]) -> Vec<u8> {
         let ftyp_len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
@@ -1518,6 +1543,12 @@ mod tests {
 
     /// A QuickTime `meta` box (mdta): `keys` names the fields, `ilst` items hold their values.
     fn mdta_meta_box(fields: &[(&str, &str)]) -> Vec<u8> {
+        let raw: Vec<(&str, &[u8])> = fields.iter().map(|(key, value)| (*key, value.as_bytes())).collect();
+        mdta_meta_box_bytes(&raw)
+    }
+
+    /// [`mdta_meta_box`] for values that are not UTF-8 (a cleared UTF-16 location, say).
+    fn mdta_meta_box_bytes(fields: &[(&str, &[u8])]) -> Vec<u8> {
         let mut keys = vec![0u8; 4];
         keys.extend_from_slice(&(fields.len() as u32).to_be_bytes());
         for (key, _) in fields {
@@ -1529,7 +1560,7 @@ mod tests {
         for (i, (_, value)) in fields.iter().enumerate() {
             let mut data = 1u32.to_be_bytes().to_vec();
             data.extend_from_slice(&0u32.to_be_bytes());
-            data.extend_from_slice(value.as_bytes());
+            data.extend_from_slice(value);
             let mut data_box = Vec::new();
             write_box(&mut data_box, b"data", &data);
             let size = (data_box.len() + 8) as u32;
@@ -1580,6 +1611,67 @@ mod tests {
         assert_eq!(meta.captured.as_deref(), Some("2026-05-04T21:00:00-04:00"), "the local time and its offset");
         assert_eq!(meta.metadata.make.as_deref(), Some("Apple"));
         assert_eq!(meta.metadata.model.as_deref(), Some("iPhone 17 Pro"));
+    }
+
+    /// Some recorders write the place beside the movie header rather than inside it. The import
+    /// probe keeps those top-level boxes, so probing must read them too (and the location check
+    /// still refuses the copy).
+    #[test]
+    fn top_level_quicktime_place_boxes_are_probed() {
+        let file = synthetic_mp4(60, 600, 1920, 1080, 0);
+        let text = |s: &str| {
+            let mut body = (s.len() as u16).to_be_bytes().to_vec();
+            body.extend_from_slice(&0u16.to_be_bytes());
+            body.extend_from_slice(s.as_bytes());
+            body
+        };
+        let mut xyz = Vec::new();
+        write_box(&mut xyz, b"\xa9xyz", &text("+37.7749-122.4194/"));
+        let bytes = with_top_level_box(&file, b"udta", &xyz);
+        let gps = probe_video(&bytes).expect("valid video").metadata.gps.expect("top-level ©xyz names a place");
+        assert!((gps.latitude - 37.7749).abs() < 1e-4, "{gps:?}");
+        assert!((gps.longitude + 122.4194).abs() < 1e-4, "{gps:?}");
+        assert!(verify_video_location_absent(&bytes).is_err(), "a place still refuses an unchanged copy");
+
+        // The QuickTime `loci` atom (16.16 fixed point: longitude, latitude, altitude in metres).
+        let mut loci = vec![0u8; 6];
+        loci.extend_from_slice(b"here\0");
+        loci.push(0); // role
+        for value in [-122.4194f64, 37.7749, 0.0] {
+            loci.extend_from_slice(&((value * 65_536.0) as i32).to_be_bytes());
+        }
+        let bytes = with_top_level_box(&file, b"loci", &loci);
+        let gps = probe_video(&bytes).expect("valid video").metadata.gps.expect("top-level loci names a place");
+        assert!((gps.latitude - 37.7749).abs() < 1e-4, "{gps:?}");
+        assert!((gps.longitude + 122.4194).abs() < 1e-4, "{gps:?}");
+        assert!(verify_video_location_absent(&bytes).is_err(), "a place still refuses an unchanged copy");
+    }
+
+    /// `com.apple.quicktime.location.name` names a place even without coordinates: an Original
+    /// copy that must remove location refuses it, and probing still shows no coordinates.
+    #[test]
+    fn a_quicktime_location_name_refuses_an_original_copy() {
+        let file = synthetic_mp4(60, 600, 1920, 1080, 0);
+        let meta_box = mdta_meta_box(&[("com.apple.quicktime.location.name", "San Francisco")]);
+        let bytes = with_moov_children(&file, &meta_box);
+        let error = verify_video_location_absent(&bytes).unwrap_err();
+        assert!(error.contains("GPS") || error.contains("location"), "{error}");
+        assert!(probe_video(&bytes).expect("valid video").metadata.gps.is_none(), "a name alone has no coordinates");
+    }
+
+    /// A cleared mdta location written as UTF-16 (a byte-order mark and nothing else) names no
+    /// place; the same key with a UTF-16 place still refuses.
+    #[test]
+    fn a_cleared_utf16_mdta_location_is_empty() {
+        let file = synthetic_mp4(60, 600, 1920, 1080, 0);
+        let key = "com.apple.quicktime.location.ISO6709";
+        let mut place = vec![0xFF, 0xFE];
+        place.extend("+37.7749-122.4194/".encode_utf16().flat_map(u16::to_le_bytes));
+        for (value, allows) in [(vec![0xFE, 0xFF], true), (vec![0xFF, 0xFE], true), (place, false)] {
+            let meta_box = mdta_meta_box_bytes(&[(key, value.as_slice())]);
+            let bytes = with_moov_children(&file, &meta_box);
+            assert_eq!(verify_video_location_absent(&bytes).is_ok(), allows, "{value:?}");
+        }
     }
 
     #[test]
@@ -1636,9 +1728,9 @@ mod tests {
 
         let mut keys = vec![0; 4]; // FullBox version and flags
         keys.extend_from_slice(&1u32.to_be_bytes());
-        keys.extend_from_slice(&(8u32 + LOCATION_KEY.len() as u32).to_be_bytes());
+        keys.extend_from_slice(&(8u32 + LOCATION_KEYS[0].len() as u32).to_be_bytes());
         keys.extend_from_slice(b"mdta");
-        keys.extend_from_slice(LOCATION_KEY);
+        keys.extend_from_slice(LOCATION_KEYS[0]);
         let mut keys_box = Vec::new();
         write_box(&mut keys_box, b"keys", &keys);
 

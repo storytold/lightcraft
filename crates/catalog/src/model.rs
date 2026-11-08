@@ -252,7 +252,7 @@ pub struct Photo {
     #[serde(default)]
     pub file_size: u64,
     /// ISO 8601 capture time: the camera's local wall-clock time, with its UTC offset when the file
-    /// records one; a video with only its container's UTC `mvhd` time ends in `Z`.
+    /// records one; a video with only its container's UTC `mvhd` time ends in `+00:00`.
     #[serde(default)]
     pub captured: Option<String>,
     pub imported: String,
