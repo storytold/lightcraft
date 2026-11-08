@@ -119,11 +119,22 @@ fn compressed_olympus_bodies_decode_like_camera_jpeg() {
     let cases = [
         ("orf-olympus-em1.orf", (4640, 3472)),
         ("orf-olympus-em10iii.orf", (4640, 3472)),
-        ("Olympus - E-M1MarkII - 16bit (4_3).ORI", (5240, 3912)),
-        ("Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI", (4640, 3472)),
+        ("ori-olympus-e-m1markii-16bit-4-3-2.ori", (5240, 3912)),
+        ("ori-olympus-e-m5-mark-ii-16bit-16bit-normal-4-3.ori", (4640, 3472)),
     ];
     for &(name, (expected_w, expected_h)) in &cases {
-        let path = corpus().join("raw").join(name);
+        let mut path = corpus().join("raw").join(name);
+        if !path.exists() {
+            let alt_name = match name {
+                "ori-olympus-e-m1markii-16bit-4-3-2.ori" => "Olympus - E-M1MarkII - 16bit (4_3).ORI",
+                "ori-olympus-e-m5-mark-ii-16bit-16bit-normal-4-3.ori" => "Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI",
+                _ => name,
+            };
+            let alt_path = corpus().join("raw").join(alt_name);
+            if alt_path.exists() {
+                path = alt_path;
+            }
+        }
         let Ok(bytes) = std::fs::read(&path) else {
             lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
             continue;

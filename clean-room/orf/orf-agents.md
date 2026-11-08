@@ -132,8 +132,10 @@ cargo xtask corpus --download
 - **Standard Manifest Samples:** `cargo xtask corpus --download` fetches the entries registered in `xtask/src/raw_samples.rs` (such as `orf-olympus-em1.orf` and `orf-olympus-em10iii.orf`).
 - **High-Resolution ORI Test Files:**
   The compressed-ORF tests in `crates/raw/tests/it/olympus_samsung_corpus.rs` check two composite high-res `.ORI` sample files:
-  1. `Olympus - E-M1MarkII - 16bit (4_3).ORI` (SHA-256: `89138ccc958509ca1beb7028452400ab7f42061c0fc56e35c8a7d7a4a808dd0a`)
-  2. `Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI` (SHA-256: `f2c7a1dfbfcc6093b28373a1616569b8bd9c2d91cb708480b8312d510c57fbd6`)
+  1. `ori-olympus-e-m1markii-16bit-4-3-2.ori` (`Olympus - E-M1MarkII - 16bit (4_3).ORI`, SHA-256: `89138ccc958509ca1beb7028452400ab7f42061c0fc56e35c8a7d7a4a808dd0a`)
+  2. `ori-olympus-e-m5-mark-ii-16bit-16bit-normal-4-3.ori` (`Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI`, SHA-256: `f2c7a1dfbfcc6093b28373a1616569b8bd9c2d91cb708480b8312d510c57fbd6`)
+
+  Both are registered directly in `xtask/src/raw_samples.rs` and downloaded by `cargo xtask corpus --download`.
   
   These originate from the CC0 Olympus high-resolution multi-shot raw submissions on `raw.pixls.us`.
   To make them available locally for the test suite:

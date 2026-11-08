@@ -219,11 +219,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     });
     let (mut data, bits, from_word16) = if info.compression != 1 {
         return Err(RawError::Unsupported(format!("ORF compression {}", info.compression)));
-    } else if let Some((config, src)) = compressed {
-        let stream =
-            src.get(config.header_prefix_len.saturating_add(2)..).ok_or_else(|| RawError::Corrupt("ORF compressed stream truncated".into()))?;
-        let d = if mode == Mode::Full || stated.is_none() { super::orf_compressed::decompress_stream(stream, w, h, &config)? } else { Vec::new() };
-        (RawData::U16(d), config.sensor_bits, false)
     } else if total >= (n as u64) * 2 {
         let d = read_image(bytes, &info, tiff.order, Packing::Word16)?;
         (d, 16, true)
@@ -236,26 +231,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         let d = if mode == Mode::Full || stated.is_none() {
             let mut d = vec![0u16; n];
             d.par_chunks_mut(w).enumerate().try_for_each(|(y, row)| unpack_row_blocks16(&src[y * stride..(y + 1) * stride], row))?;
-            d
-        } else {
-            Vec::new()
-        };
-        (RawData::U16(d), 12, false)
-    } else if info.bits() == 12 && total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
-        let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
-        // Only the declared 12-bit layout is supported here. A compressed stream in a 16-bit
-        // ORF container must not fall through to packed decoding just because its length fits.
-        // the strip as it is in the file (clipped at its end), not as its tag states it: one too short
-        // for the samples is a truncated file, refused before they are allocated
-        if (src.len() as u64).saturating_mul(8) < (n as u64).saturating_mul(12) {
-            return Err(RawError::Corrupt("ORF strip shorter than its samples".into()));
-        }
-        // the depth is fixed here, so a header-only probe needs the samples only when the file doesn't state its
-        // colour-filter layout
-        let d = if mode == Mode::Full || stated.is_none() {
-            let stride = src.len() / h;
-            let mut d = vec![0u16; n];
-            d.par_chunks_mut(w).enumerate().for_each(|(y, row)| unpack_row_le32_msb(&src[y * stride..(y + 1) * stride], 12, row));
             d
         } else {
             Vec::new()
@@ -276,6 +251,31 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
                     unpack_msb(src, 12, row);
                 }
             });
+            d
+        } else {
+            Vec::new()
+        };
+        (RawData::U16(d), 12, false)
+    } else if let Some((config, src)) = compressed {
+        let stream =
+            src.get(config.header_prefix_len.saturating_add(2)..).ok_or_else(|| RawError::Corrupt("ORF compressed stream truncated".into()))?;
+        let d = if mode == Mode::Full || stated.is_none() { super::orf_compressed::decompress_stream(stream, w, h, &config)? } else { Vec::new() };
+        (RawData::U16(d), config.sensor_bits, false)
+    } else if info.bits() == 12 && total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
+        let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+        // Only the declared 12-bit layout is supported here. A compressed stream in a 16-bit
+        // ORF container must not fall through to packed decoding just because its length fits.
+        // the strip as it is in the file (clipped at its end), not as its tag states it: one too short
+        // for the samples is a truncated file, refused before they are allocated
+        if (src.len() as u64).saturating_mul(8) < (n as u64).saturating_mul(12) {
+            return Err(RawError::Corrupt("ORF strip shorter than its samples".into()));
+        }
+        // the depth is fixed here, so a header-only probe needs the samples only when the file doesn't state its
+        // colour-filter layout
+        let d = if mode == Mode::Full || stated.is_none() {
+            let stride = src.len() / h;
+            let mut d = vec![0u16; n];
+            d.par_chunks_mut(w).enumerate().for_each(|(y, row)| unpack_row_le32_msb(&src[y * stride..(y + 1) * stride], 12, row));
             d
         } else {
             Vec::new()

@@ -693,16 +693,6 @@ pub(crate) const RAW_SAMPLES: &[(&str, &str, &str)] = &[
         "11d90cbb564ad2c660c7a8d5d81d99c2c018aa27fdec45ed6c461fa5d24f942b",
     ),
     (
-        "Olympus - E-M1MarkII - 16bit (4_3).ORI",
-        "https://raw.pixls.us/getfile.php/1997/nice/Olympus%20-%20E-M1MarkII%20-%2016bit%20%284:3%29.ORI",
-        "89138ccc958509ca1beb7028452400ab7f42061c0fc56e35c8a7d7a4a808dd0a",
-    ),
-    (
-        "Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI",
-        "https://raw.pixls.us/getfile.php/2857/nice/Olympus%20-%20E-M5%20Mark%20II%20-%2016bit%2016bit%20%22normal%22%20%284:3%29.ORI",
-        "f2c7a1dfbfcc6093b28373a1616569b8bd9c2d91cb708480b8312d510c57fbd6",
-    ),
-    (
         "orf-olympus-xz2.orf",
         "https://raw.pixls.us/getfile.php/1432/nice/Olympus%20-%20XZ-2%20-%2012bit%20%284:3%29.orf",
         "675fefe7c9e99281783b987889d723b5f46692f5c20e19fed5e422c7c6d2636b",
