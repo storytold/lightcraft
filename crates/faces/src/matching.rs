@@ -82,11 +82,13 @@ pub fn rank_top(query: &[f32], gallery: &[(&str, &[f32])], top: usize) -> Vec<Ra
         .into_iter()
         .map(|(_, name, mut sims)| {
             // only the best `top` count, so they are picked out rather than every similarity sorted: a person may
-            // have thousands of faces (similarities are finite, `cosine` sees to it)
+            // have thousands of faces (similarities are finite, `cosine` sees to it). Those few are then summed best
+            // first, as `person_score` sums them, so both give the very same score
             if sims.len() > top {
                 sims.select_nth_unstable_by(top - 1, |a, b| b.total_cmp(a));
                 sims.truncate(top);
             }
+            sims.sort_unstable_by(|a, b| b.total_cmp(a));
             Ranked { name, score: sims.iter().sum::<f32>() / sims.len().max(1) as f32, faces: sims.len() }
         })
         .collect();
@@ -201,6 +203,13 @@ mod tests {
             let ranked = rank(&q, &named);
             let score = person_score(&q, &refs, TOP_FACES).unwrap();
             assert!((score - ranked[0].score).abs() < 1e-6, "{score} against {}", ranked[0].score);
+        }
+        // and for any count the very same score, not merely a close one, so a threshold decides alike either way
+        for top in 1..=MAX_TOP_FACES {
+            for _ in 0..20 {
+                let q = face();
+                assert_eq!(person_score(&q, &refs, top), Some(rank_top(&q, &named, top)[0].score), "{top}");
+            }
         }
         // fewer faces than asked, bad embeddings skipped, nothing to compare, and any count
         let q = face();
