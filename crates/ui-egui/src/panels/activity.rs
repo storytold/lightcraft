@@ -87,8 +87,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             let has_footer = hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS);
             let footer_reserve = if has_footer { 44.0 } else { 20.0 };
             let space_below = (ctx.content_rect().bottom() - ui.cursor().top() - 16.0).max(0.0);
-            let max_stack_h = (ctx.content_rect().height() - 16.0).max(footer_reserve);
-            let available_h = space_below.clamp(footer_reserve, max_stack_h);
+            // Cap at the true viewport capacity so the stack never claims more height
+            // than the viewport can provide, even when it is shorter than `footer_reserve`.
+            let max_stack_h = (ctx.content_rect().height() - 16.0).max(0.0);
+            let available_h = space_below.clamp(max_stack_h.min(footer_reserve), max_stack_h);
             ui.set_max_height(available_h);
             let frame_resp = frame.show(ui, |ui| {
                 let inner = WIDTH - 2.0 * (f32::from(MARGIN) + 1.0);
