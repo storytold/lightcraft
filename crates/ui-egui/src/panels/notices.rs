@@ -649,8 +649,8 @@ fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&s
     chosen
 }
 
-/// Draw the prompt owning input, if any, and act on its answer: quit-while-tasks cancels jobs
-/// and re-checks for unsaved changes; quit-with-unsaved retries, quits or cancels; a settings
+/// Draw the prompt owning input, if any, and act on its answer: quit-while-tasks, on Quit Anyway,
+/// re-checks for unsaved changes and stops the jobs once the quit goes through; quit-with-unsaved retries, quits or cancels; a settings
 /// notice is removed when acknowledged. Returns without drawing when no prompt is up.
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(QuitPrompt::Tasks(text)) = app.quit_prompt.clone() {
