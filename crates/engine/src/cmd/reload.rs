@@ -22,6 +22,8 @@ use crate::{Result, Session};
 pub struct Item {
     pub id: PhotoId,
     pub path: String,
+    /// Explicitly selected photos sharing this probe; each may gain missing metadata.
+    pub metadata_targets: Vec<PhotoId>,
     /// The [`plan`] it came from, in the order reloads were started (see [`Tickets`]).
     pub ticket: u64,
 }
@@ -38,20 +40,23 @@ pub struct Tickets {
 /// file-system calls.
 pub fn plan(s: &mut Session, p: &Value) -> Result<Vec<Item>> {
     let ids = s.targets(p)?;
-    let mut seen = std::collections::HashSet::new();
+    let mut groups = std::collections::HashMap::<(PhotoId, String), usize>::new();
+    let mut items: Vec<Item> = Vec::new();
     s.reload_tickets.last = s.reload_tickets.last.saturating_add(1);
     let ticket = s.reload_tickets.last;
-    Ok(ids
-        .into_iter()
-        .filter_map(|id| {
-            let ph = s.catalog.photo(id)?;
-            // Probe a shared file once without replacing the explicit metadata target.
-            match &ph.source {
-                Source::File { path } if seen.insert((ph.copy_of.unwrap_or(ph.id), path.clone())) => Some(Item { id, path: path.clone(), ticket }),
-                _ => None,
-            }
-        })
-        .collect())
+    for id in ids {
+        let Some(ph) = s.catalog.photo(id) else { continue };
+        let Source::File { path } = &ph.source else { continue };
+        let key = (ph.copy_of.unwrap_or(ph.id), path.clone());
+        // Sharing a probe must not drop any explicitly selected metadata target.
+        if let Some(item) = groups.get(&key).and_then(|index| items.get_mut(*index)) {
+            item.metadata_targets.push(id);
+        } else {
+            groups.insert(key, items.len());
+            items.push(Item { id, path: path.clone(), metadata_targets: vec![id], ticket });
+        }
+    }
+    Ok(items)
 }
 
 /// The session's file probe, to [`probe`] with on a worker thread (`None` in a session without file
@@ -106,10 +111,20 @@ pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result
         if !current || superseded {
             continue;
         }
-        for id in family {
-            s.reload_tickets.applied.insert(id, item.ticket);
+        for id in &family {
+            s.reload_tickets.applied.insert(*id, item.ticket);
         }
         crate::cmd::convert::reload_ops(&s.catalog, item.id, &info, &mut ops, &mut reloaded);
+        for id in item.metadata_targets.into_iter().filter(|id| *id != item.id && family.contains(id)) {
+            let Some(ph) = s.catalog.photo(id) else { continue };
+            let meta = super::convert::fill_missing_meta(id, ph, &info);
+            if !meta.is_empty() {
+                ops.extend(meta);
+                if !reloaded.contains(&id) {
+                    reloaded.push(id);
+                }
+            }
+        }
     }
     for id in &reloaded {
         s.media.forget(*id);
