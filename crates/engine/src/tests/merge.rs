@@ -396,6 +396,86 @@ fn undersized_group_is_skipped_before_source_validation() {
     assert_eq!(jobs[0].sources.iter().map(|(p, _)| *p).collect::<Vec<_>>(), ids);
 }
 
+/// A collapsed stack that contains an earlier merge result expands to its sources only:
+/// the result (`*-HDR.dng`) is excluded by `merge_groups`, in capture order, for both
+/// `plan_merge` and `plan_merges`, and a second merge via the command does not merge the result.
+#[test]
+fn collapsed_stack_excludes_earlier_merge_result() {
+    let dir = temp_dir("stack-excludes-result");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, &[-1.0, 0.0, 1.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let r = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false, "stack": true})).unwrap();
+    let result = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let stack = s.catalog.stack_of(result).expect("merge result stacked").clone();
+    assert!(stack.photos.contains(&result));
+    assert!(stack.photos[1..].iter().map(|p| p.0).collect::<Vec<_>>() == ids);
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    let job = s.plan_merge(kind.clone(), finish.clone(), &[result], true).unwrap();
+    assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), ids, "plan_merge excludes the merge result");
+    let jobs = s.plan_merges(kind, finish, &[result], true).unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), ids, "plan_merges excludes the merge result");
+    let r2 = s.execute("merge.hdr", &json!({"ids": [result.0], "autoSettings": false})).unwrap();
+    assert!(r2["path"].as_str().unwrap().ends_with("IMG_0-HDR-2.dng"), "{r2}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A middle group that fails does not stop later groups: `merge_now` reports both
+/// `merged` (first and third) and `failed` (middle), and the same holds for previews.
+#[test]
+fn middle_group_failure_does_not_stop_later_groups() {
+    let dir = temp_dir("middle-fails");
+    let mut paths = Vec::new();
+    for (set, evs) in [("A", &[-2.0, 0.0, 2.0][..]), ("C", &[-1.5, 0.5, 2.5][..])] {
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, evs).unwrap().into_iter().enumerate() {
+            let p = dir.join(format!("{set}_{i}.dng"));
+            std::fs::write(&p, b).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    assert_eq!(ids.len(), 6);
+    // Middle group: catalog photos whose files do not exist, so its merge fails.
+    let mut missing = Vec::new();
+    for i in 0..3 {
+        let id = s.catalog.alloc_photo_id();
+        let name = format!("MISSING_{i}.dng");
+        let p =
+            lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path: name.clone() }, &name, "DNG", 96, 64, "2026-01-01T00:00:00");
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        missing.push(id);
+    }
+    s.execute("stack.group", &json!({"ids": ids[..3]})).unwrap();
+    s.execute("stack.group", &json!({"ids": ids[3..]})).unwrap();
+    let op = s.catalog.group_ops(missing[0], &missing, true).unwrap();
+    s.catalog.apply(op).unwrap();
+    let selected = [ids[0], missing[0], ids[3]];
+    // Preview: first and third previews are reported, middle under `failed`.
+    let pv = s.execute("merge.hdr", &json!({"ids": selected, "preview": true})).unwrap();
+    assert_eq!(pv["previews"].as_array().unwrap().len(), 2, "{pv}");
+    let failed = pv["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 1, "{pv}");
+    assert_eq!(failed[0]["photos"], json!(missing.iter().map(|p| p.0).collect::<Vec<_>>()), "{pv}");
+    // Full merge: same per-group reporting, two outputs written.
+    let r = s.execute("merge.hdr", &json!({"ids": selected, "autoSettings": false})).unwrap();
+    let merged = r["merged"].as_array().unwrap();
+    assert_eq!(merged.len(), 2, "{r}");
+    let names: Vec<&str> = merged.iter().map(|m| m["path"].as_str().unwrap()).collect();
+    assert!(names[0].ends_with("A_0-HDR.dng") && names[1].ends_with("C_0-HDR.dng"), "{names:?}");
+    let failed = r["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 1, "{r}");
+    assert_eq!(failed[0]["photos"], json!(missing.iter().map(|p| p.0).collect::<Vec<_>>()), "{r}");
+    assert!(failed[0]["error"].as_str().unwrap().len() > 0, "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A multi-group preview with `previewPath` is refused instead of silently dropping the path:
 /// there is no single file to write for several groups.
 #[test]
