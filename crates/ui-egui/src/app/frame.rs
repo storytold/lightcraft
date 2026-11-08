@@ -548,3 +548,40 @@ impl LightcraftApp {
 pub(crate) fn import_tick_allowed(ctx: &egui::Context) -> bool {
     ctx.current_pass_index() == 0
 }
+
+#[cfg(test)]
+mod keep_awake_tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use crate::Services;
+    use lightcraft_engine::activity::Cancel;
+
+    use super::*;
+
+    /// A context that records every delay it is asked to repaint after.
+    fn recording_context() -> (egui::Context, Arc<Mutex<Vec<Duration>>>) {
+        let ctx = egui::Context::default();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let sink = asked.clone();
+        ctx.set_request_repaint_callback(move |info| sink.lock().unwrap().push(info.delay));
+        (ctx, asked)
+    }
+
+    fn app_with_keep_awake() -> LightcraftApp {
+        let keep_awake: crate::KeepAwakeFn = Box::new(|_| {});
+        LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, keep_awake: Some(keep_awake), ..Default::default() })
+    }
+
+    #[test]
+    fn a_holding_job_asks_for_a_repaint_within_a_second_and_an_idle_app_asks_for_none() {
+        let (ctx, asked) = recording_context();
+        let mut app = app_with_keep_awake();
+        app.sync_keep_awake(&ctx);
+        assert!(asked.lock().unwrap().is_empty(), "nothing runs: no repaint is asked for");
+
+        let _job = app.session.activity.start("export", "Exporting", Cancel::Yes);
+        app.sync_keep_awake(&ctx);
+        assert_eq!(*asked.lock().unwrap(), [Duration::from_secs(1)], "the end of the job is looked for every second");
+    }
+}
