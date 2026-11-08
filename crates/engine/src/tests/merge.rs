@@ -504,6 +504,36 @@ fn multi_group_preview_with_preview_path_is_an_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A single selected collapsed stack enables all three merge actions: the expanded count
+/// reaches each kind's minimum and planning expands the stack, while a single loose photo
+/// does not.
+#[test]
+fn single_collapsed_stack_enables_all_three_merge_actions() {
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for i in 0..4 {
+        let id = s.catalog.alloc_photo_id();
+        let name = format!("IMG_{i}.dng");
+        let p =
+            lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path: name.clone() }, &name, "DNG", 96, 64, "2026-01-01T00:00:00");
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        ids.push(id);
+    }
+    let op = s.catalog.group_ops(ids[0], &ids, true).unwrap();
+    s.catalog.apply(op).unwrap();
+    let top = ids[0];
+    assert_eq!(s.expanded_merge_count(&[top]), 4, "one selected id represents the stack's members");
+    assert_eq!(s.expanded_merge_count(&[ids[0]]), 1, "a single loose photo still counts once");
+    for command in ["merge.hdr", "merge.panorama", "merge.hdrPanorama"] {
+        let (kind, finish) = crate::merge::parse(command, &json!({})).unwrap();
+        assert!(s.merge_selection_ready(&kind, &[top]), "{command} should be enabled for the collapsed stack");
+        let job = s.plan_merge(kind, finish, &[top], true).unwrap();
+        assert_eq!(job.sources.iter().map(|(p, _)| *p).collect::<Vec<_>>(), ids, "{command} expands the stack");
+    }
+    let (kind, _) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    assert!(!s.merge_selection_ready(&kind, &[ids[0]]), "a single loose photo does not enable a merge");
+}
+
 /// A preview reports an undersized group as `skipped`, like `merge_now` does, instead of
 /// silently omitting it: a valid stack previews while a single loose photo is skipped.
 #[test]

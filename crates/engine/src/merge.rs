@@ -404,6 +404,22 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
 }
 
 impl Session {
+    /// How many photos a merge selection represents: a collapsed stack counts its members
+    /// (less earlier merge results, as [`Session::plan_merge`] merges them), any other photo
+    /// counts once, and a photo named more than once counts once. Frontends use this for
+    /// action enablement, so a single selected collapsed stack is counted by the photos it
+    /// holds rather than by the one selected id.
+    pub fn expanded_merge_count(&self, ids: &[PhotoId]) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        self.merge_groups(ids).iter().flat_map(|g| g.iter()).filter(|id| seen.insert(**id)).count()
+    }
+
+    /// Whether a merge selection holds enough photos for `kind` once collapsed stacks are
+    /// expanded ([`Session::expanded_merge_count`]).
+    pub fn merge_selection_ready(&self, kind: &MergeKind, ids: &[PhotoId]) -> bool {
+        self.expanded_merge_count(ids) >= kind.min_photos()
+    }
+
     /// Plan a merge of `ids`. Loose ids keep the order given; members of a collapsed stack are in capture order.
     /// A photo named more than once is merged once (issue #1947): it adds nothing to the merge, and each copy would
     /// be decoded and held in memory. Naming a photo in a collapsed stack names all its members (in capture order,
