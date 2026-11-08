@@ -221,7 +221,7 @@ pub(crate) fn forget_orientation_op(id: lightcraft_catalog::PhotoId, ph: &lightc
 /// preview-only photo this version hasn't checked yet: its stamp is refreshed so it isn't probed
 /// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
-    let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
+    let preview_checked = ph.preview_stamp(&info.preview_only);
     // a probe that can't tell the orientation (a raw shown from its preview) doesn't forget the
     // one on record while the bytes are the same; for other bytes only the probe's answer counts.
     // Without a hash on both sides the bytes can't be shown to be the same, and an equal size
