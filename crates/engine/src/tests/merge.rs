@@ -503,3 +503,26 @@ fn multi_group_preview_with_preview_path_is_an_error() {
     assert_eq!(r["previews"].as_array().unwrap().len(), 2, "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A preview reports an undersized group as `skipped`, like `merge_now` does, instead of
+/// silently omitting it: a valid stack previews while a single loose photo is skipped.
+#[test]
+fn preview_reports_skipped_undersized_group() {
+    let dir = temp_dir("preview-skipped");
+    let mut paths = Vec::new();
+    for (set, evs) in [("A", &[-2.0, 0.0, 2.0][..]), ("C", &[-1.0, 1.0][..])] {
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, evs).unwrap().into_iter().enumerate() {
+            let p = dir.join(format!("{set}_{i}.dng"));
+            std::fs::write(&p, b).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    assert_eq!(ids.len(), 5);
+    s.execute("stack.group", &json!({"ids": ids[..3]})).unwrap();
+    let r = s.execute("merge.hdr", &json!({"ids": [ids[0], ids[3]], "preview": true})).unwrap();
+    assert_eq!(r["skipped"], json!([[ids[3]]]), "{r}");
+    assert_eq!(r["previews"].as_array().unwrap().len(), 1, "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

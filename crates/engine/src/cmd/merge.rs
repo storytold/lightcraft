@@ -24,7 +24,7 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     if !bool_or(p, "preview", false) {
         return s.merge_now(kind, finish, &ids);
     }
-    let jobs = s.plan_merges(kind, finish, &ids, true)?;
+    let (jobs, skipped) = s.plan_merges_inner(kind, finish, &ids, true)?;
     if jobs.len() > 1 && str_param(p, "previewPath").is_some() {
         return Err(bad(id, "previewPath is only supported for a single merge group; remove it to preview all groups"));
     }
@@ -67,6 +67,11 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
         if !failed.is_empty() {
             obj.insert("failed".into(), Value::Array(failed));
         }
+    }
+    if !skipped.is_empty()
+        && let Some(obj) = info.as_object_mut()
+    {
+        obj.insert("skipped".into(), json!(skipped.iter().map(|g| g.iter().map(|p| p.0).collect::<Vec<_>>()).collect::<Vec<_>>()));
     }
     Ok(info)
 }
