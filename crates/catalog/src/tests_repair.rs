@@ -1,6 +1,10 @@
 //! A damaged or hand-edited snapshot that still parses is made to hold together on load
 //! ([`Catalog::repair`]): found by fuzzing snapshots of a real library.
 
+use std::sync::Arc;
+
+use lightcraft_develop::{DevelopSettings, Mask, MaskComponent, MaskOp, MaskShape, SegMask};
+
 use crate::journal::SNAPSHOT;
 use crate::*;
 
@@ -268,4 +272,140 @@ fn a_repair_forgets_what_was_worked_out_from_the_albums() {
     }
     assert!(!c.repair().is_empty());
     assert!(c.keeps_written_order(), "the loop the repair left is seen");
+}
+
+// ---- repair copies only what it repairs ----
+
+/// Develop settings with one object mask whose segmentation is `seg`.
+fn settings_with(seg: SegMask) -> Arc<DevelopSettings> {
+    let mut s = DevelopSettings::default();
+    s.masks.push(Mask {
+        id: 1,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Object {
+                hint: vec![lightcraft_geom::Point::new(0.5, 0.5)],
+                exclude: vec![],
+                seg: Some(seg),
+                detail: vec![],
+                edge: 0.0,
+            },
+        }],
+        ..Default::default()
+    });
+    Arc::new(s)
+}
+
+/// The segmentation of the first mask of `s`.
+fn first_seg(s: &DevelopSettings) -> SegMask {
+    let mut found = None;
+    s.visit_seg_masks(&mut |m| found = found.take().or_else(|| Some(m.clone())));
+    found.unwrap()
+}
+
+/// A catalog this build wrote is shared with whoever else holds its photos (the journal's record of
+/// what is on disk, a clone being measured): repairing it has nothing to change, so it copies
+/// nothing, neither a photo nor the settings it holds.
+#[test]
+fn a_repair_that_changes_nothing_copies_no_photo() {
+    let (mut c, _) = sound();
+    let held = c.clone();
+    assert!(c.repair().is_empty());
+    for (id, p) in &c.photos {
+        let theirs = &held.photos[id];
+        assert!(Arc::ptr_eq(p, theirs), "photo {} was copied by a repair that changed nothing", id.0);
+    }
+}
+
+/// The settings are shared too when only a photo is unique (its holders share the settings with
+/// other holders, as a history step shares the settings it was made from): a repair with no grid
+/// reference to resolve leaves them as they are.
+#[test]
+fn a_repair_that_resolves_no_grid_reference_copies_no_settings() {
+    let (mut c, ids) = sound();
+    let settings = settings_with(SegMask::from_logits(8, &[0.5f32; 64]));
+    for id in &ids {
+        let Some(p) = c.photos.get_mut(id).map(Arc::make_mut) else { continue };
+        p.develop = settings.clone();
+        p.history.push(HistoryStep { label: "Exposure".into(), settings: settings.clone() });
+    }
+    assert!(Arc::strong_count(&settings) > 1);
+    assert!(c.repair().is_empty());
+    for id in &ids {
+        let p = &c.photos[id];
+        assert!(Arc::ptr_eq(&p.develop, &settings), "photo {}: develop settings were copied", id.0);
+        assert!(Arc::ptr_eq(&p.history[0].settings, &settings), "photo {}: a history step's settings were copied", id.0);
+    }
+}
+
+/// A repair copies the photos it has something to fix and only those, and still fixes each: a photo
+/// filed under another id, one with a grid reference (in its settings and a history step) to
+/// resolve, one with more History than it keeps. The fourth, sound, stays the very photo that
+/// was shared.
+#[test]
+fn a_repair_copies_only_the_photos_it_repairs_and_still_repairs_them() {
+    let (mut c, ids) = sound();
+    let seg = SegMask::from_logits(8, &[0.5f32; 64]);
+    let blob = seg.data.clone();
+    c.grids = vec![blob.clone()];
+    let by_ref = SegMask { data: String::new(), grid: Some(0), ..seg };
+    if let Some(p) = c.photos.get_mut(&ids[0]).map(Arc::make_mut) {
+        p.id = PhotoId(900);
+    }
+    if let Some(p) = c.photos.get_mut(&ids[1]).map(Arc::make_mut) {
+        p.develop = settings_with(by_ref.clone());
+        p.history.push(HistoryStep { label: "Mask".into(), settings: settings_with(by_ref) });
+    }
+    if let Some(p) = c.photos.get_mut(&ids[2]).map(Arc::make_mut) {
+        let step = HistoryStep { label: "Exposure".into(), settings: Arc::new(DevelopSettings::default()) };
+        p.history = vec![step; HISTORY_LIMIT + 3];
+    }
+    let held = c.clone();
+
+    let report = c.repair();
+    assert_eq!(report.len(), 2, "{report:?}");
+    assert!(report.iter().any(|r| r.contains("was filed as")), "{report:?}");
+    assert!(report.iter().any(|r| r.contains("History step(s) beyond")), "{report:?}");
+
+    // repaired, each on its own copy
+    assert_eq!(c.photos[&ids[0]].id, ids[0]);
+    for settings in c.photos[&ids[1]].settings_holders() {
+        let seg = first_seg(settings);
+        assert_eq!((seg.grid, seg.data.as_str()), (None, blob.as_str()), "the reference is resolved in every holder");
+    }
+    assert_eq!(c.photos[&ids[2]].history.len(), HISTORY_LIMIT);
+    assert!(c.grids.is_empty(), "the snapshot's table is not kept");
+    for id in &ids[..3] {
+        assert!(!Arc::ptr_eq(&c.photos[id], &held.photos[id]), "photo {} had something to repair and was repaired in place of the shared one", id.0);
+    }
+    // the sound one: not copied
+    assert!(Arc::ptr_eq(&c.photos[&ids[3]], &held.photos[&ids[3]]), "a sound photo was copied");
+    // what was shared is as it was
+    assert_eq!(held.photos[&ids[0]].id, PhotoId(900));
+    assert_eq!(held.photos[&ids[2]].history.len(), HISTORY_LIMIT + 3);
+    assert!(c.repair().is_empty(), "a second repair is idempotent");
+}
+
+/// Of a photo that has a reference to resolve, only the holders with one are copied: a History step
+/// made from settings that are still shared elsewhere keeps the shared settings.
+#[test]
+fn a_repair_resolves_the_holders_with_a_reference_and_leaves_the_others_shared() {
+    let (mut c, ids) = sound();
+    let seg = SegMask::from_logits(8, &[0.5f32; 64]);
+    let blob = seg.data.clone();
+    c.grids = vec![blob.clone()];
+    let plain = Arc::new(DevelopSettings::default());
+    if let Some(p) = c.photos.get_mut(&ids[0]).map(Arc::make_mut) {
+        p.develop = settings_with(SegMask { data: String::new(), grid: Some(0), ..seg });
+        p.history.push(HistoryStep { label: "Exposure".into(), settings: plain.clone() });
+    }
+    let held = c.clone();
+    assert!(c.repair().is_empty(), "resolving a reference is how a snapshot reads, not damage");
+    let p = &c.photos[&ids[0]];
+    let resolved = first_seg(&p.develop);
+    assert_eq!((resolved.grid, resolved.data.as_str()), (None, blob.as_str()));
+    assert!(Arc::ptr_eq(&p.history[0].settings, &plain), "settings without a reference were copied");
+    assert_eq!(first_seg(&held.photos[&ids[0]].develop).grid, Some(0), "what was shared is as it was");
 }
