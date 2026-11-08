@@ -16,29 +16,13 @@ use objc2::{ClassType as _, MainThreadMarker};
 use objc2_app_kit::{NSApplication, NSPanel, NSView, NSWindowButton, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
-/// Frames, in points, that put the buttons' centre at the middle of a `bar_h` tall bar.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Layout {
-    /// The title-bar container's height.
-    pub container_h: f32,
-    /// The container's bottom edge above the window's bottom edge (AppKit's origin is bottom-left).
-    pub container_y: f32,
-    /// The buttons' bottom edge above the container's bottom edge.
-    pub button_y: f32,
-}
-
-/// Where the container and the buttons go for a window `window_h` tall, a bar `bar_h` tall and
-/// buttons `button_h` tall. A bar shorter than the buttons is as tall as they are.
-pub fn layout(window_h: f32, bar_h: f32, button_h: f32, scale: f32) -> Layout {
-    // on whole device pixels: half a pixel off draws the buttons blurred on a 1x screen
-    let container_h = (bar_h.max(button_h) * scale).round() / scale;
-    let button_y = ((container_h - button_h) / 2.0 * scale).round() / scale;
-    Layout { container_h, container_y: window_h - container_h, button_y }
-}
+use crate::traffic_layout::layout;
 
 /// Moves the buttons of every window with a full-size content view and visible buttons so their
 /// centre is the middle of a `bar_h` tall bar. Call it once per frame, on the main thread;
-/// anywhere else, or in full screen (the buttons are gone), it does nothing.
+/// anywhere else, or in full screen (the buttons are gone), it does nothing. LightCraft's root
+/// window is the only one built with a full-size content view (`with_fullsize_content_view` in
+/// `main.rs`; a file dialog or other panel is skipped), so `bar_h` is that window's bar.
 pub fn centre_on_bar(bar_h: f32) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -93,48 +77,5 @@ fn set_frame(view: &NSView, to: impl Fn(NSRect) -> NSRect) {
     let want = to(now);
     if want != now {
         view.setFrame(want);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// How far below the window's top edge the buttons' centre is.
-    fn centre_from_top(window_h: f32, button_h: f32, l: Layout) -> f32 {
-        window_h - (l.container_y + l.button_y + button_h / 2.0)
-    }
-
-    // Scenario: the traffic lights are centred on the top bar, whatever the window's height, and
-    // on whole device pixels (a button half a pixel off draws blurred on a 1x screen)
-    #[test]
-    fn the_buttons_are_centred_on_the_bar_on_whole_pixels() {
-        for scale in [1.0, 2.0] {
-            for window_h in [400.0, 1000.0, 2160.0] {
-                for bar_h in [42.0, 41.0, 60.0, 61.5, 51.25] {
-                    let l = layout(window_h, bar_h, 16.0, scale);
-                    let off = (centre_from_top(window_h, 16.0, l) - bar_h / 2.0).abs();
-                    assert!(off <= 0.75 / scale, "scale {scale}, window {window_h}, bar {bar_h}: {off} off");
-                    let whole = |points: f32| points * scale == (points * scale).round();
-                    assert!(whole(l.button_y) && whole(l.container_h), "scale {scale}, bar {bar_h}: {l:?}");
-                    assert!((l.container_h - bar_h).abs() <= 0.5 / scale, "the container covers the bar, so a click on a button lands on it");
-                    assert_eq!(l.container_y + l.container_h, window_h, "and starts at the window's top edge");
-                }
-            }
-        }
-    }
-
-    // Scenario: a bar shorter than the buttons still holds them
-    #[test]
-    fn a_bar_shorter_than_the_buttons_is_as_tall_as_they_are() {
-        let l = layout(1000.0, 10.0, 16.0, 2.0);
-        assert_eq!(l.container_h, 16.0);
-        assert_eq!(l.button_y, 0.0);
-    }
-
-    #[test]
-    fn nothing_happens_off_the_main_thread() {
-        // AppKit is main-thread only; a test thread must not touch it
-        std::thread::spawn(|| centre_on_bar(42.0)).join().unwrap();
     }
 }

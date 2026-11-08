@@ -41,6 +41,9 @@ mod profile_file;
 mod screen_profile;
 #[cfg(windows)]
 mod win_screen_profile;
+// plain arithmetic, built and tested everywhere; only macOS calls it
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod traffic_layout;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 mod window_gpu;
@@ -172,7 +175,7 @@ impl eframe::App for App {
         // No bar drawn (the full-screen photo preview): leave them where they are.
         #[cfg(target_os = "macos")]
         if self.0.integrated_titlebar
-            && let Some((_, bar)) = self.0.widgets.iter().find(|(id, _)| id == "region:titlebar")
+            && let Some((_, bar)) = self.0.widgets.iter().find(|(id, _)| id == lightcraft_ui_egui::panels::topbar::TITLEBAR_REGION)
         {
             traffic_lights::centre_on_bar(bar.height() * ctx.zoom_factor());
         }
