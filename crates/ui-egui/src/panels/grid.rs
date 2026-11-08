@@ -1689,6 +1689,11 @@ mod tests {
         assert_eq!(new_order(at(sort, all, true), at(days, all, true)), Follow::Stay, "Day while Auto already shows days changes nothing");
         assert_eq!(new_order(at(days, all, true), at(sort, all, true)), Follow::Stay, "and back");
         assert_eq!(new_order(at(sort, all, true), at(Sort { group: GroupBy::Month, ..sort }, all, true)), Follow::NewOrder);
+        // dragging the thumbnail-size slider moves what `Auto` comes to (days, then months) without choosing
+        // anything else: the same choice is not another grouping
+        let resized = |size: f32| Seen { shown: resolve_group(sort.group, size), ..at(sort, all, true) };
+        assert_ne!(resized(220.0).shown, resized(120.0).shown, "the slider changes what Auto comes to");
+        assert_eq!(new_order(resized(220.0), resized(120.0)), Follow::Stay, "the thumbnail size alone is no new order");
         assert_eq!(new_order(at(sort, all, false), at(regrouped, all, false)), Follow::Stay, "the filmstrip has no date headers");
         assert_eq!(new_order(at(named, all, true), at(named_regrouped, all, true)), Follow::Stay, "a name sort has no date headers");
         assert_eq!(new_order(at(sort, all, true), at(seeded, all, true)), Follow::Stay, "only a shuffle has a seed");
