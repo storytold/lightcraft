@@ -618,6 +618,40 @@ fn brush_strokes_carry_auto_mask() {
     h.settle(SETTLE);
 }
 
+/// On a photo cropped to its middle half each way, the brush and Remove cursors are drawn at the radius
+/// the render paints with, measured on the uncropped photo's long edge (#3957), not on the
+/// cropped frame's.
+#[test]
+fn cursors_on_a_cropped_photo_are_the_size_the_render_paints() {
+    for panel in ["panel.masking", "panel.remove"] {
+        let mut h = detail(panel);
+        if panel == "panel.masking" {
+            exec(&mut h, "tool.brush", json!({}));
+        }
+        exec(&mut h, "crop.set", json!({"rect": [0.25, 0.25, 0.75, 0.75]}));
+        h.settle(SETTLE);
+        let img = h.app.widgets.iter().find(|(w, _)| w == "canvas:image").map(|(_, r)| *r).expect("the photo on screen");
+        // the pointer rests on the photo, nothing painted yet
+        h.app.synthetic.push(egui::Event::PointerMoved(img.center()));
+        h.step();
+        h.step();
+        // the crop shows half of each edge: the uncropped long edge is twice the shown one
+        let long = 2.0 * img.width().max(img.height());
+        let size = if panel == "panel.masking" { h.app.ui.brush_size } else { h.app.ui.remove_size };
+        let want = size * long;
+        let radii: Vec<f32> = h
+            .view
+            .painted_shapes()
+            .iter()
+            .filter_map(|s| match s {
+                egui::epaint::Shape::Circle(c) if c.stroke.color == egui::Color32::WHITE => Some(c.radius),
+                _ => None,
+            })
+            .collect();
+        assert!(radii.iter().any(|r| (r - want).abs() < 0.5), "{panel}: cursor radius {want} not among {radii:?}");
+    }
+}
+
 #[test]
 fn remove_spots_by_pointer_and_keyboard() {
     let mut h = detail("panel.remove");

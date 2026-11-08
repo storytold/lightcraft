@@ -173,7 +173,8 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
     }
     if crate::canvas_keys::has_focus(ui.ctx()) && ui.memory(|m| m.has_focus(crate::canvas_keys::id("spot:new"))) {
         let r = app.ui.remove_size * map.per_long();
-        ui.painter().circle_stroke(q, r, Stroke::new(1.0, Color32::WHITE));
+        // clipped to the canvas like the other Remove overlays: near an edge it can reach past it
+        ui.painter_at(app.canvas_rect.unwrap_or(map.rect)).circle_stroke(q, r, Stroke::new(1.0, Color32::WHITE));
     }
     if keys.activated {
         let mode = match app.ui.tool.as_str() {
