@@ -1,4 +1,4 @@
-//! The arithmetic behind [`crate::traffic_lights`]: where the title-bar container and the window's
+//! The arithmetic behind `crate::traffic_lights`: where the title-bar container and the window's
 //! close, minimize and zoom buttons go so the buttons sit in the middle of the top bar. It is plain
 //! numbers, so it is built and tested on every platform; only the AppKit calls are macOS-only.
 
