@@ -79,6 +79,10 @@
 //!   parse, fails [`Journal::open`] with [`CatalogError::Newer`] before any file is modified — it
 //!   is never mistaken for a torn tail or damage. (Builds up to v0.2.0 refuse a v2 snapshot with
 //!   "unsupported format".)
+//! - **An unknown layout is refused, untouched** (#3962): a snapshot at a readable version with a
+//!   top-level key other than `format`, `version`, `seq` and `catalog`, or a `segments` folder
+//!   next to it, fails [`Journal::open`] with [`CatalogError::Newer`] the same way — the photos may
+//!   live where this version doesn't look, and the upgrade rewrite would save an empty catalog.
 
 use crate::store::Store;
 use crate::{Catalog, CatalogError, Op, Result};
@@ -418,6 +422,34 @@ struct SnapHeader {
     version: u32,
 }
 
+/// The top-level keys a `catalog.snap` of this format may have. Anything else means the library is
+/// laid out in a way this version doesn't read (#3962): ignoring the key would load part of it and
+/// the upgrade-on-open rewrite would then save that part over the whole.
+const SNAP_KEYS: [&str; 4] = ["format", "version", "seq", "catalog"];
+/// A folder next to `catalog.snap` that this format never writes (a segment-file layout keeps the
+/// photos there). Its presence means the snapshot alone isn't the library (#3962).
+const SEGMENTS: &str = "segments";
+
+/// Refuse a library whose layout this version doesn't read, before anything reads it into the
+/// catalog or writes to it: a top-level key in `catalog.snap` outside [`SNAP_KEYS`] (`snap`), or a
+/// [`SEGMENTS`] folder next to it. Without this guard such a library loads as an empty catalog and
+/// the first snapshot overwrites it (#3962).
+fn refuse_unknown_layout(store: &mut dyn Store, snap: Option<&[u8]>) -> Result<()> {
+    let layout = "this library's layout isn't one this version reads";
+    if let Some(bytes) = snap {
+        // (values are skipped, not built: the catalog itself is parsed once, by `Journal::open`)
+        type Keys = std::collections::BTreeMap<String, serde::de::IgnoredAny>;
+        let keys: Keys = serde_json::from_slice(bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
+        if let Some(key) = keys.keys().find(|k| !SNAP_KEYS.contains(&k.as_str())) {
+            return Err(newer(format!("{SNAPSHOT} has a top-level {key:?} this version doesn't know: {layout}")));
+        }
+    }
+    if store.has_folder(SEGMENTS).map_err(io)? {
+        return Err(newer(format!("the library has a {SEGMENTS:?} folder next to {SNAPSHOT}: {layout}")));
+    }
+    Ok(())
+}
+
 /// The whole `catalog.snap` (after [`SnapHeader`] was checked; `format` and `version` are ignored).
 #[derive(serde::Deserialize)]
 struct SnapFile {
@@ -443,6 +475,8 @@ impl Journal {
                 if h.version > VERSION {
                     return Err(newer(format!("{SNAPSHOT} is catalog format v{}", h.version)));
                 }
+                // a readable stamp, but a layout this version doesn't read: refused untouched (#3962)
+                refuse_unknown_layout(store.as_mut(), Some(bytes.as_slice()))?;
                 let s: SnapFile = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
                 // a seq this high can't come from real use; the next record's seq would wrap
                 if s.seq > MAX_SEQ {
@@ -455,7 +489,11 @@ impl Journal {
                 }
                 (catalog, s.seq, Some(h.version))
             }
-            None => (Catalog::new(), 0, None),
+            None => {
+                // no snapshot: a fresh one would otherwise be written beside the segments
+                refuse_unknown_layout(store.as_mut(), None)?;
+                (Catalog::new(), 0, None)
+            }
         };
         report.snapshot_seq = snapshot_seq;
         let mut j = Journal {

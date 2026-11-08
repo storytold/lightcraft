@@ -151,6 +151,103 @@ fn newer_snapshot_is_refused_untouched() {
     assert!(e.contains(&format!("v{}", VERSION + 1)), "{e}");
 }
 
+/// Issue #3962: `catalog.snap` at stamp `version` holding `base`, with `extra` spliced in as more
+/// top-level members (empty: an ordinary snapshot).
+fn snap_at(version: u32, base: &Catalog, extra: &str) -> Vec<u8> {
+    format!("{{\"format\":\"lightcraft-catalog\",\"version\":{version},{extra}\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes()
+}
+
+/// The readable stamps the layout tests run at: this build's and an older one.
+const READABLE: [u32; 2] = [VERSION, VERSION - 1];
+
+/// A snapshot at a readable stamp with a top-level key this format never writes (a fork that kept
+/// its photos elsewhere) is refused untouched, not loaded as a catalog without them and then saved
+/// over by the upgrade or the next snapshot (#3962). Before the fix the open succeeded.
+#[test]
+fn unknown_top_level_key_is_refused_untouched() {
+    let (base, log, _) = legacy_parts();
+    for version in READABLE {
+        for (key, extra) in [("segments", r#""segments":["0001.seg","0002.seg"],"#), ("photoIndex", r#""photoIndex":{"count":2},"#)] {
+            let m = MemStore::new();
+            m.set(SNAPSHOT, snap_at(version, &base, extra));
+            m.set(LOG, log.clone().into_bytes());
+            assert_refused_untouched(&m);
+            let e = Journal::open(Box::new(m)).err().unwrap().to_string();
+            assert!(e.contains(&format!("{key:?}")) && e.contains("layout isn't one this version reads"), "v{version}: {e}");
+        }
+    }
+}
+
+/// A `segments` folder next to an otherwise ordinary snapshot: the snapshot isn't the whole
+/// library, so it is refused untouched (#3962). Also with no snapshot at all, where a new empty
+/// one would otherwise be written beside the folder. Before the fix the open succeeded.
+#[test]
+fn segments_folder_is_refused_untouched() {
+    let (base, log, _) = legacy_parts();
+    for version in READABLE {
+        let m = MemStore::new();
+        m.set(SNAPSHOT, snap_at(version, &base, ""));
+        m.set(LOG, log.clone().into_bytes());
+        m.set("segments/0001.seg", b"photos live here".to_vec());
+        assert_refused_untouched(&m);
+        let e = Journal::open(Box::new(m)).err().unwrap().to_string();
+        assert!(e.contains("\"segments\" folder") && e.contains("layout isn't one this version reads"), "v{version}: {e}");
+    }
+    let m = MemStore::new();
+    m.set("segments/0001.seg", b"photos live here".to_vec());
+    assert_refused_untouched(&m);
+}
+
+/// The same refusal through the native store, where the folder is a real directory: the snapshot
+/// and log keep their bytes and no file is added (#3962). Before the fix the open succeeded.
+#[test]
+fn segments_folder_on_disk_is_refused_untouched() {
+    let (base, log, _) = legacy_parts();
+    for version in READABLE {
+        let dir = std::env::temp_dir().join(format!("lc-layout-{version}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("segments")).unwrap();
+        std::fs::write(dir.join("segments").join("0001.seg"), b"photos live here").unwrap();
+        let snap = snap_at(version, &base, "");
+        std::fs::write(dir.join(SNAPSHOT), &snap).unwrap();
+        std::fs::write(dir.join(LOG), log.as_bytes()).unwrap();
+        let names = |d: &std::path::Path| {
+            let mut v: Vec<_> = std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name()).collect();
+            v.sort();
+            v
+        };
+        let before = names(&dir);
+        let e = Journal::open(Box::new(FsStore::open(&dir).unwrap())).err().expect("refused");
+        assert!(matches!(e, CatalogError::Newer(_)), "{e:?}");
+        assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), snap);
+        assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), log.as_bytes());
+        assert_eq!(names(&dir), before, "no file added or renamed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// Controls for #3962: an ordinary library at a readable stamp still opens with its photos (a
+/// `segments` *file* or a key-like string inside the catalog is no folder or top-level key), and a
+/// stamp above [`VERSION`] is still refused for its version, even with an unknown key beside it.
+#[test]
+fn ordinary_layout_still_opens_and_a_newer_stamp_still_names_its_version() {
+    let (base, log, full) = legacy_parts();
+    for version in READABLE {
+        let m = MemStore::new();
+        m.set(SNAPSHOT, snap_at(version, &base, ""));
+        m.set(LOG, log.clone().into_bytes());
+        m.set("segments", b"not a folder".to_vec());
+        let (_, c, r) = Journal::open(Box::new(m)).unwrap();
+        assert_eq!(c.to_snapshot(), full.to_snapshot());
+        assert_eq!(r.upgraded_from, (version != VERSION).then_some(version));
+    }
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snap_at(VERSION + 1, &base, r#""segments":[],"#));
+    assert_refused_untouched(&m);
+    let e = Journal::open(Box::new(m)).err().unwrap().to_string();
+    assert!(e.contains(&format!("is catalog format v{}", VERSION + 1)), "{e}");
+}
+
 /// A log record with a valid CRC whose op this version doesn't know: refused, not taken for a
 /// torn tail (truncated) or damage (renamed) — wherever it is in the log.
 #[test]

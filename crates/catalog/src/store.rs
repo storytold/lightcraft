@@ -56,6 +56,13 @@ pub trait Store: Send {
     fn unwritten(&self) -> Option<(usize, String)> {
         None
     }
+    /// Is there a folder called `name` among the files? The journal refuses a library laid out
+    /// with a folder this version doesn't read (#3962) rather than load part of it and overwrite
+    /// the rest. The default: a flat store (no folders), so `false`.
+    fn has_folder(&mut self, name: &str) -> io::Result<bool> {
+        let _ = name;
+        Ok(false)
+    }
 }
 
 /// Appends and truncates open the name's own file, so anything else at the name is the library's
@@ -285,6 +292,16 @@ impl Store for FsStore {
     fn unwritten(&self) -> Option<(usize, String)> {
         self.log.as_ref().and_then(|w| w.unwritten())
     }
+
+    fn has_folder(&mut self, name: &str) -> io::Result<bool> {
+        // (a link to a folder counts: what it points at is what another build would read)
+        match std::fs::metadata(self.path(name)) {
+            Ok(md) => Ok(md.is_dir()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            // can't tell: an error, not a guess that would let the open go on to write
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// Counts the bytes written through it.
@@ -344,6 +361,11 @@ impl Store for MemStore {
     }
     fn describe(&self) -> String {
         "memory".into()
+    }
+    /// A file named `<name>/…` stands for a file inside folder `name`.
+    fn has_folder(&mut self, name: &str) -> io::Result<bool> {
+        let prefix = format!("{name}/");
+        Ok(self.files.lock().unwrap_or_else(|e| e.into_inner()).keys().any(|k| k.starts_with(&prefix)))
     }
     fn background_writer(&self) -> Option<Box<dyn Store>> {
         self.background.then(|| Box::new(self.clone()) as Box<dyn Store>)
