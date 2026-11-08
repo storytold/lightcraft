@@ -231,6 +231,85 @@ fn mid_log_damage_is_preserved_and_recovered() {
     assert!(r2.damaged.is_none());
 }
 
+/// `log` with its third record damaged, the damage spelled `mark` (so two such logs differ).
+fn damaged_at_record_three(log: &[u8], mark: &str) -> Vec<u8> {
+    let text = String::from_utf8(log.to_vec()).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    assert!(lines.len() > 4);
+    lines[2] = lines[2].replacen("\"op\":{\"op\":\"", &format!("\"op\":{{\"op\":\"{mark}"), 1);
+    format!("{}\n", lines.join("\n")).into_bytes()
+}
+
+/// A library that reaches the same change number twice with a damaged log (restored from an older
+/// backup, say) keeps both damaged logs: the second never replaces the first.
+#[test]
+fn a_second_damaged_log_at_the_same_change_is_kept_beside_the_first() {
+    let (m, _, _) = sample_catalog_with_log();
+    let clean = m.get(LOG).unwrap();
+    let first = damaged_at_record_three(&clean, "x");
+    m.set(LOG, first.clone());
+    let (_, _, r1) = open(&m);
+    let name1 = r1.damaged.expect("damage reported");
+    assert_eq!(m.get(&name1).unwrap(), first);
+
+    let second = damaged_at_record_three(&clean, "y");
+    m.set(LOG, second.clone());
+    let (_, _, r2) = open(&m);
+    let name2 = r2.damaged.expect("damage reported again");
+    assert_ne!(name1, name2, "the second copy needs a name of its own");
+    assert_eq!(m.get(&name1).unwrap(), first, "the first copy is untouched");
+    assert_eq!(m.get(&name2).unwrap(), second);
+
+    let third = damaged_at_record_three(&clean, "z");
+    m.set(LOG, third.clone());
+    let (_, _, r3) = open(&m);
+    let name3 = r3.damaged.expect("damage reported a third time");
+    assert!(name3 != name1 && name3 != name2);
+    assert_eq!(m.get(&name1).unwrap(), first);
+    assert_eq!(m.get(&name2).unwrap(), second);
+    assert_eq!(m.get(&name3).unwrap(), third);
+}
+
+/// The same damaged log twice (an open whose snapshot failed, then a retry) is the copy already
+/// kept: no second file, and the report names the first.
+#[test]
+fn the_same_damaged_log_twice_is_kept_once() {
+    let (m, _, _) = sample_catalog_with_log();
+    let bad = damaged_at_record_three(&m.get(LOG).unwrap(), "x");
+    m.set(LOG, bad.clone());
+    let (_, _, r1) = open(&m);
+    let name1 = r1.damaged.expect("damage reported");
+    m.set(LOG, bad.clone());
+    let (_, _, r2) = open(&m);
+    assert_eq!(r2.damaged, Some(name1.clone()));
+    assert_eq!(m.get(&name1).unwrap(), bad);
+    assert_eq!(m.get(&format!("{name1}-2")), None, "no second copy of the same bytes");
+}
+
+/// With every free name taken the library is refused, its damaged log still in place (a copy is
+/// never replaced to make room).
+#[test]
+fn a_damaged_log_with_every_name_taken_is_refused_untouched() {
+    let (m, _, _) = sample_catalog_with_log();
+    let clean = m.get(LOG).unwrap();
+    m.set(LOG, damaged_at_record_three(&clean, "x"));
+    let (_, _, r) = open(&m);
+    let first = r.damaged.expect("damage reported");
+    let mut others = Vec::new();
+    for n in 2..=100 {
+        let name = format!("{first}-{n}");
+        m.set(&name, format!("another copy {n}").into_bytes());
+        others.push((name, n));
+    }
+    let bad = damaged_at_record_three(&clean, "w");
+    m.set(LOG, bad.clone());
+    assert!(Journal::open(Box::new(m.clone())).is_err());
+    assert_eq!(m.get(LOG).unwrap(), bad, "the damaged log stays where it is");
+    for (name, n) in others {
+        assert_eq!(m.get(&name).unwrap(), format!("another copy {n}").into_bytes(), "{name} is untouched");
+    }
+}
+
 #[test]
 fn record_codec() {
     let op = Op::RenameAlbum { id: AlbumId(3), name: "Line\nbreak \"quoted\" }".into() };
