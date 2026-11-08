@@ -456,7 +456,7 @@ fn middle_group_failure_does_not_stop_later_groups() {
     s.execute("stack.group", &json!({"ids": ids[3..]})).unwrap();
     let op = s.catalog.group_ops(missing[0], &missing, true).unwrap();
     s.catalog.apply(op).unwrap();
-    let selected = [ids[0], missing[0], ids[3]];
+    let selected = [ids[0], missing[0].0, ids[3]];
     // Preview: first and third previews are reported, middle under `failed`.
     let pv = s.execute("merge.hdr", &json!({"ids": selected, "preview": true})).unwrap();
     assert_eq!(pv["previews"].as_array().unwrap().len(), 2, "{pv}");
