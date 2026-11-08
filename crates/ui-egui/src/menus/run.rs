@@ -4,6 +4,11 @@ use super::{BeforeAfter, Dialog, LightcraftApp, PickRequest, Picked, RightPanel,
 
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
     if app.ui.right == p && crate::docking::exposed(app, crate::docking::Panel::Tools) {
+        // A refused close must not leave visibility out of sync with the locked workspace:
+        // the renderer would mistake that mismatch for an invalid saved arrangement.
+        if app.ui.docking.as_ref().is_some_and(|workspace| workspace.locked) {
+            return;
+        }
         app.ui.right = RightPanel::None;
         app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
     } else {
@@ -1005,6 +1010,13 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(Value::Null)
         }
         "panel.presets" => {
+            // Locking forbids closing, but still allows opening or revealing a background tab.
+            if app.ui.presets
+                && crate::docking::exposed(app, crate::docking::Panel::Presets)
+                && app.ui.docking.as_ref().is_some_and(|workspace| workspace.locked)
+            {
+                return Some(Ok(Value::Null));
+            }
             app.ui.presets = !app.ui.presets || !crate::docking::exposed(app, crate::docking::Panel::Presets);
             if app.ui.presets && app.ui.view != ViewMode::Detail {
                 app.ui.view = ViewMode::Detail;

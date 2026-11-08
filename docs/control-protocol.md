@@ -421,6 +421,9 @@ tab onto the middle of the other panel is still supported. These context-menu ac
 when the workspace is locked or the icon's panel is closed; grouping is also disabled when the
 other panel is closed. Only layout
 changes: no preset is applied and no photo or undo entry is changed.
+Primary clicks on the currently exposed Presets or tool icon also respect the lock: they keep
+that panel open, including without a selected photo. Opening a closed panel, selecting a
+background tab and switching Tools modes remain available in a locked workspace.
 
 Panel IDs: `library`, `tools`, `presets`. The protected center is `canvas`.
 
