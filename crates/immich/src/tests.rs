@@ -14,6 +14,7 @@ use crate::api::{Client, Limits, SearchQuery};
 use crate::error::Error;
 
 pub struct Captured {
+    pub method: String,
     pub path: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
@@ -96,7 +97,8 @@ fn read_request(stream: &mut TcpStream) -> Option<Captured> {
     let head = String::from_utf8_lossy(&buf[..head_len]).into_owned();
     let mut lines = head.lines();
     let mut first = lines.next().unwrap_or_default().split_whitespace();
-    let path = first.next().and_then(|_| first.next()).unwrap_or_default().to_string();
+    let method = first.next().unwrap_or_default().to_string();
+    let path = first.next().unwrap_or_default().to_string();
     let headers: Vec<(String, String)> = lines.filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))).collect();
     let declared = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.parse::<usize>().ok()).unwrap_or(0);
     let mut body = buf[head_len..].to_vec();
@@ -107,7 +109,7 @@ fn read_request(stream: &mut TcpStream) -> Option<Captured> {
         }
         body.extend_from_slice(&chunk[..n]);
     }
-    Some(Captured { path, headers, body })
+    Some(Captured { method, path, headers, body })
 }
 
 fn write_reply(stream: &mut TcpStream, r: &Reply) {
@@ -197,6 +199,58 @@ fn a_redirect_to_another_host_is_refused() {
     let got = take(&seen);
     h.join().unwrap();
     assert_eq!(got.len(), 1, "nothing was sent to the other host");
+}
+
+#[test]
+fn a_303_redirect_is_followed_as_a_bodyless_get() {
+    // RFC 9110 §15.4.4: a 303 asks every method to become a GET; repeating the POST with its body
+    // at the target would fail a GET-only endpoint (a proxy answering the search)
+    let (base, seen, h) = start(vec![redirect(303, "/immich/api/search/metadata"), json(200, r#"{"assets":[]}"#)]);
+    let client = Client::new(&base, "k", Limits::default()).unwrap();
+    client.search(&SearchQuery::default()).unwrap();
+    let got = take(&seen);
+    h.join().unwrap();
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0].method, "POST");
+    assert_eq!(got[1].method, "GET", "the redirect becomes a GET");
+    assert_eq!(got[1].path, "/immich/api/search/metadata");
+    assert!(got[1].body.is_empty(), "no body follows a 303");
+}
+
+#[test]
+fn a_base_url_with_a_query_is_refused_before_anything_is_sent() {
+    // a query on the base would land mid-path on every endpoint (`/api?source=desktop/api/…`)
+    let e = Client::new("http://127.0.0.1:8080/api?source=desktop", "k", Limits::default()).unwrap_err();
+    assert!(e.to_string().contains("must not include a query"), "{e}");
+}
+
+#[test]
+fn a_server_error_that_reflects_the_key_is_redacted() {
+    // a debug server (or proxy) can echo the key back in an error body
+    let (base, _seen, h) = start(vec![json(500, r#"{"message":"bad key 7f7d-5a5a-2c2c"}"#)]);
+    let client = Client::new(&base, "7f7d-5a5a-2c2c", Limits::default()).unwrap();
+    let e = client.ping().unwrap_err().to_string();
+    assert!(!e.contains("7f7d-5a5a-2c2c"), "{e}");
+    assert!(e.contains("[redacted]"), "{e}");
+    h.join().unwrap();
+}
+
+#[test]
+fn album_assets_uses_the_metadata_search() {
+    // `GET /albums/{id}/assets` is gone in 3.x; the album's page comes from the search
+    let (base, seen, h) = start(vec![json(
+        200,
+        r#"{"assets":{"total":2,"count":2,"items":[{"id":"a1","checksum":"beef","originalFileName":"IMG_1.HEIC"},{"id":"b2","checksum":"cafe","originalFileName":"IMG_2.HEIC"}],"nextPage":null}}"#,
+    )]);
+    let client = Client::new(&base, "k", Limits::default()).unwrap();
+    let assets = client.album_assets("alb1").unwrap();
+    let got = take(&seen);
+    h.join().unwrap();
+    assert_eq!(assets.len(), 2);
+    assert_eq!(got.first().unwrap().method, "POST");
+    assert_eq!(got.first().unwrap().path, "/api/search/metadata", "the album's assets come from the search");
+    let sent: serde_json::Value = serde_json::from_slice(&got.first().unwrap().body).unwrap();
+    assert_eq!(sent["albumIds"][0], "alb1");
 }
 
 #[test]

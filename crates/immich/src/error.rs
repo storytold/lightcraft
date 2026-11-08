@@ -39,9 +39,10 @@ impl From<HttpError> for Error {
         match e {
             HttpError::Cancelled => Error::Cancelled,
             HttpError::Tls(why) => Error::Transport(format!(
-                "{why}: the built-in root certificates do not trust this server's certificate \
-                 (self-signed or internally issued). Serve it over HTTPS with a certificate the \
-                 system trusts, or reach it over http:// on a network you trust."
+                "{why}: this client trusts the built-in webpki root certificates only, so a \
+                 self-signed or internally issued certificate always fails. Serve the server's \
+                 API over HTTPS with a publicly trusted certificate, or reach it over http:// on \
+                 a network you trust."
             )),
             other => Error::Transport(other.to_string()),
         }

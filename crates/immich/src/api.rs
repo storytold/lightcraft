@@ -228,6 +228,11 @@ impl Client {
     /// Immich's Settings > API keys.
     pub fn new(base_url: &str, api_key: &str, limits: Limits) -> Result<Client, Error> {
         let base = Url::parse(base_url).map_err(|e| Error::Transport(e.to_string()))?;
+        if base.path.contains('?') {
+            // every endpoint path is built on this base, so a query would land mid-path
+            // (`/api?source=desktop/api/…`); the user means the address alone
+            return Err(Error::Transport("the server address must not include a query — enter just the address, and any path prefix".into()));
+        }
         if api_key.is_empty() || api_key.len() > 200 || api_key.chars().any(|c| c.is_control()) {
             return Err(Error::Unauthorized);
         }
@@ -280,6 +285,10 @@ impl Client {
 
     fn send(&self, method: &str, rest: &str, body: Option<&[u8]>, content_type: Option<&str>) -> Result<Response, Error> {
         let mut url = self.url(rest);
+        // a 303 asks every method to become a bodyless GET (RFC 9110 §15.4.4) — a proxy answering
+        // a search with a 303 must get a GET, not a repeat of the POST
+        let mut method = method;
+        let (mut body, mut content_type) = (body, content_type);
         let mut redirects = 0;
         loop {
             let mut resp = http::request(method, &url, &self.headers(content_type), body, &self.limits())?;
@@ -306,22 +315,37 @@ impl Client {
                 return Err(Error::Api {
                     status: resp.status,
                     message: format!(
-                        "the server redirected to {location}, a different scheme, host or port — add the server with its final address instead"
+                        "the server redirected to {}, a different scheme, host or port — add the server with its final address instead",
+                        self.redact(&location)
                     ),
                 });
+            }
+            if resp.status == 303 {
+                (method, body, content_type) = ("GET", None, None);
             }
             url = next;
         }
     }
 
-    /// Turn a non-2xx answer into an error, quoting the server's own message when it sent one.
+    /// The API key, hidden in any text that came back from the server or a proxy (an error can
+    /// reflect the key back — a rejected redirect, a debugging server): the key never appears in
+    /// dialog state, control answers or logs, even quoted.
+    fn redact(&self, text: &str) -> String {
+        if self.api_key.is_empty() {
+            return text.to_string();
+        }
+        text.replace(&self.api_key, "[redacted]")
+    }
+
+    /// Turn a non-2xx answer into an error, quoting the server's own message when it sent one —
+    /// with the API key redacted, in case the server (or a proxy) reflected it back.
     fn error_from(&self, resp: &mut Response, what: &str) -> Error {
         let status = resp.status;
         if status == 404 {
             return Error::NotFound(what.to_string());
         }
         let body = http::read_all(resp, self.limits.max_json, &self.limits()).unwrap_or_default();
-        let text = String::from_utf8_lossy(&body).into_owned();
+        let text = self.redact(&String::from_utf8_lossy(&body));
         let quoted = serde_json::from_str::<serde_json::Value>(&text)
             .ok()
             .and_then(|v| ["message", "error", "detail"].iter().find_map(|k| v.get(*k).and_then(|m| m.as_str()).map(str::to_string)));
@@ -375,9 +399,22 @@ impl Client {
         self.get_json("/albums")
     }
 
-    /// The assets of one album (`GET /albums/{id}/assets`).
+    /// The assets of one album, paged through the metadata search (`POST /search/metadata` with
+    /// `albumIds`): the server's `GET /albums/{id}/assets` route is gone in 3.x, and the search is
+    /// the supported way to list an album's assets.
     pub fn album_assets(&self, album_id: &str) -> Result<Vec<Asset>, Error> {
-        self.get_json(&format!("/albums/{}/assets", encode_segment(album_id)?))
+        let mut query = SearchQuery { page: 1, page_size: 1000, ..Default::default() };
+        query.album_ids.push(album_id.to_string());
+        let mut assets = Vec::new();
+        loop {
+            let page = self.search(&query)?;
+            let n = page.items.len();
+            assets.extend(page.items);
+            if !page.maybe_more || n < query.page_size as usize {
+                return Ok(assets);
+            }
+            query.page = query.page.saturating_add(1);
+        }
     }
 
     /// `GET /assets/{id}/original` into `out`, at most `max_download` bytes, reporting bytes so far

@@ -351,10 +351,17 @@ impl Stream {
                 Ok(())
             }
             Stream::Tls(conn, sock) => {
-                // buffered by rustls, then sent as TLS records
-                conn.writer().write_all(data).map_err(|e| HttpError::Tls(e.to_string()))?;
-                while conn.wants_write() {
-                    Self::retry(limits, || conn.write_tls(sock))?;
+                // buffered by rustls, then sent as TLS records. rustls holds back what its own
+                // buffer can't fit, so a body larger than that must be sent in parts, draining the
+                // TLS output between writes (a plain `writer().write_all` would stall on a full
+                // buffer).
+                let mut rest = data;
+                while !rest.is_empty() {
+                    let n = conn.writer().write(rest).map_err(|e| HttpError::Tls(e.to_string()))?;
+                    while conn.wants_write() {
+                        Self::retry(limits, || conn.write_tls(sock))?;
+                    }
+                    rest = rest.get(n..).unwrap_or_default();
                 }
                 Ok(())
             }
@@ -611,7 +618,8 @@ pub fn request(method: &str, url: &Url, headers: &[(&str, String)], body: Option
         }
     }
     let find = |name: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str());
-    let body = if status == 204 || status == 304 || (100..200).contains(&status) {
+    let body = if status == 204 || status == 304 || (100..200).contains(&status) || method == "HEAD" {
+        // HEAD answers carry no body, whatever a Content-Length says (RFC 9110 §9.3.2).
         BodyMode::Done
     } else if find("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked")) {
         BodyMode::Chunked { left: 0, done: false }
