@@ -61,6 +61,8 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 ## Closed recently (kept for calibration)
 
+- 2026-11-07: Reload, Relink, Undo/Redo and automatic rechecks discard both proxy layouts before changing preview-only/raw interpretation; unavailable custom storage refuses the change for retry. Rebuilds reject decoder/catalog interpretation mismatches. Existing feature hardened; no ranked gap or readiness estimate changes.
+
 - 2026-10-29: the import review has a remembered 80–320 pt thumbnail-size slider, density-aware previews and bounded visible retention (#2237, part of #2056). Small sources do not reconstruct the same preview job every frame. The pre-import loupe and keyboard culling remain open in #2056; no ranked gap or headline feature count closes.
 
 - 2026-10-22: saving XMP preserves foreign namespaces even when they use `lc:` or `xmp:` prefixes; importing them no longer interprets their properties as native settings or ratings. Parser, merge and save-command regressions cover the correction; no ranked gap or readiness estimate changes.
