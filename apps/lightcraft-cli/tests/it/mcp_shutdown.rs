@@ -6,13 +6,7 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn broken_stdout_exits_with_stdin_still_open() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lightcraft-cli"))
-        .arg("mcp")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child = Command::new(super::binary()).arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     let mut input = child.stdin.take().unwrap();
     drop(child.stdout.take());
     input.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n{\"jsonrpc\":").unwrap();

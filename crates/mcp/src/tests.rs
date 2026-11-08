@@ -539,3 +539,66 @@ fn the_clipboard_tool_cuts_copies_and_pastes_in_the_app() {
     assert!(!r.is_error, "{r:?}");
     assert_eq!(b.0, vec![("ui.clipboard".to_string(), json!({"action": "paste", "text": "travel"}))]);
 }
+
+/// A running app that writes the PNG `ui.render` / `ui.screenshot` ask for. It notes each path and
+/// what its folder looked like then; with `dies_mid_write` it leaves a half-written temp file and
+/// fails instead, like an app that quits part-way through.
+struct PngWriter {
+    seen: Vec<(std::path::PathBuf, Option<std::fs::Metadata>)>,
+    dies_mid_write: bool,
+}
+
+impl Backend for PngWriter {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        assert!(matches!(method, "ui.render" | "ui.screenshot"), "{method}");
+        let path = std::path::PathBuf::from(params["path"].as_str().unwrap());
+        self.seen.push((path.clone(), path.parent().and_then(|d| std::fs::symlink_metadata(d).ok())));
+        if self.dies_mid_write {
+            std::fs::write(path.with_file_name(".lightcraft-mcp-test.tmp"), b"half a png").unwrap();
+            return Err("connection closed".into());
+        }
+        crate::write_image(&path, &lightcraft_raster::Rgba8::new(1, 1), 92)?;
+        Ok(json!({"width": 1, "height": 1}))
+    }
+    fn has_ui(&self) -> bool {
+        true
+    }
+    fn describe(&self) -> String {
+        "png writer".into()
+    }
+}
+
+/// Renders and screenshots reach the agent through a PNG the app writes. In a shared /tmp other
+/// users could read it or take its predictable name first and make the render fail, so it goes in
+/// a new folder of its own, private on Unix, that is gone afterwards even when the write fails
+/// (#2573).
+#[test]
+fn render_and_screenshot_pngs_go_through_a_private_folder() {
+    let mut b = PngWriter { seen: vec![], dies_mid_write: false };
+    for (tool, args) in [("render_photo", json!({"id": 1})), ("render_preview", json!({"id": 1})), ("screenshot", json!({}))] {
+        let r = call_tool(&mut b, tool, &args);
+        assert!(!r.is_error, "{tool}: {r:?}");
+        assert_eq!(r.image().map(|(_, mime)| mime), Some("image/png"), "{tool}: {r:?}");
+    }
+    b.dies_mid_write = true;
+    assert!(call_tool(&mut b, "screenshot", &json!({})).is_error);
+    assert_eq!(b.seen.len(), 4);
+    let temp = std::env::temp_dir();
+    let mut folders = vec![];
+    for (file, folder) in &b.seen {
+        let dir = file.parent().unwrap();
+        let meta = folder.as_ref().unwrap();
+        assert!(meta.is_dir() && !meta.file_type().is_symlink(), "{}", dir.display());
+        assert_ne!(dir, temp, "{} is right in the shared temp dir", file.display());
+        assert_eq!(dir.parent(), Some(temp.as_path()), "{}", file.display());
+        assert!(dir.file_name().unwrap().to_string_lossy().starts_with("lightcraft-mcp-"), "{}", dir.display());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(meta.permissions().mode() & 0o777, 0o700, "{}", dir.display());
+        }
+        assert!(!dir.exists(), "{} was left behind", dir.display());
+        assert!(!folders.contains(&dir), "{} was used twice", dir.display());
+        folders.push(dir);
+    }
+}

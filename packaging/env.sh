@@ -46,21 +46,24 @@ warn() {
   return 0
 }
 
-# Copy licence and readme files that exist into a package directory (plus the craft-fonts licences
-# when building with CRAFT_FONTS_DIR).
+# Copy licence and readme files that exist into a package directory, plus the font licence texts
+# (Inter's OFL always; the craft-fonts OFLs when building with CRAFT_FONTS_DIR).
 copy_docs() {
   local dest="$1" f
   for f in README.md LICENSE LICENSE-MIT LICENSE-APACHE COPYRIGHT NOTICE; do
     if [[ -f "$ROOT/$f" ]]; then cp "$ROOT/$f" "$dest/"; fi
   done
   copy_font_licences "$dest"
-  return 0
+  return $?
 }
 
-# Builds made with CRAFT_FONTS_DIR (storytold/craft-fonts, an optional build input) embed its fonts;
-# their OFL licences go with the package as OFL-<family-dir>.txt. Nothing to do without it.
+# Inter is embedded in every build (crates/ui-egui/src/theme.rs), so its OFL always ships with the
+# package as OFL-Inter.txt. Builds made with CRAFT_FONTS_DIR (storytold/craft-fonts, an optional
+# build input) also embed its fonts; their OFL licences go with the package as OFL-<family-dir>.txt.
 copy_font_licences() {
   local dest="$1" lic family
+  local inter="$ROOT/assets/fonts/OFL-Inter.txt"
+  cp "$inter" "$dest/OFL-Inter.txt" || return $?
   [[ -n "${CRAFT_FONTS_DIR:-}" ]] || return 0
   for lic in "$CRAFT_FONTS_DIR"/fonts/*/OFL.txt; do
     [[ -f "$lic" ]] || continue

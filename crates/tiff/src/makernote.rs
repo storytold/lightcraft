@@ -55,7 +55,11 @@ pub fn parse_makernote(data: &[u8], offset: u64, len: u64, order: ByteOrder, mak
         Some(b"MM") => Some(ByteOrder::Big),
         _ => None,
     };
-    let opts = ParseOptions { max_ifds: 64, max_depth: 3, ..Default::default() };
+    // A fixed value budget: a maker note is at most tens of kilobytes of values in any honest file, and
+    // computing the budget from the buffer's length multiplies the file length (a hostile entry in a
+    // sparse header-read buffer, where the buffer holds the file's logical size but only a few
+    // kilobytes are loaded, would decode allocations no actual data backs).
+    let opts = ParseOptions { max_ifds: 64, max_depth: 3, value_budget: Some(1 << 20), ..Default::default() };
     let try_parse = |kind: MakerNoteKind, ifd_at: u64, base: u64, ord: ByteOrder| -> Option<MakerNote> {
         let (ifd, _) = parse_ifd_at(data, ifd_at, ord, base, false, &opts).ok()?;
         (!ifd.entries.is_empty()).then_some(MakerNote { kind, order: ord, base, ifd })
@@ -190,6 +194,35 @@ mod tests {
         let m = parse_makernote(&bytes, off, len, order, "Canon").unwrap();
         assert_eq!(m.kind, MakerNoteKind::Plain);
         assert_eq!(m.ifd.u64s(2).unwrap(), vec![9, 0]);
+    }
+
+    /// A maker note's value budget is fixed, not computed from the length of the buffer it sits in:
+    /// an entry claiming more than the note budget (here 2 MB) is dropped, a fitting one is read. In a
+    /// sparse header read the buffer holds the file's logical size while only kilobytes were loaded,
+    /// so a length-scaled budget would let an unrelated entry decode megabytes of zeros (see the focus
+    /// reader, try_read_exif_with).
+    #[test]
+    fn a_note_entry_past_the_fixed_value_budget_is_dropped() {
+        let order = ByteOrder::Little;
+        let mut note = b"SONY DSC \0\0\0".to_vec();
+        // the Sony IFD directly after the 12-byte header, one fitting BYTE entry and a decoy
+        // BYTE[2 MB] entry pointing into the file's own (zero-filled) body
+        order.put_u16(&mut note, 2);
+        order.put_u16(&mut note, 0x201b);
+        order.put_u16(&mut note, 1);
+        order.put_u32(&mut note, 1);
+        note.extend([3, 0, 0, 0]);
+        order.put_u16(&mut note, 0x9900);
+        order.put_u16(&mut note, 1);
+        order.put_u32(&mut note, 2 << 20);
+        order.put_u32(&mut note, 200);
+        order.put_u32(&mut note, 0);
+        let mut bytes = note.clone();
+        bytes.resize(200 + (2 << 20), 0); // the decoy's value range is inside the real bytes
+        let m = parse_makernote(&bytes, 0, note.len() as u64, order, "SONY").unwrap();
+        assert_eq!(m.kind, MakerNoteKind::Sony);
+        assert!(m.ifd.get(0x201b).is_some(), "the fitting entry is read");
+        assert!(m.ifd.get(0x9900).is_none(), "the decoy is dropped by the value budget");
     }
 
     #[test]

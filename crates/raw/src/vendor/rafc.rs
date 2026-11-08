@@ -114,26 +114,57 @@ impl<'a> Bits<'a> {
         Self { src, pos: 0, acc: 0, available: 0 }
     }
 
+    /// Tops the accumulator up to at least 57 bits, or to every remaining byte near the end of the stream.
     #[inline]
-    fn get(&mut self, n: u32) -> Result<u32> {
-        while self.available < n {
-            let b = self.src.get(self.pos).copied().ok_or_else(|| corrupt("truncated entropy stream"))?;
+    fn refill(&mut self) {
+        while self.available <= 56 {
+            let Some(&b) = self.src.get(self.pos) else { return };
             self.pos += 1;
             self.acc = (self.acc << 8) | u64::from(b);
             self.available += 8;
+        }
+    }
+
+    #[inline]
+    fn get(&mut self, n: u32) -> Result<u32> {
+        if self.available < n {
+            self.refill();
+            if self.available < n {
+                return Err(corrupt("truncated entropy stream"));
+            }
         }
         self.available -= n;
         Ok(((self.acc >> self.available) & ((1u64 << n) - 1)) as u32)
     }
 
-    fn residual(&mut self, k: u32, bits: u32, range: u32, limit: u32) -> Result<i32> {
+    /// Reads the unary prefix: the zeros before the next one bit, which is consumed. Errors exactly where reading
+    /// bit by bit would: more than `limit` zeros, or a stream that ends first.
+    #[inline]
+    fn zeros(&mut self, limit: u32) -> Result<u32> {
         let mut zeros = 0;
-        while self.get(1)? == 0 {
-            zeros += 1;
-            if zeros > limit {
+        loop {
+            if self.available == 0 {
+                self.refill();
+                if self.available == 0 {
+                    return Err(corrupt("truncated entropy stream"));
+                }
+            }
+            // the unread bits, left-aligned; the zeros shifted in below them are cut off by `min`
+            let run = (self.acc << (64 - self.available)).leading_zeros().min(self.available);
+            if zeros + run > limit {
                 return Err(corrupt("invalid residual escape"));
             }
+            zeros += run;
+            if run < self.available {
+                self.available -= run + 1;
+                return Ok(zeros);
+            }
+            self.available = 0;
         }
+    }
+
+    fn residual(&mut self, k: u32, bits: u32, range: u32, limit: u32) -> Result<i32> {
+        let zeros = self.zeros(limit)?;
         let code = if zeros == limit { self.get(bits)? + 1 } else { (zeros << k) | self.get(k)? };
         if code > range {
             return Err(corrupt(&format!(
@@ -500,6 +531,49 @@ mod tests {
             src.extend_from_slice(&data);
             src.extend_from_slice(&data);
             let _ = decode(&src, 780, 6, bits, xtrans, Mode::Full);
+        }
+
+        /// The word-at-a-time reader returns what reading bit by bit returns, and fails where it fails: long zero
+        /// runs, the escape limit and the end of the stream included.
+        #[test]
+        fn bit_reader_matches_reading_bit_by_bit(
+            data in prop::collection::vec(prop_oneof![3 => Just(0u8), 1 => any::<u8>()], 0..64),
+            reads in prop::collection::vec((any::<bool>(), 0u32..=24, 0u32..=63), 1..200),
+        ) {
+            let bit = |i: usize| data.get(i / 8).map(|b| (b >> (7 - i % 8)) & 1 == 1);
+            let mut at = 0usize;
+            let mut reader = Bits::new(&data);
+            for (prefix, n, limit) in reads {
+                let expected = if prefix {
+                    let mut zeros = 0;
+                    loop {
+                        let Some(b) = bit(at) else { break Err("truncated") };
+                        at += 1;
+                        if b {
+                            break Ok(zeros);
+                        }
+                        zeros += 1;
+                        if zeros > limit {
+                            break Err("escape");
+                        }
+                    }
+                } else if at + n as usize > data.len() * 8 {
+                    Err("truncated")
+                } else {
+                    let value = (0..n as usize).fold(0, |v, i| (v << 1) | u32::from(bit(at + i) == Some(true)));
+                    at += n as usize;
+                    Ok(value)
+                };
+                let actual = if prefix { reader.zeros(limit) } else { reader.get(n) };
+                match (expected, actual) {
+                    (Ok(want), Ok(got)) => prop_assert_eq!(want, got),
+                    (Err(want), Err(got)) => {
+                        prop_assert!(got.to_string().contains(want), "{got}");
+                        break;
+                    }
+                    (want, got) => prop_assert!(false, "expected {want:?}, got {got:?}"),
+                }
+            }
         }
     }
 }

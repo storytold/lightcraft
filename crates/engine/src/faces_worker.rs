@@ -13,7 +13,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use lightcraft_catalog::PhotoId;
-use lightcraft_faces::align::{Rgb, align_to_template, crop_box};
+use lightcraft_faces::align::{FaceCrop, Rgb, align_to_template, crop_box};
 use lightcraft_faces::runtime::Embedder;
 use lightcraft_faces::yunet::{Detector, Face, Options};
 use lightcraft_geom::Rect;
@@ -221,13 +221,11 @@ pub(crate) fn process(p: Prepared, embedder: &Embedder) -> Done {
                     Some((_, f)) => align_to_template(&img, &scaled(f), iw, ih),
                     None => crop_box(
                         &img,
-                        rect.x0 as f32 * w as f32,
-                        rect.y0 as f32 * h as f32,
-                        rect.x1 as f32 * w as f32,
-                        rect.y1 as f32 * h as f32,
-                        BOX_PAD,
-                        iw,
-                        ih,
+                        FaceCrop {
+                            bounds: (rect.x0 as f32 * w as f32, rect.y0 as f32 * h as f32, rect.x1 as f32 * w as f32, rect.y1 as f32 * h as f32),
+                            padding: BOX_PAD,
+                            output_size: (iw, ih),
+                        },
                     ),
                 };
                 // shown by the detector's box where it found this face: every face then has the same tightness

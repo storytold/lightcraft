@@ -161,6 +161,13 @@ pub fn to_rgb16(planes: &Planes<'_>, signal: Signal, alpha: bool, mode: Upsampli
     if !(8..=16).contains(&bd) || w == 0 || h == 0 {
         return None;
     }
+    // The default caller limit is 2²8 pixels, at most four channels per pixel, so the largest
+    // legitimate `w·h·ch` is 2²30 samples. Anything more is a malformed or hostile canvas the
+    // decode path would have refused before calling here (CodeRabbit #48): refuse rather than
+    // ask for a multi-gigabuffer (or worse, over usize).
+    if w.checked_mul(h)?.checked_mul(ch)? > 1 << 30 {
+        return None;
+    }
     let max = ((1u32 << bd) - 1) as f32;
     let half = (1u32 << (bd - 1)) as f32;
     let scale = (1u32 << (bd - 8)) as f32;
@@ -322,5 +329,24 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// CodeRabbit #48: a plane claiming 500 000 × 500 000 pixels must be refused without ever
+    /// allocating for it (before the cap this vec was never built; upper-bounding allocation
+    /// would have been a 7.5-gibabuffer or a panic instead of an error).
+    #[test]
+    fn an_oversized_canvas_is_refused_without_allocation() {
+        let f = Frame {
+            width: 500_000,
+            height: 500_000,
+            bit_depth: 8,
+            chroma: ChromaFormat::Yuv420,
+            y: vec![128],
+            cb: vec![128; 4],
+            cr: vec![128; 4],
+            y_stride: 0,
+            c_stride: 0,
+        };
+        assert!(to_rgb16(&Planes::Picture(&f), Signal { matrix: 6, full_range: true }, false, Upsampling::Nearest).is_none());
     }
 }

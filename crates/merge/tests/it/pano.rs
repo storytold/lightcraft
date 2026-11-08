@@ -246,6 +246,18 @@ fn unrelated_photos_do_not_stitch() {
     assert!(stitch(frames, &PanoOptions::default(), &no_progress).is_err());
 }
 
+/// Pair matching compares every pair of frames before anything is known about them: an unbounded
+/// photo count is quadratic CPU and memory (issue #1519). More than `MAX_FRAMES` is refused at once,
+/// before any frame is worked on.
+#[test]
+fn a_stitch_of_more_than_the_frame_cap_is_refused_up_front() {
+    let frames: Vec<Frame> = (0..lightcraft_merge::pano::MAX_FRAMES + 1)
+        .map(|i| Frame::from_linear_rec2020(Rgb32f::from_fn(8, 8, |_, _| [(i % 255) as f32 / 255.0, 0.0, 0.0]), None))
+        .collect();
+    let err = stitch(frames, &PanoOptions::default(), &no_progress).unwrap_err();
+    assert!(err.to_string().contains("refused"), "the frame cap errors, it does not begin the quadratic match: {err}");
+}
+
 /// Issue #1455: a panorama came out at 40 MP whatever its photos' resolution. It now keeps their
 /// own resolution unless a size is asked for (up to Lightroom's 512 MP); a size scales it down,
 /// and a NaN one (from an agent) is no size at all, not a 0.1 MP thumbnail.
@@ -267,4 +279,28 @@ fn panoramas_keep_the_photos_resolution_unless_asked() {
     assert!(k > 0.9 && k <= 1.02, "a quarter of the size asked: {} MP", mp(&quarter));
     let nan = run(&shots, 800.0, &opts(f64::NAN)).0;
     assert_eq!((nan.image.width, nan.image.height), (full.image.width, full.image.height));
+}
+
+/// Issue #2320: a few wide frames can settle the fitted focal length below the lens's, and a canvas
+/// sized from it holds fewer pixels than the photos. EXIF's focal length sets the native scale.
+#[test]
+fn the_lens_focal_length_sets_the_native_scale() {
+    let e = env();
+    let f = 2000.0; // what the frames were shot with: the fit settles near it
+    let lens = 2400.0; // what EXIF says, on a 4000-pixel long edge
+    let shots = [
+        Shot { yaw: -20.0, pitch: 0.0, roll: 0.0, gain: 1.0 },
+        Shot { yaw: 0.0, pitch: 0.0, roll: 0.0, gain: 1.0 },
+        Shot { yaw: 20.0, pitch: 0.0, roll: 0.0, gain: 1.0 },
+    ];
+    let rs: Vec<M3> = shots.iter().map(|s| rot(s.yaw, s.pitch, s.roll)).collect();
+    let mut frames: Vec<Frame> = shots.iter().zip(&rs).map(|(s, r)| shoot(&e, r, f, 4000, 3000, s.gain)).collect();
+    for frame in &mut frames {
+        frame.metadata.focal_length_35mm = Some(lens / 4000.0 * 36.0);
+    }
+    let res = stitch(frames, &PanoOptions { projection: Projection::Spherical, ..Default::default() }, &no_progress).unwrap();
+    assert_eq!(res.used.len(), 3, "all three frames must connect: {:?}", res.used);
+    assert!((res.focal / lens - 1.0).abs() < 0.01, "output focal {} for a {lens} px lens", res.focal);
+    let mp = (res.image.width * res.image.height) as f64 / 1e6;
+    assert!((mp / res.native_megapixels - 1.0).abs() < 0.02, "canvas {mp} MP for {} MP native", res.native_megapixels);
 }
