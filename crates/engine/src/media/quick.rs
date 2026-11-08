@@ -122,6 +122,6 @@ fn header_info(p: &Photo) -> SourceInfo {
             ..Default::default()
         }
     } else {
-        SourceInfo::default()
+        SourceInfo { lens: p.embedded_lens, ..Default::default() }
     }
 }

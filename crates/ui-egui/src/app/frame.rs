@@ -52,6 +52,12 @@ impl LightcraftApp {
         if self.queued_input_needs_repaint() {
             ctx.request_repaint();
         }
+        if self.session.poll_lens_probes() {
+            ctx.request_repaint();
+        }
+        if self.session.lens_probes_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         self.renderer.poll(ctx, &mut self.session);
         merge::poll(self, ctx);
         import::poll_scan(self, ctx);

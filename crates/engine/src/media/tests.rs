@@ -521,30 +521,234 @@ fn variant_jobs_have_their_own_keys_and_hit_the_cache() {
 #[test]
 fn ensure_embedded_lens_avoids_repeated_probes() {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
+
     let mut s = crate::Session::with_demo();
     let id = PhotoId(9999);
     s.catalog
         .apply(Op::AddPhoto { photo: Box::new(Photo::new(id, Source::File { path: "/test.raw".into() }, "test.raw", "RAW", 100, 100, "2026-01-01")) })
         .unwrap();
-    static PROBE_CALLS: AtomicUsize = AtomicUsize::new(0);
-    static SHOULD_FAIL: AtomicBool = AtomicBool::new(true);
-    s.media.file_probe = Some(Arc::new(|_path| {
-        PROBE_CALLS.fetch_add(1, Ordering::SeqCst);
-        if SHOULD_FAIL.load(Ordering::SeqCst) { Err("transient disk error".into()) } else { Ok(ProbeInfo::default()) }
+    let probe_calls = Arc::new(AtomicUsize::new(0));
+    let should_fail = Arc::new(AtomicBool::new(true));
+    let calls_cl = probe_calls.clone();
+    let fail_cl = should_fail.clone();
+    s.media.file_probe = Some(Arc::new(move |_path| {
+        calls_cl.fetch_add(1, Ordering::SeqCst);
+        if fail_cl.load(Ordering::SeqCst) { Err("transient disk error".into()) } else { Ok(ProbeInfo::default()) }
     }));
-    assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 0);
-    // Transient error should not be cached in probed_lens
+
+    let wait_probes = |s: &mut crate::Session| {
+        for _ in 0..400 {
+            s.poll_lens_probes();
+            if !s.lens_probes_busy() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("background lens probe timed out");
+    };
+
+    assert_eq!(probe_calls.load(Ordering::SeqCst), 0);
+    // Transient error must not mark the photo in `probed_lens`.
     s.ensure_embedded_lens(id);
-    assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 1);
+    wait_probes(&mut s);
+    assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
     assert!(!s.media.probed_lens.contains(&id));
 
-    // When probe is called again, it retries because the previous attempt errored
-    SHOULD_FAIL.store(false, Ordering::SeqCst);
+    // When `ensure_embedded_lens` runs again, it retries because the previous attempt errored.
+    should_fail.store(false, Ordering::SeqCst);
     s.ensure_embedded_lens(id);
-    assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 2);
+    wait_probes(&mut s);
+    assert_eq!(probe_calls.load(Ordering::SeqCst), 2);
     assert!(s.media.probed_lens.contains(&id));
 
-    // Calling ensure_embedded_lens again avoids repeated probes after a successful negative probe
+    // Subsequent calls avoid repeated probes after a successful negative probe.
     s.ensure_embedded_lens(id);
-    assert_eq!(PROBE_CALLS.load(Ordering::SeqCst), 2);
+    wait_probes(&mut s);
+    assert_eq!(probe_calls.load(Ordering::SeqCst), 2);
+}
+
+fn sample_lens() -> lightcraft_develop::EmbeddedLens {
+    let mut warp = lightcraft_develop::EmbeddedWarp::default();
+    warp.planes[0][0] = 1.0;
+    warp.planes[0][1] = -0.05;
+    warp.planes[1][0] = 1.0;
+    warp.planes[2][0] = 1.0;
+    warp.radius = 0.5;
+    lightcraft_develop::EmbeddedLens { warp: Some(warp), ..Default::default() }
+}
+
+#[test]
+fn set_develop_probing_lens_runs_in_background_and_updates_catalog_on_completion() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
+
+    let mut s = crate::Session::new();
+    let id = PhotoId(42);
+    s.catalog
+        .apply(Op::AddPhoto { photo: Box::new(Photo::new(id, Source::File { path: "/slow.arw".into() }, "slow.arw", "ARW", 400, 300, "2026-01-01")) })
+        .unwrap();
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let entered_tx = Mutex::new(entered_tx);
+    let release_rx = Mutex::new(release_rx);
+    let probe_calls = Arc::new(AtomicUsize::new(0));
+    let calls_cl = probe_calls.clone();
+    let expected_lens = sample_lens();
+    s.media.file_probe = Some(Arc::new(move |_path| {
+        calls_cl.fetch_add(1, Ordering::SeqCst);
+        entered_tx.lock().unwrap().send(()).map_err(|e| e.to_string())?;
+        release_rx.lock().unwrap().recv_timeout(Duration::from_secs(3)).map_err(|e| e.to_string())?;
+        Ok(ProbeInfo { embedded_lens: Some(expected_lens), ..Default::default() })
+    }));
+
+    // Turning `optics.lens_profile` on must return immediately even while the probe blocks.
+    let mut d = DevelopSettings::default();
+    d.optics.lens_profile = true;
+    s.set_develop(id, d, "Enable Lens Profile").unwrap();
+    assert!(s.lens_probes_busy(), "probe runs asynchronously in the background");
+    assert!(s.catalog.photo(id).unwrap().embedded_lens.is_none());
+
+    // Render key before the probe completes.
+    let pre_key = s.render_job(id, 400, 300, false, true).unwrap().key;
+
+    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // Duplicate `ensure_embedded_lens` while already in flight does not queue a second probe.
+    s.ensure_embedded_lens(id);
+    release_tx.send(()).unwrap();
+
+    let mut updated = false;
+    for _ in 0..400 {
+        if s.poll_lens_probes() {
+            updated = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(updated, "poll_lens_probes reports catalog update");
+    assert!(!s.lens_probes_busy());
+    assert_eq!(s.catalog.photo(id).unwrap().embedded_lens, Some(expected_lens));
+    assert!(s.has_lens(id));
+    assert_eq!(probe_calls.load(Ordering::SeqCst), 1);
+
+    // Render key changes once embedded lens data arrives so cached pre-probe renders are refreshed.
+    let post_key = s.render_job(id, 400, 300, false, true).unwrap().key;
+    assert_ne!(pre_key, post_key);
+}
+
+#[test]
+fn ensure_embedded_lens_uses_cached_decode_synchronously_and_learn_respects_profile_gate() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut s = crate::Session::new();
+    let a = PhotoId(1);
+    let b = PhotoId(2);
+    for id in [a, b] {
+        s.catalog
+            .apply(Op::AddPhoto {
+                photo: Box::new(Photo::new(id, Source::File { path: format!("/{}.arw", id.0) }, "p.arw", "ARW", 200, 150, "2026-01-01")),
+            })
+            .unwrap();
+    }
+    let probes = Arc::new(AtomicUsize::new(0));
+    let probes_cl = probes.clone();
+    s.media.file_probe = Some(Arc::new(move |_path| {
+        probes_cl.fetch_add(1, Ordering::SeqCst);
+        Err("file probe should not be called when cached_lens hits".into())
+    }));
+
+    let lens = sample_lens();
+    let decoded = DecodedSource::new(Arc::new(Rgb32f::new(16, 12)), Some(SourceInfo { raw: true, lens: Some(lens), ..Default::default() }));
+
+    // 1. `accept` when `optics.lens_profile` is false: caches the source (so `cached_lens` and
+    // `has_lens` see the lens) without mutating `p.embedded_lens` in the catalog.
+    assert!(!s.catalog.photo(a).unwrap().develop.optics.lens_profile);
+    let res_off = RenderResult {
+        request_id: 1,
+        source_key: None,
+        photo: a,
+        level: SourceLevel::Preview,
+        key: 1,
+        rendered: Err("unused".into()),
+        gpu_fallback: None,
+        loaded: Some(decoded.clone()),
+        quick: None,
+        display: None,
+    };
+    s.accept(&res_off);
+    assert!(s.catalog.photo(a).unwrap().embedded_lens.is_none(), "lens not learned into catalog while profile is off");
+    assert!(s.has_lens(a), "has_lens sees cached_lens even before catalog stores it");
+
+    // Turning `optics.lens_profile` on for `a` populates `embedded_lens` synchronously from
+    // `cached_lens` with zero file probes.
+    let mut on = DevelopSettings::default();
+    on.optics.lens_profile = true;
+    s.set_develop(a, on.clone(), "Lens On").unwrap();
+    assert_eq!(s.catalog.photo(a).unwrap().embedded_lens, Some(lens));
+    assert!(s.media.probed_lens.contains(&a));
+    assert_eq!(probes.load(Ordering::SeqCst), 0);
+
+    // 2. `accept` when `optics.lens_profile` is already true (and no cached source existed yet):
+    // `learn_embedded_lens` records the lens into the catalog immediately on decode.
+    s.catalog.apply(Op::SetDevelop { id: b, settings: Arc::new(on), label: "init".into(), edited: None }).unwrap();
+    assert!(s.catalog.photo(b).unwrap().embedded_lens.is_none());
+    let res_on = RenderResult { photo: b, loaded: Some(decoded), ..res_off };
+    s.accept(&res_on);
+    assert_eq!(s.catalog.photo(b).unwrap().embedded_lens, Some(lens), "lens learned on decode when profile is on");
+    assert_eq!(probes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn cached_lens_finds_lens_in_thumb_preview_and_full_and_clears_on_eviction() {
+    let mut s = crate::Session::new();
+    let lens = sample_lens();
+    let with_lens = || DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), Some(SourceInfo { lens: Some(lens), ..Default::default() }));
+    let without_lens = || DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), Some(SourceInfo::default()));
+
+    for raw_id in 1..=6 {
+        let id = PhotoId(raw_id);
+        s.catalog
+            .apply(Op::AddPhoto { photo: Box::new(Photo::new(id, Source::File { path: format!("/{raw_id}.arw") }, "x.arw", "ARW", 80, 80, "")) })
+            .unwrap();
+    }
+
+    let (t_id, p_id, f_id) = (PhotoId(1), PhotoId(2), PhotoId(3));
+    assert!(!s.has_lens(t_id) && !s.has_lens(p_id) && !s.has_lens(f_id));
+
+    // Thumb level
+    s.media.insert_source(t_id, SourceLevel::Thumb, with_lens());
+    assert_eq!(s.media.cached_lens(t_id), Some(lens));
+    assert!(s.has_lens(t_id));
+
+    // Preview level
+    s.media.preview_capacity = 2;
+    s.media.insert_source(p_id, SourceLevel::Preview, with_lens());
+    assert_eq!(s.media.cached_lens(p_id), Some(lens));
+    assert!(s.has_lens(p_id));
+
+    // Full level
+    s.media.set_full_capacity(1);
+    s.media.insert_source(f_id, SourceLevel::Full, with_lens());
+    assert_eq!(s.media.cached_lens(f_id), Some(lens));
+    assert!(s.has_lens(f_id));
+
+    // Evicting `f_id` from Full (capacity 1) removes its indexed lens entry.
+    s.media.insert_source(PhotoId(4), SourceLevel::Full, without_lens());
+    assert_eq!(s.media.cached_lens(f_id), None);
+    assert!(!s.has_lens(f_id));
+
+    // Evicting `p_id` from Preview (capacity 2) removes its indexed lens entry.
+    s.media.insert_source(PhotoId(5), SourceLevel::Preview, without_lens());
+    s.media.insert_source(PhotoId(6), SourceLevel::Preview, without_lens());
+    assert_eq!(s.media.cached_lens(p_id), None);
+    assert!(!s.has_lens(p_id));
+
+    // `forget` clears Thumb and any indexed entries; `clear_sources` clears everything.
+    s.media.insert_source(p_id, SourceLevel::Preview, with_lens());
+    s.media.forget(t_id);
+    assert_eq!(s.media.cached_lens(t_id), None);
+    s.media.clear_sources();
+    assert_eq!(s.media.cached_lens(p_id), None);
 }

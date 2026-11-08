@@ -363,4 +363,45 @@ mod tests {
         s.reset_section(Section::Detail);
         assert_eq!(s.enhance.denoise_on, None);
     }
+
+    #[test]
+    fn ai_concept_mask_shapes_round_trip_and_accept_legacy_unit_forms() {
+        // Default constructors serialize cleanly as compact tagged objects and have seg() == None
+        for (shape, kind_tag, legacy_pascal) in
+            [(MaskShape::subject(), "subject", "Subject"), (MaskShape::sky(), "sky", "Sky"), (MaskShape::background(), "background", "Background")]
+        {
+            assert_eq!(shape.seg(), None);
+            let serialized = serde_json::to_value(&shape).unwrap();
+            assert_eq!(serialized, json!({"kind": kind_tag}));
+            // Deserializes from tagged unit object (v9 catalog / preset / XMP form)
+            let from_tagged: MaskShape = serde_json::from_value(json!({"kind": kind_tag})).unwrap();
+            assert_eq!(from_tagged, shape);
+            // Deserializes from bare unit-variant strings (PascalCase and camelCase)
+            let from_pascal: MaskShape = serde_json::from_value(json!(legacy_pascal)).unwrap();
+            assert_eq!(from_pascal, shape);
+            let from_camel: MaskShape = serde_json::from_value(json!(kind_tag)).unwrap();
+            assert_eq!(from_camel, shape);
+        }
+
+        // Populated seg, detail, and edge round-trip and expose seg()
+        let base_seg = SegMask::from_logits(4, &[2.0; 16]);
+        let patch = SegMask::from_logits_in(4, &[4.0; 16], [0.2, 0.2, 0.8, 0.8]);
+        let populated = [
+            MaskShape::Subject { seg: Some(base_seg.clone()), detail: vec![patch.clone()], edge: -25.0 },
+            MaskShape::Sky { seg: Some(base_seg.clone()), detail: vec![patch.clone()], edge: 40.0 },
+            MaskShape::Background { seg: Some(base_seg.clone()), detail: vec![patch.clone()], edge: 15.0 },
+        ];
+        for shape in populated {
+            assert_eq!(shape.seg(), Some(&base_seg));
+            let val = serde_json::to_value(&shape).unwrap();
+            let round: MaskShape = serde_json::from_value(val).unwrap();
+            assert_eq!(round, shape);
+        }
+
+        // Non-AI shapes return None from seg()
+        let linear = MaskShape::Linear { start: lightcraft_geom::Point::new(0.0, 0.0), end: lightcraft_geom::Point::new(1.0, 1.0) };
+        assert_eq!(linear.seg(), None);
+        assert!(serde_json::from_value::<MaskShape>(json!("UnknownVariant")).is_err());
+        assert!(serde_json::from_value::<MaskShape>(json!({"kind": "unknownVariant"})).is_err());
+    }
 }

@@ -30,6 +30,7 @@ pub use load::{load_bytes, load_vec, load_vec_pair, load_vec_reduced};
 use preview::PLAN_PREFIX;
 pub(crate) use preview::decode_raw_preview;
 pub use preview::{PreviewRead, embedded_preview_srgb, fs_preview_loader, load_embedded_preview, preview_window};
+pub(crate) use probe::embedded_lens_with_opcodes;
 pub use probe::{embedded_lens, probe_bytes};
 #[cfg(test)]
 use probe::{meta_of, preview_reason};

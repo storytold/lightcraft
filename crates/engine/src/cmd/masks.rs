@@ -82,6 +82,8 @@ fn seg_param(p: &Value) -> Option<lightcraft_develop::SegMask> {
     p.get("seg").and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
+/// SAM 3 concept prompt used to segment the foreground subject for automatic `Subject` masks (and
+/// inverted to form `Background` masks).
 pub const SUBJECT_CONCEPT: &str = "person | animal | vehicle | subject, main object, foreground";
 
 /// What a new AI shape still needs once it is added.

@@ -156,6 +156,8 @@ pub struct Segmenter {
     download: download::Downloader,
     #[cfg(feature = "sam")]
     results: (std::sync::mpsc::Sender<worker::Outcome>, std::sync::mpsc::Receiver<worker::Outcome>),
+    #[cfg(test)]
+    pub(crate) test_text: Option<std::sync::Arc<dyn Fn(&str) -> Result<Option<SegMask>, String> + Send + Sync>>,
 }
 
 // (derivable only without the `sam` feature: the results channel has no Default)
@@ -178,6 +180,8 @@ impl Default for Segmenter {
             download: download::Downloader::default(),
             #[cfg(feature = "sam")]
             results: std::sync::mpsc::channel(),
+            #[cfg(test)]
+            test_text: None,
         }
     }
 }
@@ -208,6 +212,10 @@ impl Segmenter {
 
     /// Whether the SAM 3 model is available to segment, either locally installed or through a configured remote worker.
     pub fn has_model(&self) -> bool {
+        #[cfg(test)]
+        if self.test_text.is_some() {
+            return true;
+        }
         self.installed() || self.remote_endpoint().is_some()
     }
 
@@ -215,6 +223,10 @@ impl Segmenter {
     pub fn busy(&self) -> bool {
         #[cfg(feature = "sam")]
         {
+            #[cfg(test)]
+            if self.test_text.is_some() && self.background {
+                return self.in_flight.iter().any(|j| !j.detail);
+            }
             if self.background {
                 return self.in_flight.iter().any(|j| !j.detail) && self.worker.pending() > 0;
             }
@@ -337,6 +349,10 @@ impl Segmenter {
     /// [`Segmenter::model_dir`] for commands: a model that is not installed (or still downloading) is
     /// [`crate::EngineError::ModelMissing`], so a frontend offers the download without reading the message.
     pub fn require_model(&self) -> crate::Result<PathBuf> {
+        #[cfg(test)]
+        if self.test_text.is_some() {
+            return Ok(PathBuf::new());
+        }
         let other = |why: &str| crate::EngineError::Other(why.into());
         if !Self::AVAILABLE {
             return Err(other("AI masks are not available in this build"));
@@ -629,6 +645,11 @@ impl Session {
         }
         let job_id = job.id;
         let cancel = job.cancel.clone();
+        #[cfg(test)]
+        if self.segmenter.test_text.is_some() {
+            self.segmenter.in_flight.push(InFlight { id: job_id, tag, cancel, detail });
+            return Ok(());
+        }
         self.segmenter.worker.submit(job)?;
         self.segmenter.in_flight.push(InFlight { id: job_id, tag, cancel, detail });
         Ok(())
@@ -648,7 +669,7 @@ impl Session {
 
     /// Pre-load the SAM 3 model on its background worker thread (and pre-encode the active photo if one
     /// is selected) so the model and image embeddings are ready in memory before the user's first AI
-    /// mask or object-remove action. Does nothing if the model is not installed.
+    /// mask action. Does nothing if the model is not installed.
     pub fn segment_warmup(&mut self) {
         if !self.segmenter.has_model() {
             return;
@@ -725,6 +746,11 @@ impl Session {
         let text = text.trim();
         if text.is_empty() {
             return Err("describe what to select".into());
+        }
+        #[cfg(test)]
+        if let Some(mock) = self.segmenter.test_text.clone() {
+            let _ = self.catalog.photo(id).ok_or("no such photo")?;
+            return mock(text);
         }
         #[cfg(feature = "sam")]
         {
@@ -1221,5 +1247,211 @@ mod tests {
         assert!(detail_region(&seg_box(50, 2, 2, 48, 48), 1.0).is_none());
         let damaged = SegMask { side: 50, data: "?".into(), rect: None };
         assert!(detail_region(&damaged, 1.0).is_none());
+    }
+
+    #[test]
+    fn concept_masks_without_model_leave_shapes_empty() {
+        for background in [false, true] {
+            let mut s = Session::with_demo();
+            s.segmenter.background = background;
+            assert!(!s.segmenter.has_model());
+
+            for kind in ["subject", "sky", "background"] {
+                let r = s.execute("mask.add", &serde_json::json!({"kind": kind})).unwrap();
+                assert!(r.get("pending").is_none(), "no model -> nothing queued ({kind}, bg={background})");
+            }
+            assert!(s.segmenter.in_flight.is_empty());
+
+            let photo = s.active().unwrap();
+            let d = s.develop_of(photo).unwrap();
+            assert_eq!(d.masks.len(), 3);
+            assert!(matches!(d.masks[0].components[0].shape, MaskShape::Subject { seg: None, .. }));
+            assert!(matches!(d.masks[1].components[0].shape, MaskShape::Sky { seg: None, .. }));
+            assert!(matches!(d.masks[2].components[0].shape, MaskShape::Background { seg: None, .. }));
+        }
+    }
+
+    #[test]
+    fn concept_masks_foreground_mock_sets_seg_inverts_background_and_handles_failed_invert() {
+        use std::sync::{Arc, Mutex};
+
+        let mut s = Session::with_demo();
+        s.segmenter.background = false;
+        let seen_prompts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_cl = seen_prompts.clone();
+        // Top half positive (+6.0), bottom half negative (-6.0).
+        let base_logits: Vec<f32> = (0..16).map(|i| if i < 8 { 6.0 } else { -6.0 }).collect();
+        let base_seg = SegMask::from_logits(4, &base_logits);
+        s.segmenter.test_text = Some(Arc::new(move |prompt| {
+            seen_cl.lock().unwrap().push(prompt.to_string());
+            Ok(Some(base_seg.clone()))
+        }));
+
+        s.execute("mask.add", &serde_json::json!({"kind": "subject"})).unwrap();
+        s.execute("mask.add", &serde_json::json!({"kind": "sky"})).unwrap();
+        s.execute("mask.add", &serde_json::json!({"kind": "background"})).unwrap();
+
+        assert_eq!(
+            *seen_prompts.lock().unwrap(),
+            vec![crate::cmd::SUBJECT_CONCEPT.to_string(), "sky".to_string(), crate::cmd::SUBJECT_CONCEPT.to_string()]
+        );
+
+        let photo = s.active().unwrap();
+        let d = s.develop_of(photo).unwrap();
+        let subj = d.masks[0].components[0].shape.seg().expect("foreground subject seg");
+        let sky = d.masks[1].components[0].shape.seg().expect("foreground sky seg");
+        let bg = d.masks[2].components[0].shape.seg().expect("foreground background seg");
+        let subj_l = subj.logits().unwrap();
+        let bg_l = bg.logits().unwrap();
+        assert_eq!(sky.side, 4);
+        assert!(subj_l[..8].iter().all(|&v| v > 0.0) && subj_l[8..].iter().all(|&v| v < 0.0));
+        assert!(bg_l[..8].iter().all(|&v| v < 0.0) && bg_l[8..].iter().all(|&v| v > 0.0), "background logits must be inverted");
+
+        // When `invert()` returns `None` (damaged SegMask), foreground Background propagates as `seg: None`.
+        s.segmenter.test_text = Some(Arc::new(|_| Ok(Some(SegMask { side: 4, data: "?".into(), rect: None }))));
+        let r = s.execute("mask.add", &serde_json::json!({"kind": "background"})).unwrap();
+        let mid = r["id"].as_u64().unwrap() as u32;
+        let d = s.develop_of(photo).unwrap();
+        let m = d.masks.iter().find(|m| m.id == mid).unwrap();
+        assert!(matches!(m.components[0].shape, MaskShape::Background { seg: None, .. }));
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn background_concept_queues_with_invert_and_propagates_invert_failure_as_none() {
+        use std::sync::Arc;
+
+        let mut s = Session::with_demo();
+        s.segmenter.background = true;
+        s.segmenter.test_text = Some(Arc::new(|_| Ok(None)));
+
+        // `mask.add` and `mask.addComponent` with `background` queue `Tag::NewConcept` with `invert = true`.
+        let r = s.execute("mask.add", &serde_json::json!({"kind": "background"})).unwrap();
+        assert_eq!(r["pending"], true);
+        let m_bg = r["id"].as_u64().unwrap() as u32;
+        let rc = s.execute("mask.addComponent", &serde_json::json!({"kind": "background", "op": "add"})).unwrap();
+        assert_eq!(rc["pending"], true);
+        assert_eq!(s.segmenter.in_flight.len(), 2);
+
+        let job0_id = s.segmenter.in_flight[0].id;
+        let job0_tag = s.segmenter.in_flight[0].tag.clone();
+        let job1_id = s.segmenter.in_flight[1].id;
+        let job1_tag = s.segmenter.in_flight[1].tag.clone();
+        assert!(matches!(
+            &job0_tag,
+            Tag::NewConcept { target: Some((tm, 0)), kind, invert: true, .. } if *tm == m_bg && kind == "background"
+        ));
+        assert!(matches!(
+            &job1_tag,
+            Tag::NewConcept { target: Some((tm, 1)), kind, invert: true, .. } if *tm == m_bg && kind == "background"
+        ));
+
+        // 1. Damaged SegMask on component 0: `invert()` returns `None` -> leaves component 0 `seg: None`.
+        s.segmenter
+            .results
+            .0
+            .send(worker::Outcome {
+                id: job0_id,
+                tag: job0_tag,
+                result: Ok(Some(SegMask { side: 4, data: "?".into(), rect: None })),
+                superseded: false,
+                notice: None,
+            })
+            .unwrap();
+        let polled = s.segment_poll();
+        assert!(!polled.changed);
+        let photo = s.active().unwrap();
+        assert!(s.develop_of(photo).unwrap().masks[0].components[0].shape.seg().is_none());
+
+        // 2. Valid SegMask on component 1: `invert()` negates logits and populates `seg`.
+        let valid = SegMask::from_logits(4, &[4.0; 16]);
+        s.segmenter.results.0.send(worker::Outcome { id: job1_id, tag: job1_tag, result: Ok(Some(valid)), superseded: false, notice: None }).unwrap();
+        let polled = s.segment_poll();
+        assert!(polled.changed);
+        let inv = s.develop_of(photo).unwrap().masks[0].components[1].shape.seg().cloned().expect("inverted seg stored");
+        assert!(inv.logits().unwrap().iter().all(|&v| v < 0.0));
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn session_dispatch_cancels_all_only_when_masks_become_empty_or_active_photo_changes() {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        let mut s = Session::with_demo();
+        s.segmenter.background = true;
+        s.segmenter.test_text = Some(Arc::new(|_| Ok(None)));
+
+        let photos: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(2).collect();
+        assert_eq!(photos.len(), 2);
+        let (p1, p2) = (photos[0], photos[1]);
+        s.execute("library.select", &serde_json::json!({"ids": [p1.0]})).unwrap();
+
+        // Queue two concept masks + a photo-wide `Prepare` job (`Tag::Prepare` survives
+        // `reconcile_segmenter` and is only cancelled by `cancel_all`).
+        let m1 = s.execute("mask.add", &serde_json::json!({"kind": "subject"})).unwrap()["id"].as_u64().unwrap() as u32;
+        let m2 = s.execute("mask.add", &serde_json::json!({"kind": "sky"})).unwrap()["id"].as_u64().unwrap() as u32;
+        s.segment_prepare(p1).unwrap();
+        assert_eq!(s.segmenter.in_flight.len(), 3);
+        let c1 = s.segmenter.in_flight[0].cancel.clone();
+        let c2 = s.segmenter.in_flight[1].cancel.clone();
+        let c_prep = s.segmenter.in_flight[2].cancel.clone();
+
+        // Deleting `m2` while `m1` remains reconciles `m2` only, without `cancel_all`.
+        s.execute("mask.delete", &serde_json::json!({"id": m2})).unwrap();
+        assert!(c2.load(Ordering::Relaxed), "deleted mask's job is cancelled");
+        assert!(!c1.load(Ordering::Relaxed), "remaining mask's job stays active");
+        assert!(!c_prep.load(Ordering::Relaxed), "Prepare job is not cancelled while masks remain");
+
+        // Adding `m3` and running `edit.undo` (leaving `m1`) reconciles `m3` only, without `cancel_all`.
+        let _m3 = s.execute("mask.add", &serde_json::json!({"kind": "background"})).unwrap()["id"].as_u64().unwrap() as u32;
+        let c3 = s.segmenter.in_flight.last().unwrap().cancel.clone();
+        s.execute("edit.undo", &serde_json::json!({})).unwrap();
+        assert!(c3.load(Ordering::Relaxed), "undone mask's job is cancelled");
+        assert!(!c1.load(Ordering::Relaxed), "remaining mask's job stays active");
+        assert!(!c_prep.load(Ordering::Relaxed), "Prepare job stays active on undo with remaining masks");
+
+        // `spots_edit` (`spot.add` + `spot.delete`) reconciles segmenter without cancelling valid mask jobs.
+        s.execute("spot.add", &serde_json::json!({"mode": "heal", "points": [[0.5, 0.5]], "source": [0.1, 0.1]})).unwrap();
+        s.execute("spot.delete", &serde_json::json!({"index": 0})).unwrap();
+        assert!(!c1.load(Ordering::Relaxed) && !c_prep.load(Ordering::Relaxed));
+
+        // Deleting the last remaining mask (`m1`) makes masks empty -> calls `cancel_all()`.
+        s.execute("mask.delete", &serde_json::json!({"id": m1})).unwrap();
+        assert!(c1.load(Ordering::Relaxed));
+        assert!(c_prep.load(Ordering::Relaxed), "cancel_all cancels Prepare when masks become empty");
+        assert!(s.segmenter.in_flight.is_empty());
+
+        // `mask.component` deleting the sole component makes masks empty -> calls `cancel_all()`.
+        s.execute("mask.add", &serde_json::json!({"kind": "subject"})).unwrap();
+        s.segment_prepare(p1).unwrap();
+        let c_prep_comp = s.segmenter.in_flight.last().unwrap().cancel.clone();
+        s.execute("mask.component", &serde_json::json!({"component": 0, "action": "delete"})).unwrap();
+        assert!(c_prep_comp.load(Ordering::Relaxed));
+        assert!(s.segmenter.in_flight.is_empty());
+
+        // `edit.undo` to empty masks calls `cancel_all()`.
+        s.execute("mask.add", &serde_json::json!({"kind": "sky"})).unwrap();
+        s.segment_prepare(p1).unwrap();
+        let c_prep_undo = s.segmenter.in_flight.last().unwrap().cancel.clone();
+        s.execute("edit.undo", &serde_json::json!({})).unwrap();
+        assert!(c_prep_undo.load(Ordering::Relaxed));
+        assert!(s.segmenter.in_flight.is_empty());
+
+        // `develop.reset` to empty masks calls `cancel_all()`.
+        s.execute("mask.add", &serde_json::json!({"kind": "subject"})).unwrap();
+        s.segment_prepare(p1).unwrap();
+        let c_prep_reset = s.segmenter.in_flight.last().unwrap().cancel.clone();
+        s.execute("develop.reset", &serde_json::json!({})).unwrap();
+        assert!(c_prep_reset.load(Ordering::Relaxed));
+        assert!(s.segmenter.in_flight.is_empty());
+
+        // Switching the active photo (`library.select` -> `p2`) calls `cancel_all()` even with masks on `p1`.
+        s.execute("mask.add", &serde_json::json!({"kind": "subject"})).unwrap();
+        s.segment_prepare(p1).unwrap();
+        let c_prep_switch = s.segmenter.in_flight.last().unwrap().cancel.clone();
+        s.execute("library.select", &serde_json::json!({"ids": [p2.0]})).unwrap();
+        assert!(c_prep_switch.load(Ordering::Relaxed));
+        assert!(s.segmenter.in_flight.is_empty());
     }
 }

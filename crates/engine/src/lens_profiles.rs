@@ -17,40 +17,34 @@ pub const ENV: &str = "LIGHTCRAFT_LENSFUN_DIR";
 /// The configured database, read once per process; `None` when none is configured or it holds no lenses.
 pub fn database() -> Option<&'static LensDb> {
     static DB: OnceLock<Option<LensDb>> = OnceLock::new();
-    DB.get_or_init(|| {
-        for dir in lensfun_candidate_dirs() {
-            match LensDb::load_dir(&dir) {
-                Ok((db, errors)) => {
-                    for (file, e) in errors {
-                        log::warn!("lens database: skipped {file}: {e}");
-                    }
-                    if !db.lenses.is_empty() {
-                        return Some(db);
-                    }
+    DB.get_or_init(|| load_first_database(&lensfun_candidate_dirs())).as_ref()
+}
+
+/// Load the first non-empty [`LensDb`] from `dirs`, skipping unreadable or zero-lens directories.
+fn load_first_database(dirs: &[PathBuf]) -> Option<LensDb> {
+    for dir in dirs {
+        match LensDb::load_dir(dir) {
+            Ok((db, errors)) => {
+                for (file, e) in errors {
+                    log::warn!("lens database: skipped {file}: {e}");
                 }
-                Err(e) => {
-                    log::warn!("lens database load from {}: {e}", dir.display());
+                if !db.lenses.is_empty() {
+                    return Some(db);
                 }
             }
+            Err(e) => {
+                log::warn!("lens database load from {}: {e}", dir.display());
+            }
         }
-        None
-    })
-    .as_ref()
+    }
+    None
 }
 
 /// Find external lensfun database candidate directories from the environment, user config, and common system locations.
 fn lensfun_candidate_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(d) = std::env::var_os(ENV) {
-        let p = PathBuf::from(d);
-        if p.is_dir() {
-            dirs.push(p);
-        }
-    }
-    if let Some(p) = crate::config::config_dir().map(|d| d.join("lensfun")).filter(|p| p.is_dir()) {
-        dirs.push(p);
-    }
-    let candidates = [
+    let env_dir = std::env::var_os(ENV).map(PathBuf::from);
+    let config_lensfun = crate::config::config_dir().map(|d| d.join("lensfun"));
+    let system = [
         "/usr/share/lensfun/version_1",
         "/usr/share/lensfun/version_2",
         "/var/lib/lensfun-updates/version_1",
@@ -60,7 +54,19 @@ fn lensfun_candidate_dirs() -> Vec<PathBuf> {
         "/opt/homebrew/share/lensfun/version_1",
         "/opt/homebrew/share/lensfun/version_2",
     ];
-    for c in candidates {
+    candidate_dirs_from(env_dir.as_deref(), config_lensfun.as_deref(), &system)
+}
+
+/// Assemble existing directory candidates in precedence order: `env_dir`, then `config_dir`, then `system_dirs`.
+fn candidate_dirs_from(env_dir: Option<&std::path::Path>, config_dir: Option<&std::path::Path>, system_dirs: &[&str]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(p) = env_dir.filter(|p| p.is_dir()) {
+        dirs.push(p.to_path_buf());
+    }
+    if let Some(p) = config_dir.filter(|p| p.is_dir()) {
+        dirs.push(p.to_path_buf());
+    }
+    for c in system_dirs {
         let p = PathBuf::from(c);
         if p.is_dir() {
             dirs.push(p);
@@ -97,14 +103,14 @@ fn sony_fallback_camera(make: Option<&str>, model: Option<&str>) -> Option<light
     if model.is_empty() {
         return None;
     }
-    let is_sony = make.is_some_and(|mk| mk.trim().to_ascii_uppercase().starts_with("SONY"))
-        || model.starts_with("ILCE-")
-        || model.starts_with("ZV-E")
-        || model.starts_with("NEX-");
+    let upper = model.to_ascii_uppercase();
+    let is_sony = match make.map(str::trim).filter(|mk| !mk.is_empty()) {
+        Some(mk) => mk.to_ascii_uppercase().starts_with("SONY"),
+        None => upper.starts_with("ILCE-") || upper.starts_with("ZV-E") || upper.starts_with("NEX-"),
+    };
     if !is_sony {
         return None;
     }
-    let upper = model.to_ascii_uppercase();
     let crop_factor = if upper.starts_with("ILCE-6")
         || upper.starts_with("ILCE-5")
         || upper.starts_with("ILCE-3")
@@ -112,7 +118,13 @@ fn sony_fallback_camera(make: Option<&str>, model: Option<&str>) -> Option<light
         || upper.starts_with("NEX-")
     {
         1.53
-    } else if upper.starts_with("ILCE-7") || upper.starts_with("ILCE-9") || upper.starts_with("ILCE-1") || upper.starts_with("ZV-E1") {
+    } else if upper.starts_with("ILCE-7")
+        || upper.starts_with("ILCE-9")
+        || upper.starts_with("ILCE-1")
+        || upper == "ZV-E1"
+        || upper.starts_with("ZV-E1M")
+        || upper.starts_with("ZV-E1-")
+    {
         1.0
     } else {
         return None;
@@ -133,9 +145,14 @@ fn sony_embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<EmbeddedLens> {
     }
     let sony = raw.lens_metadata.sony.as_ref()?;
     let op = sony.distortion_opcode()?;
-    let mut tmp = raw.clone();
-    tmp.opcodes.list3.push(op);
-    crate::files::embedded_lens(&tmp)
+    if raw.opcodes.list3.is_empty() {
+        crate::files::embedded_lens_with_opcodes(raw, std::slice::from_ref(&op))
+    } else {
+        let mut list3 = Vec::with_capacity(raw.opcodes.list3.len() + 1);
+        list3.extend_from_slice(&raw.opcodes.list3);
+        list3.push(op);
+        crate::files::embedded_lens_with_opcodes(raw, &list3)
+    }
 }
 
 /// The crop factor of the recorded frame, which scales the profile's radii: the body's (`camera`), else what the
@@ -372,5 +389,132 @@ mod tests {
         let info = lightcraft_raw::probe_info(&bytes).unwrap();
         let fallback = sony_embedded_lens(&info).expect("a6400 embedded ARW distortion fallback");
         assert!(fallback.warp.is_some());
+    }
+
+    #[test]
+    fn sony_fallback_camera_covers_full_frame_aps_c_and_rejects_unknown_or_non_sony() {
+        for (make, model) in [
+            (Some("SONY"), "ILCE-7M4"),
+            (Some("Sony Corporation"), "ILCE-7RM5"),
+            (Some("SONY"), "ILCE-7C"),
+            (Some("SONY"), "ILCE-9M3"),
+            (Some("SONY"), "ILCE-1"),
+            (Some("SONY"), "ZV-E1"),
+            (None, "ILCE-7SM3"),
+            (None, "ZV-E1"),
+        ] {
+            let cam = sony_fallback_camera(make, Some(model)).unwrap_or_else(|| panic!("expected FF camera for {make:?} {model}"));
+            assert_eq!((cam.mount.as_str(), cam.crop_factor), ("Sony E", 1.0), "{make:?} {model}");
+        }
+
+        for (make, model) in [
+            (Some("SONY"), "ILCE-6400"),
+            (Some("SONY"), "ILCE-5100"),
+            (Some("SONY"), "ILCE-3000"),
+            (Some("SONY"), "ZV-E10"),
+            (Some("SONY"), "ZV-E10M2"),
+            (Some("SONY"), "NEX-7"),
+            (None, "ILCE-6700"),
+            (None, "ZV-E10"),
+            (None, "NEX-5N"),
+        ] {
+            let cam = sony_fallback_camera(make, Some(model)).unwrap_or_else(|| panic!("expected APS-C camera for {make:?} {model}"));
+            assert_eq!((cam.mount.as_str(), cam.crop_factor), ("Sony E", 1.53), "{make:?} {model}");
+        }
+
+        // Rejected cases: non-Sony make/model, empty/whitespace model, unknown Sony model (A-mount / compact / unknown ZV)
+        for (make, model) in [
+            (Some("Canon"), Some("EOS R5")),
+            (Some("Nikon"), Some("Z 6II")),
+            (Some("Canon"), Some("ILCE-7M4")),
+            (None, Some("EOS R6")),
+            (Some("SONY"), None),
+            (Some("SONY"), Some("")),
+            (Some("SONY"), Some("   ")),
+            (Some("SONY"), Some("SLT-A99V")),
+            (Some("SONY"), Some("DSC-RX100M7")),
+            (Some("SONY"), Some("ZV-1")),
+            (Some("SONY"), Some("ZV-E12")),
+        ] {
+            assert!(sony_fallback_camera(make, model).is_none(), "expected None for {make:?} {model:?}");
+        }
+    }
+
+    #[test]
+    fn sony_embedded_lens_returns_none_for_unlisted_model_or_missing_sony_metadata() {
+        use lightcraft_tiff::tags::{self as t, photometric};
+        use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+        let build_arw = |model: &str, with_distortion_tag: bool| -> lightcraft_raw::RawInfo {
+            let (w, h) = (72u32, 48u32);
+            let mut raw = IfdBuilder::new();
+            raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![14]));
+            raw.set(t::COMPRESSION, Value::Short(vec![1]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+            raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+            raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+            if with_distortion_tag {
+                raw.set(0x7037, Value::SShort(vec![16, 0, 2, 7, 16, 28, 43, 61, 83, 109, 139, 175, 217, 267, 325, 395, 479]));
+            }
+            raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![2000u16.to_le_bytes().repeat((w * h) as usize)] });
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set(t::MAKE, Value::Ascii("SONY".into()));
+            ifd0.set(t::MODEL, Value::Ascii(model.into()));
+            ifd0.add_sub_ifd(raw);
+            let bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+            lightcraft_raw::probe_info(&bytes).unwrap()
+        };
+
+        // Unlisted Sony model (e.g. DSC-RX100M7) with distortion tag is rejected by sony_embedded_lens
+        let unlisted = build_arw("DSC-RX100M7", true);
+        assert!(sony_embedded_lens(&unlisted).is_none());
+
+        // Listed model (ILCE-6400) without Sony distortion tag / metadata returns None
+        let no_tag = build_arw("ILCE-6400", false);
+        assert!(sony_embedded_lens(&no_tag).is_none());
+    }
+
+    #[test]
+    fn lensfun_candidate_dirs_and_database_loader_respect_precedence_and_skip_invalid() {
+        let root = std::env::temp_dir().join(format!("lc-lensfun-candidates-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let env_dir = root.join("env_db");
+        let cfg_dir = root.join("cfg_db");
+        let sys_dir = root.join("sys_db");
+        let file_not_dir = root.join("not_a_dir.xml");
+        let missing_dir = root.join("does_not_exist");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::create_dir_all(&sys_dir).unwrap();
+        std::fs::write(&file_not_dir, "<lensdatabase/>").unwrap();
+
+        // Non-directories and missing paths are filtered out; precedence is env -> config -> system
+        let sys_str = sys_dir.to_string_lossy().into_owned();
+        let file_str = file_not_dir.to_string_lossy().into_owned();
+        let missing_str = missing_dir.to_string_lossy().into_owned();
+        let dirs = candidate_dirs_from(Some(&env_dir), Some(&cfg_dir), &[&file_str, &missing_str, &sys_str]);
+        assert_eq!(dirs, vec![env_dir.clone(), cfg_dir.clone(), sys_dir.clone()]);
+        assert!(candidate_dirs_from(Some(&file_not_dir), Some(&missing_dir), &[&file_str]).is_empty());
+
+        // All empty directories -> fallback to None
+        assert!(load_first_database(&dirs).is_none());
+
+        // Empty env_dir is skipped in favour of populated cfg_dir; sys_dir with another lens is not reached
+        std::fs::write(env_dir.join("empty.xml"), "<lensdatabase></lensdatabase>").unwrap();
+        std::fs::write(cfg_dir.join("valid.xml"), DB).unwrap();
+        std::fs::write(sys_dir.join("other.xml"), DB.replace("Testcam", "Other")).unwrap();
+        let loaded = load_first_database(&dirs).expect("loads first non-empty database");
+        assert_eq!(loaded.lenses.len(), 1);
+        assert_eq!(loaded.lenses[0].maker, "Testcam");
+
+        // When env_dir also has a valid lens, env_dir wins by precedence
+        std::fs::write(env_dir.join("env.xml"), DB.replace("Testcam", "EnvCam")).unwrap();
+        let loaded = load_first_database(&dirs).expect("env database takes precedence");
+        assert_eq!(loaded.lenses.len(), 1);
+        assert_eq!(loaded.lenses[0].maker, "EnvCam");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

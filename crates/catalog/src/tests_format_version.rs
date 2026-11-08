@@ -97,6 +97,56 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// A v9 library whose Subject, Sky, and Background masks were written before those variants stored
+/// `seg`/`detail`/`edge` (both tagged `{"kind":"subject"}` and bare unit strings `"Subject"`)
+/// loads cleanly and is upgraded to the current catalog format.
+#[test]
+fn v9_ai_concept_masks_load_and_are_upgraded() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 160, 120, "2026-01-01");
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let mut d = lightcraft_develop::DevelopSettings::default();
+    d.masks.push(lightcraft_develop::Mask {
+        id: 1,
+        name: "Mask 1".into(),
+        components: vec![
+            lightcraft_develop::MaskComponent {
+                name: None,
+                op: lightcraft_develop::MaskOp::Add,
+                invert: false,
+                shape: lightcraft_develop::MaskShape::subject(),
+            },
+            lightcraft_develop::MaskComponent {
+                name: None,
+                op: lightcraft_develop::MaskOp::Add,
+                invert: false,
+                shape: lightcraft_develop::MaskShape::sky(),
+            },
+            lightcraft_develop::MaskComponent {
+                name: None,
+                op: lightcraft_develop::MaskOp::Add,
+                invert: false,
+                shape: lightcraft_develop::MaskShape::background(),
+            },
+        ],
+        ..Default::default()
+    });
+    c.apply(Op::SetDevelop { id, settings: std::sync::Arc::new(d), label: "Mask".into(), edited: None }).unwrap();
+    // Simulate a legacy bare-string unit variant in one component alongside tagged unit objects
+    let snap = c.to_snapshot().replace(r#"{"kind":"background"}"#, r#""Background""#);
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":2,\"catalog\":{snap}}}\n").into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    let masks = &loaded.photo(id).unwrap().develop.masks;
+    assert_eq!(masks.len(), 1);
+    assert_eq!(masks[0].components[0].shape, lightcraft_develop::MaskShape::subject());
+    assert_eq!(masks[0].components[1].shape, lightcraft_develop::MaskShape::sky());
+    assert_eq!(masks[0].components[2].shape, lightcraft_develop::MaskShape::background());
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
@@ -238,8 +288,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v10: `MaskShape::Subject/Sky/Background` AI segmentation, detail, and edge fields.
+    const NEWEST_FIELDS: u32 = 10;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

@@ -30,6 +30,7 @@ impl crate::Session {
         apply_crop: bool,
         thumb_bucket: Option<usize>,
     ) -> Option<RenderJob> {
+        self.poll_lens_probes();
         let p = self.catalog.photo(id)?.clone();
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
         let level = SourceLevel::for_size(if thumb_bucket.is_some() {
@@ -47,7 +48,8 @@ impl crate::Session {
         let content = source_key.0 as u64;
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
-        let salt = self.media.denoise_salt(id, &settings);
+        let lens_salt = if settings.optics.lens_profile && p.embedded_lens.is_some() { 0x517c_c1b7_2722_0a95 } else { 0 };
+        let salt = self.media.denoise_salt(id, &settings) ^ lens_salt;
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -214,14 +216,17 @@ impl crate::Session {
 
     /// Size-independent cache key of a photo's view render (loupe) for its current settings.
     fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+        let mut h = Hasher128::new();
+        h.str(&content_key(p))
             .str("view")
             .u64(p.develop.hash64())
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        if p.develop.optics.lens_profile && p.embedded_lens.is_some() {
+            h.u64(0x517c_c1b7_2722_0a95);
+        }
+        h.finish()
     }
 
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the
@@ -385,10 +390,12 @@ impl crate::Session {
         self.catalog.photo(id).is_some_and(|p| p.embedded_lens.is_some()) || self.media.cached_lens(id).is_some()
     }
 
-    /// Ensure `id`'s catalog entry has its embedded/profile lens data when available from a
-    /// cached decode or file probe. Photos without lens data are marked as probed so subsequent
-    /// edits avoid repeated synchronous file reads.
+    /// Ensure `id`'s catalog entry has its embedded/profile lens data: synchronously when already
+    /// held in a cached decode, or via a background file-probe job when uncached so command and UI
+    /// callers never block on disk I/O. Photos without lens data are marked as probed once the
+    /// probe succeeds so subsequent edits avoid repeated file reads.
     pub(crate) fn ensure_embedded_lens(&mut self, id: PhotoId) {
+        self.poll_lens_probes();
         let Some(p) = self.catalog.photo(id) else { return };
         if p.embedded_lens.is_some() || self.media.probed_lens.contains(&id) {
             return;
@@ -400,21 +407,45 @@ impl crate::Session {
             }
             return;
         }
-        let (lens, probed_ok) = match (&p.source, &self.media.file_probe) {
-            (Source::File { path }, Some(probe)) => match probe(path) {
-                Ok(info) => (info.embedded_lens, true),
-                Err(_) => (None, false),
-            },
-            _ => (None, false),
-        };
-        if probed_ok {
+        if let (Source::File { path }, Some(probe)) = (&p.source, &self.media.file_probe) {
+            self.media.lens_prober.submit(id, path.clone(), probe.clone());
+        }
+    }
+
+    /// Whether any background file probes for embedded lens data are currently running.
+    pub fn lens_probes_busy(&self) -> bool {
+        self.media.lens_prober.busy()
+    }
+
+    /// Apply finished background file probes for embedded lens data. Returns `true` when any
+    /// photo's catalog `embedded_lens` was updated.
+    pub fn poll_lens_probes(&mut self) -> bool {
+        let mut changed = false;
+        for (id, res) in self.media.lens_prober.drain() {
+            let Ok(lens) = res else {
+                // Leave `probed_lens` unset on I/O or decode failure so a subsequent attempt retries.
+                continue;
+            };
             self.media.probed_lens.insert(id);
+            let Some(lens) = lens else { continue };
+            let Some(p) = self.catalog.photo(id) else { continue };
+            if p.embedded_lens.is_some() {
+                continue;
+            }
+            let constrain = p.develop.geometry.constrain_crop && p.develop.optics.lens_profile && p.develop.section_enabled("optics");
+            if let Err(e) = self.apply_system(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens)) }) {
+                log::warn!("photo {}: embedded lens data not recorded: {e}", id.0);
+                continue;
+            }
+            if constrain && let Some(d) = self.develop_of(id) {
+                let fitted = self.fit_constrained_crop(id, (*d).clone());
+                if fitted.crop.geometry != d.crop.geometry {
+                    let _ = self.apply_system(Op::SetDevelop { id, settings: Arc::new(fitted), label: "Lens Profile".into(), edited: None });
+                }
+            }
+            changed = true;
         }
-        if let Some(lens) = lens
-            && let Err(e) = self.apply_system(Op::SetEmbeddedLens { id, lens: Some(Box::new(lens)) })
-        {
-            log::warn!("photo {}: embedded lens data not recorded: {e}", id.0);
-        }
+        changed
     }
 
     /// Record embedded/profile lens data read during decode (`info`) when the catalog entry has

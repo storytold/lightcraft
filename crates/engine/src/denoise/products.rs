@@ -12,6 +12,7 @@ pub(crate) struct Active {
     pub onnx: PathBuf,
     pub fingerprint: String,
     pub model: ModelSlot,
+    pub warming: Arc<AtomicBool>,
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

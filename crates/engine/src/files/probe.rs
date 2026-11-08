@@ -39,6 +39,15 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
 /// raw reader's equivalent of the camera's correction, e.g. Panasonic / Leica RW2 distortion), re-expressed for the
 /// default-cropped, EXIF-oriented image. These are the only "profile" corrections LightCraft applies.
 pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop::EmbeddedLens> {
+    embedded_lens_with_opcodes(raw, &raw.opcodes.list3)
+}
+
+/// [`embedded_lens`] evaluated against `list3` instead of `raw.opcodes.list3` (avoids cloning [`lightcraft_raw::RawInfo`]
+/// when evaluating a fallback opcode).
+pub(crate) fn embedded_lens_with_opcodes(
+    raw: &lightcraft_raw::RawInfo,
+    list3: &[lightcraft_raw::Opcode],
+) -> Option<lightcraft_develop::EmbeddedLens> {
     use lightcraft_develop::{EmbeddedLens, EmbeddedVignette, EmbeddedWarp, EmbeddedWarpStage, WARP_STAGES};
     use lightcraft_geom::Point;
     use lightcraft_raw::Opcode;
@@ -63,7 +72,7 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
     let mut lens = EmbeddedLens::default();
     // opcodes in list order, minus the ones the DNG 1.6 skip rule drops (a WarpRectilinear that follows an optional
     // WarpRectilinear2)
-    let ops: Vec<&Opcode> = lightcraft_raw::opcodes::applied_ops(&raw.opcodes.list3).collect();
+    let ops: Vec<&Opcode> = lightcraft_raw::opcodes::applied_ops(list3).collect();
     // A DNG with a WarpRectilinear2 keeps every warp opcode as a chain of stages (each warps the one before's output);
     // without one the first WarpRectilinear is the lens warp, as it always was.
     let chain = ops.iter().any(|op| matches!(op, Opcode::WarpRectilinear2 { .. }));

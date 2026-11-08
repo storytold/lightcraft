@@ -50,6 +50,7 @@ impl Session {
             onnx: i.onnx,
             fingerprint,
             model: Arc::new(Mutex::new(None)),
+            warming: Arc::new(AtomicBool::new(false)),
         });
         if let Some(r) = self.denoise.running.take() {
             r.progress.cancel_now();
@@ -164,19 +165,31 @@ impl Session {
         }
     }
 
-    /// Pre-load the active AI Denoise model on a background thread at app startup so it is ready
-    /// in memory before the user's first denoise action. Does nothing if no model is configured.
+    /// Pre-load the active AI Denoise model on a background thread when idle so it is ready in
+    /// memory before the user's first denoise action. Does nothing if no model is configured,
+    /// already loaded, or already warming up.
     pub fn denoise_warmup(&mut self) {
         self.denoise_refresh_active(false);
         let Some(active) = &self.denoise.active else { return };
         if active.model.lock().unwrap_or_else(PoisonError::into_inner).is_some() {
             return;
         }
+        if active.warming.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+            return;
+        }
+        struct WarmupGuard(Arc<AtomicBool>);
+        impl Drop for WarmupGuard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let guard = WarmupGuard(active.warming.clone());
         let onnx = active.onnx.clone();
         let manifest = active.manifest.clone();
         let slot = active.model.clone();
         let loader = self.denoise.loader.clone();
         let _ = std::thread::Builder::new().name("denoise-warmup".into()).stack_size(STACK).spawn(move || {
+            let _guard = guard;
             if slot.lock().unwrap_or_else(PoisonError::into_inner).is_some() {
                 return;
             }

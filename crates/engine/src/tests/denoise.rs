@@ -859,3 +859,101 @@ fn denoise_row_while_queue_is_busy() {
     assert!(rows(&x.s).is_empty(), "the row goes once the photo is made");
     let _ = std::fs::remove_dir_all(&x.dir);
 }
+
+#[test]
+fn denoise_warmup_handles_no_model_already_loaded_panics_and_concurrent_calls() {
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
+
+    // 1. No model configured: warmup is a no-op and never invokes the loader.
+    let mut no_model = setup("warmup-none", false);
+    let loads = Arc::new(AtomicUsize::new(0));
+    let loads_cl = loads.clone();
+    no_model.s.denoise.loader = Arc::new(move |_, _| {
+        loads_cl.fetch_add(1, Ordering::SeqCst);
+        Err("should not run".into())
+    });
+    no_model.s.denoise_warmup();
+    assert!(no_model.s.denoise.active.is_none());
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+    drop(no_model.s);
+    let _ = std::fs::remove_dir_all(no_model.dir);
+
+    // 2. Already-loaded model (installed in this session): warmup is a no-op.
+    let mut loaded = setup("warmup-loaded", true);
+    let loads = Arc::new(AtomicUsize::new(0));
+    let loads_cl = loads.clone();
+    loaded.s.denoise.loader = Arc::new(move |_, _| {
+        loads_cl.fetch_add(1, Ordering::SeqCst);
+        Err("already loaded; should not reload".into())
+    });
+    loaded.s.denoise_warmup();
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+
+    // 3. Cold session where loader panics: panic is swallowed and resets the warming guard so a
+    // subsequent warmup with a working loader succeeds; concurrent warmup calls while in flight
+    // invoke the loader only once.
+    let models_dir = loaded.dir.join("denoise-models");
+    let runs = loaded.runs.clone();
+    drop(loaded.s);
+
+    let mut cold = Session::new().with_fs();
+    cold.set_denoise_models_dir(Some(models_dir));
+    let (panic_done_tx, panic_done_rx) = mpsc::channel();
+    let panic_tx = Mutex::new(panic_done_tx);
+    cold.denoise.loader = Arc::new(move |_, _| {
+        let _ = panic_tx.lock().unwrap().send(());
+        panic!("simulated loader panic during warmup");
+    });
+    cold.denoise_warmup();
+    panic_done_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    let active = cold.denoise.active.as_ref().unwrap();
+    for _ in 0..200 {
+        if !active.warming.load(Ordering::Acquire) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!active.warming.load(Ordering::Acquire), "warming guard resets after loader panic");
+    assert!(active.model.lock().unwrap().is_none(), "panicking loader leaves slot empty");
+
+    // Concurrent warmup calls coalesce to a single loader invocation.
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let entered_tx = Mutex::new(entered_tx);
+    let release_rx = Mutex::new(release_rx);
+    let concurrent_loads = Arc::new(AtomicUsize::new(0));
+    let concurrent_loads_cl = concurrent_loads.clone();
+    cold.denoise.loader = Arc::new(move |_, _| {
+        concurrent_loads_cl.fetch_add(1, Ordering::SeqCst);
+        entered_tx.lock().unwrap().send(()).map_err(|e| e.to_string())?;
+        release_rx.lock().unwrap().recv_timeout(Duration::from_secs(3)).map_err(|e| e.to_string())?;
+        Ok(Arc::new(Dim { runs: runs.clone() }) as Arc<dyn Model>)
+    });
+    cold.denoise_warmup();
+    entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // Second and third calls while the first warmup thread is blocked must not spawn extra loads.
+    cold.denoise_warmup();
+    cold.denoise_warmup();
+    assert_eq!(concurrent_loads.load(Ordering::SeqCst), 1);
+
+    release_tx.send(()).unwrap();
+    let active = cold.denoise.active.as_ref().unwrap();
+    for _ in 0..400 {
+        if active.model.lock().unwrap().is_some() && !active.warming.load(Ordering::Acquire) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(active.model.lock().unwrap().is_some(), "warmup populates the model slot");
+    assert!(!active.warming.load(Ordering::Acquire));
+    assert_eq!(concurrent_loads.load(Ordering::SeqCst), 1);
+
+    // Calling warmup again after completion is a no-op.
+    cold.denoise_warmup();
+    assert_eq!(concurrent_loads.load(Ordering::SeqCst), 1);
+
+    drop(cold);
+    let _ = std::fs::remove_dir_all(loaded.dir);
+}

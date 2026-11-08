@@ -400,6 +400,7 @@ impl Headless {
             || self.app.import.is_some()
             || self.app.export.is_some()
             || self.app.session.denoise_busy()
+            || self.app.session.lens_probes_busy()
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()
             || !self.app.pending_gestures.is_empty()

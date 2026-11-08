@@ -1,5 +1,24 @@
 # What's new in LightCraft
 
+## 2026-11-08
+
+### SAM 3 AI masking for Subject, Sky and Background
+- **Select Subject**, **Select Sky**, and **Select Background** now run through the SAM 3 segmentation model when it is
+  installed (or connected via a remote SAM 3 worker), with zoomed-in detail refinement passes, the **Edge** crispness
+  slider (−100…100), and immediate cooperative cancellation when cancelling, deleting a mask, undoing, or switching
+  photos. Without the model installed, they continue to use embedded DNG semantic mattes or heuristic estimation.
+- **Backward compatibility and migration**: existing libraries (catalog format v9 and earlier), develop presets, and XMP
+  sidecars storing legacy `Subject`, `Sky`, or `Background` masks (both tagged `{"kind":"subject"}` objects and bare
+  unit-variant strings) continue to load without loss: missing `seg`, `detail`, and `edge` fields default to empty /
+  `0.0` so unsegmented masks keep their existing fallback rendering, and opening an older library upgrades its snapshot
+  to catalog format v10 automatically.
+
+### Sony E-mount lens corrections and autofocus metadata
+- Sony E-mount cameras not yet listed in an older external lensfun XML database (such as the α6400, ZV-E10, and newer
+  α7 / α9 / α1 bodies) now match E-mount lens profiles using built-in mount and sensor crop-factor fallbacks, and
+  supported Sony ARW files fall back to their embedded raw-IFD distortion table when no external lens profile is
+  present. Sony MakerNote autofocus mode and face-tracking metadata are also read.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

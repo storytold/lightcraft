@@ -93,6 +93,15 @@ pub fn pump_background(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     // frames are drawn only when something asks for one: while a photo is being made, ask again for its progress
     if busy {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    } else if app.ui_passes > 0
+        && pace != "pause"
+        && app.renderer.in_flight() == 0
+        && (watching
+            || (matches!(app.ui.view, crate::state::ViewMode::Detail)
+                && matches!(app.ui.right, crate::state::RightPanel::Edit)
+                && app.ui.section_open("detail")))
+    {
+        app.session.denoise_warmup();
     }
 }
 

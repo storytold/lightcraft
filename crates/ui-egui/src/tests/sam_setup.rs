@@ -158,3 +158,44 @@ fn folder_worker_keeps_frames_running_and_delivers_failure_before_retry() {
     assert_eq!(h.app.session.segmenter.dir.as_ref(), Some(&dir));
     assert_eq!(std::fs::read(dir.join("local-note")).unwrap(), b"keep this file");
 }
+
+#[test]
+fn segment_warmup_defers_past_first_render_and_stays_off_outside_masking() {
+    use crate::headless::Headless;
+    use crate::state::{RightPanel, ViewMode};
+    use std::time::Duration;
+
+    let mut session = lightcraft_engine::Session::with_demo();
+    session.segmenter.remote = Some("127.0.0.1:9".into());
+    assert!(session.segmenter.has_model());
+
+    let mut app = LightcraftApp::new(session, Services::default());
+    app.ui.view = ViewMode::Detail;
+    app.ui.right = RightPanel::Edit;
+
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    assert!(h.settle(Duration::from_secs(10)));
+    // Stepping past the 0.3 s debounce in Edit view never schedules or triggers SAM 3 warmup.
+    for _ in 0..25 {
+        h.step();
+    }
+    assert!(h.app.ui.warmup_due.is_none(), "Edit view must not schedule SAM 3 warmup");
+    assert!(!h.app.session.is_segment_warmed());
+
+    // Even when starting in Masking, `logic_background` before the first UI pass (`ui_passes == 0`)
+    // must not schedule warmup; once the first frame renders and renders settle, Masking schedules it.
+    let mut session2 = lightcraft_engine::Session::with_demo();
+    session2.segmenter.remote = Some("127.0.0.1:9".into());
+    let mut app2 = LightcraftApp::new(session2, Services::default());
+    app2.ui.view = ViewMode::Detail;
+    app2.ui.right = RightPanel::Masking;
+    let ctx = egui::Context::default();
+    app2.logic(&ctx);
+    assert_eq!(app2.ui_passes, 0);
+    assert!(app2.ui.warmup_due.is_none(), "before first UI pass, warmup must stay deferred");
+
+    let mut h2 = Headless::new(app2, [1200.0, 800.0], 1.0);
+    assert!(h2.settle(Duration::from_secs(10)));
+    assert!(h2.app.ui_passes > 0);
+    assert!(h2.app.ui.warmup_due.is_some(), "after first render settles in Masking, warmup is scheduled");
+}

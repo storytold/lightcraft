@@ -194,6 +194,20 @@ mod tests {
         for (a, b) in orig_logits.iter().zip(&inv_logits) {
             assert!((a + b).abs() <= 1e-5, "expected negation: {a} vs {b}");
         }
+
+        // Full-frame mask (rect = None) preserves rect = None and negates logits
+        let full = SegMask::from_logits(side, &l);
+        assert_eq!(full.rect, None);
+        let full_inv = full.invert().unwrap();
+        assert_eq!(full_inv.rect, None);
+        assert_eq!(full_inv.logits().unwrap(), inv_logits);
+
+        // Damaged / missing logits propagate None on invert()
+        assert!(SegMask { side: 8, data: "not base64 !".into(), rect: None }.invert().is_none());
+        assert!(SegMask { side: 0, data: String::new(), rect: None }.invert().is_none());
+        let mut wrong_side = full;
+        wrong_side.side = 9;
+        assert!(wrong_side.invert().is_none());
     }
 
     #[test]

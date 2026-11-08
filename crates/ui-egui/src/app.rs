@@ -483,15 +483,18 @@ impl LightcraftApp {
                 None => {}
             }
         }
-        // When the SAM 3 model is loaded and the user is in Detail / Masking / Remove view,
-        // pre-encode the active photo in the background so the first AI click or stroke is instant.
-        // Debounce warmup so it does not run on every frame during develop-setting changes,
-        // and skip warmup while an interaction (slider drag, stroke) is active.
+        // When the user has the Masking panel open in Detail view (after the first UI frame and
+        // once initial renders settle), pre-load SAM 3 and pre-encode the active photo in the
+        // background so the first AI click or selection is fast, without competing with startup
+        // or warming up for users who never open Masking.
         if self.session.interaction.is_some() {
             self.ui.warmup_due = None;
-        } else if self.session.segmenter.loaded()
+        } else if self.ui_passes > 0
+            && self.renderer.in_flight() == 0
+            && self.session.segmenter.has_model()
             && !self.session.segmenter.busy()
             && matches!(self.ui.view, state::ViewMode::Detail)
+            && matches!(self.ui.right, state::RightPanel::Masking)
             && self.session.active().is_some()
         {
             if self.session.is_segment_warmed() {

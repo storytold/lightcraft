@@ -922,7 +922,7 @@ impl Default for BrushStroke {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", remote = "Self")]
 pub enum MaskShape {
     Brush {
         strokes: Vec<BrushStroke>,
@@ -958,28 +958,42 @@ pub enum MaskShape {
         hi: f64,
         feather: f64,
     },
-    /// AI / automatic selections, evaluated by a segmenter.
+    /// Automatic main-subject selection: `seg` caches the SAM 3 segmentation when computed
+    /// (`None` falls back to DNG semantic mattes or heuristic subject estimation).
     Subject {
+        /// Cached full-image segmentation computed by SAM 3 (`None` before segmentation or without a model).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seg: Option<crate::SegMask>,
+        /// Zoomed-in refinement passes over sub-rectangles of the image (higher resolution than `seg`).
         #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
         detail: Vec<crate::SegMask>,
+        /// Edge crispness in `−100..=100` (default `0.0`: `< 0` harder border, `> 0` softer/feathered border).
         #[serde(default, skip_serializing_if = "is_zero")]
         edge: f64,
     },
+    /// Automatic sky selection: `seg` caches the SAM 3 segmentation when computed
+    /// (`None` falls back to DNG semantic mattes or colour/luminance sky estimation).
     Sky {
+        /// Cached full-image segmentation computed by SAM 3 (`None` before segmentation or without a model).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seg: Option<crate::SegMask>,
+        /// Zoomed-in refinement passes over sub-rectangles of the image (higher resolution than `seg`).
         #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
         detail: Vec<crate::SegMask>,
+        /// Edge crispness in `−100..=100` (default `0.0`: `< 0` harder border, `> 0` softer/feathered border).
         #[serde(default, skip_serializing_if = "is_zero")]
         edge: f64,
     },
+    /// Automatic background selection (complement of the main subject): `seg` caches the inverted
+    /// SAM 3 subject segmentation when computed (`None` falls back to inverted subject estimation).
     Background {
+        /// Cached full-image background segmentation (`None` before segmentation or without a model).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seg: Option<crate::SegMask>,
+        /// Zoomed-in refinement passes over sub-rectangles of the image (higher resolution than `seg`).
         #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
         detail: Vec<crate::SegMask>,
+        /// Edge crispness in `−100..=100` (default `0.0`: `< 0` harder border, `> 0` softer/feathered border).
         #[serde(default, skip_serializing_if = "is_zero")]
         edge: f64,
     },
@@ -1046,6 +1060,27 @@ impl MaskShape {
             | MaskShape::Background { seg, .. } => seg.as_ref(),
             _ => None,
         }
+    }
+}
+
+impl Serialize for MaskShape {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        MaskShape::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MaskShape {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if let Some(s) = value.as_str() {
+            match s {
+                "Subject" | "subject" => return Ok(MaskShape::subject()),
+                "Sky" | "sky" => return Ok(MaskShape::sky()),
+                "Background" | "background" => return Ok(MaskShape::background()),
+                _ => {}
+            }
+        }
+        MaskShape::deserialize(value).map_err(serde::de::Error::custom)
     }
 }
 

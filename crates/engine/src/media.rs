@@ -81,6 +81,10 @@ pub struct MediaCache {
     pub denoise: DenoiseIndex,
     /// Photos whose files have already been probed for embedded lens data.
     pub probed_lens: std::collections::HashSet<PhotoId>,
+    /// O(1) index of embedded lens data held in `previews` (slot 0) and `full` (slot 1) by `PhotoId`.
+    lens_index: HashMap<PhotoId, [Option<lightcraft_develop::EmbeddedLens>; 2]>,
+    /// Background worker for non-blocking file probes of embedded/profile lens data.
+    pub(crate) lens_prober: cache::LensProber,
 }
 
 #[cfg(test)]

@@ -587,7 +587,7 @@ impl Session {
         if self.depth == 0 {
             self.reconcile_segmenter();
             let clear_ai = self.active() != was_active
-                || (matches!(id, "edit.undo" | "edit.reset" | "mask.delete" | "mask.deleteAll" | "mask.component")
+                || (matches!(id, "edit.undo" | "develop.reset" | "edit.reset" | "mask.delete" | "mask.deleteAll" | "mask.component")
                     && self.active().and_then(|p| self.develop_of(p)).is_some_and(|d| d.masks.is_empty()));
             if clear_ai {
                 self.segmenter.cancel_all();

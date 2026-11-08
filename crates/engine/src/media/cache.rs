@@ -48,6 +48,107 @@ impl DenoiseIndex {
     }
 }
 
+type LensProbeOutcome = (PhotoId, u64, Result<Option<lightcraft_develop::EmbeddedLens>, String>);
+
+/// Single-thread background runner for file-level lens probes so `Session::set_develop` never
+/// blocks the UI or command thread on disk I/O.
+#[derive(Default)]
+pub(crate) struct LensProber {
+    next_ticket: u64,
+    in_flight: HashMap<PhotoId, u64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    worker_tx: Option<std::sync::mpsc::Sender<(PhotoId, u64, String, FileProbe)>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    done_rx: Option<std::sync::mpsc::Receiver<LensProbeOutcome>>,
+    #[cfg(target_arch = "wasm32")]
+    done: VecDeque<LensProbeOutcome>,
+}
+
+impl LensProber {
+    pub fn busy(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
+    pub fn forget(&mut self, id: PhotoId) {
+        self.in_flight.remove(&id);
+    }
+
+    pub fn clear(&mut self) {
+        self.in_flight.clear();
+    }
+
+    pub fn submit(&mut self, id: PhotoId, path: String, probe: FileProbe) {
+        if self.in_flight.contains_key(&id) {
+            return;
+        }
+        self.next_ticket = self.next_ticket.wrapping_add(1).max(1);
+        let ticket = self.next_ticket;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.worker_tx.is_none() {
+                let (job_tx, job_rx) = std::sync::mpsc::channel::<(PhotoId, u64, String, FileProbe)>();
+                let (done_tx, done_rx) = std::sync::mpsc::channel::<LensProbeOutcome>();
+                let spawned = std::thread::Builder::new().name("lens-probe".into()).spawn(move || {
+                    while let Ok((id, ticket, path, probe)) = job_rx.recv() {
+                        let res = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe(&path))) {
+                            Ok(Ok(info)) => Ok(info.embedded_lens),
+                            Ok(Err(e)) => Err(e),
+                            Err(_) => Err("lens probe panicked".into()),
+                        };
+                        if done_tx.send((id, ticket, res)).is_err() {
+                            break;
+                        }
+                    }
+                });
+                if spawned.is_err() {
+                    return;
+                }
+                self.worker_tx = Some(job_tx);
+                self.done_rx = Some(done_rx);
+            }
+            if let Some(tx) = &self.worker_tx {
+                if tx.send((id, ticket, path, probe)).is_ok() {
+                    self.in_flight.insert(id, ticket);
+                } else {
+                    self.worker_tx = None;
+                    self.done_rx = None;
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let res = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe(&path))) {
+                Ok(Ok(info)) => Ok(info.embedded_lens),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err("lens probe panicked".into()),
+            };
+            self.in_flight.insert(id, ticket);
+            self.done.push_back((id, ticket, res));
+        }
+    }
+
+    pub fn drain(&mut self) -> Vec<(PhotoId, Result<Option<lightcraft_develop::EmbeddedLens>, String>)> {
+        let mut out = Vec::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(rx) = &self.done_rx {
+            for (id, ticket, res) in rx.try_iter() {
+                if self.in_flight.get(&id) == Some(&ticket) {
+                    self.in_flight.remove(&id);
+                    out.push((id, res));
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        while let Some((id, ticket, res)) = self.done.pop_front() {
+            if self.in_flight.get(&id) == Some(&ticket) {
+                self.in_flight.remove(&id);
+                out.push((id, res));
+            }
+        }
+        out
+    }
+}
+
 impl Default for MediaCache {
     fn default() -> Self {
         let budget = crate::memory::cache_share(crate::memory::budget());
@@ -71,6 +172,8 @@ impl Default for MediaCache {
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
             denoise: DenoiseIndex::default(),
             probed_lens: std::collections::HashSet::new(),
+            lens_index: HashMap::new(),
+            lens_prober: LensProber::default(),
         }
     }
 }
@@ -106,6 +209,24 @@ impl MediaCache {
         self.previews.clear();
         self.full.clear();
         self.probed_lens.clear();
+        self.lens_index.clear();
+        self.lens_prober.clear();
+    }
+
+    fn set_indexed_lens(&mut self, id: PhotoId, slot: usize, lens: Option<lightcraft_develop::EmbeddedLens>) {
+        if let Some(l) = lens {
+            let entry = self.lens_index.entry(id).or_default();
+            if let Some(dst) = entry.get_mut(slot) {
+                *dst = Some(l);
+            }
+        } else if let Some(entry) = self.lens_index.get_mut(&id) {
+            if let Some(dst) = entry.get_mut(slot) {
+                *dst = None;
+            }
+            if entry.iter().all(Option::is_none) {
+                self.lens_index.remove(&id);
+            }
+        }
     }
 
     /// How many full-resolution originals to keep at once (at least one). Compare and Reference
@@ -130,7 +251,8 @@ impl MediaCache {
     fn trim_full(&mut self) {
         while self.full.len() > self.full_capacity {
             let oldest = self.full.iter().enumerate().min_by_key(|(_, e)| e.2).map(|(i, _)| i).unwrap_or(0);
-            self.full.remove(oldest);
+            let removed = self.full.remove(oldest);
+            self.set_indexed_lens(removed.0, 1, None);
         }
     }
 
@@ -174,8 +296,16 @@ impl MediaCache {
             let Some((tick, which)) = candidates.into_iter().flatten().min() else { break };
             let freed = match which {
                 0 => self.thumbs.pop_oldest(),
-                1 => self.previews.iter().position(|e| e.2 == tick).map(|i| self.previews.remove(i).1.bytes()),
-                2 => self.full.iter().position(|e| e.2 == tick).map(|i| self.full.remove(i).1.bytes()),
+                1 => self.previews.iter().position(|e| e.2 == tick).map(|i| {
+                    let removed = self.previews.remove(i);
+                    self.set_indexed_lens(removed.0, 0, None);
+                    removed.1.bytes()
+                }),
+                2 => self.full.iter().position(|e| e.2 == tick).map(|i| {
+                    let removed = self.full.remove(i);
+                    self.set_indexed_lens(removed.0, 1, None);
+                    removed.1.bytes()
+                }),
                 _ => self.rendered.evict_oldest(),
             };
             match freed {
@@ -231,17 +361,22 @@ impl MediaCache {
                 self.thumbs.insert(id, img, cost);
             }
             SourceLevel::Preview => {
+                let lens = img.info.as_ref().and_then(|info| info.lens);
                 self.previews.retain(|e| e.0 != id);
                 self.previews.push((id, img, tick));
+                self.set_indexed_lens(id, 0, lens);
                 let cap = if self.preview_capacity == 0 { 4 } else { self.preview_capacity };
                 while self.previews.len() > cap {
                     let oldest = self.previews.iter().enumerate().min_by_key(|(_, e)| e.2).map(|(i, _)| i).unwrap_or(0);
-                    self.previews.remove(oldest);
+                    let removed = self.previews.remove(oldest);
+                    self.set_indexed_lens(removed.0, 0, None);
                 }
             }
             SourceLevel::Full => {
+                let lens = img.info.as_ref().and_then(|info| info.lens);
                 self.full.retain(|e| e.0 != id);
                 self.full.push((id, img, tick));
+                self.set_indexed_lens(id, 1, lens);
                 self.trim_full();
             }
         }
@@ -250,12 +385,11 @@ impl MediaCache {
 
     /// Embedded lens data read while decoding any cached level of `id`.
     pub fn cached_lens(&self, id: PhotoId) -> Option<lightcraft_develop::EmbeddedLens> {
-        self.thumbs
-            .peek(&id)
-            .into_iter()
-            .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
-            .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
-            .find_map(|s| s.info.as_ref()?.lens)
+        if let Some(lens) = self.thumbs.peek(&id).and_then(|s| s.info.as_ref()?.lens) {
+            return Some(lens);
+        }
+        let [preview, full] = self.lens_index.get(&id)?;
+        (*preview).or(*full)
     }
 
     /// Forget a photo's decoded sources (e.g. after its file changed).
@@ -264,6 +398,8 @@ impl MediaCache {
         self.previews.retain(|e| e.0 != id);
         self.full.retain(|e| e.0 != id);
         self.probed_lens.remove(&id);
+        self.lens_index.remove(&id);
+        self.lens_prober.forget(id);
     }
 
     /// (decoded thumbnail sources, bytes).
