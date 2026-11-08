@@ -143,14 +143,8 @@ pub(super) fn proxies(
         clipped = clipped.into_oriented(raw.orientation);
         reference = reference.into_oriented(raw.orientation);
         sensor.map_in_place(to_working);
-        // Judge the external warp against the established CR3 framing fallback, not
-        // against unregistered sensor pixels. This preserves an already better fit.
-        let (fallback, fallback_mask) = align_cr3_framing(sensor.clone(), clipped.clone(), &reference);
-        let proposed =
-            embedded.filter(|correction| transform.matrix_is_fallback && lens.is_none() && correction.warp.is_some()).and_then(|correction| {
-                align_profile_geometry_against(&sensor, &clipped, &reference, correction, lightcraft_geom::Orientation::Normal, Some(&fallback))
-            });
-        (sensor, clipped) = proposed.unwrap_or((fallback, fallback_mask));
+        let correction = embedded.filter(|correction| transform.matrix_is_fallback && lens.is_none() && correction.warp.is_some());
+        (sensor, clipped) = align_cr3_geometry(sensor, clipped, &reference, correction);
     }
     let mut sensor = fit(&sensor, size, size, Filter::Box);
     let mut reference_small = reference_at(&reference, &sensor);
@@ -207,8 +201,15 @@ pub(super) fn estimate_cr3_framing(sensor: &Rgb32f, reference: &Rgb32f) -> Optio
 
 #[cfg(test)]
 thread_local! {
+    static FRAMING_SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LAST_GEOMETRY_SCORES: std::cell::Cell<Option<[f64; 4]>> = const { std::cell::Cell::new(None) };
     static LAST_FRAMED_SCORES: std::cell::Cell<Option<[f64; 4]>> = const { std::cell::Cell::new(None) };
+}
+
+/// Read and reset this thread's framing-search budget, independent of elapsed time.
+#[cfg(test)]
+pub(super) fn take_framing_search_count() -> usize {
+    FRAMING_SEARCHES.replace(0)
 }
 
 /// Return this test thread's last `[train_before, train_after, held_before, held_after]`
@@ -230,6 +231,7 @@ pub(super) fn geometry_framed_scores() -> Option<[f64; 4]> {
 fn estimate_framing_against(sensor: &Rgb32f, reference: &Rgb32f, original: Option<&Rgb32f>, framed: Option<&Rgb32f>) -> Option<Cr3Framing> {
     #[cfg(test)]
     {
+        FRAMING_SEARCHES.set(FRAMING_SEARCHES.get() + 1);
         LAST_GEOMETRY_SCORES.set(None);
         LAST_FRAMED_SCORES.set(None);
     }
@@ -402,19 +404,44 @@ pub(super) fn estimate_profile_framing(candidate: &Rgb32f, reference: &Rgb32f, o
     estimate_framing_against(candidate, reference, Some(original), None)
 }
 
-/// The sensor proxy and its clip mask (same size), both moved to the camera JPEG's framing.
-fn align_cr3_framing(sensor: Rgb32f, clipped: Rgb32f, reference: &Rgb32f) -> (Rgb32f, Rgb32f) {
-    let Some(framing) = estimate_cr3_framing(&sensor, reference) else { return (sensor, clipped) };
-    let apply = |image: &Rgb32f| {
-        let (w, h) = (image.width, image.height);
-        let mut aligned = Rgb32f::new(w, h);
-        for (i, pixel) in aligned.data.iter_mut().enumerate() {
-            let (x, y) = framing.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
-            *pixel = if x >= 0.5 && y >= 0.5 && x <= w as f32 - 0.5 && y <= h as f32 - 0.5 { image.sample_bilinear(x, y) } else { [f32::NAN; 3] };
-        }
-        aligned
-    };
-    (apply(&sensor), apply(&clipped))
+/// Choose CR3 correspondence without copying the unregistered sensor or mask. The
+/// unwarped fallback and warped proposal need separate searches: their pixels and
+/// support rules differ, and the proposal must preserve the accepted fallback.
+pub(super) fn align_cr3_geometry(
+    sensor: Rgb32f,
+    clipped: Rgb32f,
+    reference: &Rgb32f,
+    correction: Option<&lightcraft_develop::EmbeddedLens>,
+) -> (Rgb32f, Rgb32f) {
+    let framing = estimate_cr3_framing(&sensor, reference);
+    let fallback = framing.map(|framing| apply_cr3_framing(&sensor, framing));
+    if let Some(proposed) = correction.and_then(|correction| {
+        align_profile_geometry_against(
+            &sensor,
+            &clipped,
+            reference,
+            correction,
+            lightcraft_geom::Orientation::Normal,
+            Some(fallback.as_ref().unwrap_or(&sensor)),
+        )
+    }) {
+        return proposed;
+    }
+    // The mask is needed only if the fallback wins; when no framing is accepted,
+    // return both original allocations unchanged.
+    let clipped = if let Some(framing) = framing { apply_cr3_framing(&clipped, framing) } else { clipped };
+    (fallback.unwrap_or(sensor), clipped)
+}
+
+/// Move one image to the accepted camera framing, preserving invalid border samples.
+fn apply_cr3_framing(image: &Rgb32f, framing: Cr3Framing) -> Rgb32f {
+    let (w, h) = (image.width, image.height);
+    let mut aligned = Rgb32f::new(w, h);
+    for (i, pixel) in aligned.data.iter_mut().enumerate() {
+        let (x, y) = framing.source((i % w) as f32 + 0.5, (i / w) as f32 + 0.5, w, h);
+        *pixel = if x >= 0.5 && y >= 0.5 && x <= w as f32 - 0.5 && y <= h as f32 - 0.5 { image.sample_bilinear(x, y) } else { [f32::NAN; 3] };
+    }
+    aligned
 }
 
 /// Apply a shared source map to colour or a nonnegative clip mask. Invalid borders

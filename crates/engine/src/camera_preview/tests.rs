@@ -2678,6 +2678,50 @@ fn cr3_framing_only_does_not_report_profile_gate_scores() {
     assert!(super::proxy::geometry_framed_scores().is_none());
 }
 
+/// Rejected registration must preserve both input allocations and pixel bits. A
+/// missing/ineligible warp uses only the fallback search; an eligible warp adds
+/// exactly one search on different (warped) pixels, never repeats either search.
+#[test]
+fn cr3_unchanged_geometry_preserves_allocations_and_bounds_search_work() {
+    for (correction, searches) in [(None, 1), (Some(Default::default()), 1), (Some(synthetic_profile_lens()), 2)] {
+        let sensor = profile_geometry_scene(384, 256);
+        let reference = sensor.clone();
+        let mut mask = Rgb32f::new(sensor.width, sensor.height);
+        mask.data[17] = [1.0; 3];
+        let sensor_ptr = sensor.data.as_ptr();
+        let mask_ptr = mask.data.as_ptr();
+        let mask_bits: Vec<_> = mask.data.iter().map(|p| p.map(f32::to_bits)).collect();
+        super::proxy::take_framing_search_count();
+        let (aligned, aligned_mask) = super::proxy::align_cr3_geometry(sensor, mask, &reference, correction.as_ref());
+        assert_eq!(super::proxy::take_framing_search_count(), searches, "bounded search budget for missing or rejected geometry");
+        assert_eq!(aligned.data.as_ptr(), sensor_ptr, "no accepted framing or warp: retain sensor allocation");
+        assert_eq!(aligned_mask.data.as_ptr(), mask_ptr, "no accepted framing or warp: retain mask allocation");
+        assert_eq!(aligned.data, reference.data);
+        assert_eq!(aligned_mask.data.iter().map(|p| p.map(f32::to_bits)).collect::<Vec<_>>(), mask_bits);
+    }
+}
+
+/// Exercise selection through the same orchestration as file-local and pooled
+/// fitting, including the proposal's comparisons with the framed fallback.
+#[test]
+fn cr3_geometry_selects_matching_profile_with_one_search_per_geometry() {
+    let sensor = profile_geometry_scene(384, 256);
+    let lens = synthetic_profile_lens();
+    let framing = Cr3Framing { scale: 0.95, offset: [0.006, -0.004] };
+    let expected = profile_geometry_target(&sensor, &lens, framing);
+    let mut reference = expected.clone();
+    reference.map_in_place(|p| p.map(|v| v.powf(0.7)));
+    let mask = Rgb32f::new(sensor.width, sensor.height);
+    let expected_mask = profile_geometry_target(&mask, &lens, framing);
+    super::proxy::take_framing_search_count();
+    let (aligned, aligned_mask) = super::proxy::align_cr3_geometry(sensor, mask, &reference, Some(&lens));
+    assert_eq!(super::proxy::take_framing_search_count(), 2);
+    assert!(super::proxy::geometry_gate_scores().is_some(), "proposal passed original geometry gates");
+    assert!(super::proxy::geometry_framed_scores().is_some(), "proposal was compared with fallback on both splits");
+    assert_profile_geometry_mask(&aligned, &aligned_mask, &expected_mask);
+    assert!(geometry_rms(&aligned, &expected) < 0.008, "matching proposal selected despite nonlinear JPEG tone");
+}
+
 /// Return a deliberately strong radial warp for synthetic correspondence tests.
 fn synthetic_profile_lens() -> lightcraft_develop::EmbeddedLens {
     lightcraft_develop::EmbeddedLens {
