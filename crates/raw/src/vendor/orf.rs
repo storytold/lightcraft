@@ -524,6 +524,18 @@ mod tests {
         assert_eq!(decode_noted(&e).black.values, vec![0.0]);
     }
 
+    /// The main note's black level is `Metadata`; no usable level (none, a rejected one, or a body with
+    /// ImageProcessing but without BlackLevel2) is a `Fallback` 0.
+    #[test]
+    fn black_source_follows_the_stated_level() {
+        let source = |e: &[(u16, u16, Vec<u8>)]| decode_noted(e).level_sources.black;
+        let valid = (MN_VALID_BITS, 3, shorts(&[10, 0]));
+        assert_eq!(source(&[(MN_BLACK, 3, shorts(&[32; 4])), valid.clone()]), crate::LevelSource::Metadata);
+        assert_eq!(source(&[]), crate::LevelSource::Fallback);
+        assert_eq!(source(&[(MN_BLACK, 3, shorts(&[256; 4])), valid.clone()]), crate::LevelSource::Fallback);
+        assert_eq!(source(&[bare_image_processing(), (MN_BLACK, 3, shorts(&[32; 4])), valid]), crate::LevelSource::Fallback);
+    }
+
     /// A 12-bit mosaic stored as 16-bit words: `site(cx, cy)` gives the four values of the 2×2 cell at (cx, cy).
     fn mosaic(w: usize, h: usize, site: impl Fn(usize, usize) -> [u16; 4]) -> Vec<u8> {
         (0..w * h).flat_map(|i| site(i % w / 2, i / w / 2)[((i / w) & 1) * 2 + ((i % w) & 1)].to_le_bytes()).collect()

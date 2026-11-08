@@ -426,6 +426,7 @@ mod tests {
         assert_eq!(r.active_area, Rect::new(6, 4, 52, 26));
         assert_eq!(r.crop, Rect::new(0, 0, 52, 26));
         assert_eq!((r.black.mean(), r.white.clone()), (3.0, vec![4095.0]));
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Metadata });
         assert_eq!(r.wb_multipliers, Some([2.0, 1.0, 1.5]));
         // headers only: everything but the samples
         let i = probe_info(&bytes).unwrap();
@@ -439,7 +440,10 @@ mod tests {
         let v = ramp(64, 32, 4096);
         for (strip, name) in [(pack12(&v), "msb"), (pack12_lsb(&v), "lsb")] {
             let bytes = srw(Spec { w: 64, h: 32, compression: 32770, strip, pattern: Some([1, 0, 2, 1]), note: None, picture: None });
-            assert_eq!(decode(&bytes).unwrap().data, RawData::U16(v.clone()), "{name}");
+            let r = decode(&bytes).unwrap();
+            assert_eq!(r.data, RawData::U16(v.clone()), "{name}");
+            // no maker note, no dark border, no plateau
+            assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback }, "{name}");
         }
     }
 
@@ -496,6 +500,7 @@ mod tests {
         assert_eq!(r.bits, 14);
         assert!((15800.0..=15882.0).contains(&r.white[0]), "{:?}", r.white);
         assert_eq!(r.black.mean(), 80.0);
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::MaskedPixels, white: crate::LevelSource::Inferred });
         assert_eq!(r.cfa.unwrap().name(), "RGGB");
     }
 

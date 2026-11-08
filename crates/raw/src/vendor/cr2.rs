@@ -645,5 +645,7 @@ pub(crate) mod tests {
         let r = crate::decode(&bytes).unwrap();
         assert_eq!(r.active_area, Rect::new(left, top, w - left, h - top));
         assert!((13300.0..=13433.0).contains(&r.white[0]), "{:?}", r.white);
+        assert_eq!(r.black.mean(), 1024.0);
+        assert_eq!(r.level_sources, LevelSources { black: LevelSource::MaskedPixels, white: LevelSource::Inferred });
     }
 }

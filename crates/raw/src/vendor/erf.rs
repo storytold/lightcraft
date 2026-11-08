@@ -183,6 +183,8 @@ mod tests {
         assert_eq!(r.data, RawData::U16(px));
         assert_eq!(r.cfa.as_ref().map(Cfa::name).as_deref(), Some("RGGB"));
         assert!(r.wb_multipliers.is_some());
+        // no maker note: no stated black; no plateau
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback });
         assert_eq!(crate::probe_info(&f).unwrap(), r.info());
     }
 

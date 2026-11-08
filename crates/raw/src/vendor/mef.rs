@@ -227,6 +227,8 @@ mod tests {
         assert_eq!(r.data, RawData::U16(px));
         assert_eq!(r.orientation, Orientation::from_exif(6));
         assert_eq!(r.crop, Rect::new(0, 0, 16, 6));
+        // the format's black is a constant 0; no plateau
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback });
         assert_eq!(crate::probe_info(&f).unwrap(), r.info());
     }
 

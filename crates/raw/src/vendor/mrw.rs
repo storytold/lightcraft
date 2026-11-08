@@ -198,6 +198,11 @@ pub(crate) mod tests {
             assert_eq!(r.metadata.make.as_deref(), Some("Minolta Co., Ltd."));
             let wb = r.wb_multipliers.unwrap();
             assert!((wb[0] - 408.0 / 256.0).abs() < 1e-6 && (wb[2] - 450.0 / 256.0).abs() < 1e-6, "{wb:?}");
+            assert_eq!(
+                r.level_sources,
+                crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback },
+                "packed {packed}"
+            );
             assert_eq!(crate::probe_info(&f).unwrap(), r.info());
         }
     }

@@ -415,6 +415,15 @@ pub(crate) enum Mode {
 }
 
 fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
+    let mut raw = decode_format(bytes, mode)?;
+    if mode == Mode::Header {
+        // the samples weren't read, so no source a decoder reported for a measured level holds
+        raw.level_sources = LevelSources::default();
+    }
+    Ok(raw)
+}
+
+fn decode_format(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     match probe(bytes).ok_or(RawError::NotRaw)? {
         RawFormat::Dng => dng::decode(bytes, mode).map(lift_clipped),
         RawFormat::Cr2 => vendor::cr2::decode(bytes, mode),
@@ -688,6 +697,7 @@ pub struct ColorData {
 /// Where a black or white level came from. Rendering ignores it; code that compares or stacks frames can refuse
 /// a [`LevelSource::Fallback`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum LevelSource {
     /// The decoder doesn't say (every decoder that hasn't been annotated yet).
     #[default]
@@ -707,7 +717,9 @@ pub enum LevelSource {
 /// The [`LevelSource`] of a [`RawImage`]'s black and white levels.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LevelSources {
+    /// Where [`RawImage::black`] came from.
     pub black: LevelSource,
+    /// Where [`RawImage::white`] came from.
     pub white: LevelSource,
 }
 
@@ -748,7 +760,8 @@ pub struct RawImage {
     /// validated components are in `opcodes`.
     #[serde(default)]
     pub lens_metadata: LensMetadata,
-    /// Where `black` and `white` came from. Not meaningful in [`Mode::Header`], where measured levels are placeholders.
+    /// Where `black` and `white` came from. Both [`LevelSource::Unknown`] after a headers-only decode
+    /// ([`Mode::Header`]), whose measured levels are placeholders.
     #[serde(default)]
     pub level_sources: LevelSources,
 }

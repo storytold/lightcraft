@@ -1114,6 +1114,27 @@ mod tests {
         assert_eq!(decode(&[]).level_sources.black, crate::LevelSource::Fallback);
     }
 
+    /// A plateau at or below the black level can't be the white: the full range is used, a `Fallback`. A
+    /// headers-only decode reads no samples, so both sources are `Unknown`.
+    #[test]
+    fn white_source_of_a_plateau_below_the_black_and_of_headers_only() {
+        let (w, h) = (90usize, 60usize);
+        let mut px: Vec<u16> = (0..w * h).map(|i| 300 + (i % 7) as u16).collect();
+        px[10 * w..20 * w].fill(2500);
+        let make = |black: u16| {
+            let mut tags = vec![short(CFA_PATTERN, 2), short(BITS, 12), short(RAW_FORMAT, 5)];
+            tags.extend(BLACK_RGB.map(|tag| short(tag, black)));
+            file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))])
+        };
+        let r = crate::decode(&make(100)).unwrap();
+        assert!((2400.0..=2500.0).contains(&r.white_at(0)), "{}", r.white_at(0));
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Inferred });
+        let r = crate::decode(&make(3000)).unwrap();
+        assert_eq!(r.white_at(0), 4095.0);
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Fallback });
+        assert_eq!(crate::decode_with(&make(100), crate::Mode::Header).unwrap().level_sources, crate::LevelSources::default());
+    }
+
     /// Format 8 code tables as two cameras write them (16-bit DC-GH6; 14-bit DC-S5M2, whose codes for categories 15
     /// and 16 start with the 8-bit code of category 14 and are unreachable).
     const TABLE16: [(u32, u32); 17] = [

@@ -380,6 +380,28 @@ pub(super) mod tests {
         }
     }
 
+    /// The black is `Metadata` when the raw IFD states it (`0xf00a`), else a `Fallback` 0; the white is `Inferred`
+    /// from a saturation plateau, else the full range, a `Fallback`.
+    #[test]
+    fn level_sources_follow_the_black_tag_and_the_plateau() {
+        let (w, h) = (64u32, 32u32);
+        let flat: Vec<u16> = (0..w * h).map(|i| 300 + (i % 50) as u16).collect();
+        let mut peaked = flat.clone();
+        peaked[..200].fill(15000);
+        let r = crate::decode(&raf(w, h, 14, pack(&peaked, 16), None, b"")).unwrap();
+        assert_eq!(r.black.mean(), 64.0);
+        // the plateau's lower edge, so everything at saturation maps to >= 1.0
+        assert!((14900.0..=15000.0).contains(&r.white[0]), "{}", r.white[0]);
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Inferred });
+        // the same file with tag 0xf00a renamed to 0xf00b (a lens table, absent here): no black is stated
+        let mut bytes = raf(w, h, 14, pack(&flat, 16), None, b"");
+        let at = bytes.windows(4).position(|b| b == [0x0a, 0xf0, 4, 0]).unwrap();
+        bytes[at] = 0x0b;
+        let r = crate::decode(&bytes).unwrap();
+        assert_eq!((r.black.mean(), r.white[0]), (0.0, 16383.0));
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback });
+    }
+
     #[test]
     fn decodes_all_packings() {
         let (w, h) = (16u32, 6u32);

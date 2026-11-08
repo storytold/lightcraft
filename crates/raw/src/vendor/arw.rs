@@ -866,6 +866,7 @@ mod tests {
         // the YCbCr data sit 512 above the recorded sensor black level; white moves with it
         assert_eq!((full.black.mean(), full.white_at(0)), (1024.0, 16895.0));
         assert_eq!((header.black.mean(), header.white_at(0)), (1024.0, 16895.0));
+        assert_eq!(full.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Fallback });
         let RawData::U16(ref pixels) = full.data else {
             panic!("integer ARW");
         };
@@ -979,6 +980,11 @@ mod tests {
 
     /// A 32767-compressed, 12-bit ARW of `w` x `h` whose single strip is `strip`.
     fn packed_arw(w: u32, h: u32, strip: Vec<u8>) -> Vec<u8> {
+        packed_arw_with(w, h, strip, &[])
+    }
+
+    /// [`packed_arw`] with `extra` raw-IFD entries.
+    fn packed_arw_with(w: u32, h: u32, strip: Vec<u8>, extra: &[(u16, lightcraft_tiff::Value)]) -> Vec<u8> {
         use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
@@ -992,6 +998,9 @@ mod tests {
         raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
         raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
         raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
+        for (tag, v) in extra {
+            raw.set(*tag, v.clone());
+        }
         raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![strip] });
         TiffWriter::default().write(&[raw]).unwrap()
     }
@@ -999,6 +1008,21 @@ mod tests {
     /// Pack 12-bit samples as the file does: `b0 = a & 0xff`, `b1 = a >> 8 | b << 4 & 0xf0`, `b2 = b >> 4`.
     fn pack12(samples: &[u16]) -> Vec<u8> {
         samples.chunks(2).flat_map(|p| [p[0] as u8, (p[0] >> 8) as u8 | ((p[1] & 0xf) << 4) as u8, (p[1] >> 4) as u8]).collect()
+    }
+
+    /// Levels the raw IFD states are `Metadata`; without them the black is the format default and the white the
+    /// samples' full range (no plateau here), both `Fallback`. The YCbCr white is a format constant.
+    #[test]
+    fn level_sources_follow_the_stated_levels() {
+        use lightcraft_tiff::Value;
+        let (w, h) = (8u32, 4u32);
+        let samples: Vec<u16> = (0..w * h).map(|i| (i as u16 * 129 + 130) & 0xfff).collect();
+        let bare = decode(&packed_arw(w, h, pack12(&samples)), Mode::Full).unwrap();
+        assert_eq!(bare.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback });
+        let stated = [(BLACK_LEVEL, Value::Short(vec![128; 4])), (t::WHITE_LEVEL, Value::Short(vec![4000]))];
+        let r = decode(&packed_arw_with(w, h, pack12(&samples), &stated), Mode::Full).unwrap();
+        assert_eq!((r.black.mean(), r.white_at(0)), (128.0, 4000.0));
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Metadata, white: crate::LevelSource::Metadata });
     }
 
     #[test]
