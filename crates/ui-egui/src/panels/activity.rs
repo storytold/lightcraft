@@ -35,6 +35,7 @@ pub fn count_text(t: &TaskInfo) -> String {
     }
 }
 
+/// Format bytes as a decimal megabyte string ("1.2", "42").
 fn megabytes(bytes: u64) -> String {
     let mb = bytes as f64 / 1_048_576.0;
     if mb < 10.0 { format!("{mb:.1}") } else { format!("{:.0}", mb.floor()) }
@@ -81,17 +82,19 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
             // is: the stack would never grow when rows are added. Give it the whole height below its position instead
             // (the scroll area keeps to `max_scroll_h`).
-            let available_h = (ctx.content_rect().bottom() - ui.cursor().top() - 16.0).max(80.0);
+            let has_footer = hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS);
+            let footer_reserve = if has_footer { 44.0 } else { 20.0 };
+            let min_scroll_h = 64.0f32;
+            let space_below = (ctx.content_rect().bottom() - ui.cursor().top() - 16.0).max(0.0);
+            let available_h = space_below.max(min_scroll_h + footer_reserve);
             ui.set_max_height(available_h);
             let frame_resp = frame.show(ui, |ui| {
                 let inner = WIDTH - 2.0 * (f32::from(MARGIN) + 1.0);
                 ui.set_width(inner);
                 ui.spacing_mut().item_spacing.y = 3.0;
                 let mut interactive_hovered = false;
-                let has_footer = hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS);
-                let footer_reserve = if has_footer { 44.0 } else { 20.0 };
-                let max_scroll_h = (available_h - footer_reserve).max(0.0);
-                egui::ScrollArea::vertical().max_height(max_scroll_h).auto_shrink([false, true]).show(ui, |ui| {
+                let max_scroll_h = (available_h - footer_reserve).max(min_scroll_h);
+                egui::ScrollArea::vertical().max_height(max_scroll_h).min_scrolled_height(min_scroll_h).auto_shrink([false, true]).show(ui, |ui| {
                     for (i, task) in tasks.iter().take(shown).enumerate() {
                         if i > 0 {
                             ui.add_space(6.0);
