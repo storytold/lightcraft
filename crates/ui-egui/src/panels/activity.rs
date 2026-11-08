@@ -69,7 +69,6 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let shown = if app.activity_expanded { tasks.len() } else { tasks.len().min(MAX_ROWS) };
     let hidden = tasks.len().saturating_sub(shown);
-    let max_height = (ctx.content_rect().height() - t.top_bar_h - 60.0).max(80.0);
     let mut cancel = None;
     let mut toggle = false;
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6).inner_margin(Margin::same(MARGIN));
@@ -80,15 +79,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         .constrain(true)
         .show(ctx, |ui| {
             // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
-            // is: the stack would never grow when rows are added. Give it the whole height below the top bar instead
-            // (the scroll area keeps to `max_height`).
-            ui.set_max_height((ctx.content_rect().height() - t.top_bar_h - 16.0).max(80.0));
+            // is: the stack would never grow when rows are added. Give it the whole height below its position instead
+            // (the scroll area keeps to `max_scroll_h`).
+            let available_h = (ctx.content_rect().bottom() - ui.cursor().top() - 16.0).max(80.0);
+            ui.set_max_height(available_h);
             let frame_resp = frame.show(ui, |ui| {
                 let inner = WIDTH - 2.0 * (f32::from(MARGIN) + 1.0);
                 ui.set_width(inner);
                 ui.spacing_mut().item_spacing.y = 3.0;
-                let mut cross_hovered = false;
-                egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
+                let mut interactive_hovered = false;
+                let max_scroll_h = (available_h - 44.0).max(60.0);
+                egui::ScrollArea::vertical().max_height(max_scroll_h).auto_shrink([false, true]).show(ui, |ui| {
                     for (i, task) in tasks.iter().take(shown).enumerate() {
                         if i > 0 {
                             ui.add_space(6.0);
@@ -97,7 +98,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         if clicked {
                             cancel = Some(task.id);
                         }
-                        cross_hovered |= hovered;
+                        interactive_hovered |= hovered;
                     }
                 });
                 if hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS) {
@@ -106,15 +107,16 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let r = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
                     register(ui, "activity:more", r.rect);
                     toggle = r.clicked();
+                    interactive_hovered |= r.hovered();
                 }
-                cross_hovered
+                interactive_hovered
             });
             frame_resp.inner
         });
-    let cross_hovered = area_resp.inner;
+    let interactive_hovered = area_resp.inner;
     if area_resp.response.dragged() {
         ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-    } else if cross_hovered {
+    } else if interactive_hovered {
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     } else if area_resp.response.hovered() {
         ctx.set_cursor_icon(egui::CursorIcon::Grab);

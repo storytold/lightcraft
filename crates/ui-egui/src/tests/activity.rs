@@ -589,9 +589,9 @@ fn activity_stack_area_is_movable() {
     h.step();
     assert_eq!(h.last_cursor, egui::CursorIcon::PointingHand, "cancel cross shows pointing hand");
 
-    // Drag the activity stack using ui.drag
-    let start_x = initial_rect.center().x;
-    let start_y = initial_rect.center().y;
+    // Drag the activity stack using ui.drag from non-interactive frame padding
+    let start_x = initial_rect.min.x + 4.0;
+    let start_y = initial_rect.min.y + 4.0;
     let dx = 100.0;
     let dy = 60.0;
     let r = h.request("ui.drag", json!({"x": start_x, "y": start_y, "toX": start_x + dx, "toY": start_y + dy, "steps": 6}), T);
@@ -600,6 +600,20 @@ fn activity_stack_area_is_movable() {
     let updated_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
     assert!((updated_rect.min.x - (initial_rect.min.x + dx)).abs() < 5.0, "stack moved in x: {updated_rect:?}");
     assert!((updated_rect.min.y - (initial_rect.min.y + dy)).abs() < 5.0, "stack moved in y: {updated_rect:?}");
+    assert!(!g.is_cancelled(), "dragging the stack does not cancel the task");
+
+    // Dragging beyond the viewport edge is constrained on screen
+    let content = h.view.ctx.content_rect();
+    let r = h.request(
+        "ui.drag",
+        json!({"x": updated_rect.min.x + 4.0, "y": updated_rect.min.y + 4.0, "toX": content.max.x + 500.0, "toY": content.max.y + 500.0, "steps": 6}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    let constrained_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(constrained_rect.max.x <= content.max.x + 1.0, "constrained in x: {constrained_rect:?} vs {content:?}");
+    assert!(constrained_rect.max.y <= content.max.y + 1.0, "constrained in y: {constrained_rect:?} vs {content:?}");
 }
 
 #[test]
