@@ -138,21 +138,41 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "only photos from files can be relinked"));
     }
     let abs = abs.to_string_lossy().to_string();
-    // the file may differ from the one imported (another export, a raw that decodes now or not):
-    // its size, dimensions and preview-only state follow it
-    let mut ops = vec![relink_op(id, &abs)];
-    if s.media.file_probe.is_some()
-        && let (Some(Ok(info)), Some(ph)) = (crate::import::probe_paths(s, std::slice::from_ref(&abs)).pop(), s.catalog.photo(id))
-    {
-        ops.extend(crate::cmd::convert::content_op(id, ph, info));
-    }
+    let mut changed = Vec::new();
+    let ops = relink_ops(s, id, &abs, &mut changed);
     let op = match <[Op; 1]>::try_from(ops) {
         Ok([op]) => op,
         Err(ops) => Op::Batch { ops },
     };
     s.commit("Relink Photo", op)?;
     s.media.forget(id);
+    for id in changed {
+        s.media.forget(id);
+    }
     Ok(json!({"id": id.0, "path": abs}))
+}
+
+/// The ops that point photo `id` at `path` and bring its record up to date with the file there,
+/// read when the session has a file probe: the file may differ from the one imported (another
+/// export, a raw that decodes now or not), so its size, dimensions and preview-only state follow
+/// it; a record made without its file (a Lightroom catalog import whose original wasn't there) gets
+/// the camera and exposure fields it never had (issue #3965), and the lens data and as-shot white
+/// balance the file carries. `changed` gets the other photos whose records change (virtual copies).
+pub(crate) fn relink_ops(s: &Session, id: PhotoId, path: &str, changed: &mut Vec<PhotoId>) -> Vec<Op> {
+    let mut ops = vec![relink_op(id, path)];
+    if s.media.file_probe.is_some()
+        && let Some(Ok(info)) = crate::import::probe_paths(s, std::slice::from_ref(&path.to_string())).pop()
+    {
+        crate::cmd::convert::reload_ops(&s.catalog, id, &info, &mut ops, changed);
+    }
+    ops
+}
+
+/// A record whose file was never read: no camera and no exposure information (a Lightroom catalog
+/// import lists an original that isn't there without reading anything).
+fn never_read(p: &Photo) -> bool {
+    let m = &p.meta;
+    m.camera.is_empty() && m.shutter.is_empty() && m.aperture.is_none() && m.iso.is_none() && m.focal_mm.is_none()
 }
 
 /// The stored content hash of a photo, without the `:dupN` suffix duplicates get.
@@ -475,9 +495,19 @@ fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
     // ambiguous photos relinked meanwhile aren't missing any more
     missing = missing.saturating_sub(planned - ambiguous.len());
     if !found.is_empty() {
-        s.commit("Find Missing Photos", Op::Batch { ops: found.iter().map(|f| relink_op(f.id, &f.to)).collect() })?;
-        for f in &found {
-            s.media.forget(f.id);
+        // a record that was never read gets what its file says (issue #3965); the rest, imported
+        // from their files, need only the new path (reading every found file would hash them all)
+        let mut changed = Vec::new();
+        let ops = found
+            .iter()
+            .flat_map(|f| match s.catalog.photo(f.id) {
+                Some(p) if never_read(p) => relink_ops(s, f.id, &f.to, &mut changed),
+                _ => vec![relink_op(f.id, &f.to)],
+            })
+            .collect();
+        s.commit("Find Missing Photos", Op::Batch { ops })?;
+        for id in found.iter().map(|f| f.id).chain(changed) {
+            s.media.forget(id);
         }
     }
     Ok(FindPlan { found, missing, ambiguous }.to_json())

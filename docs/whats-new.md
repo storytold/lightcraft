@@ -38,6 +38,13 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### A found photo shows its exposure
+- A photo a Lightroom catalog import listed without its file (the original wasn't where the catalog said) showed "No
+  exposure information" even after Locate Missing File or Find Missing Photos found it (issue #3965). Finding the
+  file now reads its camera, lens, exposure and capture time, as an import does, along with its size and lens data;
+  undo takes the record back as before. Photos imported from their files already had them and are only pointed at the
+  new path.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
