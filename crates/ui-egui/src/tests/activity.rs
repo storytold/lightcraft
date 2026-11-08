@@ -576,11 +576,18 @@ fn rows_added_later_grow_the_stack() {
 #[test]
 fn activity_stack_area_is_movable() {
     let mut h = demo();
-    let _g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
     wait_visible(&mut h);
     let id = egui::Id::unique("activity-stack");
     let initial_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
     assert!(initial_rect.min.x >= 7.0 && initial_rect.min.x <= 9.0, "default pos at x=8: {initial_rect:?}");
+
+    // Hover cancel cross -> PointingHand
+    let cancel_id = format!("activity:cancel:{}", g.id());
+    let r = h.request("ui.hoverWidget", json!({"id": cancel_id}), T);
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::PointingHand, "cancel cross shows pointing hand");
 
     // Drag the activity stack using ui.drag
     let start_x = initial_rect.center().x;

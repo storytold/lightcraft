@@ -83,18 +83,21 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             // is: the stack would never grow when rows are added. Give it the whole height below the top bar instead
             // (the scroll area keeps to `max_height`).
             ui.set_max_height((ctx.content_rect().height() - t.top_bar_h - 16.0).max(80.0));
-            frame.show(ui, |ui| {
+            let frame_resp = frame.show(ui, |ui| {
                 let inner = WIDTH - 2.0 * (f32::from(MARGIN) + 1.0);
                 ui.set_width(inner);
                 ui.spacing_mut().item_spacing.y = 3.0;
+                let mut cross_hovered = false;
                 egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
                     for (i, task) in tasks.iter().take(shown).enumerate() {
                         if i > 0 {
                             ui.add_space(6.0);
                         }
-                        if row(ui, &t, task, inner) {
+                        let (clicked, hovered) = row(ui, &t, task, inner);
+                        if clicked {
                             cancel = Some(task.id);
                         }
+                        cross_hovered |= hovered;
                     }
                 });
                 if hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS) {
@@ -104,10 +107,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     register(ui, "activity:more", r.rect);
                     toggle = r.clicked();
                 }
+                cross_hovered
             });
+            frame_resp.inner
         });
+    let cross_hovered = area_resp.inner;
     if area_resp.response.dragged() {
         ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if cross_hovered {
+        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     } else if area_resp.response.hovered() {
         ctx.set_cursor_icon(egui::CursorIcon::Grab);
     }
@@ -125,9 +133,10 @@ pub(crate) fn cancel(app: &mut LightcraftApp, id: u64) {
     let _ = app.session.execute("activity.cancel", &json!({"id": id}));
 }
 
-/// One task: name and ✕, the bar, the detail line. True when ✕ was clicked.
-fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
+/// One task: name and ✕, the bar, the detail line. Returns `(cancel_clicked, cross_hovered)`.
+fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> (bool, bool) {
     let mut clicked = false;
+    let mut cross_hovered = false;
     let r = ui.vertical(|ui| {
         ui.set_width(width);
         ui.horizontal(|ui| {
@@ -143,6 +152,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
                 crate::widgets::announce(&resp, crate::i18n::tr("Cancel"));
                 paint(ui.painter(), rect.shrink(2.0), Icon::Close, if resp.hovered() { t.text } else { t.icon });
                 register(ui, format!("activity:cancel:{}", task.id), rect);
+                cross_hovered = resp.hovered();
                 clicked = resp.on_hover_text(tr("Cancel")).clicked();
             }
         });
@@ -153,7 +163,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
         }
     });
     register(ui, format!("activity:row:{}", task.id), r.response.rect);
-    clicked
+    (clicked, cross_hovered)
 }
 
 /// The progress bar, named after its task for screen readers; while the amount of work isn't
