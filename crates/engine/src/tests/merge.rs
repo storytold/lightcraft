@@ -524,8 +524,15 @@ fn single_collapsed_stack_enables_all_three_merge_actions() {
     let top = ids[0];
     let loose = s.catalog.alloc_photo_id();
     let loose_name = "LOOSE.dng".to_string();
-    let loose_photo =
-        lightcraft_catalog::Photo::new(loose, lightcraft_catalog::Source::File { path: loose_name.clone() }, &loose_name, "DNG", 96, 64, "2026-01-01T00:00:00");
+    let loose_photo = lightcraft_catalog::Photo::new(
+        loose,
+        lightcraft_catalog::Source::File { path: loose_name.clone() },
+        &loose_name,
+        "DNG",
+        96,
+        64,
+        "2026-01-01T00:00:00",
+    );
     s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(loose_photo) }).unwrap();
     assert_eq!(s.expanded_merge_count(&[top]), 4, "one selected id represents the stack's members");
     assert_eq!(s.expanded_merge_count(&[loose]), 1, "a single loose photo still counts once");
@@ -537,6 +544,31 @@ fn single_collapsed_stack_enables_all_three_merge_actions() {
     }
     let (kind, _) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
     assert!(!s.merge_selection_ready(&kind, &[loose]), "a single loose photo does not enable a merge");
+}
+
+/// `plan_merge` refuses a selection holding more than one group even when one group is
+/// undersized, instead of silently dropping it and merging only the valid group.
+#[test]
+fn plan_merge_refuses_undersized_plus_valid_group() {
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for i in 0..3 {
+        let id = s.catalog.alloc_photo_id();
+        let name = format!("IMG_{i}.dng");
+        let p =
+            lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path: name.clone() }, &name, "DNG", 96, 64, "2026-01-01T00:00:00");
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        ids.push(id);
+    }
+    let demo = s.catalog.alloc_photo_id();
+    let demo_photo =
+        lightcraft_catalog::Photo::new(demo, lightcraft_catalog::Source::Demo { scene: 1 }, "demo.jpg", "JPEG", 96, 64, "2026-01-01T00:00:00");
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(demo_photo) }).unwrap();
+    let op = s.catalog.group_ops(ids[0], &ids, true).unwrap();
+    s.catalog.apply(op).unwrap();
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    let err = s.plan_merge(kind, finish, &[ids[0], demo], true).err().unwrap().to_string();
+    assert!(err.contains("more than one merge group"), "{err}");
 }
 
 /// A preview reports an undersized group as `skipped`, like `merge_now` does, instead of
