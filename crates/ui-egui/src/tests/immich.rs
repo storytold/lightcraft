@@ -98,7 +98,12 @@ fn route(head: &str) -> (u16, &'static str, Vec<u8>) {
         "/api/search/metadata" => (200, "application/json", ASSET.as_bytes().to_vec()),
         "/api/assets/a1" => (200, "application/json", r#"{"id":"a1","checksum":"c1","originalFileName":"IMG_1.JPG"}"#.as_bytes().to_vec()),
         "/api/assets/a1/thumbnail" => png(7).map_or((404, "text/plain", Vec::new()), |b| (200, "image/png", b)),
-        "/api/assets/a1/original" => png(9).map_or((404, "text/plain", Vec::new()), |b| (200, "image/png", b)),
+        // the a1 download is slow on purpose: the e2e test reopens the browser while the import
+        // runs — reopening must refuse, and a fast completion would make that window untestable
+        "/api/assets/a1/original" => {
+            std::thread::sleep(Duration::from_millis(800));
+            png(9).map_or((404, "text/plain", Vec::new()), |b| (200, "image/png", b))
+        }
         // a file the library cannot import: the download works, the bytes are not an image
         "/api/assets/b1" => (200, "application/json", r#"{"id":"b1","checksum":"c2","originalFileName":"BAD.JPG"}"#.as_bytes().to_vec()),
         "/api/assets/b1/thumbnail" => (404, "text/plain", Vec::new()),
@@ -164,6 +169,14 @@ fn browse_select_and_import_round_trip_through_the_dialog() {
     let progressed =
         h.step_until(SETTLE, |h| h.app.session.immich_import.as_ref().is_some() || h.app.immich_task.as_ref().is_some_and(|t| t.import_done));
     assert!(progressed, "the import started");
+    // reopening the browser while the import runs is refused — it must never silently cancel it
+    let running = h.step_until(SETTLE, |h| h.app.session.immich_import.as_ref().is_some_and(|j| j.finished.is_none()));
+    assert!(running, "the import is in flight");
+    let r = h.request("engine.execute", json!({"command": "file.importImmich"}), T);
+    assert_eq!(r["ok"], false, "reopening while an import runs is refused: {r}");
+    assert!(r["error"].as_str().is_some_and(|e| e.contains("running")), "{r}");
+    assert!(h.app.session.immich_import.as_ref().is_some_and(|j| j.finished.is_none()), "the running import was not cancelled");
+    // and the import still lands once it is given the time
     let done = h.step_until(SETTLE, |h| h.app.session.catalog.len() == 1);
     assert!(done, "the download and library.import completed");
     // the main window says what landed, even with the dialog already closed
@@ -342,7 +355,25 @@ fn the_integrations_tab_adds_a_server_from_its_form() {
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.session.immich_servers.len(), 1, "the server was added");
     assert_eq!(h.app.session.immich_servers[0].url, base);
+    assert_eq!(
+        h.app.session.immich_servers[0].name,
+        base.split("//").nth(1).map(|rest| rest.split('/').next().unwrap_or_default()).unwrap_or_default(),
+        "without a name, the address's host is the name"
+    );
     assert!(!h.app.session.immich_servers[0].verified, "a fresh server still needs its test");
+
+    // a name the user typed overrides the host — and lets a second server on the same host
+    // (a reverse-proxy prefix) use a distinct name
+    h.view.ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::unique("immich-settings-name"), "Work".to_string());
+        d.insert_temp(egui::Id::unique("immich-settings-url"), format!("{base}/photos"));
+        d.insert_temp(egui::Id::unique("immich-settings-key"), "k".to_string());
+    });
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": "button:immichSettingsAdd"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.immich_servers.len(), 2, "two prefixes of one host, two servers: {r}");
+    assert_eq!(h.app.session.immich_servers[1].name, "Work", "the typed name is used: {r}");
     h.settle(SETTLE);
     let _ = std::fs::remove_dir_all(&lib);
 }

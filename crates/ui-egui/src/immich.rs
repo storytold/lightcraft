@@ -173,7 +173,10 @@ enum Event {
         result: Result<(Vec<ImmichAsset>, bool), String>,
     },
     /// A thumbnail's decoded pixels; `None` = fetch or decode failed (noted, not retried).
+    /// `generation` is the server it was asked against — a late answer from a server we left is
+    /// not mixed into the current one's cache.
     Thumb {
+        generation: u64,
         id: String,
         image: Option<lightcraft_raster::Rgba8>,
     },
@@ -265,6 +268,7 @@ impl ImmichTask {
         }
         let tx = self.tx.clone();
         let (id, url, key) = (id.to_string(), self.server_url.clone(), self.server_key.clone());
+        let generation = self.generation.load(Ordering::Relaxed);
         // the guard moves into the worker and releases the slot when the thread ends; the event
         // it sends only carries the pixels, so a thread that dies early still gives its slot back
         let slot = ThumbSlot { busy: self.thumb_busy.clone() };
@@ -277,7 +281,7 @@ impl ImmichTask {
             })
             .flatten()
             .ok();
-            let _ = tx.send(Event::Thumb { id, image });
+            let _ = tx.send(Event::Thumb { generation, id, image });
             drop(slot);
         });
         // a failed spawn drops the closure (and the guard) right here — the slot is released
@@ -378,9 +382,13 @@ fn start_search(task: &mut ImmichTask, query: SearchQuery, ctx: &egui::Context) 
     }
 }
 
-/// Open the dialog (File ▸ Import from Immich…). A running import is stopped first; the dialog
-/// opens fresh.
+/// Open the dialog (File ▸ Import from Immich…). A running import is left running — the browser
+/// must not silently cancel a transfer a user is watching — so opening it while one is in flight
+/// is refused (cancel from the activity stack, or wait); otherwise the dialog opens fresh.
 pub fn open(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    if app.session.immich_import.as_ref().is_some_and(|j| j.finished.is_none()) {
+        return Err(crate::i18n::tr("An Immich import is running — wait for it to finish, or cancel it.").to_string());
+    }
     close(app);
     let wanted = p.get("server").and_then(Value::as_str).unwrap_or("").trim().to_string();
     let server = if wanted.is_empty() {
@@ -425,12 +433,6 @@ pub fn close(app: &mut LightcraftApp) {
         job.abandon();
     }
     app.immich_task.take();
-}
-
-/// Cancel the import in progress: in-flight transfers stop at the next chunk, no new file is
-/// started, and the downloads that are already complete still join the library.
-pub fn cancel(app: &mut LightcraftApp) {
-    app.session.cancel_immich_import();
 }
 
 /// Start importing the selected assets (the dialog's Import button / `ui.dialog.confirm`); the
@@ -524,9 +526,12 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Err(e) => set_dialog_lines(app, Some(e), None),
                 }
             }
-            Event::Thumb { id, image } => {
+            Event::Thumb { generation, id, image } => {
                 // the budget slot was already released by the worker's guard — applying the
                 // event must not touch the counter again
+                if generation != task.generation.load(Ordering::Relaxed) {
+                    continue;
+                }
                 match image {
                     Some(img) => {
                         let color = std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.as_bytes()));
@@ -870,6 +875,10 @@ fn asset_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog, 
     let img = Rect::from_min_size(rect.min, vec2(rect.width(), rect.width()));
     let resp = ui.interact(img, egui::Id::unique(("immich-cell", i)), Sense::click());
     register(ui, format!("immich:{i}"), img);
+    let on = d.checked.get(i).copied().unwrap_or(false);
+    // screen readers name the cell with its file and its state (the grid's own cells do the same)
+    let spoken = format!("{} — {}", a.file_name, if on { crate::i18n::tr("selected for import") } else { crate::i18n::tr("not selected") });
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, &spoken));
     let p = ui.painter();
     p.rect_filled(img, 3.0, Color32::from_gray(30));
     // thumbnail (a worker job; the grid only asks for the cells in view)
@@ -883,7 +892,6 @@ fn asset_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImmichDialog, 
             p.image(tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
     }
-    let on = d.checked.get(i).copied().unwrap_or(false);
     if on {
         p.rect_stroke(img, 3.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
     }
@@ -998,14 +1006,25 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         });
     }
 
-    // the add form: the address and the key the user created in Immich (never shown, never saved
-    // anywhere but the engine's prefs once Add succeeds)
-    let (url_id, key_id) = (egui::Id::unique("immich-settings-url"), egui::Id::unique("immich-settings-key"));
+    // the add form: an optional name, the address and the key the user created in Immich (never
+    // shown, never saved anywhere but the engine's prefs once Add succeeds). The name is what the
+    // menu and this tab show, and a reverse-proxied prefix means one host can be several servers:
+    // without a name, two prefixes of the same host would collide ("a server named `host` already
+    // exists").
+    let (name_id, url_id, key_id) =
+        (egui::Id::unique("immich-settings-name"), egui::Id::unique("immich-settings-url"), egui::Id::unique("immich-settings-key"));
+    let mut add_name = ui.data(|d| d.get_temp::<String>(name_id)).unwrap_or_default();
     let mut add_url = ui.data(|d| d.get_temp::<String>(url_id)).unwrap_or_default();
     let mut add_key = ui.data(|d| d.get_temp::<String>(key_id)).unwrap_or_default();
     let mut add_clicked = false;
     heading(ui, t, "Add a server");
     hint(ui, t, "Create the key in Immich under Settings ▸ API keys.");
+    row(ui, t, "Name", |ui| {
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut add_name).hint_text(crate::i18n::tr("Optional — the address's host by default")).desired_width(300.0),
+        );
+        register(ui, "field:immichSettingsName", r.rect);
+    });
     row(ui, t, "Server address", |ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut add_url).hint_text("https://photos.example.com:2283").desired_width(300.0));
         register(ui, "field:immichSettingsUrl", r.rect);
@@ -1034,6 +1053,9 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 let c = Client::new(&url, &key, Limits::default()).map_err(|e| e.to_string())?;
                 let pong = c.ping().map_err(|e| e.to_string())?;
                 let v = c.version().map_err(|e| e.to_string())?;
+                // ping and version are public endpoints on Immich: a passing test has to prove
+                // the key works — the authenticated album list does
+                c.albums().map_err(|e| e.to_string())?;
                 Ok(format!("{pong} — Immich {v}"))
             })
             .flatten();
@@ -1058,16 +1080,22 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     if add_clicked {
-        match app.run("immich.servers", json!({ "add": { "url": add_url.trim(), "apiKey": add_key.trim() } })) {
+        let mut add = json!({ "url": add_url.trim(), "apiKey": add_key.trim() });
+        if !add_name.trim().is_empty() {
+            add["name"] = json!(add_name.trim());
+        }
+        match app.run("immich.servers", json!({ "add": add })) {
             Ok(_) => {
                 add_url.clear();
                 add_key.clear();
+                add_name.clear();
                 settings_message(ui, true, crate::i18n::tr("Added. Test it to unlock Import from Immich.").to_string());
             }
             Err(e) => settings_message(ui, false, e),
         }
     }
     ui.data_mut(|d| {
+        d.insert_temp(name_id, add_name);
         d.insert_temp(url_id, add_url);
         d.insert_temp(key_id, add_key);
     });
