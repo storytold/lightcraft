@@ -471,7 +471,8 @@ fn committed_wal_len(main: &[u8], wal: &[u8]) -> Result<usize, String> {
 /// catalog's volume, resolved against the catalog's folder, if that is a folder. Both paths are
 /// looked at only when [`crate::doc_path::resolve`] follows them.
 fn relocated_root(absolute: &str, relative: &str, catalog: &Path, shares: &NetworkShares) -> Option<PathBuf> {
-    if relative.is_empty()
+    if shares.excludes_network_root(absolute, catalog)
+        || relative.is_empty()
         || !Path::new(relative).is_relative()
         || shares.resolve(absolute, Some(catalog)).is_ok_and(|p| crate::doc_path::original_metadata(&p).is_ok_and(|m| m.is_dir()))
     {

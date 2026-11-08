@@ -321,6 +321,7 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
     }
 
     let undo0 = s.undo.len();
+    classify_rechecked_originals(s, &mut prepared);
     prepared.normal.revalidate_add(s);
     let options = ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, ..ImportOptions::default() };
     let now = prepared.now.clone();
@@ -340,6 +341,40 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
     let path = prepared.token.library_dir().map(|dir| dir.join("Interop/lightroom-index.json"));
     let bytes = if path.is_some() { Some(serde_json::to_vec(&applied.index).map_err(|e| error(e.to_string()))?) } else { None };
     Ok(LightroomCompletion { report: applied.report, finalization: LightroomArchiveFinalization { path, bytes } })
+}
+
+fn classify_rechecked_originals(s: &crate::Session, prepared: &mut PreparedLightroom) {
+    // A share can go offline after original_paths. Only a current record makes that failure an
+    // offline match; a detected redirect must never retain or promote a path through catalog apply.
+    let known = std::cell::OnceCell::new();
+    let mut redirected = HashSet::new();
+    prepared.normal.retain_original_errors(|path, error| {
+        let key = normalize(path);
+        if crate::doc_path::is_network_redirect(error) {
+            redirected.insert(key);
+            true
+        } else if known
+            .get_or_init(|| {
+                let paths: HashSet<_> = s
+                    .catalog
+                    .photos()
+                    .filter(|p| p.copy_of.is_none())
+                    .filter_map(|p| match &p.source {
+                        lightcraft_catalog::Source::File { path } => Some(normalize(path)),
+                        _ => None,
+                    })
+                    .collect();
+                paths
+            })
+            .contains(&key)
+        {
+            prepared.missing_sources.insert(key);
+            false
+        } else {
+            true
+        }
+    });
+    refuse_redirected(&mut prepared.data, &redirected);
 }
 
 /// Collect unique accessible originals, preserve missing paths and mark refused redirects on every copy.
@@ -378,6 +413,14 @@ fn original_paths(data: &mut CatalogImport, cancel: &AtomicBool) -> crate::Resul
             missing.insert(key);
         }
     }
+    refuse_redirected(data, &redirected);
+    Ok((paths, missing))
+}
+
+fn refuse_redirected(data: &mut CatalogImport, redirected: &HashSet<String>) {
+    if redirected.is_empty() {
+        return;
+    }
     for photo in &mut data.photos {
         if redirected.contains(&normalize(&photo.path)) {
             let why = "network originals through reparse points are not imported";
@@ -385,7 +428,6 @@ fn original_paths(data: &mut CatalogImport, cancel: &AtomicBool) -> crate::Resul
             data.warnings.push(format!("image {}: {why}", photo.source_id));
         }
     }
-    Ok((paths, missing))
 }
 
 fn normalize(path: &str) -> String {
@@ -396,6 +438,68 @@ fn normalize(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An offline recheck is missing only if catalog application can still match the current record.
+    #[test]
+    fn a_network_source_lost_between_passes_is_classified_against_current_records() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        for (initial, current) in [(true, true), (false, true), (true, false)] {
+            let mut session = crate::Session::new();
+            let path = r"\\localhost\LightCraft-Review-Nonexistent\photo.jpg";
+            let mut photo = Photo::new(PhotoId(1), Source::File { path: path.into() }, "photo.jpg", "JPG", 1, 1, "2026-01-01T00:00:00");
+            photo.local = true;
+            if initial {
+                session.catalog.apply(Op::AddPhoto { photo: Box::new(photo.clone()) }).unwrap();
+            }
+            let mut job = crate::import::ImportJob::new(&mut session, ImportOptions::default()).unwrap();
+            job.check_network_links();
+            let mut prepared = prepared_for(&session, path, 4);
+            prepared.missing_sources.clear(); // the first pass saw the original; the second no longer can
+            prepared.normal = job.prepare_files(vec![path.into()], &AtomicBool::new(false));
+            if current && !initial {
+                session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+            } else if initial && !current {
+                session.catalog.apply(Op::RemovePhoto { id: PhotoId(1) }).unwrap();
+            }
+            let report = commit_prepared(&mut session, prepared).unwrap().report;
+            if current {
+                assert_eq!(report["failed"], serde_json::json!([]));
+                assert_eq!(report["missing"], serde_json::json!([path]));
+                assert!(!session.catalog.photo(PhotoId(1)).unwrap().local);
+            } else {
+                assert_eq!(report["failed"].as_array().unwrap().len(), 1, "a stale worker snapshot cannot hide a failure");
+            }
+        }
+    }
+
+    /// A redirect discovered by the second pass must not promote an existing Local record.
+    #[cfg(windows)]
+    #[test]
+    fn a_redirect_between_passes_cannot_promote_a_known_photo() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        let f = crate::doc_path::network::tests::Fixture::new();
+        let Some(unc) = f.unc().filter(|p| std::fs::metadata(p).is_ok()) else {
+            lightcraft_testkit::skip!(System, "loopback administrative share unavailable");
+            return;
+        };
+        let path = unc.join("selected/safe/photo.jpg").to_string_lossy().into_owned();
+        std::fs::write(f.0.join("selected/safe/photo.jpg"), b"fixture").unwrap();
+        let mut session = crate::Session::new();
+        let mut photo = Photo::new(PhotoId(1), Source::File { path: path.clone() }, "photo.jpg", "JPG", 1, 1, "2026-01-01T00:00:00");
+        photo.local = true;
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let before = session.catalog.to_snapshot();
+        let mut prepared = prepared_for(&session, &path, 4);
+        prepared.missing_sources.clear();
+        let mut job = crate::import::ImportJob::new(&mut session, ImportOptions::default()).unwrap();
+        job.check_network_links();
+        std::fs::rename(f.0.join("selected/safe"), f.0.join("selected/before")).unwrap();
+        junction::create(f.0.join("unselected"), f.0.join("selected/safe")).unwrap();
+        prepared.normal = job.prepare_files(vec![path], &AtomicBool::new(false));
+        let report = commit_prepared(&mut session, prepared).unwrap().report;
+        assert_eq!(report["failed"].as_array().unwrap().len(), 1);
+        assert_eq!(session.catalog.to_snapshot(), before);
+    }
 
     fn empty_data() -> CatalogImport {
         CatalogImport {

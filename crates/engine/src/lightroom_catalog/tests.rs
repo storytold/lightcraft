@@ -1,5 +1,29 @@
 use super::*;
 use lightcraft_geom::CropGeometry;
+
+/// Each fixture owns only its uniquely created file, including when an assertion unwinds.
+struct CatalogFixture(PathBuf);
+
+impl CatalogFixture {
+    fn new(bytes: &[u8]) -> Self {
+        use std::io::Write;
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("lc-source-review-{}-{stamp}-{}.lrcat", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+        let fixture = Self(path);
+        file.write_all(bytes).unwrap();
+        fixture
+    }
+}
+
+impl Drop for CatalogFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 fn row(v: Value) -> Row {
     serde_json::from_value(v).unwrap()
 }
@@ -1672,8 +1696,8 @@ fn discovers_distinct_network_sources_without_reading_originals() {
     ];
     let roots = paths.iter().enumerate().map(|(i, path)| vec![I(i as i64 + 1), T((*path).into())]).collect();
     let bytes = native_catalog_rows(&[("AgLibraryRootFolder", "id_local INTEGER PRIMARY KEY, absolutePath TEXT", roots)], None);
-    let source = std::env::temp_dir().join(format!("lightcraft-discover-shares-{}.lrcat", std::process::id()));
-    std::fs::write(&source, &bytes).unwrap();
+    let fixture = CatalogFixture::new(&bytes);
+    let source = fixture.0.clone();
     let expected = vec![r"\\192.0.2.1\Photos", r"\\192.0.2.1\photos-private", r"\\192.0.2.2\archive"];
     assert_eq!(network_sources(&source).unwrap(), expected);
     let mut session = crate::Session::new();
@@ -1682,16 +1706,15 @@ fn discovers_distinct_network_sources_without_reading_originals() {
     assert_eq!(result["networkSources"], json!(expected));
     assert_eq!(session.catalog.to_snapshot(), before);
     assert_eq!(std::fs::read(&source).unwrap(), bytes);
-    std::fs::remove_file(source).unwrap();
 }
 
 /// Selecting a NAS share changes only this read's path policy; the local catalog is untouched.
 /// `relativePathFromCatalog` is empty, so this reader test performs no network filesystem calls.
 #[test]
 fn a_local_catalog_can_reference_an_explicitly_selected_network_share() {
-    let source = std::env::temp_dir().join(format!("lightcraft-selected-share-{}.lrcat", std::process::id()));
     let bytes = native_catalog(&photo_tables((r"\\192.0.2.1\photos\", "")));
-    std::fs::write(&source, &bytes).unwrap();
+    let fixture = CatalogFixture::new(&bytes);
+    let source = fixture.0.clone();
     let chosen = NetworkShares::new(vec![r"\\192.0.2.1\photos\chosen-folder".into()]).unwrap();
     let catalog = read_with_network_shares(&source, &chosen).unwrap();
     assert_eq!(catalog.photos.len(), 1);
@@ -1704,7 +1727,6 @@ fn a_local_catalog_can_reference_an_explicitly_selected_network_share() {
     assert!(matches!(read_with_network_shares(&source, &other).unwrap().photos[0].original, Original::Refused(_)));
     assert!(matches!(read(&source).unwrap().photos[0].original, Original::Refused(_)), "permission must not persist in the catalog");
     assert_eq!(std::fs::read(&source).unwrap(), bytes);
-    std::fs::remove_file(source).unwrap();
 }
 
 #[test]
@@ -1807,15 +1829,24 @@ fn discovery_lists_more_than_thirty_two_shares() {
     use SqlValue::Text;
     let roots: Vec<_> = (0..40).map(|i| vec![Text(format!(r"\\nas\s{i:02}"))]).collect();
     let bytes = native_catalog_rows(&[("AgLibraryRootFolder", "absolutePath TEXT", roots)], None);
-    let source = std::env::temp_dir().join(format!("lc-many-shares-{}.lrcat", std::process::id()));
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&source).unwrap();
-    std::io::Write::write_all(&mut file, &bytes).unwrap();
-    drop(file);
+    let fixture = CatalogFixture::new(&bytes);
+    let source = fixture.0.clone();
     let shares = network_sources(&source).unwrap();
     assert_eq!(shares.len(), 40);
     assert!(NetworkShares::new(shares[..32].to_vec()).is_ok());
     assert!(NetworkShares::new(Vec::new()).is_ok());
-    std::fs::remove_file(source).unwrap();
+}
+
+/// Explicitly unchecked roots stay refused even when a catalog-relative folder exists locally.
+#[test]
+fn unchecked_network_roots_cannot_use_a_catalog_relative_fallback() {
+    let fixture = CatalogFixture::new(&native_catalog(&photo_tables((r"\\nas\é\", "./"))));
+    let policy = NetworkShares::new(vec![r"\\nas\É".into()]).unwrap();
+    let catalog = read_with_network_shares(&fixture.0, &policy).unwrap();
+    assert!(matches!(catalog.photos[0].original, Original::Refused(_)));
+    assert!(!catalog.warnings.iter().any(|w| w.contains("using ")));
+    // The default document policy still supports relocating catalogs; only explicit refusals block it.
+    assert_eq!(read(&fixture.0).unwrap().photos[0].original, Original::Local);
 }
 
 /// Cancelling before discovery does not even try to open the catalog.

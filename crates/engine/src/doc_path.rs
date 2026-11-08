@@ -63,6 +63,11 @@ impl NetworkShares {
         &self.paths
     }
 
+    /// A deliberately unchecked source cannot gain consent through a catalog-relative fallback.
+    pub(crate) fn excludes_network_root(&self, root: &str, document: &Path) -> bool {
+        self.explicit && network_share(root).is_some() && self.resolve(root, Some(document)) == Err(NotFollowed::Refused(Refused::Network))
+    }
+
     /// Preserve the distinction between the default document policy and an explicit empty selection.
     pub fn param_value(&self) -> serde_json::Value {
         if self.explicit { serde_json::json!(self.paths) } else { serde_json::Value::Null }
@@ -201,6 +206,17 @@ pub(crate) fn read_original_text(path: impl AsRef<Path>) -> std::io::Result<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Consent stays lexical: an unchecked non-ASCII alias cannot borrow the catalog share's grant.
+    #[test]
+    fn unchecked_unicode_share_aliases_cannot_be_relocated() {
+        let catalog = Path::new(r"\\nas\É\Catalog\photos.lrcat");
+        let selected = NetworkShares::new(vec![r"\\nas\É".into()]).unwrap();
+        assert!(selected.excludes_network_root(r"\\nas\é\Photos", catalog));
+        assert!(!selected.excludes_network_root(r"\\NAS\É\Photos", catalog));
+        assert!(!NetworkShares::default().excludes_network_root(r"\\nas\é\Photos", catalog));
+        assert!(NetworkShares::new(vec![]).unwrap().excludes_network_root(r"\\nas\É\Photos", catalog));
+    }
 
     #[test]
     /// Explicit grants match complete server/share pairs and never authorize devices, URLs or traversal.

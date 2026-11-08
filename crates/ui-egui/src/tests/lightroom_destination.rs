@@ -611,3 +611,28 @@ fn more_than_thirty_two_sources_still_open_review() {
     assert_eq!(start["result"]["networkShares"], json!([]));
     import_ends(&mut h, &f.lrcat);
 }
+
+/// A large review draws only visible rows; scrolling keeps offscreen selections and Cancel usable.
+#[test]
+fn a_large_network_review_virtualizes_rows_without_losing_selection() {
+    let f = Fixture::new("virtual-network-review");
+    let mut h = f.app(true);
+    let sources: Vec<_> = (0..5000).map(|i| format!(r"\\nas\source-{i:04}")).collect();
+    crate::lightroom_destination::after_sources(&mut h.app, &f.lrcat(), &Default::default(), sources).unwrap();
+    h.step();
+    h.step();
+    assert!(has(&h, "check:lightroomNetworkSource-0"));
+    assert!(!has(&h, "check:lightroomNetworkSource-4999"));
+    assert!(h.app.widgets.iter().filter(|(id, _)| id.starts_with("check:lightroomNetworkSource-")).count() < 20);
+    click(&mut h, "check:lightroomNetworkSource-0");
+    h.request("ui.hoverWidget", json!({"id":"check:lightroomNetworkSource-0"}), T);
+    h.request("ui.scroll", json!({"dy":-1000000.0}), T);
+    assert!(h.step_until(T, |h| has(h, "check:lightroomNetworkSource-4999")));
+    click(&mut h, "check:lightroomNetworkSource-4999");
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_shares, .. })
+        if network_shares == &[r"\\nas\source-0000", r"\\nas\source-4999"]));
+    shot(&mut h, "lightroom-virtual-network-sources.png");
+    click(&mut h, "button:dialogCancel");
+    assert!(destination(&h).is_none());
+    assert!(h.app.lightroom.is_none());
+}
