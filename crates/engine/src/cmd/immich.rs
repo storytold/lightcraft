@@ -142,7 +142,6 @@ pub struct ImmichImportJob {
     rx: Option<std::sync::mpsc::Receiver<ImportMsg>>,
     client: std::sync::Arc<lightcraft_immich::Client>,
     staging: std::path::PathBuf,
-    mode: String,
     /// The album the run joins when it commits (`immich.import`'s `album` / `albumName`, checked
     /// when the run starts so a bad id fails before anything downloads).
     album: Option<u64>,
@@ -214,11 +213,6 @@ impl ImmichImportJob {
             return 0.0;
         }
         (self.file_done as f32 / self.file_total as f32).min(1.0)
-    }
-
-    /// The `library.import` mode the run commits in.
-    pub fn mode(&self) -> &str {
-        &self.mode
     }
 
     /// Where the run's files are staged (cleaned up by the session once they join).
@@ -322,8 +316,8 @@ impl ImmichImportJob {
     /// own importer uses the same split, so no frame waits on a disk); the session commits the
     /// batch that comes back as one `library.import` undo step.
     pub fn start_commit(&mut self, s: &mut Session, paths: Vec<String>) {
-        let mode = if self.mode == "add" { crate::import::ImportMode::Add } else { crate::import::ImportMode::Copy };
-        let job = match crate::import::ImportJob::new(s, crate::import::ImportOptions { mode, ..Default::default() }) {
+        let job = match crate::import::ImportJob::new(s, crate::import::ImportOptions { mode: crate::import::ImportMode::Copy, ..Default::default() })
+        {
             Ok(job) => job,
             Err(e) => {
                 self.finish(json!({ "failed": self.failed.clone(), "error": e.to_string() }));
@@ -332,7 +326,10 @@ impl ImmichImportJob {
         };
         let (total, done) = (job.total.clone(), job.done.clone());
         let (opts, now) = (job.opts.clone(), job.now().to_string());
-        let cancel = self.client.cancel_flag();
+        // a fresh flag, not the client's cancel one: a Cancel must stop the transfers, and the
+        // files that already finished must still join ("the finished downloads still join" is the
+        // documented promise). The download worker keeps checking the client's flag.
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (tx, rx) = std::sync::mpsc::channel();
         let worker = std::thread::Builder::new()
             .name("lc-immich-commit".into())
@@ -350,7 +347,8 @@ impl ImmichImportJob {
 }
 
 /// Download `id`'s original into `staging` under the given name, reporting progress. Returns the
-/// staged file, or the failure (as `immich.import` reports it).
+/// staged file, or the failure (as `immich.import` reports it). A partial file left by a failure
+/// is removed — nothing half-downloaded ever stays staged.
 #[cfg(not(target_arch = "wasm32"))]
 fn download_one(
     c: &lightcraft_immich::Client,
@@ -361,14 +359,17 @@ fn download_one(
 ) -> std::result::Result<std::path::PathBuf, Value> {
     let dest = staged_path(staging, name);
     match std::fs::File::create(&dest) {
-        Ok(mut f) => c.download_original(id, &mut f, progress).map_err(|e| json!({ "id": id, "error": e.to_string() })).and_then(|n| {
-            if n == 0 {
+        Ok(mut f) => match c.download_original(id, &mut f, progress) {
+            Ok(0) => {
                 let _ = std::fs::remove_file(&dest);
                 Err(json!({ "id": id, "error": "the server sent an empty file" }))
-            } else {
-                Ok(dest)
             }
-        }),
+            Ok(_) => Ok(dest),
+            Err(e) => {
+                let _ = std::fs::remove_file(&dest);
+                Err(json!({ "id": id, "error": e.to_string() }))
+            }
+        },
         Err(e) => Err(json!({ "id": id, "error": format!("could not write the download: {e}") })),
     }
 }
@@ -422,6 +423,9 @@ fn current(s: &Session) -> Value {
 /// Read, add and remove servers. The key goes in and never comes back out.
 fn servers(s: &mut Session, p: &Value) -> Result<Value> {
     const CID: &str = "immich.servers";
+    // the list is changed in memory before it is persisted; a failed save restores what was so
+    // the session and the file never disagree
+    let before = (p.get("add").is_some() || p.get("remove").is_some()).then(|| s.immich_servers.clone());
     if let Some(a) = p.get("add") {
         let url = str_param(a, "url").unwrap_or_default().trim().to_string();
         if !valid_url(&url) {
@@ -438,31 +442,49 @@ fn servers(s: &mut Session, p: &Value) -> Result<Value> {
         };
         // a fresh entry is unverified — File ▸ Import from Immich unlocks only after a Test
         let entry = ImmichServer { name, url, api_key: key, verified: false };
-        match s.immich_servers.iter_mut().find(|x| ImmichServer::normalise(&x.url) == ImmichServer::normalise(&entry.url)) {
-            Some(existing) => *existing = entry,
+        let names = |skip: usize| s.immich_servers.iter().enumerate().any(|(j, x)| j != skip && x.name.eq_ignore_ascii_case(&entry.name));
+        match s.immich_servers.iter().position(|x| ImmichServer::normalise(&x.url) == ImmichServer::normalise(&entry.url)) {
+            // an existing server with this address is replaced — but the name must not collide
+            // with a *different* server's (a reversed proxy prefix means one host can be several)
+            Some(i) => {
+                if names(i) {
+                    return Err(bad(CID, format!("a server named `{}` already exists — remove it first", entry.name)));
+                }
+                s.immich_servers[i] = entry;
+            }
             None => {
                 if s.immich_servers.len() >= MAX_SERVERS {
                     return Err(bad(CID, "too many servers configured (32)"));
                 }
-                if s.immich_servers.iter().any(|x| x.name.eq_ignore_ascii_case(&entry.name)) {
+                if names(usize::MAX) {
                     return Err(bad(CID, format!("a server named `{}` already exists — remove it first", entry.name)));
                 }
                 s.immich_servers.push(entry);
             }
         }
-        s.save_immich()?;
+        if let Err(e) = s.save_immich()
+            && let Some(kept) = &before
+        {
+            s.immich_servers = kept.clone();
+            return Err(e);
+        }
     }
     if let Some(rm) = p.get("remove") {
         let sel = [str_param(rm, "name"), str_param(rm, "url")].into_iter().flatten().next().unwrap_or_default().to_string();
         if sel.trim().is_empty() {
             return Err(bad(CID, "`remove` needs a `name` or `url`"));
         }
-        let before = s.immich_servers.len();
+        let had = s.immich_servers.len();
         s.immich_servers.retain(|x| !x.matches(sel.trim()));
-        if s.immich_servers.len() == before {
+        if s.immich_servers.len() == had {
             return Err(bad(CID, format!("no Immich server `{sel}`")));
         }
-        s.save_immich()?;
+        if let Err(e) = s.save_immich()
+            && let Some(kept) = &before
+        {
+            s.immich_servers = kept.clone();
+            return Err(e);
+        }
     }
     Ok(current(s))
 }
@@ -507,7 +529,9 @@ fn date_param(p: &Value, key: &str, cid: &'static str) -> Result<Option<String>>
 }
 
 /// Is the Immich server up, and what does it report? The settings dialog's "Test" button.
-/// A passing test marks the server verified (File ▸ Import from Immich needs one that is).
+/// A passing test marks the server verified (File ▸ Import from Immich needs one that is) — and
+/// a test only counts once an *authenticated* call succeeded: ping and version are public
+/// endpoints on Immich, so a key the server rejects must not mark a server ready.
 #[cfg(not(target_arch = "wasm32"))]
 fn test(s: &mut Session, p: &Value) -> Result<Value> {
     const CID: &str = "immich.test";
@@ -518,8 +542,13 @@ fn test(s: &mut Session, p: &Value) -> Result<Value> {
     let c = lightcraft_immich::Client::new(&url, &key, Default::default()).map_err(net(CID))?;
     let pong = c.ping().map_err(net(CID))?;
     let version = c.version().map_err(net(CID))?;
+    let _albums = c.albums().map_err(net(CID))?; // authenticated: proves the key is accepted
+    let before = s.immich_servers.clone();
     mark_verified(s, &url);
-    s.save_immich()?;
+    if let Err(e) = s.save_immich() {
+        s.immich_servers = before;
+        return Err(e);
+    }
     Ok(json!({ "ok": true, "pong": pong, "version": version.to_string() }))
 }
 
@@ -536,8 +565,12 @@ fn verify(s: &mut Session, p: &Value) -> Result<Value> {
         let names: Vec<&str> = s.immich_servers.iter().map(|x| x.name.as_str()).collect();
         bad(CID, format!("unknown Immich server `{sel}` (configured: {})", names.join(", ")))
     })?;
+    let before = s.immich_servers.clone();
     mark_verified(s, &url);
-    s.save_immich()?;
+    if let Err(e) = s.save_immich() {
+        s.immich_servers = before;
+        return Err(e);
+    }
     Ok(current(s))
 }
 
@@ -616,7 +649,9 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// Strip a server-supplied name down to one safe file name for the staging folder.
+/// Strip a server-supplied name down to one safe file name for the staging folder. The component
+/// limit of a file system is 255 *bytes*, so the result is bounded by UTF-8 bytes, cut at a char
+/// boundary, with room left for `staged_path`'s `-{n}` suffix and the extension.
 #[cfg(not(target_arch = "wasm32"))]
 fn safe_file_name(given: &str, id: &str) -> String {
     let base = given.rsplit(['/', '\\']).next().unwrap_or(given);
@@ -625,11 +660,18 @@ fn safe_file_name(given: &str, id: &str) -> String {
     let trimmed = out.trim_matches(|c| c == ' ' || c == '.');
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
         // a byte cut here would panic on a multi-byte id (the name is agent- or server-supplied)
-        let short: String = id.chars().take(64).collect();
-        return format!("immich-{short}");
+        let mut end = id.len().min(160);
+        while end > 0 && !id.is_char_boundary(end) {
+            end -= 1;
+        }
+        return format!("immich-{}", &id[..end]);
     }
-    if out.chars().count() > 200 {
-        out = out.chars().take(200).collect();
+    if out.len() > 200 {
+        let mut end = 200;
+        while end > 0 && !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out = out[..end].to_string();
     }
     out
 }
@@ -672,8 +714,9 @@ fn staged_path(staging: &std::path::Path, name: &str) -> std::path::PathBuf {
 }
 
 /// Download the named assets, then run them through the untouched import pipeline (probe,
-/// content-hash dedupe, undoable add/copy). `copy` (the default) places the originals in the
-/// library like any other import; `add` keeps the staged files in place.
+/// content-hash dedupe, undoable copy). The downloads are staged in the system temp folder, so
+/// the import always copies them into the library — "add" (keep the files where they are) would
+/// leave the library's photos somewhere the OS can delete.
 ///
 /// `background: true` (the dialog's path) starts the engine's own worker and returns at once;
 /// the run then lives in `Session::immich_import`, polled with `poll_immich_import`. Without it
@@ -698,8 +741,11 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CID, "too many ids at once (10 000)"));
     }
     let mode = str_param(p, "mode").unwrap_or("copy");
-    if mode != "copy" && mode != "add" {
-        return Err(bad(CID, "`mode` is \"copy\" (default — into the library) or \"add\" (keep the downloaded files where they are)"));
+    if mode != "copy" {
+        return Err(bad(
+            CID,
+            "`mode` is \"copy\" — Immich downloads are staged in the system temp folder, and \"add\" would leave the imported photos somewhere the OS can delete; v1 imports by copy",
+        ));
     }
     let srv = server_of(s, p, CID)?;
     let client = std::sync::Arc::new(lightcraft_immich::Client::new(&srv.url, &srv.api_key, Default::default()).map_err(net(CID))?);
@@ -746,7 +792,6 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             rx: Some(rx),
             client,
             staging,
-            mode: mode.to_string(),
             album,
             album_name,
             library: s.library_generation(),
@@ -770,22 +815,30 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         let _ = std::fs::remove_dir(&staging);
         return Err(EngineError::Other(format!("{CID}: nothing could be downloaded — {failed:?}")));
     }
-    let mut params = json!({ "paths": paths, "mode": mode });
+    let mut params = json!({ "paths": paths, "mode": "copy" });
     for key in ["album", "albumName"] {
         if let Some(v) = p.get(key) {
             params[key] = v.clone();
         }
     }
-    let report = s.execute("library.import", &params)?;
-    if mode == "copy" {
-        // the bytes are in the library now; the staged copies have no further use
-        for path in &paths {
-            if let Err(e) = std::fs::remove_file(path) {
-                log::warn!("immich: staging cleanup: {path}: {e}");
+    let report = match s.execute("library.import", &params) {
+        Ok(r) => r,
+        Err(e) => {
+            // the bytes did not make it into the library: nothing may stay staged
+            for path in &paths {
+                let _ = std::fs::remove_file(path);
             }
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
         }
-        let _ = std::fs::remove_dir(&staging);
+    };
+    // the bytes are in the library now; the staged copies have no further use
+    for path in &paths {
+        if let Err(e) = std::fs::remove_file(path) {
+            log::warn!("immich: staging cleanup: {path}: {e}");
+        }
     }
+    let _ = std::fs::remove_dir_all(&staging);
     Ok(json!({ "report": report, "failed": failed }))
 }
 
@@ -825,9 +878,10 @@ fn run_download_worker(
 
 /// The commit worker: ready the staged files — expand, probe, hash, copy/place, the file-system
 /// half any import runs ([`crate::import::ImportJob::prepare_files`]) — and hand the batch back.
-/// The client's cancel flag stops it between files, like the download worker's. If the session
-/// dropped the run meanwhile, what a Move placed is taken back (copies stay, like the ones of a
-/// failed commit).
+/// The flag it checks is a fresh one, not the client's cancel flag: a cancelled download keeps
+/// every file that already arrived on its way into the library ("the finished downloads still
+/// join"). If the session dropped the run meanwhile, what a Move placed is taken back (copies
+/// stay, like the ones of a failed commit).
 #[cfg(not(target_arch = "wasm32"))]
 fn run_commit_worker(
     tx: std::sync::mpsc::Sender<CommitMsg>,
@@ -920,7 +974,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import from Immich",
             [],
             None,
-            "{server?, ids: [assetId...], mode? (\"copy\" default, into the library; \"add\" keeps the files in the staging folder), album?|albumName? (a regular album's id — checked when the run starts; the photos join it), background? (true = run on the engine's worker and return at once, for the UI; poll Session::immich_import, then it is {report, failed}; the run joins the library it started in — a library switched under it ends it with {failed, error})} — download the assets and run the ordinary import over them (dedupe, undo) → {report, failed: [{id, error}]} (synchronous: {importing} once started in background mode)",
+            "{server?, ids: [assetId...], album?|albumName? (a regular album's id — checked when the run starts; the photos join it), background? (true = run on the engine's worker and return at once, for the UI; poll Session::immich_import, then it is {report, failed}; the run joins the library it started in — a library switched under it ends it with {failed, error})} — download the assets and run the ordinary import over them (dedupe, undo); the downloads are staged in the system temp folder and always copied into the library, so there is no \"add\" mode → {report, failed: [{id, error}]} (synchronous: {importing} once started in background mode)",
             always,
             import
         ));
@@ -950,6 +1004,21 @@ mod tests {
     }
 
     #[test]
+    fn staging_dir_is_fresh_private_and_called_beyond_the_pid() {
+        // a fresh 0700 folder per import, named beyond the bare pid so a neighbour cannot guess it
+        let staging = staging_dir().unwrap();
+        let name = staging.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with(&format!("lightcraft-immich-{}", std::process::id())), "{name}");
+        assert!(name.len() > format!("lightcraft-immich-{}", std::process::id()).len(), "the name carries more than the pid: {name}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&staging).unwrap().permissions().mode() & 0o777, 0o700, "private by creation");
+        }
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+
+    #[test]
     fn poll_counts_finished_files_and_shares_the_current_files_bytes() {
         // the activity row has to move while the run goes: one finished file per Start (the
         // worker downloads one file at a time), and the current file's bytes in the detail
@@ -969,7 +1038,6 @@ mod tests {
             rx: Some(rx),
             client,
             staging: std::path::PathBuf::from("/nonexistent"),
-            mode: "copy".into(),
             album: None,
             album_name: None,
             library: 0,

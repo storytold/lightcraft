@@ -967,7 +967,7 @@ impl Session {
                     "error": "the library was switched while the import ran; the downloads were dropped"
                 }));
             } else if paths.is_empty() {
-                let _ = std::fs::remove_dir(job.staging());
+                let _ = std::fs::remove_dir_all(job.staging());
                 job.finish(serde_json::json!({ "failed": job.failed.clone(), "error": "nothing could be downloaded" }));
             } else {
                 job.start_commit(self, paths);
@@ -981,7 +981,9 @@ impl Session {
 
     /// Commit what the commit worker readied — the catalog half of the import, the same steps
     /// `library.import` takes after its own prepare: the album joins, the whole import is one
-    /// undo step, and the first imported photo becomes the selection.
+    /// undo step, and the first imported photo becomes the selection. The staged folder is
+    /// removed on every ending — success, a dead commit worker, a missing commit — so a failed
+    /// run leaves nothing behind in temp.
     #[cfg(not(target_arch = "wasm32"))]
     fn finish_immich_commit(&mut self, job: &mut crate::cmd::immich::ImmichImportJob, msg: crate::cmd::immich::CommitMsg) {
         let batch = match msg {
@@ -991,6 +993,7 @@ impl Session {
                 batch
             }
             crate::cmd::immich::CommitMsg::Failed(e) => {
+                let _ = std::fs::remove_dir_all(job.staging());
                 job.finish(serde_json::json!({ "failed": job.failed.clone(), "error": e }));
                 return;
             }
@@ -998,6 +1001,7 @@ impl Session {
         let (opts, now, album, album_name) = match job.commit_parts() {
             Ok(parts) => parts,
             Err(e) => {
+                let _ = std::fs::remove_dir_all(job.staging());
                 job.finish(serde_json::json!({ "failed": job.failed.clone(), "error": e.to_string() }));
                 return;
             }
@@ -1010,13 +1014,14 @@ impl Session {
         });
         let finished = match report {
             Ok(report) => {
-                if job.mode() == "copy" {
-                    // the bytes are in the library now; the staged copies have no further use
-                    let _ = std::fs::remove_dir_all(job.staging());
-                }
+                // the bytes are in the library now; the staged copies have no further use
+                let _ = std::fs::remove_dir_all(job.staging());
                 serde_json::json!({ "report": report, "failed": job.failed.clone() })
             }
-            Err(e) => serde_json::json!({ "failed": job.failed.clone(), "error": e.to_string() }),
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(job.staging());
+                serde_json::json!({ "failed": job.failed.clone(), "error": e.to_string() })
+            }
         };
         job.finish(finished);
     }

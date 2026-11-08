@@ -160,7 +160,15 @@ fn servers_are_configured_without_ever_echoing_the_key() {
 #[test]
 fn a_passing_test_marks_the_server_verified_and_readding_resets_it() {
     let lib = temp_dir("verifymark");
-    let (base, _seen, _h) = start(vec![reply_json(200, r#"{"res":"pong"}"#), reply_json(200, r#"{"major":1,"minor":135,"patch":3}"#)]);
+    let (base, _seen, _h) = start(vec![
+        reply_json(200, r#"{"res":"pong"}"#),
+        reply_json(200, r#"{"major":1,"minor":135,"patch":3}"#),
+        reply_json(200, "[]"), // albums: the authenticated call a passing test requires
+        // a bad-key round: ping/version pass (public endpoints), the album list answers 401
+        reply_json(200, r#"{"res":"pong"}"#),
+        reply_json(200, r#"{"major":1,"minor":135,"patch":3}"#),
+        reply_json(401, r#"{"message":"Invalid API key"}"#),
+    ]);
     let mut s = Session::new().with_fs();
     s.immich_store = Some(lib.join("immich.json"));
     s.open_library(&lib, false).unwrap();
@@ -174,6 +182,11 @@ fn a_passing_test_marks_the_server_verified_and_readding_resets_it() {
     let r = s.execute("immich.servers", &json!({"add": {"url": base, "apiKey": "k2", "name": "Home"}})).unwrap();
     assert_eq!(r["servers"].as_array().map(Vec::len), Some(1), "{r}");
     assert!(!s.immich_servers[0].verified, "a re-added server starts unverified");
+    // ping and version are public on Immich: a test has to prove the key itself (the album
+    // list must answer) — a rejected key must not mark a server ready
+    let e = s.execute("immich.test", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("rejected the API key"), "{e}");
+    assert!(!s.immich_servers[0].verified, "a failing test does not verify");
     let _ = std::fs::remove_dir_all(&lib);
 }
 
@@ -190,6 +203,29 @@ fn verify_records_a_passed_test_without_touching_the_network() {
     assert!(e.contains("unknown Immich server"), "{e}");
     let e = s.execute("immich.verify", &json!({})).unwrap_err().to_string();
     assert!(e.contains("`server`"), "{e}");
+}
+
+#[test]
+fn adding_two_servers_with_one_name_is_refused() {
+    // no server is dialled: immich.servers {add} touches only the local settings file
+    let lib = temp_dir("namecollide");
+    let mut s = Session::new().with_fs();
+    s.immich_store = Some(lib.join("immich.json"));
+    let url1 = "http://127.0.0.1:9";
+    let url2 = "http://127.0.0.1:10";
+    s.execute("immich.servers", &json!({"add": {"url": url1, "apiKey": "k", "name": "Both"}})).unwrap();
+    // a different URL may not take a name another server already has
+    let e = s.execute("immich.servers", &json!({"add": {"url": url2, "apiKey": "k", "name": "Both"}})).unwrap_err().to_string();
+    assert!(e.contains("already exists"), "{e}");
+    assert_eq!(s.immich_servers.len(), 1);
+    // …and a replacement of url1 may not take a name url2 holds (one host, several prefixes)
+    s.execute("immich.servers", &json!({"add": {"url": url2, "apiKey": "k", "name": "Other"}})).unwrap();
+    let e = s.execute("immich.servers", &json!({"add": {"url": url1, "apiKey": "k", "name": "Other"}})).unwrap_err().to_string();
+    assert!(e.contains("already exists"), "{e}");
+    // a rename to a free name still replaces by URL (a changed key needs its test again)
+    let r = s.execute("immich.servers", &json!({"add": {"url": url1, "apiKey": "k", "name": "Cam"}})).unwrap();
+    assert_eq!(r["servers"].as_array().map(Vec::len), Some(2), "{r}");
+    let _ = std::fs::remove_dir_all(&lib);
 }
 
 #[test]
@@ -300,6 +336,39 @@ fn a_background_import_registers_an_activity_row_and_releases_it() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+#[test]
+fn a_cancelled_run_still_imports_what_was_downloaded() {
+    // Cancel's promise ("the finished downloads still join") holds against the commit half too:
+    // the commit worker runs with its own flag, so a cancel that lands while the downloaded
+    // files are being prepared keeps them on their way into the library.
+    let lib = temp_dir("impcancel");
+    let (base, _seen, h) =
+        start(vec![reply_json(200, r#"{"id":"a1","checksum":"c1","originalFileName":"CANCEL_ME_1.JPG"}"#), reply_bytes(200, "image/png", png(6))]);
+    let mut s = Session::new().with_fs();
+    s.immich_store = Some(lib.join("immich.json"));
+    s.open_library(&lib, false).unwrap();
+    add_server(&mut s, &base);
+    let r = s.execute("immich.import", &json!({"server": "Home", "ids": ["a1"], "background": true})).unwrap();
+    assert_eq!(r["importing"], 1, "{r}");
+    // wait until the downloads are in and the commit worker has started, then cancel
+    let commit = (0..1000).find_map(|_| {
+        s.poll_immich_import();
+        if s.immich_import.as_ref().is_some_and(|j| j.commit_parts().is_ok()) {
+            Some(())
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            None
+        }
+    });
+    assert!(commit.is_some(), "the commit worker is running");
+    s.cancel_immich_import();
+    let finished = wait_for_import(&mut s);
+    assert_eq!(s.catalog.len(), 1, "the downloaded file joined despite the cancel: {finished}");
+    assert_eq!(s.immich_import.as_ref().and_then(|j| j.finished.as_ref()).and_then(|f| f.get("error")), None, "{finished}");
+    h.join().unwrap();
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 /// Poll a background import until it lands, then hand back its `finished` value.
 fn wait_for_import(s: &mut Session) -> Value {
     for _ in 0..1000 {
@@ -361,9 +430,9 @@ fn a_background_import_joins_the_album_it_was_started_with() {
 }
 
 #[test]
-fn import_staging_is_a_fresh_private_folder_per_run() {
-    // `add` keeps the staged files (and their folder) in place, so the folder is inspectable
-    // afterwards: one per import, named beyond the bare pid, and 0700 on Unix.
+fn import_is_always_a_copy_and_rejects_add() {
+    // `add` would keep files where they are — but the downloads are staged in the system temp
+    // folder, so the import is always a copy into the library: `add` is refused outright.
     let lib = temp_dir("impstage");
     let (base, _seen, h) =
         start(vec![reply_json(200, r#"{"id":"a1","checksum":"c1","originalFileName":"STAGE_ME_42.JPG"}"#), reply_bytes(200, "image/png", png(4))]);
@@ -371,29 +440,24 @@ fn import_staging_is_a_fresh_private_folder_per_run() {
     s.immich_store = Some(lib.join("immich.json"));
     s.open_library(&lib, false).unwrap();
     add_server(&mut s, &base);
-    let r = s.execute("immich.import", &json!({"server": "Home", "ids": ["a1"], "mode": "add"})).unwrap();
+    let e = s.execute("immich.import", &json!({"server": "Home", "ids": ["a1"], "mode": "add"})).unwrap_err().to_string();
+    assert!(e.contains("copy"), "add is refused: {e}");
+    assert_eq!(s.catalog.len(), 0, "the refused import changed nothing");
+    // a copy import lands in the library, and the import's own staging folder is gone afterwards
+    let r = s.execute("immich.import", &json!({"server": "Home", "ids": ["a1"]})).unwrap();
     h.join().unwrap();
     assert_eq!(r["report"]["imported"].as_array().map(Vec::len), Some(1), "{r}");
-    // the add-mode file sits in this import's own staging folder; find it (a parallel test may
-    // have created other lightcraft-immich- folders in the meantime)
+    assert_eq!(s.catalog.len(), 1);
     let marker = "STAGE_ME_42.JPG";
-    let staging = std::env::temp_dir()
+    let leftover = std::env::temp_dir()
         .read_dir()
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("lightcraft-immich-")))
-        .find(|p| p.join(marker).is_file())
-        .unwrap_or_else(|| panic!("no staging folder holds {marker}"));
-    let name = staging.file_name().unwrap().to_string_lossy().into_owned();
-    assert!(name.len() > format!("lightcraft-immich-{}", std::process::id()).len(), "the name carries more than the pid: {name}");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&staging).unwrap().permissions().mode() & 0o777, 0o700, "private by creation");
-    }
-    let _ = std::fs::remove_dir_all(&staging);
+        .any(|p| p.join(marker).is_file());
+    assert!(!leftover, "no staging folder still holds the imported file");
     let _ = std::fs::remove_dir_all(&lib);
 }
 
@@ -412,7 +476,7 @@ fn import_with_a_multibyte_id_and_no_file_name_does_not_panic() {
     let r = s.execute("immich.import", &json!({"server": "Home", "ids": [id]})).unwrap();
     h.join().unwrap();
     assert_eq!(r["report"]["imported"].as_array().map(Vec::len), Some(1), "{r}");
-    let want = format!("immich-{}", "€".repeat(64));
+    let want = format!("immich-{}", "€".repeat(53)); // 160 bytes, back at a char boundary
     let name = s
         .catalog
         .photos()
@@ -421,7 +485,7 @@ fn import_with_a_multibyte_id_and_no_file_name_does_not_panic() {
             _ => None,
         })
         .unwrap_or_default();
-    assert_eq!(name, want, "the fallback name is 64 chars of the id, at a char boundary");
+    assert_eq!(name, want, "the fallback name is the id cut to 160 bytes, at a char boundary");
     let _ = std::fs::remove_dir_all(&lib);
 }
 
