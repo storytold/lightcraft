@@ -3675,11 +3675,15 @@ fn find_missing_hashless_copy_follows_renamed_original_in_either_order() {
         if reverse {
             candidates.reverse();
         }
-        let plan = plan_find_missing(&candidates, &dir.join("moved").to_string_lossy()).unwrap();
+        let mut plan = plan_find_missing(&candidates, &dir.join("moved").to_string_lossy()).unwrap();
         let target = dir.join("moved/Trip-001.png");
         assert!(plan.found.iter().any(|f| f.id == copy && Path::new(&f.to) == target), "{plan:?}");
         assert!(!plan.ambiguous.iter().any(|f| f.id == copy), "{plan:?}");
         assert_eq!(FindPlan::from_json(&plan.to_json()), plan);
+        if reverse {
+            plan.found.reverse();
+            assert_eq!(plan.found[0].id, copy, "the submitted plan starts with the dependent copy");
+        }
         let r = s.execute("library.findMissing", &plan.to_json()).unwrap();
         assert_eq!(r["found"].as_array().unwrap().len(), 3);
         assert_eq!(r["missing"], 1);

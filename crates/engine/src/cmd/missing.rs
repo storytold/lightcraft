@@ -409,13 +409,23 @@ fn name_key(path: &str) -> String {
 /// Originals are matched before hashless copies, which prefer their original's located file over
 /// a name-only match. The file must be in the searched folder and its known size must agree.
 pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::result::Result<FindPlan, String> {
+    plan_find_missing_within(candidates, folder, None)
+}
+
+/// Limit relink targets to `within`, retaining every candidate for original and ownership context.
+/// Filtering the snapshot itself would hide already-located originals and unrelated file owners.
+pub fn plan_find_missing_within(candidates: &[FindCandidate], folder: &str, within: Option<&str>) -> std::result::Result<FindPlan, String> {
     if !Path::new(folder).is_dir() {
         return Err(format!("{folder}: not a folder"));
     }
     if cfg!(target_arch = "wasm32") {
         return Ok(FindPlan::default());
     }
-    let mut lost: Vec<&FindCandidate> = candidates.iter().filter(|c| !Path::new(&c.path).exists()).collect();
+    let mut lost: Vec<&FindCandidate> = candidates
+        .iter()
+        .filter(|c| within.is_none_or(|folder| lightcraft_catalog::query::folder_within(&c.path, folder)))
+        .filter(|c| !Path::new(&c.path).exists())
+        .collect();
     if lost.is_empty() {
         return Ok(FindPlan::default());
     }
@@ -540,7 +550,7 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
 /// Related originals and copies may share it; duplicate plan entries never relink a photo twice.
 /// A copy matched through its original is skipped if that original was moved or removed meanwhile.
 /// `missing` is the plan's count, corrected for what changed among the photos the plan names.
-fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
+fn commit_find(s: &mut Session, mut plan: FindPlan) -> Result<Value> {
     let still_at = |cat: &Catalog, id: PhotoId, from: &str| cat.photo(id).and_then(|p| checked_path(p)) == Some(from);
     let mut owners = FileOwners::default();
     for p in s.catalog.photos() {
@@ -549,6 +559,9 @@ fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
         }
     }
     let mut seen = HashSet::new();
+    // Submitted worker plans need not retain the planner's order. Validate independent entries
+    // first, so an original must pass the same stale-path and ownership checks before its copies.
+    plan.found.sort_by_key(|f| matches!(f.by, MatchBy::Original));
     let mut accepted_originals = HashMap::new();
     let mut found: Vec<FoundFile> = Vec::new();
     let mut missing = plan.missing;
