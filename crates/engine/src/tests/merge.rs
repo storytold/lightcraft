@@ -522,8 +522,13 @@ fn single_collapsed_stack_enables_all_three_merge_actions() {
     let op = s.catalog.group_ops(ids[0], &ids, true).unwrap();
     s.catalog.apply(op).unwrap();
     let top = ids[0];
+    let loose = s.catalog.alloc_photo_id();
+    let loose_name = "LOOSE.dng".to_string();
+    let loose_photo =
+        lightcraft_catalog::Photo::new(loose, lightcraft_catalog::Source::File { path: loose_name.clone() }, &loose_name, "DNG", 96, 64, "2026-01-01T00:00:00");
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(loose_photo) }).unwrap();
     assert_eq!(s.expanded_merge_count(&[top]), 4, "one selected id represents the stack's members");
-    assert_eq!(s.expanded_merge_count(&[ids[0]]), 1, "a single loose photo still counts once");
+    assert_eq!(s.expanded_merge_count(&[loose]), 1, "a single loose photo still counts once");
     for command in ["merge.hdr", "merge.panorama", "merge.hdrPanorama"] {
         let (kind, finish) = crate::merge::parse(command, &json!({})).unwrap();
         assert!(s.merge_selection_ready(&kind, &[top]), "{command} should be enabled for the collapsed stack");
@@ -531,7 +536,7 @@ fn single_collapsed_stack_enables_all_three_merge_actions() {
         assert_eq!(job.sources.iter().map(|(p, _)| *p).collect::<Vec<_>>(), ids, "{command} expands the stack");
     }
     let (kind, _) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
-    assert!(!s.merge_selection_ready(&kind, &[ids[0]]), "a single loose photo does not enable a merge");
+    assert!(!s.merge_selection_ready(&kind, &[loose]), "a single loose photo does not enable a merge");
 }
 
 /// A preview reports an undersized group as `skipped`, like `merge_now` does, instead of
@@ -553,6 +558,7 @@ fn preview_reports_skipped_undersized_group() {
     s.execute("stack.group", &json!({"ids": ids[..3]})).unwrap();
     let r = s.execute("merge.hdr", &json!({"ids": [ids[0], ids[3]], "preview": true})).unwrap();
     assert_eq!(r["skipped"], json!([[ids[3]]]), "{r}");
-    assert_eq!(r["previews"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(r["previewSize"].as_array().unwrap().len(), 2, "single-job preview returns its info directly: {r}");
+    assert!(r["previews"].is_null(), "single-job preview has no previews array: {r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
