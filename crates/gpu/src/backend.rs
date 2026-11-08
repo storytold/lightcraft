@@ -483,9 +483,9 @@ pub fn forced_window_renderer(app: Option<&str>, wgpu: Option<&str>) -> Option<W
 /// uncatchably (issue #136), so it is never in the automatic chain, and the renderer remembered
 /// from the last run cannot put it first either.
 /// `failed` (the renderer the last start died in) goes last, as a last resort only. Backends not
-/// in `compiled`, and glow without `glow`, are left out. The list is empty only when no usable
-/// renderer exists and glow is unavailable; callers must handle that case instead of using an
-/// empty backend set as a renderer.
+/// in `compiled`, and glow without `glow`, are left out. The list is never empty: when no usable
+/// renderer exists and glow is unavailable it falls back to the platform default, so callers
+/// never receive an empty backend set as a renderer.
 pub fn window_renderer_order(
     forced: Option<WindowRenderer>,
     remembered: Option<WindowRenderer>,
@@ -556,8 +556,8 @@ pub fn glow_without_marker(forced: Option<WindowRenderer>, marker_available: boo
 /// renderer when there is one, glow on Linux when no marker can be written
 /// ([`glow_without_marker`]) unless a wgpu renderer is remembered from a good start, otherwise
 /// the first renderer of [`window_renderer_order`]. With a marker available this is the existing
-/// order (remembered first, failed last), so the marker-based retry is preserved. `None` when
-/// no usable renderer exists; never an empty backend set as a renderer.
+/// order (remembered first, failed last), so the marker-based retry is preserved. That list is
+/// never empty, so this always returns its first entry; never an empty backend set as a renderer.
 pub fn initial_window_renderer(
     forced: Option<WindowRenderer>,
     remembered: Option<WindowRenderer>,
