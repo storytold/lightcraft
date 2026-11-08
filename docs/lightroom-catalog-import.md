@@ -165,8 +165,10 @@ by default only when they are on this computer or on the network share the catal
 (`crates/engine/src/doc_path.rs`). An original on another computer (`\\server\share\…`,
 `//server/…`, `file://server/…`), a device path, or one whose folder or file name in the catalog is
 an absolute path is not looked at: the import lists it as missing with a warning and leaves the
-photo and its virtual copies out of the library. To import originals on a share, open the catalog
-from that share, or explicitly select the share as described below. A path that is not a path on this computer (a Windows drive path read on macOS or
+photo and its virtual copies out of the library. The implicit catalog-share grant applies only when
+the command omits `networkShares`. In the interactive import, explicitly select each share whose
+originals should be imported, including the catalog's own share; an empty selection grants none.
+A path that is not a path on this computer (a Windows drive path read on macOS or
 Linux) is not looked at either and stays catalogued as missing.
 
 **Local catalog, NAS originals.** After choosing the `.lrcat`, LightCraft reads its recorded root
@@ -180,8 +182,9 @@ LightCraft library and original photos stay at their existing locations.
 Example views using synthetic catalogs: [local sources only](images/lightcraft-import-local-sources.png)
 and [two network sources with one selected](images/lightcraft-import-network-sources.png).
 
-Discovery reads only the catalog and its committed WAL, without probing any originals or contacting
-their servers. The network review also appears with **Always merge** or an in-memory library;
+Discovery reads only the catalog and its committed WAL. It does not contact servers to probe
+originals, but a catalog on a share requires contacting that catalog's server to read the catalog
+and WAL. The network review also appears with **Always merge** or an in-memory library;
 that preference still skips the destination question for catalogs without network sources. Cancel
 grants nothing. Selections apply only to this import and are not remembered on the next one.
 
@@ -248,7 +251,9 @@ object rather than reopening a previously checked path. Native remote-symlink er
 refused; there is no fallback that retries the path through Win32 or evaluates a link target.
 Preview and native byte-loading paths use the same entry point after import. Region-orientation
 rereads and Synchronize Folder sidecar reads also revalidate their opens; a prior lookup or cached
-folder listing does not authorize a later read. Image/preview loaders retain one original handle
+folder listing does not authorize a later read. Synchronize Folder reads sidecars through one
+checked handle and rejects content beyond 16 MiB while reading, even if a writer grows the file
+after metadata was inspected. Image/preview loaders retain one original handle
 for metadata and bytes, including whole-file preview fallback. Source discovery itself still
 performs no original-file I/O.
 

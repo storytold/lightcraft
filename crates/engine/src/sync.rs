@@ -605,20 +605,18 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarLookup, listing:
     // over for the next name, as a name that is no file was)
     let found = naming.candidates(path).find_map(|c| {
         let there = listing.or_ask(listing.is_file(&c), || crate::doc_path::original_metadata(&c).is_ok_and(|m| m.is_file()));
-        let meta = there.then(|| crate::doc_path::original_metadata(&c).ok()).flatten().filter(std::fs::Metadata::is_file)?;
-        Some((c, meta))
+        let file = there.then(|| crate::doc_path::open_original(&c).ok()).flatten()?;
+        let meta = file.metadata().ok().filter(std::fs::Metadata::is_file)?;
+        Some((file, meta))
     });
     let Some((file, meta)) = found else { return false };
-    if meta.len() > MAX_SIDECAR_BYTES {
-        return false;
-    }
     let saved = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
     let Some(saved) = saved.and_then(|s| i64::try_from(s).ok()) else { return false };
     let seen = [Some(p.imported.as_str()), p.edited.as_deref()].into_iter().flatten().filter_map(lightcraft_catalog::stacks::iso_seconds).max();
     if seen.is_some_and(|t| saved <= t) {
         return false;
     }
-    let Ok(text) = crate::doc_path::read_original_text(&file) else { return false };
+    let Ok(text) = read_sidecar_text(file) else { return false };
     let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
     let sc = sc.with_file_orientation(path).resolve_label(labels);
     let mut q = p.clone();
@@ -803,12 +801,21 @@ fn read_sidecar(path: &str, naming: SidecarLookup, target: crate::crs::Target) -
 
 /// Revalidate a discovered sidecar at each read; an earlier lookup or folder listing is not authority.
 fn read_sidecar_file(path: &str, file: &Path, target: crate::crs::Target) -> std::result::Result<crate::sidecar::SidecarData, String> {
-    let len = crate::doc_path::original_metadata(file).map_err(|e| format!("{}: {e}", file.display()))?.len();
-    if len > MAX_SIDECAR_BYTES {
-        return Err(format!("{}: too large for an XMP sidecar", file.display()));
-    }
-    let text = crate::doc_path::read_original_text(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let opened = crate::doc_path::open_original(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let text = read_sidecar_text(opened).map_err(|e| format!("{}: {e}", file.display()))?;
     crate::sidecar::parse_sidecar(&text, target).map(|sc| sc.with_file_orientation(path)).map_err(|e| format!("{}: {e}", file.display()))
+}
+
+/// Bound the actual read: a writer can grow a sidecar after metadata or a folder listing was read.
+/// One extra byte distinguishes an exactly full sidecar from an oversized one without reading it all.
+fn read_sidecar_text(reader: impl std::io::Read) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    reader.take(MAX_SIDECAR_BYTES + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_SIDECAR_BYTES {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "too large for an XMP sidecar"));
+    }
+    Ok(text)
 }
 
 impl SyncCommit {
