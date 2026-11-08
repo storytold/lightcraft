@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 
 fn harness(state: Option<UiState>, width: f32, scale: f32) -> Harness<'static, LightcraftApp> {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    // a headless host never gains the first-run tour: its modal would take the pointer the drags aim at
+    app.headless_host = true;
     if let Some(state) = state {
         app.ui = state;
     } else {

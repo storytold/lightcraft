@@ -93,12 +93,15 @@ pub enum Process {
     /// V4, with a raw's tone curve rolling off into white in stops past its last fitted knot, so
     /// highlights the sensor recorded keep their detail when Exposure lifts them (issue #1632).
     V5,
+    /// V5, with colour noise reduction on the linear colour differences R−Y and B−Y, leaving Y alone, with
+    /// edge-aware weights from a denoised guide and a brake for isolated colour specks (issue #815).
+    V6,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 5] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5];
-    pub const LATEST: Process = Process::V5;
+    pub const ALL: [Process; 6] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6];
+    pub const LATEST: Process = Process::V6;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -107,6 +110,7 @@ impl Process {
             Process::V3 => ProcessVersion(3),
             Process::V4 => ProcessVersion(4),
             Process::V5 => ProcessVersion(5),
+            Process::V6 => ProcessVersion(6),
         }
     }
 }
