@@ -151,3 +151,157 @@ fn compressed_olympus_bodies_decode_like_camera_jpeg() {
         assert!(r > 0.6, "{name}: decoded mosaic does not follow the camera JPEG (r = {r:.3})");
     }
 }
+
+/// All 112 Olympus and OM System ORF and ORI corpus samples decode without panic,
+/// match their exact sensor dimensions, agree between probe and decode, and correlate
+/// with the embedded camera JPEG preview (Pearson r > 0.60; E-10 r > 0.55).
+#[test]
+fn all_112_olympus_corpus_samples_decode_like_camera_jpeg() {
+    let cases = [
+        ("orf-olympus-e1.orf", (2624, 1966)),
+        ("orf-olympus-e400.orf", (3768, 2840)),
+        ("orf-olympus-em1.orf", (4640, 3472)),
+        ("orf-olympus-em10iii.orf", (4640, 3472)),
+        ("orf-olympus-xz2.orf", (3984, 2986)),
+        ("orf-olympus-sp550uz.orf", (3088, 2309)),
+        ("orf-olympus-e-10.orf", (2256, 1684)),
+        ("orf-olympus-c5060wz.orf", (2608, 1949)),
+        ("orf-olympus-sp565uz.orf", (3664, 2741)),
+        ("orf-olympus-e-m5-mark-ii.orf", (9280, 6932)),
+        ("orf-olympus-e-300.orf", (3360, 2504)),
+        ("orf-olympus-sh-2.orf", (4624, 3470)),
+        ("orf-olympus-c7070wz.orf", (3088, 2309)),
+        ("orf-olympus-xz-10.orf", (3984, 2990)),
+        ("orf-olympus-e-330.orf", (3280, 2450)),
+        ("orf-olympus-sp570uz.orf", (3664, 2741)),
+        ("orf-olympus-sp510uz.orf", (3088, 2309)),
+        ("orf-olympus-pen-f.orf", (10400, 7796)),
+        ("orf-olympus-e-500.orf", (3360, 2504)),
+        ("orf-olympus-c8080wz-12bit-4-3.orf", (3280, 2453)),
+        ("orf-olympus-e-p3-16bit-4-3.orf", (4080, 3040)),
+        ("orf-olympus-e-520-16bit-4-3.orf", (3720, 2800)),
+        ("orf-olympus-e-30-16bit-4-3.orf", (4100, 3084)),
+        ("orf-olympus-sp500uz-12bit-4-3.orf", (2832, 2117)),
+        ("orf-olympus-e-600-16bit-4-3.orf", (4100, 3084)),
+        ("orf-olympus-c5050z-12bit-4-3.orf", (2576, 1925)),
+        ("orf-olympus-sp350.orf", (3280, 2453)),
+        ("orf-olympus-e-20.orf", (2576, 1924)),
+        ("orf-olympus-e-pm1-16bit-4-3.orf", (4080, 3040)),
+        ("orf-olympus-e-m5-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-e-p5-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-tg-4-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-e-410-16bit-4-3.orf", (3720, 2800)),
+        ("orf-olympus-e-pm2-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-e-pl3-16bit-4-3.orf", (4080, 3040)),
+        ("orf-olympus-e-m10-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-e-pl6-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-e-pl7-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-tg-5-16bit-4-3.orf", (4040, 3016)),
+        ("orf-olympus-e-pl8-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-e-pl1-16bit-4-3.orf", (4100, 3084)),
+        ("orf-olympus-xz-1-16bit-4-3.orf", (3680, 2760)),
+        ("orf-olympus-e-pl5-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-e-pl2-16bit-4-3.orf", (4100, 3084)),
+        ("orf-olympus-e-3-16bit-4-3.orf", (3720, 2800)),
+        ("orf-olympus-e-620-16bit-4-3.orf", (4100, 3084)),
+        ("orf-olympus-e-m1markii-16bit-4-3.orf", (5240, 3912)),
+        ("orf-olympus-e-m1markii-16bit-4-3-2.orf", (10400, 7792)),
+        ("ori-olympus-e-m1markii-16bit-4-3.ori", (5240, 3912)),
+        ("orf-olympus-e-m1markii-16bit-4-3-3.orf", (10400, 7792)),
+        ("ori-olympus-e-m1markii-16bit-4-3-2.ori", (5240, 3912)),
+        ("orf-olympus-e-m1markii-16bit-4-3-4.orf", (5240, 3912)),
+        ("orf-olympus-e-420-16bit-4-3.orf", (3720, 2800)),
+        ("orf-olympus-e-5-16bit-4-3.orf", (4100, 3084)),
+        ("orf-olympus-e-p2-16bit-4-3.orf", (4100, 3084)),
+        ("orf-olympus-e-pl9-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-stylus11s-16bit-4-3.orf", (4000, 2992)),
+        ("ori-olympus-e-m5-mark-ii-16bit-16bit-normal-4-3.ori", (4640, 3472)),
+        ("orf-olympus-pen-f-16bit-4-3-2.orf", (5200, 3904)),
+        ("orf-olympus-e-m1x-16bit-4-3.orf", (5240, 3912)),
+        ("orf-olympus-tg-6-16bit-4-3.orf", (4040, 3016)),
+        ("orf-olympus-stylus1-16bit-4-3.orf", (4000, 2992)),
+        ("orf-olympus-e-m5-mark-iii-16bit-4-3.orf", (10400, 7792)),
+        ("orf-olympus-e-m5-mark-iii-16bit-4-3-2.orf", (5240, 3912)),
+        ("orf-olympus-e-m1markiii-16bit-4-3.orf", (5240, 3912)),
+        ("orf-olympus-e-m1markiii-16bit-4-3-2.orf", (8200, 6132)),
+        ("ori-olympus-e-m1markiii-16bit-4-3.ori", (5240, 3912)),
+        ("orf-olympus-e-m1markiii-16bit-4-3-3.orf", (10400, 7792)),
+        ("ori-olympus-e-m1markiii-16bit-4-3-2.ori", (5240, 3912)),
+        ("orf-olympus-e-pl10-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-e-m10-mark-iv-16bit-4-3.orf", (5200, 3904)),
+        ("orf-olympus-e-m10-mark-iv-16bit-4-3-2.orf", (5200, 3904)),
+        ("orf-olympus-e-m10-mark-iiis-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-e-p1-16bit-4-3.orf", (4100, 3084)),
+        ("orf-om-system-om-1-16bit-4-3.orf", (5220, 3912)),
+        ("orf-om-system-om-1-16bit-4-3-2.orf", (8180, 6132)),
+        ("orf-om-system-om-1-16bit-4-3-3.orf", (10400, 7792)),
+        ("ori-om-system-om-1-16bit-4-3.ori", (5220, 3912)),
+        ("ori-om-system-om-1-16bit-4-3-2.ori", (5220, 3912)),
+        ("orf-olympus-e-510-16bit-4-3.orf", (3720, 2800)),
+        ("orf-olympus-e-450-16bit-4-3.orf", (3720, 2800)),
+        ("orf-olympus-e-m10-mark-ii-16bit-4-3.orf", (4640, 3472)),
+        ("orf-olympus-e-p7-16bit-4-3.orf", (5200, 3904)),
+        ("orf-om-system-om-5-16bit-4-3.orf", (5240, 3912)),
+        ("orf-om-system-om-5-16bit-4-3-2.orf", (8200, 6132)),
+        ("ori-om-system-om-5-16bit-4-3.ori", (5240, 3912)),
+        ("orf-om-system-om-5-16bit-4-3-3.orf", (10400, 7792)),
+        ("ori-om-system-om-5-16bit-4-3-2.ori", (5240, 3912)),
+        ("orf-om-system-tg-7-16bit-4-3.orf", (4040, 3016)),
+        ("orf-om-system-om-1-mark-ii-16bit-4-3.orf", (5220, 3912)),
+        ("orf-om-system-om-1-mark-ii-16bit-4-3-2.orf", (8180, 6132)),
+        ("ori-om-system-om-1-mark-ii-16bit-4-3.ori", (5220, 3912)),
+        ("orf-om-system-om-1-mark-ii-16bit-4-3-3.orf", (10400, 7792)),
+        ("ori-om-system-om-1-mark-ii-16bit-4-3-2.ori", (5220, 3912)),
+        ("orf-om-system-om-1-mark-ii-16bit-4-3-4.orf", (10386, 7792)),
+        ("ori-om-system-om-1-mark-ii-16bit-4-3-3.ori", (5220, 3912)),
+        ("orf-om-system-om-1-mark-ii-16bit-4-3-5.orf", (8172, 6132)),
+        ("ori-om-system-om-1-mark-ii-16bit-4-3-4.ori", (5220, 3912)),
+        ("orf-om-system-om-3-16bit-4-3.orf", (5220, 3912)),
+        ("orf-om-system-om-3-16bit-4-3-2.orf", (8180, 6132)),
+        ("ori-om-system-om-3-16bit-4-3.ori", (5220, 3912)),
+        ("orf-om-system-om-3-16bit-4-3-3.orf", (10400, 7792)),
+        ("ori-om-system-om-3-16bit-4-3-2.ori", (5220, 3912)),
+        ("orf-om-system-om-3-16bit-4-3-4.orf", (10386, 7792)),
+        ("ori-om-system-om-3-16bit-4-3-3.ori", (5220, 3912)),
+        ("orf-om-system-om-3-16bit-4-3-5.orf", (8172, 6132)),
+        ("ori-om-system-om-3-16bit-4-3-4.ori", (5220, 3912)),
+        ("orf-om-system-om-5-mark-ii-16bit-4-3.orf", (5240, 3912)),
+        ("ori-om-system-om-5-mark-ii-16bit-4-3.ori", (5240, 3912)),
+        ("orf-om-system-om-5-mark-ii-16bit-4-3-2.orf", (8200, 6132)),
+        ("orf-om-system-om-5-mark-ii-16bit-4-3-3.orf", (10400, 7792)),
+        ("ori-om-system-om-5-mark-ii-16bit-4-3-2.ori", (5240, 3912)),
+    ];
+    let mut tested = 0;
+    for &(name, (expected_w, expected_h)) in &cases {
+        let mut path = corpus().join("raw").join(name);
+        if !path.exists() {
+            let alt_name = match name {
+                "ori-olympus-e-m1markii-16bit-4-3-2.ori" => "Olympus - E-M1MarkII - 16bit (4_3).ORI",
+                "ori-olympus-e-m5-mark-ii-16bit-16bit-normal-4-3.ori" => "Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI",
+                _ => name,
+            };
+            let alt_path = corpus().join("raw").join(alt_name);
+            if alt_path.exists() {
+                path = alt_path;
+            }
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
+            continue;
+        };
+        assert_eq!(probe(&bytes), Some(RawFormat::Orf), "{name}");
+        let raw = decode(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        raw.validate().unwrap();
+        assert_eq!((raw.width, raw.height), (expected_w, expected_h), "{name}: sensor size mismatch");
+        assert_eq!(raw.info(), probe_info(&bytes).unwrap(), "{name}: probe and decode disagree");
+
+        let jpeg = embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG"));
+        let r = green_vs_camera_jpeg(&raw, &jpeg, 24, 16);
+        eprintln!("{name:55} {}x{}: green follows camera JPEG, r = {r:.3}", raw.width, raw.height);
+        // E-10 has a tiny low-quality thumbnail yielding ~0.59; others are >= 0.60
+        let min_r = if name == "orf-olympus-e-10.orf" { 0.55 } else { 0.60 };
+        assert!(r > min_r, "{name}: decoded mosaic does not follow camera JPEG (r = {r:.3})");
+        tested += 1;
+    }
+    eprintln!("All Olympus/OM ORF and ORI files checked on {tested} files");
+}
