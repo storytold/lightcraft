@@ -854,10 +854,17 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
 /// Encode `image` as PNG and write it to the capture's pinned target, returning the control
 /// protocol's JSON result. The destination is revalidated before encoding; a new path is written
 /// with create-new semantics (never replacing a file that appeared), and a missing encoder or
-/// writer is an error. `None` only reports the image size without writing.
+/// writer is an error. `None` reports the image size without writing; the web build, which has no
+/// file system to write to, also returns the PNG inline (`pngBase64`).
 pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, target: Option<&lightcraft_engine::originals::WriteTarget>) -> Value {
     let [w, h] = image.size;
     let Some(target) = target else {
+        if cfg!(target_arch = "wasm32")
+            && let Some(img) = lightcraft_raster::Rgba8::from_pixels(w, h, image.pixels.iter().map(|c| c.to_array()))
+            && let Some(png) = app.services.png.as_ref()
+        {
+            return inline_result(w, h, &png(&img));
+        }
         return json!({"ok": true, "result": {"width": w, "height": h}});
     };
     // Re-check the pinned destination immediately before encoding/writing. This is the point the
@@ -910,4 +917,46 @@ fn preview_cache_json(app: &crate::LightcraftApp) -> serde_json::Value {
         "diskBudget": disk.map(|d| d.budget()),
         "loupeEdge": app.session.loupe_edge,
     })
+}
+
+/// The reply for a screenshot with no file to write: its size and the PNG as base64 (`pngBase64`).
+fn inline_result(w: usize, h: usize, png: &[u8]) -> Value {
+    json!({"ok": true, "result": {"width": w, "height": h, "pngBase64": base64(png)}})
+}
+
+/// Standard padded base64.
+fn base64(bytes: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk.first().copied().unwrap_or(0), chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+        let at = |shift: u32| A.get((n >> shift) as usize & 63).copied().map_or('=', char::from);
+        out.push(at(18));
+        out.push(at(12));
+        out.push(if chunk.len() > 1 { at(6) } else { '=' });
+        out.push(if chunk.len() > 2 { at(0) } else { '=' });
+    }
+    out
+}
+
+#[cfg(test)]
+mod inline_tests {
+    use super::*;
+
+    #[test]
+    fn an_inline_screenshot_carries_the_png_and_its_size() {
+        let reply = inline_result(2, 1, &[0x89, b'P', b'N', b'G']);
+        assert_eq!(reply["ok"], true);
+        assert_eq!((reply["result"]["width"].as_u64(), reply["result"]["height"].as_u64()), (Some(2), Some(1)));
+        assert_eq!(reply["result"]["pngBase64"], "iVBORw==");
+    }
+
+    #[test]
+    fn base64_pads_like_the_standard() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+    }
 }

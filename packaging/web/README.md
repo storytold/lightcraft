@@ -107,3 +107,15 @@ an iframe `src`:
 | `?store=idb` | Keep the library in IndexedDB instead of OPFS |
 | `?store=memory` | Keep nothing (a throwaway session) |
 | `?reset` | Delete the library stored in this browser (asks first) |
+
+## Driving it from the page (`window.lightcraft`)
+
+Every LightCraft web build puts the page command API on `window.lightcraft`, from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app, beside LightCraft's own `lightcraft.command(id, params)`. `lightcraft.request(method, params)` calls any method of the control channel the desktop app serves (`docs/control-protocol.md`), and `execute(command, params)`, `commands()`, `uiInspect(params)` and `screenshot(params)` are shortcuts for the common ones; LightCraft has no `document.inspect`, so there is no `docInspect`. Each returns a Promise that resolves with the method's result and rejects with an `Error`; a call the app does not answer within 30 seconds rejects, and the app skips it if it has not started it. A call the app has already started still finishes, so a retry after a timeout can apply a command twice.
+
+```js
+await lightcraft.request("ui.set", { view: "detail" });
+const ui = await lightcraft.uiInspect();                             // the UI state
+const { data } = await lightcraft.screenshot();                      // the window as PNG (base64)
+```
+
+The API is installed in every session; opening photos and the unsaved flag stay with the host messages.
