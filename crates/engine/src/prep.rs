@@ -220,6 +220,10 @@ pub struct PrepState {
     /// A build that couldn't start: the view (its signature), and when it may try again (not on
     /// every tick while the cause lasts; CodeRabbit on #3080).
     pub retry_at: Option<(u64, web_time::Instant)>,
+    /// The long edge (px) the frontend builds standard previews at (its Build Standard-Sized
+    /// Previews size; 0: [`crate::cmd::previews::standard_edge`]). The background build uses it
+    /// too, so a later build asked for skips what it made instead of rendering it again (#3947).
+    pub edge: usize,
     /// Tests: the next starts to fail, as a build thread that can't be spawned does.
     #[cfg(test)]
     pub(crate) fail_starts: usize,
@@ -420,7 +424,10 @@ impl Session {
         if ids.is_empty() {
             return;
         }
-        let p = json!({"ids": ids, "background": true, "from": at.0, "backward": backward});
+        let mut p = json!({"ids": ids, "background": true, "from": at.0, "backward": backward});
+        if let Some(o) = p.as_object_mut().filter(|_| self.prep.edge > 0) {
+            o.insert("edge".into(), json!(self.prep.edge));
+        }
         // (tests: a start made to fail, as a build thread that can't be spawned fails)
         #[cfg(test)]
         let fail = self.prep.fail_starts.checked_sub(1).map(|left| self.prep.fail_starts = left).is_some();

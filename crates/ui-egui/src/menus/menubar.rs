@@ -465,15 +465,12 @@ fn live_label(app: &LightcraftApp, id: &str, label: &str) -> String {
 }
 
 /// The parameterized submenus.
-/// The params of Build Standard-Sized Previews: automatic builds as big as the loupe on this screen shows photos
-/// (the engine's standard size, once a loupe has been drawn); before that, in a fresh session, the standard
-/// 2560 px, not the engine's 2048 px minimum, so a typical fit view needn't render again; a chosen limit is used as is.
+/// The params of Build Standard-Sized Previews: automatic builds at the standard 2560 px (not the engine's
+/// 2048 px minimum, so a typical fit view needn't render again), or as big as the loupe on this screen shows
+/// photos when that is more; a chosen limit is used as is. The background preparation builds at the same size
+/// ([`crate::state::AppSettings::standard_build_edge`]), so this build skips what it made (#3947).
 pub(crate) fn standard_build_params(settings: &crate::state::AppSettings, loupe_edge: usize) -> Value {
-    match settings.preview_limit {
-        0 if loupe_edge == 0 => json!({"size": "standard", "edge": settings.standard_preview_edge()}),
-        0 => json!({"size": "standard"}),
-        edge => json!({"size": "standard", "edge": edge}),
-    }
+    json!({"size": "standard", "edge": settings.standard_build_edge(loupe_edge)})
 }
 
 pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
