@@ -1064,6 +1064,31 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
     if elided { resp.on_hover_text(text) } else { resp }
 }
 
+/// A row of `label` and a [`dropdown`] beside it, as White Balance has, choosing one of `items`
+/// (menu label, key): the panel way to pick one of several modes, where a row of buttons for
+/// each would take more room than the choice is worth. The closed dropdown names the `active`
+/// item, or the first when none is. The dropdown registers as `dropdown:{id}` and each menu item
+/// as `{id}:{key}`. Returns the index of the item chosen this frame.
+pub fn labeled_dropdown(ui: &mut Ui, id: &str, label: &str, items: &[(&str, &str)], active: Option<usize>) -> Option<usize> {
+    let t = Tokens::get(ui.ctx());
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(crate::i18n::tr(label)).color(t.text_dim));
+        let current = active.and_then(|i| items.get(i)).or(items.first()).map_or("", |(l, _)| *l);
+        let r = dropdown(ui, id, crate::i18n::tr(current), t.font(12.5), t.text_label);
+        egui::Popup::menu(&r).show(|ui| {
+            for (i, (l, key)) in items.iter().enumerate() {
+                let item = ui.selectable_label(active == Some(i), crate::i18n::tr(l));
+                register(ui, format!("{id}:{key}"), item.rect);
+                if item.clicked() {
+                    chosen = Some(i);
+                }
+            }
+        });
+    });
+    chosen
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

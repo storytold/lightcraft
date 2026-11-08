@@ -184,13 +184,12 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
     });
     padded(ui, |ui| {
-        ui.label(crate::i18n::tr("Overlay"));
         {
             use crate::state::CropOverlay as O;
             let opts = [
                 (O::Thirds, "Thirds", "thirds"),
                 (O::Grid, "Grid", "grid"),
-                (O::Golden, "Golden", "golden"),
+                (O::Golden, "Golden Ratio", "golden"),
                 (O::Diagonal, "Diagonal", "diagonal"),
                 (O::Triangle, "Triangle", "triangle"),
                 (O::Spiral, "Spiral", "spiral"),
@@ -198,7 +197,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ];
             let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
             let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-            if let Some(i) = crate::widgets::segmented(ui, "cropOverlay", &items, active, 4) {
+            if let Some(i) = crate::widgets::labeled_dropdown(ui, "cropOverlay", "Overlay", &items, active) {
                 app.ui.crop_overlay = opts[i].0;
             }
             if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
@@ -211,7 +210,6 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
     header(ui, "Geometry");
     padded(ui, |ui| {
-        ui.label(crate::i18n::tr("Upright"));
         {
             use lightcraft_develop::Upright;
             let modes = [
@@ -224,7 +222,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ];
             let items: Vec<(&str, &str)> = modes.iter().map(|(l, _, k)| (*l, *k)).collect();
             let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
-            if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3) {
+            if let Some(i) = crate::widgets::labeled_dropdown(ui, "upright", "Upright", &items, active) {
                 let (_, mode, key) = modes[i];
                 let _ = app.run("geometry.upright", json!({"mode": key}));
                 app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
@@ -276,13 +274,12 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Remove");
     padded(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (label, tool) in [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")] {
-                if text_button(ui, &format!("removeMode-{tool}"), label, app.ui.tool == tool).clicked() {
-                    app.ui.tool = tool.into();
-                }
-            }
-        });
+        // painting with no mode chosen adds a Remove spot (`retouch.rs`), so the dropdown names it then
+        let modes = [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")];
+        let active = modes.iter().position(|(_, tool)| app.ui.tool == *tool);
+        if let Some(i) = crate::widgets::labeled_dropdown(ui, "removeMode", "Mode", &modes, active) {
+            app.ui.tool = modes[i].1.into();
+        }
         ui.add_space(8.0);
         ui.label(crate::i18n::tr_format!("{} spot(s) on this photo", d.spots.len()));
         ui.add_space(4.0);
