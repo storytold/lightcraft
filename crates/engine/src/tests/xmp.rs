@@ -1390,6 +1390,30 @@ fn external_edit_again_after_the_copy_was_trashed_keeps_the_file_the_restored_co
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Review of #3628: the unchanged copy is still in the original's stack, but under it and collapsed. As for a new copy,
+/// the copy is put on top and the stack opened, so the editor's file shows in the grid.
+#[test]
+fn external_edit_again_puts_a_hidden_copy_back_on_top_of_its_stack() {
+    let dir = temp_dir("extedit-hidden");
+    let src = dir.join("beach.png");
+    write_png(&src, 9);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let orig = s.active().unwrap();
+    let first = s.execute("photo.editExternal", &json!({})).unwrap();
+    let copy = lightcraft_catalog::PhotoId(first["id"].as_u64().unwrap());
+    // the original on top, the stack collapsed: the copy is hidden under it
+    s.execute("stack.group", &json!({"ids": [orig.0, copy.0], "top": orig.0, "collapsed": true})).unwrap();
+    let hidden = s.catalog.stack_of(copy).expect("stacked");
+    assert_eq!((hidden.top(), hidden.collapsed), (orig, true));
+    s.execute("library.select", &json!({"ids": [orig.0]})).unwrap();
+    let again = s.execute("photo.editExternal", &json!({})).unwrap();
+    assert_eq!(again["id"].as_u64(), Some(copy.0), "the same copy");
+    let st = s.catalog.stack_of(copy).expect("still stacked");
+    assert_eq!((st.top(), st.collapsed, st.photos.contains(&orig)), (copy, false, true));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Review of #3628: same bytes alone don't make another photo this photo's edit copy. An unrelated photo that holds the
 /// render is not handed to the editor or stacked; the command fails and leaves no stray file.
 #[test]
