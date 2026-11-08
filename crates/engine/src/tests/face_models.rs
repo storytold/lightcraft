@@ -647,7 +647,7 @@ fn the_faces_a_match_is_based_on_are_kept_and_bad_values_are_refused() {
     let d = temp("top-faces");
     let mut s = session(&d);
     let v = s.execute("faces.matching", &json!({})).unwrap();
-    assert_eq!((v["topFaces"].clone(), v["default"].clone()), (json!(2), json!(2)), "{v}");
+    assert_eq!((v["topFaces"].clone(), v["topFacesDefault"].clone(), v["topFacesMax"].clone()), (json!(2), json!(2), json!(8)), "{v}");
     assert_eq!(s.execute("faces.matching", &json!({"topFaces": 4})).unwrap()["topFaces"], 4);
     // kept with the models, beside the other face settings, which it leaves alone
     assert_eq!(s.execute("faces.gpu", &json!({"cpuOnly": true})).unwrap()["cpuOnly"], true);

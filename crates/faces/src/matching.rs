@@ -81,9 +81,13 @@ pub fn rank_top(query: &[f32], gallery: &[(&str, &[f32])], top: usize) -> Vec<Ra
     let mut out: Vec<Ranked> = people
         .into_iter()
         .map(|(_, name, mut sims)| {
-            sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
-            let top = sims.get(..sims.len().min(top)).unwrap_or(&[]);
-            Ranked { name, score: top.iter().sum::<f32>() / top.len().max(1) as f32, faces: top.len() }
+            // only the best `top` count, so they are picked out rather than every similarity sorted: a person may
+            // have thousands of faces (similarities are finite, `cosine` sees to it)
+            if sims.len() > top {
+                sims.select_nth_unstable_by(top - 1, |a, b| b.total_cmp(a));
+                sims.truncate(top);
+            }
+            Ranked { name, score: sims.iter().sum::<f32>() / sims.len().max(1) as f32, faces: sims.len() }
         })
         .collect();
     out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal).then_with(|| a.name.cmp(&b.name)));
