@@ -448,7 +448,13 @@ impl Session {
         Ok(self.plan_merges_inner(kind, finish, ids, preview)?.0)
     }
 
-    fn plan_merges_inner(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
+    pub(crate) fn plan_merges_inner(
+        &self,
+        kind: MergeKind,
+        finish: MergeFinish,
+        ids: &[PhotoId],
+        preview: bool,
+    ) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
         let groups = self.merge_groups(ids);
         let read = self.merge_reader();
         let mut jobs = Vec::new();
