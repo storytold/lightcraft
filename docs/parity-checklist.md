@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 418 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 419 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 545 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 57.0% of 179.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
