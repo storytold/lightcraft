@@ -1,9 +1,13 @@
 //! Issue #2882 / TEST-TIFF-ZIP: noisy 8/16-bit ZIP TIFFs stay within their uncompressed size.
 //! Use the backend selected by the application dependency graph, without forcing a test-only backend:
 //! #3800 removed craft-update's zlib-rs feature so Windows uses miniz_oxide like the other platforms.
-//! Running these tests across the workspace also catches a dependency switching the backend again.
+//! Backend regression qualification requires `cargo xtask ci`, which runs these tests with workspace
+//! feature unification, or `cargo test --workspace --lib --bins --tests tiff_zip::` with the same
+//! application features. A package-only `cargo test -p lightcraft-codecs` is a codec diagnostic,
+//! not evidence for the shipped application's backend: downstream dependencies can enable features
+//! that are absent from that smaller graph. Do not add a test-only flate2 dependency to select one.
 
-use lightcraft_codecs::*;
+use lightcraft_codecs::{DecodeOptions, EncodeImage, EncodeMeta, Samples, TiffCompression, decode, encode_tiff};
 
 /// A deterministic value in -0.5..0.5 per position and channel.
 fn hash(x: u32, y: u32, c: u32) -> f64 {
@@ -28,12 +32,21 @@ fn noisy16(w: u32, h: u32, noise: f64) -> Vec<u16> {
     v
 }
 
-/// Both depths must actually use Deflate and decode at the original dimensions.
+/// Both depths must use Deflate and preserve every integer sample as well as the dimensions.
 fn checked_zip_size(img: &EncodeImage<'_>) -> usize {
     let bytes = encode_tiff(img, TiffCompression::Deflate, &EncodeMeta::default()).unwrap();
     let mut decoder = tiff::decoder::Decoder::new(std::io::Cursor::new(&bytes)).unwrap();
     let compression = decoder.get_tag_u32(tiff::tags::Tag::Compression).unwrap();
     assert!(matches!(compression, 8 | 32946), "Compression tag {compression} is not Deflate");
+    match (img.samples, decoder.read_image().unwrap()) {
+        (Samples::U8(expected), tiff::decoder::DecodingResult::U8(actual)) => {
+            assert!(actual.as_slice() == expected, "8-bit TIFF samples changed during the lossless round trip");
+        }
+        (Samples::U16(expected), tiff::decoder::DecodingResult::U16(actual)) => {
+            assert!(actual.as_slice() == expected, "16-bit TIFF samples changed during the lossless round trip");
+        }
+        _ => panic!("decoded TIFF sample type differs from the integer fixture"),
+    }
     let decoded = decode(&bytes, DecodeOptions::default()).unwrap();
     assert_eq!((decoded.image.width, decoded.image.height), (img.width as usize, img.height as usize));
     bytes.len()
@@ -68,7 +81,7 @@ fn eight_bit_zip_tiff_is_never_larger_than_uncompressed() {
 }
 
 /// What ZIP costs at 24 MP, 16 bit (ignored by default):
-/// `cargo test --release -p lightcraft-codecs --test it tiff_zip::bench -- --ignored --nocapture`
+/// `cargo test --release --workspace --lib --bins --tests tiff_zip::bench -- --ignored --nocapture`
 #[test]
 #[ignore]
 fn bench_24mp_16_bit_zip() {
