@@ -2155,3 +2155,55 @@ fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     assert_eq!((a.exposure, a.shadows, a.clarity, a.amount), (0.7, 25.0, 0.0, 50.0));
     assert_eq!(exec(&mut h, "mask.effects", json!({}))["current"], "Lift");
 }
+
+/// People: without the model the tile offers it (and resumes People after); with it, the chooser
+/// lists the photo's faces (a name, else "Person N"), hints when there are none, and keeps the
+/// person and parts picked until Cancel.
+#[test]
+fn the_people_chooser_lists_faces_and_parts() {
+    use crate::state::{Dialog, PeopleChoice};
+    use lightcraft_engine::segment::Segmenter;
+    let mut h = detail("panel.masking");
+    let id = h.app.session.active().expect("active photo");
+    let set_faces = |h: &mut Headless, regions: Vec<lightcraft_meta::Region>| {
+        let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
+        meta.regions = regions;
+        h.app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    };
+    let face = |x: f64, name: Option<&str>| lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect { x0: x, y0: 0.2, x1: x + 0.2, y1: 0.5 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: name.map(str::to_string),
+        description: None,
+    };
+    set_faces(&mut h, vec![]);
+    if Segmenter::AVAILABLE {
+        let dir = std::env::temp_dir().join(format!("lc-ui-people-no-sam3-{}", std::process::id()));
+        h.app.session.segmenter.dir = Some(dir);
+        click(&mut h, "maskNew:people");
+        assert_eq!(h.app.ui.dialog, Some(Dialog::SamModel { then: Some(("people".into(), "new".into())), error: None }));
+        assert_eq!(h.app.ui.people, None);
+        h.app.ui.dialog = None;
+    }
+    // (no model folder: nothing to offer, the chooser opens and a request says what's missing)
+    h.app.session.segmenter.dir = None;
+    click(&mut h, "maskNew:people");
+    assert_eq!(h.app.ui.people, Some(PeopleChoice { op: "new".into(), person: 0, parts: [true, false, false, false, false] }));
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "button:maskPeopleDetect"), "no faces: Detect Faces is offered");
+    set_faces(&mut h, vec![face(0.1, Some("Ana Lima")), face(0.6, None)]);
+    h.step();
+    h.step();
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "maskPerson:0") && h.app.widgets.iter().any(|(w, _)| w == "maskPerson:1"));
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "button:maskPeopleDetect"));
+    click(&mut h, "maskPerson:1");
+    click(&mut h, "check:maskPeoplePart3");
+    assert_eq!(h.app.ui.people, Some(PeopleChoice { op: "new".into(), person: 1, parts: [true, false, false, true, false] }));
+    assert!(develop(&h).masks.is_empty(), "nothing is made before the button");
+    click(&mut h, "button:maskPeopleCancel");
+    assert_eq!(h.app.ui.people, None);
+    // the component menu opens it for the selected mask
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    click(&mut h, "button:maskMinus:1");
+    click(&mut h, "maskComp:subtract:people");
+    assert_eq!(h.app.ui.people.as_ref().map(|p| p.op.as_str()), Some("subtract"));
+}
