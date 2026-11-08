@@ -199,7 +199,7 @@ impl Cr3<'_> {
             let mut at = 0usize;
             while budget > 0 {
                 budget -= 1;
-                let Some(len) = le32(sample, at).and_then(|v| usize::try_from(v).ok()) else { break };
+                let Some(len) = le32(sample, at).and_then(|value| usize::try_from(value).ok()) else { break };
                 let Some(end) = at.checked_add(len).filter(|&end| len >= 12 && end <= sample.len()) else { break };
                 let Some(record) = sample.get(at..end) else { break };
                 let Some(kind) = le16(record, 4) else { break };
@@ -207,7 +207,7 @@ impl Cr3<'_> {
                     let mut item_at = 12usize;
                     while budget > 0 {
                         budget -= 1;
-                        let Some(item_len) = le32(record, item_at).and_then(|v| usize::try_from(v).ok()) else { break };
+                        let Some(item_len) = le32(record, item_at).and_then(|value| usize::try_from(value).ok()) else { break };
                         let Some(item_end) = item_at.checked_add(item_len).filter(|&end| item_len >= 8 && end <= record.len()) else { break };
                         let Some(item) = record.get(item_at..item_end) else { break };
                         if let Some(tag @ (0x8769 | 0x927c)) = le32(item, 4)
@@ -222,6 +222,55 @@ impl Cr3<'_> {
             }
         }
         out
+    }
+
+    /// Read timed EXIF records only when every CTMD sample and record is structurally complete.
+    pub(crate) fn timed_exif_with_status<'a>(&self, bytes: &'a [u8]) -> Option<Vec<Cr3TimedExif<'a>>> {
+        let mut out = Vec::new();
+        let mut budget = MAX_BOXES;
+        for track in &self.tracks {
+            if track.kind != Cr3TrackKind::Other(*b"CTMD") {
+                continue;
+            }
+            let (at, len) = track.data?;
+            let sample = bytes.get(at..at.checked_add(len)?)?;
+            if sample.is_empty() {
+                return None;
+            }
+            let mut at = 0usize;
+            while at < sample.len() {
+                if budget == 0 {
+                    return None;
+                }
+                budget -= 1;
+                let len = le32(sample, at).and_then(|value| usize::try_from(value).ok())?;
+                let end = at.checked_add(len).filter(|&end| len >= 12 && end <= sample.len())?;
+                let record = sample.get(at..end)?;
+                let kind = le16(record, 4)?;
+                if !matches!(kind, 7..=9) {
+                    at = end;
+                    continue;
+                }
+                let mut item_at = 12usize;
+                while item_at < record.len() {
+                    if budget == 0 {
+                        return None;
+                    }
+                    budget -= 1;
+                    let item_len = le32(record, item_at).and_then(|value| usize::try_from(value).ok())?;
+                    let item_end = item_at.checked_add(item_len).filter(|&end| item_len >= 8 && end <= record.len())?;
+                    let item = record.get(item_at..item_end)?;
+                    if let Some(tag @ (0x8769 | 0x927c)) = le32(item, 4)
+                        && let Some(data) = item.get(8..)
+                    {
+                        out.push(Cr3TimedExif { record_type: kind, tag, data });
+                    }
+                    item_at = item_end;
+                }
+                at = end;
+            }
+        }
+        Some(out)
     }
 }
 
@@ -339,9 +388,42 @@ pub(crate) fn cmt1_blocks(bytes: &[u8]) -> Option<Vec<&[u8]>> {
     collect_canon_blocks(bytes, b"CMT1")
 }
 
+/// All raw CMT2 EXIF blocks in a CR3, including duplicates discarded by the convenience view.
+pub(crate) fn cmt2_blocks(bytes: &[u8]) -> Option<Vec<&[u8]>> {
+    collect_canon_blocks(bytes, b"CMT2")
+}
+
 /// All raw THMB JPEG blocks in a CR3, including duplicates discarded by the convenience view.
 pub(crate) fn thumbnail_blocks(bytes: &[u8]) -> Option<Vec<&[u8]>> {
     collect_canon_blocks(bytes, b"THMB")
+}
+
+/// The JPEG bytes of a THMB block, whether stored directly or behind Canon's 16-byte preview header.
+pub(crate) fn thumbnail_jpeg(bytes: &[u8]) -> Option<&[u8]> {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        return Some(bytes);
+    }
+    let length = usize::try_from(be32(bytes, 12)?).ok()?;
+    if length < 4 {
+        return None;
+    }
+    let end = 16usize.checked_add(length)?;
+    let jpeg = bytes.get(16..end)?;
+    let trailing = bytes.get(end..)?;
+    (jpeg.starts_with(&[0xff, 0xd8]) && trailing.iter().all(|byte| *byte == 0)).then_some(jpeg)
+}
+
+/// All top-level CR3 XMP UUID payloads, including packets overwritten by `Cr3::xmp`.
+pub(crate) fn xmp_packets(bytes: &[u8]) -> Option<Vec<&[u8]>> {
+    if !is_cr3(bytes) {
+        return None;
+    }
+    let mut budget = MAX_BOXES;
+    let (top, complete) = boxes_with_status(bytes, 0, bytes.len(), &mut budget);
+    if !complete {
+        return None;
+    }
+    top.into_iter().filter(|b| &b.kind == b"uuid" && b.uuid == Some(XMP_UUID)).map(|b| bytes.get(b.body..b.end)).collect()
 }
 
 fn collect_canon_blocks<'a>(bytes: &'a [u8], wanted: &[u8; 4]) -> Option<Vec<&'a [u8]>> {
@@ -418,6 +500,7 @@ pub(crate) fn source_boxes_are_complete(bytes: &[u8], parsed_track_count: usize)
     found_moov && track_count == parsed_track_count && budget > 0
 }
 
+/// Validate a track's nested sample tables and reject tables whose additional samples cannot be scanned.
 fn track_boxes_are_complete(bytes: &[u8], parent: &BoxRef, depth: usize, budget: &mut usize) -> bool {
     if depth > MAX_DEPTH {
         return false;
@@ -426,6 +509,8 @@ fn track_boxes_are_complete(bytes: &[u8], parent: &BoxRef, depth: usize, budget:
     if !complete {
         return false;
     }
+    let is_sample_table = &parent.kind == b"stbl";
+    let (mut stsd_count, mut stsz_count, mut stsc_count, mut offset_table_count) = (0usize, 0usize, 0usize, 0usize);
     for child in children {
         match &child.kind {
             b"mdia" | b"minf" | b"stbl" | b"edts" => {
@@ -434,11 +519,15 @@ fn track_boxes_are_complete(bytes: &[u8], parent: &BoxRef, depth: usize, budget:
                 }
             }
             b"stsd" => {
+                stsd_count = stsd_count.saturating_add(1);
                 let Some(declared_start) = child.body.checked_add(4) else { return false };
                 let Some(declared_end) = declared_start.checked_add(4) else { return false };
                 let Some(declared) = bytes.get(declared_start..declared_end).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes) else {
                     return false;
                 };
+                if declared != 1 {
+                    return false;
+                }
                 let Some(entries_at) = child.body.checked_add(8) else { return false };
                 let (entries, complete) = boxes_with_status(bytes, entries_at, child.end, budget);
                 if !complete || u32::try_from(entries.len()).ok() != Some(declared) {
@@ -463,10 +552,34 @@ fn track_boxes_are_complete(bytes: &[u8], parent: &BoxRef, depth: usize, budget:
                     }
                 }
             }
+            b"stsz" => {
+                stsz_count = stsz_count.saturating_add(1);
+                let Some(body) = bytes.get(child.body..child.end) else { return false };
+                let (Some(sample_size), Some(sample_count)) = (be32(body, 4), be32(body, 8)) else { return false };
+                if sample_count != 1 || body.len() != if sample_size == 0 { 16 } else { 12 } {
+                    return false;
+                }
+            }
+            b"stsc" => {
+                stsc_count = stsc_count.saturating_add(1);
+                let Some(body) = bytes.get(child.body..child.end) else { return false };
+                if body.len() != 20 || be32(body, 4) != Some(1) || be32(body, 8) != Some(1) || be32(body, 12) != Some(1) || be32(body, 16) != Some(1)
+                {
+                    return false;
+                }
+            }
+            b"stco" | b"co64" => {
+                offset_table_count = offset_table_count.saturating_add(1);
+                let Some(body) = bytes.get(child.body..child.end) else { return false };
+                let offset_size = if &child.kind == b"co64" { 8 } else { 4 };
+                if be32(body, 4) != Some(1) || body.len() != 8 + offset_size {
+                    return false;
+                }
+            }
             _ => {}
         }
     }
-    true
+    !is_sample_table || (stsd_count == 1 && stsz_count == 1 && stsc_count == 1 && offset_table_count == 1)
 }
 
 fn moov<'a>(bytes: &'a [u8], m: &BoxRef, out: &mut Cr3<'a>, budget: &mut usize) {
@@ -659,14 +772,23 @@ mod tests {
         bx(b"CRAW", &b)
     }
     fn trak(entry: Vec<u8>, offset: u64, size: u32) -> Vec<u8> {
-        let mut stsd = 1u32.to_be_bytes().to_vec();
-        stsd.extend(entry);
+        trak_with_entries_and_samples(&[entry], offset, &[size])
+    }
+    fn trak_with_entries_and_samples(entries: &[Vec<u8>], offset: u64, sizes: &[u32]) -> Vec<u8> {
+        let mut stsd = u32::try_from(entries.len()).unwrap().to_be_bytes().to_vec();
+        stsd.extend(entries.concat());
         let mut stsz = 0u32.to_be_bytes().to_vec();
-        stsz.extend(1u32.to_be_bytes());
-        stsz.extend(size.to_be_bytes());
+        stsz.extend(u32::try_from(sizes.len()).unwrap().to_be_bytes());
+        for size in sizes {
+            stsz.extend(size.to_be_bytes());
+        }
+        let mut stsc = 1u32.to_be_bytes().to_vec();
+        stsc.extend(1u32.to_be_bytes());
+        stsc.extend(u32::try_from(sizes.len()).unwrap().to_be_bytes());
+        stsc.extend(1u32.to_be_bytes());
         let mut co64 = 1u32.to_be_bytes().to_vec();
         co64.extend(offset.to_be_bytes());
-        let stbl = [full(b"stsd", &stsd), full(b"stsz", &stsz), full(b"co64", &co64)].concat();
+        let stbl = [full(b"stsd", &stsd), full(b"stsz", &stsz), full(b"stsc", &stsc), full(b"co64", &co64)].concat();
         bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &stbl))))
     }
     fn tiff_with(tag: u16, v: lightcraft_tiff::Value) -> Vec<u8> {
@@ -771,11 +893,13 @@ mod tests {
         assert!(crate::source_embeds_exif_gps_location(&malformed_cmt4));
 
         let gps_cmt4 = tiff_with(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
-        let invalid_cmt1 = cr3_with(b"not a TIFF", &gps_cmt4);
-        let parsed = parse_cr3(&invalid_cmt1).unwrap();
-        assert!(merged_exif(&parsed).is_none());
-        assert_eq!(crate::exif::exif_gps_tag_presence(&gps_cmt4), Some(false), "CMT4 stores the GPS IFD as its root IFD");
-        assert!(crate::source_embeds_exif_gps_location(&invalid_cmt1));
+        let valid_cmt1 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
+        let gps_cmt4_file = cr3_with(&valid_cmt1, &gps_cmt4);
+        let parsed = parse_cr3(&gps_cmt4_file).unwrap();
+        let merged = merged_exif(&parsed).unwrap();
+        assert_eq!(crate::exif::exif_gps_tag_presence(&merged), Some(true));
+        assert_eq!(crate::exif::exif_gps_tag_presence(&gps_cmt4), Some(true), "CMT4 stores location tags in its root IFD");
+        assert!(crate::source_embeds_exif_gps_location(&gps_cmt4_file));
     }
 
     /// A partially traversed CR3 box tree cannot establish that location-bearing data is absent.
@@ -797,7 +921,8 @@ mod tests {
 
         for tag in [t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE] {
             let cmt4 = tiff_with(tag, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
-            let canon = uuid(&CANON_UUID, &[bx(b"CMT1", b"not a TIFF"), bx(b"CMT4", &cmt4)].concat());
+            let cmt1 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
+            let canon = uuid(&CANON_UUID, &[bx(b"CMT1", &cmt1), bx(b"CMT4", &cmt4)].concat());
             let file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat();
             assert!(crate::source_embeds_exif_gps_location(&file), "CMT4 destination tag {tag}");
         }
@@ -808,7 +933,7 @@ mod tests {
     fn source_gps_guard_checks_duplicate_cmt4_packets() {
         use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
 
-        let cmt1 = b"not a TIFF".to_vec();
+        let cmt1 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
         let mut gps = IfdBuilder::new();
         gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
         let gps_cmt4 = TiffWriter::default().write(&[gps]).unwrap();
@@ -818,7 +943,8 @@ mod tests {
 
         let parsed = parse_cr3(&file).unwrap();
         assert_eq!(parsed.cmt[3], Some(empty_cmt4.as_slice()));
-        assert!(merged_exif(&parsed).is_none());
+        let merged = merged_exif(&parsed).unwrap();
+        assert!(crate::read_exif(&merged).gps.is_none(), "the convenience merge keeps only the later clean block");
 
         assert!(crate::source_embeds_exif_gps_location(&file));
     }
@@ -863,6 +989,44 @@ mod tests {
         assert!(crate::source_embeds_exif_gps_location(&file));
     }
 
+    /// CMT4 location tags in any IFD in its TIFF chain must block an Original copy.
+    #[test]
+    fn source_gps_guard_checks_every_cmt4_root_ifd() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let cmt1 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
+        let clean = IfdBuilder::new().with(t::MAKE, Value::Ascii("Canon".into()));
+        let located = IfdBuilder::new().with(t::GPS_DEST_LATITUDE, Value::Rational(vec![(45, 1), (0, 1), (0, 1)]));
+        let cmt4 = TiffWriter::default().write(&[clean, located]).unwrap();
+        let canon = uuid(&CANON_UUID, &[bx(b"CMT1", &cmt1), bx(b"CMT4", &cmt4)].concat());
+        let file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat();
+
+        assert!(crate::source_embeds_exif_gps_location(&file));
+    }
+
+    /// CMT2 blocks and every XMP UUID are retained by Original export and must be inspected.
+    #[test]
+    fn source_gps_guard_checks_cmt2_and_every_xmp_packet() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let clean_cmt1 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let mut cmt2_root = IfdBuilder::new();
+        cmt2_root.set_child(t::GPS_IFD, gps);
+        let cmt2 = TiffWriter::default().write(&[cmt2_root]).unwrap();
+        let canon = uuid(&CANON_UUID, &[bx(b"CMT1", &clean_cmt1), bx(b"CMT2", &cmt2)].concat());
+        let cmt2_file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat();
+        assert!(crate::source_embeds_exif_gps_location(&cmt2_file), "CMT2 GPS pointers must be checked before merging");
+
+        let located = crate::write_xmp(&crate::Metadata { city: Some("Cusco".into()), ..Default::default() }, None);
+        let clean = crate::write_xmp(&crate::Metadata { title: Some("No location".into()), ..Default::default() }, None);
+        let mut file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &bx(b"uuid", &CANON_UUID))].concat();
+        file.extend(uuid(&XMP_UUID, located.as_bytes()));
+        file.extend(uuid(&XMP_UUID, clean.as_bytes()));
+        assert!(crate::source_embeds_exif_gps_location(&file), "a later clean packet cannot hide an earlier location packet");
+    }
+
     fn jpeg_with_gps() -> Vec<u8> {
         use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
 
@@ -894,6 +1058,112 @@ mod tests {
         let at = usize::try_from(payload_at).unwrap();
         track_file[at..at + jpeg.len()].copy_from_slice(&jpeg);
         assert!(crate::source_embeds_exif_gps_location(&track_file), "GPS in the JPEG track must be found");
+    }
+
+    /// THMB may contain a length-prefixed preview header before its JPEG bytes.
+    #[test]
+    fn source_gps_guard_parses_wrapped_thmb_before_scanning() {
+        let cmt1 = tiff_with(0x010f, lightcraft_tiff::Value::Ascii("Canon".into()));
+        let jpeg = vec![0xff, 0xd8, 0xff, 0xd9];
+        let mut thmb = vec![0; 12];
+        thmb.extend_from_slice(&u32::try_from(jpeg.len()).unwrap().to_be_bytes());
+        thmb.extend_from_slice(&jpeg);
+        let canon = uuid(&CANON_UUID, &[bx(b"CMT1", &cmt1), bx(b"THMB", &thmb)].concat());
+        let file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat();
+
+        assert!(!crate::source_embeds_exif_gps_location(&file), "a valid wrapped clean preview should not block Original export");
+    }
+
+    /// The location guard cannot infer absence from an invalid or uninspected JPEG track sample.
+    #[test]
+    fn source_gps_guard_rejects_unframed_or_additional_jpeg_samples() {
+        let cmt1 = tiff_with(0x010f, lightcraft_tiff::Value::Ascii("Canon".into()));
+        let canon = uuid(&CANON_UUID, &bx(b"CMT1", &cmt1));
+        let offset = 4096u64;
+
+        let invalid_jpeg_track = trak(craw(16, 16, &bx(b"JPEG", &[0; 4])), offset, 4);
+        let mut unframed = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &[canon.clone(), invalid_jpeg_track].concat())].concat();
+        unframed.resize(usize::try_from(offset).unwrap().saturating_add(4), 0);
+        assert!(crate::source_embeds_exif_gps_location(&unframed), "a JPEG track without SOI is unverified");
+
+        let clean_jpeg = vec![0xff, 0xd8, 0xff, 0xd9];
+        let gps_jpeg = jpeg_with_gps();
+        let sizes = [u32::try_from(clean_jpeg.len()).unwrap(), u32::try_from(gps_jpeg.len()).unwrap()];
+        let raw_description = craw(16, 16, &bx(b"CMP1", &[0; 4]));
+        let jpeg_description = craw(16, 16, &bx(b"JPEG", &[0; 4]));
+        let multiple_descriptions = trak_with_entries_and_samples(&[raw_description.clone(), jpeg_description], offset, &[sizes[0]]);
+        let mut multiple_descriptions =
+            [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &[canon.clone(), multiple_descriptions].concat())].concat();
+        multiple_descriptions.resize(usize::try_from(offset).unwrap().saturating_add(clean_jpeg.len()), 0);
+        multiple_descriptions[usize::try_from(offset).unwrap()..].copy_from_slice(&clean_jpeg);
+        assert!(crate::source_embeds_exif_gps_location(&multiple_descriptions), "multiple descriptions are not all inspected");
+
+        let jpeg_description = craw(16, 16, &bx(b"JPEG", &[0; 4]));
+        let multiple_samples = trak_with_entries_and_samples(&[jpeg_description], offset, &sizes);
+        let mut multiple_samples = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &[canon, multiple_samples].concat())].concat();
+        multiple_samples.resize(usize::try_from(offset).unwrap().saturating_add(clean_jpeg.len()).saturating_add(gps_jpeg.len()), 0);
+        let second_start = usize::try_from(offset).unwrap().saturating_add(clean_jpeg.len());
+        multiple_samples[usize::try_from(offset).unwrap()..second_start].copy_from_slice(&clean_jpeg);
+        multiple_samples[second_start..].copy_from_slice(&gps_jpeg);
+        assert!(crate::source_embeds_exif_gps_location(&multiple_samples), "a later JPEG sample must not be skipped");
+    }
+
+    /// GPS pointers in CTMD Exif records are retained even though static CMT blocks are clean.
+    #[test]
+    fn source_gps_guard_checks_ctmd_exif_records_and_fails_closed() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let cmt1 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let mut exif = IfdBuilder::new();
+        exif.set_child(t::GPS_IFD, gps);
+        let exif = TiffWriter::default().write(&[exif]).unwrap();
+        let mut item = u32::try_from(exif.len().saturating_add(8)).unwrap().to_le_bytes().to_vec();
+        item.extend_from_slice(&0x8769u32.to_le_bytes());
+        item.extend_from_slice(&exif);
+        let mut sample = vec![0u8; 12];
+        let record_len = u32::try_from(sample.len().saturating_add(item.len())).unwrap();
+        sample[0..4].copy_from_slice(&record_len.to_le_bytes());
+        sample[4..6].copy_from_slice(&8u16.to_le_bytes());
+        sample.extend_from_slice(&item);
+        let offset = 4096u64;
+        let track = trak(bx(b"CTMD", &[]), offset, u32::try_from(sample.len()).unwrap());
+        let canon = uuid(&CANON_UUID, &bx(b"CMT1", &cmt1));
+        let mut file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &[canon.clone(), track.clone()].concat())].concat();
+        let start = usize::try_from(offset).unwrap();
+        file.resize(start.saturating_add(sample.len()), 0);
+        file[start..].copy_from_slice(&sample);
+        assert!(crate::source_embeds_exif_gps_location(&file), "CTMD Exif GPS cannot be dropped from the Original");
+
+        let mut malformed = sample;
+        malformed[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &[canon, track].concat())].concat();
+        file.resize(start.saturating_add(malformed.len()), 0);
+        file[start..].copy_from_slice(&malformed);
+        assert!(crate::source_embeds_exif_gps_location(&file), "malformed CTMD records cannot authorize an Original copy");
+    }
+
+    #[test]
+    fn source_gps_guard_skips_valid_non_exif_ctmd_records() {
+        use lightcraft_tiff::{Value, tags as t};
+
+        let record = |kind: u16| {
+            let mut record = vec![0u8; 12];
+            record[0..4].copy_from_slice(&12u32.to_le_bytes());
+            record[4..6].copy_from_slice(&kind.to_le_bytes());
+            record
+        };
+        let sample = [record(1), record(8)].concat();
+        let offset = 4096u64;
+        let track = trak(bx(b"CTMD", &[]), offset, u32::try_from(sample.len()).unwrap_or(u32::MAX));
+        let canon = uuid(&CANON_UUID, &bx(b"CMT1", &tiff_with(t::MAKE, Value::Ascii("Canon".into()))));
+        let mut file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &[canon, track].concat())].concat();
+        let start = usize::try_from(offset).unwrap_or(0);
+        file.resize(start.saturating_add(sample.len()), 0);
+        file[start..].copy_from_slice(&sample);
+
+        assert!(!crate::source_embeds_exif_gps_location(&file), "valid non-EXIF CTMD records do not make location uncheckable");
     }
 
     fn compression_payload(levels: u8) -> Vec<u8> {

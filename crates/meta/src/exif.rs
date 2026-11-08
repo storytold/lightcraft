@@ -88,16 +88,20 @@ pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
                 return true;
             }
         }
+        let Some(cmt2_blocks) = crate::cr3::cmt2_blocks(bytes) else { return true };
+        for cmt2 in cmt2_blocks {
+            if exif_gps_tag_presence_with_budget(cmt2, 0, &mut budget) != Some(false) {
+                return true;
+            }
+        }
         let Some(cmt4s) = crate::cr3::cmt4_blocks(bytes) else { return true };
         if cmt4s.into_iter().any(|cmt4| cr3_cmt4_embeds_gps_location_with_budget(cmt4, &mut budget) != Some(false)) {
             return true;
         }
         let Some(thumbnails) = crate::cr3::thumbnail_blocks(bytes) else { return true };
         for thumbnail in thumbnails {
-            if !thumbnail.starts_with(&[0xff, 0xd8]) {
-                return true;
-            }
-            if crate::container::jpeg_embeds_location_in_preview(thumbnail, 1, &mut budget) {
+            let Some(jpeg) = crate::cr3::thumbnail_jpeg(thumbnail) else { return true };
+            if crate::container::jpeg_embeds_location_in_preview(jpeg, 1, &mut budget) {
                 return true;
             }
         }
@@ -108,20 +112,46 @@ pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
             let Some((at, len)) = track.data else { return true };
             let Some(end) = at.checked_add(len) else { return true };
             let Some(jpeg) = bytes.get(at..end) else { return true };
+            if !jpeg.starts_with(&[0xff, 0xd8]) {
+                return true;
+            }
             if crate::container::jpeg_embeds_location_in_preview(jpeg, 1, &mut budget) {
+                return true;
+            }
+        }
+        let Some(xmp_packets) = crate::cr3::xmp_packets(bytes) else { return true };
+        for packet in xmp_packets {
+            if !crate::container::consume_gps_scan_work(&mut budget, packet.len()) || crate::container::xmp_packet_has_location(packet) != Some(false)
+            {
+                return true;
+            }
+        }
+        let Some(timed_exif) = cr3.timed_exif_with_status(bytes) else { return true };
+        for part in timed_exif.into_iter().filter(|part| part.tag == 0x8769) {
+            if exif_gps_tag_presence_with_budget(part.data, 1, &mut budget) != Some(false) {
                 return true;
             }
         }
         return false;
     }
     if crate::heif::is_heif(bytes) {
-        let Some(exifs) = crate::heif::exif_items(bytes) else { return true };
+        let Some((exifs, xmp_packets)) = crate::heif::privacy_items(bytes, &mut budget) else { return true };
         for exif in exifs {
             if exif_gps_tag_presence_with_budget(&exif, 0, &mut budget) != Some(false) {
                 return true;
             }
         }
+        for packet in xmp_packets {
+            if !crate::container::consume_gps_scan_work(&mut budget, packet.len())
+                || crate::container::xmp_packet_has_location(&packet) != Some(false)
+            {
+                return true;
+            }
+        }
         return false;
+    }
+    if bytes.starts_with(b"8BPS") {
+        return crate::psd::embeds_location(bytes, &mut budget) != Some(false);
     }
     match crate::container::embedded(bytes).exif.as_deref() {
         Some(exif) => exif_gps_tag_presence_with_budget(exif, 0, &mut budget) != Some(false),
@@ -165,9 +195,12 @@ fn cr3_cmt4_embeds_gps_location_with_budget(bytes: &[u8], budget: &mut usize) ->
     };
     *budget = remaining;
     let (tiff, complete) = Tiff::parse_with_status(strip_exif_header(bytes), &ParseOptions::default()).ok()?;
-    let gps = tiff.ifds.first()?;
-    let has_location = gps.contains(t::GPS_IFD)
-        || [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE].into_iter().any(|tag| gps.contains(tag));
+    let has_location = tiff.all_ifds().into_iter().any(|ifd| {
+        ifd.contains(t::GPS_IFD)
+            || [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE]
+                .into_iter()
+                .any(|tag| ifd.contains(tag))
+    });
     if has_location {
         return Some(true);
     }
@@ -192,13 +225,28 @@ pub(crate) fn exif_gps_tag_presence_with_budget(bytes: &[u8], depth: usize, budg
     };
     *budget = remaining;
     let (tiff, complete) = Tiff::parse_with_status(data, &ParseOptions::default()).ok()?;
-    if tiff.all_ifds().into_iter().any(|ifd| ifd.contains(t::GPS_IFD)) {
-        return Some(true);
-    }
-    if tiff.gps().is_some_and(|gps| {
-        [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE].into_iter().any(|tag| gps.contains(tag))
+    let all_ifds = tiff.all_ifds();
+    if all_ifds.iter().any(|ifd| {
+        ifd.contains(t::GPS_IFD)
+            || [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE]
+                .into_iter()
+                .any(|tag| ifd.contains(tag))
     }) {
         return Some(true);
+    }
+    for ifd in &all_ifds {
+        if ifd.contains(t::XMP) {
+            let packet = ifd.bytes(t::XMP)?;
+            if !crate::container::consume_gps_scan_work(budget, packet.len()) || crate::container::xmp_packet_has_location(packet) != Some(false) {
+                return Some(true);
+            }
+        }
+        if ifd.contains(t::IPTC_NAA) {
+            let iim = ifd.bytes(t::IPTC_NAA)?;
+            if !crate::container::consume_gps_scan_work(budget, iim.len()) || crate::iptc::contains_place_name(iim) != Some(false) {
+                return Some(true);
+            }
+        }
     }
     if !complete {
         return None;
@@ -794,6 +842,19 @@ pub(crate) mod tests {
             let bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
             assert!(exif_embeds_gps_location(&bytes), "destination tag {tag}");
         }
+    }
+
+    /// Location values in TIFF XMP and IPTC prevent an unchanged Original copy.
+    #[test]
+    fn source_tiff_guard_checks_xmp_and_iptc_location() {
+        let xmp = crate::write_xmp(&Metadata { city: Some("Cusco".into()), ..Default::default() }, None);
+        let xmp_tiff = TiffWriter::default().write(&[IfdBuilder::new().with(t::XMP, Value::Byte(xmp.into_bytes()))]).unwrap();
+
+        let iim = [0x1c, 2, 90, 0, 5, b'C', b'u', b's', b'c', b'o'];
+        let iptc_tiff = TiffWriter::default().write(&[IfdBuilder::new().with(t::IPTC_NAA, Value::Undefined(iim.to_vec()))]).unwrap();
+
+        assert!(source_embeds_exif_gps_location(&xmp_tiff), "TIFF tag 700 can contain place names");
+        assert!(source_embeds_exif_gps_location(&iptc_tiff), "TIFF IPTC can contain place names");
     }
 
     /// An unreadable GPS child still counts when its parent contains the GPS pointer tag.

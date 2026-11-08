@@ -90,7 +90,10 @@ pub(crate) fn contains_place_name(mut b: &[u8]) -> Option<bool> {
         }
         let end = at.checked_add(size)?;
         let value = b.get(at..end)?;
-        if record == 2 && matches!(dataset, 90 | 92 | 95 | 100 | 101) && value.iter().any(|byte| !matches!(byte, 0 | b' ' | b'\t' | b'\r' | b'\n')) {
+        if record == 2
+            && matches!(dataset, 26 | 27 | 90 | 92 | 95 | 100 | 101)
+            && value.iter().any(|byte| !matches!(byte, 0 | b' ' | b'\t' | b'\r' | b'\n'))
+        {
             return Some(true);
         }
         b = b.get(end..)?;
@@ -122,6 +125,18 @@ pub(crate) mod tests {
         ds(&mut v, 2, 55, b"20210304");
         ds(&mut v, 2, 60, b"101112+0100");
         v
+    }
+
+    #[test]
+    fn content_location_datasets_are_location_bearing() {
+        for dataset in [26, 27] {
+            let mut iim = Vec::new();
+            ds(&mut iim, 2, dataset, b"Cusco");
+            assert_eq!(contains_place_name(&iim), Some(true), "dataset {dataset}");
+        }
+        let mut iim = Vec::new();
+        ds(&mut iim, 2, 26, b" \0\t");
+        assert_eq!(contains_place_name(&iim), Some(false));
     }
 
     #[test]

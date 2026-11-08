@@ -30,6 +30,7 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("aux", "http://ns.adobe.com/exif/1.0/aux/"),
     ("lr", "http://ns.adobe.com/lightroom/1.0/"),
     ("Iptc4xmpCore", "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"),
+    ("Iptc4xmpExt", "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"),
     ("lc", LC_NS),
     // Read-only: develop settings written by other raw developers (interchange; see docs/xmp-interop.md).
     ("crs", CRS_NS),

@@ -31,6 +31,11 @@ pub(crate) fn embedded(bytes: &[u8]) -> Embedded {
 }
 
 pub(crate) fn parse(bytes: &[u8]) -> Option<Embedded> {
+    parse_resources(resource_section(bytes)?)
+}
+
+/// Read the bounded Photoshop image-resource section from a PSD or PSB header.
+fn resource_section(bytes: &[u8]) -> Option<&[u8]> {
     let mut reader = Reader { bytes, offset: 0 };
     if reader.take(4)? != b"8BPS" || !matches!(reader.u16()?, 1 | 2) {
         return None;
@@ -40,8 +45,58 @@ pub(crate) fn parse(bytes: &[u8]) -> Option<Embedded> {
     let colour_mode_length = usize::try_from(reader.u32()?).ok()?;
     reader.take(colour_mode_length)?;
     let resource_length = usize::try_from(reader.u32()?).ok()?;
-    let resources = reader.take(resource_length)?;
-    parse_resources(resources)
+    reader.take(resource_length)
+}
+
+/// Inspect every location-bearing image resource before allowing an unchanged PSD/PSB copy.
+/// `None` means the resource section or one of its recognized payloads could not be verified.
+pub(crate) fn embeds_location(bytes: &[u8], budget: &mut usize) -> Option<bool> {
+    const MAX_RESOURCES: usize = 4096;
+
+    let mut reader = Reader { bytes: resource_section(bytes)?, offset: 0 };
+    let mut count = 0usize;
+    while reader.offset < reader.bytes.len() {
+        count = count.checked_add(1)?;
+        if count > MAX_RESOURCES || reader.take(4)? != b"8BIM" {
+            return None;
+        }
+        let id = reader.u16()?;
+        let name_length = usize::from(*reader.take(1)?.first()?);
+        let pascal_length = 1usize.checked_add(name_length)?.checked_add(1)? & !1;
+        reader.take(pascal_length.checked_sub(1)?)?;
+        let data_length = usize::try_from(reader.u32()?).ok()?;
+        let data = reader.take(data_length)?;
+
+        match id {
+            1058 => {
+                if !crate::container::consume_gps_scan_work(budget, data.len())
+                    || crate::exif::exif_gps_tag_presence_with_budget(data, 0, budget) != Some(false)
+                {
+                    return Some(true);
+                }
+            }
+            1060 => {
+                if !crate::container::consume_gps_scan_work(budget, data.len()) {
+                    return Some(true);
+                }
+                let Some(packet) = std::str::from_utf8(data).ok().map(|text| text.trim_end_matches('\0').as_bytes()) else {
+                    return Some(true);
+                };
+                if crate::container::xmp_packet_has_location(packet) != Some(false) {
+                    return Some(true);
+                }
+            }
+            0x0404 if !crate::container::consume_gps_scan_work(budget, data.len()) || crate::iptc::contains_place_name(data) != Some(false) => {
+                return Some(true);
+            }
+            _ => {}
+        }
+
+        if !data.len().is_multiple_of(2) {
+            reader.take(1)?;
+        }
+    }
+    Some(false)
 }
 
 fn parse_resources(bytes: &[u8]) -> Option<Embedded> {
@@ -157,6 +212,26 @@ mod tests {
         assert_eq!(actual.capture_time, metadata.capture_time);
         assert_eq!(actual.gps, metadata.gps);
         assert_eq!(actual.title, metadata.title);
+    }
+
+    #[test]
+    fn original_gps_guard_checks_psd_xmp_and_iptc_resources() {
+        let located_xmp = crate::write_xmp(&Metadata { city: Some("Cusco".into()), ..Default::default() }, None);
+        let clean_xmp = crate::write_xmp(&Metadata { title: Some("No location".into()), ..Default::default() }, None);
+        let place_name_iim = [0x1c, 2, 90, 0, 5, b'P', b'a', b'r', b'i', b's'];
+        let clean_iim = [0x1c, 2, 5, 0, 5, b'T', b'i', b't', b'l', b'e'];
+
+        for resources in
+            [resource(1060, b"", located_xmp.as_bytes()), resource(0x0404, b"", &place_name_iim), resource(1060, b"", b"<x:xmpmeta><broken")]
+        {
+            assert!(
+                crate::source_embeds_exif_gps_location(&image(1, &[], &resources)),
+                "unverified or location-bearing PSD metadata blocks an unchanged copy"
+            );
+        }
+
+        let clean_resources = [resource(1060, b"", clean_xmp.as_bytes()), resource(0x0404, b"", &clean_iim)].concat();
+        assert!(!crate::source_embeds_exif_gps_location(&image(1, &[], &clean_resources)));
     }
 
     #[test]

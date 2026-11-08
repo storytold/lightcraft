@@ -30,15 +30,16 @@ nonnegative, and minutes / seconds must be below 60. The writer rounds total coo
 before splitting DMS, carrying rounding across minute and degree boundaries. Malformed subdivisions do not create a
 typed location, while the source tags remain available in All Metadata. Original export with Remove Location Info
 refuses files with location-bearing EXIF tags, a GPS IFD pointer whose child could not be read, or an embedded EXIF
-block that could not be parsed. CR3 `CMT1` and every `CMT4` packet are checked before merged metadata can discard
-pointers or duplicate packets; its `THMB` JPEGs and JPEG tracks are checked too. PNG `eXIf` and WebP `EXIF` chunks
+block that could not be parsed. TIFF/XMP and TIFF/IPTC place data are checked with GPS tags. CR3 `CMT1`, `CMT2`,
+every `CMT4` packet, XMP UUID, CTMD EXIF record, and wrapped or direct `THMB` JPEG is checked before merged metadata
+can discard pointers or duplicate packets. JPEG tracks are copied only when their sample tables identify one
+inspectable sample and description. PNG `eXIf` and WebP `EXIF` chunks
 are all checked, not just the one exposed by `embedded()`. JPEG scanning continues between progressive scans through
 EOI, checks every EXIF and standard / extended XMP packet, and fails closed on malformed or unverified segments.
-It also checks IPTC place-name datasets in Photoshop APP13 resources; malformed IPTC resources fail closed. JPEG XL
+It also checks IPTC place-name and content-location datasets in Photoshop APP13 resources; malformed IPTC resources fail closed. JPEG XL
 Original copies are refused when location removal is enabled because this crate cannot yet verify their metadata boxes.
 The same bounded scan handles EXIF and XMP in TIFF JPEG thumbnails and Panasonic `JpgFromRaw` previews. TIFF IFD
-parsing reports incomplete traversal, and nested thumbnail checks share a finite work budget. HEIF checks each EXIF
-item; MRW rejects an incomplete TTW block list. Containers without a separate EXIF block retain the whole-file TIFF
+parsing reports incomplete traversal, including deliberately skipped child IFDs, and nested thumbnail checks share a finite work budget. HEIF checks every EXIF and XMP item, rejects incomplete or duplicate item locations, and bounds aggregate item bytes; MRW rejects an incomplete TTW block list. Containers without a separate EXIF block retain the whole-file TIFF
 fallback. MPF multi-picture JPEGs are refused for Original copying because secondary-image EXIF is not scanned.
 
 ## XMP namespaces

@@ -121,16 +121,27 @@ pub(crate) fn png_webp_embeds_exif_gps_location(bytes: &[u8], budget: &mut usize
             if kind == b"eXIf" && crate::exif::exif_gps_tag_presence_with_budget(data, 0, budget) != Some(false) {
                 return Some(true);
             }
-            if kind == b"iTXt" {
-                match png_xmp_packet(data) {
-                    Some(Some(packet)) => {
-                        if !consume_gps_scan_work(budget, packet.len()) || xmp_packet_has_location(packet) != Some(false) {
-                            return Some(true);
-                        }
+            if kind == b"tEXt" || kind == b"zTXt" || kind == b"iTXt" {
+                let Some(keyword_end) = data.iter().position(|byte| *byte == 0) else { return Some(true) };
+                let Some(keyword) = data.get(..keyword_end) else { return Some(true) };
+                if keyword.starts_with(b"Raw profile type") {
+                    // PNG raw-profile text can carry embedded EXIF data; this scanner does not decode it.
+                    return Some(true);
+                }
+                if keyword == b"XML:com.adobe.xmp" {
+                    if kind != b"iTXt" {
+                        // tEXt is not the standard XMP encoding and zTXt requires decompression.
+                        return Some(true);
                     }
-                    Some(None) => {}
-                    None if data.starts_with(b"XML:com.adobe.xmp\0") => return Some(true),
-                    None => {}
+                    match png_xmp_packet(data) {
+                        Some(Some(packet)) => {
+                            if !consume_gps_scan_work(budget, packet.len()) || xmp_packet_has_location(packet) != Some(false) {
+                                return Some(true);
+                            }
+                        }
+                        Some(None) => {}
+                        None => return Some(true),
+                    }
                 }
             }
             if kind == b"IEND" {
@@ -433,7 +444,8 @@ fn walk_jpeg_segments<'a>(b: &'a [u8], budget: &mut usize, allow_padding: bool, 
     }
 }
 
-fn consume_gps_scan_work(budget: &mut usize, amount: usize) -> bool {
+/// Charge work against a shared scan allowance, returning false when it would be exceeded.
+pub(crate) fn consume_gps_scan_work(budget: &mut usize, amount: usize) -> bool {
     let Some(remaining) = budget.checked_sub(amount) else {
         *budget = 0;
         return false;
@@ -556,14 +568,33 @@ fn jpeg_embeds_location_at_depth_with_padding(bytes: &[u8], depth: usize, budget
     packet.len() != total || xmp_packet_has_location(&packet) != Some(false)
 }
 
-fn xmp_packet_has_location(packet: &[u8]) -> Option<bool> {
+/// Whether an XMP packet contains a GPS property or place name; malformed packets are unverifiable.
+pub(crate) fn xmp_packet_has_location(packet: &[u8]) -> Option<bool> {
     let packet = std::str::from_utf8(packet).ok()?;
     let xmp = crate::parse_xmp(packet).ok()?;
     let metadata = xmp.metadata;
+    let raw_gps = xmp
+        .properties
+        .iter()
+        .any(|(key, values)| (key.starts_with("exif:GPS") || key.starts_with("exifEX:GPS")) && values.iter().any(|value| !value.trim().is_empty()));
+    let country_code = xmp.properties.get("Iptc4xmpCore:CountryCode").is_some_and(|values| values.iter().any(|value| !value.trim().is_empty()));
+    let structured_location =
+        ["Iptc4xmpExt:LocationCreated", "Iptc4xmpExt:LocationShown"].iter().filter_map(|key| xmp.values.get(*key)).any(xmp_value_has_content);
     Some(
         metadata.gps.is_some()
+            || raw_gps
+            || country_code
+            || structured_location
             || [metadata.sublocation, metadata.city, metadata.state, metadata.country].into_iter().flatten().any(|value| !value.trim().is_empty()),
     )
+}
+
+fn xmp_value_has_content(value: &crate::XmpValue) -> bool {
+    match value {
+        crate::XmpValue::Text(text) => !text.trim().is_empty(),
+        crate::XmpValue::Array(items) => items.iter().any(xmp_value_has_content),
+        crate::XmpValue::Struct(fields) => fields.values().any(xmp_value_has_content),
+    }
 }
 
 /// Return an XMP packet from an uncompressed PNG iTXt record. `None` means the record is malformed
@@ -1142,6 +1173,69 @@ mod tests {
 
         assert!(crate::source_embeds_exif_gps_location(&png(&[itxt(&located, 1)])), "compressed PNG XMP cannot be verified");
         assert!(crate::source_embeds_exif_gps_location(&webp(&[vec![0xff, 0xfe]])), "malformed WebP XMP cannot be verified");
+    }
+
+    #[test]
+    fn png_gps_guard_fails_closed_on_uninspected_text_profiles() {
+        let png = |kind: &[u8; 4], data: &[u8]| {
+            let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+            let chunks: [(&[u8], &[u8]); 2] = [(kind.as_slice(), data), (&b"IEND"[..], &b""[..])];
+            for (chunk_kind, chunk_data) in chunks {
+                bytes.extend_from_slice(&u32::try_from(chunk_data.len()).unwrap_or(u32::MAX).to_be_bytes());
+                bytes.extend_from_slice(chunk_kind);
+                bytes.extend_from_slice(chunk_data);
+                bytes.extend_from_slice(&[0; 4]);
+            }
+            bytes
+        };
+
+        let gps_xmp = crate::write_xmp(&crate::Metadata { city: Some("Cusco".into()), ..Default::default() }, None);
+        let xmp_text = [&b"XML:com.adobe.xmp\0"[..], gps_xmp.as_bytes()].concat();
+        let raw_profile = b"Raw profile type exif\0compressed profile data";
+        let app1_profile = b"Raw profile type APP1\0compressed profile data";
+        let compressed_profile = b"Raw profile type exif\0\0\0compressed profile data";
+        let clean_text = b"Comment\0ordinary text";
+
+        for (kind, data, name) in [
+            (b"tEXt", raw_profile.as_slice(), "tEXt raw profile"),
+            (b"tEXt", app1_profile.as_slice(), "tEXt APP1 profile"),
+            (b"zTXt", compressed_profile.as_slice(), "zTXt raw profile"),
+            (b"iTXt", raw_profile.as_slice(), "iTXt raw profile"),
+            (b"tEXt", xmp_text.as_slice(), "tEXt XMP"),
+            (b"zTXt", xmp_text.as_slice(), "zTXt XMP"),
+        ] {
+            assert!(crate::source_embeds_exif_gps_location(&png(kind, data)), "{name} cannot authorize an unchanged copy");
+        }
+        assert!(!crate::source_embeds_exif_gps_location(&png(b"tEXt", clean_text)), "unrelated text remains safe");
+    }
+
+    /// A standalone or destination GPS XMP property is location-bearing without a full coordinate pair.
+    #[test]
+    fn xmp_location_check_catches_standalone_gps_properties() {
+        for property in ["GPSLatitude", "GPSDestLatitude", "GPSDestLongitude", "GPSAltitude"] {
+            let packet = format!(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:exif=\"http://ns.adobe.com/exif/1.0/\"><rdf:RDF><rdf:Description exif:{property}=\"45, 0, 0\"/></rdf:RDF></x:xmpmeta>"
+            );
+            assert_eq!(xmp_packet_has_location(packet.as_bytes()), Some(true), "{property}");
+        }
+    }
+
+    #[test]
+    fn xmp_location_check_catches_country_codes_and_structured_places() {
+        let country_code = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:iptc="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"><rdf:RDF><rdf:Description iptc:CountryCode="FR"/></rdf:RDF></x:xmpmeta>"#;
+        assert_eq!(xmp_packet_has_location(country_code.as_bytes()), Some(true));
+
+        for field in ["LocationCreated", "LocationShown"] {
+            let packet = format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:ext="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"><rdf:RDF><rdf:Description><ext:{field}><rdf:Seq><rdf:li rdf:parseType="Resource"><ext:City>Paris</ext:City><ext:CountryCode>FR</ext:CountryCode></rdf:li></rdf:Seq></ext:{field}></rdf:Description></rdf:RDF></x:xmpmeta>"#
+            );
+            let parsed = crate::parse_xmp(&packet).expect("valid structured XMP");
+            assert!(parsed.values.contains_key(&format!("Iptc4xmpExt:{field}")), "the extension namespace is canonicalized");
+            assert_eq!(xmp_packet_has_location(packet.as_bytes()), Some(true), "{field} array entries are location-bearing");
+        }
+
+        let empty = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:ext="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"><rdf:RDF><rdf:Description><ext:LocationCreated><rdf:Seq><rdf:li rdf:parseType="Resource"/></rdf:Seq></ext:LocationCreated></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        assert_eq!(xmp_packet_has_location(empty.as_bytes()), Some(false), "an empty location structure has no identifying data");
     }
 
     #[test]

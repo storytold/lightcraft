@@ -53,7 +53,7 @@ pub fn metadata(bytes: &[u8]) -> Embedded {
     for b in boxes(bytes, meta.body.saturating_add(4), meta.end, &mut budget) {
         match &b.kind {
             b"iinf" => items = item_infos(bytes, &b, &mut budget),
-            b"iloc" => locs = item_locations(bytes.get(b.body..b.end).unwrap_or_default()),
+            b"iloc" => locs = item_locations_best_effort(bytes.get(b.body..b.end).unwrap_or_default()),
             b"idat" => idat = bytes.get(b.body..b.end),
             _ => {}
         }
@@ -77,9 +77,9 @@ pub fn metadata(bytes: &[u8]) -> Embedded {
     out
 }
 
-/// All declared HEIF EXIF items for privacy checks. `None` means an EXIF item could not be
-/// located or decoded well enough to prove that its GPS content is absent.
-pub(crate) fn exif_items(bytes: &[u8]) -> Option<Vec<Vec<u8>>> {
+/// All EXIF and XMP items retained by a HEIF Original copy. `None` means metadata could not be
+/// located or decoded well enough to verify that its location data is absent.
+pub(crate) fn privacy_items(bytes: &[u8], work_budget: &mut usize) -> Option<(Vec<Vec<u8>>, Vec<Vec<u8>>)> {
     if !is_heif(bytes) {
         return None;
     }
@@ -106,16 +106,13 @@ pub(crate) fn exif_items(bytes: &[u8]) -> Option<Vec<Vec<u8>>> {
                 }
                 has_iinf = true;
                 items = privacy_item_infos(bytes, &child, &mut budget)?;
-                if items.len() >= MAX_ITEMS {
-                    return None;
-                }
             }
             b"iloc" => {
                 if has_iloc {
                     return None;
                 }
                 has_iloc = true;
-                locs = item_locations(bytes.get(child.body..child.end)?);
+                locs = item_locations(bytes.get(child.body..child.end)?)?;
             }
             b"idat" => {
                 if idat.is_some() {
@@ -129,15 +126,33 @@ pub(crate) fn exif_items(bytes: &[u8]) -> Option<Vec<Vec<u8>>> {
     if budget == 0 || !has_iinf || !has_iloc {
         return None;
     }
-    let mut out = Vec::new();
-    for (id, _, _) in items.into_iter().filter(|(_, kind, _)| kind == b"Exif") {
-        let location = locs.iter().find(|loc| loc.id == id)?;
-        let block = item_bytes(bytes, idat, location)?;
-        let offset = be32(&block, 0).and_then(|value| usize::try_from(value).ok())?;
-        let tiff_at = offset.checked_add(4)?;
-        out.push(block.get(tiff_at..).filter(|tiff| !tiff.is_empty())?.to_vec());
+    let mut exif_items = Vec::new();
+    let mut xmp_items = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+    for (id, kind, content_type) in items {
+        if !seen_ids.insert(id) {
+            return None;
+        }
+        let is_exif = kind == *b"Exif";
+        let is_xmp = kind == *b"mime" && content_type == "application/rdf+xml";
+        if !is_exif && !is_xmp {
+            continue;
+        }
+        let mut locations = locs.iter().filter(|loc| loc.id == id);
+        let location = locations.next()?;
+        if locations.next().is_some() {
+            return None;
+        }
+        let block = item_bytes_with_budget(bytes, idat, location, work_budget)?;
+        if is_exif {
+            let offset = be32(&block, 0).and_then(|value| usize::try_from(value).ok())?;
+            let tiff_at = offset.checked_add(4)?;
+            exif_items.push(block.get(tiff_at..).filter(|tiff| !tiff.is_empty())?.to_vec());
+        } else {
+            xmp_items.push(block);
+        }
     }
-    Some(out)
+    Some((exif_items, xmp_items))
 }
 
 /// Parse every declared item header for the privacy check. Unlike metadata extraction, malformed
@@ -156,7 +171,9 @@ fn privacy_item_infos(bytes: &[u8], iinf: &crate::cr3::BoxRef, budget: &mut usiz
     if !complete || entries.len() != entry_count {
         return None;
     }
-    entries.iter().map(|entry| privacy_item_info(bytes, entry)).collect()
+    let entries: Vec<_> = entries.iter().map(|entry| privacy_item_info(bytes, entry)).collect::<Option<_>>()?;
+    let mut ids = std::collections::HashSet::new();
+    entries.iter().all(|(id, _, _)| ids.insert(*id)).then_some(entries)
 }
 
 /// Parse one supported HEIF item-information entry without dropping unknown or truncated fields.
@@ -223,45 +240,119 @@ struct Loc {
     extents: Vec<(u64, u64)>,
 }
 
-/// `iloc` (payload after the box header) → one [`Loc`] per entry, stopping at the first
-/// unreadable one.
-fn item_locations(p: &[u8]) -> Vec<Loc> {
-    let version = *p.first().unwrap_or(&0);
-    let (Some(sizes), Some(base_index)) = (p.get(4), p.get(5)) else { return Vec::new() };
+/// Parse the complete `iloc` payload into one [`Loc`] per local entry; truncated and duplicate IDs fail closed.
+fn item_locations(p: &[u8]) -> Option<Vec<Loc>> {
+    let version = *p.first()?;
+    let (sizes, base_index) = (*p.get(4)?, *p.get(5)?);
     let (offset_size, length_size) = ((sizes >> 4) as usize, (sizes & 0xf) as usize);
     let (base_size, index_size) = ((base_index >> 4) as usize, if version > 0 { (base_index & 0xf) as usize } else { 0 });
     let (count, mut at) = match version {
         0 | 1 => (be16(p, 6).map(usize::from), 8),
         2 => (be32(p, 6).and_then(|v| usize::try_from(v).ok()), 10),
-        _ => return Vec::new(),
+        _ => return None,
     };
+    let count = count?;
+    if count > MAX_ITEMS {
+        return None;
+    }
     let mut out = Vec::new();
-    for _ in 0..count.unwrap_or(0).min(MAX_ITEMS) {
+    let mut ids = std::collections::HashSet::new();
+    for _ in 0..count {
         let (id, after_id) = match version {
-            2 => (be32(p, at), at + 4),
-            _ => (be16(p, at).map(u32::from), at + 2),
+            2 => (be32(p, at), at.checked_add(4)?),
+            _ => (be16(p, at).map(u32::from), at.checked_add(2)?),
         };
         // version 1 and 2 put the construction method in the low nibble of a reserved 16-bit field
         let construction = if version == 0 { Some(0) } else { be16(p, after_id).map(|v| (v & 0xf) as u8) };
         let after_method = after_id + if version == 0 { 0 } else { 2 };
         // a data reference index of 0 means this file; an external reference has no bytes here
-        let external = be16(p, after_method).is_some_and(|v| v != 0);
-        let base = uint(p, after_method + 2, base_size);
-        let extent_at = after_method + 2 + base_size;
-        let (Some(id), Some(construction), Some(base), Some(extent_count)) = (id, construction, base, be16(p, extent_at)) else {
-            break;
-        };
+        let data_reference = be16(p, after_method)?;
+        let external = data_reference != 0;
+        let base_at = after_method.checked_add(2)?;
+        let base = uint(p, base_at, base_size)?;
+        let extent_at = base_at.checked_add(base_size)?;
+        let (id, construction, extent_count) = (id?, construction?, usize::from(be16(p, extent_at)?));
+        if !ids.insert(id) || extent_count > usize::from(MAX_EXTENTS) {
+            return None;
+        }
         let stride = index_size + offset_size + length_size;
         let mut extents = Vec::new();
-        let mut e = extent_at + 2;
-        for _ in 0..extent_count.min(MAX_EXTENTS) {
-            let (Some(offset), Some(length)) = (uint(p, e + index_size, offset_size), uint(p, e + index_size + offset_size, length_size)) else {
-                return out;
-            };
+        let mut e = extent_at.checked_add(2)?;
+        for _ in 0..extent_count {
+            let offset_at = e.checked_add(index_size)?;
+            let length_at = offset_at.checked_add(offset_size)?;
+            let offset = uint(p, offset_at, offset_size)?;
+            let length = uint(p, length_at, length_size)?;
             extents.push((offset, length));
-            e += stride;
+            e = e.checked_add(stride)?;
         }
         at = e;
+        if !external {
+            out.push(Loc { id, construction, base, extents });
+        }
+    }
+    (at == p.len()).then_some(out)
+}
+
+/// Parse the readable prefix of an `iloc` table for ordinary metadata extraction. Original-copy
+/// privacy checks use [`item_locations`] and require the entire table to be complete.
+fn item_locations_best_effort(p: &[u8]) -> Vec<Loc> {
+    let Some(version) = p.first().copied() else { return Vec::new() };
+    let (Some(sizes), Some(base_index)) = (p.get(4), p.get(5)) else { return Vec::new() };
+    let (offset_size, length_size) = ((*sizes >> 4) as usize, (*sizes & 0xf) as usize);
+    let (base_size, index_size) = ((*base_index >> 4) as usize, if version > 0 { (*base_index & 0xf) as usize } else { 0 });
+    let (count, mut at) = match version {
+        0 | 1 => (be16(p, 6).map(usize::from), 8),
+        2 => (be32(p, 6).and_then(|value| usize::try_from(value).ok()), 10),
+        _ => return Vec::new(),
+    };
+    let Some(count) = count else { return Vec::new() };
+    let mut out = Vec::new();
+    for _ in 0..count.min(MAX_ITEMS) {
+        let (id, after_id) = match version {
+            2 => (be32(p, at), at.checked_add(4)),
+            _ => (be16(p, at).map(u32::from), at.checked_add(2)),
+        };
+        let Some(after_id) = after_id else { break };
+        let construction = if version == 0 { Some(0) } else { be16(p, after_id).map(|value| (value & 0xf) as u8) };
+        let Some(after_method) = after_id.checked_add(if version == 0 { 0 } else { 2 }) else { break };
+        let external = be16(p, after_method).is_some_and(|value| value != 0);
+        let Some(base_at) = after_method.checked_add(2) else { break };
+        let Some(base) = uint(p, base_at, base_size) else { break };
+        let Some(extent_at) = base_at.checked_add(base_size) else { break };
+        let (Some(id), Some(construction), Some(extent_count)) = (id, construction, be16(p, extent_at)) else { break };
+        let extent_count = usize::from(extent_count);
+        if extent_count > usize::from(MAX_EXTENTS) {
+            break;
+        }
+        let stride = index_size + offset_size + length_size;
+        let mut extents = Vec::new();
+        let Some(mut extent_pos) = extent_at.checked_add(2) else { break };
+        let mut complete = true;
+        for _ in 0..extent_count {
+            let Some(offset_at) = extent_pos.checked_add(index_size) else {
+                complete = false;
+                break;
+            };
+            let Some(length_at) = offset_at.checked_add(offset_size) else {
+                complete = false;
+                break;
+            };
+            let (Some(offset), Some(length)) = (uint(p, offset_at, offset_size), uint(p, length_at, length_size)) else {
+                complete = false;
+                break;
+            };
+            extents.push((offset, length));
+            let Some(next) = extent_pos.checked_add(stride) else {
+                complete = false;
+                break;
+            };
+            extent_pos = next;
+        }
+        if !complete {
+            break;
+        }
+        at = extent_pos;
         if !external {
             out.push(Loc { id, construction, base, extents });
         }
@@ -283,22 +374,34 @@ fn uint(b: &[u8], at: usize, size: usize) -> Option<u64> {
 /// An item's bytes, its extents concatenated. `None` when they don't fit the file (or the `idat`
 /// box), when the item is built by referencing another one, or when it is implausibly large.
 fn item_bytes(bytes: &[u8], idat: Option<&[u8]>, loc: &Loc) -> Option<Vec<u8>> {
+    let mut budget = usize::MAX;
+    item_bytes_with_budget(bytes, idat, loc, &mut budget)
+}
+
+/// Assemble one item only after accounting its entire output size against the shared source scan budget.
+fn item_bytes_with_budget(bytes: &[u8], idat: Option<&[u8]>, loc: &Loc, budget: &mut usize) -> Option<Vec<u8>> {
     let src = match loc.construction {
         0 => bytes,
         1 => idat?,
         _ => return None,
     };
-    let mut out = Vec::new();
+    let total = loc
+        .extents
+        .iter()
+        .try_fold(0usize, |total, (_, length)| total.checked_add(usize::try_from(*length).ok()?).filter(|size| *size <= MAX_ITEM))?;
+    let remaining = budget.checked_sub(total)?;
+    *budget = remaining;
+    let mut out = Vec::with_capacity(total);
     for &(offset, length) in &loc.extents {
         let at = loc.base.checked_add(offset)?;
         let (start, end) = (usize::try_from(at).ok()?, usize::try_from(at.checked_add(length)?).ok()?);
         let extent = src.get(start..end)?;
-        if out.len().checked_add(extent.len())? > MAX_ITEM {
+        if out.len().checked_add(extent.len())? > total {
             return None;
         }
         out.extend_from_slice(extent);
     }
-    (!out.is_empty()).then_some(out)
+    (out.len() == total && !out.is_empty()).then_some(out)
 }
 
 #[cfg(test)]
@@ -419,6 +522,19 @@ mod tests {
         assert_eq!(m.iso, Some(64));
     }
 
+    #[test]
+    fn best_effort_metadata_keeps_readable_iloc_prefix() {
+        let file = heic(&exif_only(&iphone_exif("2026:10:18 13:00:00", "-05:00")), 1, false);
+        let mut malformed_later_entry = file;
+        let iloc_type = malformed_later_entry.windows(4).position(|window| window == b"iloc").expect("iloc box");
+        let count_at = iloc_type + 10;
+        malformed_later_entry[count_at..count_at + 2].copy_from_slice(&2u16.to_be_bytes());
+
+        let metadata = crate::extract(&malformed_later_entry);
+        assert_eq!(metadata.capture_time.map(|time| time.to_iso()), Some("2026-10-18T13:00:00-05:00".into()));
+        assert!(crate::source_embeds_exif_gps_location(&malformed_later_entry), "privacy verification still rejects an incomplete item table");
+    }
+
     /// The XMP packet is the `mime` item that declares `application/rdf+xml`, not any other one.
     #[test]
     fn the_xmp_packet_is_the_rdf_mime_item() {
@@ -468,6 +584,52 @@ mod tests {
             Item { kind: b"Exif", content_type: "", data: exif_item(&with_gps, 0) },
         ];
         assert!(crate::source_embeds_exif_gps_location(&heic(&items, 1, false)));
+    }
+
+    /// Every XMP MIME item is retained by Original export and participates in location removal.
+    #[test]
+    fn original_gps_guard_checks_every_xmp_item() {
+        let clean = crate::write_xmp(&crate::Metadata { title: Some("No location".into()), ..Default::default() }, None);
+        let located = crate::write_xmp(&crate::Metadata { city: Some("Cusco".into()), ..Default::default() }, None);
+        let items = [
+            Item { kind: b"mime", content_type: "application/rdf+xml", data: clean.into_bytes() },
+            Item { kind: b"mime", content_type: "application/rdf+xml", data: located.into_bytes() },
+        ];
+        assert!(crate::source_embeds_exif_gps_location(&heic(&items, 1, true)));
+    }
+
+    /// The declared item cap is inclusive; the cap-sized valid file remains scannable.
+    #[test]
+    fn original_gps_guard_accepts_exactly_max_items() {
+        let items: Vec<_> = (0..MAX_ITEMS).map(|_| Item { kind: b"mime", content_type: "text/plain", data: vec![0] }).collect();
+        let file = heic(&items, 1, true);
+        assert!(!crate::source_embeds_exif_gps_location(&file));
+    }
+
+    /// A malformed or duplicated item-location table cannot be treated as a readable prefix.
+    #[test]
+    fn privacy_item_locations_reject_truncation_and_duplicate_ids() {
+        let record = |id: u16| [id.to_be_bytes().to_vec(), vec![0, 0, 0, 0, 0, 1], 0u32.to_be_bytes().to_vec(), 1u32.to_be_bytes().to_vec()].concat();
+        let mut locations = vec![1, 0, 0, 0, 0x44, 0, 0, 2];
+        locations.extend(record(1));
+        locations.extend(record(2));
+        assert_eq!(item_locations(&locations).map(|locs| locs.len()), Some(2));
+        assert!(item_locations(&locations[..locations.len() - 1]).is_none(), "a truncated extent invalidates the table");
+
+        let mut duplicate = vec![1, 0, 0, 0, 0x44, 0, 0, 2];
+        duplicate.extend(record(1));
+        duplicate.extend(record(1));
+        assert!(item_locations(&duplicate).is_none(), "duplicate item IDs make the location ambiguous");
+    }
+
+    /// Item bytes share a bounded work allowance instead of multiplying the per-item cap.
+    #[test]
+    fn privacy_items_charge_the_aggregate_item_byte_budget() {
+        let tiff = iphone_exif("2026:10:18 13:00:00", "-05:00");
+        let items = [Item { kind: b"Exif", content_type: "", data: exif_item(&tiff, 0) }];
+        let file = heic(&items, 1, true);
+        let mut budget = 0;
+        assert!(privacy_items(&file, &mut budget).is_none(), "item data must fit the aggregate budget before allocation");
     }
 
     /// Incomplete HEIF boxes or unparseable item headers cannot prove that EXIF is absent.

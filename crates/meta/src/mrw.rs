@@ -58,6 +58,8 @@ pub fn parse_with_status(bytes: &[u8]) -> Option<(Mrw<'_>, bool)> {
         };
         if name[0] == 0 {
             blocks.push(([name[1], name[2], name[3]], data));
+        } else {
+            complete = false;
         }
         at = end;
     }
@@ -120,5 +122,21 @@ mod tests {
         truncated_ttw.extend_from_slice(b"\0TTW");
         truncated_ttw.extend_from_slice(&100u32.to_be_bytes());
         assert!(crate::source_embeds_exif_gps_location(&truncated_ttw));
+    }
+
+    /// A block with a discarded malformed name makes the MRW scan incomplete.
+    #[test]
+    fn original_gps_guard_fails_closed_for_malformed_block_name() {
+        let data = b"unverified TIFF payload";
+        let mut body = vec![1, b'T', b'T', b'W'];
+        body.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+        body.extend_from_slice(data);
+        let mut file = b"\0MRM".to_vec();
+        file.extend_from_slice(&u32::try_from(body.len()).unwrap().to_be_bytes());
+        file.extend_from_slice(&body);
+
+        let (_, complete) = parse_with_status(&file).unwrap();
+        assert!(!complete, "a discarded block name must not establish metadata absence");
+        assert!(crate::source_embeds_exif_gps_location(&file));
     }
 }

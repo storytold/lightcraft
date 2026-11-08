@@ -289,6 +289,8 @@ impl<'a> Ctx<'a> {
         let mut ifd = Ifd { offset, entries, ..Default::default() };
         if self.opts.follow_children {
             self.children(&mut ifd, base, depth);
+        } else if [tags::SUB_IFDS, tags::EXIF_IFD, tags::GPS_IFD, tags::INTEROP_IFD].into_iter().any(|tag| ifd.contains(tag)) {
+            self.complete = false;
         }
         Ok((ifd, next))
     }
@@ -314,13 +316,20 @@ impl<'a> Ctx<'a> {
         ifd.interop = interop;
     }
 
+    /// Follow one singleton child pointer and mark malformed or unreadable targets incomplete.
     fn child(&mut self, ifd: &Ifd, tag: u16, base: u64, depth: usize) -> Option<Box<Ifd>> {
         if !ifd.contains(tag) {
             return None;
         }
-        let parsed = ifd
-            .value(tag)
-            .and_then(|value| value.get_u64(0))
+        let Some(value) = ifd.value(tag) else {
+            self.complete = false;
+            return None;
+        };
+        if value.count() != 1 {
+            self.complete = false;
+        }
+        let parsed = value
+            .get_u64(0)
             .and_then(|offset| base.checked_add(offset))
             .and_then(|offset| self.ifd(offset, base, depth + 1).ok().map(|(child, _)| Box::new(child)));
         if parsed.is_none() {
@@ -417,6 +426,23 @@ mod tests {
         let valid = TiffWriter::default().write(&[valid_ifd]).unwrap();
         let (_, complete) = Tiff::parse_with_status(&valid, &ParseOptions::default()).unwrap();
         assert!(complete, "a fully read TIFF must report complete");
+    }
+
+    /// Completeness is false when callers skip child metadata or a singleton pointer is malformed.
+    #[test]
+    fn parse_status_reports_skipped_and_ambiguous_child_pointers() {
+        let child = IfdBuilder::new().with(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (0, 1), (0, 1)]));
+        let mut root = IfdBuilder::new();
+        root.set_child(t::GPS_IFD, child);
+        let with_child = TiffWriter::default().write(&[root]).unwrap();
+        let opts = ParseOptions { follow_children: false, ..Default::default() };
+        let (_, complete) = Tiff::parse_with_status(&with_child, &opts).unwrap();
+        assert!(!complete, "an intentionally unvisited GPS IFD is incomplete");
+
+        let ambiguous = IfdBuilder::new().with(t::GPS_IFD, Value::Long(vec![8, 8]));
+        let ambiguous = TiffWriter::default().write(&[ambiguous]).unwrap();
+        let (_, complete) = Tiff::parse_with_status(&ambiguous, &ParseOptions::default()).unwrap();
+        assert!(!complete, "a pointer field with multiple offsets is ambiguous");
     }
 
     /// A BigTIFF whose first IFD, at 80, declares `declared` entries but holds one, followed by a next-IFD pointer
