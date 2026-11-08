@@ -1814,7 +1814,7 @@ fn partial_look_takes_the_measured_colour() {
     let measured = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
     let none = vec![false; w * h];
     let generic = fit_look(&sensor, &reference, &none, None).expect("a partial look");
-    let look = fit_look_with(&sensor, &reference, &none, None, false, Some(measured)).expect("a partial look in the measured colour");
+    let look = fit_look_with(&sensor, &reference, &none, None, false, Some((measured, None))).expect("a partial look in the measured colour");
     assert_eq!(look.matrix, measured);
     assert!(look.hue_sat.is_none());
     let error = |look: &CameraLook| {
@@ -1835,8 +1835,8 @@ fn partial_look_keeps_the_generic_colour_when_the_measured_one_misses_the_gates(
     // a grey that is red minus blue: its brightness doesn't follow the scene's, so no tone curve can fix it
     let wrong = Mat3([[1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [1.0, 0.0, -1.0]]);
     let check = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
-    assert!(fit_partial(&sensor, &reference, &check, Some(wrong)).is_none(), "the measured colour misses the gates");
-    let look = fit_look_with(&sensor, &reference, &none, None, false, Some(wrong)).expect("the generic partial look");
+    assert!(fit_partial(&sensor, &reference, &check, Some(&(wrong, None))).is_none(), "the measured colour misses the gates");
+    let look = fit_look_with(&sensor, &reference, &none, None, false, Some((wrong, None))).expect("the generic partial look");
     assert_eq!((look.matrix.0, look.tone), (generic.matrix.0, generic.tone));
 }
 
@@ -1870,6 +1870,36 @@ fn fit_preview_gives_a_covered_models_partial_look_its_measured_colour() {
     let generic = fit_preview_with(&raw, &bytes, &transform, None, None, None).0.expect("the generic partial look");
     assert_ne!(generic.matrix, measured);
     assert!(generic.hue_sat.is_none());
+}
+
+/// A model with a camera profile whose full look misses the gates (stage and LED light, where the camera JPEG and the
+/// raw disagree) opens in the profile's colour, matrix and table, with the tone fitted to the JPEG: before, the profile
+/// was dropped with the full look and the photo got the generic partial look.
+#[test]
+fn fit_preview_gives_a_profiled_models_partial_look_the_profiles_colour() {
+    use lightcraft_raw::color::{as_shot_white_xy, camera_transform};
+    let (w, h) = (192usize, 128usize);
+    let (sensor, reference) = lens_corrected_foliage();
+    let at = |image: &Rgb32f, x: usize, y: usize| image.data[(y / 2) * image.width + x / 2];
+    let (mut raw, _) = grey_raw_with_jpeg((w, h), |_, _| 0.0, |_, _| 0.0, [1.0; 3]);
+    raw.format = RawFormat::Arw;
+    raw.data = lightcraft_raw::RawData::F32((0..w * h).flat_map(|i| at(&sensor, i % w, i / w)).collect());
+    raw.metadata.make = Some("Sony".into());
+    raw.metadata.model = Some("Profiled Camera".into());
+    let srgb = |v: f32| if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    let pixels: Vec<u8> = (0..w * h).flat_map(|i| at(&reference, i % w, i / w).map(|v| (srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8)).collect();
+    let bytes = tiff_with_jpeg((w, h), &pixels);
+    let transform = camera_transform(&raw, as_shot_white_xy(&raw));
+    // a profile close to the scene's colour, with a table that lifts saturation a little
+    let matrix = transform.matrix.mul(&Mat3([[1.6, -0.35, -0.08], [-0.18, 1.4, -0.08], [-0.04, -0.25, 1.55]]));
+    let table = HsvTable { hue_divisions: 6, sat_divisions: 2, val_divisions: 1, data: vec![[0.0, 1.05, 1.0]; 12], srgb_value: false };
+    let profile = crate::camera_profiles::CameraProfile::new("Profiled Camera", 1, 1, matrix, Some(table.clone()));
+    let colour = profile.matrix().mul(&transform.matrix.inverse().expect("an invertible transform"));
+    let look = fit_preview_with(&raw, &bytes, &transform, None, None, Some(&profile)).0.expect("a partial look");
+    assert_eq!(look.matrix, colour, "the partial look takes the profile's colour");
+    assert_eq!(look.hue_sat.as_ref().map(|t| t.data.clone()), Some(table.data), "and its hue/saturation table");
+    let generic = fit_preview_with(&raw, &bytes, &transform, None, None, None).0.expect("the generic partial look");
+    assert_ne!(generic.matrix, colour);
 }
 
 /// A colourful scene with fine detail (foliage) and its camera JPEG ([`bright_camera`]) with barrel distortion.

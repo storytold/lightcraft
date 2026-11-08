@@ -85,7 +85,8 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// RAF; other makes with a lens database), so the render no longer applies it twice, at the position a lens warp samples;
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
 /// 14: a partial look of a model with measured spectral matrices takes their colour instead of the generic one.
-pub const LOOK_VERSION: u32 = 14;
+/// 15: a partial look of a model with a camera profile takes the profile's colour (matrix and hue/saturation table).
+pub const LOOK_VERSION: u32 = 15;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

@@ -39,8 +39,9 @@ pub(super) fn fit_preview_with(
     // Sony's Dynamic Range Optimizer (on by default) brightens the camera JPEG's darker regions,
     // not the raw: keep the colour fitted to the JPEG, take the tone curve without DRO.
     let dro = lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes) == Some(true);
-    // Without a profile, a model with measured spectral matrices gives its partial look their colour (`fit_partial`).
-    let measured = if profile.is_none() { measured_colour(raw, transform) } else { None };
+    // When the full fit fails, the partial look (`fit_partial`) takes the camera profile's colour, matrix and table;
+    // without a profile, the colour of the model's measured spectral matrices.
+    let measured = if colour.is_some() { colour.clone() } else { measured_colour(raw, transform).map(|m| (m, None)) };
     let look = match fit_look_with(&sensor, &reference, &clipped, colour.clone(), dro, measured) {
         Some(look) => look,
         // A black-and-white JPEG has no colour to fit: the profile's colour and the JPEG's tone curve
@@ -118,7 +119,7 @@ pub(super) fn fit_look_with(
     clipped: &[bool],
     colour: Option<(Mat3, Option<HsvTable>)>,
     dro: bool,
-    measured: Option<Mat3>,
+    measured: Option<(Mat3, Option<HsvTable>)>,
 ) -> Option<CameraLook> {
     let unclipped = without_clipped(sensor, clipped);
     // from the proxies as they are: the retries' filters (clipped pixels, edges) don't remove them
@@ -126,7 +127,7 @@ pub(super) fn fit_look_with(
     let Some((look, attempt)) = search_ordered(sensor, reference, colour.clone(), TONE_FITS, &bright) else {
         return unclipped.as_ref().and_then(|u| search_ordered(u, reference, colour, TONE_FITS, &bright)).map(|(look, _)| look).or_else(|| {
             let fit_on = unclipped.as_ref().unwrap_or(sensor);
-            measured.and_then(|m| fit_partial(fit_on, reference, &bright, Some(m))).or_else(|| fit_partial(fit_on, reference, &bright, None))
+            measured.as_ref().and_then(|m| fit_partial(fit_on, reference, &bright, Some(m))).or_else(|| fit_partial(fit_on, reference, &bright, None))
         });
     };
     let Some(unclipped) = unclipped else { return Some(look) };
