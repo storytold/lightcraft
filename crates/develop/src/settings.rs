@@ -84,17 +84,33 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
+    /// Pixel-scale sharpening with working Radius and Detail controls.
+    V3,
+    /// V3, with Contrast and Blacks on a raw's camera look calibrated to Lightroom: the
+    /// camera curve keeps V2 Whites and fitted pointwise operators follow it
+    /// (`lightcraft_pipeline::light_v3`, `docs/light-v3.md`).
+    V4,
+    /// V4, with a raw's tone curve rolling off into white in stops past its last fitted knot, so
+    /// highlights the sensor recorded keep their detail when Exposure lifts them (issue #1632).
+    V5,
+    /// V5, with colour noise reduction on the linear colour differences R−Y and B−Y, leaving Y alone, with
+    /// edge-aware weights from a denoised guide and a brake for isolated colour specks (issue #815).
+    V6,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
-    pub const LATEST: Process = Process::V2;
+    pub const ALL: [Process; 6] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6];
+    pub const LATEST: Process = Process::V6;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
+            Process::V4 => ProcessVersion(4),
+            Process::V5 => ProcessVersion(5),
+            Process::V6 => ProcessVersion(6),
         }
     }
 }
@@ -624,6 +640,13 @@ pub struct Detail {
     pub nr_color: f64,
     pub nr_color_detail: f64,
     pub nr_color_smoothness: f64,
+    /// Replace single outlier photosites (noise spikes far above all their same-colour neighbours) in the
+    /// raw mosaic before demosaicing, so they do not become coloured dots (#1345). On for newly imported
+    /// raws ([`crate::DevelopSettings::for_raw`]); off for edits saved before it existed, so they look the
+    /// same. Raw files only. Omitted when off, so settings saved before it keep their JSON (and hash, and with it
+    /// their cached thumbnails).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub nr_outliers: bool,
 }
 
 impl Default for Detail {
@@ -641,6 +664,7 @@ impl Default for Detail {
             nr_color: 0.0,
             nr_color_detail: 50.0,
             nr_color_smoothness: 50.0,
+            nr_outliers: false,
         }
     }
 }
@@ -699,9 +723,30 @@ impl Default for Optics {
 pub struct EmbeddedLens {
     pub warp: Option<EmbeddedWarp>,
     pub vignette: Option<EmbeddedVignette>,
+    /// Where the correction came from: the file itself, or a lens database looked up by the
+    /// lens named in the file (what the Optics panel says is loaded).
+    #[serde(skip_serializing_if = "LensSource::is_file")]
+    pub source: LensSource,
     /// A DNG 1.6 `WarpRectilinear2` chain (up to [`WARP_STAGES`] stages, in `OpcodeList3` order; each stage warps
     /// the result of the one before it). When any is set, `warp` is `None`: the chain holds every warp opcode.
     pub stages: [Option<EmbeddedWarpStage>; WARP_STAGES],
+}
+
+/// Where an [`EmbeddedLens`] came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LensSource {
+    /// The file's own correction (DNG opcodes, a camera's correction a raw reader converts).
+    #[default]
+    File,
+    /// A profile from a lensfun-format lens database, matched by the lens named in the file.
+    Database,
+}
+
+impl LensSource {
+    pub fn is_file(&self) -> bool {
+        *self == LensSource::File
+    }
 }
 
 /// Most warp stages an [`EmbeddedLens`] chain keeps.
@@ -1054,15 +1099,101 @@ pub struct Mask {
     /// Refine Edges 0..100: the mask's edges snap to the photo's (guided filter).
     #[serde(skip_serializing_if = "is_zero")]
     pub refine: f64,
+    /// Where its coordinates (gradients, brush strokes, AI selections) live: `true`, on the photo as
+    /// shot (user orientation, before lens corrections, Upright and Transform), so the mask stays
+    /// on the same content whatever those do; `false`, a mask from before that, on the corrected
+    /// frame. Read as `false` when absent; [`Mask::default`] (every new mask) is `true`, and an
+    /// edit converts an old one (`lightcraft_pipeline::mask_space::attach`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub on_photo: bool,
 }
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 impl Default for Mask {
     fn default() -> Self {
-        Self { id: 0, name: "Mask 1".into(), visible: true, invert: false, components: Vec::new(), adjust: LocalAdjustments::default(), refine: 0.0 }
+        Self {
+            id: 0,
+            name: "Mask 1".into(),
+            visible: true,
+            invert: false,
+            components: Vec::new(),
+            adjust: LocalAdjustments::default(),
+            refine: 0.0,
+            on_photo: true,
+        }
+    }
+}
+
+impl DevelopSettings {
+    /// Calls `f` for every segmentation grid stored in these settings (the `seg` and `detail`
+    /// of Object and Prompt mask shapes).
+    pub fn visit_seg_masks(&self, f: &mut impl FnMut(&crate::SegMask)) {
+        for mask in &self.masks {
+            for component in &mask.components {
+                visit_shape(&component.shape, f);
+            }
+        }
+    }
+
+    /// [`DevelopSettings::visit_seg_masks`] with mutable access (resolving references into a
+    /// snapshot's grid table).
+    pub fn visit_seg_masks_mut(&mut self, f: &mut impl FnMut(&mut crate::SegMask)) {
+        for mask in &mut self.masks {
+            for component in &mut mask.components {
+                visit_shape_mut(&mut component.shape, f);
+            }
+        }
+    }
+}
+
+fn visit_shape(shape: &MaskShape, f: &mut impl FnMut(&crate::SegMask)) {
+    match shape {
+        MaskShape::Object { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        MaskShape::Prompt { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn visit_shape_mut(shape: &mut MaskShape, f: &mut impl FnMut(&mut crate::SegMask)) {
+    match shape {
+        MaskShape::Object { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        MaskShape::Prompt { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        _ => {}
     }
 }
 
