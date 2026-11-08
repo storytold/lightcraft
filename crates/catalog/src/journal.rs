@@ -427,7 +427,8 @@ const MAX_DAMAGED_COPIES: u32 = 100;
 fn keep_damaged_log(store: &mut dyn Store, seq: u64, log: &[u8]) -> std::io::Result<String> {
     for copy in 1..=MAX_DAMAGED_COPIES {
         let name = if copy == 1 { format!("{LOG}.damaged-{seq}") } else { format!("{LOG}.damaged-{seq}-{copy}") };
-        match store.read(&name)? {
+        let there = store.read(&name).map_err(|e| std::io::Error::new(e.kind(), format!("can't read {name}: {e}")))?;
+        match there {
             None => {
                 store.write_atomic(&name, log)?;
                 return Ok(name);
@@ -436,7 +437,9 @@ fn keep_damaged_log(store: &mut dyn Store, seq: u64, log: &[u8]) -> std::io::Res
             Some(_) => {}
         }
     }
-    Err(std::io::Error::other(format!("{MAX_DAMAGED_COPIES} damaged logs kept as {LOG}.damaged-{seq} are in the way")))
+    Err(std::io::Error::other(format!(
+        "{MAX_DAMAGED_COPIES} damaged logs kept as {LOG}.damaged-{seq} are already there; nothing was changed: move some out of the library folder and open it again"
+    )))
 }
 
 /// Just the identification of `catalog.snap` (read before the catalog itself).
@@ -455,7 +458,9 @@ struct SnapFile {
 
 impl Journal {
     /// Open (or create) the catalog in `store`: load the snapshot, replay the log, repair a torn
-    /// tail. Fails only if the snapshot itself is unreadable (then nothing is modified).
+    /// tail. Fails if the snapshot itself is unreadable (then nothing is modified), or if a
+    /// damaged log can't be kept (every name for its copy is taken, or the copy can't be written:
+    /// the log stays as it is).
     pub fn open(mut store: Box<dyn Store>) -> Result<(Journal, Catalog, LoadReport)> {
         let mut report = LoadReport::default();
         let snap = store.read(SNAPSHOT).map_err(io)?;
