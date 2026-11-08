@@ -1,4 +1,4 @@
-//! Olympus ORF — uncompressed variants; compressed sensor data is unsupported.
+//! Olympus / OM System ORF — uncompressed and lossless compressed variants.
 //!
 //! Sources: TIFF 6.0 (the `IIRO`/`MMOR` container is a TIFF with a different magic number), Exif 2.3 (`CFAPattern`,
 //! tag `0xa302`), the ExifTool Olympus tag-name documentation (maker-note sub-directories `0x2020` CameraSettings —
@@ -28,15 +28,16 @@
 //!   (last), the bit order and the pixel order were fixed by measurement on the CC0 files 2878 (E-300), 3540 (E-500)
 //!   and 3624 (E-330), as was the sensor-origin RGGB anchoring (the maker-note crop offsets are odd). The E-M5 Mark II
 //!   and PEN-F files were only checked for smoothness, not for CFA anchoring or black level.
-//! - Compressed ORF sensor data is unsupported. The previous decoder was removed pending provenance
-//!   resolution; embedded previews remain available. See `docs/orf-compression.md`.
+//! - Lossless compressed ORF (E-410 onwards, PEN, OM-D, Tough and OM System): `orfc` decodes the adaptive
+//!   Rice-coded 12-bit sensor stream, independently derived from CC0 samples and Olympus patent prose.
+//!   See `docs/orf.md` for the bit layout and exact sensor-pixel verification.
 //! - The colour-filter layout is the file's Exif `CFAPattern`: GRBG on the E-1 and E-400, RGGB on the XZ-2, where
 //!   the colours of the decoded mosaic follow the embedded JPEG best with exactly that layout
 //!   (`corpus_orf_cfa_patterns`). The samples' active areas start at even offsets, so they can't tell whether the
 //!   pattern is anchored at the sensor origin (assumed) or at the active area. Files without a usable tag fall back
 //!   to the green diagonal found from the data, which can't tell red from blue (GRBG or RGGB is assumed).
 
-use super::{cfa_from_exif, white_from_data};
+use super::{cfa_from_exif, orfc, white_from_data};
 use crate::tiffraw::{Packing, read_image};
 use crate::unpack::unpack_msb;
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
@@ -199,21 +200,32 @@ fn field_rows(strips: &[(u64, u64)], w: usize, h: usize, file_len: usize) -> Opt
     Some(rows)
 }
 
-/// Decode the supported uncompressed Olympus ORF layouts into a mosaic raw image.
+/// Decode the supported Olympus ORF layouts into a mosaic raw image.
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
-    let ifd0 = &tiff.ifds[0];
+    let ifd0 = tiff.ifds.first().ok_or_else(|| RawError::Corrupt("ORF has no image directory".into()))?;
     let info = ifd0.image()?;
     let (w, h) = (info.width as usize, info.height as usize);
     let n = w.checked_mul(h).filter(|n| *n > 0 && *n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
     let chunks = info.chunks(bytes.len() as u64);
-    let total = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len));
+    let total = chunks.iter().try_fold(0u64, |sum, c| sum.checked_add(c.len)).ok_or(RawError::Limit("ORF strip sizes overflow"))?;
     let stated = cfa_from_exif(&tiff);
     let mut two_field = false;
-    let mn = maker_note(bytes, &tiff);
-    let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
+    let mut compressed = false;
+    let compressed_strip = match chunks.as_slice() {
+        [chunk] => chunk_bytes(bytes, chunk).filter(|src| orfc::recognizes(src)),
+        _ => None,
+    };
     let (mut data, bits, from_word16) = if info.compression != 1 {
         return Err(RawError::Unsupported(format!("ORF compression {}", info.compression)));
+    } else if let Some(src) = compressed_strip {
+        if src.len() as u64 != total || info.samples_per_pixel != 1 || info.planar == 2 {
+            return Err(RawError::Corrupt("ORF compressed strip has an invalid layout".into()));
+        }
+        orfc::validate(src, w, h)?;
+        compressed = true;
+        let d = if mode == Mode::Full || stated.is_none() { orfc::decode(src, w, h)? } else { Vec::new() };
+        (RawData::U16(d), 12, false)
     } else if total >= (n as u64) * 2 {
         let d = read_image(bytes, &info, tiff.order, Packing::Word16)?;
         (d, 16, true)
@@ -292,13 +304,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         bits
     };
 
-    let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).map(|v| v as usize))) {
-        // checked: the tags are file data; `x + cw` on a hostile value would wrap past the bounds
-        Some([Some(x), Some(y), Some(cw), Some(ch)])
-            if cw > 0 && ch > 0 && x.checked_add(cw).is_some_and(|end| end <= w) && y.checked_add(ch).is_some_and(|end| end <= h) =>
-        {
-            Rect::new(x, y, cw, ch)
-        }
+    let mn = maker_note(bytes, &tiff);
+    let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
+    // Crop coordinates are file data: reject narrowing and out-of-bounds rectangles.
+    let active = match ip.as_ref().map(|i| CROP.map(|tag| i.u64(tag).and_then(|v| usize::try_from(v).ok()))) {
+        Some([Some(x), Some(y), Some(cw), Some(ch)]) if cw > 0 && ch > 0 && x <= w && y <= h && cw <= w - x && ch <= h - y => Rect::new(x, y, cw, ch),
         _ => Rect::new(0, 0, w, h),
     };
     let cfa = stated.unwrap_or_else(|| cfa_from_data(samples, w, active));
@@ -322,7 +332,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             let g = |tag| m.ifd.f64s(tag).and_then(|v| v.first().copied()).filter(|g| *g > 25.6 && *g < 2560.0);
             Some([(g(MN_WB_RED)? / 256.0) as f32, 1.0, (g(MN_WB_BLUE)? / 256.0) as f32])
         });
-    let white = white_from_data(samples, bits);
+    let white = if compressed { 4095.0 } else { white_from_data(samples, bits) };
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
@@ -405,7 +415,7 @@ mod tests {
     /// A 16-bit container with a short sensor stream is not the supported 12-bit packed layout.
     /// Both entry points must report unsupported rather than returning fabricated sensor pixels.
     #[test]
-    fn compressed_sensor_data_is_unsupported_in_probe_and_decode() {
+    fn unknown_short_16bit_stream_is_not_misread_as_packed12() {
         for strip_len in [8, 24, 25] {
             let bytes = orf_with(4, 4, 16, vec![0; strip_len], Some(&[2, 0, 2, 0, 0, 1, 1, 2]));
             assert!(matches!(crate::decode(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"));
@@ -518,6 +528,67 @@ mod tests {
         // ImageProcessing present (without BlackLevel2): the main note isn't read
         let e = [bare_image_processing(), (MN_BLACK, 3, shorts(&[32; 4])), (MN_VALID_BITS, 3, shorts(&[10, 0]))];
         assert_eq!(decode_noted(&e).black.values, vec![0.0]);
+    }
+
+    fn zero_compressed(w: usize, h: usize) -> Vec<u8> {
+        let mut bits = Vec::new();
+        for _ in 0..h {
+            for x in 0..w {
+                bits.extend_from_slice(&[0, 0, 0, 1]); // sign, low bits, quotient 0
+                bits.extend(std::iter::repeat_n(0, if x < 6 { 4 } else { 2 }));
+            }
+        }
+        let mut strip = vec![0, 0, 0, 0, 1, 0, 0];
+        strip.extend(bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |b, (i, bit)| b | bit << (7 - i))));
+        strip
+    }
+
+    #[test]
+    fn compressed_orf_import_and_full_decode_use_sensor_data() {
+        for tag in [Some(RGGB), None] {
+            let bytes = orf_with(64, 4, 16, zero_compressed(64, 4), tag);
+            let raw = crate::decode(&bytes).unwrap();
+            assert_eq!(raw.data, RawData::U16(vec![0; 64 * 4]));
+            assert_eq!(raw.bits, 12);
+            assert_eq!(raw.white, [4095.0]);
+            assert_eq!(raw.cfa.as_ref().unwrap().name(), "RGGB");
+            assert_eq!(raw.info(), crate::probe_info(&bytes).unwrap());
+        }
+        let bytes = orf_with(64, 4, 16, zero_compressed(64, 4)[..100].to_vec(), Some(RGGB));
+        assert!(crate::decode(&bytes).is_err());
+        assert!(crate::probe_info(&bytes).is_err());
+        // The codec is selected by its header even when its byte count resembles packed/word data.
+        let mut padded = zero_compressed(64, 4);
+        padded.resize(64 * 4 * 2, 0);
+        let bytes = orf_with(64, 4, 16, padded, Some(RGGB));
+        assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(vec![0; 64 * 4]));
+    }
+
+    #[test]
+    fn overflowing_maker_note_crop_does_not_panic() {
+        // A new-style Olympus note points to an image-processing IFD with four LONG8 crops.
+        // Reject a hostile crop even when the sensor stream itself is valid.
+        let mut note = b"OLYMPUS\0II\x03\0".to_vec();
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.extend_from_slice(&IMAGE_PROCESSING.to_le_bytes());
+        note.extend_from_slice(&4u16.to_le_bytes());
+        note.extend_from_slice(&1u32.to_le_bytes());
+        note.extend_from_slice(&30u32.to_le_bytes());
+        note.extend_from_slice(&0u32.to_le_bytes());
+        note.extend_from_slice(&4u16.to_le_bytes());
+        for (i, tag) in CROP.iter().enumerate() {
+            note.extend_from_slice(&tag.to_le_bytes());
+            note.extend_from_slice(&16u16.to_le_bytes()); // LONG8
+            note.extend_from_slice(&1u32.to_le_bytes());
+            note.extend_from_slice(&(84u32 + i as u32 * 8).to_le_bytes());
+        }
+        note.extend_from_slice(&0u32.to_le_bytes());
+        for value in [u64::MAX, 0, 2, 2] {
+            note.extend_from_slice(&value.to_le_bytes());
+        }
+        let bytes = orf_with_note(64, 4, 16, zero_compressed(64, 4), Some(RGGB), Some(note));
+        assert_eq!(crate::decode(&bytes).unwrap().active_area, Rect::new(0, 0, 64, 4));
+        assert_eq!(crate::probe_info(&bytes).unwrap().active_area, Rect::new(0, 0, 64, 4));
     }
 
     /// A 12-bit mosaic stored as 16-bit words: `site(cx, cy)` gives the four values of the 2×2 cell at (cx, cy).

@@ -1,5 +1,7 @@
 # What's new in LightCraft
 
+- Olympus / OM System: measured lossless ORF streams decode from sensor data with 23 pinned full-sensor references. Existing preview-only photos can be refreshed with Reload from Disk; preserved edits can look different on sensor data. See [verification and limits](orf.md).
+
 ## Unreleased
 
 ### Colour noise reduction (process V6)

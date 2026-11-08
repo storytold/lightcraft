@@ -21,7 +21,7 @@ Toward **beta** (~340–600 Opus 5.5 agent hours; ranked, each a gap in [gaps.md
 4. **Full-resolution zoom** (gap 4, 8–15 h): visible-region rendering so 100% shows original pixels.
 5. **AI masks** (gap 5, 40–70 h): Subject / Sky / People on licensable weights; configure the SAM 3
    mirror. Needs the maintainer's model decision.
-6. **Compressed ORF** (gap 6 reopened; estimate pending provenance review) and **HE NEF** (gap 7, 20–40 h).
+6. **Compressed ORF** (gap 6: 23 sensor references; provenance and remaining modes under review) and **HE NEF** (gap 7, 20–40 h).
 7. **Lens profiles of our own** (gap 8, 40–80 h).
 8. **Tests in CI on macOS and Windows, and the GPU tests in CI** (gap 9, 6–12 h).
 9. **Per-model verification** (gap 10, 20–35 h).
@@ -36,7 +36,7 @@ against the code, tests, issues and [gaps.md](gaps.md).
 |---|---|---|---:|
 | 1. Import a shoot (raw + JPEG) from a card or folder into the library | yes | Add / Copy / Move import with templates, duplicates, devices with DCIM, background import with cancel (`crates/engine/src/import.rs`, `tests_import.rs`, `tests_import_move.rs`); checklist A 83% | 0 |
 | 2. Cull: rate, flag, label, compare / survey, filter, check focus | yes (partial: focus check) | ratings / flags / labels with advance, Compare, Survey ≤ 48, filter bar, smart albums (checklist B–D 88–92%); 100% zoom is capped by the preview size (2,560 px default, adjustable in Settings), gap 4 — degrades focus checks on large files but does not block culling | 0 (8–15 h to close gap 4, beta) |
-| 3. Develop raws non-destructively (global sliders, crop, masks, heal) | yes for most cameras (partial: Canon CR3 outside the verified variants, compressed ORF, HE NEF open as embedded previews) | Sony, Nikon (except HE), Fujifilm, Panasonic, Pentax, CR2, DNG decode from sensor data (raw-parity.md); every Edit slider, crop / Upright, brush / gradient / range masks, heal / clone (checklist F, H, K); colour estimated per file rather than measured, gaps 1–3 | 0 (coverage and colour gaps are beta blockers 1–3, 6–7) |
+| 3. Develop raws non-destructively (global sliders, crop, masks, heal) | yes for most cameras (partial: Canon CR3 outside the verified variants, HE NEF opens as embedded previews; measured lossless ORF streams decode) | Sony, Nikon (except HE), Fujifilm, Panasonic, Pentax, CR2, DNG decode from sensor data (raw-parity.md); every Edit slider, crop / Upright, brush / gradient / range masks, heal / clone (checklist F, H, K); colour estimated per file rather than measured, gaps 1–3 | 0 (coverage and colour gaps are beta blockers 1–3, 6–7) |
 | 4. Save, quit and reopen the work | yes | crash-safe journal + snapshots, torn-append and crash tests (`crates/catalog/src/journal.rs`, `tests_journal.rs`, `tests_torn_append.rs`); XMP sidecars read / write; failed saves reported | 0 |
 | 5. Batch-apply a look: presets, copy / paste / sync settings | yes | presets (incl. `.xmp` / `.lrtemplate` import), copy / paste / sync, auto sync (checklist L 86%, N 100%) | 0 |
 | 6. Export deliverables (JPEG / TIFF, size, sharpening, metadata, watermark, naming) | yes | one encoder for app, CLI and MCP (`crates/engine/src/export.rs`, `tests_export.rs`); checklist S 89% | 0 |
@@ -72,7 +72,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 | M8 | Heal / Remove | content-aware remove (PatchMatch), heal, clone, brush spots, visualize spots, red/pet eye | 6–10 | 🚧 (heal, clone, auto source, visualize spots, red/pet eye ✅; PatchMatch remove ⬜) |
 | M9 | Presets, profiles, versions, sync | preset browser + amount, create/import presets, profile browser, versions, history, copy/paste/sync settings | 5–8 | ✅ |
 | M10 | Export & share | export dialog (JPEG/PNG/TIFF/DNG/AVIF/JXL/original), sizing, sharpening, metadata, watermark, naming, batch jobs, XMP sidecars, HDR export | 6–10 | 🚧 (all formats incl. DNG/original, sizing, presets, background jobs, HDR gain map JPEG / PQ AVIF ✅; JXL encode ⬜) |
-| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF all, RW2 every format, PEF, ORF uncompressed and 12.8 bpp, SRW uncompressed, HEIC ✅; CR3 🟡 (3 bodies verified); **camera colour calibration** 🚧 (per-file JPEG fits, 5 bundled profiles, 52 spectral matrices; measured database missing); compressed ORF / SRW, HE NEF, IIQ, X3F ⬜) |
+| M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (RAF all, RW2 every format, PEF, ORF uncompressed, 12.8 bpp and measured lossless streams, SRW uncompressed, HEIC ✅; CR3 🟡 (3 bodies verified); **camera colour calibration** 🚧 (per-file JPEG fits, 5 bundled profiles, 52 spectral matrices; measured database missing); remaining ORF modes/provenance 🟡; compressed SRW, HE NEF, IIQ, X3F ⬜) |
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | 🚧 (faces: detection, recognition, People view ✅; Object / Describe masks via SAM 3 🟡; Subject / Sky / People masks, semantic search ⬜) |
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
 | M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | ⬜ |
@@ -108,6 +108,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Extract #1162 lossless ORF decoder with 23 pinned full-sensor references and repeatable black-box verification. Coverage: 577 verified, 703 unverified, 129 preview-only, 37 unsupported; 97% use-weighted. Provenance/mode review remains open; readiness and hour estimates not re-scored. |
 | 2026-10-24 | patch | Item 8 (gap 9): Linux dropped from "Tests in CI" and "the GPU tests in CI" added, because the CI gate has run the tests there since #2667; hours unchanged |
 | 2026-10-12 | minor | LR-PROF-IMPORT: the user's own DNG camera profiles (`.dcp`) import as camera profiles; none ship |
 | 2026-10-10 | minor | Beta hours 340–600; full ready ~59% in the gate note |

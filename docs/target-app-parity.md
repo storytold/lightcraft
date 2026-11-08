@@ -10,6 +10,8 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
 
 ## Headline
 
+ORF sensor coverage was remeasured on 2026-11-07 (577 verified models overall, 97% use-weighted coverage). The audience/readiness calculations below retain their earlier 94% baseline until provenance and unmeasured-mode review is complete.
+
 | Number | Value | Kind |
 |---|---:|---|
 | **Feature breadth**, checklist | **83.2%** of 543 in-scope rows (P0 97.5%, P1 94.4%, P2 56.7%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
@@ -47,7 +49,7 @@ phase #85, duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | Dimension | Breadth | Ready for real work | Remaining | Doc |
 |---|---:|---:|---:|---|
 | Features (weighted areas below) | ~77% (checklist 83.2%, measured) | ~62% | 600–1,100 h | [Features](#features) |
-| ↳ RAW cameras, colour and lens profiles (part of features) | 85% of Adobe's 1,446 models decode (39% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
+| ↳ RAW cameras, colour and lens profiles (part of features) | 89% of Adobe's 1,446 models decode (40% verified), measured | ~56% | 255–480 h | [raw-parity.md](raw-parity.md) |
 | UI/UX fidelity | ~85% | ~70% | 32–54 h | [ui-parity.md](ui-parity.md) |
 | File formats (non-raw: images, sidecars, presets, catalogs) | ~85% | ~70% | 30–55 h | [file-format-parity.md](file-format-parity.md) |
 | Hardware | ~50% | ~40% | 40–80 h (+ tethering and printing, counted under Classic modules) | [hardware-parity.md](hardware-parity.md) |
@@ -67,7 +69,7 @@ from the checklist sections and the deep-dive documents.
 | Area | Weight | Breadth | Ready | Remaining | Notes |
 |---|---:|---:|---:|---:|---|
 | Import and library (import, folders, albums, smart albums, keywords, metadata, search, faces) | 15% | 90% | 80% | 25–45 h | checklist A–E 83–92%; robust journal; 85k-photo libraries |
-| RAW decoding and camera coverage | 15% | 85% | 85% | 110–205 h | [raw-parity.md](raw-parity.md), measured model by model: 94% of photographers' cameras decode (use-weighted), × 0.9 for per-body bugs; CR3 variants, compressed ORF, HE NEF |
+| RAW decoding and camera coverage | 15% | 85% | 85% | 110–205 h | [raw-parity.md](raw-parity.md), measured coverage is now 97% use-weighted; the earlier 85% depth estimate (94% × 0.9 for per-body bugs) is retained; CR3 variants, unmeasured ORF modes, HE NEF |
 | Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 10 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; no fidelity suite ([raw-parity.md](raw-parity.md#colour)) |
 | Global develop adjustments (light, colour, curves, grading, effects, detail) | 15% | 93% | 70% | 30–60 h | checklist F 91.7%; character tuned by eye |
 | Optics, lens profiles, crop and geometry | 6% | 80% | 50% | 40–80 h | no lens database; crop / Upright complete |
@@ -230,7 +232,7 @@ evidence. The stage stays **alpha**.
 
 **Alpha.** Core workflows exist end to end (import, cull, develop, mask, export, catalog migration),
 but ready-for-real-work is ~62%, below the ~75% beta bar, and the main file formats have blocking
-gaps: Canon CR3 decodes from sensor data on 26 verified bodies, compressed ORF and HE NEF use embedded previews when available, while colour on every non-DNG raw is estimated rather than measured.
+gaps: Canon CR3 decodes from sensor data on 26 verified bodies, measured lossless ORF streams decode from sensor data and HE NEF uses embedded previews when available; colour on every non-DNG raw is estimated rather than measured.
 
 **Alpha gate:** all six core workflows (import, cull, develop, save and reopen, batch looks, export)
 work end to end on macOS; see the table in [roadmap.md](roadmap.md#alpha-gate). The partial rows (CR3
@@ -299,6 +301,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Extract #1162 lossless ORF decoder with 23 pinned full-sensor references and repeatable black-box verification. Coverage: 577 verified, 703 unverified, 129 preview-only, 37 unsupported; 97% use-weighted. Provenance/mode review remains open; readiness and hour estimates not re-scored. |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |

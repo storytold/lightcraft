@@ -321,10 +321,10 @@ doesn't pass, so a file can only stay as before or move closer to its camera JPE
 
 ### Olympus ORF
 
-The ORF decoder (uncompressed files) supplies the as-shot white balance (ImageProcessing `WB_RBLevels`) and no colour
+The ORF decoder (uncompressed and measured lossless-compressed files) supplies the as-shot white balance (ImageProcessing `WB_RBLevels`) and no colour
 matrix, so ORF takes the same fit, gates and relative white balance. The reference is the camera's preview JPEG (on the
 E-1 the 1280 × 960 one the maker note points to). All three decodable corpus files are accepted (held-out RMS against
-the neutral fallback): E-1 0.126 → 0.014, E-400 0.087 → 0.022, XZ-2 0.061 → 0.023. Compressed ORFs (E-M1, E-M10 III)
-still open from their embedded JPEG. Against Lightroom Classic's render of a CC0 E-1 photo (2000 px, ΔE00 of the
+the neutral fallback): E-1 0.126 → 0.014, E-400 0.087 → 0.022, XZ-2 0.061 → 0.023. Measured compressed ORFs now use sensor pixels with the same file-local fit;
+the 23 sensor references establish decode correctness, not colour parity ([ORF verification](orf.md)). Against Lightroom Classic's render of a CC0 E-1 photo (2000 px, ΔE00 of the
 unedited render) the starting look moved from 11.25 to 8.30. Lightroom frames that E-1 file about 4 × 11 sensor pixels
 differently from the crop the file records (`CropLeft`/`CropTop` 36, 34); the file's own crop is kept.
