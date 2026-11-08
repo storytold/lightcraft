@@ -397,7 +397,8 @@ mod tests {
         assert!(looks_group(&m).is_none());
     }
 
-    /// A newer format, a node short, a non-hexadecimal node or no step is refused.
+    /// A look file that names its raw exposure bias brightens a raw by the difference from the raw's own, in place of
+    /// the dynamic range setting; without either bias the dynamic range setting decides.
     #[test]
     fn a_file_that_names_its_exposure_bias_brightens_by_the_raws_own() {
         // the X-T5 file: eleven looks, registered like the X-T4's
@@ -417,6 +418,7 @@ mod tests {
         assert_eq!(exposure("X-T5", Some(f64::NAN), Some(100)), 1.0);
     }
 
+    /// A newer format, a node short, a non-hexadecimal node or no step is refused.
     #[test]
     fn damaged_look_files_are_refused() {
         let (_, json) = BUNDLED[0];

@@ -374,6 +374,7 @@ pub(crate) mod tests {
             assert_eq!(r.orientation, Orientation::Rotate270);
             assert_eq!(r.cfa.as_ref().map(Cfa::name).as_deref(), Some("GBRG"), "CR2CFAPattern 3");
             assert_eq!(r.metadata.iso, Some(400));
+            assert_eq!(r.metadata.raw_exposure_bias, None, "only Fujifilm RAFs record one");
             assert!(r.develop(crate::Method::Ahd).is_ok());
         }
     }

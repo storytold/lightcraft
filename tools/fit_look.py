@@ -153,6 +153,7 @@ def main():
                 val[cur].append(tuple(line.split("\t")))
     D = second_diff(lax, abx)
     n = lax[2] * abx[2] * abx[2]
+    unfitted = []
     for look in f["looks"]:
         lid = look["id"]
         if lid not in blocks:
@@ -165,6 +166,7 @@ def main():
                 ins.append(r[0]); tgs.append(r[1])
         if sum(len(v) for v in ins) == 0:
             print(f"{lid}: no usable pixels in its {len(blocks[lid])} listed raws; its nodes are left as they were", file=sys.stderr, flush=True)
+            unfitted.append(lid)
             continue
         lab, y = np.concatenate(ins), np.concatenate(tgs)
         W = weights(lab, lax, abx)
@@ -190,6 +192,9 @@ def main():
         print(msg, flush=True)
         look["nodes"] = encode(x, off, step)
     json.dump(f, open(out, "w", encoding="utf-8"))
+    # the file is written so the fitted looks aren't lost, but it still holds starting nodes for these
+    if unfitted:
+        sys.exit(f"not fitted, left at their starting nodes: {', '.join(unfitted)}")
 
 
 if __name__ == "__main__":
