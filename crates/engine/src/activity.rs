@@ -382,7 +382,8 @@ mod tests {
     fn running_lists_a_task_whose_stop_was_switched_off_and_one_with_a_flag_of_its_own() {
         let a = Activity::default();
         let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (stoppable, flagged) = (a.start("lightroom", "Importing Lightroom catalog", Cancel::Yes), a.start("export", "E", Cancel::Flag(flag.clone())));
+        let (stoppable, flagged) =
+            (a.start("lightroom", "Importing Lightroom catalog", Cancel::Yes), a.start("export", "E", Cancel::Flag(flag.clone())));
         let by = |a: &Activity| a.running().iter().map(|t| (t.label.clone(), t.cancellable)).collect::<Vec<_>>();
         assert_eq!(by(&a), vec![("Importing Lightroom catalog".into(), true), ("E".into(), true)]);
         // the commit phase of an import: still running, no longer stoppable, so the prompt names it as not waited for
