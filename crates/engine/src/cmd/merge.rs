@@ -30,9 +30,16 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     }
     let single = jobs.len() == 1;
     let mut previews = Vec::new();
+    let mut failed = Vec::new();
     let mut first_preview = None;
     for job in &jobs {
-        let out = job.run(&|_, _| true).map_err(|e| bad(id, e))?;
+        let out = match job.run(&|_, _| true) {
+            Ok(out) => out,
+            Err(e) => {
+                failed.push(json!({"photos": job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), "error": e}));
+                continue;
+            }
+        };
         let mut info = out.info;
         if let Some(img) = &out.preview {
             info["previewSize"] = json!([img.width, img.height]);
@@ -41,6 +48,10 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
             first_preview = out.preview;
         }
         previews.push(info);
+    }
+    if previews.is_empty() {
+        let msg = failed.iter().map(|f| format!("{}: {}", f["photos"], f["error"])).collect::<Vec<_>>().join("; ");
+        return Err(bad(id, format!("all previews failed: {msg}")));
     }
     let mut info = previews.first().cloned().unwrap_or(Value::Null);
     if single {
@@ -53,6 +64,9 @@ fn run(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
         }
     } else if let Some(obj) = info.as_object_mut() {
         obj.insert("previews".into(), Value::Array(previews));
+        if !failed.is_empty() {
+            obj.insert("failed".into(), Value::Array(failed));
+        }
     }
     Ok(info)
 }
