@@ -578,7 +578,7 @@ fn reflect_finished(app: &mut LightcraftApp, task: &mut ImmichTask, ctx: &egui::
                 .as_array()
                 .map(|a| (a.first().and_then(Value::as_str).unwrap_or(""), a.get(1).and_then(Value::as_str).unwrap_or("import failed")))
                 .unwrap_or(("", "import failed"));
-            let name = path.rsplit('/').next().unwrap_or(path);
+            let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
             task.failed.push(format!("{name}: {reason}"));
         }
     }
