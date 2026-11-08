@@ -212,8 +212,18 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let mut two_field = false;
     let mn = maker_note(bytes, &tiff);
     let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
+    let compressed = ip.as_ref().and_then(|i| super::orf_compressed::OrfCompressionConfig::from_subifd(i, mn.as_ref())).and_then(|config| {
+        let chunk = chunks.first()?;
+        let src = chunk_bytes(bytes, chunk)?;
+        if super::orf_compressed::verify_stream_header(src, config.header_prefix_len) { Some((config, src)) } else { None }
+    });
     let (mut data, bits, from_word16) = if info.compression != 1 {
         return Err(RawError::Unsupported(format!("ORF compression {}", info.compression)));
+    } else if let Some((config, src)) = compressed {
+        let stream =
+            src.get(config.header_prefix_len.saturating_add(2)..).ok_or_else(|| RawError::Corrupt("ORF compressed stream truncated".into()))?;
+        let d = if mode == Mode::Full || stated.is_none() { super::orf_compressed::decompress_stream(stream, w, h, &config)? } else { Vec::new() };
+        (RawData::U16(d), config.sensor_bits, false)
     } else if total >= (n as u64) * 2 {
         let d = read_image(bytes, &info, tiff.order, Packing::Word16)?;
         (d, 16, true)
@@ -271,16 +281,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             Vec::new()
         };
         (RawData::U16(d), 12, false)
-    } else if let Some(config) = ip.as_ref().and_then(|i| super::orf_compressed::OrfCompressionConfig::from_subifd(i, mn.as_ref())) {
-        let chunk = chunks.first().ok_or_else(|| RawError::Corrupt("ORF missing raw strip".into()))?;
-        let src = chunk_bytes(bytes, chunk).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
-        if !super::orf_compressed::verify_stream_header(src, config.header_prefix_len) {
-            return Err(RawError::Corrupt("ORF compressed header mismatch".into()));
-        }
-        let stream =
-            src.get(config.header_prefix_len.saturating_add(2)..).ok_or_else(|| RawError::Corrupt("ORF compressed stream truncated".into()))?;
-        let d = if mode == Mode::Full || stated.is_none() { super::orf_compressed::decompress_stream(stream, w, h, &config)? } else { Vec::new() };
-        (RawData::U16(d), config.sensor_bits, false)
     } else {
         return Err(RawError::Unsupported("Olympus compressed ORF".into()));
     };

@@ -22,4 +22,4 @@ Verified against real CC0 files from `raw.pixls.us`:
 | `Olympus - E-M1MarkII - 16bit (4_3).ORI` | Olympus OM-D E-M1 Mark II (ORI) | 5240 × 3912 | 0.998 |
 | `Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI` | Olympus OM-D E-M5 Mark II (ORI) | 4640 × 3472 | 0.994 |
 
-Verification is enforced by `crates/raw/tests/it/olympus_samsung_corpus.rs` (`compressed_olympus_bodies_decode_like_camera_jpeg`).
+The test suite `compressed_olympus_bodies_decode_like_camera_jpeg` in `crates/raw/tests/it/olympus_samsung_corpus.rs` checks that decoded green mosaic sites follow the camera's embedded JPEG with $r > 0.6$. Note that this test skips missing files when the local corpus is unavailable rather than enforcing an mandatory four-file regression check, and asserts the $r > 0.6$ correlation threshold rather than the empirical values reported above.

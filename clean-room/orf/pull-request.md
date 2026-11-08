@@ -24,7 +24,7 @@ Implemented a clean-room, pure safe-Rust bitstream decoder for compressed Olympu
    - Crate-level `#![forbid(unsafe_code)]` compliance.
 
 3. **Vendor Integration & Dispatch (`crates/raw/src/vendor/orf.rs`, `crates/raw/src/vendor.rs`)**:
-   - Dispatches compressed SubIFD strips (`Compression == 0x26`, `0x27`, or sub-type tags) through `decode_orf_compressed`.
+   - Attempts compressed decoding for IFD0 strips with `Compression == 1` when no uncompressed layout matches and the ImageProcessing configuration is valid.
    - Graceful fallback to embedded preview when compressed data is truncated or corrupt.
 
 4. **Independent Code Audit (`clean-room/orf/10-code-audit.md`)**:
@@ -39,10 +39,10 @@ Implemented a clean-room, pure safe-Rust bitstream decoder for compressed Olympu
 
 - [x] `cargo xtask ci` passes on this branch (`cargo fmt`, `cargo clippy`, all unit tests, `layers`, `assets`, `roots`, `wasm`).
 - [x] Verified against CC0 sample corpus (`crates/raw/tests/it/olympus_samsung_corpus.rs`):
-  - `orf-olympus-em1.orf` (Olympus E-M1): Pearson correlation $r = 0.995$ against reference mosaic.
-  - `orf-olympus-em10iii.orf` (Olympus E-M10 Mark III): Pearson correlation $r = 0.929$.
-  - `Olympus - E-M1MarkII - 16bit (4_3).ORI` (Olympus E-M1 Mark II high-res raw): Pearson correlation $r = 0.998$.
-  - `Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI` (Olympus E-M5 Mark II high-res raw): Pearson correlation $r = 0.994$.
+  - `orf-olympus-em1.orf` (Olympus E-M1): Pearson correlation $r = 0.995$ against the camera's embedded JPEG preview (downscaled green channel).
+  - `orf-olympus-em10iii.orf` (Olympus E-M10 Mark III): Pearson correlation $r = 0.929$ against the camera's embedded JPEG preview.
+  - `Olympus - E-M1MarkII - 16bit (4_3).ORI` (Olympus E-M1 Mark II high-res raw): Pearson correlation $r = 0.998$ against the camera's embedded JPEG preview.
+  - `Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI` (Olympus E-M5 Mark II high-res raw): Pearson correlation $r = 0.994$ against the camera's embedded JPEG preview.
 - [x] Automated review via `coderabbit review --agent`: 0 findings across all files.
 - [x] Regression testing: Synthetic malformed/truncated bitstream inputs reject gracefully without panicking or allocating unconstrained memory.
 
@@ -58,7 +58,7 @@ Implemented a clean-room, pure safe-Rust bitstream decoder for compressed Olympu
 
 - [x] No new panic path in non-test code: no `unwrap` / `expect` / `panic!`, no indexing or unchecked arithmetic on a number from a file, a person or an agent (`get`, `checked_mul`, NaN and char boundaries handled)
 - [x] New text on screen goes through `tr()` and has its key in `crates/ui-egui/locales/*.json`; a new shortcut is free in `docs/library-shortcuts.md` (N/A — no new UI text or shortcuts)
-- [x] The feature's rows in `docs/parity-checklist.md` and its entry in `docs/gaps.md` are updated honestly in `docs/orf-compression.md` and related docs.
+- [x] The feature's rows in `docs/parity-checklist.md` (LR-IMP-FORMATS restored) and its entry in `docs/gaps.md` (Gap 6 closed) are updated honestly, with verified 97% use-weighted camera coverage recorded in `docs/raw-parity.md`, `docs/target-app-parity.md`, `docs/orf-compression.md`, and `ROADMAP.md`.
 - [x] New code has a caller: wired into `crates/raw/src/vendor/orf.rs` and `vendor.rs`.
 - [x] Every new image, icon or other asset has its entry in `assets/ATTRIBUTION.md`; no font or media files added.
 - [x] Ready to merge.

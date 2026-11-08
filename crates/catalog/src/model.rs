@@ -435,12 +435,17 @@ impl Photo {
     /// The stamp for a fresh probe. Supported ORFs keep it too, so the support-withdrawal
     /// recheck runs once, without repeatedly probing uncompressed ORFs on every library open.
     pub fn preview_stamp(&self, preview_only: &Option<String>) -> String {
-        if self.format.eq_ignore_ascii_case("orf") { APP_VERSION.to_string() } else { preview_stamp(preview_only) }
+        if self.format.eq_ignore_ascii_case("orf") || self.format.eq_ignore_ascii_case("ori") {
+            APP_VERSION.to_string()
+        } else {
+            preview_stamp(preview_only)
+        }
     }
     /// A preview-only photo or ORF whose support was checked by another app version (or before
     /// stamps existed), so this build should probe its file again (issues #662 and #3775).
     pub fn preview_only_stale(&self) -> bool {
-        (self.preview_only.is_some() || self.format.eq_ignore_ascii_case("orf")) && self.preview_checked != APP_VERSION
+        (self.preview_only.is_some() || self.format.eq_ignore_ascii_case("orf") || self.format.eq_ignore_ascii_case("ori"))
+            && self.preview_checked != APP_VERSION
     }
     /// A raw file developed from its sensor data: not a rendered image, and not a raw shown from
     /// its embedded preview ([`Photo::preview_only`]).

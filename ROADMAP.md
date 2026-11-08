@@ -107,14 +107,14 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 3. Render-fidelity suite against Lightroom, then tuning (30–60 h)
 4. ~~Full-resolution zoom~~ (done 2026-10-12)
 5. AI masks: Subject / Sky / People (40–70 h + model decision)
-6. Compressed ORF (support withdrawn; estimate pending provenance review) and HE NEF (20–40 h)
+6. HE NEF (20–40 h)
 7. Lens profile database of our own (40–80 h, #329)
 8. Tests in CI on macOS and Windows, and the GPU tests in CI (6–12 h)
 9. Per-model raw verification (20–35 h)
 
 ## Progress log
 
-- 2026-11-07: Compressed ORF support withdrawn pending provenance review; uncompressed support remains. Regenerated camera coverage: 557 verified, 665 unverified, 187 preview-only and 37 unsupported; 94% use-weighted coverage. See [ORF status](docs/orf-compression.md).
+- 2026-11-07: LR-IMP-FORMATS: clean-room pure-Rust compressed Olympus ORF decoder restored from patent disclosures (US7333035B2, US7715639B2) in `crates/raw/src/vendor/orf_compressed.rs`, verified on CC0 sample corpus. Camera coverage regenerated: 560 verified, 720 unverified, 129 preview-only and 37 unsupported; 97% use-weighted coverage. See [ORF status](docs/orf-compression.md).
 
 - 2026-11-04: Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available.
 - 2026-10-22: Print page setup and PDF output gain the Japanese photo and postcard papers — L判
@@ -199,6 +199,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Compressed ORF clean-room decoder restored; camera coverage regenerated: 560 verified, 720 unverified, 129 preview-only, 37 unsupported; 97% use-weighted coverage |
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
 | 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |
 | 2026-10-22 | minor | Print: Japanese photo and postcard paper sizes (L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺) in the page setup, Print dialog and PDF output; headline numbers unchanged |

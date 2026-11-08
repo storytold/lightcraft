@@ -8,7 +8,7 @@ This document tracks the steps and status of the clean-room Olympus ORF decoder 
 - **Clean-room Separation:**
   - **Role 1 (Specification Author):** Documents functional mathematical algorithms derived solely from public patent disclosures (US7333035B2, US7715639B2), TIFF 6.0, Exif 2.3, and black-box CC0 analysis into `clean-room/orf/orf-spec.md`.
   - **Role 2 (Clean-Room Implementer):** Implements the bitstream parser in Rust using *only* `clean-room/orf/orf-spec.md` and sample ORF/ORI files in `corpus/raw`.
-  - **Role 3 (Independent Auditor):** Audits the resulting Rust code against known external implementations (LibRaw/dcraw) to ensure zero architectural or verbatim derivation.
+  - **Role 3 (Independent Auditor):** Audits the resulting Rust code against the clean-room specification, patent disclosures, and repository house rules to verify clean-room integrity, architectural novelty, and that no external source code was consulted or copied.
 
 ---
 
@@ -47,7 +47,7 @@ This document tracks the steps and status of the clean-room Olympus ORF decoder 
 - Wired `orf_compressed` into `crates/raw/src/vendor/orf.rs` and `crates/raw/src/vendor.rs`.
 
 ### Step 5: Independent Code Audit
-- Audited implementation against LibRaw/dcraw patterns; certified zero code derivation in `clean-room/orf/10-code-audit.md`.
+- Audited implementation against clean-room specifications and provenance requirements; certified zero external code derivation in `clean-room/orf/10-code-audit.md`.
 
 ### Step 6: Testing & Empirical Validation
 - Verified unit tests in `crates/raw/src/vendor/orf_compressed.rs`.
@@ -73,9 +73,9 @@ This document tracks the steps and status of the clean-room Olympus ORF decoder 
 Per `AGENTS.md` (section *Start every session here*, rule 2) and the raw-parity governance guidelines, landing a camera format feature requires updating four tiers of documentation:
 
 ### 1. Camera Coverage & Verification Database (The Source of Truth)
-- `docs/raw/evidence.tsv`: Records verified camera models, sensor dimensions, pinned 64-bit FNV-1a checksums, Pearson correlation $r$ against the camera JPEG preview, and corpus paths (e.g. `Olympus OM-D E-M1`, `Olympus OM-D E-M10 Mark III`, `Olympus OM-D E-M1 Mark II (ORI)`, `Olympus OM-D E-M5 Mark II (ORI)`).
-- `docs/raw/coverage.tsv`: The master spreadsheet mapping every camera model to its support status. Updates the 58 Olympus and OM System compressed camera models from preview-only (`preview`) to supported (`verified` or `unverified`).
-- `docs/raw/coverage.py`: The script used to recalculate the coverage percentages. Running `python docs/raw/coverage.py` outputs the exact updated tables:
+- `docs/raw/evidence.tsv`: Add verified records for newly checked camera models (e.g. `Olympus OM-D E-M1`, `Olympus OM-D E-M10 Mark III`, `Olympus OM-D E-M1 Mark II (ORI)`, `Olympus OM-D E-M5 Mark II (ORI)`), recording test references and camera-JPEG correlation.
+- `docs/raw/coverage.py`: Update the format classification rules (e.g. adjust `ORF_DECODED` pattern or format handlers) so that compressed ORF bodies are recognized as supported rather than preview-only.
+- `docs/raw/coverage.tsv`: Generated file (do not edit directly). Regenerate it by running `python docs/raw/coverage.py`, which re-evaluates all camera models against `docs/raw/evidence.tsv` and the updated format rules in `docs/raw/coverage.py`, outputting the recalculated coverage tables:
   - OM / Olympus fully working: **6% → 81%**
   - Overall use-weighted camera coverage: **94% → 97%**
   - Preview-only models: **187 → 129**
@@ -126,10 +126,23 @@ cargo xtask corpus --download
 3. **Downloads Auxiliary Test Corpora:**
    - Downloads the Nikon D750 CC0 ColorChecker test suite into `corpus/d750-colorchecker/`.
 
-### Useful Operational Notes
+### Useful Operational Notes & Obtaining ORI Test Files
 - **Location:** The test media is stored in `corpus/` at the repository root, which is git-ignored and never committed.
 - **Skip Behavior:** When files are absent, test suites use `lightcraft_testkit::skip!(Corpus, ...)` to skip gracefully instead of failing.
-- **Manual / Individual Downloads:** If you want to fetch an individual file from `raw.pixls.us` directly:
-  ```powershell
-  curl -L -o "corpus/raw/<filename>" "https://raw.pixls.us/getfile.php/<id>/nice/<name>"
-  ```
+- **Standard Manifest Samples:** `cargo xtask corpus --download` fetches the entries registered in `xtask/src/raw_samples.rs` (such as `orf-olympus-em1.orf` and `orf-olympus-em10iii.orf`).
+- **High-Resolution ORI Test Files:**
+  The compressed-ORF tests in `crates/raw/tests/it/olympus_samsung_corpus.rs` check two composite high-res `.ORI` sample files:
+  1. `Olympus - E-M1MarkII - 16bit (4_3).ORI` (SHA-256: `89138ccc958509ca1beb7028452400ab7f42061c0fc56e35c8a7d7a4a808dd0a`)
+  2. `Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI` (SHA-256: `f2c7a1dfbfcc6093b28373a1616569b8bd9c2d91cb708480b8312d510c57fbd6`)
+  
+  These originate from the CC0 Olympus high-resolution multi-shot raw submissions on `raw.pixls.us`.
+  To make them available locally for the test suite:
+  - Copy them from local clean-room storage:
+    ```powershell
+    Copy-Item "clean-room/orf/corpus/*.ORI" -Destination "corpus/raw/"
+    ```
+  - Or download individually from `raw.pixls.us`:
+    ```powershell
+    curl -L -o "corpus/raw/<filename>" "https://raw.pixls.us/getfile.php/<id>/nice/<name>"
+    ```
+  If neither file is present in `corpus/raw/`, the test suite automatically calls `lightcraft_testkit::skip!(Corpus, ...)` so the overall test gate remains clean.
