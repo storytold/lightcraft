@@ -1115,3 +1115,33 @@ fn stopped_then_made(tag: &str, take_in: impl Fn(&mut Session)) {
     assert!(mine.exists());
     let _ = std::fs::remove_dir_all(&x.dir);
 }
+
+/// A session whose one photo has its amount set, is lined up, and then stopped by the row's ✕ (on a paused queue).
+fn stopped_photo(tag: &str) -> (Setup, lightcraft_catalog::PhotoId) {
+    let mut x = setup(tag, true);
+    let id = photo(&x.s);
+    set_amount(&mut x.s, 100.0);
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    let row = x.s.activity.list().into_iter().find(|t| t.kind == "denoise").expect("a row");
+    x.s.activity.cancel(row.id).unwrap();
+    x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+    assert_eq!(x.s.denoise_photo_state(id), PhotoState::Stopped);
+    (x, id)
+}
+
+#[test]
+fn clearing_the_cache_forgets_what_was_stopped() {
+    let (mut x, id) = stopped_photo("stopped-then-cleared");
+    x.s.denoise_clear();
+    assert_ne!(x.s.denoise_photo_state(id), PhotoState::Stopped);
+    let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+#[test]
+fn another_library_forgets_what_was_stopped() {
+    let (mut x, id) = stopped_photo("stopped-then-another-library");
+    x.s.denoise.library_changed();
+    assert_ne!(x.s.denoise_photo_state(id), PhotoState::Stopped, "photo ids are per library: nothing carries over");
+    let _ = std::fs::remove_dir_all(&x.dir);
+}

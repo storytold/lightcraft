@@ -33,8 +33,8 @@ struct Inner {
 pub enum Cancel {
     /// Not at all (no ✕): Adding to Apple Photos (Photos can't be stopped once asked), a move, Print to PDF.
     No,
-    /// Not at all (no ✕), and short and read-only (Find Missing Photos, a library check, the GPU check): quitting
-    /// loses nothing and doesn't wait for it, so Quit's prompt doesn't list it.
+    /// Not at all (no ✕), and short and read-only (Find Missing Photos, a library check, Show in File Manager, the GPU
+    /// check…): quitting loses nothing and doesn't wait for it, so Quit's prompt doesn't list it.
     Quick,
     /// With a flag of its own ([`TaskGuard::cancel_flag`]).
     Yes,
@@ -379,15 +379,31 @@ mod tests {
     }
 
     #[test]
+    fn running_lists_a_task_whose_stop_was_switched_off_and_one_with_a_flag_of_its_own() {
+        let a = Activity::default();
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (stoppable, flagged) = (a.start("lightroom", "Importing Lightroom catalog", Cancel::Yes), a.start("export", "E", Cancel::Flag(flag.clone())));
+        let by = |a: &Activity| a.running().iter().map(|t| (t.label.clone(), t.cancellable)).collect::<Vec<_>>();
+        assert_eq!(by(&a), vec![("Importing Lightroom catalog".into(), true), ("E".into(), true)]);
+        // the commit phase of an import: still running, no longer stoppable, so the prompt names it as not waited for
+        stoppable.set_cancellable(false);
+        assert_eq!(by(&a), vec![("Importing Lightroom catalog".into(), false), ("E".into(), true)]);
+        a.cancel(flagged.id()).unwrap();
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed), "the job's own flag is the stop");
+        assert_eq!(by(&a), vec![("Importing Lightroom catalog".into(), false)], "a task already stopping is not listed again");
+    }
+
+    #[test]
     fn a_quick_check_has_no_stop_and_is_not_what_quitting_would_cut_short() {
         let a = Activity::default();
-        let (_c, _p) = (a.start("findMissing", "Find Missing Photos", Cancel::Quick), a.start("applePhotos", "P", Cancel::No));
+        let (c, _p) = (a.start("findMissing", "Find Missing Photos", Cancel::Quick), a.start("applePhotos", "P", Cancel::No));
         assert_eq!(
             a.list().iter().map(|t| (t.label.clone(), t.cancellable)).collect::<Vec<_>>(),
             vec![("Find Missing Photos".into(), false), ("P".into(), false)]
         );
         assert_eq!(a.running().iter().map(|t| t.label.clone()).collect::<Vec<_>>(), vec!["P".to_string()], "only the one quitting doesn't wait for");
         assert_eq!(a.cancel_all(), 0);
+        assert!(a.cancel(c.id()).is_err(), "a quick check has no stop, as a job with no ✕ has none");
     }
 
     #[test]
