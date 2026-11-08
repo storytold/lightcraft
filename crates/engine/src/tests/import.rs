@@ -4197,6 +4197,23 @@ fn all_metadata_of_a_clip_without_a_file_shows_the_recorded_values() {
     assert!(r["note"].as_str().is_some());
 }
 
+/// A clip whose catalog record has no dimensions gets no Width or Height row: 0 is not a size.
+#[test]
+fn all_metadata_of_a_clip_without_dimensions_omits_the_size_rows() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+    let mut s = Session::new();
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "/lightcraft-web/clip.mp4".into() }, "clip.mp4", "MP4", 0, 0, "2026-05-04T10:00:00");
+    p.kind = MediaKind::Video;
+    p.duration = Some(1.5);
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let r = s.execute("photo.allMetadata", &json!({"id": 1})).unwrap();
+    let rows = r["exif"].as_array().unwrap();
+    assert!(rows.iter().any(|row| row["name"] == "Duration" && row["value"] == "1.50 s"), "{r}");
+    assert!(!rows.iter().any(|row| row["name"] == "Width"), "{r}");
+    assert!(!rows.iter().any(|row| row["name"] == "Height"), "{r}");
+    assert!(r["note"].as_str().is_some());
+}
+
 /// A catalogued video (and an old VIDEO entry) gets no render, thumb, face or smart-preview job.
 #[test]
 fn a_catalogued_video_asks_the_renderer_for_nothing() {

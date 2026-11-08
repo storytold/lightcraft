@@ -77,8 +77,14 @@ fn recorded_video_rows(ph: &lightcraft_catalog::Photo) -> Vec<Value> {
     if let Some(d) = ph.duration.filter(|d| d.is_finite()) {
         rows.push(("Video", "Duration", format!("{d:.2} s")));
     }
-    rows.push(("Video", "Width", ph.width.to_string()));
-    rows.push(("Video", "Height", ph.height.to_string()));
+    // A record without dimensions (a clip imported from a container that named none) has no
+    // Width or Height row: 0 is not a size.
+    if ph.width > 0 {
+        rows.push(("Video", "Width", ph.width.to_string()));
+    }
+    if ph.height > 0 {
+        rows.push(("Video", "Height", ph.height.to_string()));
+    }
     if let Some(c) = &ph.captured {
         rows.push(("Video", "Created", c.clone()));
     }
@@ -112,8 +118,12 @@ fn video_metadata_rows(boxes: &[u8]) -> Vec<Value> {
         if let Some(d) = v.duration {
             rows.push(("Video", "Duration", format!("{d:.2} s")));
         }
-        rows.push(("Video", "Width", v.width.to_string()));
-        rows.push(("Video", "Height", v.height.to_string()));
+        if v.width > 0 {
+            rows.push(("Video", "Width", v.width.to_string()));
+        }
+        if v.height > 0 {
+            rows.push(("Video", "Height", v.height.to_string()));
+        }
         if let Some(o) = v.orientation {
             let label = match o {
                 lightcraft_meta::Orientation::Normal => "Horizontal (normal)".to_string(),

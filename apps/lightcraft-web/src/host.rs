@@ -41,11 +41,20 @@
 //! The message layer (what a message means, what is sent back) is plain Rust, tested natively;
 //! [`Bridge`] (wasm32 only) moves it over `postMessage`, or over DOM events in page mode.
 
+/// The bytes a page opened: a copied vector, or the page's own `Blob` (wasm only), so a large
+/// video is never copied through the WASM heap before it is stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpenBytes {
+    Bytes(Vec<u8>),
+    #[cfg(target_arch = "wasm32")]
+    Blob(web_sys::Blob),
+}
+
 /// A message from the parent page, once understood.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Incoming {
     /// `lightcraft:open`: add this photo to the library.
-    Open { name: String, bytes: Vec<u8> },
+    Open { name: String, bytes: OpenBytes },
     /// `lightcraft:cmd`: run this command (params as JSON text).
     Cmd { id: String, params: String },
     /// `lightcraft:open` with a file too large to keep: tell the parent why (`lightcraft:failed`).
@@ -58,6 +67,9 @@ pub struct Raw {
     pub kind: Option<String>,
     pub name: Option<String>,
     pub bytes: Option<Vec<u8>>,
+    /// The page's bytes as a `Blob`, when they are a video (wasm only; see [`OpenBytes`]).
+    #[cfg(target_arch = "wasm32")]
+    pub blob: Option<web_sys::Blob>,
     pub id: Option<String>,
     pub params: Option<String>,
     /// The size of `bytes` when it was too large to copy (`bytes` is then `None`).
@@ -84,7 +96,15 @@ impl Incoming {
                     return Some(Incoming::Refused(error));
                 }
                 let name = raw.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| DEFAULT_OPEN_NAME.to_string());
-                Some(Incoming::Open { name, bytes: raw.bytes? })
+                #[cfg(target_arch = "wasm32")]
+                let bytes = match (raw.blob, raw.bytes) {
+                    (Some(blob), _) => OpenBytes::Blob(blob),
+                    (None, Some(bytes)) => OpenBytes::Bytes(bytes),
+                    (None, None) => return None,
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                let bytes = OpenBytes::Bytes(raw.bytes?);
+                Some(Incoming::Open { name, bytes })
             }
             Some("lightcraft:cmd") => {
                 let id = raw.id.filter(|i| !i.trim().is_empty())?;
@@ -234,7 +254,7 @@ mod bridge {
     use wasm_bindgen::JsValue;
     use wasm_bindgen::closure::Closure;
 
-    use super::{DirtyReport, Field, Incoming, Mode, Outgoing, Raw, open_size_error, origin_is_usable, save_name};
+    use super::{DirtyReport, Field, Incoming, Mode, OpenBytes, Outgoing, Raw, open_size_error, origin_is_usable, save_name};
 
     /// How an event goes to the host page, per mode ([`Mode`]).
     #[derive(Clone)]
@@ -415,15 +435,17 @@ mod bridge {
     /// next frame.
     fn deliver(incoming: &Rc<RefCell<Vec<Incoming>>>, ctx: &egui::Context, data: &JsValue, event_type: Option<&str>) {
         // moved, not cloned: an accepted photo can be hundreds of MB
-        let (bytes, oversize) = match bytes(data) {
-            Some(Ok(b)) => (Some(b), None),
-            Some(Err(len)) => (None, Some(len)),
-            None => (None, None),
+        let (bytes, blob, oversize) = match bytes(data) {
+            Some(Ok(OpenBytes::Bytes(b))) => (Some(b), None, None),
+            Some(Ok(OpenBytes::Blob(b))) => (None, Some(b), None),
+            Some(Err(len)) => (None, None, Some(len)),
+            None => (None, None, None),
         };
         let raw = Raw {
             kind: super::incoming_kind(event_type, string(data, "type")),
             name: string(data, "name"),
             bytes,
+            blob,
             id: string(data, "id"),
             params: string(data, "params"),
             oversize,
@@ -456,7 +478,9 @@ mod bridge {
     /// `bytes` as an `ArrayBuffer` or `Uint8Array`.
     /// `bytes` as an `ArrayBuffer` or `Uint8Array`, copied only when within the size cap
     /// ([`open_size_error`]); `Err(len)` for an oversize one, never copied into the app's memory.
-    fn bytes(data: &JsValue) -> Option<Result<Vec<u8>, u64>> {
+    /// A video stays the page's `Blob` (built here, outside the WASM heap): importing reads it in
+    /// ranges, and copying the whole clip through memory first would only double its cost.
+    fn bytes(data: &JsValue) -> Option<Result<OpenBytes, u64>> {
         let bytes = js_sys::Reflect::get(data, &JsValue::from_str("bytes")).ok()?;
         let array = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
             array.clone()
@@ -466,7 +490,22 @@ mod bridge {
             return None;
         };
         let len = u64::from(array.byte_length());
-        Some(if open_size_error(len).is_some() { Err(len) } else { Ok(array.to_vec()) })
+        if open_size_error(len).is_some() {
+            return Some(Err(len));
+        }
+        let head_len = usize::try_from(len).unwrap_or(usize::MAX).min(4096);
+        let head = array.subarray(0, u32::try_from(head_len).unwrap_or(0)).to_vec();
+        let format = lightcraft_codecs::sniff(&head);
+        let video =
+            format.as_ref().is_some_and(|f| f.is_video()) || (format.is_none() && lightcraft_engine::files::looks_like_video_container(&head));
+        if video {
+            let parts = js_sys::Array::new();
+            parts.push(&array);
+            if let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence(&parts) {
+                return Some(Ok(OpenBytes::Blob(blob)));
+            }
+        }
+        Some(Ok(OpenBytes::Bytes(array.to_vec())))
     }
 
     /// A `JsValue` error as a string, after `what` went wrong.
@@ -485,14 +524,15 @@ mod tests {
 
     #[test]
     fn open_needs_bytes_and_names_a_nameless_photo() {
+        let open = |name: &str, bytes: Vec<u8>| Incoming::Open { name: name.into(), bytes: OpenBytes::Bytes(bytes) };
         let mut m = raw("lightcraft:open");
         assert_eq!(Incoming::parse(m.clone()), None, "no bytes, nothing to add");
         m.bytes = Some(vec![1, 2, 3]);
-        assert_eq!(Incoming::parse(m.clone()), Some(Incoming::Open { name: DEFAULT_OPEN_NAME.into(), bytes: vec![1, 2, 3] }));
+        assert_eq!(Incoming::parse(m.clone()), Some(open(DEFAULT_OPEN_NAME, vec![1, 2, 3])));
         m.name = Some("  ".into());
-        assert_eq!(Incoming::parse(m.clone()), Some(Incoming::Open { name: DEFAULT_OPEN_NAME.into(), bytes: vec![1, 2, 3] }));
+        assert_eq!(Incoming::parse(m.clone()), Some(open(DEFAULT_OPEN_NAME, vec![1, 2, 3])));
         m.name = Some("IMG_0001.CR2".into());
-        assert_eq!(Incoming::parse(m), Some(Incoming::Open { name: "IMG_0001.CR2".into(), bytes: vec![1, 2, 3] }));
+        assert_eq!(Incoming::parse(m), Some(open("IMG_0001.CR2", vec![1, 2, 3])));
     }
 
     #[test]

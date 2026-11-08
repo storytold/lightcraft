@@ -19,7 +19,7 @@ use crate::backend::Backend;
 use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, valid_library_dir};
 use crate::bench::Bench;
 use crate::files::{Files, FlushOp, LIBRARY_FILES};
-use crate::host::{Incoming, Outgoing};
+use crate::host::{Incoming, OpenBytes, Outgoing};
 use crate::safety::{self, notice};
 use crate::store::{Originals, check_original_size, content_hash, download_name, storage_key};
 use crate::wire::ThumbIndex;
@@ -895,25 +895,15 @@ impl WebApp {
                 Incoming::Open { name, bytes } => {
                     let (originals, backend, ctx) = (self.originals.clone(), self.backend.clone(), ctx.clone());
                     wasm_bindgen_futures::spawn_local(async move {
-                        // A clip goes through the video path: its Original copier reads the Blob
-                        // from `VIDEO_BLOBS`, and the image path never registers one.
-                        let head = bytes.get(..bytes.len().min(4096)).unwrap_or(&bytes);
-                        let format = lightcraft_codecs::sniff(head);
-                        let video = format.as_ref().is_some_and(|f| f.is_video())
-                            || (format.is_none() && lightcraft_engine::files::looks_like_video_container(head));
-                        if video {
-                            let parts = js_sys::Array::new();
-                            parts.push(&js_sys::Uint8Array::from(bytes.as_slice()));
-                            match web_sys::Blob::new_with_u8_array_sequence(&parts) {
-                                Ok(blob) => {
-                                    if let Err(e) = store_video(&originals, backend.as_ref(), &name, &blob).await {
-                                        notice(format!("{name} was not added: {e}"));
-                                    }
+                        match bytes {
+                            // A clip already arrived as the page's Blob: its Original copier reads
+                            // it in ranges, and the image path would never register one.
+                            OpenBytes::Blob(blob) => {
+                                if let Err(e) = store_video(&originals, backend.as_ref(), &name, &blob).await {
+                                    notice(format!("{name} was not added: {e}"));
                                 }
-                                Err(e) => notice(format!("{name} was not added: {e:?}")),
                             }
-                        } else {
-                            store_file(originals, backend, name, None, bytes, ctx.clone()).await;
+                            OpenBytes::Bytes(bytes) => store_file(originals, backend, name, None, bytes, ctx.clone()).await,
                         }
                         ctx.request_repaint();
                     });

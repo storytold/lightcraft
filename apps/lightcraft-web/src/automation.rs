@@ -30,6 +30,12 @@ pub fn waits_behind_export(id: &str) -> bool {
     lightcraft_engine::find_command(id).is_none_or(|spec| spec.journal)
 }
 
+/// Whether a `path` param names no exact output file: absent, null, a blank string, or a value
+/// that is not a string (the same reading `export_active` gives it).
+fn no_exact_path(v: Option<&Value>) -> bool {
+    v.and_then(Value::as_str).is_none_or(|s| s.trim().is_empty())
+}
+
 /// The `app.export` params an export that has to wait runs with later: its `resolved` settings
 /// (a preset expanded, or the previous export's), with the targets frozen in `params` and the
 /// destination it resolved now. A preset, the previous export or `last_export.dir` changed during
@@ -41,12 +47,13 @@ pub fn frozen_export(resolved: &Value, params: &Value, destination: Option<&str>
         if let Some(ids) = params.get("ids").filter(|ids| !ids.is_null()) {
             o.insert("ids".into(), ids.clone());
         }
-        // `export_active` falls back to `last_export.dir` when the call names none: freeze that
-        // now, so an export that runs later still writes where it was asked to.
+        // `export_active` falls back to `last_export.dir` when the call names no exact file (a
+        // blank `path` is no file) and no folder: freeze that now, so an export that runs later
+        // still writes where it was asked to.
         if o.get("dir").is_none_or(Value::is_null)
-            && o.get("path").is_none_or(Value::is_null)
+            && no_exact_path(o.get("path"))
             && params.get("dir").is_none_or(Value::is_null)
-            && params.get("path").is_none_or(Value::is_null)
+            && no_exact_path(params.get("path"))
             && let Some(dir) = destination
         {
             o.insert("dir".into(), Value::String(dir.to_string()));
@@ -85,6 +92,15 @@ mod tests {
             frozen_export(&json!({"format": "original", "path": "/a.jpg"}), &json!({}), Some("/out")),
             json!({"format": "original", "path": "/a.jpg"})
         );
+        // a blank path names no exact file: the destination is frozen like an absent one
+        for path in ["  ", ""] {
+            assert_eq!(
+                frozen_export(&json!({"format": "original", "path": path}), &json!({}), Some("/out")),
+                json!({"format": "original", "path": path, "dir": "/out"}),
+                "{path:?}"
+            );
+        }
+        assert_eq!(frozen_export(&json!({"format": "original"}), &json!({"path": "  "}), Some("/out")), json!({"format": "original", "dir": "/out"}));
     }
 
     #[test]

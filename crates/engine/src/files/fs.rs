@@ -180,6 +180,11 @@ pub fn video_box_header_len(header: &[u8]) -> u64 {
     if header.get(..4) == Some(&1u32.to_be_bytes()) { 16 } else { 8 }
 }
 
+/// The most metadata a video probe retains per read. The import reads the boxes twice (once to
+/// describe the clip, once to confirm nothing changed while hashing), so its working set is at
+/// most twice this, whatever the clip's own length.
+const MAX_VIDEO_METADATA: usize = 64 * 1024 * 1024;
+
 /// Stage metadata from an already opened original, keeping verification and copy on one handle.
 /// Fragmented `moof` boxes are left out: display and probing read the movie header, and an import
 /// must not fail because a clip has many fragments.
@@ -201,7 +206,7 @@ pub(crate) fn read_video_metadata_from_with_fragments(
     let mut at = 0u64;
     let mut budget = MAX_VIDEO_TOP_LEVEL_BOXES;
     let mut saw_moov = false;
-    const MAX_BOX_SIZE: u64 = 64 * 1024 * 1024;
+    let max_box_size = MAX_VIDEO_METADATA as u64;
 
     while at < file_len && budget > 0 {
         budget -= 1;
@@ -239,7 +244,7 @@ pub(crate) fn read_video_metadata_from_with_fragments(
         if is_video_metadata_box(&kind, extended_type) || (include_fragments && &kind == b"moof") {
             let box_len = usize::try_from(total_len).map_err(|_| format!("{path}: video metadata box is too large"))?;
             // Per box and in all: many small boxes must not add up past the working-memory cap.
-            if total_len > MAX_BOX_SIZE || out.len().saturating_add(box_len) > MAX_BOX_SIZE as usize {
+            if total_len > max_box_size || out.len().saturating_add(box_len) > MAX_VIDEO_METADATA {
                 return Err(format!("{path}: video metadata boxes exceed 64MB limit"));
             }
             f.seek(SeekFrom::Start(at)).map_err(|e| format!("{path}: {e}"))?;
@@ -265,7 +270,7 @@ pub(crate) fn read_video_metadata_from_with_fragments(
 pub(crate) fn read_video_metadata_file(path: &str) -> Result<Vec<u8>, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
     let len = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
-    let weight = usize::try_from(len).unwrap_or(usize::MAX).min(64 * 1024 * 1024);
+    let weight = usize::try_from(len).unwrap_or(usize::MAX).min(MAX_VIDEO_METADATA);
     let _permit = crate::memory::work_gate().acquire_urgent(weight);
     read_video_metadata_from(&mut file, len, path)
 }
@@ -361,16 +366,24 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         // one open, then everything from the open file: its size and modification time are not
         // round trips of their own (on a network share each of them is one)
         let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-        let meta = file.metadata().ok();
-        // the probe takes the file's real length; only the memory weight is a `usize`
-        let file_len = meta.as_ref().map_or(0, |m| m.len());
-        let len = usize::try_from(file_len).unwrap_or(usize::MAX);
+        let meta = file.metadata();
         // A video container is read box by box, never whole: a clip cut off before its moov (or
         // with a moov over the cap) is an error, not a multi-gigabyte read. A file merely named
         // .mp4 whose bytes are another format is probed as what it is.
         let video = video_container_format(&mut file, path)?;
-        // a video probe holds its metadata boxes twice (read, then re-read after hashing)
-        let weight = if video.is_some() { len.saturating_mul(2).min(2 * 64 * 1024 * 1024) } else { len };
+        // The probe takes the file's real length (only the memory weight is a `usize`). A video
+        // probe needs it: report why it can't be read rather than a length of 0 that looks like a
+        // clip without metadata boxes. A still image is read to its end, so no length is needed.
+        let file_len = match &meta {
+            Ok(m) => m.len(),
+            Err(e) if video.is_some() => return Err(format!("{path}: {e}")),
+            Err(_) => 0,
+        };
+        let len = usize::try_from(file_len).unwrap_or(usize::MAX);
+        // A video probe retains its metadata boxes (at most MAX_VIDEO_METADATA), twice: read, then
+        // re-read after hashing. Hashing streams the clip through a 64 KiB buffer, so counting its
+        // whole length would only make a large clip wait behind itself.
+        let weight = if video.is_some() { len.min(MAX_VIDEO_METADATA).saturating_mul(2) } else { len };
         let _permit = crate::memory::work_gate().acquire(weight);
         let mut info = if let Some(format) = video {
             probe_video_file(&mut file, path, file_len, format)?
@@ -379,7 +392,7 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
             file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
             probe_bytes(path, &bytes)?
         };
-        info.file_modified = meta.as_ref().and_then(modified_iso);
+        info.file_modified = meta.as_ref().ok().and_then(modified_iso);
         Ok(info)
     });
     (loader, probe)
