@@ -303,12 +303,13 @@ impl Pool {
         let photos = self.photos();
         let mut models: Vec<(&str, usize, Vec<Pair>)> = Vec::new();
         for photo in photos {
-            if models.last().is_none_or(|m| m.0 != photo.model) {
-                models.push((&photo.model, 0, Vec::new()));
+            match models.last_mut() {
+                Some(last) if last.0 == photo.model => {
+                    last.1 += 1;
+                    last.2.extend_from_slice(&photo.pairs);
+                }
+                _ => models.push((&photo.model, 1, photo.pairs.clone())),
             }
-            let last = models.last_mut().expect("just pushed");
-            last.1 += 1;
-            last.2.extend_from_slice(&photo.pairs);
         }
         models
             .into_iter()
