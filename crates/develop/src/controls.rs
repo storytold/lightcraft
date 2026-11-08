@@ -295,6 +295,11 @@ controls! {
     "calibration.greenSat" => calibration.green_sat, "Green Saturation", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#40b050" };
     "calibration.blueHue" => calibration.blue_hue, "Blue Hue", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#30a0d0", to: "#8040d0" };
     "calibration.blueSat" => calibration.blue_sat, "Blue Saturation", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#3a60e0" };
+    // Channel Mixer: nine percentages, `channelMixer.<output>.<input>` ("Blue from Red" is how much of the red input
+    // goes into the blue output), each −200..200 with 1 % steps. The default is the identity (100 on the diagonal, 0
+    // elsewhere), which leaves the photo unchanged. For infrared: `develop.mixerSwapRB` swaps the red and blue
+    // outputs (the classic false-colour swap), and `develop.mixerNeutralPick` sets the input gains so a picked
+    // white or grey renders neutral.
     "channelMixer.red.red" => channel_mixer.red.red, "Red from Red", ChannelMixer, -200, 200, 100, 1, 0, Centered;
     "channelMixer.red.green" => channel_mixer.red.green, "Red from Green", ChannelMixer, -200, 200, 0, 1, 0, Centered;
     "channelMixer.red.blue" => channel_mixer.red.blue, "Red from Blue", ChannelMixer, -200, 200, 0, 1, 0, Centered;

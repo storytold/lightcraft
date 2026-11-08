@@ -637,7 +637,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Channel Mixer Neutral",
             [],
             None,
-            "{x, y} normalized image coords of a neutral point — a mixer scaled down to fit the ±200 % sliders raises Exposure by log2(1/scaled) in the same undo step, to keep the brightness; a pick with the section's eye off switches the section on in that same step; with the Light section off Exposure stays unchanged (lightOff in the result: the raise would not render); the white balance is read as the render does (Color's eye off means its defaults; a mask's local temperature/tint is not modelled: the mixer is global); the brightness kept is what the spot rendered before the pick (without the mixer when its eye was off), before the calibration's shadow tint",
+            "Params: {x, y} normalized image coords (0..1) of a spot that should be neutral (white or grey). Returns: {scaled: the factor (0..1] the new mixer was scaled down by to fit the ±200 % sliders, 1 when it fit; exposureAdded: the stops added to Exposure to keep the brightness, log2(1/scaled), 0 when none; exposureClamped: true when Exposure hit its maximum and some darkening stays; lightOff: true when the mixer was scaled but the Light section is off, so Exposure was left alone and the photo keeps the darkening; mixer: the new mixer as {red, green, blue} rows of {red, green, blue} percentages}. Notes: the mixer, any Exposure raise and switching the section on (when its eye was off) are one undo step; the white balance is read as the render does (Color's eye off means its defaults); a mask's local temperature/tint is not modelled, as the mixer is global; the brightness kept is what the spot rendered before the pick (without the mixer when its eye was off), before the calibration's shadow tint; refused (bad params) when the spot or the mixer can't be made neutral",
             has_active,
             |s, p| {
                 let (x, y) = (f64_req(p, "x", "develop.mixerNeutralPick")?, f64_req(p, "y", "develop.mixerNeutralPick")?);
@@ -722,7 +722,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Swap Red and Blue",
             [],
             None,
-            "{} — swaps the mixer's red and blue output rows (the infrared swap; twice is the identity); with the section's eye off it switches the section on in the same step",
+            "{} (no parameters) → {mixer: the new mixer as {red, green, blue} rows of {red, green, blue} percentages} — swaps the mixer's red and blue output rows (the infrared swap; twice is the identity); with the section's eye off it switches the section on in the same step",
             has_active,
             |s, _| {
                 edit(s, "develop.mixerSwapRB", "Swap Red and Blue", |d| {
