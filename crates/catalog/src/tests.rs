@@ -466,13 +466,14 @@ fn preview_only_survives_serde_and_set_content_undo() {
         content_hash: None,
         preview_only: Some("Nikon Huffman-compressed NEF".into()),
         preview_checked: "0.6.0".into(),
+        duration: None,
     };
     c.apply(op).unwrap();
     assert_eq!(c.photo(a).unwrap().preview_checked, "0.6.0");
     // Reload: the file decodes now → cleared, with its stamp; undo (through the journal's JSON)
     // restores both
     let op =
-        Op::SetContent { id: a, width: 6016, height: 4000, file_size: 1, content_hash: None, preview_only: None, preview_checked: String::new() };
+        Op::SetContent { id: a, width: 6016, height: 4000, file_size: 1, content_hash: None, preview_only: None, preview_checked: String::new(), duration: None };
     let inv = c.apply(op).unwrap();
     assert!(c.photo(a).unwrap().develops_raw());
     assert_eq!(c.photo(a).unwrap().preview_checked, "");

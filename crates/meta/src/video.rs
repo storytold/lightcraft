@@ -272,7 +272,7 @@ fn read_udta_text(body: &[u8]) -> Option<String> {
         let data_payload = body.get(16..size.min(body.len()))?;
         // Lossy like the classic branch: undecodable text (UTF-16, say) is still a value, which the
         // location check must see rather than take for an empty atom.
-        return Some(String::from_utf8_lossy(data_payload).into_owned());
+        return Some(decode_atom_text(data_payload));
     }
     // Classic QuickTime atom: a 16-bit text length, a 16-bit language, then the text (the length
     // says where the text ends, so trailing bytes of the box are not part of the value)
@@ -280,9 +280,23 @@ fn read_udta_text(body: &[u8]) -> Option<String> {
         let declared = body.get(..2).map(|b| usize::from(u16::from_be_bytes([b[0], b[1]])));
         let end = declared.and_then(|n| 4usize.checked_add(n)).filter(|e| *e <= body.len()).unwrap_or(body.len());
         let str_bytes = body.get(4..end)?;
-        return String::from_utf8(str_bytes.to_vec()).ok().or_else(|| Some(String::from_utf8_lossy(str_bytes).into_owned()));
+        return Some(decode_atom_text(str_bytes));
     }
     None
+}
+
+/// Atom text as UTF-8, or UTF-16 when it starts with a byte-order mark (the mark itself is not
+/// text, so an emptied tag stays empty); anything else undecodable is kept lossily.
+fn decode_atom_text(bytes: &[u8]) -> String {
+    let utf16 = |rest: &[u8], le: bool| {
+        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| if le { u16::from_le_bytes(*c) } else { u16::from_be_bytes(*c) }).collect();
+        String::from_utf16_lossy(&units)
+    };
+    match bytes {
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, false),
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, true),
+        _ => String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned()),
+    }
 }
 
 /// Keep the first XMP packet found in an `XMP_` or XMP `uuid` box.
@@ -1047,6 +1061,34 @@ mod tests {
             write_box(&mut bytes, if uuid { b"uuid" } else { b"XMP_" }, &body);
             let error = verify_video_location_absent(&bytes).unwrap_err();
             assert!(error.contains("exceeds the size limit"), "uuid={uuid}: {error}");
+        }
+    }
+
+    /// A cleared `©xyz` written as UTF-16 (a byte-order mark and nothing else) is empty too, and a
+    /// UTF-16 place still refuses.
+    #[test]
+    fn a_cleared_utf16_location_atom_is_empty() {
+        let atom = |text: &[u8]| {
+            let mut body = (text.len() as u16).to_be_bytes().to_vec();
+            body.extend_from_slice(&0u16.to_be_bytes());
+            body.extend_from_slice(text);
+            body
+        };
+        assert_eq!(read_udta_text(&atom(&[0xFE, 0xFF])).as_deref(), Some(""));
+        assert_eq!(read_udta_text(&atom(&[0xFF, 0xFE])).as_deref(), Some(""));
+        let mut place = vec![0xFF, 0xFE];
+        place.extend("+37.7749-122.4194/".encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(read_udta_text(&atom(&place)).as_deref(), Some("+37.7749-122.4194/"));
+        for (body, allows) in [(atom(&[0xFE, 0xFF]), true), (atom(&[0xFF, 0xFE]), true), (atom(&place), false)] {
+            let mut bytes = synthetic_mp4(1000, 1000, 640, 360, 0);
+            let moov_at = be32(&bytes, 0).expect("ftyp size") as usize;
+            let mut moov = bytes.get(moov_at + 8..).expect("moov body").to_vec();
+            let mut atom = Vec::new();
+            write_box(&mut atom, b"\xa9xyz", &body);
+            write_box(&mut moov, b"udta", &atom);
+            bytes.truncate(moov_at);
+            write_box(&mut bytes, b"moov", &moov);
+            assert_eq!(verify_video_location_absent(&bytes).is_ok(), allows, "{body:?}");
         }
     }
 

@@ -71,6 +71,23 @@ fn photo_arg(s: &Session, p: &Value, c: &str) -> crate::Result<PhotoId> {
     }
 }
 
+/// The All Metadata rows of a video whose file can't be read: what its catalog record holds.
+fn recorded_video_rows(ph: &lightcraft_catalog::Photo) -> Vec<Value> {
+    let mut rows: Vec<(&str, String)> = Vec::new();
+    if let Some(d) = ph.duration.filter(|d| d.is_finite()) {
+        rows.push(("Duration", format!("{d:.2} s")));
+    }
+    rows.push(("Width", ph.width.to_string()));
+    rows.push(("Height", ph.height.to_string()));
+    if let Some(c) = &ph.captured {
+        rows.push(("Created", c.clone()));
+    }
+    if !ph.meta.camera.is_empty() {
+        rows.push(("Camera", ph.meta.camera.clone()));
+    }
+    rows.into_iter().map(|(name, value)| json!({"group": "Video", "tag": 0, "name": name, "value": value})).collect()
+}
+
 /// The All Metadata rows of a video, from its metadata boxes ([`crate::files::read_video_metadata_file`]):
 /// the movie header, then what its QuickTime / mdta atoms and embedded XMP say about the camera and place.
 fn video_metadata_rows(boxes: &[u8]) -> Vec<Value> {
@@ -178,7 +195,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Ok(json!({"exif": [], "xmp": [], "note": "a generated demo photo has no file"}));
             };
             // a clip can be gigabytes: only its metadata boxes are read, as the import probe does
-            let (bytes, exif) = if ph.is_video() {
+            let (bytes, exif) = if ph.is_video() && !std::path::Path::new(path).exists() {
+                // A host without a filesystem (the browser) keeps a clip as a Blob under a made-up
+                // path: show what the library recorded instead of failing on a read that can't work.
+                return Ok(json!({"exif": recorded_video_rows(&ph), "xmp": [], "note": "the clip's file isn't readable here; showing what the library recorded"}));
+            } else if ph.is_video() {
                 let boxes = crate::files::read_video_metadata_file(path).map_err(|e| super::bad("photo.allMetadata", e))?;
                 let rows = video_metadata_rows(&boxes);
                 (boxes, rows)

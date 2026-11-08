@@ -4153,6 +4153,41 @@ fn a_trailer_after_the_movie_header_is_bounded_and_the_clip_still_works() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Reload from Disk on a replaced clip brings its running time along (grid, loupe card, smart rules).
+#[test]
+fn reload_of_a_replaced_clip_updates_its_duration() {
+    let src = temp_dir("video-reload-duration");
+    let path = src.join("clip.mp4");
+    std::fs::write(&path, synthetic_mp4(1000, 2_000, 640, 360, 0)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    assert_eq!(s.catalog.photo(id).unwrap().duration, Some(2.0));
+    std::fs::write(&path, synthetic_mp4(1000, 9_000, 640, 360, 0)).unwrap();
+    s.execute("photo.reload", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().duration, Some(9.0));
+    s.undo_step().unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().duration, Some(2.0));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A clip with no readable file (a browser's Blob under a made-up path) still gets its All Metadata.
+#[test]
+fn all_metadata_of_a_clip_without_a_file_shows_the_recorded_values() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+    let mut s = Session::new();
+    let mut p =
+        Photo::new(PhotoId(1), Source::File { path: "/lightcraft-web/clip.mp4".into() }, "clip.mp4", "MP4", 1920, 1080, "2026-05-04T10:00:00");
+    p.kind = MediaKind::Video;
+    p.duration = Some(12.5);
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let r = s.execute("photo.allMetadata", &json!({"id": 1})).unwrap();
+    let rows = r["exif"].as_array().unwrap();
+    assert!(rows.iter().any(|row| row["name"] == "Duration" && row["value"] == "12.50 s"), "{r}");
+    assert!(rows.iter().any(|row| row["name"] == "Width" && row["value"] == "1920"), "{r}");
+    assert!(r["note"].as_str().is_some());
+}
+
 /// A catalogued video (and an old VIDEO entry) gets no render, thumb, face or smart-preview job.
 #[test]
 fn a_catalogued_video_asks_the_renderer_for_nothing() {

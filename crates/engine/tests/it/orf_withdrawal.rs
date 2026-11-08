@@ -83,6 +83,7 @@ fn mark_orf_preview_only(s: &mut Session) {
             content_hash: p.content_hash.clone(),
             preview_only: Some("Olympus compressed ORF".into()),
             preview_checked: lightcraft_catalog::APP_VERSION.into(),
+            duration: None,
         })
         .unwrap();
     s.media.forget(p.id);
