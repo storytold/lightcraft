@@ -33,23 +33,38 @@ fn be32(b: &[u8], at: usize) -> Option<usize> {
 /// Parse the block list of an MRW file. `None` when the magic is missing or the header length points past the
 /// file; a block that runs past the header is dropped together with everything after it.
 pub fn parse(bytes: &[u8]) -> Option<Mrw<'_>> {
+    parse_with_status(bytes).map(|(mrw, _)| mrw)
+}
+
+/// Parse MRW blocks and report whether the complete block list up to the sensor data was inspected.
+pub fn parse_with_status(bytes: &[u8]) -> Option<(Mrw<'_>, bool)> {
     if !bytes.starts_with(b"\0MRM") {
         return None;
     }
     let data_offset = be32(bytes, 4)?.checked_add(8).filter(|&o| o <= bytes.len())?;
     let mut blocks = Vec::new();
     let mut at = 8usize;
+    let mut complete = true;
     while blocks.len() < MAX_BLOCKS && at.saturating_add(8) <= data_offset {
         let (Some(name), Some(len)) = (bytes.get(at..at + 4), be32(bytes, at + 4)) else { break };
         let start = at + 8;
-        let Some(end) = start.checked_add(len).filter(|&e| e <= data_offset) else { break };
-        let Some(data) = bytes.get(start..end) else { break };
+        let Some(end) = start.checked_add(len).filter(|&e| e <= data_offset) else {
+            complete = false;
+            break;
+        };
+        let Some(data) = bytes.get(start..end) else {
+            complete = false;
+            break;
+        };
         if name[0] == 0 {
             blocks.push(([name[1], name[2], name[3]], data));
         }
         at = end;
     }
-    Some(Mrw { blocks, data_offset })
+    if at != data_offset {
+        complete = false;
+    }
+    Some((Mrw { blocks, data_offset }, complete))
 }
 
 #[cfg(test)]
@@ -89,5 +104,21 @@ mod tests {
         for n in 0..f.len() {
             let _ = parse(&f[..n]);
         }
+    }
+
+    /// A recognized MRW with an unreadable TTW block cannot authorize a location-preserving copy.
+    #[test]
+    fn original_gps_guard_fails_closed_for_unreadable_ttw() {
+        let body = block(b"TTW", b"not a TIFF");
+        let mut file = b"\0MRM".to_vec();
+        file.extend_from_slice(&u32::try_from(body.len()).unwrap().to_be_bytes());
+        file.extend_from_slice(&body);
+        assert!(crate::source_embeds_exif_gps_location(&file));
+
+        let mut truncated_ttw = b"\0MRM".to_vec();
+        truncated_ttw.extend_from_slice(&8u32.to_be_bytes());
+        truncated_ttw.extend_from_slice(b"\0TTW");
+        truncated_ttw.extend_from_slice(&100u32.to_be_bytes());
+        assert!(crate::source_embeds_exif_gps_location(&truncated_ttw));
     }
 }

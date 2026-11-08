@@ -30,12 +30,16 @@ nonnegative, and minutes / seconds must be below 60. The writer rounds total coo
 before splitting DMS, carrying rounding across minute and degree boundaries. Malformed subdivisions do not create a
 typed location, while the source tags remain available in All Metadata. Original export with Remove Location Info
 refuses files with location-bearing EXIF tags, a GPS IFD pointer whose child could not be read, or an embedded EXIF
-block that could not be parsed. CR3 `CMT4` GPS metadata is checked directly as well as through merged EXIF, and an
-unreadable `CMT4` fails closed. PNG `eXIf` and WebP `EXIF` chunks are all checked, not just the one exposed by
-`embedded()`. Every JPEG EXIF APP1 before SOS is checked, including all EXIF packets in a RAF preview, and TIFF
-JPEG-thumbnail EXIF is checked recursively with a depth bound. Containers without a separate EXIF block retain the
-whole-file TIFF fallback. MPF multi-picture JPEGs are refused for Original copying because secondary-image EXIF is
-not scanned.
+block that could not be parsed. CR3 `CMT1` and every `CMT4` packet are checked before merged metadata can discard
+pointers or duplicate packets; its `THMB` JPEGs and JPEG tracks are checked too. PNG `eXIf` and WebP `EXIF` chunks
+are all checked, not just the one exposed by `embedded()`. JPEG scanning continues between progressive scans through
+EOI, checks every EXIF and standard / extended XMP packet, and fails closed on malformed or unverified segments.
+It also checks IPTC place-name datasets in Photoshop APP13 resources; malformed IPTC resources fail closed. JPEG XL
+Original copies are refused when location removal is enabled because this crate cannot yet verify their metadata boxes.
+The same bounded scan handles EXIF and XMP in TIFF JPEG thumbnails and Panasonic `JpgFromRaw` previews. TIFF IFD
+parsing reports incomplete traversal, and nested thumbnail checks share a finite work budget. HEIF checks each EXIF
+item; MRW rejects an incomplete TTW block list. Containers without a separate EXIF block retain the whole-file TIFF
+fallback. MPF multi-picture JPEGs are refused for Original copying because secondary-image EXIF is not scanned.
 
 ## XMP namespaces
 

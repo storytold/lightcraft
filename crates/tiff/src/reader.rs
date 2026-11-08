@@ -173,6 +173,10 @@ fn header_with(data: &[u8], raw_magic: bool) -> Result<(ByteOrder, bool, u64)> {
 }
 
 pub(crate) fn parse(data: &[u8], opts: &ParseOptions) -> Result<Tiff> {
+    parse_with_status(data, opts).map(|(tiff, _)| tiff)
+}
+
+pub(crate) fn parse_with_status(data: &[u8], opts: &ParseOptions) -> Result<(Tiff, bool)> {
     let (order, big, first) = header_with(data, opts.accept_raw_magic)?;
     let mut ctx = Ctx::new(data, order, big, opts);
     let mut ifds = Vec::new();
@@ -187,6 +191,7 @@ pub(crate) fn parse(data: &[u8], opts: &ParseOptions) -> Result<Tiff> {
                 if ifds.is_empty() {
                     return Err(e);
                 }
+                ctx.complete = false;
                 break;
             }
         }
@@ -194,7 +199,7 @@ pub(crate) fn parse(data: &[u8], opts: &ParseOptions) -> Result<Tiff> {
     if ifds.is_empty() {
         return Err(TiffError::Invalid("no IFDs".into()));
     }
-    Ok(Tiff { order, bigtiff: big, ifds })
+    Ok((Tiff { order, bigtiff: big, ifds }, ctx.complete))
 }
 
 /// Parse one IFD at absolute `offset` whose value offsets (and child IFD pointers) are relative to
@@ -213,12 +218,13 @@ struct Ctx<'a> {
     visited: HashSet<u64>,
     budget: u64,
     entries_total: usize,
+    complete: bool,
 }
 
 impl<'a> Ctx<'a> {
     fn new(data: &'a [u8], order: ByteOrder, big: bool, opts: &'a ParseOptions) -> Self {
         let budget = opts.budget_for(data.len());
-        Self { data, order, big, opts, visited: HashSet::new(), budget, entries_total: 0 }
+        Self { data, order, big, opts, visited: HashSet::new(), budget, entries_total: 0, complete: true }
     }
 
     fn read_off(&self, pos: usize) -> Option<u64> {
@@ -237,6 +243,9 @@ impl<'a> Ctx<'a> {
             return Err(TiffError::Invalid(format!("IFD loop at {offset}")));
         }
         let dir = directory_entries(self.data, offset, self.order, self.big, self.opts.max_entries)?;
+        if !reads_every_entry(dir.declared, dir.read) {
+            self.complete = false;
+        }
         // Bound total entries across the whole parse so overlapping IFD tables (SubIFD pointers
         // shifted by one entry) cannot allocate millions of `Entry`s from a small input.
         self.entries_total = self.entries_total.saturating_add(dir.read);
@@ -247,18 +256,34 @@ impl<'a> Ctx<'a> {
         for p in dir.positions() {
             if let Some(e) = self.entry(p, base) {
                 entries.push(e);
+            } else {
+                self.complete = false;
             }
         }
         entries.sort_by_key(|e| e.tag);
+        if entries.windows(2).any(|pair| pair[0].tag == pair[1].tag) {
+            self.complete = false;
+        }
         entries.dedup_by_key(|e| e.tag);
         // the next-IFD pointer follows the last entry, read only when every declared entry was (checked: a BigTIFF
         // count can be anything up to u64::MAX)
         let next = if reads_every_entry(dir.declared, dir.read) {
             match dir.read.checked_mul(dir.entry_size).and_then(|n| n.checked_add(dir.table)).and_then(|p| self.read_off(p)) {
-                Some(0) | None => 0,
-                Some(v) => base.checked_add(v).unwrap_or(0),
+                Some(0) => 0,
+                None => {
+                    self.complete = false;
+                    0
+                }
+                Some(v) => match base.checked_add(v) {
+                    Some(next) => next,
+                    None => {
+                        self.complete = false;
+                        0
+                    }
+                },
             }
         } else {
+            self.complete = false;
             0
         };
         let mut ifd = Ifd { offset, entries, ..Default::default() };
@@ -271,25 +296,37 @@ impl<'a> Ctx<'a> {
     fn children(&mut self, ifd: &mut Ifd, base: u64, depth: usize) {
         if let Some(v) = ifd.value(tags::SUB_IFDS) {
             let offs = v.to_u64_vec();
+            if offs.len() != v.count() {
+                self.complete = false;
+            }
             for o in offs {
-                if let Some(abs) = base.checked_add(o)
-                    && let Ok((sub, _)) = self.ifd(abs, base, depth + 1)
-                {
-                    ifd.sub_ifds.push(sub);
+                match base.checked_add(o).and_then(|abs| self.ifd(abs, base, depth + 1).ok().map(|(sub, _)| sub)) {
+                    Some(sub) => ifd.sub_ifds.push(sub),
+                    None => self.complete = false,
                 }
             }
         }
-        let child = |tag: u16, ctx: &mut Self| -> Option<Box<Ifd>> {
-            let o = ifd.value(tag)?.get_u64(0)?;
-            let abs = base.checked_add(o)?;
-            ctx.ifd(abs, base, depth + 1).ok().map(|(i, _)| Box::new(i))
-        };
-        let exif = child(tags::EXIF_IFD, self);
-        let gps = child(tags::GPS_IFD, self);
-        let interop = child(tags::INTEROP_IFD, self);
+        let exif = self.child(ifd, tags::EXIF_IFD, base, depth);
+        let gps = self.child(ifd, tags::GPS_IFD, base, depth);
+        let interop = self.child(ifd, tags::INTEROP_IFD, base, depth);
         ifd.exif = exif;
         ifd.gps = gps;
         ifd.interop = interop;
+    }
+
+    fn child(&mut self, ifd: &Ifd, tag: u16, base: u64, depth: usize) -> Option<Box<Ifd>> {
+        if !ifd.contains(tag) {
+            return None;
+        }
+        let parsed = ifd
+            .value(tag)
+            .and_then(|value| value.get_u64(0))
+            .and_then(|offset| base.checked_add(offset))
+            .and_then(|offset| self.ifd(offset, base, depth + 1).ok().map(|(child, _)| Box::new(child)));
+        if parsed.is_none() {
+            self.complete = false;
+        }
+        parsed
     }
 
     fn entry(&mut self, p: usize, base: u64) -> Option<Entry> {
@@ -356,6 +393,30 @@ mod tests {
         let tiff = Tiff::parse_with(&file, &opts).unwrap();
         assert_eq!(tiff.ifds[0].string(t::MAKE), Some("Keep".to_string()), "a fitting entry is read");
         assert!(tiff.ifds[0].get(0x9000).is_none(), "the over-budget entry is dropped");
+        let (_, complete) = Tiff::parse_with_status(&file, &opts).unwrap();
+        assert!(!complete, "dropping an entry must be reported as incomplete");
+    }
+
+    #[test]
+    fn parse_status_reports_truncated_tables_and_unreadable_children() {
+        let truncated = bigtiff_chain(ByteOrder::Little, 2, 0);
+        let (_, complete) = Tiff::parse_with_status(&truncated, &ParseOptions::default()).unwrap();
+        assert!(!complete, "a declared entry omitted by a truncated table must be reported");
+
+        let mut unreadable_gps = b"II\x2a\0\x08\0\0\0".to_vec();
+        unreadable_gps.extend_from_slice(&1u16.to_le_bytes());
+        unreadable_gps.extend_from_slice(&tags::GPS_IFD.to_le_bytes());
+        unreadable_gps.extend_from_slice(&4u16.to_le_bytes());
+        unreadable_gps.extend_from_slice(&1u32.to_le_bytes());
+        unreadable_gps.extend_from_slice(&u32::MAX.to_le_bytes());
+        unreadable_gps.extend_from_slice(&0u32.to_le_bytes());
+        let (_, complete) = Tiff::parse_with_status(&unreadable_gps, &ParseOptions::default()).unwrap();
+        assert!(!complete, "a dangling GPS pointer must be reported");
+
+        let valid_ifd = IfdBuilder::new().with(tags::MAKE, Value::Ascii("Camera".into()));
+        let valid = TiffWriter::default().write(&[valid_ifd]).unwrap();
+        let (_, complete) = Tiff::parse_with_status(&valid, &ParseOptions::default()).unwrap();
+        assert!(complete, "a fully read TIFF must report complete");
     }
 
     /// A BigTIFF whose first IFD, at 80, declares `declared` entries but holds one, followed by a next-IFD pointer

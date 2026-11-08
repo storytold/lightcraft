@@ -69,6 +69,35 @@ pub fn parse_iptc(b: &[u8]) -> Metadata {
     m
 }
 
+/// Whether a structurally complete IPTC-IIM stream contains a non-empty place-name dataset.
+/// `None` means malformed data, which privacy checks must not treat as proof of absence.
+pub(crate) fn contains_place_name(mut b: &[u8]) -> Option<bool> {
+    while !b.is_empty() {
+        if b.len() < 5 || b[0] != 0x1c {
+            return None;
+        }
+        let (record, dataset) = (b[1], b[2]);
+        let mut size = usize::from(u16::from_be_bytes([b[3], b[4]]));
+        let mut at = 5usize;
+        if size & 0x8000 != 0 {
+            let count = size & 0x7fff;
+            if count == 0 || count > 4 {
+                return None;
+            }
+            let length = b.get(at..at.checked_add(count)?)?;
+            size = length.iter().fold(0usize, |value, byte| (value << 8) | usize::from(*byte));
+            at = at.checked_add(count)?;
+        }
+        let end = at.checked_add(size)?;
+        let value = b.get(at..end)?;
+        if record == 2 && matches!(dataset, 90 | 92 | 95 | 100 | 101) && value.iter().any(|byte| !matches!(byte, 0 | b' ' | b'\t' | b'\r' | b'\n')) {
+            return Some(true);
+        }
+        b = b.get(end..)?;
+    }
+    Some(false)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

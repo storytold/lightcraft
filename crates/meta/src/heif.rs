@@ -12,7 +12,7 @@
 //! *property*, not an item, and is read by the decoder instead.
 
 use crate::container::Embedded;
-use crate::cr3::{MAX_BOXES, be16, be32, be64, boxes};
+use crate::cr3::{MAX_BOXES, be16, be32, be64, boxes, boxes_with_status};
 
 /// Brands that declare a still image in the ISO base media container.
 const IMAGE_BRANDS: [&[u8]; 12] = [b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1", b"avif", b"avis"];
@@ -75,6 +75,114 @@ pub fn metadata(bytes: &[u8]) -> Embedded {
         }
     }
     out
+}
+
+/// All declared HEIF EXIF items for privacy checks. `None` means an EXIF item could not be
+/// located or decoded well enough to prove that its GPS content is absent.
+pub(crate) fn exif_items(bytes: &[u8]) -> Option<Vec<Vec<u8>>> {
+    if !is_heif(bytes) {
+        return None;
+    }
+    let mut budget = MAX_BOXES;
+    let (top, complete) = boxes_with_status(bytes, 0, bytes.len(), &mut budget);
+    if !complete {
+        return None;
+    }
+    let mut metas = top.into_iter().filter(|b| &b.kind == b"meta");
+    let meta = metas.next()?;
+    if metas.next().is_some() {
+        return None;
+    }
+    let (mut items, mut locs, mut idat, mut has_iinf, mut has_iloc) = (Vec::new(), Vec::new(), None, false, false);
+    let (children, complete) = boxes_with_status(bytes, meta.body.checked_add(4)?, meta.end, &mut budget);
+    if !complete {
+        return None;
+    }
+    for child in children {
+        match &child.kind {
+            b"iinf" => {
+                if has_iinf {
+                    return None;
+                }
+                has_iinf = true;
+                items = privacy_item_infos(bytes, &child, &mut budget)?;
+                if items.len() >= MAX_ITEMS {
+                    return None;
+                }
+            }
+            b"iloc" => {
+                if has_iloc {
+                    return None;
+                }
+                has_iloc = true;
+                locs = item_locations(bytes.get(child.body..child.end)?);
+            }
+            b"idat" => {
+                if idat.is_some() {
+                    return None;
+                }
+                idat = bytes.get(child.body..child.end);
+            }
+            _ => {}
+        }
+    }
+    if budget == 0 || !has_iinf || !has_iloc {
+        return None;
+    }
+    let mut out = Vec::new();
+    for (id, _, _) in items.into_iter().filter(|(_, kind, _)| kind == b"Exif") {
+        let location = locs.iter().find(|loc| loc.id == id)?;
+        let block = item_bytes(bytes, idat, location)?;
+        let offset = be32(&block, 0).and_then(|value| usize::try_from(value).ok())?;
+        let tiff_at = offset.checked_add(4)?;
+        out.push(block.get(tiff_at..).filter(|tiff| !tiff.is_empty())?.to_vec());
+    }
+    Some(out)
+}
+
+/// Parse every declared item header for the privacy check. Unlike metadata extraction, malformed
+/// or unsupported `infe` entries cannot be skipped because they could hide an EXIF item.
+fn privacy_item_infos(bytes: &[u8], iinf: &crate::cr3::BoxRef, budget: &mut usize) -> Option<Vec<(u32, [u8; 4], String)>> {
+    let version = *bytes.get(iinf.body)?;
+    let (entry_count, entries_at) = match version {
+        0 => (usize::from(be16(bytes, iinf.body.checked_add(4)?)?), iinf.body.checked_add(6)?),
+        1 => (usize::try_from(be32(bytes, iinf.body.checked_add(4)?)?).ok()?, iinf.body.checked_add(8)?),
+        _ => return None,
+    };
+    if entry_count > MAX_ITEMS {
+        return None;
+    }
+    let (entries, complete) = boxes_with_status(bytes, entries_at, iinf.end, budget);
+    if !complete || entries.len() != entry_count {
+        return None;
+    }
+    entries.iter().map(|entry| privacy_item_info(bytes, entry)).collect()
+}
+
+/// Parse one supported HEIF item-information entry without dropping unknown or truncated fields.
+fn privacy_item_info(bytes: &[u8], entry: &crate::cr3::BoxRef) -> Option<(u32, [u8; 4], String)> {
+    if &entry.kind != b"infe" {
+        return None;
+    }
+    let e = bytes.get(entry.body..entry.end)?;
+    let (id, kind_at): (u32, usize) = match *e.first()? {
+        2 => (be16(e, 4).map(u32::from)?, 8),
+        3 => (be32(e, 4)?, 10),
+        _ => return None,
+    };
+    let kind_bytes = e.get(kind_at..kind_at.checked_add(4)?)?;
+    let mut kind = [0u8; 4];
+    kind.copy_from_slice(kind_bytes);
+    let name_and_content = e.get(kind_at.checked_add(4)?..)?;
+    let name_end = name_and_content.iter().position(|byte| *byte == 0)?;
+    let content_type = if &kind == b"mime" {
+        let content = name_and_content.get(name_end.checked_add(1)?..)?;
+        let content_end = content.iter().position(|byte| *byte == 0)?;
+        String::from_utf8_lossy(content.get(..content_end)?).into_owned()
+    } else {
+        String::new()
+    };
+    Some((id, kind, content_type))
 }
 
 /// `iinf` → one `(item_ID, item_type, content_type)` per `infe` entry. Entries of version 0 and 1
@@ -345,6 +453,45 @@ mod tests {
         let tiff = iphone_exif("2026:10:18 13:00:00", "-05:00");
         let items = vec![Item { kind: b"Exif", content_type: "", data: exif_item(&tiff, 6) }];
         assert_eq!(embedded(&heic(&items, 1, false)).exif.as_deref(), Some(tiff.as_slice()));
+    }
+
+    /// Original export must inspect every declared EXIF item, not only the first readable item.
+    #[test]
+    fn original_gps_guard_checks_every_exif_item() {
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::GPS_IFD, gps);
+        let with_gps = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        let items = vec![
+            Item { kind: b"Exif", content_type: "", data: exif_item(&iphone_exif("2026:10:18 13:00:00", "-05:00"), 0) },
+            Item { kind: b"Exif", content_type: "", data: exif_item(&with_gps, 0) },
+        ];
+        assert!(crate::source_embeds_exif_gps_location(&heic(&items, 1, false)));
+    }
+
+    /// Incomplete HEIF boxes or unparseable item headers cannot prove that EXIF is absent.
+    #[test]
+    fn original_gps_guard_fails_closed_on_incomplete_item_lists() {
+        let plain_exif = iphone_exif("2026:10:18 13:00:00", "-05:00");
+        let valid = heic(&exif_only(&plain_exif), 1, true);
+        assert!(!crate::source_embeds_exif_gps_location(&valid));
+
+        let mut truncated_top = valid.clone();
+        truncated_top.extend_from_slice(&[0, 0, 0]);
+        assert!(crate::source_embeds_exif_gps_location(&truncated_top), "an incomplete top-level box list cannot authorize a copy");
+
+        let mut truncated_meta = valid.clone();
+        let meta_type = truncated_meta.windows(4).position(|window| window == b"meta").unwrap();
+        let meta_size_at = meta_type.saturating_sub(4);
+        truncated_meta.get_mut(meta_size_at..meta_type).unwrap().copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(crate::source_embeds_exif_gps_location(&truncated_meta), "a truncated meta box cannot authorize a copy");
+
+        let mut unsupported_infe = valid;
+        let infe_type = unsupported_infe.windows(4).position(|window| window == b"infe").unwrap();
+        let infe_version_at = infe_type.saturating_add(4);
+        *unsupported_infe.get_mut(infe_version_at).unwrap() = 1;
+        assert!(crate::source_embeds_exif_gps_location(&unsupported_infe), "an unparseable item header may hide EXIF");
     }
 
     /// Which `ftyp` brands count as a still image in this container, major or compatible.

@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### EXIF GPS locations are validated before use
-- EXIF GPS minutes and seconds at or above 60 are no longer folded into plausible coordinates, and serialized coordinates round with carries before splitting into DMS. Original export with Remove Location Info refuses a copy when EXIF location data is present or cannot be verified, checking every JPEG EXIF APP1 and PNG/WebP EXIF chunk and inspecting raw CR3 `CMT4` GPS data.
+- EXIF GPS minutes and seconds at or above 60 are no longer folded into plausible coordinates, and serialized coordinates round with carries before splitting into DMS. Original export with Remove Location Info refuses a copy when location data is present or cannot be verified. Its bounded source scan checks JPEG EXIF, standard / extended XMP and IPTC place names through EOI, embedded TIFF previews, all PNG/WebP EXIF chunks, TIFF traversal status, Panasonic `JpgFromRaw`, MRW TTW, all HEIF EXIF items and CR3 CMT1/CMT4/THMB/JPEG tracks. JPEG XL Originals are refused because their metadata cannot yet be verified.
 
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps

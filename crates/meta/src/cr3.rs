@@ -266,26 +266,58 @@ pub(crate) struct BoxRef {
 
 /// The boxes directly inside `[from, to)`; stops at the first malformed header.
 pub(crate) fn boxes(bytes: &[u8], from: usize, to: usize, budget: &mut usize) -> Vec<BoxRef> {
+    boxes_with_status(bytes, from, to, budget).0
+}
+
+pub(crate) fn boxes_with_status(bytes: &[u8], from: usize, to: usize, budget: &mut usize) -> (Vec<BoxRef>, bool) {
     let mut out = Vec::new();
     let mut at = from;
     let to = to.min(bytes.len());
-    while at.saturating_add(8) <= to && *budget > 0 {
+    if from > to {
+        return (out, false);
+    }
+    let mut complete = true;
+    while at < to {
+        if at.saturating_add(8) > to || *budget == 0 {
+            complete = false;
+            break;
+        }
         *budget -= 1;
-        let (Some(size), Some(kind)) = (be32(bytes, at), bytes.get(at + 4..at + 8)) else { break };
+        let (Some(size), Some(kind)) = (be32(bytes, at), bytes.get(at + 4..at + 8)) else {
+            complete = false;
+            break;
+        };
         let mut kind4 = [0u8; 4];
         kind4.copy_from_slice(kind);
         let (len, mut hdr) = match size {
             0 => (to - at, 8),
             1 => match be64(bytes, at + 8).and_then(|v| usize::try_from(v).ok()) {
                 Some(l) => (l, 16),
-                None => break,
+                None => {
+                    complete = false;
+                    break;
+                }
             },
             n => (n as usize, 8),
         };
-        let Some(end) = at.checked_add(len).filter(|&e| e <= to && len >= hdr) else { break };
+        let Some(end) = at.checked_add(len).filter(|&e| e <= to && len >= hdr) else {
+            complete = false;
+            break;
+        };
         let mut uuid = None;
         if &kind4 == b"uuid" {
-            let Some(u) = bytes.get(at + hdr..at + hdr + 16).filter(|_| at + hdr + 16 <= end) else { break };
+            let Some(uuid_at) = at.checked_add(hdr) else {
+                complete = false;
+                break;
+            };
+            let Some(uuid_end) = uuid_at.checked_add(16) else {
+                complete = false;
+                break;
+            };
+            let Some(u) = bytes.get(uuid_at..uuid_end).filter(|_| uuid_end <= end) else {
+                complete = false;
+                break;
+            };
             let mut a = [0u8; 16];
             a.copy_from_slice(u);
             uuid = Some(a);
@@ -294,7 +326,147 @@ pub(crate) fn boxes(bytes: &[u8], from: usize, to: usize, budget: &mut usize) ->
         out.push(BoxRef { kind: kind4, body: at + hdr, end, uuid });
         at = end;
     }
-    out
+    (out, complete && at == to)
+}
+
+/// All raw CMT4 blocks in a CR3, including duplicates discarded by the convenience `Cr3::cmt` view.
+pub(crate) fn cmt4_blocks(bytes: &[u8]) -> Option<Vec<&[u8]>> {
+    collect_canon_blocks(bytes, b"CMT4")
+}
+
+/// All raw CMT1 blocks in a CR3, including duplicates discarded by the convenience `Cr3::cmt` view.
+pub(crate) fn cmt1_blocks(bytes: &[u8]) -> Option<Vec<&[u8]>> {
+    collect_canon_blocks(bytes, b"CMT1")
+}
+
+/// All raw THMB JPEG blocks in a CR3, including duplicates discarded by the convenience view.
+pub(crate) fn thumbnail_blocks(bytes: &[u8]) -> Option<Vec<&[u8]>> {
+    collect_canon_blocks(bytes, b"THMB")
+}
+
+fn collect_canon_blocks<'a>(bytes: &'a [u8], wanted: &[u8; 4]) -> Option<Vec<&'a [u8]>> {
+    if !is_cr3(bytes) {
+        return None;
+    }
+    let mut budget = MAX_BOXES;
+    let mut out = Vec::new();
+    let (top_boxes, complete) = boxes_with_status(bytes, 0, bytes.len(), &mut budget);
+    if !complete {
+        return None;
+    }
+    for top in top_boxes {
+        if &top.kind != b"moov" {
+            continue;
+        }
+        let (children, complete) = boxes_with_status(bytes, top.body, top.end, &mut budget);
+        if !complete {
+            return None;
+        }
+        for child in children {
+            if &child.kind != b"uuid" || child.uuid != Some(CANON_UUID) {
+                continue;
+            }
+            let (metadata_boxes, complete) = boxes_with_status(bytes, child.body, child.end, &mut budget);
+            if !complete {
+                return None;
+            }
+            for metadata in metadata_boxes {
+                if &metadata.kind == wanted {
+                    out.push(bytes.get(metadata.body..metadata.end)?);
+                }
+            }
+        }
+    }
+    (budget > 0).then_some(out)
+}
+
+/// Whether CR3 box lists used by the Original-copy guard were fully traversable.
+pub(crate) fn source_boxes_are_complete(bytes: &[u8], parsed_track_count: usize) -> bool {
+    if !is_cr3(bytes) {
+        return false;
+    }
+    let mut budget = MAX_BOXES;
+    let (top, complete) = boxes_with_status(bytes, 0, bytes.len(), &mut budget);
+    if !complete {
+        return false;
+    }
+    let mut found_moov = false;
+    let mut track_count = 0usize;
+    for box_ref in top {
+        if &box_ref.kind != b"moov" {
+            continue;
+        }
+        found_moov = true;
+        let (children, complete) = boxes_with_status(bytes, box_ref.body, box_ref.end, &mut budget);
+        if !complete {
+            return false;
+        }
+        for child in children {
+            if &child.kind == b"uuid" && child.uuid == Some(CANON_UUID) {
+                let (_, complete) = boxes_with_status(bytes, child.body, child.end, &mut budget);
+                if !complete {
+                    return false;
+                }
+            } else if &child.kind == b"trak" {
+                track_count = track_count.saturating_add(1);
+                if !track_boxes_are_complete(bytes, &child, 0, &mut budget) {
+                    return false;
+                }
+            }
+        }
+    }
+    found_moov && track_count == parsed_track_count && budget > 0
+}
+
+fn track_boxes_are_complete(bytes: &[u8], parent: &BoxRef, depth: usize, budget: &mut usize) -> bool {
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    let (children, complete) = boxes_with_status(bytes, parent.body, parent.end, budget);
+    if !complete {
+        return false;
+    }
+    for child in children {
+        match &child.kind {
+            b"mdia" | b"minf" | b"stbl" | b"edts" => {
+                if !track_boxes_are_complete(bytes, &child, depth + 1, budget) {
+                    return false;
+                }
+            }
+            b"stsd" => {
+                let Some(declared_start) = child.body.checked_add(4) else { return false };
+                let Some(declared_end) = declared_start.checked_add(4) else { return false };
+                let Some(declared) = bytes.get(declared_start..declared_end).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes) else {
+                    return false;
+                };
+                let Some(entries_at) = child.body.checked_add(8) else { return false };
+                let (entries, complete) = boxes_with_status(bytes, entries_at, child.end, budget);
+                if !complete || u32::try_from(entries.len()).ok() != Some(declared) {
+                    return false;
+                }
+                for entry in entries {
+                    if &entry.kind == b"CRAW" {
+                        let Some(children_at) = entry.body.checked_add(CRAW_CHILDREN_AT) else { return false };
+                        let (sample_children, complete) = boxes_with_status(bytes, children_at, entry.end, budget);
+                        if !complete {
+                            return false;
+                        }
+                        for sample_child in sample_children {
+                            if &sample_child.kind == b"CDI1" {
+                                let Some(areas_at) = sample_child.body.checked_add(4) else { return false };
+                                let (_, complete) = boxes_with_status(bytes, areas_at, sample_child.end, budget);
+                                if !complete {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    true
 }
 
 fn moov<'a>(bytes: &'a [u8], m: &BoxRef, out: &mut Cr3<'a>, budget: &mut usize) {
@@ -604,6 +776,124 @@ mod tests {
         assert!(merged_exif(&parsed).is_none());
         assert_eq!(crate::exif::exif_gps_tag_presence(&gps_cmt4), Some(false), "CMT4 stores the GPS IFD as its root IFD");
         assert!(crate::source_embeds_exif_gps_location(&invalid_cmt1));
+    }
+
+    /// A partially traversed CR3 box tree cannot establish that location-bearing data is absent.
+    #[test]
+    fn source_gps_guard_fails_closed_on_truncated_box_lists() {
+        let valid = sample();
+        let parsed = parse_cr3(&valid).unwrap();
+        assert!(source_boxes_are_complete(&valid, parsed.tracks.len()));
+        let canon = uuid(&CANON_UUID, b"\0\0");
+        let malformed = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat();
+        assert!(!source_boxes_are_complete(&malformed, 0));
+        assert!(crate::source_embeds_exif_gps_location(&malformed));
+    }
+
+    /// Each destination-coordinate tag in raw CMT4 is location-bearing by itself.
+    #[test]
+    fn source_gps_guard_checks_destination_tags_in_cmt4() {
+        use lightcraft_tiff::{Value, tags as t};
+
+        for tag in [t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE] {
+            let cmt4 = tiff_with(tag, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+            let canon = uuid(&CANON_UUID, &[bx(b"CMT1", b"not a TIFF"), bx(b"CMT4", &cmt4)].concat());
+            let file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat();
+            assert!(crate::source_embeds_exif_gps_location(&file), "CMT4 destination tag {tag}");
+        }
+    }
+
+    /// Every CMT4 packet must be inspected; the parsed convenience view keeps only the last one.
+    #[test]
+    fn source_gps_guard_checks_duplicate_cmt4_packets() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let cmt1 = b"not a TIFF".to_vec();
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let gps_cmt4 = TiffWriter::default().write(&[gps]).unwrap();
+        let empty_cmt4 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
+        let canon = uuid(&CANON_UUID, &[bx(b"CMT1", &cmt1), bx(b"CMT4", &gps_cmt4), bx(b"CMT4", &empty_cmt4)].concat());
+        let file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat();
+
+        let parsed = parse_cr3(&file).unwrap();
+        assert_eq!(parsed.cmt[3], Some(empty_cmt4.as_slice()));
+        assert!(merged_exif(&parsed).is_none());
+
+        assert!(crate::source_embeds_exif_gps_location(&file));
+    }
+
+    /// GPS references in raw CMT1 cannot be lost when merged EXIF drops dangling source pointers.
+    #[test]
+    fn source_gps_guard_checks_cmt1_before_merging() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("Canon".into()));
+        ifd0.set_child(t::GPS_IFD, gps);
+        let cmt1 = TiffWriter::default().write(&[ifd0]).unwrap();
+        let canon = uuid(&CANON_UUID, &bx(b"CMT1", &cmt1));
+        let file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat();
+
+        let parsed = parse_cr3(&file).unwrap();
+        let merged = merged_exif(&parsed).unwrap();
+        assert_eq!(crate::exif::exif_gps_tag_presence(&cmt1), Some(true));
+        assert_eq!(crate::exif::exif_gps_tag_presence(&merged), Some(false), "merging drops the dangling GPS pointer");
+        assert!(crate::source_embeds_exif_gps_location(&file));
+    }
+
+    /// A later GPS-free CMT1 must not hide an earlier CMT1 with a GPS pointer.
+    #[test]
+    fn source_gps_guard_checks_duplicate_cmt1_packets() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let mut located = IfdBuilder::new();
+        located.set_child(t::GPS_IFD, gps);
+        let gps_cmt1 = TiffWriter::default().write(&[located]).unwrap();
+        let clean_cmt1 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
+        let canon = uuid(&CANON_UUID, &[bx(b"CMT1", &gps_cmt1), bx(b"CMT1", &clean_cmt1)].concat());
+        let file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &canon)].concat();
+
+        let parsed = parse_cr3(&file).unwrap();
+        assert_eq!(parsed.cmt[0], Some(clean_cmt1.as_slice()), "the convenience view keeps only the last CMT1");
+        assert!(crate::source_embeds_exif_gps_location(&file));
+    }
+
+    fn jpeg_with_gps() -> Vec<u8> {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::GPS_IFD, gps);
+        let exif = TiffWriter::default().write(&[ifd0]).unwrap();
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend(exif);
+        let segment_length = u16::try_from(payload.len() + 2).unwrap();
+        [vec![0xff, 0xd8, 0xff, 0xe1], segment_length.to_be_bytes().to_vec(), payload, vec![0xff, 0xd9]].concat()
+    }
+
+    /// CR3's thumbnail and JPEG tracks are part of the bytes retained by an Original copy.
+    #[test]
+    fn source_gps_guard_checks_thumbnail_and_jpeg_tracks() {
+        let cmt1 = tiff_with(0x010f, lightcraft_tiff::Value::Ascii("Canon".into()));
+        let jpeg = jpeg_with_gps();
+        let thumbnail_uuid = uuid(&CANON_UUID, &[bx(b"CMT1", &cmt1), bx(b"THMB", &jpeg)].concat());
+        let thumbnail_file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &thumbnail_uuid)].concat();
+        assert!(crate::source_embeds_exif_gps_location(&thumbnail_file), "GPS in THMB must be found");
+
+        let payload_at = 4096u64;
+        let jpeg_track = trak(craw(16, 16, &bx(b"JPEG", &[0; 4])), payload_at, u32::try_from(jpeg.len()).unwrap());
+        let moov = bx(b"moov", &jpeg_track);
+        let mut track_file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), moov].concat();
+        track_file.resize(usize::try_from(payload_at).unwrap().saturating_add(jpeg.len()), 0);
+        let at = usize::try_from(payload_at).unwrap();
+        track_file[at..at + jpeg.len()].copy_from_slice(&jpeg);
+        assert!(crate::source_embeds_exif_gps_location(&track_file), "GPS in the JPEG track must be found");
     }
 
     fn compression_payload(levels: u8) -> Vec<u8> {
