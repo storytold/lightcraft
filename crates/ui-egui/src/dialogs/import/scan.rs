@@ -239,7 +239,13 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
         let candidates =
             queue.iter().cloned().map(|path| lightcraft_engine::import::ImportCandidate { path, ..Default::default() }).chain(known).collect();
         // the probes of earlier scans go back to the session with the result, for the import that follows
-        let _ = tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput { candidates, probes: input.take_probes() }));
+        let _ = tx.send(ScanEnd::Done(lightcraft_engine::import::ScanOutput {
+            candidates,
+            probes: input.take_probes(),
+            truncated: false,
+            unreadable: 0,
+            unsupported: 0,
+        }));
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(job);
@@ -360,11 +366,19 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     if out.candidates.is_empty() {
-        app.toast(ctx, crate::i18n::tr("No photos found"));
+        // (what the scan left out is said here too: a scan that found no photos may have had folders it
+        // could not read, or files that are not photos, and the note is the same one the review shows)
+        let left_out = ImportDialog { scan_limited: out.truncated, unreadable: out.unreadable, unsupported: out.unsupported, ..Default::default() };
+        let text = match super::scan_note(&left_out) {
+            Some(note) => format!("{} · {note}", crate::i18n::tr("No photos found")),
+            None => crate::i18n::tr("No photos found").to_string(),
+        };
+        app.toast(ctx, text);
         return;
     }
     app.renderer.forget_imports();
     let mut d = ImportDialog::new(out.candidates);
+    (d.scan_limited, d.unreadable, d.unsupported) = (out.truncated, out.unreadable, out.unsupported);
     let trashed = d
         .candidates
         .iter()

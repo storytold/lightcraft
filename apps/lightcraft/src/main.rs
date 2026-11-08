@@ -35,8 +35,12 @@ mod hdr_display;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+#[cfg(any(target_os = "linux", windows))]
+mod profile_file;
 #[cfg(target_os = "macos")]
 mod screen_profile;
+#[cfg(windows)]
+mod win_screen_profile;
 mod window_gpu;
 
 use dialog_filter::FileDialogExt as _;
