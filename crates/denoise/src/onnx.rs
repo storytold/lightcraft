@@ -62,6 +62,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
     // a Concat is not a layer of its own: the convolution that reads it takes both sources
     let mut joins: HashMap<String, (TensorId, TensorId)> = HashMap::new();
     let mut ops: Vec<Op> = Vec::new();
+    let mut shapes: Vec<(usize, i32)> = vec![(in_channels, 0)];
     let mut weights_total = 0usize;
 
     let nodes = &graph.node;
@@ -77,6 +78,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
             "ConvTranspose" => &["kernel_shape", "pads", "strides", "dilations", "group", "output_padding", "auto_pad"],
             "MaxPool" => &["kernel_shape", "pads", "strides", "dilations", "ceil_mode", "storage_order", "auto_pad"],
             "Concat" => &["axis"],
+            "Add" => &[],
             "DepthToSpace" => &["blocksize", "mode"],
             _ => &[],
         };
@@ -149,6 +151,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("Conv without an output".into()))?;
                 let (leaky, out_name) = fuse_leaky(out)?;
                 ids.insert(out_name, this);
+                shapes.push((cout, shapes.get(src).copied().map_or(0, |s| s.1)));
                 ops.push(Op::Conv(Conv { src, src2, cin, cout, k: kh, weight: w.1, bias: b, leaky }));
             }
             "ConvTranspose" => {
@@ -174,6 +177,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("ConvTranspose without an output".into()))?;
                 let (leaky, out_name) = fuse_leaky(out)?;
                 ids.insert(out_name, this);
+                shapes.push((cout, shapes.get(src).copied().map_or(0, |s| s.1) - 1));
                 ops.push(Op::ConvT2(ConvT2 { src, cin, cout, weight: w.1, bias: b, leaky }));
             }
             "MaxPool" => {
@@ -190,7 +194,37 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 let src = lookup(node.input.first().map_or("", String::as_str))?;
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("MaxPool without an output".into()))?;
                 ids.insert(out.clone(), this);
+                shapes.push(shapes.get(src).copied().map_or((in_channels, 1), |(c, l)| (c, l + 1)));
                 ops.push(Op::MaxPool2 { src });
+            }
+            "Add" => {
+                let [a, b] = node.input.as_slice() else { return unsupported("Add of other than two tensors") };
+                let src = lookup(a)?;
+                let src2 = lookup(b)?;
+                let out = node.output.first().ok_or_else(|| NetError::Invalid("Add without an output".into()))?;
+                let (ca, la) = shapes.get(src).copied().ok_or_else(|| NetError::Invalid("Add reads a tensor with no shape".into()))?;
+                let (cb, lb) = shapes.get(src2).copied().ok_or_else(|| NetError::Invalid("Add reads a tensor with no shape".into()))?;
+                // broadcast addition of two same-shape tensors as a 1x1 identity convolution over both sources (src2
+                // channels follow src's). initializer broadcast is not a residual connection, reject it.
+                if ca != cb || la != lb {
+                    return unsupported("Add of tensors of different shapes");
+                }
+                if ca == 0 || ca > 4096 {
+                    return invalid("Add");
+                }
+                let nn = ca.checked_mul(ca).and_then(|n| n.checked_mul(2)).ok_or_else(|| NetError::Invalid("Add channel count overflows".into()))?;
+                let mut weight = vec![0.0f32; nn];
+                for c in 0..ca {
+                    if let Some(w) = weight.get_mut(c * ca * 2 + c) {
+                        *w = 1.0;
+                    }
+                    if let Some(w) = weight.get_mut(c * ca * 2 + ca + c) {
+                        *w = 1.0;
+                    }
+                }
+                ids.insert(out.clone(), this);
+                shapes.push((ca, la));
+                ops.push(Op::Conv(Conv { src, src2: Some(src2), cin: ca * 2, cout: ca, k: 1, weight, bias: vec![0.0; ca], leaky: None }));
             }
             "DepthToSpace" => {
                 if attr(node, "blocksize").map(|a| a.i) != Some(2) || attr(node, "mode").map(|a| a.s.as_slice()) != Some(&b"CRD"[..]) {
@@ -199,6 +233,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 let src = lookup(node.input.first().map_or("", String::as_str))?;
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("DepthToSpace without an output".into()))?;
                 ids.insert(out.clone(), this);
+                shapes.push(shapes.get(src).copied().map_or((in_channels / 4, -1), |(c, l)| (c / 4, l - 1)));
                 ops.push(Op::DepthToSpace2 { src });
             }
             other => return unsupported(format!("the `{other}` operator")),
@@ -322,6 +357,69 @@ mod tests {
         assert!(net.fits_tile(tile) && !net.fits_tile(30));
 
         let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn add_operator_model_is_accepted() {
+        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
+
+        fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
+            let mut n = Vec::new();
+            for i in inputs {
+                len_field(1, i.as_bytes(), &mut n);
+            }
+            len_field(2, output.as_bytes(), &mut n);
+            len_field(4, op.as_bytes(), &mut n);
+            for (name, value) in ints {
+                let mut a = Vec::new();
+                len_field(1, name.as_bytes(), &mut a);
+                varint_field(3, *value as u64, &mut a);
+                varint_field(20, 2, &mut a);
+                len_field(5, &a, &mut n);
+            }
+            n
+        }
+
+        fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
+            let mut t = Vec::new();
+            for d in dims {
+                varint_field(1, *d, &mut t);
+            }
+            varint_field(2, 1, &mut t);
+            len_field(8, name.as_bytes(), &mut t);
+            let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            len_field(9, &raw, &mut t);
+            t
+        }
+
+        // the convolution output added back to the input, as a residual block does
+        let mut graph = Vec::new();
+        len_field(1, &node("Conv", &["data", "w1"], "c1", &[("group", 1)]), &mut graph);
+        len_field(1, &node("Add", &["c1", "data"], "a1", &[]), &mut graph);
+        len_field(1, &node("Conv", &["a1", "w2"], "c2", &[("group", 1)]), &mut graph);
+        let mut depth_to_space = node("DepthToSpace", &["c2"], "rgb", &[("blocksize", 2)]);
+        let mut mode = Vec::new();
+        len_field(1, b"mode", &mut mode);
+        len_field(4, b"CRD", &mut mode);
+        varint_field(20, 3, &mut mode);
+        len_field(5, &mode, &mut depth_to_space);
+        len_field(1, &depth_to_space, &mut graph);
+        len_field(5, &tensor("w1", &[4, 4, 1, 1], &[0.1; 16]), &mut graph);
+        len_field(5, &tensor("w2", &[12, 4, 1, 1], &[0.1; 48]), &mut graph);
+        len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
+        len_field(12, &value_info_bytes("rgb", 1, &[Ok(1), Ok(3), Ok(16), Ok(16)]), &mut graph);
+        let mut ops = Vec::new();
+        len_field(1, b"", &mut ops);
+        varint_field(2, 13, &mut ops);
+        let mut model = Vec::new();
+        varint_field(1, 8, &mut model);
+        len_field(7, &graph, &mut model);
+        len_field(8, &ops, &mut model);
+
+        let net = read_bytes(&model);
+        assert!(net.is_ok(), "a model with an Add residual was rejected: {:?}", net.err());
+        let net = net.unwrap();
+        assert_eq!((net.in_channels, net.out_channels()), (4, 3));
     }
 
     #[test]
