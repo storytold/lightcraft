@@ -515,6 +515,24 @@ fn picked_sample(o: &lightcraft_raster::Rgb32f, x: f64, y: f64) -> [f32; 3] {
     acc
 }
 
+/// The render's colour over the same 5×5 window [`picked_sample`] reads, averaged in linear light and
+/// encoded back to 8-bit sRGB: what the pick promises is that this patch renders neutral, so a check on
+/// one pixel of it could pass or fail on the photo's texture rather than on the pick.
+fn rendered_spot(img: &lightcraft_raster::Rgba8, x: f64, y: f64) -> [u8; 3] {
+    use lightcraft_color::transfer::{decode_srgb8, encode_srgb8};
+    let (cx, cy) = ((x.clamp(0.0, 1.0) * img.width as f64) as isize, (y.clamp(0.0, 1.0) * img.height as f64) as isize);
+    let mut acc = [0.0f32; 3];
+    for dy in -2..=2 {
+        for dx in -2..=2 {
+            let c = img.get_clamped(cx + dx, cy + dy);
+            for i in 0..3 {
+                acc[i] += decode_srgb8(c[i]) / 25.0;
+            }
+        }
+    }
+    acc.map(encode_srgb8)
+}
+
 /// Issue #2158: `develop.mixerNeutralPick` makes the picked spot render neutral (white balance at
 /// the mixer's input), composes over a mix already set, and each pick is one undo step.
 #[test]
@@ -548,11 +566,10 @@ fn mixer_neutral_pick_neutralizes_and_composes_as_one_undo_step() {
     }
     let (Some((mx, my, mc)), Some((sx, sy, sc))) = (mild, strong) else { panic!("the demo photo has no mild and saturated bright spots") };
     assert!(sc > mc + 0.1, "the second spot is more saturated: {mc} vs {sc}");
-    // the render at the thumb's own size: its pixel at (x, y) is the spot the pick sampled
+    // the render at the thumb's own size, read over the window the pick sampled
     let render_at = |s: &mut Session, x: f64, y: f64| {
         let r = s.render_now(id, o.width, o.height).unwrap();
-        let (px, py) = ((x * r.image.width as f64) as usize, (y * r.image.height as f64) as usize);
-        r.image.get(px, py)
+        rendered_spot(&r.image, x, y)
     };
     let before = render_at(&mut s, mx, my);
     assert!(
@@ -640,8 +657,7 @@ fn mixer_neutral_pick_keeps_brightness_when_it_scales_down() {
     // luminance as a grey encodes to a lower encoded luma, so the encoded luma would misreport)
     let render_luma = |s: &mut Session| {
         let r = s.render_now(id, o.width, o.height).unwrap();
-        let (px, py) = ((x * r.image.width as f64) as usize, (y * r.image.height as f64) as usize);
-        let c = r.image.get(px, py);
+        let c = rendered_spot(&r.image, x, y);
         let lin = |v: u8| {
             let v = v as f32 / 255.0;
             (if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }) * 255.0
@@ -662,8 +678,7 @@ fn mixer_neutral_pick_keeps_brightness_when_it_scales_down() {
     let after = render_luma(&mut s);
     assert!((after - before).abs() <= 2.0, "brightness kept within 2/255: {before} -> {after}");
     let r2 = s.render_now(id, o.width, o.height).unwrap();
-    let (px, py) = ((x * r2.image.width as f64) as usize, (y * r2.image.height as f64) as usize);
-    let c = r2.image.get(px, py);
+    let c = rendered_spot(&r2.image, x, y);
     assert!(c[0].abs_diff(c[1]).max(c[1].abs_diff(c[2])) <= 3, "and it is neutral: {c:?}");
 
     // one undo gives the mixer and the Exposure back
@@ -721,8 +736,7 @@ fn mixer_neutral_pick_with_the_section_off_switches_it_on() {
     assert!(d.section_enabled("channelMixer"), "the pick switched the section on");
     assert!(!d.channel_mixer.is_identity(), "the pick composed over the stored mixer: {:?}", d.channel_mixer);
     let render = s.render_now(id, o.width, o.height).unwrap();
-    let (px, py) = ((x * render.image.width as f64) as usize, (y * render.image.height as f64) as usize);
-    let c = render.image.get(px, py);
+    let c = rendered_spot(&render.image, x, y);
     assert!(c[0].abs_diff(c[1]).max(c[1].abs_diff(c[2])) <= 3, "the picked spot renders neutral: {c:?}");
 
     // one undo step gives the stored mixer and the eye's off state back
@@ -845,8 +859,7 @@ fn mixer_neutral_pick_keeps_the_clamped_brightness_a_negative_channel_renders_as
 
     let render_luma = |s: &mut Session| {
         let r = s.render_now(id, o.width, o.height).unwrap();
-        let (px, py) = ((x * r.image.width as f64) as usize, (y * r.image.height as f64) as usize);
-        let c = r.image.get(px, py);
+        let c = rendered_spot(&r.image, x, y);
         let lin = |v: u8| {
             let v = v as f32 / 255.0;
             (if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }) * 255.0
@@ -1655,8 +1668,7 @@ fn mixer_neutral_pick_keeps_brightness_through_a_calibration() {
 
     let render_luma = |s: &mut Session| {
         let r = s.render_now(id, o.width, o.height).unwrap();
-        let (px, py) = ((x * r.image.width as f64) as usize, (y * r.image.height as f64) as usize);
-        let c = r.image.get(px, py);
+        let c = rendered_spot(&r.image, x, y);
         let lin = |v: u8| {
             let v = v as f32 / 255.0;
             (if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }) * 255.0
@@ -1714,8 +1726,7 @@ fn mixer_neutral_pick_with_the_section_off_keeps_the_pre_pick_brightness() {
 
     let render_luma = |s: &mut Session| {
         let r = s.render_now(id, o.width, o.height).unwrap();
-        let (px, py) = ((x * r.image.width as f64) as usize, (y * r.image.height as f64) as usize);
-        let c = r.image.get(px, py);
+        let c = rendered_spot(&r.image, x, y);
         let lin = |v: u8| {
             let v = v as f32 / 255.0;
             (if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }) * 255.0
@@ -1770,8 +1781,7 @@ fn mixer_neutral_pick_with_color_off_uses_the_white_balance_the_render_shows() {
     assert!(!active_dev(&s).channel_mixer.is_identity(), "the pick set the mixer");
     assert!(!active_dev(&s).section_enabled("color"), "Color stays off");
     let render = s.render_now(id, o.width, o.height).unwrap();
-    let (px, py) = ((x * render.image.width as f64) as usize, (y * render.image.height as f64) as usize);
-    let c = render.image.get(px, py);
+    let c = rendered_spot(&render.image, x, y);
     assert!(c[0].abs_diff(c[1]).max(c[1].abs_diff(c[2])) <= 3, "the picked spot renders neutral: {c:?}");
 }
 
