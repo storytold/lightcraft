@@ -32,7 +32,7 @@ fn noisy16(w: u32, h: u32, noise: f64) -> Vec<u16> {
     v
 }
 
-/// Both depths must use Deflate and preserve every integer sample as well as the dimensions.
+/// Both depths must preserve integer samples, dimensions and the application's linear-light pixels.
 fn checked_zip_size(img: &EncodeImage<'_>) -> usize {
     let bytes = encode_tiff(img, TiffCompression::Deflate, &EncodeMeta::default()).unwrap();
     let mut decoder = tiff::decoder::Decoder::new(std::io::Cursor::new(&bytes)).unwrap();
@@ -49,6 +49,19 @@ fn checked_zip_size(img: &EncodeImage<'_>) -> usize {
     }
     let decoded = decode(&bytes, DecodeOptions::default()).unwrap();
     assert_eq!((decoded.image.width, decoded.image.height), (img.width as usize, img.height as usize));
+    // Untagged integer RGB TIFFs are sRGB; check the application conversion independently
+    // of the raw integer comparison above, including the sample count so zip cannot hide truncation.
+    let encoded: Vec<f32> = match img.samples {
+        Samples::U8(samples) => samples.iter().map(|&v| f32::from(v) / 255.0).collect(),
+        Samples::U16(samples) => samples.iter().map(|&v| f32::from(v) / 65535.0).collect(),
+        _ => panic!("expected an integer TIFF fixture"),
+    };
+    assert_eq!(decoded.image.data.len() * 3, encoded.len());
+    for (i, (&actual, encoded)) in decoded.image.data.iter().flatten().zip(encoded).enumerate() {
+        let expected = lightcraft_color::transfer::srgb_to_linear(encoded);
+        // Allow float conversion rounding; the encoded integer samples must still match exactly.
+        assert!((actual - expected).abs() <= 1e-6, "application-decoded sample {i}: {actual}, expected {expected}");
+    }
     bytes.len()
 }
 
