@@ -125,7 +125,8 @@ const APP_MENU_ROWS: &[&str] = &["app.about", "app.checkForUpdates"];
 const HOST_APP_MENU_ROWS: &[&str] = &["app.settings", "app.quit"];
 
 /// The macOS split of the bar: the application menu's rows from [`APP_MENU_ROWS`] in that order,
-/// and the other menus without them and without the host's own rows.
+/// and the other menus without them and without the host's own rows, and without the separators
+/// that removing those rows leaves at the start or end of a menu or doubled.
 pub fn native_menu_split(bar: Vec<(String, Vec<MenuNode>)>) -> (Vec<MenuNode>, Vec<(String, Vec<MenuNode>)>) {
     let mut app_rows: Vec<MenuNode> = Vec::new();
     let menus = bar
@@ -139,7 +140,7 @@ pub fn native_menu_split(bar: Vec<(String, Vec<MenuNode>)>) -> (Vec<MenuNode>, V
                     _ => rest.push(node),
                 }
             }
-            (title, rest)
+            (title, tidy_separators(rest))
         })
         .collect();
     app_rows.sort_by_key(|n| match n {
@@ -147,6 +148,21 @@ pub fn native_menu_split(bar: Vec<(String, Vec<MenuNode>)>) -> (Vec<MenuNode>, V
         _ => None,
     });
     (app_rows, menus)
+}
+
+/// Drop the separators a removed row leaves behind: at the start or end of a menu, or two in a row.
+fn tidy_separators(nodes: Vec<MenuNode>) -> Vec<MenuNode> {
+    let mut out: Vec<MenuNode> = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        if matches!(node, MenuNode::Separator) && matches!(out.last(), None | Some(MenuNode::Separator)) {
+            continue;
+        }
+        out.push(node);
+    }
+    while matches!(out.last(), Some(MenuNode::Separator)) {
+        out.pop();
+    }
+    out
 }
 
 /// Top-level menus in order (the macOS app menu is added by the host).

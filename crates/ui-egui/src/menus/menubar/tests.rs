@@ -921,3 +921,72 @@ fn help_shortcut_is_the_mac_one_on_macos_and_f1_elsewhere() {
     let want = if cfg!(target_os = "macos") { "Cmd+Shift+/" } else { "F1" };
     assert_eq!(crate::shortcuts::shortcut_of(&keymap, "app.help"), Some(want));
 }
+
+/// Both platforms' LightCraft Help keys are real, free shortcuts, whichever platform runs the test
+/// (the Linux gate never builds the macOS one into the menu).
+#[test]
+fn both_help_shortcuts_parse_round_trip_and_clash_with_nothing() {
+    let keymap = crate::shortcuts::Keymap::new();
+    for (macos, want) in [(true, "Cmd+Shift+/"), (false, "F1")] {
+        let sc = super::super::ui_commands::help_shortcut(macos);
+        assert_eq!(sc, want);
+        let parsed = crate::shortcuts::parse(sc).unwrap_or_else(|| panic!("{sc} does not parse"));
+        assert_eq!(crate::shortcuts::format(parsed.0, parsed.1).as_deref(), Some(sc));
+        assert!(
+            crate::shortcuts::conflicts(&keymap, "app.help", sc).is_empty(),
+            "{sc} is bound to {:?}",
+            crate::shortcuts::conflicts(&keymap, "app.help", sc)
+        );
+    }
+}
+
+/// Taking a row out of a menu never leaves a separator first, last or twice in a row (the native
+/// menu is built from these lists as they are).
+#[test]
+fn the_macos_split_leaves_no_dangling_separators() {
+    let item = |id: &str| MenuNode::Item { id: id.into(), params: Value::Null, label: id.into(), shortcut: None, enabled: true, checked: None };
+    let bar = vec![
+        ("Edit".to_string(), vec![item("a"), MenuNode::Separator, item("app.settings")]),
+        (
+            "Help".to_string(),
+            vec![
+                MenuNode::Separator,
+                item("app.about"),
+                MenuNode::Separator,
+                item("b"),
+                MenuNode::Separator,
+                item("app.checkForUpdates"),
+                MenuNode::Separator,
+                item("c"),
+            ],
+        ),
+    ];
+    let (_, menus) = native_menu_split(bar);
+    assert_eq!(row_shapes(menu(&menus, "Edit")), ["a"]);
+    assert_eq!(row_shapes(menu(&menus, "Help")), ["b", "---", "c"]);
+    // doubled, leading and trailing separators around kept rows, and a menu of separators alone
+    let sep = || MenuNode::Separator;
+    let bar = vec![("File".to_string(), vec![sep(), item("a"), sep(), sep(), item("b"), sep(), sep()]), ("Window".to_string(), vec![sep(), sep()])];
+    let (_, menus) = native_menu_split(bar);
+    assert_eq!(row_shapes(menu(&menus, "File")), ["a", "---", "b"]);
+    assert!(menu(&menus, "Window").is_empty());
+    // and every menu of the real bar, with separators counted
+    let (_, menus) = native_menu_split(menu_bar(&app()));
+    for (title, nodes) in &menus {
+        let shapes = row_shapes(nodes);
+        assert!(shapes.first().is_none_or(|s| s != "---") && shapes.last().is_none_or(|s| s != "---"), "{title}: {shapes:?}");
+        assert!(shapes.windows(2).all(|w| !(w[0] == "---" && w[1] == "---")), "{title}: {shapes:?}");
+    }
+}
+
+/// The ids of a menu's top-level rows with each separator as `---`, a submenu as `@Label`.
+fn row_shapes(nodes: &[MenuNode]) -> Vec<String> {
+    nodes
+        .iter()
+        .map(|n| match n {
+            MenuNode::Item { id, .. } => id.clone(),
+            MenuNode::Submenu { label, .. } => format!("@{label}"),
+            MenuNode::Separator => "---".to_string(),
+        })
+        .collect()
+}
