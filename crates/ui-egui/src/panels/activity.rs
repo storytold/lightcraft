@@ -73,34 +73,39 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let mut cancel = None;
     let mut toggle = false;
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6).inner_margin(Margin::same(MARGIN));
-    egui::Area::new(egui::Id::unique("activity-stack")).order(egui::Order::Middle).fixed_pos(pos2(8.0, t.top_bar_h + 8.0)).show(ctx, |ui| {
-        // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
-        // is: the stack would never grow when rows are added. Give it the whole height below the top bar instead
-        // (the scroll area keeps to `max_height`).
-        ui.set_max_height((ctx.content_rect().height() - t.top_bar_h - 16.0).max(80.0));
-        frame.show(ui, |ui| {
-            let inner = WIDTH - 2.0 * (f32::from(MARGIN) + 1.0);
-            ui.set_width(inner);
-            ui.spacing_mut().item_spacing.y = 3.0;
-            egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
-                for (i, task) in tasks.iter().take(shown).enumerate() {
-                    if i > 0 {
-                        ui.add_space(6.0);
+    egui::Area::new(egui::Id::unique("activity-stack"))
+        .order(egui::Order::Middle)
+        .default_pos(pos2(8.0, t.top_bar_h + 8.0))
+        .movable(true)
+        .constrain(true)
+        .show(ctx, |ui| {
+            // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
+            // is: the stack would never grow when rows are added. Give it the whole height below the top bar instead
+            // (the scroll area keeps to `max_height`).
+            ui.set_max_height((ctx.content_rect().height() - t.top_bar_h - 16.0).max(80.0));
+            frame.show(ui, |ui| {
+                let inner = WIDTH - 2.0 * (f32::from(MARGIN) + 1.0);
+                ui.set_width(inner);
+                ui.spacing_mut().item_spacing.y = 3.0;
+                egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
+                    for (i, task) in tasks.iter().take(shown).enumerate() {
+                        if i > 0 {
+                            ui.add_space(6.0);
+                        }
+                        if row(ui, &t, task, inner) {
+                            cancel = Some(task.id);
+                        }
                     }
-                    if row(ui, &t, task, inner) {
-                        cancel = Some(task.id);
-                    }
+                });
+                if hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS) {
+                    ui.add_space(4.0);
+                    let text = if hidden > 0 { tr_format!("+{n} more", n = hidden) } else { tr("Show less").to_string() };
+                    let r = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
+                    register(ui, "activity:more", r.rect);
+                    toggle = r.clicked();
                 }
             });
-            if hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS) {
-                ui.add_space(4.0);
-                let text = if hidden > 0 { tr_format!("+{n} more", n = hidden) } else { tr("Show less").to_string() };
-                let r = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
-                register(ui, "activity:more", r.rect);
-                toggle = r.clicked();
-            }
         });
-    });
     if let Some(id) = cancel {
         self::cancel(app, id);
     }

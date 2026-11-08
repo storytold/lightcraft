@@ -574,6 +574,28 @@ fn rows_added_later_grow_the_stack() {
 }
 
 #[test]
+fn activity_stack_area_is_movable() {
+    let mut h = demo();
+    let _g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    wait_visible(&mut h);
+    let id = egui::Id::unique("activity-stack");
+    let initial_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(initial_rect.min.x >= 7.0 && initial_rect.min.x <= 9.0, "default pos at x=8: {initial_rect:?}");
+
+    // Drag the activity stack using ui.drag
+    let start_x = initial_rect.center().x;
+    let start_y = initial_rect.center().y;
+    let dx = 100.0;
+    let dy = 60.0;
+    let r = h.request("ui.drag", json!({"x": start_x, "y": start_y, "toX": start_x + dx, "toY": start_y + dy, "steps": 6}), T);
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    let updated_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!((updated_rect.min.x - (initial_rect.min.x + dx)).abs() < 5.0, "stack moved in x: {updated_rect:?}");
+    assert!((updated_rect.min.y - (initial_rect.min.y + dy)).abs() < 5.0, "stack moved in y: {updated_rect:?}");
+}
+
+#[test]
 fn immediate_library_commands_and_auto_sync_show_completion() {
     let mut h = demo();
     assert!(h.app.run("library.clearPreviews", json!({})).is_ok());
