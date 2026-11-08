@@ -5,8 +5,14 @@ use lightcraft_develop::VignetteStyle;
 use lightcraft_pipeline::colorops::POINT_WORDS;
 use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
 
+use crate::ctx::{FailKind, fail};
+
 /// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
 pub const CURVE_N: u32 = 1024;
+
+/// Set on every word of a float render's output: the values are at least 0, so the sign bit is
+/// free, and it tells a written 0 from a word the kernel never reached.
+pub const DEEP_WRITTEN: u32 = 1 << 31;
 
 /// Field name and number of 32-bit words.
 const FIELDS: &[(&str, usize)] = &[
@@ -101,6 +107,11 @@ const FIELDS: &[(&str, usize)] = &[
     ("LIGHT_MODE", 2),
     ("LIGHT_W", 2),
     ("LIGHT_OFF", 1),
+    // the render's peak over SDR white (`FinishParams::peak`; above 1: an HDR render)
+    ("PEAK", 1),
+    // a float render (`finish_deep`): the exact sRGB curve, and three words per pixel in `out`, each
+    // a linear value with `DEEP_WRITTEN` set
+    ("DEEP", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -168,7 +179,12 @@ pub struct Present {
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
 /// mask terms | light operator tables) for `fp` with `masks` (their local adjustments' terms).
-pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present) -> (Vec<u32>, Vec<f32>) {
+///
+/// `deep`: the kernel writes float samples, as the pipeline's `finish_deep` does.
+///
+/// A curve whose length is not [`CURVE_N`] fails the render ([`FailKind::Fatal`]) and returns an
+/// empty parameter block with a truncated aux table, which the caller discards (CPU fallback).
+pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present, deep: bool) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
     let srgb_off = aux.len();
@@ -176,7 +192,17 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let curve_off = aux.len();
     if let Some(c) = &fp.curves {
         for l in c {
-            assert_eq!(l.v.len(), CURVE_N as usize);
+            if l.v.len() != CURVE_N as usize {
+                // a wrong-length curve would shift every later aux offset (CURVE_OFF, MASK_OFF and
+                // the mask terms that follow) and make the kernel read the wrong data. `fail()`
+                // records the failure on this thread so the render falls back to the CPU; the
+                // partial `(p, aux)` returned here is never bound to a pipeline.
+                fail(FailKind::Fatal, format!("curve table has {} entries, expected {}", l.v.len(), CURVE_N));
+                // `p` is only assembled below the curve loop, so an empty block is as good as any:
+                // the caller (render.rs) gates on `failed()` right after this returns and bails to
+                // the CPU fallback before indexing `p` or uploading `aux`.
+                return (Vec::new(), aux);
+            }
             aux.extend_from_slice(&l.v);
         }
     }
@@ -206,6 +232,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         }
     }
     p.fs("LIGHT_W", &light.iter().map(|op| op.weight).collect::<Vec<f32>>());
+    p.f("PEAK", fp.peak);
+    p.b("DEEP", deep);
     p.u("W", fp.w as u32);
     p.u("H", fp.h as u32);
     p.u("NMASK", masks.len() as u32);

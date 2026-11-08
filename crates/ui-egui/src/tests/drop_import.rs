@@ -568,6 +568,32 @@ fn a_queued_drop_waits_for_a_dialog_opened_before_the_launch_list_closes() {
     assert!(h.app.dropped_files.is_empty(), "the deferred drop was consumed only when safe");
 }
 
+/// A drop delivered on the very first frame is queued by `raw_input_hook` before the same frame's
+/// `logic` assigns the startup dialog. The dialog did not exist when the drop arrived, so the
+/// drop must not take the "close the open dialog" refusal on the first UI pass that can see it:
+/// it waits behind the startup dialog and is imported once the tour closes.
+#[test]
+fn a_drop_delivered_on_the_first_frame_waits_behind_the_startup_dialog() {
+    let dir = Scratch::new("startup-drop");
+    write_png(&dir.path("trip/a.png"), 1);
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.open_library(dir.path("library"), false).unwrap();
+    let mut h = Headless::new(LightcraftApp::new(session, services()), [1300.0, 900.0], 1.0);
+    // a window host on its first launch, with the drop riding the first frame's raw input
+    h.app.headless_host = false;
+    h.app.drop_pending = vec![dir.path("trip/a.png")];
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Welcome { page: 0 })), "{:?}", h.app.ui.dialog);
+    assert_eq!(h.app.dropped_files.len(), 1, "the first-frame drop is queued");
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Welcome { .. })), "the tour stays: {:?}", h.app.ui.dialog);
+    assert_eq!(h.app.dropped_files.len(), 1, "the first-frame drop waits behind the startup dialog instead of being refused");
+    assert!(h.app.import.is_none(), "nothing starts behind the dialog");
+    h.app.ui.dialog = None;
+    assert!(h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(Dialog::Import { .. }))), "the drop opens its review once the tour is closed");
+    assert!(h.app.dropped_files.is_empty(), "the queued drop was consumed only when safe");
+}
+
 /// A drop queued behind the launch list may be released while a Synchronize Folder runs. It
 /// waits for that run to finish instead of taking `import::start_paths`'s "A folder is being
 /// synchronized" refusal and being lost. A drop made while no barrier was up still gets that
