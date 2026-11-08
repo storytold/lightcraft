@@ -648,6 +648,48 @@ fn activity_stack_area_is_movable() {
 }
 
 #[test]
+fn activity_stack_short_viewport_near_bottom_keeps_controls_reachable() {
+    // 300 pt tall viewport exercises the height-budget path.
+    // Do NOT use h.settle(T): demo renders asynchronously and blocks 60 s.
+    // Two steps suffice for a pure-UI / height-constraint test.
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [600.0, 300.0], 1.0);
+    h.step();
+    h.step();
+    let guards: Vec<_> = (0..5).map(|i| h.app.session.activity.start("export", &format!("Task {i}"), Cancel::Yes)).collect();
+    wait_visible(&mut h);
+
+    let content = h.view.ctx.content_rect();
+    let id = egui::Id::unique("activity-stack");
+
+    // At the default position the cancel and "+more" controls are within the viewport.
+    let cancel_id = format!("activity:cancel:{}", guards[0].id());
+    assert!(has(&h, &cancel_id), "cancel button is present at default position");
+    assert!(content.contains_rect(rect(&h, &cancel_id)), "cancel button within viewport at default position");
+    assert!(has(&h, "activity:more"), "+more button is present at default position");
+    assert!(content.contains_rect(rect(&h, "activity:more")), "+more button within viewport at default position");
+
+    // Cancel task 0 while controls are reachable at the default position.
+    click(&mut h, &cancel_id);
+    assert!(guards[0].is_cancelled(), "cancel button was clickable and worked");
+
+    // Drag the stack to 40 pt above the bottom edge.  When only 40 pt remain the
+    // height-budget path clamps available_h to footer_reserve, so rows disappear —
+    // that is expected.  What must hold is that the stack does not exceed the
+    // viewport: its max.y must stay at or below content.bottom().
+    let initial_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    let r = h.request(
+        "ui.drag",
+        json!({"x": initial_rect.min.x + 4.0, "y": initial_rect.min.y + 4.0, "toX": initial_rect.min.x + 4.0, "toY": content.bottom() - 40.0, "steps": 6}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    let dragged_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(dragged_rect.max.y <= content.bottom() + 1.0, "stack stays within viewport after near-bottom drag: {dragged_rect:?} vs {content:?}");
+}
+
+#[test]
 fn immediate_library_commands_and_auto_sync_show_completion() {
     let mut h = demo();
     assert!(h.app.run("library.clearPreviews", json!({})).is_ok());
