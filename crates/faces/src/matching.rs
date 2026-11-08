@@ -211,6 +211,15 @@ mod tests {
                 assert_eq!(person_score(&q, &refs, top), Some(rank_top(&q, &named, top)[0].score), "{top}");
             }
         }
+        // a person with fewer faces than asked is scored on every one of them, in both
+        for n in 2..MAX_TOP_FACES {
+            let q = face();
+            let mut sims: Vec<f32> = refs[..n].iter().filter_map(|e| cosine(&q, e)).collect();
+            sims.sort_unstable_by(|a, b| b.total_cmp(a));
+            let mean = sims.iter().sum::<f32>() / n as f32;
+            assert_eq!(rank_top(&q, &named[..n], MAX_TOP_FACES)[0].score, mean, "{n}");
+            assert_eq!(person_score(&q, &refs[..n], MAX_TOP_FACES), Some(mean), "{n}");
+        }
         // fewer faces than asked, bad embeddings skipped, nothing to compare, and any count
         let q = face();
         assert!((person_score(&q, &refs[..1], 4).unwrap() - cosine(&q, refs[0]).unwrap()).abs() < 1e-6);
