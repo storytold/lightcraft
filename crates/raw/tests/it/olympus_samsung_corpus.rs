@@ -304,4 +304,35 @@ fn all_112_olympus_corpus_samples_decode_like_camera_jpeg() {
         tested += 1;
     }
     eprintln!("All Olympus/OM ORF and ORI files checked on {tested} files");
+
+    // Independent assertion on checked-in compressed ORF fixture: ensures compressed decode
+    // regression testing runs even when optional corpus files are absent.
+    assert_eq!(probe(COMPRESSED_ORF_FIXTURE), Some(RawFormat::Orf));
+    let fixture_raw = decode(COMPRESSED_ORF_FIXTURE).unwrap_or_else(|e| panic!("compressed ORF fixture: {e}"));
+    fixture_raw.validate().unwrap();
+    assert_eq!((fixture_raw.width, fixture_raw.height, fixture_raw.bits), (4, 2, 12));
+    assert_eq!(fixture_raw.info(), probe_info(COMPRESSED_ORF_FIXTURE).unwrap());
+    let RawData::U16(samples) = &fixture_raw.data else { panic!("compressed ORF fixture: integer sensor data expected") };
+    assert_eq!(samples.as_slice(), &[0u16; 8]);
+}
+
+/// A 266-byte checked-in compressed Olympus ORF fixture (4x2, 12-bit, RGGB CFA) with known sensor samples.
+const COMPRESSED_ORF_FIXTURE: &[u8] = &[
+    73, 73, 82, 79, 140, 0, 0, 0, 0, 0, 0, 1, 0, 0, 16, 16, 16, 16, 16, 16, 16, 16, 0, 0, 79, 76, 89, 77, 80, 0, 1, 0, 2, 0, 64, 32, 7, 0, 18, 0, 0,
+    0, 62, 0, 0, 0, 44, 16, 3, 0, 1, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 1, 0, 83, 6, 3, 0, 1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 2, 0, 1, 1, 2,
+    2, 0, 124, 146, 7, 0, 56, 0, 0, 0, 24, 0, 0, 0, 2, 163, 7, 0, 8, 0, 0, 0, 80, 0, 0, 0, 0, 0, 0, 0, 79, 76, 89, 77, 80, 85, 83, 32, 73, 77, 65,
+    71, 73, 78, 71, 32, 67, 79, 82, 80, 46, 0, 10, 0, 0, 1, 4, 0, 1, 0, 0, 0, 4, 0, 0, 0, 1, 1, 4, 0, 1, 0, 0, 0, 2, 0, 0, 0, 2, 1, 3, 0, 1, 0, 0, 0,
+    16, 0, 0, 0, 3, 1, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0, 6, 1, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0, 15, 1, 2, 0, 22, 0, 0, 0, 118, 0, 0, 0, 17, 1, 4, 0, 1, 0,
+    0, 0, 8, 0, 0, 0, 22, 1, 4, 0, 1, 0, 0, 0, 2, 0, 0, 0, 23, 1, 4, 0, 1, 0, 0, 0, 16, 0, 0, 0, 105, 135, 4, 0, 1, 0, 0, 0, 88, 0, 0, 0, 0, 0, 0, 0,
+];
+
+#[test]
+fn compressed_orf_checked_in_fixture_decodes() {
+    assert_eq!(probe(COMPRESSED_ORF_FIXTURE), Some(RawFormat::Orf));
+    let raw = decode(COMPRESSED_ORF_FIXTURE).unwrap_or_else(|e| panic!("compressed ORF fixture: {e}"));
+    raw.validate().unwrap();
+    assert_eq!((raw.width, raw.height, raw.bits), (4, 2, 12));
+    assert_eq!(raw.info(), probe_info(COMPRESSED_ORF_FIXTURE).unwrap());
+    let RawData::U16(samples) = &raw.data else { panic!("compressed ORF fixture: integer sensor data expected") };
+    assert_eq!(samples.as_slice(), &[0u16; 8]);
 }

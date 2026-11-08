@@ -339,6 +339,9 @@ pub(crate) fn decompress_stream(stream: &[u8], width: usize, height: usize, conf
 
             // Decode entropy symbol
             let symbol = decode_entropy_symbol(&mut reader, rice_k as u32, config);
+            if reader.bits_consumed_total > (stream.len() as u64).saturating_mul(8) {
+                return Err(RawError::Corrupt("ORF compressed stream ended unexpectedly".into()));
+            }
             let residual = symbol.signed_delta;
             curr_magnitude = symbol.raw_magnitude;
 

@@ -219,6 +219,24 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     });
     let (mut data, bits, from_word16) = if info.compression != 1 {
         return Err(RawError::Unsupported(format!("ORF compression {}", info.compression)));
+    } else if let Some((config, src)) = compressed {
+        let stream =
+            src.get(config.header_prefix_len.saturating_add(2)..).ok_or_else(|| RawError::Corrupt("ORF compressed stream truncated".into()))?;
+        let d = if mode == Mode::Full || stated.is_none() { super::orf_compressed::decompress_stream(stream, w, h, &config)? } else { Vec::new() };
+        let sensor_bits = if mn.as_ref().and_then(|m| m.ifd.u64(MN_VALID_BITS)).is_some() {
+            config.sensor_bits
+        } else if let Some(&mx) = d.iter().step_by(31).max() {
+            if mx < 4096 {
+                12
+            } else if mx < 16384 {
+                14
+            } else {
+                16
+            }
+        } else {
+            config.sensor_bits
+        };
+        (RawData::U16(d), sensor_bits, false)
     } else if total >= (n as u64) * 2 {
         let d = read_image(bytes, &info, tiff.order, Packing::Word16)?;
         (d, 16, true)
@@ -256,11 +274,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             Vec::new()
         };
         (RawData::U16(d), 12, false)
-    } else if let Some((config, src)) = compressed {
-        let stream =
-            src.get(config.header_prefix_len.saturating_add(2)..).ok_or_else(|| RawError::Corrupt("ORF compressed stream truncated".into()))?;
-        let d = if mode == Mode::Full || stated.is_none() { super::orf_compressed::decompress_stream(stream, w, h, &config)? } else { Vec::new() };
-        (RawData::U16(d), config.sensor_bits, false)
     } else if info.bits() == 12 && total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
         // Only the declared 12-bit layout is supported here. A compressed stream in a 16-bit
@@ -818,5 +831,23 @@ mod tests {
         for cut in [bytes.len() - 1, bytes.len() - 40, bytes.len() / 2, 100] {
             let _ = crate::decode(&bytes[..cut]);
         }
+    }
+
+    #[test]
+    fn compressed_orf_synthetic_fixture_decodes() {
+        let (w, h) = (4u32, 2u32);
+        // Prefix of 4 bytes equal to 1, followed by [0x00, 0x00], then 8 symbols of 0x10 (sign=0, sub=0, q=0, rem=0 with k=4), plus padding
+        let strip = vec![0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00, 0x00];
+        let mut ip_ifd = 1u16.to_le_bytes().to_vec();
+        // tag 0x0653, SHORT, count 1, value 4
+        ip_ifd.extend_from_slice(&[0x53, 0x06, 3, 0, 1, 0, 0, 0, 4, 0, 0, 0]);
+        ip_ifd.extend_from_slice(&0u32.to_le_bytes());
+        let entries = vec![(IMAGE_PROCESSING, 7, ip_ifd), (MN_VALID_BITS, 3, shorts(&[12]))];
+        let file = |at| orf_with_note(w, h, 16, strip.clone(), Some(RGGB), Some(olymp_note(at, &entries)));
+        let at = file(0).windows(6).position(|b| b == b"OLYMP\0").unwrap();
+        let bytes = file(at);
+        let raw = crate::decode(&bytes).unwrap();
+        assert_eq!((raw.width, raw.height, raw.bits), (4, 2, 12));
+        assert_eq!(raw.data, RawData::U16(vec![0; 8]));
     }
 }

@@ -19,8 +19,8 @@ Implemented a clean-room, pure safe-Rust bitstream decoder for compressed Olympu
 
 2. **Pure Safe-Rust Implementer (`crates/raw/src/vendor/orf_compressed.rs`)**:
    - `MsbBitReader`: 64-bit sliding window accumulator for MSB-first bit consumption with bounds-checked slice indexing.
-   - `decode_orf_compressed`: Decodes 2-sample pixel pairs with 12-bit differential prediction across identical color planes, clamping outputs to `[0, 4095]`.
-   - Hostile input handling: Strict boundary checks for SubIFD dimensions, offsets, lengths, and pixel counts; non-panicking error paths returning `Option<RawImage>`.
+   - `decompress_stream`: Decodes predictive residuals across Bayer channels, clamping outputs to `u16` (`[0, 65535]`).
+   - Hostile input handling: Strict boundary checks for SubIFD dimensions, offsets, lengths, and pixel counts; non-panicking error paths returning typed `Result` (`Result<Vec<u16>>` / `Result<RawImage>`).
    - Crate-level `#![forbid(unsafe_code)]` compliance.
 
 3. **Vendor Integration & Dispatch (`crates/raw/src/vendor/orf.rs`, `crates/raw/src/vendor.rs`)**:

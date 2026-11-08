@@ -37,6 +37,7 @@ The implementation in `crates/raw/src/vendor/orf_compressed.rs` was verified aga
    - No `unsafe` code (crate root carries `#![forbid(unsafe_code)]`).
    - No `unwrap()`, `expect()`, `panic!`, `todo!`, or `unimplemented!`.
    - Arithmetic combinations and accumulation use `checked_*` and `saturating_*` operations to prevent integer overflows, with bit-shifts bounded by validated exponents.
+   - Outputs are clamped to the 16-bit unsigned range `[0, 65535]`, and all decoding entry points return typed `Result` (`Result<Vec<u16>>` / `Result<RawImage>`).
    - Truncated or hostile bitstreams fail gracefully with `RawError::Corrupt`.
 4. **Empirical Validation:**
    Verified across real CC0 camera files:

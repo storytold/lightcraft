@@ -51,7 +51,7 @@ The Olympus MakerNote (Exif tag `0x927c`) contains the `ImageProcessing` SubIFD 
 | $k_{max}$ | `0x0651` | Maximum allowable Golomb-Rice parameter $k$ | 15 | $0 \le k_{max} \le 15$ |
 | $Q_{max}$ | `0x0652` | Maximum unary quotient run before escape coding | 12 | $1 \le Q_{max} \le 32$ |
 | $N$ | `0x0653` | Header prefix length in bytes | 4 or 8 | $1 \le N \le 8$ |
-| $B_{sensor}$ | `0x102c` | MakerNote valid sensor bit depth | 12 | $10 \le B_{sensor} \le 16$ |
+| $B_{sensor}$ | `0x102c` | MakerNote valid sensor bit depth | 12 | $8 \le B_{sensor} \le 16$ |
 
 ---
 
