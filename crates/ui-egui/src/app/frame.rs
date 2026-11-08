@@ -612,4 +612,41 @@ mod keep_awake_tests {
         app.sync_keep_awake(&ctx);
         assert_eq!(*asked.lock().unwrap(), [Duration::from_secs(1)], "the end of the job is looked for every second");
     }
+
+    fn app_with_dock_badge() -> (LightcraftApp, Arc<Mutex<Vec<usize>>>) {
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let sink = told.clone();
+        let dock_badge: crate::DockBadgeFn = Box::new(move |n| sink.lock().unwrap().push(n));
+        let app =
+            LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, dock_badge: Some(dock_badge), ..Default::default() });
+        (app, told)
+    }
+
+    #[test]
+    fn a_running_job_asks_for_a_repaint_within_a_second_until_it_has_stopped() {
+        let (ctx, asked) = recording_context();
+        let (mut app, told) = app_with_dock_badge();
+        app.sync_dock_badge(&ctx);
+        assert!(asked.lock().unwrap().is_empty(), "nothing runs: no repaint is asked for");
+        assert!(told.lock().unwrap().is_empty(), "nothing runs: the host is told nothing");
+
+        let job = app.session.activity.start("export", "Exporting", Cancel::Yes);
+        app.sync_dock_badge(&ctx);
+        assert_eq!(*asked.lock().unwrap(), [Duration::from_secs(1)], "the end of the job is looked for every second");
+        assert_eq!(*told.lock().unwrap(), [1]);
+
+        // asked to stop, a job still counts, so the count is still looked at (a fresh context: egui asks its host
+        // again only for a delay shorter than the one still pending)
+        let (ctx, asked) = recording_context();
+        app.session.activity.cancel(job.id()).unwrap();
+        app.sync_dock_badge(&ctx);
+        assert_eq!(*asked.lock().unwrap(), [Duration::from_secs(1)], "a job still stopping is still looked for every second");
+        assert_eq!(*told.lock().unwrap(), [1], "the count did not change: the host is not told again");
+
+        let (ctx, asked) = recording_context();
+        drop(job);
+        app.sync_dock_badge(&ctx);
+        assert!(asked.lock().unwrap().is_empty(), "nothing runs any more: no repaint is asked for");
+        assert_eq!(*told.lock().unwrap(), [1, 0]);
+    }
 }

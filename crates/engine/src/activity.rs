@@ -411,11 +411,17 @@ mod running_jobs_tests {
     }
 
     #[test]
-    fn housekeeping_does_not_count() {
+    fn housekeeping_the_person_did_not_ask_for_does_not_count() {
         let a = Activity::default();
         let _c = a.start("cache", "Tidying the thumbnail cache", Cancel::Yes);
+        let _g = a.start("facesGpu", "Checking the GPU for faces", Cancel::No);
         let _f = a.start("faces", "Finding faces", Cancel::No);
+        let _p = a.start("focus", "Reading focus points", Cancel::Yes);
+        let _l = a.start("library", "Checking recent libraries", Cancel::No);
+        let _r = a.start("recheck", "Checking raw files", Cancel::Yes);
         assert_eq!(a.running_jobs(), 0);
+        let _e = a.start("import", "Importing", Cancel::Yes);
+        assert_eq!(a.running_jobs(), 1, "a job the person started still counts beside the housekeeping");
     }
 
     #[test]
