@@ -7,7 +7,8 @@ a task that can stop is running. Agents see the same list through `activity.list
 `ui.inspect` reports it as `activity`.
 
 On macOS a running job the person started also keeps the Mac awake: `Activity::wake_reason` names the oldest such job
-(housekeeping that starts by itself, like the thumbnail-cache tidy, the focus-point reading and the face scan, doesn't count, and neither does a job that was asked to stop), the UI tells
+(housekeeping that starts by itself doesn't count: the thumbnail-cache tidy, the GPU check, the focus-point reading,
+the face scan and the checks of recent libraries and of raw files; neither does a job that was asked to stop), the UI tells
 the host when that changes (`Services::keep_awake`), and the app holds an `NSProcessInfo` activity (user initiated,
 idle system sleep disabled) with that reason until the last job ends, is cancelled or the app quits.
 `pmset -g assertions` lists it. A new `kind` that is background housekeeping rather than something the person asked for
