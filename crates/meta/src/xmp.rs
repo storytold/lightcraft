@@ -352,29 +352,30 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
-fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, truncated: &mut bool) {
     for (k, v) in &d.attrs {
-        if !is_rdf_meta_attr(k) && take_key_bytes(&format!("{prefix}{k}"), budget) {
+        if !is_rdf_meta_attr(k) && take_key_bytes(&format!("{prefix}{k}"), budget, truncated) {
             props.entry(format!("{prefix}{k}")).or_default().push(v.clone());
         }
     }
     for c in &d.children {
-        collect_property(c, prefix, props, budget);
+        collect_property(c, prefix, props, budget, truncated);
     }
 }
 
 /// Charge one flattened key's length to the key budget; `false` when the budget is spent (the
 /// property is then left out, like other elements a limit has cut).
-fn take_key_bytes(key: &str, budget: &mut usize) -> bool {
+fn take_key_bytes(key: &str, budget: &mut usize, truncated: &mut bool) -> bool {
     let n = key.len();
     if *budget < n {
+        *truncated = true;
         return false;
     }
     *budget -= n;
     true
 }
 
-fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, truncated: &mut bool) {
     let key = format!("{prefix}{}", p.name);
     if let Some(arr) = p.children.iter().find(|c| matches!(c.name.as_str(), "rdf:Seq" | "rdf:Bag" | "rdf:Alt")) {
         let mut items: Vec<(bool, String)> = arr
@@ -388,7 +389,7 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         if arr.name == "rdf:Alt" {
             items.sort_by_key(|(default, _)| !*default);
         }
-        if take_key_bytes(&key, budget) {
+        if take_key_bytes(&key, budget, truncated) {
             props.entry(key).or_default().extend(items.into_iter().map(|(_, v)| v));
         }
         return;
@@ -396,26 +397,26 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
     let struct_prefix = format!("{key}/");
     if p.attr("rdf:parseType") == Some("Resource") {
         for c in &p.children {
-            collect_property(c, &struct_prefix, props, budget);
+            collect_property(c, &struct_prefix, props, budget, truncated);
         }
         return;
     }
     if let Some(d) = p.children.iter().find(|c| c.name == "rdf:Description") {
-        collect_description(d, &struct_prefix, props, budget);
+        collect_description(d, &struct_prefix, props, budget, truncated);
         return;
     }
     let field_attrs: Vec<&(String, String)> = p.attrs.iter().filter(|(k, _)| !is_rdf_meta_attr(k)).collect();
     if !field_attrs.is_empty() && p.children.is_empty() && p.text.trim().is_empty() {
         for (k, v) in field_attrs {
             let full = format!("{struct_prefix}{k}");
-            if take_key_bytes(&full, budget) {
+            if take_key_bytes(&full, budget, truncated) {
                 props.entry(full).or_default().push(v.clone());
             }
         }
         return;
     }
     let v = p.attr("rdf:resource").map(str::to_string).unwrap_or_else(|| p.text.trim().to_string());
-    if take_key_bytes(&key, budget) {
+    if take_key_bytes(&key, budget, truncated) {
         props.entry(key).or_default().push(v);
     }
 }
@@ -534,6 +535,17 @@ fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
 
 /// Parse an XMP packet (with or without the `<?xpacket?>` wrapper / `x:xmpmeta` element).
 pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
+    parse_xmp_with_privacy_status(s).map(|(xmp, _, _)| xmp)
+}
+
+/// Parse XMP and retain facts needed by Original-export privacy checks that the public projection
+/// intentionally does not expose: whether flattened keys were truncated and whether any
+/// structured location occurrence carried content.
+pub(crate) fn parse_xmp_for_privacy(s: &str) -> Result<(XmpData, bool, bool), XmpError> {
+    parse_xmp_with_privacy_status(s)
+}
+
+fn parse_xmp_with_privacy_status(s: &str) -> Result<(XmpData, bool, bool), XmpError> {
     let s = s.trim_start_matches('\u{feff}');
     let tree = parse_tree(s)?;
     let mut descs = Vec::new();
@@ -542,9 +554,13 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     let mut values = BTreeMap::new();
     // One budget for the whole document: several descriptions cannot each spend a fresh one.
     let mut key_budget = MAX_KEY_BYTES;
+    let mut properties_truncated = false;
+    let mut structured_location = false;
     for d in descs {
-        collect_description(d, "", &mut props, &mut key_budget);
-        if let XmpValue::Struct(m) = node_struct(d) {
+        collect_description(d, "", &mut props, &mut key_budget, &mut properties_truncated);
+        structured_location |= node_has_structured_location(d);
+        let description = node_struct(d);
+        if let XmpValue::Struct(m) = description {
             values.extend(m);
         }
     }
@@ -624,7 +640,23 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
-    Ok(XmpData { metadata: m, lc_settings, properties: props, values })
+    Ok((XmpData { metadata: m, lc_settings, properties: props, values }, properties_truncated, structured_location))
+}
+
+fn node_has_structured_location(node: &Node) -> bool {
+    node.attrs
+        .iter()
+        .any(|(key, value)| matches!(key.as_str(), "Iptc4xmpExt:LocationCreated" | "Iptc4xmpExt:LocationShown") && !value.trim().is_empty())
+        || node.children.iter().any(|child| {
+            (matches!(child.name.as_str(), "Iptc4xmpExt:LocationCreated" | "Iptc4xmpExt:LocationShown") && node_has_location_content(child))
+                || node_has_structured_location(child)
+        })
+}
+
+fn node_has_location_content(node: &Node) -> bool {
+    !node.text.trim().is_empty()
+        || node.attrs.iter().any(|(key, value)| (key == "rdf:resource" || !is_rdf_meta_attr(key)) && !value.trim().is_empty())
+        || node.children.iter().any(node_has_location_content)
 }
 
 fn frac(v: f64) -> String {

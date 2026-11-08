@@ -571,20 +571,24 @@ fn jpeg_embeds_location_at_depth_with_padding(bytes: &[u8], depth: usize, budget
 /// Whether an XMP packet contains a GPS property or place name; malformed packets are unverifiable.
 pub(crate) fn xmp_packet_has_location(packet: &[u8]) -> Option<bool> {
     let packet = std::str::from_utf8(packet).ok()?;
-    let xmp = crate::parse_xmp(packet).ok()?;
+    let (xmp, properties_truncated, structured_location) = crate::xmp::parse_xmp_for_privacy(packet).ok()?;
+    if properties_truncated {
+        return Some(true);
+    }
     let metadata = xmp.metadata;
     let raw_gps = xmp
         .properties
         .iter()
         .any(|(key, values)| (key.starts_with("exif:GPS") || key.starts_with("exifEX:GPS")) && values.iter().any(|value| !value.trim().is_empty()));
     let country_code = xmp.properties.get("Iptc4xmpCore:CountryCode").is_some_and(|values| values.iter().any(|value| !value.trim().is_empty()));
-    let structured_location =
+    let parsed_structured_location =
         ["Iptc4xmpExt:LocationCreated", "Iptc4xmpExt:LocationShown"].iter().filter_map(|key| xmp.values.get(*key)).any(xmp_value_has_content);
     Some(
         metadata.gps.is_some()
             || raw_gps
             || country_code
             || structured_location
+            || parsed_structured_location
             || [metadata.sublocation, metadata.city, metadata.state, metadata.country].into_iter().flatten().any(|value| !value.trim().is_empty()),
     )
 }
@@ -1236,6 +1240,27 @@ mod tests {
 
         let empty = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:ext="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"><rdf:RDF><rdf:Description><ext:LocationCreated><rdf:Seq><rdf:li rdf:parseType="Resource"/></rdf:Seq></ext:LocationCreated></rdf:Description></rdf:RDF></x:xmpmeta>"#;
         assert_eq!(xmp_packet_has_location(empty.as_bytes()), Some(false), "an empty location structure has no identifying data");
+    }
+
+    #[test]
+    fn xmp_location_check_keeps_earlier_structured_locations_and_rejects_truncated_keys() {
+        let duplicate = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:ext="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"><rdf:RDF><rdf:Description><ext:LocationShown><rdf:Seq><rdf:li rdf:parseType="Resource"><ext:City>Paris</ext:City></rdf:li></rdf:Seq></ext:LocationShown><ext:LocationShown><rdf:Seq><rdf:li rdf:parseType="Resource"/></rdf:Seq></ext:LocationShown></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        assert_eq!(xmp_packet_has_location(duplicate.as_bytes()), Some(true), "a later empty occurrence must not hide an earlier place");
+
+        let mut packet = String::from(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:lc="http://ns.lightcraft.app/lc/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/"><rdf:RDF><rdf:Description>"#,
+        );
+        let suffix = "x".repeat(500);
+        for index in 0..2_200 {
+            let name = format!("lc:p{index:04}{suffix}");
+            packet.push_str(&format!("<{name}>x</{name}>"));
+        }
+        let final_name = format!("lc:{}", "y".repeat(50));
+        packet.push_str(&format!("<{final_name}>x</{final_name}>"));
+        packet.push_str("<exif:GPSDestLatitude>45, 0, 0</exif:GPSDestLatitude></rdf:Description></rdf:RDF></x:xmpmeta>");
+        let parsed = crate::parse_xmp(&packet).expect("the bounded property collection keeps parsing");
+        assert!(!parsed.properties.contains_key("exif:GPSDestLatitude"), "the fixture exhausts the flattened-key budget before GPS");
+        assert_eq!(xmp_packet_has_location(packet.as_bytes()), Some(true), "an omitted property cannot establish privacy-safe absence");
     }
 
     #[test]

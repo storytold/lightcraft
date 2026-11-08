@@ -40,6 +40,10 @@ pub fn is_heif(bytes: &[u8]) -> bool {
     brand(8) || (16..end).step_by(4).any(brand)
 }
 
+fn is_xmp_content_type(content_type: &str) -> bool {
+    content_type.split(';').next().is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/rdf+xml"))
+}
+
 /// The Exif and XMP blocks of a HEIF file. Anything malformed is left out rather than reported:
 /// a file whose items can't be located simply has no metadata, as before this reader existed.
 pub fn metadata(bytes: &[u8]) -> Embedded {
@@ -60,7 +64,7 @@ pub fn metadata(bytes: &[u8]) -> Embedded {
     }
     for (id, kind, content_type) in items {
         let want_exif = &kind == b"Exif" && out.exif.is_none();
-        let want_xmp = &kind == b"mime" && content_type == "application/rdf+xml" && out.xmp.is_none();
+        let want_xmp = &kind == b"mime" && is_xmp_content_type(&content_type) && out.xmp.is_none();
         if !want_exif && !want_xmp {
             continue;
         }
@@ -79,7 +83,7 @@ pub fn metadata(bytes: &[u8]) -> Embedded {
 
 /// All EXIF and XMP items retained by a HEIF Original copy. `None` means metadata could not be
 /// located or decoded well enough to verify that its location data is absent.
-pub(crate) fn privacy_items(bytes: &[u8], work_budget: &mut usize) -> Option<(Vec<Vec<u8>>, Vec<Vec<u8>>)> {
+pub(crate) fn privacy_items(bytes: &[u8], work_budget: &mut usize) -> Option<(Vec<Vec<u8>>, Vec<Vec<u8>>, Vec<Vec<u8>>)> {
     if !is_heif(bytes) {
         return None;
     }
@@ -128,14 +132,16 @@ pub(crate) fn privacy_items(bytes: &[u8], work_budget: &mut usize) -> Option<(Ve
     }
     let mut exif_items = Vec::new();
     let mut xmp_items = Vec::new();
+    let mut jpeg_items = Vec::new();
     let mut seen_ids = std::collections::HashSet::new();
     for (id, kind, content_type) in items {
         if !seen_ids.insert(id) {
             return None;
         }
         let is_exif = kind == *b"Exif";
-        let is_xmp = kind == *b"mime" && content_type == "application/rdf+xml";
-        if !is_exif && !is_xmp {
+        let is_xmp = kind == *b"mime" && is_xmp_content_type(&content_type);
+        let is_jpeg = kind == *b"jpeg";
+        if !is_exif && !is_xmp && !is_jpeg {
             continue;
         }
         let mut locations = locs.iter().filter(|loc| loc.id == id);
@@ -148,11 +154,13 @@ pub(crate) fn privacy_items(bytes: &[u8], work_budget: &mut usize) -> Option<(Ve
             let offset = be32(&block, 0).and_then(|value| usize::try_from(value).ok())?;
             let tiff_at = offset.checked_add(4)?;
             exif_items.push(block.get(tiff_at..).filter(|tiff| !tiff.is_empty())?.to_vec());
-        } else {
+        } else if is_xmp {
             xmp_items.push(block);
+        } else {
+            jpeg_items.push(block);
         }
     }
-    Some((exif_items, xmp_items))
+    Some((exif_items, xmp_items, jpeg_items))
 }
 
 /// Parse every declared item header for the privacy check. Unlike metadata extraction, malformed
@@ -596,6 +604,25 @@ mod tests {
             Item { kind: b"mime", content_type: "application/rdf+xml", data: located.into_bytes() },
         ];
         assert!(crate::source_embeds_exif_gps_location(&heic(&items, 1, true)));
+    }
+
+    #[test]
+    fn original_gps_guard_checks_jpeg_items_and_parameterized_xmp_mime() {
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::GPS_IFD, gps);
+        let exif = TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap();
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend(exif);
+        let segment_length = u16::try_from(payload.len() + 2).unwrap();
+        let jpeg = [vec![0xff, 0xd8, 0xff, 0xe1], segment_length.to_be_bytes().to_vec(), payload, vec![0xff, 0xd9]].concat();
+        let jpeg_items = [Item { kind: b"jpeg", content_type: "", data: jpeg }];
+        assert!(crate::source_embeds_exif_gps_location(&heic(&jpeg_items, 1, true)), "embedded JPEG metadata is retained by Original export");
+
+        let xmp = crate::write_xmp(&crate::Metadata { city: Some("Cusco".into()), ..Default::default() }, None);
+        let xmp_items = [Item { kind: b"mime", content_type: "application/rdf+xml; charset=UTF-8", data: xmp.into_bytes() }];
+        assert!(crate::source_embeds_exif_gps_location(&heic(&xmp_items, 1, true)), "parameterized RDF/XML is retained by Original export");
     }
 
     /// The declared item cap is inclusive; the cap-sized valid file remains scannable.

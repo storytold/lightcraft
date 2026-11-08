@@ -51,9 +51,15 @@ fn resource_section(bytes: &[u8]) -> Option<&[u8]> {
 /// Inspect every location-bearing image resource before allowing an unchanged PSD/PSB copy.
 /// `None` means the resource section or one of its recognized payloads could not be verified.
 pub(crate) fn embeds_location(bytes: &[u8], budget: &mut usize) -> Option<bool> {
+    resources_embeds_location(resource_section(bytes)?, 0, budget)
+}
+
+/// Inspect a complete Photoshop image-resource stream, including the same records when embedded
+/// in TIFF tag 34377.
+pub(crate) fn resources_embeds_location(bytes: &[u8], depth: usize, budget: &mut usize) -> Option<bool> {
     const MAX_RESOURCES: usize = 4096;
 
-    let mut reader = Reader { bytes: resource_section(bytes)?, offset: 0 };
+    let mut reader = Reader { bytes, offset: 0 };
     let mut count = 0usize;
     while reader.offset < reader.bytes.len() {
         count = count.checked_add(1)?;
@@ -68,9 +74,9 @@ pub(crate) fn embeds_location(bytes: &[u8], budget: &mut usize) -> Option<bool> 
         let data = reader.take(data_length)?;
 
         match id {
-            1058 => {
+            1058 | 1059 => {
                 if !crate::container::consume_gps_scan_work(budget, data.len())
-                    || crate::exif::exif_gps_tag_presence_with_budget(data, 0, budget) != Some(false)
+                    || crate::exif::exif_gps_tag_presence_with_budget(data, depth.saturating_add(1), budget) != Some(false)
                 {
                     return Some(true);
                 }
@@ -89,6 +95,12 @@ pub(crate) fn embeds_location(bytes: &[u8], budget: &mut usize) -> Option<bool> 
             0x0404 if !crate::container::consume_gps_scan_work(budget, data.len()) || crate::iptc::contains_place_name(data) != Some(false) => {
                 return Some(true);
             }
+            1033 | 1036
+                if !crate::container::consume_gps_scan_work(budget, data.len())
+                    || thumbnail_embeds_location(data, depth.saturating_add(1), budget) != Some(false) =>
+            {
+                return Some(true);
+            }
             _ => {}
         }
 
@@ -97,6 +109,23 @@ pub(crate) fn embeds_location(bytes: &[u8], budget: &mut usize) -> Option<bool> 
         }
     }
     Some(false)
+}
+
+fn thumbnail_embeds_location(data: &[u8], depth: usize, budget: &mut usize) -> Option<bool> {
+    let format = data.get(..4).and_then(|bytes| <[u8; 4]>::try_from(bytes).ok()).map(u32::from_be_bytes)?;
+    match format {
+        0 => Some(false), // kRawRGB contains pixels, not an embedded metadata container.
+        1 => {
+            let compressed_size = data.get(20..24).and_then(|bytes| <[u8; 4]>::try_from(bytes).ok()).map(u32::from_be_bytes)?;
+            let compressed_size = usize::try_from(compressed_size).ok()?;
+            let jpeg = data.get(28..28usize.checked_add(compressed_size)?)?;
+            if jpeg.len() != compressed_size || !jpeg.starts_with(&[0xff, 0xd8]) || !crate::container::consume_gps_scan_work(budget, jpeg.len()) {
+                return None;
+            }
+            Some(crate::container::jpeg_embeds_location_in_preview(jpeg, depth, budget))
+        }
+        _ => None,
+    }
 }
 
 fn parse_resources(bytes: &[u8]) -> Option<Embedded> {
@@ -232,6 +261,41 @@ mod tests {
 
         let clean_resources = [resource(1060, b"", clean_xmp.as_bytes()), resource(0x0404, b"", &clean_iim)].concat();
         assert!(!crate::source_embeds_exif_gps_location(&image(1, &[], &clean_resources)));
+    }
+
+    #[test]
+    fn original_gps_guard_checks_exif_data_3_and_thumbnail_jpeg_resources() {
+        use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags as t};
+
+        let mut gps = IfdBuilder::new();
+        gps.set(t::GPS_LATITUDE, Value::Rational(vec![(45, 1), (30, 1), (0, 1)]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::GPS_IFD, gps);
+        let exif = TiffWriter::default().write(&[ifd0]).unwrap();
+        assert!(
+            crate::source_embeds_exif_gps_location(&image(1, &[], &resource(1059, b"", &exif))),
+            "EXIF data 3 is also retained by Original copies"
+        );
+
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend(exif);
+        let segment_length = u16::try_from(payload.len() + 2).unwrap();
+        let jpeg = [vec![0xff, 0xd8, 0xff, 0xe1], segment_length.to_be_bytes().to_vec(), payload, vec![0xff, 0xd9]].concat();
+        let mut thumbnail = Vec::new();
+        thumbnail.extend_from_slice(&1u32.to_be_bytes()); // kJpegRGB
+        thumbnail.extend_from_slice(&1u32.to_be_bytes()); // width
+        thumbnail.extend_from_slice(&1u32.to_be_bytes()); // height
+        thumbnail.extend_from_slice(&4u32.to_be_bytes()); // padded row bytes
+        thumbnail.extend_from_slice(&4u32.to_be_bytes()); // raw total size
+        thumbnail.extend_from_slice(&u32::try_from(jpeg.len()).unwrap().to_be_bytes());
+        thumbnail.extend_from_slice(&24u16.to_be_bytes());
+        thumbnail.extend_from_slice(&1u16.to_be_bytes());
+        thumbnail.extend_from_slice(&jpeg);
+        assert_eq!(thumbnail.len(), 28 + jpeg.len());
+        assert!(
+            crate::source_embeds_exif_gps_location(&image(1, &[], &resource(1036, b"", &thumbnail))),
+            "JPEG thumbnail metadata is retained by Original copies"
+        );
     }
 
     #[test]

@@ -135,7 +135,7 @@ pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
         return false;
     }
     if crate::heif::is_heif(bytes) {
-        let Some((exifs, xmp_packets)) = crate::heif::privacy_items(bytes, &mut budget) else { return true };
+        let Some((exifs, xmp_packets, jpeg_items)) = crate::heif::privacy_items(bytes, &mut budget) else { return true };
         for exif in exifs {
             if exif_gps_tag_presence_with_budget(&exif, 0, &mut budget) != Some(false) {
                 return true;
@@ -144,6 +144,14 @@ pub fn source_embeds_exif_gps_location(bytes: &[u8]) -> bool {
         for packet in xmp_packets {
             if !crate::container::consume_gps_scan_work(&mut budget, packet.len())
                 || crate::container::xmp_packet_has_location(&packet) != Some(false)
+            {
+                return true;
+            }
+        }
+        for jpeg in jpeg_items {
+            if !jpeg.starts_with(&[0xff, 0xd8])
+                || !crate::container::consume_gps_scan_work(&mut budget, jpeg.len())
+                || crate::container::jpeg_embeds_location_in_preview(&jpeg, 1, &mut budget)
             {
                 return true;
             }
@@ -195,16 +203,66 @@ fn cr3_cmt4_embeds_gps_location_with_budget(bytes: &[u8], budget: &mut usize) ->
     };
     *budget = remaining;
     let (tiff, complete) = Tiff::parse_with_status(strip_exif_header(bytes), &ParseOptions::default()).ok()?;
-    let has_location = tiff.all_ifds().into_iter().any(|ifd| {
-        ifd.contains(t::GPS_IFD)
-            || [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE]
-                .into_iter()
-                .any(|tag| ifd.contains(tag))
-    });
+    let all_ifds = tiff.all_ifds();
+    let has_location = tiff.ifds.iter().any(|ifd| ifd.contains(t::GPS_IFD) || gps_coordinate_tags_present(ifd));
     if has_location {
         return Some(true);
     }
+    for ifd in all_ifds {
+        if ifd.contains(t::XMP) {
+            let packet = ifd.bytes(t::XMP)?;
+            if !crate::container::consume_gps_scan_work(budget, packet.len()) || crate::container::xmp_packet_has_location(packet) != Some(false) {
+                return Some(true);
+            }
+        }
+        if ifd.contains(t::IPTC_NAA) && ifd_iptc_contains_place_name(ifd, tiff.order, budget) != Some(false) {
+            return Some(true);
+        }
+    }
     complete.then_some(false)
+}
+
+fn gps_coordinate_tags_present(ifd: &Ifd) -> bool {
+    [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE].into_iter().any(|tag| ifd.contains(tag))
+}
+
+fn gps_subifd_location_present(ifd: &Ifd) -> bool {
+    if ifd.gps.as_deref().is_some_and(gps_coordinate_tags_present) {
+        return true;
+    }
+    if ifd.sub_ifds.iter().any(gps_subifd_location_present) {
+        return true;
+    }
+    if ifd.exif.as_deref().is_some_and(gps_subifd_location_present) || ifd.interop.as_deref().is_some_and(gps_subifd_location_present) {
+        return true;
+    }
+    false
+}
+
+/// Scan the IPTC tag's supported byte representation, including the widespread TIFF-incorrect LONG form.
+fn ifd_iptc_contains_place_name(ifd: &Ifd, order: lightcraft_tiff::ByteOrder, budget: &mut usize) -> Option<bool> {
+    let value = ifd.value(t::IPTC_NAA)?;
+    if let lightcraft_tiff::Value::Long(words) = value {
+        let byte_len = words.len().checked_mul(4)?;
+        if !crate::container::consume_gps_scan_work(budget, byte_len) {
+            return None;
+        }
+        let mut bytes = Vec::with_capacity(byte_len);
+        for word in words {
+            bytes.extend_from_slice(&match order {
+                lightcraft_tiff::ByteOrder::Little => word.to_le_bytes(),
+                lightcraft_tiff::ByteOrder::Big => word.to_be_bytes(),
+            });
+        }
+        let end = bytes.iter().rposition(|byte| *byte != 0).map_or(0, |index| index.saturating_add(1));
+        let bytes = bytes.get(..end)?;
+        return crate::iptc::contains_place_name(bytes);
+    }
+    let iim = ifd.bytes(t::IPTC_NAA)?;
+    if !crate::container::consume_gps_scan_work(budget, iim.len()) {
+        return None;
+    }
+    crate::iptc::contains_place_name(iim)
 }
 
 /// Return tag presence separately from parse failure so Original-copy privacy checks can fail closed.
@@ -226,12 +284,7 @@ pub(crate) fn exif_gps_tag_presence_with_budget(bytes: &[u8], depth: usize, budg
     *budget = remaining;
     let (tiff, complete) = Tiff::parse_with_status(data, &ParseOptions::default()).ok()?;
     let all_ifds = tiff.all_ifds();
-    if all_ifds.iter().any(|ifd| {
-        ifd.contains(t::GPS_IFD)
-            || [t::GPS_LATITUDE, t::GPS_LONGITUDE, t::GPS_ALTITUDE, t::GPS_DEST_LATITUDE, t::GPS_DEST_LONGITUDE]
-                .into_iter()
-                .any(|tag| ifd.contains(tag))
-    }) {
+    if all_ifds.iter().any(|ifd| ifd.contains(t::GPS_IFD)) || tiff.ifds.iter().any(gps_subifd_location_present) {
         return Some(true);
     }
     for ifd in &all_ifds {
@@ -241,9 +294,14 @@ pub(crate) fn exif_gps_tag_presence_with_budget(bytes: &[u8], depth: usize, budg
                 return Some(true);
             }
         }
-        if ifd.contains(t::IPTC_NAA) {
-            let iim = ifd.bytes(t::IPTC_NAA)?;
-            if !crate::container::consume_gps_scan_work(budget, iim.len()) || crate::iptc::contains_place_name(iim) != Some(false) {
+        if ifd.contains(t::IPTC_NAA) && ifd_iptc_contains_place_name(ifd, tiff.order, budget) != Some(false) {
+            return Some(true);
+        }
+        if ifd.contains(t::PHOTOSHOP_IMAGE_RESOURCES) {
+            let resources = ifd.bytes(t::PHOTOSHOP_IMAGE_RESOURCES)?;
+            if !crate::container::consume_gps_scan_work(budget, resources.len())
+                || crate::psd::resources_embeds_location(resources, depth, budget) != Some(false)
+            {
                 return Some(true);
             }
         }
@@ -855,6 +913,44 @@ pub(crate) mod tests {
 
         assert!(source_embeds_exif_gps_location(&xmp_tiff), "TIFF tag 700 can contain place names");
         assert!(source_embeds_exif_gps_location(&iptc_tiff), "TIFF IPTC can contain place names");
+    }
+
+    #[test]
+    fn source_tiff_guard_checks_photoshop_resources_and_long_iptc() {
+        let city_iim = [0x1c, 2, 90, 0, 5, b'C', b'u', b's', b'c', b'o'];
+        let mut resource = b"8BIM".to_vec();
+        resource.extend_from_slice(&0x0404u16.to_be_bytes());
+        resource.extend_from_slice(&[0, 0]);
+        resource.extend_from_slice(&u32::try_from(city_iim.len()).unwrap().to_be_bytes());
+        resource.extend_from_slice(&city_iim);
+        assert_eq!(resource.len() % 2, 0);
+        let photoshop_tiff =
+            TiffWriter::default().write(&[IfdBuilder::new().with(t::PHOTOSHOP_IMAGE_RESOURCES, Value::Undefined(resource))]).unwrap();
+        assert!(source_embeds_exif_gps_location(&photoshop_tiff), "TIFF Photoshop resources may contain IPTC place names");
+
+        let clean_iim = [0x1c, 2, 25, 0, 4, b't', b'e', b's', b't'];
+        let padded: Vec<_> = clean_iim
+            .chunks(4)
+            .map(|chunk| {
+                let mut bytes = [0u8; 4];
+                bytes[..chunk.len()].copy_from_slice(chunk);
+                u32::from_le_bytes(bytes)
+            })
+            .collect();
+        let long_iptc_tiff = TiffWriter::new(ByteOrder::Little, false).write(&[IfdBuilder::new().with(t::IPTC_NAA, Value::Long(padded))]).unwrap();
+        assert!(!source_embeds_exif_gps_location(&long_iptc_tiff), "commonly mis-typed LONG IPTC without place names remains safe");
+    }
+
+    #[test]
+    fn gps_value_tags_in_non_gps_ifds_are_not_location() {
+        let mut interop = IfdBuilder::new();
+        interop.set(t::GPS_LATITUDE, Value::Undefined(vec![b'R', b'9', b'8', b'\0']));
+        let mut exif = IfdBuilder::new();
+        exif.set_child(t::INTEROP_IFD, interop);
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::EXIF_IFD, exif);
+        let bytes = TiffWriter::default().write(&[ifd0]).unwrap();
+        assert!(!exif_embeds_gps_location(&bytes), "InteroperabilityVersion reuses the GPS latitude tag number");
     }
 
     /// An unreadable GPS child still counts when its parent contains the GPS pointer tag.

@@ -491,7 +491,8 @@ pub(crate) fn source_boxes_are_complete(bytes: &[u8], parsed_track_count: usize)
                 }
             } else if &child.kind == b"trak" {
                 track_count = track_count.saturating_add(1);
-                if !track_boxes_are_complete(bytes, &child, 0, &mut budget) {
+                let mut sample_table_count = 0usize;
+                if !track_boxes_are_complete(bytes, &child, 0, &mut budget, &mut sample_table_count) || sample_table_count != 1 {
                     return false;
                 }
             }
@@ -501,7 +502,7 @@ pub(crate) fn source_boxes_are_complete(bytes: &[u8], parsed_track_count: usize)
 }
 
 /// Validate a track's nested sample tables and reject tables whose additional samples cannot be scanned.
-fn track_boxes_are_complete(bytes: &[u8], parent: &BoxRef, depth: usize, budget: &mut usize) -> bool {
+fn track_boxes_are_complete(bytes: &[u8], parent: &BoxRef, depth: usize, budget: &mut usize, sample_table_count: &mut usize) -> bool {
     if depth > MAX_DEPTH {
         return false;
     }
@@ -510,11 +511,14 @@ fn track_boxes_are_complete(bytes: &[u8], parent: &BoxRef, depth: usize, budget:
         return false;
     }
     let is_sample_table = &parent.kind == b"stbl";
+    if is_sample_table {
+        *sample_table_count = sample_table_count.saturating_add(1);
+    }
     let (mut stsd_count, mut stsz_count, mut stsc_count, mut offset_table_count) = (0usize, 0usize, 0usize, 0usize);
     for child in children {
         match &child.kind {
             b"mdia" | b"minf" | b"stbl" | b"edts" => {
-                if !track_boxes_are_complete(bytes, &child, depth + 1, budget) {
+                if !track_boxes_are_complete(bytes, &child, depth + 1, budget, sample_table_count) {
                     return false;
                 }
             }
@@ -898,8 +902,44 @@ mod tests {
         let parsed = parse_cr3(&gps_cmt4_file).unwrap();
         let merged = merged_exif(&parsed).unwrap();
         assert_eq!(crate::exif::exif_gps_tag_presence(&merged), Some(true));
-        assert_eq!(crate::exif::exif_gps_tag_presence(&gps_cmt4), Some(true), "CMT4 stores location tags in its root IFD");
         assert!(crate::source_embeds_exif_gps_location(&gps_cmt4_file));
+
+        let cmt4_xmp = crate::write_xmp(&crate::Metadata { city: Some("Cusco".into()), ..Default::default() }, None);
+        let cmt4 = tiff_with(t::XMP, Value::Byte(cmt4_xmp.into_bytes()));
+        let cmt1 = tiff_with(t::MAKE, Value::Ascii("Canon".into()));
+        assert!(crate::source_embeds_exif_gps_location(&cr3_with(&cmt1, &cmt4)), "the shared EXIF scanner already inspects XMP tag 700 inside CMT4");
+    }
+
+    #[test]
+    fn original_guard_rejects_duplicate_sample_tables() {
+        let gps_jpeg = jpeg_with_gps();
+        let clean_jpeg = vec![0xff, 0xd8, 0xff, 0xd9];
+        let first_at = 4096u64;
+        let second_at = first_at + u64::try_from(gps_jpeg.len()).unwrap();
+        let sample_table = |offset: u64, size: usize| {
+            let entry = craw(16, 16, &bx(b"JPEG", &[0; 4]));
+            let mut stsd = 1u32.to_be_bytes().to_vec();
+            stsd.extend_from_slice(&entry);
+            let mut stsz = 0u32.to_be_bytes().to_vec();
+            stsz.extend_from_slice(&1u32.to_be_bytes());
+            stsz.extend_from_slice(&u32::try_from(size).unwrap().to_be_bytes());
+            let stsc = [1u32, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>();
+            let co64 = [1u32.to_be_bytes().as_slice(), offset.to_be_bytes().as_slice()].concat();
+            let content = [full(b"stsd", &stsd), full(b"stsz", &stsz), full(b"stsc", &stsc), full(b"co64", &co64)].concat();
+            bx(b"stbl", &content)
+        };
+        let minf = [sample_table(first_at, gps_jpeg.len()), sample_table(second_at, clean_jpeg.len())].concat();
+        let track = bx(b"trak", &bx(b"mdia", &bx(b"minf", &minf)));
+        let mut file = [bx(b"ftyp", b"crx \0\0\0\x01crx isom"), bx(b"moov", &track)].concat();
+        file.resize(usize::try_from(second_at).unwrap() + clean_jpeg.len(), 0);
+        let first = usize::try_from(first_at).unwrap();
+        file[first..first + gps_jpeg.len()].copy_from_slice(&gps_jpeg);
+        let second = usize::try_from(second_at).unwrap();
+        file[second..].copy_from_slice(&clean_jpeg);
+
+        let parsed = parse_cr3(&file).unwrap();
+        assert_eq!(parsed.tracks.len(), 1);
+        assert!(crate::source_embeds_exif_gps_location(&file), "the non-selected sample table contains GPS-bearing JPEG bytes");
     }
 
     /// A partially traversed CR3 box tree cannot establish that location-bearing data is absent.
