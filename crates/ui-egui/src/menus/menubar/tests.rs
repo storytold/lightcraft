@@ -273,7 +273,11 @@ fn only_the_date_keys_offer_date_groups() {
         a.session.execute("library.sort", &json!({"key": key})).expect("sort");
         let kids = sort_submenu(&a);
         for label in GROUPS {
-            assert_eq!(sort_row(&kids, label).0, on, "{label} under {key}");
+            let (enabled, checked) = sort_row(&kids, label);
+            assert_eq!(enabled, on, "{label} under {key}");
+            if !on {
+                assert_eq!(checked, Some(false), "{label} under {key}: off, and the stored choice is not shown as in force");
+            }
         }
     }
 }
