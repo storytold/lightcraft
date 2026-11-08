@@ -55,13 +55,18 @@ pub fn to_declared(mut img: Pixels, width: usize, height: usize) -> Result<Pixel
             img.width, img.height
         )));
     }
-    // Compact the kept rows in place rather than allocating the picture again: row `y` keeps its
-    // first `width * ch` samples and moves left, so source and destination never cross.
     let (ch, stride) = (img.ch, img.width * img.ch);
     let kept = width * ch;
-    for y in 0..height {
-        let (src, dst) = (y * stride, y * kept);
-        img.data.copy_within(src..src + kept, dst);
+    // Only the height shrank, the common 1920 x 1088 -> 1920 x 1080: every kept row is already
+    // where it belongs and the truncate is the whole job. Moving them would memmove the picture
+    // onto itself.
+    if kept != stride {
+        // Compact the kept rows in place rather than allocating the picture again: row `y` keeps
+        // its first `kept` samples and moves left, so source and destination never cross.
+        for y in 0..height {
+            let (src, dst) = (y * stride, y * kept);
+            img.data.copy_within(src..src + kept, dst);
+        }
     }
     img.data.truncate(width * height * ch);
     img.width = width;

@@ -225,6 +225,49 @@ fn a_picture_coded_larger_than_its_ispe_is_cropped() {
     }
 }
 
+/// The width crop is the one that moves samples: `to_declared` compacts each kept row to the left,
+/// where a height-only crop just drops the tail. A portrait file takes this path after `irot`.
+#[test]
+fn a_width_crop_realigns_every_row() {
+    let mut bytes = build(&Spec { props: vec![FULL_601], ..Spec::new(32, 32, &grey) });
+    let want: Vec<u8> = b"ispe".iter().copied().chain([0, 0, 0, 0]).chain(32u32.to_be_bytes()).chain(32u32.to_be_bytes()).collect();
+    let at = bytes.windows(want.len()).position(|w| w == want).expect("the 32 x 32 ispe");
+    let width = at + b"ispe".len() + 4;
+    bytes[width..width + 4].copy_from_slice(&24u32.to_be_bytes());
+
+    let info = probe(&bytes).unwrap();
+    assert_eq!((info.width, info.height), (24, 32));
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (24, 32), "decode must agree with probe");
+    // Every row must have kept its own left-hand samples, not slid along from the next row.
+    for y in 0..32 {
+        for x in 0..24 {
+            let px = &d.data[((y * 24 + x) * 3) as usize..][..3];
+            assert_eq!(px, [luma(x, y) * 257; 3], "({x}, {y})");
+        }
+    }
+}
+
+/// Both edges at once, so the row compaction and the row drop run together.
+#[test]
+fn a_crop_on_both_edges_keeps_the_corner() {
+    let mut bytes = build(&Spec { props: vec![FULL_601], ..Spec::new(32, 32, &grey) });
+    let want: Vec<u8> = b"ispe".iter().copied().chain([0, 0, 0, 0]).chain(32u32.to_be_bytes()).chain(32u32.to_be_bytes()).collect();
+    let at = bytes.windows(want.len()).position(|w| w == want).expect("the 32 x 32 ispe");
+    let width = at + b"ispe".len() + 4;
+    bytes[width..width + 4].copy_from_slice(&20u32.to_be_bytes());
+    bytes[width + 4..width + 8].copy_from_slice(&12u32.to_be_bytes());
+
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (20, 12));
+    for y in 0..12 {
+        for x in 0..20 {
+            let px = &d.data[((y * 20 + x) * 3) as usize..][..3];
+            assert_eq!(px, [luma(x, y) * 257; 3], "({x}, {y})");
+        }
+    }
+}
+
 /// The other way round -- a declared size larger than the coded picture -- is a broken file, not
 /// something to pad out.
 #[test]
