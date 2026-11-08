@@ -18,6 +18,13 @@
   messages as `CustomEvent`s on the canvas instead of `postMessage` (issue #2270; `docs/web.md`). `?host=parent` wins
   when a page asks for both.
 
+### HEIF photos from cameras that pad the coded picture
+- A HEIF (`.HEIF` / `.HIF`) still whose camera codes more rows than it shows now opens at the size the file declares.
+  HEVC codes whole blocks, so Sony's ILCE-7CM2 writes a 1920 × 1080 photo as 1920 × 1088 and leaves the real size to
+  the container; LightCraft decoded all 1088 rows, so every such photo came in eight rows too tall with a dark band
+  along the bottom edge, and the imported size disagreed with the one shown before import. iPhone photos, which are
+  grids of tiles, were never affected.
+
 ### Remove Hot Pixels
 - Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
   At high ISO single photosites read far brighter than all their neighbours and turn into small red, green or blue

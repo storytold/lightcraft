@@ -35,6 +35,40 @@ impl Pixels {
     }
 }
 
+/// Crops a decoded picture to the size the container declares (`ispe`), dropping the encoder's
+/// padding. The visible image is the top-left corner.
+///
+/// A coded HEVC picture holds whole coding blocks, so a camera writing 1920 × 1080 may code
+/// 1920 × 1088 and leave the real size to `ispe`. The SPS conformance window would say so inside
+/// the bitstream, but it is optional and Sony's HEIF files omit it: without this, the eight
+/// padding rows (video-range black, so a visible dark band on a full-range picture) reach the
+/// caller and every size disagrees with [`crate::probe`], which reads `ispe`.
+///
+/// Grids are already composed at their declared output size, so this is a no-op for them.
+pub fn to_declared(mut img: Pixels, width: usize, height: usize) -> Result<Pixels, Error> {
+    if img.width == width && img.height == height {
+        return Ok(img);
+    }
+    if img.width < width || img.height < height {
+        return Err(Error::Malformed(format!(
+            "the decoded picture is {}x{}, smaller than the {width}x{height} the container declares",
+            img.width, img.height
+        )));
+    }
+    // Compact the kept rows in place rather than allocating the picture again: row `y` keeps its
+    // first `width * ch` samples and moves left, so source and destination never cross.
+    let (ch, stride) = (img.ch, img.width * img.ch);
+    let kept = width * ch;
+    for y in 0..height {
+        let (src, dst) = (y * stride, y * kept);
+        img.data.copy_within(src..src + kept, dst);
+    }
+    img.data.truncate(width * height * ch);
+    img.width = width;
+    img.height = height;
+    Ok(img)
+}
+
 /// The rectangle `(left, top, width, height)` a `clap` selects from a `w` × `h` image. Its centre
 /// is `((w - 1) / 2 + horizOff, (h - 1) / 2 + vertOff)`; a corner that falls between two pixels
 /// is rounded as libheif does: left down, top up.

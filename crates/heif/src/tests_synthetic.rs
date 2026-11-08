@@ -198,3 +198,60 @@ fn too_many_transform_properties_are_refused() {
     let d = decode(&bytes, &Options::default()).unwrap();
     assert_eq!((d.width, d.height), (32, 32));
 }
+
+/// A coded picture holds whole coding blocks, so a camera may code more rows than it shows and
+/// leave the real size to `ispe`: Sony writes 1920 × 1080 as 1920 × 1088 and no SPS conformance
+/// window says so. The padding must not reach the caller, and `decode` must agree with `probe`.
+#[test]
+fn a_picture_coded_larger_than_its_ispe_is_cropped() {
+    let mut bytes = build(&Spec { props: vec![FULL_601], ..Spec::new(32, 32, &grey) });
+    // The single picture's `ispe` declares 32 × 32; make it 32 × 24, leaving the coded picture
+    // (and every other box) alone, exactly as a camera's bottom padding looks.
+    let want: Vec<u8> = b"ispe".iter().copied().chain([0, 0, 0, 0]).chain(32u32.to_be_bytes()).chain(32u32.to_be_bytes()).collect();
+    let at = bytes.windows(want.len()).position(|w| w == want).expect("the 32 x 32 ispe");
+    let height = at + b"ispe".len() + 4 + 4;
+    bytes[height..height + 4].copy_from_slice(&24u32.to_be_bytes());
+
+    let info = probe(&bytes).unwrap();
+    assert_eq!((info.width, info.height), (32, 24));
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (32, 24), "decode must agree with probe");
+    // What survives is the top-left corner, sample for sample.
+    for y in 0..24 {
+        for x in 0..32 {
+            let px = &d.data[((y * 32 + x) * 3) as usize..][..3];
+            assert_eq!(px, [luma(x, y) * 257; 3], "({x}, {y})");
+        }
+    }
+}
+
+/// The other way round -- a declared size larger than the coded picture -- is a broken file, not
+/// something to pad out.
+#[test]
+fn an_ispe_larger_than_the_coded_picture_is_malformed() {
+    let mut bytes = build(&Spec { props: vec![FULL_601], ..Spec::new(32, 32, &grey) });
+    let want: Vec<u8> = b"ispe".iter().copied().chain([0, 0, 0, 0]).chain(32u32.to_be_bytes()).chain(32u32.to_be_bytes()).collect();
+    let at = bytes.windows(want.len()).position(|w| w == want).expect("the 32 x 32 ispe");
+    let height = at + b"ispe".len() + 4 + 4;
+    bytes[height..height + 4].copy_from_slice(&64u32.to_be_bytes());
+    let r = decode(&bytes, &Options::default());
+    assert!(matches!(r, Err(Error::Malformed(ref m)) if m.contains("declares")), "{r:?}");
+}
+
+/// The crop happens before the container's transforms, which are defined on the declared size:
+/// a quarter turn of a picture coded 32 × 32 but declared 32 × 24 is 24 × 32, not 32 × 32.
+#[test]
+fn the_ispe_crop_precedes_the_transforms() {
+    let mut bytes = build(&Spec { props: vec![FULL_601, Prop::Irot(1)], ..Spec::new(32, 32, &grey) });
+    let want: Vec<u8> = b"ispe".iter().copied().chain([0, 0, 0, 0]).chain(32u32.to_be_bytes()).chain(32u32.to_be_bytes()).collect();
+    let at = bytes.windows(want.len()).position(|w| w == want).expect("the 32 x 32 ispe");
+    let height = at + b"ispe".len() + 4 + 4;
+    bytes[height..height + 4].copy_from_slice(&24u32.to_be_bytes());
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (24, 32));
+    // Counter-clockwise: the right column of the cropped picture becomes the top row.
+    for x in 0..24u32 {
+        let px = &d.data[(x as usize) * 3..][..3];
+        assert_eq!(px, [luma(31, x) * 257; 3], "({x}, 0)");
+    }
+}
