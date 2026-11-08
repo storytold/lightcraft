@@ -667,8 +667,8 @@ fn brush_tool(
     let active = app.session.active_mask;
     // the stroke goes into the selected mask (or a new one): in its coordinates
     let map = &map.for_mask_id(d, active);
-    let long = (map.rect.width().max(map.rect.height())) as f64;
-    let r = (app.ui.brush_size as f64 * long) as f32;
+    // sized as the render sizes the stroke: on the uncropped photo's long edge
+    let r = app.ui.brush_size * map.per_long();
     if let Some(h) = resp.hover_pos() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));
