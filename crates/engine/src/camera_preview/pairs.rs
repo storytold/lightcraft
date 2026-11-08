@@ -288,6 +288,10 @@ pub(super) fn fit_attempt(
     fit_pairs_on(sensor, reference, colour, attempt.away_from_edges.then_some(EDGE_CONTRAST), attempt.tone, attempt.dark, bright)
 }
 
+/// One [`fit_attempt`]: the full look fitted on the pairs of all pixels, or of those away from edges with `edge_limit`,
+/// with the given colour (else the photo's own matrix, with and without a hue/saturation table) and `tone_fit`. `None`
+/// when it misses a gate: the bright areas ([`highlights_hold`]), the held-out error against the neutral fallback
+/// ([`MIN_IMPROVEMENT`], [`MAX_HOLDOUT_RMS`]), or, for a quantile curve, [`keeps_local_contrast`].
 fn fit_pairs_on(
     sensor: &Rgb32f,
     reference: &Rgb32f,
@@ -454,6 +458,7 @@ pub(super) fn fit_partial(sensor: &Rgb32f, reference: &Rgb32f, highlights: &High
     [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| fit_partial_on(sensor, reference, edge_limit, highlights))
 }
 
+/// One try of [`fit_partial`], on all pixels or, with `edge_limit`, on those away from edges.
 fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>, highlights: &HighlightCheck) -> Option<CameraLook> {
     // as for a known colour model: enough signal for the tone, but no monochrome reference
     let (pairs, bright) = collect_pairs(sensor, reference, 0.005, edge_limit, false)?;
