@@ -494,6 +494,40 @@ fn find_missing_matches_renamed_files_by_content() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A renamed file whose size is unknown (0) but whose content hash is known is still found by
+/// content: the hash alone is enough to confirm it is the same photo.
+#[test]
+fn find_missing_matches_renamed_file_by_content_without_size() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = temp_dir("missing-no-size");
+    std::fs::create_dir_all(dir.join("found")).unwrap();
+    let content = b"same pixels as the original";
+    let renamed = dir.join("found").join("Trip-001.png");
+    std::fs::write(&renamed, content).unwrap();
+    let hash = lightcraft_preview::hash_bytes(content).to_string();
+    let mut s = Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(
+        id,
+        Source::File { path: dir.join("gone").join("orig.png").to_string_lossy().into_owned() },
+        "orig.png",
+        "PNG",
+        48,
+        32,
+        "2026-01-01T10:00:00",
+    );
+    p.file_size = 0;
+    p.content_hash = Some(hash);
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let r = s.execute("library.findMissing", &json!({"folder": dir.join("found").to_string_lossy()})).unwrap();
+    let found = r["found"].as_array().map(Vec::len);
+    assert_eq!(found, Some(1), "renamed file matched by content without a recorded size: {r}");
+    assert_eq!(r["found"][0]["to"], json!(renamed.to_string_lossy().to_string()), "{r}");
+    assert_eq!(r["found"][0]["by"], json!("content"), "{r}");
+    assert_eq!(r["missing"], 0, "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Issue #104: the app plans Find Missing on a worker thread (no session) and relinks the plan
 /// afterwards; that gives exactly what the synchronous command gives — renamed files by content,
 /// impostors and look-alikes skipped (`ambiguous`).

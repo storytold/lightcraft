@@ -9,12 +9,13 @@ use lightcraft_geom::Orientation;
 use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput, MASK_TERMS, mask_terms};
 use lightcraft_pipeline::geometry::SampleMode;
 use lightcraft_pipeline::local::plane_at;
+use lightcraft_pipeline::nrc_joint::JointNoise;
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::resample::Filter;
 use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
 
 use crate::ctx::{Buf, FailKind, Gpu, fail, groups1, groups2};
-use crate::params::{Present, finish_block};
+use crate::params::{DEEP_WRITTEN, Present, finish_block};
 
 /// Device-resident stages of one view, kept next to the CPU [`lightcraft_pipeline::StageCache`]
 /// (as its extension). Holds the last two output sizes, like the CPU cache.
@@ -33,6 +34,8 @@ struct Entry {
     geo: u64,
     sampled: Arc<Buf>,
     lin: Option<(u64, Arc<Buf>)>,
+    /// The joint colour NR's noise model of the whole frame, keyed by `Plan::noise_key`.
+    colour_noise: Option<(u64, JointNoise)>,
     planes: Planes,
 }
 
@@ -645,13 +648,15 @@ pub fn render(
     fault: Option<crate::Fault>,
     display: bool,
 ) -> Option<Output> {
+    let _in_flight = InFlight::new();
     let mut t = profiling().then(std::time::Instant::now);
     // Each stage is submitted on its own; under `LIGHTCRAFT_PROFILE` also waited for, so the
     // timings are real.
     let lap = |what: &str, t: &mut Option<std::time::Instant>, cx: &mut Cx<'_>| match t {
         Some(t) => {
             cx.sync();
-            eprintln!("  gpu {what}: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+            let (peak, now) = crate::ctx::take_peak();
+            eprintln!("  gpu {what}: {:.1} ms (device buffers: peak {} MB, now {} MB)", t.elapsed().as_secs_f64() * 1e3, peak >> 20, now >> 20);
             *t = std::time::Instant::now();
         }
         None => cx.flush(),
@@ -704,9 +709,15 @@ pub fn render(
     lap("sample", &mut t, &mut cx);
 
     // 2. white balance, defringe, spots, noise reduction
+    let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == plan.lin_key) {
         Some((_, b)) => b,
-        None => Arc::new(linear(&mut cx, &sampled, info, &plan, &mut host)),
+        None => {
+            if colour_noise.is_none() {
+                colour_noise = lightcraft_pipeline::colour_noise(src, info, &plan).map(|n| (plan.noise_key, n));
+            }
+            Arc::new(linear(&mut cx, &sampled, info, &plan, &mut host, colour_noise.as_ref().map(|c| &c.1)))
+        }
     };
     lap("wb/nr", &mut t, &mut cx);
 
@@ -722,7 +733,7 @@ pub fn render(
     }
     lap("planes", &mut t, &mut cx);
     if let Some(c) = stages {
-        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), planes });
+        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), colour_noise, planes });
     }
 
     // 4. masks
@@ -741,7 +752,9 @@ pub fn render(
     });
     // soft proofing as the CPU's `finish` sets it up (an output-device table never gets here: see `render`)
     fp.proof = req.proof.map(|pr| pr.params(req.space));
-    if let Some(d) = &req.display {
+    // a float render is `finish_deep`: its samples are the output space's, whatever the display
+    let deep = req.depth != lightcraft_pipeline::OutputDepth::U8;
+    if let Some(d) = req.display.as_ref().filter(|_| !deep) {
         fp.for_display(d, req.proof);
     }
     let present = Present {
@@ -763,13 +776,13 @@ pub fn render(
         (Some(b), None) | (None, Some(b)) => Some(b.clone()),
         (None, None) => None,
     };
-    let (p, aux) = finish_block(&fp, &terms, &present);
+    let (p, aux) = finish_block(&fp, &terms, &present, deep);
     if crate::ctx::failed() {
         return None; // a malformed parameter block failed the render: the CPU fallback redoes it
     }
     let aux = gpu.upload(&aux);
     // cleared, so that work which never ran cannot pass for an image (see the check below)
-    let out = cx.zeroed(n);
+    let out = cx.zeroed(if deep { 3 * n } else { n });
     if fault == Some(crate::Fault::Validation) {
         // a dispatch the device rejects (too many workgroups)
         cx.run("box_h", &[0; 5], &[Some(&aux), Some(&out)], [gpu.device.limits().max_compute_workgroups_per_dimension + 1, 1, 1]);
@@ -796,6 +809,11 @@ pub fn render(
             ],
             groups2(w, rows.min(h - y0), [16, 16]),
         );
+    }
+    if deep {
+        let rendered = read_deep(&mut cx, &out, &plan, req);
+        lap("finish + readback (deep)", &mut t, &mut cx);
+        return rendered.map(Output::Image);
     }
     if display && can_display(gpu, &plan, req) {
         return to_texture(&mut cx, &out, w, h).map(|(frame, histogram)| Output::Display { frame, histogram });
@@ -879,6 +897,36 @@ pub fn render(
     Some(Output::Image(Rendered { image, histogram, deep: None }))
 }
 
+/// The finished float output `out` (three words per pixel) read back as the CPU's float render
+/// returns it, with the same checks as an 8-bit readback: every pixel written, not entirely black.
+fn read_deep(cx: &mut Cx<'_>, out: &Buf, plan: &Plan<'_>, req: &RenderRequest) -> Option<Rendered> {
+    use lightcraft_pipeline::{DeepImage, DeepSamples};
+    let (w, h) = (plan.w, plan.h);
+    let n = w * h;
+    let words: Vec<u32> = cx.read(out, 3 * n);
+    if crate::ctx::failed() {
+        return None;
+    }
+    let unwritten = words.as_chunks::<3>().0.iter().filter(|p| p.iter().any(|v| v & DEEP_WRITTEN == 0)).count();
+    if unwritten > 0 {
+        fail(FailKind::Fatal, format!("the GPU returned an incomplete image ({unwritten} of {n} pixels unwritten)"));
+        return None;
+    }
+    let samples = words.into_iter().map(|v| f32::from_bits(v & !DEEP_WRITTEN)).collect();
+    let deep = DeepImage { width: w, height: h, space: req.space, samples: DeepSamples::F32(samples) };
+    let deep = match plan.keep {
+        Some(k) => deep.crop(k.x, k.y, k.w, k.h),
+        None => deep,
+    };
+    let image = deep.to_rgba8();
+    let histogram = Histogram::of_srgb8(&image);
+    if n >= 4096 && [&histogram.r, &histogram.g, &histogram.b].iter().all(|c| c.first() == Some(&histogram.total)) {
+        fail(FailKind::Blank, "the GPU result is entirely black; rendering it on the CPU to be sure".into());
+        return None;
+    }
+    Some(Rendered { image, histogram, deep: Some(deep) })
+}
+
 /// The finished output `out` (`w × h` packed RGBA8) as a texture on the device, with its
 /// histogram; the same checks as a readback (every pixel written, not entirely black), done on
 /// the device: only the histogram and a pixel count come back.
@@ -930,8 +978,8 @@ fn unwritten(data: &[[u8; 4]]) -> usize {
     data.chunks(4096).filter(|c| c.iter().fold(255u8, |a, p| a & p[3]) != 255).map(|c| c.iter().filter(|p| p[3] != 255).count()).sum()
 }
 
-/// The white-balanced, retouched, denoised image.
-fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host) -> Buf {
+/// The white-balanced, retouched, denoised image (`colour_noise`: see `denoise`).
+fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host, colour_noise: Option<&JointNoise>) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
@@ -963,7 +1011,7 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
             eyed
         }
     };
-    denoise(cx, img, plan)
+    denoise(cx, img, plan, colour_noise)
 }
 
 /// Defringe (`optics::defringe`) of the white-balanced image.
@@ -1056,8 +1104,9 @@ fn histogram(cx: &mut Cx<'_>, out: &Buf, w: usize, region: (usize, usize, usize,
     Histogram { r: part(0), g: part(1), b: part(2), luma: part(3), total: v.get(4 * Histogram::BINS).copied().unwrap_or(0), hdr: None }
 }
 
-/// Noise reduction (`local::denoise`).
-fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
+/// Noise reduction (`local::denoise`). `colour_noise`: the whole frame's noise model for the joint colour
+/// NR (`lightcraft_pipeline::colour_noise`); `None`: measured on `img`.
+fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&JointNoise>) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let (lum, col) = local::nr_params(&plan.settings, plan.detail_scale);
@@ -1070,6 +1119,20 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
         map(cx, "nr_lum", n, &[nr.k.to_bits()], [Some(&img), Some(&l), Some(&f)], &out);
         img = out;
     }
+    if col.is_some() && local::joint_colour_nr(&plan.settings) {
+        let Some(p) = local::nrc_params(&plan.settings, plan.detail_scale) else { return img };
+        let s = &plan.settings.detail;
+        let (detail, amount) = ((s.nr_color_detail / 100.0) as f32, (s.nr_color / 100.0) as f32);
+        if let Some(out) = color_nr_joint(cx, &img, w, h, &p, detail, amount, colour_noise) {
+            return out;
+        }
+        // too small for the noise samples, or not even one band fits the device: this step on the CPU
+        let mut host = cx.read_rgb(&img, w, h);
+        let mut d = (*plan.settings).clone();
+        d.detail.nr_luminance = 0.0;
+        local::denoise(&mut host, &d, plan.detail_scale, colour_noise);
+        return cx.gpu.upload(rgb_words(&host));
+    }
     if let Some(nr) = col {
         let chroma = cx.gpu.buffer(n * 3);
         map(cx, "chroma_k", n, &[], [Some(&img), None, None], &chroma);
@@ -1079,6 +1142,226 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
         img = out;
     }
     img
+}
+
+/// Run a `nrcj.wgsl` kernel on `n` items with inputs `a`, `b` and output `out`.
+fn nrcj(cx: &mut Cx<'_>, k: &str, n: usize, p: &[u32], a: &Buf, b: Option<&Buf>, out: &Buf) {
+    cx.run(k, p, &[Some(a), b, Some(out)], groups1(n));
+}
+
+/// Device memory left aside when the joint NR plans its bands from the free memory (the rest of the
+/// render, the display, other programs).
+const VRAM_RESERVE: u64 = 384 << 20;
+
+/// Renders on the device right now ([`render`]). An export batch renders photos side by side: while one
+/// plans its noise reduction bands, each of the others may still allocate the buffers of its other stages.
+static RENDERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Held while a noise reduction plans its bands and runs them: two plans made at once from the same free
+/// memory would together ask for more than there is.
+static BANDS: Mutex<()> = Mutex::new(());
+
+/// Counts a render in [`RENDERS`] while it lives.
+struct InFlight;
+
+impl InFlight {
+    fn new() -> Self {
+        RENDERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        InFlight
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        RENDERS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The band budget from the device memory free right now and our own pooled buffers (which we reuse), less
+/// [`VRAM_RESERVE`] for each render on the device (this one's other stages and every other render's).
+fn band_budget_from(free: u64, pooled: u64, renders: usize) -> usize {
+    let reserve = VRAM_RESERVE.saturating_mul(renders.max(1) as u64);
+    free.saturating_add(pooled).saturating_sub(reserve) as usize
+}
+
+/// The joint colour noise reduction (`lightcraft_pipeline::nrc_joint`) on the GPU, the same steps as the
+/// CPU: only the noise samples are read back (the noise model is fitted on the CPU, by the same code).
+/// Large images are filtered in horizontal bands whose halo covers every step's reach, so each kept pixel
+/// gets the whole-image result; the noise model is the whole image's, or `frame_noise` (the whole frame's,
+/// for a window). `None` when the image is too small for the noise samples (the caller falls back to the CPU).
+#[allow(clippy::too_many_arguments)]
+fn color_nr_joint(
+    cx: &mut Cx<'_>,
+    img: &Buf,
+    w: usize,
+    h: usize,
+    p: &local::NrcParams,
+    detail: f32,
+    amount: f32,
+    frame_noise: Option<&JointNoise>,
+) -> Option<Buf> {
+    use lightcraft_pipeline::nrc_joint;
+    let strength = nrc_joint::strength(amount);
+    let brake = nrc_joint::speck_brake(amount);
+    if w < 3 || h < 3 {
+        return None;
+    }
+    if strength <= 0.0 {
+        return Some(cx.copy(img));
+    }
+    let n = w * h;
+    let started = profiling().then(std::time::Instant::now);
+    let mut noise = match frame_noise {
+        Some(noise) => *noise,
+        None => {
+            // noise samples of the whole image: same pixels as the CPU, fitted by the same code
+            let stride = nrc_joint::noise_sample_stride(n);
+            let count = n.div_ceil(stride);
+            let smp = cx.gpu.buffer(11 * count);
+            nrcj(cx, "nrcj_samples", count, &[count as u32, w as u32, h as u32, stride as u32], img, None, &smp);
+            let raw: Vec<f32> = cx.read(&smp, 11 * count);
+            drop(smp);
+            if let Some(t) = started {
+                eprintln!("  gpu joint samples + read: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+            }
+            let samples: Vec<nrc_joint::NoiseSample> = raw
+                .as_chunks::<11>()
+                .0
+                .iter()
+                .filter(|s| s[0] == 1.0 && s.iter().all(|v| v.is_finite()))
+                .map(|s| (s[1], [[s[2], s[3], s[4]], [s[5], s[6], s[7]], [s[8], s[9], s[10]]]))
+                .collect();
+            nrc_joint::noise_from_samples(samples)
+        }
+    };
+    noise.tolerance = nrc_joint::tolerance(detail);
+    if let Some(t) = started {
+        eprintln!("  gpu joint noise model: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+    let sigma = p.passes.last().map_or(0.0, |q| q.sigma);
+    let plan = nrc_joint::scale_plan(sigma, w, h);
+    // Rows a kept pixel depends on: a wrong value at a band edge (treated as an image border) moves
+    // inwards by delta per vertical sweep, two sweeps per scale; at the farthest row it reaches, a
+    // scale's weight and path still read up to delta rows further (at most the largest delta); the
+    // guide's blur and pilot reach a few rows, the speck brake two more. Hence 2·Σdelta + max delta + 10.
+    let halo = plan.iter().map(|d| 2 * d.0).sum::<usize>() + plan.last().map_or(0, |d| d.0) + 10;
+    // Memory: the whole output (3 values per pixel) is held besides the input; a band then holds about
+    // 12 values per pixel (guide 3, two chroma buffers 2 + 2, paths 2, weights 2; up to 12 while the
+    // speck brake and the guide run). The budget for both together is `band_budget_from` the device memory
+    // free right now (where the driver can be asked, `crate::vram`); else a fixed 2 GB. One band plan at a
+    // time (`BANDS`), held until the bands are done. PROTOTYPE: `NRV2_GPU_BAND_MB` overrides it.
+    // (free memory asked before the lock: the first question for a device waits for the driver)
+    let free = crate::vram::free_bytes(&cx.gpu.info);
+    let _bands = BANDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fixed = std::env::var("NRV2_GPU_BAND_MB").ok().and_then(|v| v.parse::<usize>().ok()).map(|mb| mb << 20);
+    let renders = RENDERS.load(std::sync::atomic::Ordering::Relaxed);
+    let measured = free.map(|free| band_budget_from(free, crate::ctx::memory().pooled, renders));
+    let budget = fixed.or(measured).unwrap_or(2048 << 20);
+    if profiling() {
+        eprintln!(
+            "  gpu joint budget: {} MB ({}, {renders} render(s) on the device)",
+            budget >> 20,
+            if fixed.is_some() {
+                "NRV2_GPU_BAND_MB"
+            } else if measured.is_some() {
+                "free device memory"
+            } else {
+                "fixed default"
+            }
+        );
+    }
+    let out_bytes = 12 * n;
+    let per_row = 48 * w;
+    // no band may exceed the device's largest buffer either (3 values per pixel are the largest)
+    let limit_rows = (cx.gpu.limit() as usize / (12 * w)).max(1);
+    let rows = (budget.saturating_sub(out_bytes) / per_row).min(limit_rows);
+    let core = if rows >= h {
+        h
+    } else if rows > 2 * halo {
+        rows - 2 * halo
+    } else {
+        // not even one band with its halo fits: this stage runs on the CPU (the rest of the render stays here)
+        return None;
+    };
+    let out = cx.gpu.buffer(3 * n);
+    let mut y0 = 0;
+    while y0 < h {
+        let y1 = (y0 + core).min(h);
+        let (b0, b1) = if core >= h { (0, h) } else { (y0.saturating_sub(halo), (y1 + halo).min(h)) };
+        let filtered = joint_band(cx, img, w, b0, b1 - b0, &noise, brake, &plan);
+        let kept = (y1 - y0) * w;
+        nrcj(cx, "nrcj_recon", kept, &[kept as u32, strength.to_bits(), (y0 * w) as u32, (b0 * w) as u32], img, Some(&filtered), &out);
+        drop(filtered);
+        // wait: the driver frees a dropped buffer only once the GPU is done with it, and a band's
+        // buffers are large (without waiting, freed memory piled up to the whole 4 GB of a Quadro M2200)
+        cx.sync();
+        y0 = y1;
+    }
+    Some(out)
+}
+
+/// The filtered chroma pairs of rows `b0 .. b0 + bh` of the image, treated as an image of their own.
+#[allow(clippy::too_many_arguments)]
+fn joint_band(
+    cx: &mut Cx<'_>,
+    img: &Buf,
+    w: usize,
+    b0: usize,
+    bh: usize,
+    noise: &lightcraft_pipeline::nrc_joint::JointNoise,
+    brake: lightcraft_pipeline::nrc_joint::SpeckBrake,
+    plan: &[(usize, f32)],
+) -> Buf {
+    let n = w * bh;
+    let mut np = vec![n as u32, w as u32, bh as u32];
+    np.extend(noise.model.alpha.iter().chain(&noise.model.beta).chain(&noise.ymax).map(|v| v.to_bits()));
+    np.push(noise.tolerance.to_bits());
+    let mut yuv = cx.gpu.buffer(3 * n);
+    nrcj(cx, "nrcj_yuv", n, &[n as u32, (b0 * w) as u32], img, None, &yuv);
+    if brake.share > 0.0 {
+        let mut sp = np.clone();
+        sp.extend([brake.threshold.to_bits(), brake.share.to_bits()]);
+        let despecked = cx.gpu.buffer(3 * n);
+        nrcj(cx, "nrcj_speck", n, &sp, &yuv, None, &despecked);
+        yuv = despecked;
+    }
+    let blurred = gaussian(cx, &yuv, w, bh, 3, 0.8);
+    let guide = cx.gpu.buffer(3 * n);
+    nrcj(cx, "nrcj_pilot", n, &np, &yuv, Some(&blurred), &guide);
+    drop(blurred);
+    let mut filtered = cx.gpu.buffer(2 * n);
+    nrcj(cx, "nrcj_uv", n, &[n as u32], &yuv, None, &filtered);
+    drop(yuv);
+    // dropped buffers only become reusable (and their memory free) once the GPU is done with them
+    cx.sync();
+    // paths (exp(−path), as on the CPU) and pair weights; the next scale's paths go to the scratch buffer,
+    // free after the diffusion steps, as on the CPU
+    let mut paths = cx.gpu.buffer(2 * n);
+    nrcj(cx, "nrcj_links1", n, &np, &guide, None, &paths);
+    let links = cx.gpu.buffer(2 * n);
+    let mut lp = np.clone();
+    lp.push(1);
+    nrcj(cx, "nrcj_links", n, &lp, &guide, Some(&paths), &links);
+    let mut scratch = cx.gpu.buffer(2 * n);
+    for (k, &(delta, rate)) in plan.iter().enumerate() {
+        let dp = [n as u32, w as u32, bh as u32, delta as u32, rate.to_bits()];
+        for _ in 0..2 {
+            nrcj(cx, "nrcj_dh", n, &dp, &filtered, Some(&links), &scratch);
+            std::mem::swap(&mut filtered, &mut scratch);
+            nrcj(cx, "nrcj_dv", n, &dp, &filtered, Some(&links), &scratch);
+            std::mem::swap(&mut filtered, &mut scratch);
+        }
+        if let Some(&(next, _)) = plan.get(k + 1) {
+            nrcj(cx, "nrcj_paths", n, &[n as u32, w as u32, bh as u32, delta as u32], &paths, None, &scratch);
+            std::mem::swap(&mut paths, &mut scratch);
+            let mut lp = np.clone();
+            lp.push(next as u32);
+            nrcj(cx, "nrcj_links", n, &lp, &guide, Some(&paths), &links);
+        }
+    }
+    drop((scratch, paths, links, guide));
+    cx.sync();
+    filtered
 }
 
 /// The planes the per-pixel stage reads.
@@ -1234,7 +1517,7 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
         let mut first = true;
         for comp in &m.components {
             let op = match comp.op {
-                _ if first && comp.op != MaskOp::Intersect => 0u32,
+                _ if first => 0u32,
                 MaskOp::Add => 1,
                 MaskOp::Subtract => 2,
                 MaskOp::Intersect => 3,
@@ -1373,6 +1656,26 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two exports side by side: each band plan leaves room for the other render, so the two together
+    /// stay within the free memory they both measured.
+    #[test]
+    fn band_budget_leaves_room_for_every_render_on_the_device() {
+        let (free, pooled) = (3000u64 << 20, 200u64 << 20);
+        let alone = band_budget_from(free, pooled, 1);
+        assert_eq!(alone, (3200usize << 20) - VRAM_RESERVE as usize);
+        assert_eq!(band_budget_from(free, pooled, 0), alone, "the render itself is always counted");
+        let two = band_budget_from(free, pooled, 2);
+        assert_eq!(two, alone - VRAM_RESERVE as usize);
+        assert_eq!(band_budget_from(100 << 20, 0, 3), 0, "nothing left: no band fits, the CPU runs the step");
+        let before = RENDERS.load(std::sync::atomic::Ordering::Relaxed);
+        {
+            let _a = InFlight::new();
+            let _b = InFlight::new();
+            assert!(RENDERS.load(std::sync::atomic::Ordering::Relaxed) >= before + 2);
+        }
+        assert!(RENDERS.load(std::sync::atomic::Ordering::Relaxed) < before + 2, "a finished render no longer counts");
+    }
 
     #[test]
     fn coverage_mask_matches_per_pixel_decision() {
