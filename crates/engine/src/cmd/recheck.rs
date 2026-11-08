@@ -4,6 +4,8 @@
 //! library opens in another version, its stale preview-only photos are probed again and get
 //! exactly what Reload from Disk would give them: a file that decodes now loses the flag, one that
 //! still doesn't gets the new reason and a fresh stamp, so it isn't probed again.
+//! ORF records are rechecked even when previously sensor-decodable: compressed sensor support
+//! was withdrawn after #3775. Supported uncompressed ORFs also keep a stamp to avoid repeat work.
 //!
 //! The work is split so the app can probe on a worker thread: [`stale`] lists what to probe (no
 //! file-system calls), [`probe`] reads the files without the session, and [`apply`] applies the
@@ -17,7 +19,7 @@ use super::{CommandSpec, always, bad, cmd};
 use crate::media::{FileProbe, ProbeInfo};
 use crate::{Result, Session};
 
-/// A preview-only photo to probe, and what the library knew about it when it was listed (so a
+/// A photo to probe, and what the library knew about it when it was listed (so a
 /// result for a photo that changed meanwhile is dropped).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stale {
@@ -40,12 +42,12 @@ impl Stale {
     }
 }
 
-/// The library's preview-only photos whose flag another app version set (or every preview-only
-/// photo, with `all`): library photos with a file, not virtual copies (they follow the photo they
-/// were copied from). No file-system calls.
+/// The library's preview-only photos and ORFs whose support another app version checked (or
+/// every such photo, with `all`): library photos with a file, not virtual copies (they follow
+/// the photo they were copied from). No file-system calls.
 pub fn stale(cat: &Catalog, all: bool) -> Vec<Stale> {
     cat.photos()
-        .filter(|p| p.copy_of.is_none() && p.preview_only.is_some() && (all || p.preview_only_stale()))
+        .filter(|p| p.copy_of.is_none() && (p.preview_only_stale() || (all && (p.preview_only.is_some() || p.format.eq_ignore_ascii_case("orf")))))
         .filter_map(|p| crate::cmd::missing::checked_path(p).map(|path| Stale::of(p, path)))
         .collect()
 }
@@ -92,7 +94,7 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
         let first = out.updated.len();
         crate::cmd::convert::reload_ops(&s.catalog, item.id, &info, &mut ops, &mut out.updated);
         if info.preview_only.is_none() {
-            out.cleared.extend_from_slice(&out.updated[first..]);
+            out.cleared.extend(out.updated[first..].iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.preview_only.is_some())));
         }
     }
     if !ops.is_empty() {
@@ -122,7 +124,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Recheck Preview-Only Raws",
         [],
         None,
-        "{all?: bool} — probe again the raws shown from their embedded preview whose flag another LightCraft version set (the app does this in the background when a library opens; `all` rechecks every preview-only raw, e.g. when testing a decoder build of the same version), and bring each up to date as Reload from Disk would; not an undo step, develop settings and history are kept; files that can't be read are left for next time → {checked, updated: [ids], cleared: [ids] (develop from their raw data now)}",
+        "{all?: bool} — probe again preview-only raws and ORFs whose support another LightCraft version checked (the app does this in the background when a library opens; `all` rechecks every preview-only raw and ORF, e.g. when testing a decoder build of the same version), and bring each up to date as Reload from Disk would; not an undo step, develop settings and history are kept; files that can't be read are left for next time → {checked, updated: [ids], cleared: [ids] (develop from their raw data now)}",
         always,
         recheck
     )]
