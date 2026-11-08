@@ -12,6 +12,7 @@ use crate::{LightcraftApp, Services};
 // generous: merges and renders run on worker threads that a busy machine (a full workspace test run) slows a lot
 const T: Duration = Duration::from_secs(60);
 
+/// Build a headless instance with the procedural demo library loaded.
 fn demo() -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
@@ -21,14 +22,17 @@ fn demo() -> Headless {
     h
 }
 
+/// Check whether a widget with the given identifier is registered.
 fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
+/// Count the number of activity row widgets registered.
 fn rows(h: &Headless) -> usize {
     h.app.widgets.iter().filter(|(w, _)| w.starts_with("activity:row:")).count()
 }
 
+/// Return the bounding rectangle of the registered widget with `id`.
 fn rect(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
@@ -573,6 +577,7 @@ fn rows_added_later_grow_the_stack() {
     }
 }
 
+/// Verify that dragging the activity stack moves the panel across frames and respects viewport constraints.
 #[test]
 fn activity_stack_area_is_movable() {
     let mut h = demo();
@@ -647,6 +652,7 @@ fn activity_stack_area_is_movable() {
     assert!(constrained_lt.min.y >= content.min.y - 1.0, "constrained in top: {constrained_lt:?} vs {content:?}");
 }
 
+/// Verify that dragging the stack near the bottom in a short viewport keeps controls reachable and within bounds.
 #[test]
 fn activity_stack_short_viewport_near_bottom_keeps_controls_reachable() {
     // 300 pt tall viewport exercises the height-budget path.
