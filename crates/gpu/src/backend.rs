@@ -532,11 +532,11 @@ pub fn window_renderer_order(
         } else if glow {
             out.push(WindowRenderer::Glow);
         } else {
-            // No usable renderer and no glow: return no renderer at all. Never
-            // return Glow the build does not have, an empty backend set as if
-            // it were usable, or (on Windows and Linux, issue #136) Vulkan
-            // merely because it is the only compiled backend. The caller
-            // handles the empty list as the no-usable-renderer failure.
+            // No compiled backend is usable and glow is unavailable: keep the
+            // never-empty contract with the platform default, which on
+            // Windows and Linux names no Vulkan (issue #136). The caller
+            // probes it and falls back when it cannot build a device.
+            out.push(WindowRenderer::Wgpu(default_window_backends(os)));
         }
     }
     out
@@ -556,7 +556,8 @@ pub fn glow_without_marker(forced: Option<WindowRenderer>, marker_available: boo
 /// renderer when there is one, glow on Linux when no marker can be written
 /// ([`glow_without_marker`]) unless a wgpu renderer is remembered from a good start, otherwise
 /// the first renderer of [`window_renderer_order`]. With a marker available this is the existing
-/// order (remembered first, failed last), so the marker-based retry is preserved.
+/// order (remembered first, failed last), so the marker-based retry is preserved. `None` when
+/// no usable renderer exists; never an empty backend set as a renderer.
 pub fn initial_window_renderer(
     forced: Option<WindowRenderer>,
     remembered: Option<WindowRenderer>,
@@ -565,30 +566,23 @@ pub fn initial_window_renderer(
     os: &str,
     compiled: Backends,
     glow: bool,
-) -> WindowRenderer {
+) -> Option<WindowRenderer> {
     // Without a marker a remembered Vulkan renderer on Linux would be tried
     // first with no retry possible (issue #136): only a remembered non-Vulkan
     // wgpu renderer is kept, anything else starts with glow. A renderer the
     // last start died in is never retried first: with no marker there is no
     // retry, so a failed glow falls through to `window_renderer_order`, which
-    // puts it last.
+    // puts it last. A remembered renderer that is also the failed one is
+    // excluded the same way, including a remembered glow.
     let remembered_vulkan = matches!(remembered, Some(WindowRenderer::Wgpu(b)) if b.contains(Backends::VULKAN));
     if glow_without_marker(forced, marker_available, os, glow)
         && failed != Some(WindowRenderer::Glow)
+        && remembered != failed
         && (remembered_vulkan || !matches!(remembered, Some(WindowRenderer::Wgpu(_))))
     {
-        return WindowRenderer::Glow;
+        return Some(WindowRenderer::Glow);
     }
-    // `window_renderer_order` is empty only when no usable renderer exists
-    // and glow is unavailable; the empty set is the no-usable-renderer
-    // sentinel the caller must check, never a usable renderer. It must not
-    // fall back to the platform default here, which could name Vulkan on
-    // Windows and Linux (issue #136).
-    match window_renderer_order(forced, remembered, failed, os, compiled, glow).first().copied() {
-        Some(r) => r,
-        None if glow => WindowRenderer::Glow,
-        None => WindowRenderer::Wgpu(Backends::empty()),
-    }
+    window_renderer_order(forced, remembered, failed, os, compiled, glow).first().copied()
 }
 
 #[cfg(test)]
@@ -916,22 +910,26 @@ mod tests {
         assert!(!glow_without_marker(Some(vk), false, "linux", true));
         assert!(!glow_without_marker(None, false, "linux", false));
         assert!(!glow_without_marker(None, false, "windows", true));
-        assert_eq!(initial_window_renderer(None, None, None, false, "linux", all, true), WindowRenderer::Glow);
+        assert_eq!(initial_window_renderer(None, None, None, false, "linux", all, true), Some(WindowRenderer::Glow));
         // a glow the last start died in is not retried first without a marker
-        assert_eq!(initial_window_renderer(None, None, Some(WindowRenderer::Glow), false, "linux", all, true), gl);
-        assert_eq!(initial_window_renderer(None, Some(vk), Some(WindowRenderer::Glow), false, "linux", all, true), gl);
+        assert_eq!(initial_window_renderer(None, None, Some(WindowRenderer::Glow), false, "linux", all, true), Some(gl));
+        assert_eq!(initial_window_renderer(None, Some(vk), Some(WindowRenderer::Glow), false, "linux", all, true), Some(gl));
         // a remembered wgpu renderer that worked is kept even without a marker
-        assert_eq!(initial_window_renderer(None, Some(gl), None, false, "linux", all, true), gl);
+        assert_eq!(initial_window_renderer(None, Some(gl), None, false, "linux", all, true), Some(gl));
+        // a remembered renderer that is also the failed one is not retried
+        // first without a marker, even when it is not Vulkan
+        assert_eq!(initial_window_renderer(None, Some(gl), Some(gl), false, "linux", all, true), Some(WindowRenderer::Glow));
+        assert_eq!(initial_window_renderer(None, Some(WindowRenderer::Glow), Some(WindowRenderer::Glow), false, "linux", all, true), Some(gl));
         // a remembered Vulkan renderer is not kept without a marker: it would be
         // tried first with no retry possible, so Linux starts with glow instead
-        assert_eq!(initial_window_renderer(None, Some(vk), None, false, "linux", all, true), WindowRenderer::Glow);
-        assert_eq!(initial_window_renderer(None, None, None, true, "linux", all, true), gl);
-        assert_eq!(initial_window_renderer(Some(vk), None, None, false, "linux", all, true), vk);
-        assert_eq!(initial_window_renderer(None, None, None, false, "linux", all, false), gl);
+        assert_eq!(initial_window_renderer(None, Some(vk), None, false, "linux", all, true), Some(WindowRenderer::Glow));
+        assert_eq!(initial_window_renderer(None, None, None, true, "linux", all, true), Some(gl));
+        assert_eq!(initial_window_renderer(Some(vk), None, None, false, "linux", all, true), Some(vk));
+        assert_eq!(initial_window_renderer(None, None, None, false, "linux", all, false), Some(gl));
         // with a marker available the existing order is kept: remembered first, failed last
-        assert_eq!(initial_window_renderer(None, Some(gl), None, true, "windows", all, true), gl);
-        assert_eq!(initial_window_renderer(None, Some(gl), Some(gl), true, "windows", all, true), WindowRenderer::Wgpu(Backends::DX12));
-        assert_eq!(initial_window_renderer(None, None, Some(gl), true, "windows", all, true), WindowRenderer::Wgpu(Backends::DX12));
+        assert_eq!(initial_window_renderer(None, Some(gl), None, true, "windows", all, true), Some(gl));
+        assert_eq!(initial_window_renderer(None, Some(gl), Some(gl), true, "windows", all, true), Some(WindowRenderer::Wgpu(Backends::DX12)));
+        assert_eq!(initial_window_renderer(None, None, Some(gl), true, "windows", all, true), Some(WindowRenderer::Wgpu(Backends::DX12)));
         // the marker-less order still carries glow as its fallback when glow is available
         let order = window_renderer_order(None, None, None, "linux", all, true);
         assert_eq!(order.last(), Some(&WindowRenderer::Glow));
@@ -940,19 +938,19 @@ mod tests {
     /// The empty-order fallback must not yield an empty backend set as a
     /// usable renderer, and on Linux it must not load Vulkan automatically
     /// to do so (issue #136): with GL not compiled in and glow unavailable
-    /// there is no usable renderer, so the order is empty for the caller to
-    /// handle; with glow available it falls back to glow.
+    /// the order keeps the never-empty platform default (GL, not Vulkan);
+    /// with glow available it falls back to glow.
     #[test]
     fn empty_order_fallback_is_usable_when_gl_not_compiled() {
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN, false);
-        assert!(order.is_empty(), "no usable renderer: {order:?}");
+        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::GL)), "platform default, not Vulkan: {order:?}");
+        assert!(!order.iter().any(|r| matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN))));
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN, true);
         assert_eq!(order.first(), Some(&WindowRenderer::Glow));
-        // a non-Vulkan compiled backend usable on Linux is still used when
-        // there is one; Metal is not a Linux window backend, so it does
-        // not count as a fallback
+        // Metal is not a Linux window backend, so it does not count as a
+        // compiled fallback; the platform default (GL) is kept instead
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN | Backends::METAL, false);
-        assert!(order.is_empty(), "Metal is not a Linux fallback: {order:?}");
+        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::GL)), "Metal is not a Linux fallback: {order:?}");
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN | Backends::GL, false);
         assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::GL)));
     }
