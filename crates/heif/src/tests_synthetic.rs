@@ -268,6 +268,62 @@ fn a_crop_on_both_edges_keeps_the_corner() {
     }
 }
 
+/// Every `ispe` in a built file, in the order they were written: the primary image's first, then
+/// each auxiliary image's. Each is (offset of its width field, width, height).
+fn ispe_fields(bytes: &[u8]) -> Vec<(usize, u32, u32)> {
+    let mut out = Vec::new();
+    for i in 0..bytes.len().saturating_sub(16) {
+        if &bytes[i..i + 4] == b"ispe" && bytes[i + 4..i + 8] == [0, 0, 0, 0] {
+            let g = |o: usize| u32::from_be_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+            out.push((i + 8, g(i + 8), g(i + 12)));
+        }
+    }
+    out
+}
+
+fn set_ispe(bytes: &mut [u8], at: usize, w: u32, h: u32) {
+    bytes[at..at + 4].copy_from_slice(&w.to_be_bytes());
+    bytes[at + 4..at + 8].copy_from_slice(&h.to_be_bytes());
+}
+
+/// An alpha image is its own coded item, so it may pad its declared size differently from the
+/// picture's. What has to agree is what the two declare; the padding comes off both.
+#[test]
+fn an_alpha_padded_on_its_own_still_lines_up() {
+    let alpha = |x: u32, _: u32| (x * 4) as u16;
+    let mut bytes = build(&Spec { props: vec![FULL_601], alpha: Some(&alpha), ..Spec::new(32, 32, &grey) });
+    // Both items code 32 x 32; declare 32 x 24 for each, as a camera's bottom padding looks.
+    let f = ispe_fields(&bytes);
+    assert_eq!(f.len(), 2, "one ispe for the picture and one for the alpha: {f:?}");
+    for (at, _, _) in f {
+        set_ispe(&mut bytes, at, 32, 24);
+    }
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height), (32, 24));
+    assert!(d.has_alpha);
+    assert_eq!(d.data.len(), 32 * 24 * 4);
+    // the alpha ramp still sits under the right columns, on the last kept row as on the first
+    for y in [0u32, 23] {
+        for x in [0u32, 10, 31] {
+            let i = ((y * 32 + x) * 4) as usize;
+            assert_eq!(d.data[i + 3], alpha(x, y) * 257, "alpha at ({x}, {y})");
+            assert_eq!(d.data[i..i + 3], [luma(x, y) * 257; 3], "colour at ({x}, {y})");
+        }
+    }
+}
+
+/// Two different declared sizes are two different images, which would need resampling.
+#[test]
+fn an_alpha_declaring_another_size_is_unsupported() {
+    let alpha = |x: u32, _: u32| (x * 4) as u16;
+    let mut bytes = build(&Spec { props: vec![FULL_601], alpha: Some(&alpha), ..Spec::new(32, 32, &grey) });
+    let f = ispe_fields(&bytes);
+    set_ispe(&mut bytes, f[0].0, 32, 24);
+    set_ispe(&mut bytes, f[1].0, 32, 20);
+    let r = decode(&bytes, &Options::default());
+    assert!(matches!(r, Err(Error::Unsupported(m)) if m.contains("alpha")), "{r:?}");
+}
+
 /// The other way round -- a declared size larger than the coded picture -- is a broken file, not
 /// something to pad out.
 #[test]

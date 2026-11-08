@@ -354,14 +354,16 @@ fn decode_item(ctx: &Context<'_>, id: u32, options: &Options, with_alpha: bool) 
     img = orient::to_declared(img, dw, dh)?;
     if let Some(aux) = alpha_id {
         let ap = ctx.props(aux).map_err(err)?;
-        let alpha = Coded::decode(ctx, aux, &ap, limit)?;
-        let alpha_planes = alpha.planes()?;
-        // The alpha is its own coded picture, so it may carry the picture's padding or none of
-        // it; either lines up with the declared size on its top-left. Anything else is a
-        // different image, which would need resampling.
-        if alpha_planes.size() != (w, h) && alpha_planes.size() != (dw, dh) {
+        // The alpha is a coded item of its own: it declares its own size and may pad it to whole
+        // coding blocks differently from the picture. What has to agree is what the two declare,
+        // not how either is coded; the padding comes off both the same way. Checked before the
+        // alpha is decoded, so a mismatch costs nothing.
+        if ctx.coded_size(aux, &ap).map_err(err)? != (cw, ch) {
             return Err(Error::Unsupported("an alpha image of a different size than the picture"));
         }
+        let alpha = Coded::decode(ctx, aux, &ap, limit)?;
+        let alpha_planes = alpha.planes()?;
+        // `put_alpha` refuses a plane that does not cover the declared size.
         ycc::put_alpha(&alpha_planes, &mut img.data, dw).ok_or_else(|| Error::Malformed("the alpha image is incomplete".into()))?;
     }
     if options.apply_transforms {
