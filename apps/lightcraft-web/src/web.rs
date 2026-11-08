@@ -179,7 +179,9 @@ async fn sleep_ms(ms: i32) {
 
 /// `work` bounded by [`ORIGINAL_LOAD_TIMEOUT_MS`] plus one second per 10 MB of `bytes` (a large
 /// clip takes a while to write): one browser promise that never settles must not hold the import
-/// queue, or the loads after it, forever.
+/// queue, or the loads after it, forever. On timeout the browser promise is dropped, not cancelled:
+/// a write that finishes late can still leave an original in storage although the caller was told
+/// the work was refused.
 async fn bounded<T>(work: impl std::future::Future<Output = Result<T, String>>, bytes: f64) -> Result<T, String> {
     let extra = if bytes.is_finite() && bytes > 0.0 { (bytes / 10_000.0).min(f64::from(i32::MAX / 2)) as i32 } else { 0 };
     let ms = ORIGINAL_LOAD_TIMEOUT_MS.saturating_add(extra);

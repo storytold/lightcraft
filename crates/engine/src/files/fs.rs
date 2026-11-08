@@ -102,10 +102,31 @@ pub fn looks_like_video_container(head: &[u8]) -> bool {
     is_top_level_video_box(&header[4..8])
 }
 
-/// A box type a movie's top level is made of.
+/// A box type a movie's top level is made of. The metadata boxes are included so that one cut short
+/// after the `moov` is an error, not a trailer whose metadata would be dropped without a word.
 fn is_top_level_video_box(kind: &[u8]) -> bool {
-    [&b"ftyp"[..], b"moov", b"mdat", b"free", b"skip", b"wide", b"pnot", b"uuid", b"moof", b"mfra", b"sidx", b"styp", b"emsg", b"prft", b"meta"]
-        .contains(&kind)
+    [
+        &b"ftyp"[..],
+        b"moov",
+        b"mdat",
+        b"free",
+        b"skip",
+        b"wide",
+        b"pnot",
+        b"uuid",
+        b"moof",
+        b"mfra",
+        b"sidx",
+        b"styp",
+        b"emsg",
+        b"prft",
+        b"meta",
+        b"udta",
+        b"XMP_",
+        b"loci",
+        b"\xa9xyz",
+    ]
+    .contains(&kind)
 }
 
 /// Whether the bytes at the end of a movie, from `head` (up to 16 bytes, fewer when the file ends
@@ -193,7 +214,17 @@ pub(crate) fn read_video_metadata_from_with_fragments(
         if is_video_trailer(head, at, file_len, saw_moov, include_fragments) {
             return Ok(out);
         }
-        let (kind, total_len) = video_box_info(head, at, file_len).map_err(|e| format!("{path}: {e}"))?;
+        let (kind, total_len) = video_box_info(head, at, file_len).map_err(|e| {
+            let after_moov = saw_moov && head.get(4..8).is_none_or(|kind| !is_top_level_video_box(kind));
+            if include_fragments && after_moov {
+                // The import accepts such a tail; the location check can't, as a trailer can carry GPS.
+                format!(
+                    "{path}: the clip has a trailer after its movie header (not a video box); a trailer can hold a location, so it can't be verified"
+                )
+            } else {
+                format!("{path}: {e}")
+            }
+        })?;
         saw_moov |= &kind == b"moov";
         let end = at.checked_add(total_len).ok_or("video box offset overflow")?;
         let header_len = video_box_header_len(&hdr);

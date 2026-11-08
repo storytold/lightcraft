@@ -4052,6 +4052,19 @@ fn a_trailer_after_the_movie_header_ends_the_clip_for_import_only() {
     truncated.extend_from_slice(b"mdat");
     truncated.extend_from_slice(&[0; 100]);
     assert!(read(&truncated, false).is_err());
+    // a metadata box cut short after the moov is an error too, not a dropped trailer
+    for kind in [b"udta", b"XMP_", b"loci", b"\xa9xyz"] {
+        let mut cut = clip.clone();
+        cut.extend_from_slice(&4096u32.to_be_bytes());
+        cut.extend_from_slice(kind);
+        cut.extend_from_slice(&[0; 20]);
+        assert!(read(&cut, false).is_err(), "{}", String::from_utf8_lossy(kind));
+    }
+    // Remove Location's refusal names the trailer
+    let mut with_tail = clip.clone();
+    with_tail.extend_from_slice(&[0xEE; 5]);
+    let refusal = read(&with_tail, true).unwrap_err();
+    assert!(refusal.contains("trailer") && refusal.contains("location"), "{refusal}");
     // stray bytes before any moov: the movie header is missing
     let ftyp_len = u32::from_be_bytes([clip[0], clip[1], clip[2], clip[3]]) as usize;
     let mut no_moov = clip[..ftyp_len].to_vec();
