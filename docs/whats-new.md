@@ -43,8 +43,8 @@
   flag and color label ("LC01207.JPG, 3 stars, picked"), and it says whether it is selected. It was named with the
   file name only, so VoiceOver told you less in Detail than in the grid.
 - A thumbnail, in the grid and in the filmstrip, is also a selectable item now, not a check box: on macOS VoiceOver
-  used to say "checked" or "unchecked" for it; it now reports the photos you have selected as selected and gives no
-  state for the others.
+  used to say "checked" or "unchecked" for it; it now reports the photos you have selected as selected and the
+  others as not selected.
 
 ## 2026-11-02
 

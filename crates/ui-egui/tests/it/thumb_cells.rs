@@ -2,7 +2,7 @@
 //! (macOS VoiceOver) reads "selected" for it, not a check box that is "checked". AccessKit's macOS
 //! adapter turns a node with a toggled state into a check box, and says "selected" for an item-like
 //! node (a list item) that carries a selected state, so the cell is a `ListItem` with `selected`.
-use egui::accesskit::{Role, Toggled};
+use egui::accesskit::{Action, Role, Toggled};
 use egui::vec2;
 use egui_kittest::{Harness, kittest::NodeT};
 use lightcraft_engine::Selection;
@@ -27,16 +27,23 @@ fn harness(view: ViewMode) -> Harness<'static, LightcraftApp> {
     h
 }
 
-/// What the accessibility tree says about the cell named `file`: (role, selected, toggled).
-fn cell(h: &Harness<'_, LightcraftApp>, file: &str) -> Option<(Role, Option<bool>, Option<Toggled>)> {
-    h.root()
+/// What the accessibility tree says about the cell named `file` (its name is the file name, alone or
+/// followed by `, …`, so a file whose name begins another's is not taken for it): (role, selected,
+/// toggled, whether it takes a click). A second cell with that name is a failure.
+fn cell(h: &Harness<'_, LightcraftApp>, file: &str) -> Option<(Role, Option<bool>, Option<Toggled>, bool)> {
+    let follows = format!("{file}, ");
+    let mut found: Vec<_> = h
+        .root()
         .children_recursive()
-        .filter(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with(file)))
+        .filter(|n| n.accesskit_node().label().is_some_and(|l| l == file || l.starts_with(&follows)))
         .map(|n| {
             let a = n.accesskit_node();
-            (a.role(), a.is_selected(), a.toggled())
+            (a.role(), a.is_selected(), a.toggled(), a.data().supports_action(Action::Click))
         })
-        .find(|(role, _, _)| matches!(role, Role::ListItem | Role::Button | Role::CheckBox))
+        .filter(|(role, ..)| matches!(role, Role::ListItem | Role::Button | Role::CheckBox))
+        .collect();
+    assert!(found.len() <= 1, "one cell is named for {file}: {found:?}");
+    found.pop()
 }
 
 fn two_photos(h: &mut Harness<'_, LightcraftApp>) -> (lightcraft_catalog::PhotoId, String, String) {
@@ -52,14 +59,16 @@ fn assert_selectable_cells(view: ViewMode) {
     let (first, first_name, second_name) = two_photos(&mut h);
     h.state_mut().session.selection = Selection::single(first);
     h.run_steps(5);
-    let (role, selected, toggled) = cell(&h, &first_name).expect("the selected photo has a cell");
+    let (role, selected, toggled, clickable) = cell(&h, &first_name).expect("the selected photo has a cell");
     assert_eq!(role, Role::ListItem, "{first_name}: a selectable cell, not a button that macOS reads as a check box");
     assert_eq!(selected, Some(true), "{first_name} reads as selected");
     assert_eq!(toggled, None, "{first_name} has no toggled state (macOS would call it a check box)");
-    let (role, selected, toggled) = cell(&h, &second_name).expect("the other photo has a cell");
+    assert!(clickable, "{first_name} still takes a click after it stopped being a button");
+    let (role, selected, toggled, clickable) = cell(&h, &second_name).expect("the other photo has a cell");
     assert_eq!(role, Role::ListItem);
     assert_eq!(selected, Some(false), "{second_name} is a selectable cell that is not selected");
     assert_eq!(toggled, None);
+    assert!(clickable, "{second_name} takes a click");
 
     // a selection change reaches the tree
     let second = h.state_mut().session.visible_cloned().get(1).copied().expect("a second photo");
