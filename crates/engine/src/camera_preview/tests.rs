@@ -1840,9 +1840,10 @@ fn partial_look_keeps_the_generic_colour_when_the_measured_one_misses_the_gates(
     assert_eq!((look.matrix.0, look.tone), (generic.matrix.0, generic.tone));
 }
 
-/// [`fit_preview`] derives the model's measured colour from the raw and hands it to the partial look: a covered model
-/// without a camera profile (the EOS R50) whose full look misses the gates opens in exactly that colour. The same file
-/// from a model without measured matrices keeps the generic partial look.
+/// [`fit_preview`] (here [`fit_preview_with`] and no camera profile) derives the model's measured colour from the raw
+/// and hands it to the partial look: a covered model without a camera profile (the EOS R50) whose full look misses the
+/// gates opens in exactly that colour. The same file from a model without measured matrices keeps the generic partial
+/// look.
 #[test]
 fn fit_preview_gives_a_covered_models_partial_look_its_measured_colour() {
     use lightcraft_raw::color::{as_shot_white_xy, camera_transform};
@@ -1858,15 +1859,15 @@ fn fit_preview_gives_a_covered_models_partial_look_its_measured_colour() {
     let srgb = |v: f32| if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
     let pixels: Vec<u8> = (0..w * h).flat_map(|i| at(&reference, i % w, i / w).map(|v| (srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8)).collect();
     let bytes = tiff_with_jpeg((w, h), &pixels);
-    assert!(crate::camera_profiles::get("Canon EOS R50").is_none(), "a local EOS R50 profile takes the place of this path");
+    // no camera profile, whatever this machine's profiles folder holds (a local EOS R50 profile takes the place of this path)
     let transform = camera_transform(&raw, as_shot_white_xy(&raw));
     let measured = measured_colour(&raw, &transform).expect("the EOS R50 shares the EOS R10's matrices");
-    let look = fit_preview(&raw, &bytes, &transform, None, None).0.expect("a partial look");
+    let look = fit_preview_with(&raw, &bytes, &transform, None, None, None).0.expect("a partial look");
     assert_eq!(look.matrix, measured, "the partial look takes the model's measured colour");
     assert!(look.hue_sat.is_none(), "a partial look, not a full one");
 
     raw.metadata.model = Some("Canon EOS Unknown".into());
-    let generic = fit_preview(&raw, &bytes, &transform, None, None).0.expect("the generic partial look");
+    let generic = fit_preview_with(&raw, &bytes, &transform, None, None, None).0.expect("the generic partial look");
     assert_ne!(generic.matrix, measured);
     assert!(generic.hue_sat.is_none());
 }
