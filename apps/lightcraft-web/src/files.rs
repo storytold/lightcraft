@@ -47,6 +47,9 @@ enum Dirty {
 #[derive(Default)]
 struct Mirror {
     files: BTreeMap<String, Vec<u8>>,
+    /// Folders start-up found beside the files (not files themselves: never dirty, never
+    /// flushed), e.g. a `segments` folder the catalog store's `has_folder` check asks about.
+    folders: std::collections::BTreeSet<String>,
     /// Dirty files, least recently modified first.
     dirty: Vec<(String, Dirty)>,
     /// Why the last flush to browser storage failed (quota, eviction…), until one succeeds.
@@ -82,6 +85,21 @@ impl Files {
 
     pub fn get(&self, name: &str) -> Option<Vec<u8>> {
         self.lock().files.get(name).cloned()
+    }
+
+    /// Note a folder start-up found in browser storage beside the library files (not a file:
+    /// it is never flushed back). The catalog's unknown-layout check (#3962) asks the store
+    /// about it through [`Store::has_folder`].
+    pub fn preload_folder(&self, name: &str) {
+        self.lock().folders.insert(name.to_string());
+    }
+
+    /// Is there a folder called `name` among the stored library entries? A folder start-up
+    /// noted with [`Files::preload_folder`], or a stored entry under `name/` (the mirror's
+    /// way of holding a folder's files, like `MemStore`).
+    pub fn has_folder(&self, name: &str) -> bool {
+        let m = self.lock();
+        m.folders.contains(name) || m.files.keys().any(|k| k.starts_with(&format!("{name}/")))
     }
 
     /// Replace a file.
@@ -192,6 +210,11 @@ impl Store for FilesStore {
     }
     fn describe(&self) -> String {
         "browser storage".into()
+    }
+    /// The mirror knows the folders start-up found in browser storage (#3962): without this
+    /// the trait default (`false`) would let a `segments` library open and be overwritten.
+    fn has_folder(&mut self, name: &str) -> io::Result<bool> {
+        Ok(self.0.has_folder(name))
     }
 }
 
@@ -353,6 +376,41 @@ mod tests {
         let reads = vec![("catalog.snap", Ok(Some(b"snap".to_vec()))), ("catalog.log", Ok(None))];
         preload_library(&files, reads).unwrap();
         assert_eq!(files.get("catalog.snap").as_deref(), Some(&b"snap"[..]));
+    }
+
+    /// A `segments` folder in browser storage is a layout this version doesn't read (#3962):
+    /// opening through [`FilesStore`] refuses it untouched, like the native and memory
+    /// stores — before the fix `FilesStore` reported no folders, so the stored snapshot
+    /// would have been replaced by a partial catalog and its log reset.
+    #[test]
+    fn segments_folder_in_browser_storage_is_refused_untouched() {
+        // a saved library, copied the way a reload would read it back
+        let mut disk = BTreeMap::new();
+        let files = Files::default();
+        let mut s = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+        s.open_library_in(stores, true).unwrap();
+        flush(&files, &mut disk);
+        let snap_before = disk.get("catalog.snap").cloned().unwrap();
+        let log_before = disk.get("catalog.log").cloned().unwrap();
+
+        // the same files, with a `segments` folder beside them in browser storage
+        let files2 = Files::default();
+        for (k, v) in &disk {
+            files2.preload(k, v.clone());
+        }
+        files2.preload_folder("segments");
+        let mut store = files2.store();
+        assert!(store.has_folder("segments").unwrap());
+        assert!(!store.has_folder("originals").unwrap());
+        let mut s2 = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files2.store()), files: Box::new(files2.store()), on_disk: false };
+        let Err(e) = s2.open_library_in(stores, true) else { panic!("refused") };
+        let msg = e.to_string();
+        assert!(msg.contains("segments") && msg.contains("layout isn't one this version reads"), "{msg}");
+        assert_eq!(files2.get("catalog.snap").as_deref(), Some(&snap_before[..]), "snapshot untouched");
+        assert_eq!(files2.get("catalog.log").as_deref(), Some(&log_before[..]), "log untouched");
+        assert!(!files2.is_dirty(), "nothing was written");
     }
 
     #[test]

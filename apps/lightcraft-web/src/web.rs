@@ -440,6 +440,26 @@ async fn boot(opts: Options, bridge: Option<crate::host::Bridge>) -> Boot {
                 load_error = Some(e);
             }
         }
+        if load_error.is_none() {
+            // A `segments` folder beside the library files is a layout this version doesn't
+            // read (#3962): note it on the mirror, so the catalog store's `has_folder` check
+            // refuses the library before anything is written, as the native store does. An
+            // empty folder shows only in the library's own listing (OPFS); a folder holding
+            // files also lists under its own path (either backend). A check that couldn't
+            // be made stops start-up rather than risk overwriting the library (#1507).
+            let in_library = b.list(&lib_dir).await;
+            let in_segments = b.list(&format!("{lib_dir}/segments")).await;
+            match (in_library, in_segments) {
+                (Ok(names), Ok(entries)) => {
+                    if names.iter().any(|n| n.as_str() == "segments") || !entries.is_empty() {
+                        files.preload_folder("segments");
+                    }
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    load_error = Some(format!("couldn't check browser storage for a segments folder beside the library ({e})"));
+                }
+            }
+        }
         let index_read = b.read(THUMB_INDEX).await;
         match &index_read {
             Ok(Some(j)) => index = ThumbIndex::from_json(j),
