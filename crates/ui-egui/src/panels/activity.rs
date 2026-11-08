@@ -88,7 +88,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 ui.set_width(inner);
                 ui.spacing_mut().item_spacing.y = 3.0;
                 let mut interactive_hovered = false;
-                let max_scroll_h = (available_h - 44.0).max(60.0);
+                let has_footer = hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS);
+                let footer_reserve = if has_footer { 44.0 } else { 20.0 };
+                let max_scroll_h = (available_h - footer_reserve).max(0.0);
                 egui::ScrollArea::vertical().max_height(max_scroll_h).auto_shrink([false, true]).show(ui, |ui| {
                     for (i, task) in tasks.iter().take(shown).enumerate() {
                         if i > 0 {
@@ -101,7 +103,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         interactive_hovered |= hovered;
                     }
                 });
-                if hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS) {
+                if has_footer {
                     ui.add_space(4.0);
                     let text = if hidden > 0 { tr_format!("+{n} more", n = hidden) } else { tr("Show less").to_string() };
                     let r = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));

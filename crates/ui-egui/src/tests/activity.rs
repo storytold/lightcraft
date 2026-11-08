@@ -589,21 +589,35 @@ fn activity_stack_area_is_movable() {
     h.step();
     assert_eq!(h.last_cursor, egui::CursorIcon::PointingHand, "cancel cross shows pointing hand");
 
-    // Drag the activity stack using ui.drag from non-interactive frame padding
-    let start_x = initial_rect.min.x + 4.0;
-    let start_y = initial_rect.min.y + 4.0;
-    let dx = 100.0;
-    let dy = 60.0;
-    let r = h.request("ui.drag", json!({"x": start_x, "y": start_y, "toX": start_x + dx, "toY": start_y + dy, "steps": 6}), T);
+    // Hover frame padding -> Grab
+    let r = h.request("ui.move", json!({"x": initial_rect.min.x + 4.0, "y": initial_rect.min.y + 4.0}), T);
     assert_eq!(r["ok"], true, "{r:?}");
     h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::Grab, "frame padding hover shows grab cursor");
+
+    // Drag the activity stack from non-interactive frame padding, verifying Grabbing cursor mid-drag
+    let start_pos = initial_rect.min + egui::vec2(4.0, 4.0);
+    let target_pos = start_pos + egui::vec2(100.0, 60.0);
+    let modifiers = egui::Modifiers::NONE;
+    h.app.synthetic.push(egui::Event::PointerMoved(start_pos));
+    h.app.synthetic.push(egui::Event::PointerButton { pos: start_pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
+    h.step();
+    for i in 1..=4 {
+        h.app.synthetic.push(egui::Event::PointerMoved(start_pos + (target_pos - start_pos) * (i as f32 / 4.0)));
+        h.step();
+    }
+    assert_eq!(h.last_cursor, egui::CursorIcon::Grabbing, "cursor is Grabbing mid-drag");
+    h.app.synthetic.push(egui::Event::PointerButton { pos: target_pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    h.step();
+    h.step();
     let updated_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
-    assert!((updated_rect.min.x - (initial_rect.min.x + dx)).abs() < 5.0, "stack moved in x: {updated_rect:?}");
-    assert!((updated_rect.min.y - (initial_rect.min.y + dy)).abs() < 5.0, "stack moved in y: {updated_rect:?}");
+    assert!((updated_rect.min.x - (initial_rect.min.x + 100.0)).abs() < 5.0, "stack moved in x: {updated_rect:?}");
+    assert!((updated_rect.min.y - (initial_rect.min.y + 60.0)).abs() < 5.0, "stack moved in y: {updated_rect:?}");
     assert!(!g.is_cancelled(), "dragging the stack does not cancel the task");
 
-    // Dragging beyond the viewport edge is constrained on screen
+    // Dragging beyond the right and bottom viewport edges moves toward edges and is constrained on screen
     let content = h.view.ctx.content_rect();
+    let before_rb = updated_rect;
     let r = h.request(
         "ui.drag",
         json!({"x": updated_rect.min.x + 4.0, "y": updated_rect.min.y + 4.0, "toX": content.max.x + 500.0, "toY": content.max.y + 500.0, "steps": 6}),
@@ -611,9 +625,26 @@ fn activity_stack_area_is_movable() {
     );
     assert_eq!(r["ok"], true, "{r:?}");
     h.step();
-    let constrained_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
-    assert!(constrained_rect.max.x <= content.max.x + 1.0, "constrained in x: {constrained_rect:?} vs {content:?}");
-    assert!(constrained_rect.max.y <= content.max.y + 1.0, "constrained in y: {constrained_rect:?} vs {content:?}");
+    let constrained_rb = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(constrained_rb.min.x > before_rb.min.x, "stack moved right toward edge: {constrained_rb:?} vs {before_rb:?}");
+    assert!(constrained_rb.min.y > before_rb.min.y, "stack moved down toward edge: {constrained_rb:?} vs {before_rb:?}");
+    assert!(constrained_rb.max.x <= content.max.x + 1.0, "constrained in right: {constrained_rb:?} vs {content:?}");
+    assert!(constrained_rb.max.y <= content.max.y + 1.0, "constrained in bottom: {constrained_rb:?} vs {content:?}");
+
+    // Dragging past the left and top edges moves toward top-left and is constrained
+    let before_lt = constrained_rb;
+    let r = h.request(
+        "ui.drag",
+        json!({"x": constrained_rb.min.x + 4.0, "y": constrained_rb.min.y + 4.0, "toX": content.min.x - 500.0, "toY": content.min.y - 500.0, "steps": 6}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    let constrained_lt = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(constrained_lt.min.x < before_lt.min.x, "stack moved left toward edge: {constrained_lt:?} vs {before_lt:?}");
+    assert!(constrained_lt.min.y < before_lt.min.y, "stack moved up toward edge: {constrained_lt:?} vs {before_lt:?}");
+    assert!(constrained_lt.min.x >= content.min.x - 1.0, "constrained in left: {constrained_lt:?} vs {content:?}");
+    assert!(constrained_lt.min.y >= content.min.y - 1.0, "constrained in top: {constrained_lt:?} vs {content:?}");
 }
 
 #[test]
