@@ -705,7 +705,12 @@ fn mapped_settings(
 ) -> Result<(Value, Vec<String>), String> {
     let mut root = crate::preset_import::parse_lua(text)?;
     let deferred = strip_lua_sentinels(&mut root);
-    let (mut props, values) = crate::preset_import::lua_settings_props(&root)?;
+    let (mut props, mut values) = crate::preset_import::lua_settings_props(&root)?;
+    // Catalog Lua names the component inversion `Inverted` while XMP's is `MaskInverted`;
+    // rename it so an inverted mask keeps its inversion instead of importing as normal.
+    for v in values.values_mut() {
+        alias_catalog_inverted(v);
+    }
     // A catalog's develop settings carry the crop edges and angle but no `HasCrop` (XMP has it):
     // any crop field means the photo is cropped.
     const CROP: [&str; 5] = ["crs:CropLeft", "crs:CropTop", "crs:CropRight", "crs:CropBottom", "crs:CropAngle"];
@@ -785,6 +790,24 @@ fn in_photo_frame(catalog: Orientation, user: Orientation) -> Orientation {
     let (flip, turns) = user.to_parts();
     let o = if flip { catalog.flipped_h() } else { catalog };
     (0..turns).fold(o, |o, _| o.rotated(true))
+}
+
+/// Rename a catalog Lua component's `Inverted` to XMP's `MaskInverted` (see [`mapped_settings`]);
+/// a `crs:MaskInverted` already present wins, and this does not touch `Flipped`.
+fn alias_catalog_inverted(v: &mut lightcraft_meta::XmpValue) {
+    use lightcraft_meta::XmpValue;
+    match v {
+        XmpValue::Array(items) => items.iter_mut().for_each(alias_catalog_inverted),
+        XmpValue::Struct(map) => {
+            if let Some(inverted) = map.remove("crs:Inverted")
+                && !map.contains_key("crs:MaskInverted")
+            {
+                map.insert("crs:MaskInverted".into(), inverted);
+            }
+            map.values_mut().for_each(alias_catalog_inverted);
+        }
+        XmpValue::Text(_) => {}
+    }
 }
 
 /// Lightroom's masks in LightCraft's frame. Like the crop's corners, their positions are on the
