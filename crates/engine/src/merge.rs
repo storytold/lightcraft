@@ -428,6 +428,9 @@ impl Session {
     /// groups; use [`Session::plan_merges`] for one job per group.
     pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
         let groups = self.merge_groups(ids);
+        if groups.len() > 1 {
+            return Err(EngineError::Other("selection holds more than one merge group; plan one merge per stack with plan_merges".into()));
+        }
         let read = self.merge_reader();
         let mut seen = std::collections::HashSet::new();
         let mut planned: Vec<Vec<(PhotoId, String)>> = Vec::new();
