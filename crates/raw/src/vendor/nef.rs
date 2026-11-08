@@ -163,9 +163,9 @@ const MEASURED_BODIES: &[MeasuredBody] = &[
     MeasuredBody { model: "NIKON D600", size: (6080, 4028), bits: 14, crop: (8, 6, 6016, 4016), white: None },
     MeasuredBody { model: "NIKON D610", size: (6080, 4028), bits: 12, crop: (8, 6, 6016, 4016), white: None },
     MeasuredBody { model: "NIKON D610", size: (6080, 4028), bits: 14, crop: (8, 6, 6016, 4016), white: None },
-    // D800: 6 files; D800E: 2, both 14-bit, with the D800 as sibling; the D800E's 12-bit row inherits the
-    // D800's measured frame (same sensor readout) — not independently measured, no pinned sample;
-    // masked: right 14 (issue #914, the top in portrait)
+    // D800: 6 files; D800E: 2, both 14-bit, with the D800 as sibling; the D800E's 12-bit row takes the
+    // D800's measured frame (same sensor readout) and was verified on the owner's own 12-bit D800E files —
+    // private shots, so no CC0 corpus sample is pinned; masked: right 14 (issue #914, the top in portrait)
     MeasuredBody { model: "NIKON D800", size: (7424, 4924), bits: 12, crop: (8, 6, 7360, 4912), white: None },
     MeasuredBody { model: "NIKON D800", size: (7424, 4924), bits: 14, crop: (8, 6, 7360, 4912), white: None },
     MeasuredBody { model: "NIKON D800E", size: (7424, 4924), bits: 12, crop: (8, 6, 7360, 4912), white: None },
