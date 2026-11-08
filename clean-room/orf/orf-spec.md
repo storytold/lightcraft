@@ -25,7 +25,7 @@ Compressed Olympus ORF and ORI files adhere to the TIFF 6.0 container specificat
 
 ### Stream Prefix
 Within the payload strip:
-1. The stream begins with an $N$-byte big-endian unsigned integer prefix (where $N \in \{4, 8\}$ is specified by ImageProcessing tag `0x0653`). Valid compressed streams require this value to equal `1`.
+1. The stream begins with an $N$-byte big-endian unsigned integer prefix (where $1 \le N \le 8$, typically 4 or 8, is specified by ImageProcessing tag `0x0653`). Valid compressed streams require this value to equal `1`.
 2. The $N$-byte prefix is followed immediately by a two-byte sentinel delimiter: `[0x00, 0x00]`.
 3. The compressed entropy bitstream begins immediately at byte index $N + 2$.
 

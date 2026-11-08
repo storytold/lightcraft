@@ -31,6 +31,11 @@ Implemented a clean-room, pure safe-Rust bitstream decoder for compressed Olympu
    - Independent verification confirming zero code or structural derivation from GPL/LGPL sources (LibRaw, dcraw, rawspeed, RawTherapee, darktable).
    - Structural AST, symbol name, and control flow audits confirm clean-room provenance.
 
+5. **Corpus Expansion & Format Registration (`xtask/src/raw_samples.rs`, `crates/raw/tests/it/olympus_samsung_corpus.rs`)**:
+   - Registered and pinned manifest entries for 112 Olympus and OM System `.orf` and `.ori` sample files covering Four Thirds DSLRs, PEN, OM-D, Tough, and modern OM System models.
+   - Enabled `.ori` high-resolution composite raw discovery across import and file-checking workflows (`crates/engine/src/import/files.rs`, `crates/engine/src/cmd/recheck.rs`).
+   - Implemented comprehensive corpus integration tests verifying format probing, decoding integrity, pinned sensor dimensions, and Pearson correlation against camera JPEGs across all 112 samples.
+
 **Not in this PR:**
 - High-resolution multi-shot pixel-shift synthesis (each raw sub-exposure in an ORI/ORF decodes as an independent Bayer sensor raster).
 - Custom per-camera color matrices (continues using file-carried matrix or standard color fallback).
@@ -39,10 +44,15 @@ Implemented a clean-room, pure safe-Rust bitstream decoder for compressed Olympu
 
 - [x] `cargo xtask ci` passes on this branch (`cargo fmt`, `cargo clippy`, all unit tests, `layers`, `assets`, `roots`, `wasm`).
 - [x] Verified against CC0 sample corpus (`crates/raw/tests/it/olympus_samsung_corpus.rs`):
-  - `orf-olympus-em1.orf` (Olympus E-M1): Pearson correlation $r = 0.995$ against the camera's embedded JPEG preview (downscaled green channel).
-  - `orf-olympus-em10iii.orf` (Olympus E-M10 Mark III): Pearson correlation $r = 0.929$ against the camera's embedded JPEG preview.
-  - `Olympus - E-M1MarkII - 16bit (4_3).ORI` (Olympus E-M1 Mark II high-res raw): Pearson correlation $r = 0.998$ against the camera's embedded JPEG preview.
-  - `Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI` (Olympus E-M5 Mark II high-res raw): Pearson correlation $r = 0.994$ against the camera's embedded JPEG preview.
+  - **Expanded targeted check across all 112 Olympus and OM System corpus files (`all_112_olympus_corpus_samples_decode_like_camera_jpeg`)**:
+    - Verifies all 112 `.orf` and `.ori` samples registered in `xtask/src/raw_samples.rs` spanning four-thirds DSLRs, PEN, OM-D, Tough, and OM System models.
+    - Validates format probe (`Some(RawFormat::Orf)`), decoding and `raw.validate()`, pinned sensor dimensions, and consistency between `probe_info` and `raw.info()`.
+    - Asserts green photosites follow the camera's embedded JPEG preview with Pearson $r > 0.60$ (and $r > 0.55$ for the legacy E-10 with low-resolution thumbnail; typical bodies $r \ge 0.92 - 0.999$).
+  - **Key compressed body and high-resolution composite raw checks**:
+    - `orf-olympus-em1.orf` (Olympus E-M1): Pearson correlation $r = 0.995$ against the camera's embedded JPEG preview (downscaled green channel).
+    - `orf-olympus-em10iii.orf` (Olympus E-M10 Mark III): Pearson correlation $r = 0.929$ against the camera's embedded JPEG preview.
+    - `ori-olympus-e-m1markii-16bit-4-3-2.ori` (Olympus E-M1 Mark II high-res raw): Pearson correlation $r = 0.998$ against the camera's embedded JPEG preview.
+    - `ori-olympus-e-m5-mark-ii-16bit-16bit-normal-4-3.ori` (Olympus E-M5 Mark II high-res raw): Pearson correlation $r = 0.994$ against the camera's embedded JPEG preview.
 - [x] Automated review via `coderabbit review --agent`: 0 findings across all files.
 - [x] Regression testing: Synthetic malformed/truncated bitstream inputs reject gracefully without panicking or allocating unconstrained memory.
 

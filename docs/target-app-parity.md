@@ -230,7 +230,7 @@ evidence. The stage stays **alpha**.
 
 **Alpha.** Core workflows exist end to end (import, cull, develop, mask, export, catalog migration),
 but ready-for-real-work is ~62%, below the ~75% beta bar, and the main file formats have blocking
-gaps: Canon CR3 decodes from sensor data on 26 verified bodies, compressed ORF and HE NEF use embedded previews when available, while colour on every non-DNG raw is estimated rather than measured.
+gaps: Canon CR3 decodes from sensor data on 26 verified bodies, compressed ORF can decode from sensor data, and HE NEF uses embedded previews when available, while colour on every non-DNG raw is estimated rather than measured.
 
 **Alpha gate:** all six core workflows (import, cull, develop, save and reopen, batch looks, export)
 work end to end on macOS; see the table in [roadmap.md](roadmap.md#alpha-gate). The partial rows (CR3
