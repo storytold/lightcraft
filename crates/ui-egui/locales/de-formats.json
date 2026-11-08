@@ -98,6 +98,7 @@
   "Preset: {name}": "Vorgabe: {name}",
   "Preview only — editing the camera's embedded JPEG ({})": "Nur Vorschau – das eingebettete Kamera-JPEG wird bearbeitet ({})",
   "Preview only — {}": "Nur Vorschau – {}",
+  "{title}: {line}": "{title}: {line}",
   "Previews ready for {done} photo{plural}": "Vorschauen für {done} Foto{plural} fertig",
   "Profile: {}": "Profil: {}",
   "Proof Copy ({})": "Softproof-Kopie ({})",
