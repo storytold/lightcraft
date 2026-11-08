@@ -964,6 +964,24 @@ fn dng_embedded_crs_settings_are_read_on_import() {
     s2.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
     assert_eq!(s2.catalog.photos().next().unwrap().develop.light.contrast, -10.0);
     let _ = std::fs::remove_dir_all(&src);
+
+    // A sidecar that can't be read keeps precedence too, as on Read Metadata from File
+    // (`sidecar::read_packet`): the DNG imports as one without settings, not with its embedded ones.
+    let other = temp_dir("dng-unreadable-sidecar");
+    std::fs::write(other.join("synth.dng"), synthetic_dng(x)).unwrap();
+    std::fs::write(other.join("synth.xmp"), [0xff, 0xfe, 0xfd]).unwrap();
+    std::fs::write(other.join("plain.dng"), synthetic_dng_with(None, lightcraft_meta::Metadata::default())).unwrap();
+    let mut s3 = Session::new().with_fs();
+    let r = s3.execute("library.import", &json!({"paths": [other.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().unwrap().len(), 2, "{r}");
+    let by_name = |name: &str| s3.catalog.photos().find(|p| p.file_name == name).unwrap().clone();
+    let (unreadable, plain) = (by_name("synth.dng"), by_name("plain.dng"));
+    assert_eq!(
+        (unreadable.develop.wb.temp, unreadable.develop.light.contrast, unreadable.develop.effects.dehaze, unreadable.rating),
+        (plain.develop.wb.temp, plain.develop.light.contrast, plain.develop.effects.dehaze, plain.rating),
+        "the embedded settings don't apply behind a sidecar that can't be read"
+    );
+    let _ = std::fs::remove_dir_all(&other);
 }
 
 fn jpeg_xmp_packet(rating: i8, title: &str) -> String {
