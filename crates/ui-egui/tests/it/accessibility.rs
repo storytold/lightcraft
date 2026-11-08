@@ -151,11 +151,7 @@ fn every_interactive_node_has_a_name_in_every_view_and_tool() {
 #[test]
 fn localized_accessibility_smoke_keeps_controls_named() {
     let mut problems = Vec::new();
-    for (view, right) in [
-        (ViewMode::PhotoGrid, RightPanel::None),
-        (ViewMode::Detail, RightPanel::Info),
-        (ViewMode::Survey, RightPanel::None),
-    ] {
+    for (view, right) in [(ViewMode::PhotoGrid, RightPanel::None), (ViewMode::Detail, RightPanel::Info), (ViewMode::Survey, RightPanel::None)] {
         let h = harness_in_language(view, right, lightcraft_ui_egui::i18n::Locale::De);
         problems.extend(audit(&h, &format!("German/{view:?}/{right:?}")));
     }
