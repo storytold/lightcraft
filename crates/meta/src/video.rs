@@ -571,7 +571,13 @@ fn verify_location_boxes(bytes: &[u8], top_level: &mut usize, nested: &mut usize
         if *budget == 0 {
             return Err("can't verify video location: metadata box limit exceeded".into());
         }
-        let size = be32(bytes, at).ok_or("can't verify video location: truncated box header")?;
+        // Bytes that are no box at the top level are a trailer (or a cut-short box); either can hold a location.
+        let unreadable = if depth == 0 {
+            "can't verify video location: bytes that are not a complete video box (a trailer can hold a location)"
+        } else {
+            "can't verify video location: truncated box header"
+        };
+        let size = be32(bytes, at).ok_or(unreadable)?;
         let (len, header) = match size {
             0 => (bytes.len().saturating_sub(at), 8),
             1 => (
@@ -580,7 +586,11 @@ fn verify_location_boxes(bytes: &[u8], top_level: &mut usize, nested: &mut usize
             ),
             n => (n as usize, 8),
         };
-        let end = at.checked_add(len).filter(|end| len >= header && *end <= bytes.len()).ok_or("can't verify video location: incomplete box")?;
+        let end = at.checked_add(len).filter(|end| len >= header && *end <= bytes.len()).ok_or(if depth == 0 {
+            unreadable
+        } else {
+            "can't verify video location: incomplete box"
+        })?;
         let one = bytes.get(at..end).ok_or("can't verify video location: invalid box range")?;
         let mut one_budget = 1;
         let b = read_boxes(one, &mut one_budget).pop().ok_or("can't verify video location: malformed box")?;

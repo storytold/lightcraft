@@ -4083,6 +4083,76 @@ fn a_trailer_after_the_movie_header_ends_the_clip_for_import_only() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// What follows a trailer is never read; a huge tail costs one header read; a long chain of valid
+/// unknown boxes is bounded by the box limit; and a clip with a trailer works end to end.
+#[test]
+fn a_trailer_after_the_movie_header_is_bounded_and_the_clip_still_works() {
+    use std::io::Write;
+    let clip = synthetic_mp4(1000, 2_000, 640, 360, 0);
+    let read = |bytes: &[u8], fragments: bool| {
+        crate::files::read_video_metadata_from_with_fragments(&mut std::io::Cursor::new(bytes), bytes.len() as u64, "clip.mp4", fragments)
+    };
+    let boxed = |kind: &[u8; 4], payload: &[u8]| {
+        let mut b = ((8 + payload.len()) as u32).to_be_bytes().to_vec();
+        b.extend_from_slice(kind);
+        b.extend_from_slice(payload);
+        b
+    };
+
+    // a second moov or mdat after the trailer is not read: the trailer ends the clip
+    for kind in [b"moov", b"mdat"] {
+        let mut bytes = clip.clone();
+        bytes.extend_from_slice(&[0xEE; 5]);
+        bytes.extend_from_slice(&boxed(kind, &[0; 32]));
+        assert_eq!(read(&bytes, false).unwrap(), clip, "{}", String::from_utf8_lossy(kind));
+        assert!(read(&bytes, true).is_err());
+    }
+
+    // a chain of valid unknown boxes up to the box limit is read, one more is refused
+    let mut count = 0usize;
+    let mut at = 0usize;
+    while at < clip.len() {
+        at += u32::from_be_bytes([clip[at], clip[at + 1], clip[at + 2], clip[at + 3]]) as usize;
+        count += 1;
+    }
+    let free = boxed(b"free", &[]);
+    let mut at_limit = clip.clone();
+    for _ in count..crate::files::MAX_VIDEO_TOP_LEVEL_BOXES {
+        at_limit.extend_from_slice(&free);
+    }
+    assert_eq!(read(&at_limit, false).unwrap(), clip);
+    at_limit.extend_from_slice(&free);
+    assert!(read(&at_limit, false).unwrap_err().contains("box limit"));
+
+    // a very large tail is skipped after one header read
+    let src = temp_dir("video-trailer-large");
+    let path = src.join("big.mp4");
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(&clip).unwrap();
+    f.write_all(b"\xff\xff\xff\xf0INSV-TRAILER").unwrap();
+    f.set_len(clip.len() as u64 + (1 << 30)).unwrap();
+    drop(f);
+    assert_eq!(crate::files::read_video_metadata_file(path.to_str().unwrap()).unwrap(), clip);
+
+    // end to end on a clip with a trailer: allMetadata reads, Original copies, Remove Location refuses
+    let mut bytes = clip.clone();
+    bytes.extend_from_slice(&[0xEE; 40]);
+    let path = src.join("clip.mp4");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    let id = s.catalog.photos().next().unwrap().id;
+    let r = s.execute("photo.allMetadata", &json!({"id": id.0})).unwrap();
+    assert!(r["exif"].as_array().unwrap().iter().any(|row| row["name"] == "Duration" && row["value"] == "2.00 s"), "{r}");
+    let plain = crate::export::ExportOptions::from_json(&json!({"format": "original", "removeLocation": false}));
+    assert_eq!(crate::export::export_photo(&mut s, id, &plain, 1).unwrap().bytes, bytes);
+    let private = crate::export::ExportOptions::from_json(&json!({"format": "original", "removeLocation": true}));
+    let refusal = crate::export::export_photo(&mut s, id, &private, 1).err().unwrap();
+    assert!(refusal.contains("trailer"), "{refusal}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// A catalogued video (and an old VIDEO entry) gets no render, thumb, face or smart-preview job.
 #[test]
 fn a_catalogued_video_asks_the_renderer_for_nothing() {
