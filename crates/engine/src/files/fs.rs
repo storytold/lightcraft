@@ -91,10 +91,14 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         let meta = file.metadata().ok();
         let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
         let _permit = crate::memory::work_gate().acquire(len);
+        // the time is taken after the modification time and before the bytes: a write while or
+        // after they are read is stamped this second or later
+        let read_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().and_then(|d| i64::try_from(d.as_secs()).ok());
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
         let mut info = probe_bytes(path, &bytes)?;
         info.file_modified = meta.as_ref().and_then(modified_iso);
+        info.read_at = read_at;
         Ok(info)
     });
     (loader, probe)

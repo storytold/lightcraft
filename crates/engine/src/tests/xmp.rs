@@ -1070,6 +1070,30 @@ fn embedded_jpeg_settings_rewritten_after_a_scan_import_as_they_are_now() {
 }
 
 #[test]
+fn embedded_jpeg_settings_rewritten_in_the_second_the_scan_read_them_import_as_they_are_now() {
+    let src = temp_dir("jpeg-xmp-scan-same-second");
+    let path = src.join("edited.jpg");
+    write_jpeg_xmp(&path, &jpeg_develop_packet(""));
+    // The scan reads the file in the second it was written, and the rewrite below lands in that
+    // same second at the same size, so the file's time and size are as the scan saw them. Its time
+    // is set a minute ahead so the scan and the rewrite share it whatever second the test runs in.
+    let stamp = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(stamp).unwrap();
+    let mut s = Session::new().with_fs();
+    let found = crate::import::scan(&mut s, &[src.to_string_lossy().to_string()]);
+    assert!(found.iter().any(|c| c.name == "edited.jpg" && c.error.is_none()), "{found:?}");
+    let size = std::fs::metadata(&path).unwrap().len();
+    write_jpeg_xmp(&path, &jpeg_develop_packet("").replace(r#"crs:Contrast2012="+30""#, r#"crs:Contrast2012="-30""#));
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(stamp).unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), size, "rewritten at the same size");
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().unwrap().len(), 1, "{r}");
+    let photo = s.catalog.photos().find(|p| p.file_name == "edited.jpg").unwrap().clone();
+    assert_eq!(photo.develop.light.contrast, -30.0, "the settings the file has now, not the scan's");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
 fn embedded_jpeg_xmp_reread_refreshes_metadata_and_undoes_once() {
     let src = temp_dir("jpeg-xmp-refresh");
     let file = src.join("photo.jpg");

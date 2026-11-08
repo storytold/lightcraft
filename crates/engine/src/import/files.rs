@@ -372,11 +372,15 @@ impl Seen {
     /// same modification time (to the second, as the probe records it). A file edited in place
     /// keeps its size when only a few bytes change, such as an embedded XMP packet rewritten at the
     /// same length, so the size alone can't tell. For the same reason a file whose modification
-    /// time isn't known, now or when it was probed, counts as changed.
+    /// time isn't known, now or when it was probed, counts as changed. The time to the second
+    /// tells only for a file last written before the second it was read (`info.read_at`): one
+    /// written again later in that second keeps the time, so it counts as changed too.
     pub(crate) fn unchanged_since(&self, info: &ProbeInfo) -> bool {
         match self {
             Seen::At { is_file: true, len, modified: Some(secs) } => {
-                *len == info.file_size && info.file_modified.as_deref() == Some(crate::import::civil(*secs).as_str())
+                *len == info.file_size
+                    && info.file_modified.as_deref() == Some(crate::import::civil(*secs).as_str())
+                    && info.read_at.is_some_and(|read| *secs < read)
             }
             _ => false,
         }
@@ -733,19 +737,19 @@ mod prepared_tests {
         files.push(gone.clone());
         let mut s = Session::new();
         let mut job = ImportJob::new(&mut s, ImportOptions { mode: ImportMode::Add, ..ImportOptions::default() }).unwrap();
-        // as the probe records it: the file's modification time, to the second
-        let modified = |p: &str| std::fs::metadata(p).ok().and_then(|m| crate::files::modified_secs(&m)).map(crate::import::civil);
-        let probed = |size: u64, modified: Option<String>| ProbeInfo {
+        // as the probe records it: the file's modification time, to the second, read a second later
+        let modified = |p: &str| std::fs::metadata(p).ok().and_then(|m| crate::files::modified_secs(&m));
+        let probed = |size: u64, modified: Option<i64>| ProbeInfo {
             format: "JPEG".into(),
             file_size: size,
-            file_modified: modified,
+            file_modified: modified.map(crate::import::civil),
+            read_at: modified.map(|t| t + 1),
             ..ProbeInfo::default()
         };
         job.cache.insert(files[0].clone(), probed(10, modified(&files[0])));
         job.cache.insert(files[1].clone(), probed(5, modified(&files[1])));
         // probed a minute before it was written again at the same size
-        let earlier = std::fs::metadata(&files[3]).ok().and_then(|m| crate::files::modified_secs(&m)).map(|t| crate::import::civil(t - 60));
-        job.cache.insert(files[3].clone(), probed(10, earlier));
+        job.cache.insert(files[3].clone(), probed(10, modified(&files[3]).map(|t| t - 60)));
         job.cache.insert(gone.clone(), probed(10, None));
         let read = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let read_in_probe = read.clone();
@@ -768,15 +772,29 @@ mod prepared_tests {
     /// probed, and the same: with no time on either side, only the size would be left to compare.
     #[test]
     fn a_probe_is_reused_only_when_both_modification_times_are_known_and_equal() {
-        let probed = |modified: Option<String>| ProbeInfo { file_size: 10, file_modified: modified, ..ProbeInfo::default() };
-        let at = |modified: Option<i64>| Seen::At { is_file: true, len: 10, modified };
         let secs = 1_700_000_000;
+        let probed = |modified: Option<String>| ProbeInfo { file_size: 10, file_modified: modified, read_at: Some(secs + 1), ..ProbeInfo::default() };
+        let at = |modified: Option<i64>| Seen::At { is_file: true, len: 10, modified };
         let then = Some(crate::import::civil(secs));
         assert!(at(Some(secs)).unchanged_since(&probed(then.clone())));
         assert!(!at(Some(secs + 60)).unchanged_since(&probed(then.clone())), "written again since");
         assert!(!at(None).unchanged_since(&probed(None)), "no time now or then");
         assert!(!at(None).unchanged_since(&probed(then)), "no time now");
         assert!(!at(Some(secs)).unchanged_since(&probed(None)), "no time when probed");
+    }
+
+    /// A file read in the second it was last written may be written again later in that second,
+    /// at the same size, and keep its time: its probe isn't reused. Nor is one with no read time.
+    #[test]
+    fn a_probe_is_reused_only_for_a_file_written_before_the_second_it_was_read() {
+        let secs = 1_700_000_000;
+        let probed =
+            |read_at: Option<i64>| ProbeInfo { file_size: 10, file_modified: Some(crate::import::civil(secs)), read_at, ..ProbeInfo::default() };
+        let now = Seen::At { is_file: true, len: 10, modified: Some(secs) };
+        assert!(now.unchanged_since(&probed(Some(secs + 1))), "written before the second it was read");
+        assert!(!now.unchanged_since(&probed(Some(secs))), "read in the second it was written");
+        assert!(!now.unchanged_since(&probed(Some(secs - 5))), "its time is after the read (another clock)");
+        assert!(!now.unchanged_since(&probed(None)), "no read time");
     }
 
     /// Given photos on a network share, when an import looks for their sidecars, then it asks about
