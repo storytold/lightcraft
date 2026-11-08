@@ -519,6 +519,8 @@ impl LightcraftApp {
         let loupe = self.ui.fullscreen || self.ui.view == state::ViewMode::Detail;
         let at = if loupe { self.session.active() } else { None };
         let backward = self.look_ahead.backward();
+        // the background build makes previews at Build Standard-Sized Previews' size (#3947)
+        self.session.prep.edge = self.ui.settings.standard_build_edge(self.session.loupe_edge) as usize;
         self.session.prep_tick(mode, at, backward);
         if self.session.preview_build.as_ref().is_some_and(|b| b.running()) {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));

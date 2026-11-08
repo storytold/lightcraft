@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Previews are built once
+- Background preparation now builds previews at the same size as File ▸ Previews ▸ Build Standard-Sized Previews
+  (the Settings → Performance size, else at least 2560 px), so that build skips them instead of rendering every one
+  again (issue #3947).
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth

@@ -2354,6 +2354,20 @@ fn background_preparation_advances_while_the_window_is_hidden() {
     let _ = ctx.run_logic(&visible, |ctx| app.logic(ctx));
     assert_eq!(app.prep_ticks, 3, "a shown pass advances it once");
 }
+
+/// #3947: the background preparation builds previews at Build Standard-Sized Previews' size (a
+/// chosen limit, else the standard 2560 px), so that build skips them instead of rendering them again.
+#[test]
+fn background_preparation_builds_at_the_standard_build_size() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let hidden = viewport_raw(egui::vec2(800.0, 600.0), false);
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    assert_eq!(app.session.prep.edge, crate::state::STANDARD_PREVIEW_EDGE as usize);
+    app.ui.settings.preview_limit = 1600;
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    assert_eq!(app.session.prep.edge, 1600, "a chosen limit");
+}
 /// CodeRabbit on #3077/#3080: a background build that couldn't start asks for a frame at its retry
 /// time, so the retry happens with no input and no other timed frame.
 #[test]
