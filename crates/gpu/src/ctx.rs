@@ -65,6 +65,23 @@ const MODULES: &[Module] = &[
         ],
     },
     Module {
+        src: include_str!("wgsl/nrcj.wgsl"),
+        bindings: &[("a", false, "f32"), ("b", false, "f32"), ("dst", true, "f32")],
+        entries: &[
+            "nrcj_yuv",
+            "nrcj_uv",
+            "nrcj_samples",
+            "nrcj_speck",
+            "nrcj_pilot",
+            "nrcj_links1",
+            "nrcj_paths",
+            "nrcj_links",
+            "nrcj_dh",
+            "nrcj_dv",
+            "nrcj_recon",
+        ],
+    },
+    Module {
         src: include_str!("wgsl/spot.wgsl"),
         bindings: &[("img", true, "f32"), ("pts", false, "f32"), ("al", true, "f32"), ("sp", true, "f32"), ("df", true, "f32"), ("wt", true, "f32")],
         entries: &["spot_prep", "spot_apply", "spot_score"],
@@ -294,7 +311,8 @@ pub(crate) struct Tracked(wgpu::Buffer);
 
 impl Tracked {
     fn new(b: wgpu::Buffer) -> Tracked {
-        ALLOCATED.fetch_add(b.size(), Ordering::Relaxed);
+        let now = ALLOCATED.fetch_add(b.size(), Ordering::Relaxed) + b.size();
+        PEAK.fetch_max(now, Ordering::Relaxed);
         Tracked(b)
     }
 }
@@ -317,6 +335,15 @@ thread_local! {
 
 /// Bytes of device buffers that exist (in use, retired or pooled).
 static ALLOCATED: AtomicU64 = AtomicU64::new(0);
+/// Most bytes allocated since [`take_peak`] (profiling).
+static PEAK: AtomicU64 = AtomicU64::new(0);
+
+/// The most bytes allocated since the last call; starts over from what is allocated now.
+pub(crate) fn take_peak() -> (u64, u64) {
+    let now = ALLOCATED.load(Ordering::Relaxed);
+    (PEAK.swap(now, Ordering::Relaxed), now)
+}
+
 /// Bytes waiting in per-thread retired lists.
 static RETIRED_BYTES: AtomicU64 = AtomicU64::new(0);
 /// The render device is lost: wgpu's `poll` panics from then on, so [`Gpu::poll`] stops calling it.
@@ -403,6 +430,7 @@ fn constants() -> String {
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }
+    s += &format!("const DEEP_WRITTEN: u32 = {}u;\n", crate::params::DEEP_WRITTEN);
     for (name, idx) in crate::params::finish_fields() {
         s += &format!("const F_{name}: u32 = {idx}u;\n");
     }
