@@ -171,6 +171,22 @@ pub(super) fn fit_tone_with_shadows(
 }
 
 /// Ridge-regularised 3×3 chromaticity matrix (luminance-normalised RGB) on the training pairs.
+/// Whether a matrix fitted to one photo's camera JPEG can be a camera's colour: in every row the
+/// channel's own input weighs most, and no other channel's weighs more than [`MAX_CROSS_WEIGHT`]. A fit on a proxy with few saturated colours can pass the holdout
+/// gates with a row such as blue = 2.97·R − 4.50·G + 2.57·B (a Canon EOS 400D CR2, #3973; also
+/// #3452), which gives a saturated orange as much blue as red and turns it magenta. Such a fit is
+/// refused by [`fit_matrix`], for every fit that uses it (the full look, the partial look's matrix,
+/// a pooled camera profile), so the photo falls back as when no matrix can be fitted (the camera's
+/// measured spectral matrices, where there are some).
+pub(super) fn plausible_matrix(m: &Mat3) -> bool {
+    (0..3).all(|r| (0..3).all(|c| c == r || (m.0[r][c] < m.0[r][r] && m.0[r][c] <= MAX_CROSS_WEIGHT)))
+}
+
+/// The largest weight [`plausible_matrix`] lets another channel's input have in a row. Camera
+/// colour matrices keep their positive cross terms well under half; the refused fits have 1.58 and
+/// more (#3973 refit: 2.97, its fit on all pixels: 2.07; #3452: 1.58).
+const MAX_CROSS_WEIGHT: f64 = 1.0;
+
 pub(super) fn fit_matrix(pairs: &[([f64; 3], [f64; 3])]) -> Option<Mat3> {
     let mut gram = [[0.0; 3]; 3];
     let mut cross = [[0.0; 3]; 3];
@@ -202,7 +218,11 @@ pub(super) fn fit_matrix(pairs: &[([f64; 3], [f64; 3])]) -> Option<Mat3> {
         cross[i][i] += regularization;
     }
     let matrix = Mat3(cross).mul(&Mat3(gram).inverse()?);
-    matrix.0.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0).then_some(matrix)
+    let sane = matrix.0.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0);
+    if sane && !plausible_matrix(&matrix) && lightcraft_pipeline::profiling() {
+        eprintln!("[profile] camera look: fitted matrix {:?} refused: a row's largest weight is another channel's", matrix.0);
+    }
+    (sane && plausible_matrix(&matrix)).then_some(matrix)
 }
 
 /// Neighbourhood luminance ratio above which a pixel counts as an edge for the second attempt

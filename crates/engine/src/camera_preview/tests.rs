@@ -2632,3 +2632,22 @@ fn a_narrow_black_and_white_curve_that_darkens_the_bright_areas_is_refused() {
         assert!(sky > 0.8, "an accepted curve must not darken what the camera renders at 0.93: {sky}");
     }
 }
+
+/// #3973 / #3452: a fitted matrix whose row is led by another channel's input is refused, so a
+/// fit like the Canon EOS 400D's (blue = 2.97·R − 4.50·G + 2.57·B, oranges turned magenta) never
+/// becomes a photo's colour; an ordinary fit (a Nikon Z 7II's, from #3865) is kept.
+#[test]
+fn a_fitted_matrix_led_by_another_channel_is_refused() {
+    use super::pairs::plausible_matrix;
+    let eos_400d = Mat3([[1.105, 0.017, -0.158], [-0.301, 1.387, -0.076], [2.970, -4.496, 2.569]]);
+    // #3452 reports only the third row of its X-S10 fit; the first two here are ordinary
+    let x_s10_row = Mat3([[1.2, -0.1, -0.1], [-0.2, 1.3, -0.1], [-1.9, 1.58, 1.39]]);
+    let z7_ii = Mat3([[1.791, -0.633, -0.149], [-0.305, 1.390, -0.089], [-0.020, -1.653, 2.675]]);
+    assert!(!plausible_matrix(&eos_400d), "blue row led by red");
+    assert!(!plausible_matrix(&x_s10_row), "blue row led by green");
+    // the 400D's fit on all its pixels: led by blue, but red still weighs 2.07 in the blue row
+    let eos_400d_all = Mat3([[1.063, 0.073, -0.169], [-0.205, 1.267, -0.055], [2.066, -3.371, 2.376]]);
+    assert!(!plausible_matrix(&eos_400d_all), "a cross weight of 2.07");
+    assert!(plausible_matrix(&z7_ii));
+    assert!(plausible_matrix(&Mat3([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])));
+}
