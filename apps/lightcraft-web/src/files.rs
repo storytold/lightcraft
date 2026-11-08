@@ -203,7 +203,10 @@ pub const LIBRARY_FILES: [&str; 6] = ["catalog.snap", "catalog.log", "presets.js
 /// catalog [`Store`] reads only what is preloaded, so a copy left by an earlier page load would
 /// look like a free name and be replaced by the next one.
 pub fn damaged_logs(listed: Vec<String>) -> Vec<String> {
-    listed.into_iter().filter(|n| n.starts_with("catalog.log.damaged-")).collect()
+    // the two shapes the catalog gives a copy: `-<seq>` and `-<seq>-<n>`
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let kept = |n: &String| n.strip_prefix("catalog.log.damaged-").is_some_and(|rest| rest.split('-').count() <= 2 && rest.split('-').all(digits));
+    listed.into_iter().filter(kept).collect()
 }
 
 /// Is a browser storage error, by its `DOMException` name, "the entry doesn't exist"? Only
@@ -361,6 +364,20 @@ mod tests {
         let reads = vec![("catalog.snap", Ok(Some(b"snap".to_vec()))), ("catalog.log", Ok(None))];
         preload_library(&files, reads).unwrap();
         assert_eq!(files.get("catalog.snap").as_deref(), Some(&b"snap"[..]));
+    }
+
+    #[test]
+    fn only_the_names_of_kept_damaged_logs_are_read() {
+        let listed = [
+            "catalog.log.damaged-7",
+            "catalog.log.damaged-7-2",
+            "catalog.log.damaged-",
+            "catalog.log.damaged-7-2-3",
+            "catalog.log.damaged-x",
+            "catalog.log",
+            "catalog.log.damaged-7.tmp",
+        ];
+        assert_eq!(damaged_logs(listed.iter().map(|n| n.to_string()).collect()), ["catalog.log.damaged-7", "catalog.log.damaged-7-2"]);
     }
 
     /// A damaged log kept in an earlier page load is read at start-up, so the next one kept at the

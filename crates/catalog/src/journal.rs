@@ -438,7 +438,7 @@ fn keep_damaged_log(store: &mut dyn Store, seq: u64, log: &[u8]) -> std::io::Res
         }
     }
     Err(std::io::Error::other(format!(
-        "{MAX_DAMAGED_COPIES} damaged logs kept as {LOG}.damaged-{seq} are already there; nothing was changed: move some out of the library folder and open it again"
+        "{MAX_DAMAGED_COPIES} damaged logs kept as {LOG}.damaged-{seq} are already there; nothing was changed: remove some of them and open the library again"
     )))
 }
 
