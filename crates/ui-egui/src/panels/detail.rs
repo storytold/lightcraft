@@ -381,7 +381,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// Names the loupe for screen readers as the grid names the same photo (file, rating, flag, label), not
 /// just "Photo".
 fn announce_photo(app: &LightcraftApp, resp: &egui::Response, photo: &lightcraft_catalog::Photo) {
-    crate::widgets::announce(resp, crate::i18n::tr_format!("Photo: {name}", name = super::grid::cell_description(app, photo)));
+    crate::widgets::announce(resp, crate::i18n::tr_format!("Photo: {name}", name = super::grid::photo_spoken(&app.session.catalog, photo)));
 }
 
 /// The loupe's right-click menu: zoom commands and the grid's photo menu.
