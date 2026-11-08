@@ -654,6 +654,14 @@ fn verify_location_boxes(bytes: &[u8], top_level: &mut usize, nested: &mut usize
                     );
                 }
             }
+            // An unrecognized vendor `uuid` box may hold a location, and its contents are not
+            // parsed: fail closed rather than copy a place we cannot remove.
+            b"uuid" => {
+                return Err(
+                    "can't verify an original video's embedded location: an unrecognized uuid box may hold a location; export without Remove Location only to share the unchanged clip"
+                        .into(),
+                );
+            }
             _ => {}
         }
         at = end;
@@ -1756,6 +1764,20 @@ mod tests {
 
         let error = verify_video_location_absent(&bytes).unwrap_err();
         assert!(error.contains("malformed") || error.contains("unreadable"), "{error}");
+    }
+
+    /// An unrecognized vendor `uuid` box may carry a place the verifier cannot parse: Remove
+    /// Location refuses it instead of copying it unchanged.
+    #[test]
+    fn location_verification_rejects_an_unrecognized_uuid_box() {
+        let mut bytes = synthetic_mp4(60, 600, 1920, 1080, 0);
+        let mut vendor = [7u8; 16].to_vec();
+        vendor.extend_from_slice(b"a place we cannot read");
+        let mut box_bytes = Vec::new();
+        write_box(&mut box_bytes, b"uuid", &vendor);
+        bytes.extend_from_slice(&box_bytes);
+        let error = verify_video_location_absent(&bytes).unwrap_err();
+        assert!(error.contains("uuid"), "{error}");
     }
 
     /// A 90-degree display matrix is read as Rotate90.

@@ -436,9 +436,14 @@ mod bridge {
     fn deliver(incoming: &Rc<RefCell<Vec<Incoming>>>, ctx: &egui::Context, data: &JsValue, event_type: Option<&str>) {
         // moved, not cloned: an accepted photo can be hundreds of MB
         let (bytes, blob, oversize) = match bytes(data) {
-            Some(Ok(OpenBytes::Bytes(b))) => (Some(b), None, None),
-            Some(Ok(OpenBytes::Blob(b))) => (None, Some(b), None),
-            Some(Err(len)) => (None, None, Some(len)),
+            Some(ReadBytes::Ready(OpenBytes::Bytes(b))) => (Some(b), None, None),
+            Some(ReadBytes::Ready(OpenBytes::Blob(b))) => (None, Some(b), None),
+            Some(ReadBytes::Oversize(len)) => (None, None, Some(len)),
+            Some(ReadBytes::Refused(error)) => {
+                incoming.borrow_mut().push(Incoming::Refused(error));
+                ctx.request_repaint();
+                return;
+            }
             None => (None, None, None),
         };
         let raw = Raw {
@@ -475,12 +480,20 @@ mod bridge {
         js_sys::Reflect::get(data, &JsValue::from_str(key)).ok()?.as_string()
     }
 
-    /// `bytes` as an `ArrayBuffer` or `Uint8Array`.
+    /// What the page's `bytes` field gave: a ready photo, a file past the size cap, or a video
+    /// whose Blob could not be built (refused, never sent through the image path).
+    enum ReadBytes {
+        Ready(OpenBytes),
+        Oversize(u64),
+        Refused(String),
+    }
+
     /// `bytes` as an `ArrayBuffer` or `Uint8Array`, copied only when within the size cap
-    /// ([`open_size_error`]); `Err(len)` for an oversize one, never copied into the app's memory.
+    /// ([`open_size_error`]); `Oversize` for an oversize one, never copied into the app's memory.
     /// A video stays the page's `Blob` (built here, outside the WASM heap): importing reads it in
-    /// ranges, and copying the whole clip through memory first would only double its cost.
-    fn bytes(data: &JsValue) -> Option<Result<OpenBytes, u64>> {
+    /// ranges, and copying the whole clip through memory first would only double its cost. When
+    /// the Blob cannot be built the open is refused, not catalogued through the image path.
+    fn bytes(data: &JsValue) -> Option<ReadBytes> {
         let bytes = js_sys::Reflect::get(data, &JsValue::from_str("bytes")).ok()?;
         let array = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
             array.clone()
@@ -491,7 +504,7 @@ mod bridge {
         };
         let len = u64::from(array.byte_length());
         if open_size_error(len).is_some() {
-            return Some(Err(len));
+            return Some(ReadBytes::Oversize(len));
         }
         let head_len = usize::try_from(len).unwrap_or(usize::MAX).min(4096);
         let head = array.subarray(0, u32::try_from(head_len).unwrap_or(0)).to_vec();
@@ -499,13 +512,23 @@ mod bridge {
         let video =
             format.as_ref().is_some_and(|f| f.is_video()) || (format.is_none() && lightcraft_engine::files::looks_like_video_container(&head));
         if video {
+            // A view on a resizable ArrayBuffer can make the Blob constructor fail: normalize it
+            // into a fixed-length view first (the Blob copies the bytes anyway).
+            let fixed;
+            let source = if array.buffer().resizable() {
+                fixed = array.slice(0, u32::try_from(len).unwrap_or(u32::MAX));
+                &fixed
+            } else {
+                &array
+            };
             let parts = js_sys::Array::new();
-            parts.push(&array);
-            if let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence(&parts) {
-                return Some(Ok(OpenBytes::Blob(blob)));
-            }
+            parts.push(source);
+            return Some(match web_sys::Blob::new_with_u8_array_sequence(&parts) {
+                Ok(blob) => ReadBytes::Ready(OpenBytes::Blob(blob)),
+                Err(e) => ReadBytes::Refused(format!("the video could not be prepared for import: {e:?}")),
+            });
         }
-        Some(Ok(OpenBytes::Bytes(array.to_vec())))
+        Some(ReadBytes::Ready(OpenBytes::Bytes(array.to_vec())))
     }
 
     /// A `JsValue` error as a string, after `what` went wrong.

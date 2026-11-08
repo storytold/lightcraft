@@ -1,3 +1,24 @@
+/// A same-length rewrite is still a change: the probe's modification-time check sees it even when
+/// the file size and byte count match.
+#[test]
+fn a_same_length_rewrite_changes_the_probe_verdict() {
+    use std::time::{Duration, SystemTime};
+    let dir = std::env::temp_dir().join(format!("lightcraft-probe-mtime-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("clip.mp4");
+    std::fs::write(&path, b"0123456789abcdef").unwrap();
+    let before = std::fs::metadata(&path).unwrap();
+    std::fs::write(&path, b"fedcba9876543210").unwrap();
+    // Force a distinct mtime so the test does not depend on the filesystem's timestamp granularity.
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    let later = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+    file.set_times(std::fs::FileTimes::new().set_modified(later)).unwrap();
+    let after = std::fs::metadata(&path).unwrap();
+    assert!(super::fs::changed_while_hashing(&before, &after, 16, 16), "the rewrite is seen");
+    assert!(!super::fs::changed_while_hashing(&after, &after, 16, 16), "an unchanged file passes");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn original_buffers_use_platform_capacity_and_physical_ram_not_cache_budgets() {
     use super::check_original_buffer_capacity;

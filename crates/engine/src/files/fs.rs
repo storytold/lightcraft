@@ -241,6 +241,13 @@ pub(crate) fn read_video_metadata_from_with_fragments(
         } else {
             None
         };
+        // The location check cannot read an unrecognized vendor `uuid` box; refusing beats
+        // copying a clip that may carry a place we cannot see or remove.
+        if include_fragments && &kind == b"uuid" && !is_video_metadata_box(&kind, extended_type) {
+            return Err(format!(
+                "{path}: an unrecognized uuid box may hold a location; export without Remove Location only to share the unchanged clip"
+            ));
+        }
         if is_video_metadata_box(&kind, extended_type) || (include_fragments && &kind == b"moof") {
             let box_len = usize::try_from(total_len).map_err(|_| format!("{path}: video metadata box is too large"))?;
             // Per box and in all: many small boxes must not add up past the working-memory cap.
@@ -294,6 +301,13 @@ fn hash_file_stream(f: &mut std::fs::File, path: &str) -> Result<(String, u64), 
     Ok((hasher.finish().to_string(), hashed))
 }
 
+/// Whether a file changed while it was being hashed: the byte count, final length, or
+/// modification time differ from what the probe started with. Length alone misses an in-place
+/// rewrite of the same size.
+pub(super) fn changed_while_hashing(before: &std::fs::Metadata, after: &std::fs::Metadata, hashed: u64, file_len: u64) -> bool {
+    hashed != file_len || after.len() != file_len || before.modified().ok() != after.modified().ok()
+}
+
 /// Probe a video file using bounded box reads and incremental hashing, all from one open handle:
 /// the catalog cannot combine boxes and a hash from two different versions of the file.
 /// `sniffed`: the container format read from its first bytes, used when the name has no video extension.
@@ -320,9 +334,13 @@ fn probe_video_file(f: &mut std::fs::File, path: &str, file_len: u64, sniffed: l
         "MP4" | "MOV" | "M4V" => ext_upper(&name),
         _ => sniffed.extension().to_ascii_uppercase(),
     };
+    let before_hash = f.metadata().map_err(|e| format!("{path}: {e}"))?;
     let (hash, hashed) = hash_file_stream(f, path)?;
-    // a file that grew or shrank since its size was read would catalogue a size and a hash of two versions
-    if hashed != file_len {
+    // A file that grew or shrank since its size was read, or changed while it was being hashed,
+    // would catalogue a size and a hash of two versions. Length alone misses an in-place rewrite
+    // (same size, new bytes): the modification time covers the hashing interval.
+    let after = f.metadata().map_err(|e| format!("{path}: {e}"))?;
+    if changed_while_hashing(&before_hash, &after, hashed, file_len) {
         return Err(format!("{path}: original changed while probing; retry when it is no longer being written"));
     }
     let content_hash = Some(hash);

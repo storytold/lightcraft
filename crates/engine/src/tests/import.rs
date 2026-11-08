@@ -3985,6 +3985,10 @@ fn all_metadata_on_a_video_reads_only_its_metadata_boxes() {
     assert_eq!(row("Duration").as_deref(), Some("84.50 s"), "{r}");
     assert_eq!(row("Width").as_deref(), Some("640"), "{r}");
     assert!(r["xmp"].as_array().unwrap().iter().any(|x| x["value"] == "Sunset clip"), "{r}");
+    // The same bounded reader the command uses returns just the boxes: a whole-file read would
+    // have returned the 256 MiB `mdat` too (the byte hook above already fails such a fallback).
+    let boxes = crate::files::read_video_metadata_file(path.to_str().unwrap()).unwrap();
+    assert!(boxes.len() < 64 * 1024, "metadata boxes only, not the 256 MiB clip: {} bytes", boxes.len());
     let _ = std::fs::remove_dir_all(&src);
 }
 
@@ -4023,6 +4027,9 @@ fn the_metadata_reader_keeps_only_the_xmp_uuid_box() {
     assert_eq!(kept.len(), moov_and_ftyp + 8 + xmp.len());
     assert!(!kept.contains(&0xAB));
     assert!(kept.windows(16).any(|w| w == XMP_UUID));
+    // With Remove Location on, the vendor box is refused rather than skipped unseen.
+    let error = crate::files::read_video_metadata_from_with_fragments(&mut std::io::Cursor::new(&bytes), len, "clip.mp4", true).unwrap_err();
+    assert!(error.contains("uuid"), "{error}");
 }
 
 /// Bytes after a complete `moov` that are no box (a camera's trailer, such as Insta360's, or a
@@ -4262,25 +4269,35 @@ fn a_catalogued_video_asks_the_renderer_for_nothing() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
-/// Verify video duplicate detection by path and by content hash.
+/// Verify video duplicate detection by path and by content hash: a clip with the same movie
+/// header but a different byte past 64 KiB in its `mdat` is another clip.
 #[test]
 fn video_duplicate_detection_by_path_and_content() {
     let src = temp_dir("video-dup");
-    let clip = synthetic_mp4(1000, 30_000, 1920, 1080, 0);
+    let mut clip = synthetic_mp4(1000, 30_000, 1920, 1080, 0);
+    let payload = vec![0u8; 128 * 1024];
+    let mut mdat = Vec::new();
+    write_test_box(&mut mdat, b"mdat", &payload);
+    clip.extend_from_slice(&mdat);
+    let mut other = clip.clone();
+    // beyond the 64 KiB mark, inside the `mdat` payload
+    let diff_at = clip.len() - payload.len() + 70 * 1024;
+    other[diff_at] = 1;
     std::fs::write(src.join("clip.mp4"), &clip).unwrap();
     std::fs::write(src.join("copy_of_clip.mp4"), &clip).unwrap();
+    std::fs::write(src.join("other_clip.mp4"), &other).unwrap();
 
     let mut s = Session::new().with_fs();
-    // First import: imports clip.mp4, finds copy_of_clip.mp4 is a duplicate by content
+    // First import: both distinct contents import, the byte-for-byte copy is a duplicate
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
-    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert_eq!(ids(&r, "imported"), 2, "{r}");
     assert_eq!(ids(&r, "duplicates"), 1, "{r}");
     assert_eq!(r["duplicates"][0]["reason"], "content");
 
-    // Second import: both are duplicates by path or content
+    // Second import: all three are duplicates by path or content
     let r2 = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
     assert_eq!(ids(&r2, "imported"), 0, "{r2}");
-    assert_eq!(ids(&r2, "duplicates"), 2, "{r2}");
+    assert_eq!(ids(&r2, "duplicates"), 3, "{r2}");
 
     let _ = std::fs::remove_dir_all(&src);
 }

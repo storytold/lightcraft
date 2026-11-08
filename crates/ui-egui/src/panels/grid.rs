@@ -796,7 +796,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     let photo_rect = paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp, video });
     // labels and badges
     paint_cell_caption(app, ui, p, &t, &photo, id, r, square);
-    paint_video_badges(app, ui, p, &t, &photo, id, img_rect, square);
+    paint_video_badges(app, ui, p, &t, &photo, id, img_rect, photo_rect, square);
     paint_cell_badges(app, p, &t, &photo, photo_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
     if let Some(name) = &photo.copy_name {
         paint_copy_tag(p, &t, name, img_rect, square);
@@ -839,7 +839,7 @@ pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::
 /// A catalogued clip: it has no decoded frame yet (playback and trim come in a later update), so its
 /// cell is a placeholder tile with the container and running time, never a failed image.
 fn is_clip(photo: &lightcraft_catalog::Photo) -> bool {
-    photo.is_video() || photo.duration.is_some()
+    photo.is_video()
 }
 
 fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, id: PhotoId, img_rect: Rect, flags: ThumbFlags) -> Rect {
@@ -927,13 +927,15 @@ fn paint_video_badges(
     photo: &lightcraft_catalog::Photo,
     id: PhotoId,
     img_rect: Rect,
+    photo_rect: Rect,
     square: bool,
 ) {
     if !is_clip(photo) {
         return;
     }
-    // the running time first: in a short cell it is the pill that stays
-    let duration = photo.duration.and_then(|d| video_duration_badge(ui, p, t, id, d, img_rect));
+    // the running time first: in a short cell it is the pill that stays. It hangs above the
+    // photo's own badge bar (the placeholder's in the square grid), never the cell's margin.
+    let duration = photo.duration.and_then(|d| video_duration_badge(ui, p, t, id, d, img_rect, photo_rect));
     if !(square && app.ui.show_filenames) && !photo.format.is_empty() {
         // a virtual copy's tag holds the top right corner: the container sits just below it
         let below = if photo.copy_name.is_some() { COPY_TAG_HEIGHT + 4.0 } else { 0.0 };
@@ -1088,7 +1090,7 @@ fn video_format_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId,
 
 /// A clip's running time (video icon + `MM:SS`) in a dark pill at the thumbnail's lower edge,
 /// above the rating bar so neither hides the other. Its rect, when drawn.
-fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, seconds: f64, img_rect: Rect) -> Option<Rect> {
+fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoId, seconds: f64, img_rect: Rect, photo_rect: Rect) -> Option<Rect> {
     let text = crate::widgets::format_duration(seconds);
     if text.is_empty() {
         return None;
@@ -1101,7 +1103,11 @@ fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoI
         return None;
     }
     let x = (img_rect.right() - 6.0 - w).max(img_rect.left() + 4.0);
-    let y = (img_rect.bottom() - 24.0 - 20.0).max(img_rect.top() + 4.0);
+    // Hang above the photo's own badge bar (the placeholder's in the square grid), not the cell's
+    // lower margin. A placeholder too short for the pill keeps the old position: it has no room
+    // above its bar.
+    let base = if photo_rect.height() >= 48.0 { photo_rect.bottom() } else { img_rect.bottom() };
+    let y = (base - 24.0 - 20.0).max(img_rect.top() + 4.0);
     let br = Rect::from_min_size(pos2(x, y), vec2(w, 17.0));
     p.rect_filled(br, 8.5, Color32::from_black_alpha(175));
     paint(p, Rect::from_center_size(pos2(br.left() + 11.0, br.center().y), vec2(12.0, 12.0)), Icon::Video, Color32::WHITE);

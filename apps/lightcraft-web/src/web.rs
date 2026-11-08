@@ -19,7 +19,7 @@ use crate::backend::Backend;
 use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, valid_library_dir};
 use crate::bench::Bench;
 use crate::files::{Files, FlushOp, LIBRARY_FILES};
-use crate::host::{Incoming, OpenBytes, Outgoing};
+use crate::host::{Bridge, Incoming, OpenBytes, Outgoing};
 use crate::safety::{self, notice};
 use crate::store::{Originals, check_original_size, content_hash, download_name, storage_key};
 use crate::wire::ThumbIndex;
@@ -233,6 +233,11 @@ async fn video_blob_metadata(blob: &web_sys::Blob, include_fragments: bool) -> R
         saw_moov |= &kind == b"moov";
         let header_len = lightcraft_engine::files::video_box_header_len(&head);
         let extended_type = if &kind == b"uuid" && len >= header_len + 16 { head.get(header_len as usize..header_len as usize + 16) } else { None };
+        // The location check cannot read an unrecognized vendor `uuid` box; refusing beats
+        // copying a clip that may carry a place we cannot see or remove.
+        if include_fragments && &kind == b"uuid" && !lightcraft_engine::files::is_video_metadata_box(&kind, extended_type) {
+            return Err("an unrecognized uuid box may hold a location; export without Remove Location only to share the unchanged clip".into());
+        }
         if lightcraft_engine::files::is_video_metadata_box(&kind, extended_type) || (include_fragments && &kind == b"moof") {
             let new_len = (out.len() as u64).checked_add(len).ok_or("video metadata length overflow")?;
             if new_len > 64 << 20 {
@@ -897,10 +902,15 @@ impl WebApp {
                     wasm_bindgen_futures::spawn_local(async move {
                         match bytes {
                             // A clip already arrived as the page's Blob: its Original copier reads
-                            // it in ranges, and the image path would never register one.
+                            // it in ranges, and the image path would never register one. Hand it
+                            // to the same one-at-a-time queue the picker and drops use, so hosted
+                            // imports cannot pile their metadata scans up in memory.
                             OpenBytes::Blob(blob) => {
-                                if let Err(e) = store_video(&originals, backend.as_ref(), &name, &blob).await {
-                                    notice(format!("{name} was not added: {e}"));
+                                let parts = js_sys::Array::new();
+                                parts.push(&blob);
+                                match web_sys::File::new_with_blob_sequence(&parts, &name) {
+                                    Ok(file) => queue_file(originals, backend, file, ctx.clone()),
+                                    Err(e) => notice(format!("{name} was not added: {e:?}")),
                                 }
                             }
                             OpenBytes::Bytes(bytes) => store_file(originals, backend, name, None, bytes, ctx.clone()).await,
@@ -914,18 +924,11 @@ impl WebApp {
                     }
                 }
                 Incoming::Cmd { id, params } => {
-                    let r = match crate::automation::params(&params) {
-                        Err(e) => Err(format!("{id}: {e}")),
-                        Ok(_) if id == "web.stats" => Ok(self.web_stats()),
-                        Ok(params) => self.app.run(&id, params),
-                    };
-                    let response = match r {
-                        Ok(v) => Outgoing::Response { ok: true, value: v.to_string() },
-                        Err(e) => Outgoing::Response { ok: false, value: e },
-                    };
-                    if !bridge.post(&response) {
-                        log::warn!("lightcraft: the answer to {id} could not reach the page");
-                    }
+                    // Run it through the same queue as `lightcraft.command(...)`: an Original
+                    // export waits for its videos to load and keeps its place behind the
+                    // commands that could change the library, with one response per command.
+                    PENDING_COMMANDS.with(|q| q.borrow_mut().push_back((id.clone(), params, host_reply(&bridge, &id))));
+                    ctx.request_repaint();
                 }
             }
         }
@@ -1114,6 +1117,23 @@ impl WebApp {
 }
 
 type Reply = (js_sys::Function, js_sys::Function);
+
+/// A `command()` reply for a host message: it posts the result as `lightcraft:response`, so the
+/// hosted path shares [`run_inbox`](WebApp::run_inbox)'s waiting and ordering.
+fn host_reply(bridge: &Bridge, id: &str) -> Reply {
+    let reply = |ok: bool| {
+        let bridge = bridge.clone();
+        let id = id.to_string();
+        let f = Closure::<dyn FnMut(JsValue)>::new(move |v: JsValue| {
+            let value = v.as_string().unwrap_or_default();
+            if !bridge.post(&Outgoing::Response { ok, value }) {
+                log::warn!("lightcraft: the answer to {id} could not reach the page");
+            }
+        });
+        f.into_js_value().unchecked_into::<js_sys::Function>()
+    };
+    (reply(true), reply(false))
+}
 
 thread_local! {
     /// Commands from JavaScript ([`command`]), run on the next frame.

@@ -108,6 +108,54 @@ fn grid_cells_mark_videos_with_their_format_and_running_time() {
     }
 }
 
+/// A still with a stray duration stays a still: no clip badges and no "Video" in its spoken
+/// description.
+#[test]
+fn a_still_with_a_stray_duration_is_not_a_video() {
+    let mut session = lightcraft_engine::Session::new();
+    let mut p = Photo::new(
+        PhotoId(1),
+        Source::File { path: "/lightcraft-video-test/still.jpg".into() },
+        "still.jpg",
+        "JPEG",
+        1920,
+        1080,
+        "2026-05-04T10:00:00",
+    );
+    p.duration = Some(84.0);
+    session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let app = LightcraftApp::new(
+        session,
+        Services {
+            png: Some(Box::new(png)),
+            write: Some(Box::new(|path: &str, bytes: &[u8]| std::fs::write(path, bytes).map_err(|e| e.to_string()))),
+            write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
+            ..Default::default()
+        },
+    );
+    let spoken = crate::panels::grid::cell_description(&app, app.session.catalog.photo(PhotoId(1)).unwrap());
+    assert!(!spoken.contains(crate::i18n::tr("Video")), "{spoken}");
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.app.ui.view = ViewMode::PhotoGrid;
+    h.app.ui.thumb_size = 180.0;
+    h.settle(SETTLE);
+    assert!(!has(&h, "badge:videoDuration:1") && !has(&h, "badge:videoFormat:1"), "a still gets no video badges");
+}
+
+/// In a square cell without a thumbnail, the running time hangs above the placeholder's badge
+/// bar (the cell's lower margin is lower), so the rating bar cannot cover it.
+#[test]
+fn a_square_video_without_a_thumbnail_keeps_its_time_above_the_badge_bar() {
+    let mut h = video_app(ViewMode::SquareGrid);
+    h.app.ui.show_filenames = false;
+    h.settle(SETTLE);
+    let rect = |name: &str| h.app.widgets.iter().find(|(w, _)| w == name).map(|(_, r)| *r);
+    let thumb = rect("thumb:1").expect("the cell");
+    let duration = rect("badge:videoDuration:1").expect("the running time");
+    // The placeholder is the image area inset 20 and its 24 px badge bar starts at cell.bottom()-54.
+    assert!(duration.bottom() <= thumb.bottom() - 54.0, "{duration:?} in {thumb:?}");
+}
+
 /// At the smallest thumbnails a clip's two pills never cover each other: the running time stays
 /// and the container gives way when they would touch (square grid, filename line hidden).
 #[test]
