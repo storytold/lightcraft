@@ -174,7 +174,11 @@ Linux) is not looked at either and stays catalogued as missing.
 **Local catalog, NAS originals.** After choosing the `.lrcat`, LightCraft reads its recorded root
 folders in the background and lists **Network sources in this catalog** in the import window.
 Each distinct UNC server/share (for example `\\nas\photos` or `\\archive\old-photos`) gets a checkbox;
-folders and case/separator variants on the same share are grouped. No folder picker is needed.
+folders and ASCII case/separator variants on the same share are grouped, using the same comparison
+as path authorization. Non-ASCII spellings remain distinct rather than broadening a grant with
+Unicode case folding. An explicitly unchecked UNC root cannot be imported through its
+catalog-relative fallback, even when Windows treats its spelling as an alias of a selected share.
+No folder picker is needed. Long lists render only visible rows; scrolling preserves selections.
 Select the sources to import, then confirm the import. All discovered sources start unchecked;
 unchecked network sources are not imported, including the catalog's own share. The catalog,
 LightCraft library and original photos stay at their existing locations.
@@ -252,7 +256,7 @@ refused; there is no fallback that retries the path through Win32 or evaluates a
 Preview and native byte-loading paths use the same entry point after import. Region-orientation
 rereads and Synchronize Folder sidecar reads also revalidate their opens; a prior lookup or cached
 folder listing does not authorize a later read. Synchronize Folder reads sidecars through one
-checked handle and rejects content beyond 16 MiB while reading, even if a writer grows the file
+checked handle, rejects an already oversized file before buffering it, and rejects content beyond 16 MiB while reading, even if a writer grows the file
 after metadata was inspected. Image/preview loaders retain one original handle
 for metadata and bytes, including whole-file preview fallback. Source discovery itself still
 performs no original-file I/O.

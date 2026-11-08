@@ -342,20 +342,27 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
         if network_sources.len() > lightcraft_engine::doc_path::MAX_NETWORK_SHARES {
             ui.label(tr("Select up to 32 network sources for this import."));
         }
-        egui::ScrollArea::vertical().id_salt("lightroom-network-sources").max_height(140.0).show(ui, |ui| {
-            for (i, source) in network_sources.iter().enumerate() {
-                let mut selected = network_shares.iter().any(|s| s.eq_ignore_ascii_case(source));
-                let enabled = selected || network_shares.len() < lightcraft_engine::doc_path::MAX_NETWORK_SHARES;
-                let response = ui.add_enabled(enabled, egui::Checkbox::new(&mut selected, source));
-                crate::widgets::register(ui, format!("check:lightroomNetworkSource-{i}"), response.rect);
-                if response.changed() {
-                    network_shares.retain(|s| !s.eq_ignore_ascii_case(source));
-                    if selected {
-                        network_shares.push(source.clone());
+        let row_height = ui.spacing().interact_size.y;
+        egui::ScrollArea::vertical().id_salt("lightroom-network-sources").max_height(140.0).show_rows(
+            ui,
+            row_height,
+            network_sources.len(),
+            |ui, rows| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                for (i, source) in network_sources.iter().enumerate().take(rows.end).skip(rows.start) {
+                    let mut selected = network_shares.iter().any(|s| s.eq_ignore_ascii_case(source));
+                    let enabled = selected || network_shares.len() < lightcraft_engine::doc_path::MAX_NETWORK_SHARES;
+                    let response = ui.add_enabled(enabled, egui::Checkbox::new(&mut selected, source)).on_hover_text(source);
+                    crate::widgets::register(ui, format!("check:lightroomNetworkSource-{i}"), response.rect);
+                    if response.changed() {
+                        network_shares.retain(|s| !s.eq_ignore_ascii_case(source));
+                        if selected {
+                            network_shares.push(source.clone());
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
     }
     ui.add_space(4.0);
     // (it only speaks of merging: unticked and greyed out while a new library is chosen)

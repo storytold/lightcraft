@@ -80,6 +80,8 @@ pub(super) enum PreparedItem {
         file: Option<Box<FileFacts>>,
     },
     Failed(String, String),
+    /// Preserve a guarded open's error until Lightroom can distinguish offline records from redirects.
+    OriginalUnavailable(String, std::io::Error),
     Kept(Kept),
     Ready(Box<ReadyFile>),
 }
@@ -94,6 +96,14 @@ pub(super) struct ReadyFile {
 }
 
 impl Prepared {
+    /// Let catalog import classify guarded failures against the current owner catalog, not a stale snapshot.
+    pub(crate) fn retain_original_errors(&mut self, mut retain: impl FnMut(&str, &std::io::Error) -> bool) {
+        self.items.retain(|item| match item {
+            PreparedItem::OriginalUnavailable(path, error) => retain(path, error),
+            _ => true,
+        });
+    }
+
     /// Undo what the batch did on disk that only a commit would make permanent: files placed by a
     /// Move (their sources were never touched). Copies stay, like copies of a failed commit.
     pub fn rollback(&self) {
@@ -278,7 +288,7 @@ impl ImportJob {
         for f in files {
             if self.check_network_links && craft_docpath::classify(&f) == craft_docpath::PathKind::Network {
                 if let Err(e) = crate::doc_path::original_metadata(Path::new(&f)) {
-                    out.items.push(PreparedItem::Failed(f, e.to_string()));
+                    out.items.push(PreparedItem::OriginalUnavailable(f, e));
                     self.done.fetch_add(1, Relaxed);
                     continue;
                 }

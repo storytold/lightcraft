@@ -616,7 +616,7 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarLookup, listing:
     if seen.is_some_and(|t| saved <= t) {
         return false;
     }
-    let Ok(text) = read_sidecar_text(file) else { return false };
+    let Ok(text) = read_sidecar_text(file, meta.len()) else { return false };
     let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
     let sc = sc.with_file_orientation(path).resolve_label(labels);
     let mut q = p.clone();
@@ -802,14 +802,19 @@ fn read_sidecar(path: &str, naming: SidecarLookup, target: crate::crs::Target) -
 /// Revalidate a discovered sidecar at each read; an earlier lookup or folder listing is not authority.
 fn read_sidecar_file(path: &str, file: &Path, target: crate::crs::Target) -> std::result::Result<crate::sidecar::SidecarData, String> {
     let opened = crate::doc_path::open_original(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    let text = read_sidecar_text(opened).map_err(|e| format!("{}: {e}", file.display()))?;
+    let len = opened.metadata().map_err(|e| format!("{}: {e}", file.display()))?.len();
+    let text = read_sidecar_text(opened, len).map_err(|e| format!("{}: {e}", file.display()))?;
     crate::sidecar::parse_sidecar(&text, target).map(|sc| sc.with_file_orientation(path)).map_err(|e| format!("{}: {e}", file.display()))
 }
 
 /// Bound the actual read: a writer can grow a sidecar after metadata or a folder listing was read.
 /// One extra byte distinguishes an exactly full sidecar from an oversized one without reading it all.
-fn read_sidecar_text(reader: impl std::io::Read) -> std::io::Result<String> {
+fn read_sidecar_text(reader: impl std::io::Read, known_len: u64) -> std::io::Result<String> {
     use std::io::Read;
+    // Reject already oversized files without allocating a buffer; the cap below also handles growth.
+    if known_len > MAX_SIDECAR_BYTES {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "too large for an XMP sidecar"));
+    }
     let mut text = String::new();
     reader.take(MAX_SIDECAR_BYTES + 1).read_to_string(&mut text)?;
     if text.len() as u64 > MAX_SIDECAR_BYTES {
