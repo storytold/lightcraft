@@ -601,7 +601,17 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
     name.wrap.max_rows = 1;
     let name = p.layout_job(name);
     p.galley(pos2(rect.left() + 2.0, img.bottom() + 2.0), name, color);
-    let tip = format!(
+    let resp = resp.on_hover_text(candidate_tip(&c));
+    if resp.clicked() && ok {
+        let shift = ui.input(|input| input.modifiers.shift);
+        d.click(i, shift);
+    }
+}
+
+/// A cell's tooltip: path, size, format, capture time and, for an unreadable file, the error the
+/// scan hit (issue #3342), so "Unreadable" says why.
+pub(super) fn candidate_tip(c: &super::ImportCandidate) -> String {
+    let mut tip = format!(
         "{}\n{} × {} · {} · {:.1} MB{}",
         c.path,
         c.width,
@@ -610,11 +620,11 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
         c.file_size as f64 / 1e6,
         c.captured.as_deref().map(|d| format!("\n{}", d.replace('T', " "))).unwrap_or_default()
     );
-    let resp = resp.on_hover_text(tip);
-    if resp.clicked() && ok {
-        let shift = ui.input(|input| input.modifiers.shift);
-        d.click(i, shift);
+    if let Some(e) = c.error.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
+        tip.push('\n');
+        tip.push_str(e);
     }
+    tip
 }
 
 /// Where a cell's badge goes: top right, or under the checkbox when the text is too wide to sit
