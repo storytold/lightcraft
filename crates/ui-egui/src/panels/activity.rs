@@ -73,7 +73,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let mut cancel = None;
     let mut toggle = false;
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6).inner_margin(Margin::same(MARGIN));
-    egui::Area::new(egui::Id::unique("activity-stack"))
+    let area_resp = egui::Area::new(egui::Id::unique("activity-stack"))
         .order(egui::Order::Middle)
         .default_pos(pos2(8.0, t.top_bar_h + 8.0))
         .movable(true)
@@ -106,6 +106,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
             });
         });
+    if area_resp.response.dragged() {
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if area_resp.response.hovered() {
+        ctx.set_cursor_icon(egui::CursorIcon::Grab);
+    }
     if let Some(id) = cancel {
         self::cancel(app, id);
     }
