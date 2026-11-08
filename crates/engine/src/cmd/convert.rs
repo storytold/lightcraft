@@ -215,9 +215,13 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
         }
         return match existing {
             Some((copy, path)) => {
-                // a restored copy left its stack when it was deleted; one still stacked on the original stays as it is
-                let stacked = s.catalog.stack_of(lightcraft_catalog::PhotoId(copy)).is_some_and(|st| st.photos.contains(&id));
-                if !stacked {
+                // as for a new copy, it ends on top of the original's stack and the stack is open, so both show: a restored
+                // copy left its stack when it was deleted, and one still in it may be under the original or collapsed
+                let shown = s
+                    .catalog
+                    .stack_of(lightcraft_catalog::PhotoId(copy))
+                    .is_some_and(|st| st.photos.contains(&id) && st.top().0 == copy && !st.collapsed);
+                if !shown {
                     stack_on_top(s, copy, id.0);
                 }
                 Ok(json!({"path": path, "id": copy, "original": id.0}))
