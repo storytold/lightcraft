@@ -726,17 +726,19 @@ fn not_applied_message(settings: &[&str]) -> String {
 mod tests {
     use super::*;
 
-    /// An effect preset carries the brush's Density with its size, feather and flow, and applying
-    /// one restores it (clamped to the slider's range).
+    /// An effect preset saved with the brush carries its Density through the engine, and applying
+    /// it restores it, as size, feather and flow (#4005).
     #[test]
     fn an_effect_carries_the_brush_density() {
         let services = crate::Services { png: None, ..Default::default() };
         let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        app.run("library.select", json!({"ids": [1]})).expect("a demo photo");
+        app.run("mask.brushStroke", json!({"points": [[0.5, 0.5]]})).expect("a brush mask to save from");
         app.ui.brush_density = 35.0;
-        let saved = brush_now(&app);
-        assert_eq!(saved["density"], json!(35.0));
+        save_confirm(&mut app, "Dense", "", &["exposure".to_string()], false, true).expect("saved");
         app.ui.brush_density = 100.0;
-        take_brush(&mut app, &saved);
+        let v = app.run("mask.applyEffect", json!({"name": "Dense"})).expect("applied");
+        take_brush(&mut app, &v["brush"]);
         assert_eq!(app.ui.brush_density, 35.0);
         take_brush(&mut app, &json!({"density": 0.0}));
         assert_eq!(app.ui.brush_density, 1.0);
