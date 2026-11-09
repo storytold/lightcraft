@@ -552,9 +552,10 @@ impl Originals {
         let mut next = HashMap::new();
         for (path, mut ids) in wanted {
             ids.sort_unstable();
-            let Some(p) = ids.first().and_then(|id| s.catalog.photo(*id)) else { continue };
-            let quarantined = s.media.identities.needs_validation(p);
-            let wants = p.content_hash.is_none() || quarantined;
+            let masters: Vec<_> = ids.iter().filter_map(|id| s.catalog.photo(*id)).collect();
+            let Some(p) = masters.first().copied() else { continue };
+            let quarantined = masters.iter().any(|m| s.media.identities.needs_validation(m));
+            let wants = quarantined || masters.iter().any(|m| m.content_hash.is_none());
             let migration = Migration {
                 keys: s.media.content_keys(p),
                 smart: s.media.smart_dir.clone(),
@@ -1697,6 +1698,28 @@ mod lifecycle_tests {
         s.commit("Replace membership", Op::Batch { ops: vec![Op::RemovePhoto { id }, Op::AddPhoto { photo: Box::new((*p).clone()) }] }).unwrap();
         s.persist().unwrap();
         assert!(s.catalog.photo(id).unwrap().content_hash.is_none(), "old physical read belongs to removed photo lifecycle");
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_hashless_master_sharing_a_hashed_masters_path_learns_from_a_read() {
+        let dir = crate::tests_xmp::temp_dir("shared-path-masters");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("original.dng");
+        std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        let mut s = crate::Session::new().with_fs();
+        s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let first = s.catalog.photos().next().unwrap().clone();
+        assert!(first.content_hash.is_some());
+        let second = s.catalog.alloc_photo_id();
+        let mut twin = (*first).clone();
+        twin.id = second;
+        twin.content_hash = None;
+        s.commit("Second master", Op::AddPhoto { photo: Box::new(twin) }).unwrap();
+        s.originals.read_whole(path.to_str().unwrap()).unwrap();
+        s.persist().unwrap();
+        let learned = s.catalog.photo(second).unwrap().content_hash.clone();
+        assert_eq!(learned.as_deref().map(crate::sync::base_hash), first.content_hash.as_deref().map(crate::sync::base_hash));
         drop(s);
         std::fs::remove_dir_all(dir).unwrap();
     }
