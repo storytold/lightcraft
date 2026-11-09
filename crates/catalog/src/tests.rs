@@ -465,17 +465,20 @@ fn a_chosen_face_is_told_from_a_larger_one_in_the_same_photo() {
     use lightcraft_meta::{Rect, Region, RegionKind};
     let face = |rect: Rect| Region { rect, kind: RegionKind::Face, name: Some("John Roe".into()), description: None };
     let (small, big) = (Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 }, Rect { x0: 0.4, y0: 0.4, x1: 0.9, y1: 0.9 });
-    let mut c = Catalog::new();
-    let id = c.alloc_photo_id();
-    let mut p = Photo::new(id, Source::Demo { scene: 1 }, "a.jpg", "JPEG", 6000, 4000, "2026-09-30T10:00:00");
-    p.meta.regions = vec![face(big), face(small)];
-    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
-    let picture = |covers: &std::collections::BTreeMap<String, PersonCover>| {
-        c.people_in_with(&Filter::default(), covers).into_iter().find(|p| p.name == "John Roe").map(|p| (p.photo, p.face))
-    };
-    assert_eq!(picture(&Default::default()), Some((id, big)), "the larger face by default");
-    let covers = std::iter::once(("john roe".to_string(), PersonCover { photo: id, face: small })).collect();
-    assert_eq!(picture(&covers), Some((id, small)), "the smaller one once chosen");
+    // whichever comes first among the photo's regions
+    for regions in [vec![face(big), face(small)], vec![face(small), face(big)]] {
+        let mut c = Catalog::new();
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, "a.jpg", "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+        p.meta.regions = regions;
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let picture = |covers: &std::collections::BTreeMap<String, PersonCover>| {
+            c.people_in_with(&Filter::default(), covers).into_iter().find(|p| p.name == "John Roe").map(|p| (p.photo, p.face))
+        };
+        assert_eq!(picture(&Default::default()), Some((id, big)), "the larger face by default");
+        let covers = std::iter::once(("john roe".to_string(), PersonCover { photo: id, face: small })).collect();
+        assert_eq!(picture(&covers), Some((id, small)), "the smaller one once chosen");
+    }
 }
 
 #[test]

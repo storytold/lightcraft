@@ -1007,9 +1007,11 @@ fn a_persons_face_becomes_their_picture_from_its_menu() {
         name: Some("Jane Doe".into()),
         description: None,
     };
-    for (id, x1) in ids.iter().zip([0.35, 0.75]) {
+    // a second, smaller face of hers in the first photo: the star is told by the face, not the photo
+    let second = lightcraft_meta::Region { rect: lightcraft_geom::Rect { x0: 0.65, y0: 0.2, x1: 0.72, y1: 0.4 }, ..face(0.35) };
+    for (id, regions) in ids.iter().zip([vec![face(0.35), second], vec![face(0.75)]]) {
         let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
-        meta.regions = vec![face(x1)];
+        meta.regions = regions;
         h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
     }
     let picture = |h: &mut Headless| h.app.caches.people(&h.app.session).iter().find(|p| p.name == "Jane Doe").map(|p| p.photo);
@@ -1031,7 +1033,9 @@ fn a_persons_face_becomes_their_picture_from_its_menu() {
     assert_eq!(h.app.session.person_covers.get("jane doe").map(|c| c.photo), Some(ids[0]));
     // drawn on that face, and on no other
     let drawn = stars(&mut h);
-    assert!(drawn.contains(&format!("person-face-star:{}:0", ids[0].0)) && !drawn.contains(&format!("person-face-star:{}:", ids[1].0)), "{drawn}");
+    assert!(drawn.contains(&format!("person-face-star:{}:0", ids[0].0)), "{drawn}");
+    assert!(h.app.widgets.iter().any(|(w, _)| *w == format!("person-face:{}:1", ids[0].0)), "her other face in that photo is shown");
+    assert!(!drawn.contains(&format!("person-face-star:{}:1", ids[0].0)) && !drawn.contains(&format!("person-face-star:{}:", ids[1].0)), "{drawn}");
     // the star moves on the page as shown, without asking for the page (and its slow "More" faces) again
     let cached = h.app.caches.person_page.as_ref().map(|p| (p.3, p.4.cover));
     assert_eq!(cached, Some((asked_at.unwrap(), Some((ids[0].0, 0)))));
