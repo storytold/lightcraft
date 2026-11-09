@@ -156,6 +156,67 @@ fn photos_get_their_profile_when_the_database_arrives() {
     assert!(s.execute("library.refreshLensProfiles", &json!({"ids": "x"})).is_err());
 }
 
+/// One sweep searches the database once per (camera, lens) pair, whether the database knows the lens or not: a
+/// library of many raws and virtual copies sharing a few pairs costs a few searches, not one per photo (#3999). The
+/// photos listed are the ones each photo's own search would list.
+#[test]
+fn a_sweep_searches_each_camera_and_lens_pair_once() {
+    let mut s = Session::new();
+    // 40 raws: two known pairs (one on another body), one unknown lens, and each raw with a virtual copy
+    let lenses = ["50mm F1.8", "50mm F1.8", "300mm F4", "50mm F1.8"];
+    for i in 0..40u64 {
+        let mut p = raw(i + 1, lenses[(i % 4) as usize], false);
+        if i % 4 == 3 {
+            p.meta.camera = "Testcam TC-2".into();
+        }
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let mut copy = raw(i + 101, lenses[(i % 4) as usize], false);
+        copy.copy_of = Some(PhotoId(i + 1));
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+    }
+    let db = lightcraft_lensdb::LensDb::parse(DB).unwrap();
+    let mut searches: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    let listed = crate::cmd::lens_refresh::missing_with(&s.catalog, None, false, |camera, lens| {
+        *searches.entry((camera.to_string(), lens.to_string())).or_default() += 1;
+        crate::lens_profiles::profile_name(&db, camera, lens).is_some()
+    });
+    assert_eq!(searches.len(), 3, "three distinct pairs: {searches:?}");
+    assert!(searches.values().all(|&n| n == 1), "each searched once, the unknown lens too: {searches:?}");
+    assert_eq!(searches.get(&("Testcam TC-1".to_string(), "300mm F4".to_string())), Some(&1), "a miss is remembered for the sweep");
+    // the same list as before: originals whose lens the database knows, once each, in library order
+    let ids: Vec<u64> = listed.iter().map(|m| m.id.0).collect();
+    let expected: Vec<u64> = (0..40u64).filter(|i| i % 4 != 2).map(|i| i + 1).collect();
+    assert_eq!(ids, expected);
+    assert_eq!(listed, crate::cmd::lens_refresh::missing(&s.catalog, &db, None, false), "missing lists the same photos");
+    // the next sweep (a database loaded or replaced meanwhile) searches again
+    let mut again = 0;
+    crate::cmd::lens_refresh::missing_with(&s.catalog, None, false, |_, _| {
+        again += 1;
+        false
+    });
+    assert_eq!(again, 3, "answers are kept for one sweep only");
+}
+
+/// A virtual copy asked for on its own uses its original's pair, searched once for both.
+#[test]
+fn virtual_copies_share_their_originals_search() {
+    let mut s = Session::new();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw(1, "50mm F1.8", false)) }).unwrap();
+    for id in [2, 3, 4] {
+        // a copy's own lens name is never searched: the original's is
+        let mut copy = raw(id, "other lens", false);
+        copy.copy_of = Some(PhotoId(1));
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+    }
+    let mut searched = Vec::new();
+    let listed = crate::cmd::lens_refresh::missing_with(&s.catalog, Some(&[PhotoId(2), PhotoId(3), PhotoId(4)]), false, |camera, lens| {
+        searched.push((camera.to_string(), lens.to_string()));
+        true
+    });
+    assert_eq!(searched, [("Testcam TC-1".to_string(), "50mm F1.8".to_string())]);
+    assert_eq!(listed.iter().map(|m| m.id.0).collect::<Vec<_>>(), [1], "the original, listed once");
+}
+
 fn with_lens(mut p: Photo, l: Option<EmbeddedLens>, on: bool) -> Photo {
     p.embedded_lens = l;
     let mut d = (*p.develop).clone();
