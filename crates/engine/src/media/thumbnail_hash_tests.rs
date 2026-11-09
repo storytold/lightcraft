@@ -1120,3 +1120,34 @@ fn an_offline_raw_keeps_its_camera_thumbnail_after_learning_its_hash() {
     assert!(r.rendered.is_ok(), "{:?}", r.rendered.err());
     assert_eq!(r.quick, Some(QuickSource::Embedded));
 }
+
+#[test]
+fn a_render_from_another_models_product_is_not_kept_under_the_active_models_key() {
+    let mut s = session();
+    s.denoise_refresh_active(true);
+    let mut settings = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+    settings.enhance.denoise = 50.0;
+    s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(settings), label: "denoise".into(), edited: None }).unwrap();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let active = s.denoise.active.as_ref().unwrap().fingerprint.clone();
+    let model_of = |s: &mut crate::Session| {
+        let thumb = s.thumb_job(PhotoId(1), 256).unwrap().cache_recipe;
+        let view = s.loupe_job(PhotoId(1), 256, 256, true).unwrap().cache_recipe;
+        match (thumb, view) {
+            (
+                Some(super::render::CacheRecipe::Thumbnail { denoise_model: a, .. }),
+                Some(super::render::CacheRecipe::View { denoise_model: b, .. }),
+            ) => {
+                assert_eq!(a, b);
+                a
+            }
+            _ => panic!("thumbnail and view recipes"),
+        }
+    };
+    for (model, expected) in [("older-model@1", None), (active.as_str(), Some(active.clone()))] {
+        let key = crate::denoise::product_key_for(model, &content_key(&p));
+        s.media.denoise.set(PhotoId(1), crate::media::DenoiseSpec { product: "product".into(), key, make: None });
+        assert!(s.media.denoise_salt(PhotoId(1), &p.develop) != 0);
+        assert_eq!(model_of(&mut s), expected, "product made with {model}");
+    }
+}

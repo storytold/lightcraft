@@ -56,6 +56,18 @@ impl crate::Session {
         Some(Arc::new(resolved))
     }
 
+    /// The active denoise model, when a render of `p` with denoise salt `salt` uses a product it made for one of `p`'s
+    /// keys; `None` when the render uses no product, or one an earlier model made.
+    fn denoise_model(&self, p: &Photo, salt: u64) -> Option<String> {
+        let active = self.denoise.active.as_ref().filter(|_| salt != 0)?;
+        let spec = self.media.denoise.spec(p.id)?;
+        self.media
+            .content_keys(p)
+            .iter()
+            .any(|key| crate::denoise::product_key_for(&active.fingerprint, key) == spec.key)
+            .then(|| active.fingerprint.clone())
+    }
+
     /// Where `p`'s smart preview may be, best first.
     pub fn smart_preview_paths(&self, p: &Photo) -> Vec<std::path::PathBuf> {
         let Some(dir) = &self.media.smart_dir else { return Vec::new() };
@@ -147,7 +159,7 @@ impl crate::Session {
             settings: settings_hash,
             bucket,
             salt,
-            denoise_model: self.denoise.active.as_ref().filter(|_| salt != 0).map(|active| active.fingerprint.clone()),
+            denoise_model: self.denoise_model(&p, salt),
             profile_salt,
             lens,
             decoder,
@@ -378,7 +390,7 @@ impl crate::Session {
         job.cache_recipe = Some(CacheRecipe::View {
             apply_crop,
             salt: salts.denoise,
-            denoise_model: self.denoise.active.as_ref().filter(|_| salts.denoise != 0).map(|active| active.fingerprint.clone()),
+            denoise_model: self.denoise_model(&p, salts.denoise),
             profile_salt: salts.profile,
             lens: salts.lens,
             decoder: salts.decoder,
