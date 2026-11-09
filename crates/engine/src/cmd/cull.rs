@@ -9,10 +9,12 @@ use serde_json::{Value, json};
 use super::{CommandSpec, always, cmd};
 use crate::{Result, Session};
 
-/// Seconds between shots of the same burst at most.
-const BURST_GAP: i64 = 10;
-/// Signature similarity for "the same scene".
-const SAME: f32 = 0.93;
+/// Seconds between shots of the same burst at most (default of `burstGap`).
+const BURST_GAP: f64 = 10.0;
+/// Signature similarity for "the same scene" (default of `similarity`).
+const SAME: f64 = 0.93;
+/// The longest `burstGap` accepted: a day.
+const MAX_GAP: f64 = 86_400.0;
 
 fn secs(iso: &str) -> Option<i64> {
     let d = lightcraft_meta::DateTime::parse_iso(iso)?;
@@ -21,8 +23,12 @@ fn secs(iso: &str) -> Option<i64> {
 
 fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p)? } else { s.visible_cloned() };
+    // a photo listed twice is one photo, not a burst of two look-alikes (first occurrence kept)
+    let mut seen = std::collections::HashSet::new();
+    let ids: Vec<PhotoId> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
     let reject_below = p.get("rejectBelow").and_then(Value::as_f64).map(|v| v as f32);
     let pick_best = p.get("pickBest").and_then(Value::as_bool).unwrap_or(false);
+    let (gap, same) = burst_params(p)?;
     // measure (thumbnail-level sources: fast, and enough for focus at 512 px)
     let mut rows: Vec<(PhotoId, Option<i64>, f32, f32, [f32; 64])> = Vec::new();
     let mut failed = Vec::new();
@@ -42,8 +48,8 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let mut next = 1u32;
     for i in 1..rows.len() {
         let (a, b) = (&rows[i - 1], &rows[i]);
-        let close = matches!((a.1, b.1), (Some(x), Some(y)) if (y - x).abs() <= BURST_GAP);
-        if close && lightcraft_pipeline::cull::similarity(&a.4, &b.4) >= SAME {
+        let close = matches!((a.1, b.1), (Some(x), Some(y)) if (y.saturating_sub(x)).unsigned_abs() as f64 <= gap);
+        if close && lightcraft_pipeline::cull::similarity(&a.4, &b.4) >= same {
             let g = *group_of[i - 1].get_or_insert_with(|| {
                 next += 1;
                 next - 1
@@ -83,38 +89,20 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"photos": out, "groups": best.len(), "rejected": rejected, "picked": picked, "failed": failed}))
 }
 
-/// Find Similar: photos that look like `id` (signatures from thumbnail-level sources, cached by
-/// content), most similar first; the view is filtered to them.
-fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
-    const C: &str = "library.findSimilar";
-    let id = p.get("id").and_then(Value::as_u64).map(PhotoId).or(s.active()).ok_or_else(|| super::bad(C, "no photo"))?;
-    let min = p.get("similarity").and_then(Value::as_f64).unwrap_or(0.8) as f32;
-    let all: Vec<PhotoId> = s.catalog.photos().filter(|q| q.in_library()).map(|q| q.id).collect();
-    let sig = |s: &mut Session, id: PhotoId| -> Option<[f32; 64]> {
-        let key = s.catalog.photo(id).map(|p| crate::media::content_key(p))?;
-        if let Some(v) = s.signatures.get(&key) {
-            return Some(*v);
+/// `burstGap` (seconds, 0..=a day) and `similarity` (0..=1) of `photo.analyze`, refused before
+/// anything is measured when they are not numbers in range.
+fn burst_params(p: &Value) -> Result<(f64, f32)> {
+    const C: &str = "photo.analyze";
+    let num = |key: &str, d: f64, max: f64| -> Result<f64> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(d),
+            Some(v) => match v.as_f64() {
+                Some(x) if x.is_finite() && (0.0..=max).contains(&x) => Ok(x),
+                _ => Err(super::bad(C, format!("`{key}` must be a number from 0 to {max}"))),
+            },
         }
-        let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
-        let v = lightcraft_pipeline::cull::signature(&src);
-        s.signatures.insert(key, v);
-        Some(v)
     };
-    let me = sig(s, id).ok_or_else(|| super::bad(C, "can't read the photo"))?;
-    let mut hits: Vec<(PhotoId, f32)> = Vec::new();
-    for q in all {
-        if let Some(v) = sig(s, q) {
-            let sim = lightcraft_pipeline::cull::similarity(&me, &v);
-            if sim >= min {
-                hits.push((q, sim));
-            }
-        }
-    }
-    hits.sort_by(|a, b| b.1.total_cmp(&a.1));
-    if p.get("filter").and_then(Value::as_bool).unwrap_or(true) {
-        s.filter.only = hits.iter().map(|h| h.0).collect();
-    }
-    Ok(json!({"photos": hits.iter().map(|(i, v)| json!({"id": i.0, "similarity": (v * 1000.0).round() / 1000.0})).collect::<Vec<_>>()}))
+    Ok((num("burstGap", BURST_GAP, MAX_GAP)?, num("similarity", SAME, 1.0)? as f32))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -124,16 +112,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find Similar Photos",
             ["Photo"],
             None,
-            "{id?, similarity?: 0..1 (0.8), filter?: bool (true)} — photos that look like the active one (composition and tones), most similar first; filters the view to them (Clear Filters to go back) → {photos: [{id, similarity}]}",
-            always,
-            find_similar
+            "{id?, similarity?: 0..1 (0.8), filter?: bool (true)} — photos that look like the active one (composition and tones), most similar first; filters the view to them (Clear Filters to go back) → {photos: [{id, similarity}]}. In the app the photos are read on a worker thread under an activity row: a control request is answered with this when the search ends, and from a menu the answer is {background: true, count}",
+            super::similar::no_search_running,
+            super::similar::run
         ),
         cmd!(
             "photo.analyze",
             "Assisted Culling",
             [],
             None,
-            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots taken within 10 s and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best}], groups, rejected, picked}",
+            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool, burstGap?: seconds 0..86400 (10), similarity?: 0..1 (0.93)} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots (signature similarity at least `similarity`) taken at most `burstGap` seconds apart and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best}], groups, rejected, picked}",
             always,
             analyze
         ),

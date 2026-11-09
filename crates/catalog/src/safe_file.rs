@@ -23,6 +23,7 @@
 //!   replacing anything** (a hard link, which fails on a taken name; where the volume has no hard
 //!   links, an exclusive create that claims the name, then a rename over that placeholder).
 //! - [`same_file`] tells whether two paths name the same file on disk (device + inode on Unix,
+//!   volume serial number + file index on Windows,
 //!   resolved paths elsewhere), for "is this target an original?" checks.
 
 use std::cell::Cell;
@@ -267,24 +268,73 @@ fn same_content(path: &Path, data: &[u8]) -> io::Result<bool> {
     }
 }
 
-/// Do `a` and `b` name the same existing file (through links, `..`, case-insensitive names)?
+/// Do `a` and `b` name the same existing file (through hard links, symlinks, `..`,
+/// case-insensitive names)?
 pub fn same_file(a: &Path, b: &Path) -> bool {
-    let (Ok(ma), Ok(mb)) = (fs::metadata(a), fs::metadata(b)) else { return false };
+    compare_files(a, b, false).unwrap_or(false)
+}
+
+/// [`same_file`] for a check that must not let an unknown identity pass: `Err` when the metadata
+/// of either path cannot be read for a reason other than the path not existing (for example a
+/// folder it cannot enter), or when both paths exist with the same length but the file identity
+/// of either cannot be read (on Windows, when either file cannot be opened or reports file index 0). A path that does not
+/// exist is still `Ok(false)`.
+pub fn same_file_strict(a: &Path, b: &Path) -> io::Result<bool> {
+    compare_files(a, b, true)
+}
+
+fn compare_files(a: &Path, b: &Path, strict: bool) -> io::Result<bool> {
+    let missing = |e: &io::Error| matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory);
+    let (ma, mb) = match (fs::metadata(a), fs::metadata(b)) {
+        (Ok(ma), Ok(mb)) => (ma, mb),
+        (Err(e), _) | (_, Err(e)) if strict && !missing(&e) => return Err(e),
+        _ => return Ok(false),
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        ma.dev() == mb.dev() && ma.ino() == mb.ino()
+        Ok(ma.dev() == mb.dev() && ma.ino() == mb.ino())
     }
     #[cfg(not(unix))]
     {
         if ma.len() != mb.len() {
-            return false;
+            return Ok(false);
         }
-        match (fs::canonicalize(a), fs::canonicalize(b)) {
+        // A hard link has its own path but shares the volume serial number and file index with
+        // its original. A file index of 0 produces an error in strict mode. Lenient mode compares resolved paths.
+        // On ReFS two files can share the 64-bit file index, so the lengths are compared first.
+        #[cfg(windows)]
+        {
+            match file_ids(a, b).and_then(|(ia, ib)| same_file_id(ia, ib, strict)) {
+                Ok(true) => return Ok(true),
+                Ok(_) => {}
+                Err(e) if strict => return Err(e),
+                Err(_) => {}
+            }
+        }
+        Ok(match (fs::canonicalize(a), fs::canonicalize(b)) {
             (Ok(x), Ok(y)) => x == y || x.to_string_lossy().to_lowercase() == y.to_string_lossy().to_lowercase(),
             _ => false,
-        }
+        })
     }
+}
+
+/// The volume serial number and file index of `a` and `b`, read while both files are open.
+#[cfg(windows)]
+fn file_ids(a: &Path, b: &Path) -> io::Result<((u64, u64), (u64, u64))> {
+    use winapi_util::{Handle, file::information};
+    let (ha, hb) = (Handle::from_path_any(a)?, Handle::from_path_any(b)?);
+    let (ia, ib) = (information(&ha)?, information(&hb)?);
+    Ok(((ia.volume_serial_number(), ia.file_index()), (ib.volume_serial_number(), ib.file_index())))
+}
+
+/// The comparison uses each file's volume serial number and file index. Strict mode returns an error for file index 0.
+#[cfg(any(windows, test))]
+fn same_file_id(a: (u64, u64), b: (u64, u64), strict: bool) -> io::Result<bool> {
+    if strict && (a.1 == 0 || b.1 == 0) {
+        return Err(io::Error::other("file identity is unavailable"));
+    }
+    Ok(a.1 != 0 && b.1 != 0 && a == b)
 }
 
 #[cfg(test)]
@@ -398,6 +448,29 @@ mod tests {
     }
 
     #[test]
+    fn same_file_sees_a_hard_link_under_another_name() {
+        let d = temp("same-link");
+        let p = d.join("IMG_1.jpg");
+        fs::write(&p, b"original").unwrap();
+        let linked = d.join("linked.png");
+        match fs::hard_link(&p, &linked) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => panic!("{}: {e}", linked.display()),
+            // no hard links on this volume (FAT/exFAT, some shares), as in `publish_new`
+            Err(e) => {
+                let _ = fs::remove_dir_all(&d);
+                lightcraft_testkit::skip!(System, "no hard links in {}: {e}", d.display());
+                return;
+            }
+        }
+        fs::write(d.join("copy.png"), b"original").unwrap();
+        assert!(same_file(&p, &linked), "a hard link is the same file");
+        assert!(same_file(&linked, &p));
+        assert!(!same_file(&p, &d.join("copy.png")), "a copy with the same content and length is another file");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn same_file_sees_through_other_spellings() {
         let d = temp("same");
         let p = d.join("x.jpg");
@@ -408,5 +481,34 @@ mod tests {
         assert!(!same_file(&p, &d.join("y.jpg")));
         assert!(!same_file(&p, &d.join("missing.jpg")));
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn strict_comparison_reports_a_path_it_cannot_query() {
+        let d = temp("strict-query");
+        let p = d.join("x.jpg");
+        fs::write(&p, b"x").unwrap();
+        // A NUL byte makes the metadata lookup fail with an error other than "not found" on
+        // every platform, as a folder the process cannot enter does.
+        let unreadable = Path::new("IMG_1\0.jpg");
+        assert!(same_file_strict(unreadable, &p).is_err());
+        assert!(same_file_strict(&p, unreadable).is_err());
+        assert!(!same_file(unreadable, &p), "the lenient comparison still answers false");
+        assert!(!same_file_strict(&d.join("missing.jpg"), &p).unwrap(), "a missing original is another file");
+        assert!(!same_file_strict(&p.join("under-a-file.jpg"), &p).unwrap());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_zero_file_index_is_not_a_file_identity() {
+        for strict in [false, true] {
+            assert!(same_file_id((7, 42), (7, 42), strict).unwrap());
+            assert!(!same_file_id((7, 42), (7, 43), strict).unwrap());
+            assert!(!same_file_id((7, 42), (8, 42), strict).unwrap());
+        }
+        for (a, b) in [((7, 0), (7, 0)), ((0, 0), (0, 0)), ((7, 42), (7, 0)), ((7, 0), (7, 42))] {
+            assert!(same_file_id(a, b, true).is_err(), "strict comparison must reject an unavailable identity: {a:?}, {b:?}");
+            assert!(!same_file_id(a, b, false).unwrap(), "lenient comparison can fall back to resolved paths");
+        }
     }
 }

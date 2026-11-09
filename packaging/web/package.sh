@@ -11,12 +11,12 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/web"
 
-if [ "${1:-}" != "--skip-build" ]; then
+if [[ "${1:-}" != "--skip-build" ]]; then
   # CI (the shared release workflow installs only trunk): install the wasm-bindgen CLI at the
   # version in Cargo.lock. Locally, `cargo xtask web` says which version to install.
-  if [ -n "${CI:-}" ]; then
+  if [[ -n "${CI:-}" ]]; then
     WASM_BINDGEN_VERSION="$(awk '$0 == "name = \"wasm-bindgen\"" { getline; gsub(/version = |"/, ""); print; exit }' "$ROOT/Cargo.lock")"
-    [ -n "$WASM_BINDGEN_VERSION" ] || { echo "error: wasm-bindgen not found in Cargo.lock" >&2; exit 1; }
+    [[ -n "$WASM_BINDGEN_VERSION" ]] || { echo "error: wasm-bindgen not found in Cargo.lock" >&2; exit 1; }
     if ! { command -v wasm-bindgen >/dev/null && wasm-bindgen --version | grep -qF " $WASM_BINDGEN_VERSION"; }; then
       cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
     fi
@@ -25,13 +25,13 @@ if [ "${1:-}" != "--skip-build" ]; then
 fi
 
 SITE="$CARGO_TARGET_DIR/web-site"
-[ -f "$SITE/index.html" ] || { echo "error: $SITE/index.html missing; run without --skip-build" >&2; exit 1; }
+[[ -f "$SITE/index.html" ]] || { echo "error: $SITE/index.html missing; run without --skip-build" >&2; exit 1; }
 # Guard against Cargo build artifacts leaking into the release (issue #793): cross-compiling writes
 # the selected profile's *host* artifacts (build scripts, proc-macros, deps/, build/, .fingerprint/)
 # to <target>/<profile>/, so if SITE ever points at a profile directory again the zip would carry
 # ~113 MB of build output. Fail loudly instead.
 for d in deps build .fingerprint; do
-  if [ -e "$SITE/$d" ]; then
+  if [[ -e "$SITE/$d" ]]; then
     echo "error: $SITE/$d exists — $SITE holds Cargo build artifacts, not just the site (issue #793)" >&2
     exit 1
   fi

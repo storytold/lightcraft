@@ -46,8 +46,9 @@ ani anglické zdrojové řetězce. Rozložení panelů a seznamu jazyků je beze
 ## Ověření a revize
 
 Testy `i18n::tests` ověřují registraci příkazu, přepínání přes nabídku a řídicí kanál,
-uložení jazyka, pokrytí katalogů, placeholdery, neutrální formulace počtů, datum, čas
-a české glyfy. Překladové šablony kontroluje také Rust při sestavení.
+uložení jazyka, placeholdery, datum, čas a české glyfy. Překladové šablony kontroluje také
+Rust při sestavení. Chybějící překlady se zobrazují anglicky a vypisuje je
+`i18n::tests::translation_gaps_report`; žádný test kvůli nim neselže.
 
 Při jazykové korektuře doporučujeme zkontrolovat „asistované třídění“, „sada“ pro Stack,
 „bodová barva“, „měkký nátisk“ a názvy kreativních přednastavení.

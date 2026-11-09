@@ -145,11 +145,23 @@ fn rational(n: f64, d: f64) -> String {
         return "—".into();
     }
     let v = n / d;
-    if (v - v.round()).abs() < 1e-9 { format!("{}", v.round()) } else { format!("{:.4}", v).trim_end_matches('0').to_string() }
+    if (v - v.round()).abs() < 1e-9 {
+        let r = v.round();
+        if r == 0.0 { "0".to_string() } else { format!("{}", r) }
+    } else {
+        let s = format!("{:.4}", v);
+        let s = s.trim_end_matches('0').trim_end_matches('.');
+        if s == "-0" { "0".to_string() } else { s.to_string() }
+    }
 }
 
 fn list<T: ToString>(v: &[T]) -> String {
-    let shown: Vec<String> = v.iter().take(16).map(|x| x.to_string()).collect();
+    list_with(v, T::to_string)
+}
+
+/// The first 16 values of `v` written by `f`, and how many there are when that's not all of them.
+fn list_with<T>(v: &[T], f: impl Fn(&T) -> String) -> String {
+    let shown: Vec<String> = v.iter().take(16).map(f).collect();
     if v.len() > 16 { format!("{} … ({} values)", shown.join(", "), v.len()) } else { shown.join(", ") }
 }
 
@@ -242,8 +254,8 @@ fn value_text(group: &str, tag: u16, v: &Value) -> String {
         }
         Value::Rational(a) if tag == 0x829d && group != "GPS" && a.len() == 1 => format!("f/{}", rational(a[0].0 as f64, a[0].1 as f64)),
         Value::Rational(a) if tag == 0x920a && group != "GPS" && a.len() == 1 => format!("{} mm", rational(a[0].0 as f64, a[0].1 as f64)),
-        Value::Rational(a) => a.iter().map(|(n, d)| rational(*n as f64, *d as f64)).collect::<Vec<_>>().join(", "),
-        Value::SRational(a) => a.iter().map(|(n, d)| rational(*n as f64, *d as f64)).collect::<Vec<_>>().join(", "),
+        Value::Rational(a) => list_with(a, |(n, d)| rational(*n as f64, *d as f64)),
+        Value::SRational(a) => list_with(a, |(n, d)| rational(*n as f64, *d as f64)),
         Value::Byte(b) | Value::Undefined(b) => {
             // version tags and short printable values read as text
             let printable = b.len() <= 64 && b.iter().all(|c| c.is_ascii_graphic() || *c == b' ' || *c == 0);
@@ -344,7 +356,7 @@ pub fn tag_rows(tiff: &Tiff) -> Vec<TagRow> {
 }
 
 /// [`tag_rows`] of a file's bytes: a TIFF-based file directly, else its embedded EXIF block
-/// (JPEG, PNG, WebP, HEIF…). Empty when there is none.
+/// (JPEG, PNG, WebP, HEIF, PSD/PSB…). Empty when there is none.
 pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
     if Tiff::sniff(bytes).is_some()
         && let Ok(t) = Tiff::parse(bytes)
@@ -369,6 +381,28 @@ pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rational_has_no_trailing_dot() {
+        assert_eq!(rational(1.0, 100000.0), "0");
+        assert_eq!(rational(-1.0, 100000.0), "0");
+        assert_eq!(rational(-1.0, 1e10), "0");
+        assert_eq!(rational(1000001.0, 100000.0), "10");
+        assert_eq!(rational(1.0, 3.0), "0.3333");
+        assert_eq!(rational(5.0, 2.0), "2.5");
+    }
+
+    /// Rational lists were joined whole, unlike every other list (#2579): a tag of millions of
+    /// fractions became a string as long in the tag panel.
+    #[test]
+    fn rational_lists_show_sixteen_values_like_other_lists() {
+        let first16 = (1..=16).map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
+        let many: Vec<(u32, u32)> = (1..=1000).map(|i| (i, 1)).collect();
+        assert_eq!(value_text("EXIF", 0x9999, &Value::Rational(many)), format!("{first16} … (1000 values)"));
+        let signed: Vec<(i32, i32)> = (1..=1000).map(|i| (-i, 1)).collect();
+        assert!(value_text("EXIF", 0x9999, &Value::SRational(signed)).ends_with("-16 … (1000 values)"));
+        assert_eq!(value_text("EXIF", 0x9999, &Value::Rational(vec![(1, 2), (3, 4)])), "0.5, 0.75");
+    }
 
     #[test]
     fn rows_from_written_exif() {

@@ -54,7 +54,12 @@ impl Files {
         if let Some(d) = p.parent() {
             let _ = std::fs::create_dir_all(d);
         }
-        if let Err(e) = std::fs::write(&p, format!("{}\n", r.name())) {
+        // on disk before the driver is touched: a driver fault can take the machine down with it
+        let written = std::fs::File::create(&p).and_then(|mut f| {
+            std::io::Write::write_all(&mut f, format!("{}\n", r.name()).as_bytes())?;
+            f.sync_all()
+        });
+        if let Err(e) = written {
             log::warn!("window: could not write {}: {e}", p.display());
         }
     }
@@ -85,7 +90,7 @@ impl Files {
 }
 
 /// The renderer for this start: see the module docs.
-pub fn choose(files: &Files) -> Chosen {
+pub fn choose(files: &Files, compose_window: bool) -> Chosen {
     let forced =
         backend::forced_window_renderer(std::env::var("LIGHTCRAFT_GPU_BACKEND").ok().as_deref(), std::env::var("WGPU_BACKEND").ok().as_deref());
     let failed = files.take_failed();
@@ -93,10 +98,9 @@ pub fn choose(files: &Files) -> Chosen {
     let compiled = wgpu::Instance::enabled_backend_features();
     let os = std::env::consts::OS;
     let order = backend::window_renderer_order(forced, remembered, failed, os, compiled, true);
-    let mut notice = failed.map(|f| format!("The window could not start with its {} renderer last time.", f.name()));
     let mut problems = Vec::new();
     let chosen = if cfg!(windows) {
-        pick_probed(&order, &mut problems)
+        pick_probed(files, &order, &mut problems, compose_window)
     } else if forced == Some(WindowRenderer::Glow) || (forced.is_none() && failed.is_some_and(|f| f != WindowRenderer::Glow)) {
         // elsewhere eframe's own wgpu set-up stays the default; glow after a failed start
         Some((WindowRenderer::Glow, None))
@@ -104,18 +108,7 @@ pub fn choose(files: &Files) -> Chosen {
         Some((WindowRenderer::Wgpu(backend::window_backends()), None))
     };
     let (which, existing) = chosen.unwrap_or((WindowRenderer::Glow, None));
-    if !problems.is_empty() {
-        notice = Some(format!("{} {}", notice.unwrap_or_default(), problems.join(" ")).trim().to_string());
-    }
-    let notice = notice.map(|n| {
-        format!(
-            "{n} {app} now draws its window with {}. To choose another, start {app} with {var}=dx12, vulkan, gl or glow \
-             (see docs/gpu-pipeline.md → Troubleshooting).",
-            which.name(),
-            app = "LightCraft",
-            var = "LIGHTCRAFT_GPU_BACKEND",
-        )
-    });
+    let notice = user_notice(failed, forced, &problems, which);
     log::info!("window: renderer {} (order {:?})", which.name(), order.iter().map(|r| r.name()).collect::<Vec<_>>());
     let mut wgpu_options = base_options();
     let renderer = match (which, existing) {
@@ -134,25 +127,67 @@ pub fn choose(files: &Files) -> Chosen {
     Chosen { renderer, wgpu_options, which, notice }
 }
 
+/// What to tell the user about the window's renderer. A renderer that failed its probe is skipped
+/// silently (it is logged, and the one that worked is remembered): the app works, so a pop-up with
+/// wgpu's error only alarms (#1624). Shown: the last start died, or the forced renderer failed.
+fn user_notice(failed: Option<WindowRenderer>, forced: Option<WindowRenderer>, problems: &[String], which: WindowRenderer) -> Option<String> {
+    let mut notice = failed.map(|f| format!("The window could not start with its {} renderer last time.", f.name()));
+    if forced.is_some() && !problems.is_empty() {
+        notice = Some(format!("{} {}", notice.unwrap_or_default(), problems.join(" ")).trim().to_string());
+    }
+    notice.map(|n| {
+        format!(
+            "{n} {app} now draws its window with {}. To choose another, start {app} with {var}=dx12, vulkan, gl or glow \
+             (see docs/gpu-pipeline.md → Troubleshooting).",
+            which.name(),
+            app = "LightCraft",
+            var = "LIGHTCRAFT_GPU_BACKEND",
+        )
+    })
+}
+
 /// eframe's defaults with the app's backends and DX12 shader compiler (issues #136, #471).
+///
+/// Taken from `NativeOptions::default()`, whose surface is egui-wgpu's `LOW_LATENCY` (one frame in
+/// flight; two drawables on Metal). `WgpuConfiguration::default()` is `HIGH_THROUGHPUT` instead (two
+/// frames queued, three drawables): every drag, slider and crop handle reached the screen a frame
+/// later than eframe's default. Live window resizing still gets three drawables from egui-wgpu.
 pub fn base_options() -> WgpuConfiguration {
-    let mut c = WgpuConfiguration::default();
+    let mut c = eframe::NativeOptions::default().wgpu_options;
     if let WgpuSetup::CreateNew(n) = &mut c.wgpu_setup {
         n.instance_descriptor.backends = backend::window_backends();
         n.instance_descriptor.backend_options = backend::backend_options();
         // no indirect-call validation pipeline: Intel Metal fails to compile it and the window never opens (#250)
         n.instance_descriptor.flags = backend::instance_flags_from_env(n.instance_descriptor.flags);
+        // the GPU renderer may run on this device (`adopt_window_device`): it needs the adapter's
+        // buffer limits (a 24 MP photo is a 275 MiB buffer), not wgpu's defaults
+        let default = n.device_descriptor.clone();
+        n.device_descriptor = std::sync::Arc::new(move |adapter| {
+            if adapter.get_info().backend == wgpu::Backend::Gl {
+                return default(adapter);
+            }
+            wgpu::DeviceDescriptor { label: Some("lightcraft window"), required_limits: adapter.limits(), ..Default::default() }
+        });
     }
     c
 }
 
 /// The first renderer of `order` that probes cleanly (glow is taken without a probe).
-fn pick_probed(order: &[WindowRenderer], problems: &mut Vec<String>) -> Option<(WindowRenderer, Option<WgpuSetupExisting>)> {
+fn pick_probed(
+    files: &Files,
+    order: &[WindowRenderer],
+    problems: &mut Vec<String>,
+    compose_window: bool,
+) -> Option<(WindowRenderer, Option<WgpuSetupExisting>)> {
     for &r in order {
         match r {
             WindowRenderer::Glow => return Some((r, None)),
             WindowRenderer::Wgpu(b) => {
-                let probed = std::panic::catch_unwind(|| probe(b)).unwrap_or_else(|_| Err("panicked".into()));
+                // name the renderer being probed before the crash-prone device
+                // creation and egui pipeline compile: if the driver kills the
+                // start, the marker survives so the next launch tries it last
+                files.arm(r);
+                let probed = std::panic::catch_unwind(|| probe(b, compose_window)).unwrap_or_else(|_| Err("panicked".into()));
                 match probed {
                     Ok(e) => return Some((r, Some(e))),
                     Err(e) => {
@@ -167,11 +202,11 @@ fn pick_probed(order: &[WindowRenderer], problems: &mut Vec<String>) -> Option<(
 }
 
 /// Create a device on `backends` and build egui's pipeline on it; any wgpu error is returned.
-fn probe(backends: Backends) -> Result<WgpuSetupExisting, String> {
+fn probe(backends: Backends, compose_window: bool) -> Result<WgpuSetupExisting, String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends,
         flags: backend::instance_flags_from_env(wgpu::InstanceFlags::from_build_config().with_env()),
-        backend_options: backend::backend_options(),
+        backend_options: presentation_options(backends, compose_window),
         memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
         display: None,
     });
@@ -180,10 +215,12 @@ fn probe(backends: Backends) -> Result<WgpuSetupExisting, String> {
         ..Default::default()
     }))
     .map_err(|e| format!("no adapter: {e}"))?;
-    let base = if adapter.get_info().backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { wgpu::Limits::default() };
+    // (not GL: the adapter's own limits, which the GPU renderer needs when it adopts this device)
+    let base = if adapter.get_info().backend == wgpu::Backend::Gl { wgpu::Limits::downlevel_webgl2_defaults() } else { adapter.limits() };
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("egui wgpu device"),
-        required_limits: wgpu::Limits { max_texture_dimension_2d: 8192, ..base },
+        // (GL takes the conservative defaults for everything else, whose 2048 is too small for a window)
+        required_limits: wgpu::Limits { max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d, ..base },
         ..Default::default()
     }))
     .map_err(|e| format!("{}: no device: {e}", adapter.get_info().name))?;
@@ -235,6 +272,22 @@ pub fn relaunch_after_failure(files: &Files) -> bool {
         .is_ok()
 }
 
+/// Only DX12 windows use the compositor; fallback renderers retain their normal presentation.
+/// Adapted from kmnkv1's PhotoCraft PR: https://github.com/storytold/photocraft/pull/7035.
+pub fn composes_window(enabled: bool, renderer: WindowRenderer) -> bool {
+    cfg!(target_os = "windows") && enabled && renderer == WindowRenderer::Wgpu(Backends::DX12)
+}
+
+/// Select DirectComposition for opted-in Windows DX12 windows, preserving
+/// the default presentation options for other renderers.
+fn presentation_options(backends: Backends, enabled: bool) -> wgpu::BackendOptions {
+    let mut options = backend::backend_options();
+    if composes_window(enabled, WindowRenderer::Wgpu(backends)) {
+        options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
+    }
+    options
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -267,6 +320,37 @@ mod tests {
         none.arm(dx);
         assert!(!none.armed() && !relaunch_after_failure(&none));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #1624: a renderer skipped by the probe (DX12 → Vulkan) is no pop-up; a died start or a
+    /// failed forced renderer still is.
+    #[test]
+    fn probe_fallback_is_silent() {
+        let (dx, vk) = (WindowRenderer::Wgpu(Backends::DX12), WindowRenderer::Wgpu(Backends::VULKAN));
+        let problems = vec!["The dx12 renderer failed (Validation Error).".to_string()];
+        assert_eq!(user_notice(None, None, &problems, vk), None);
+        assert_eq!(user_notice(None, None, &[], vk), None);
+        let forced = user_notice(None, Some(dx), &problems, vk).unwrap();
+        assert!(forced.starts_with("The dx12 renderer failed") && forced.contains("now draws its window with vulkan"), "{forced}");
+        let died = user_notice(Some(dx), None, &problems, vk).unwrap();
+        assert!(died.contains("last time") && !died.contains("Validation Error"), "{died}");
+    }
+
+    /// The window keeps eframe's low-latency surface: one frame queued (two Metal drawables), not
+    /// the high-throughput `WgpuConfiguration::default()`, which held input a frame longer. The
+    /// probed (Windows) and forced-backend configurations are built on the same options.
+    #[test]
+    fn window_surface_keeps_one_frame_in_flight() {
+        let surface = base_options().surface;
+        assert_eq!(surface, eframe::NativeOptions::default().wgpu_options.surface);
+        assert_eq!(surface, eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY);
+        assert_eq!(surface.desired_maximum_frame_latency, Some(1));
+        assert_eq!(surface.present_mode, wgpu::PresentMode::AutoVsync);
+        assert_ne!(surface, WgpuConfiguration::default().surface, "egui-wgpu's own default is the high-throughput one");
+        // what `main` hands eframe (on Windows `choose` probes the adapters first; not here)
+        if !cfg!(windows) {
+            assert_eq!(choose(&Files::new(None), false).wgpu_options.surface, surface);
+        }
     }
 
     /// The crash report: a pipeline that fails validation must come back as an error, never as
@@ -312,5 +396,57 @@ mod tests {
         .unwrap();
         // outside a scope: logged by our handler, not a panic
         let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl("not wgsl".into()) });
+    }
+
+    /// The probed device keeps the adapter's own `max_texture_dimension_2d`, so a window
+    /// ballooned past 8192 px can still configure its surface. Needs an adapter; skipped
+    /// where there is none (CI without a GPU).
+    #[test]
+    fn probed_device_uses_adapter_max_texture_size() {
+        let Ok(setup) = probe(backend::window_backends(), false) else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        };
+        assert_eq!(
+            setup.device.limits().max_texture_dimension_2d,
+            setup.adapter.limits().max_texture_dimension_2d,
+            "the probed device must use the adapter's own max_texture_dimension_2d, not a fixed 8192 cap",
+        );
+    }
+
+    /// The workaround is opt-in and changes presentation only for Windows DX12.
+    #[test]
+    fn composition_only_changes_windows_dx12_presentation() {
+        let legacy: lightcraft_ui_egui::state::AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.compose_window, "existing settings keep the workaround off until opted in");
+        assert!(!lightcraft_ui_egui::state::AppSettings::default().compose_window);
+        let enabled: lightcraft_ui_egui::state::AppSettings = serde_json::from_str(r#"{"composeWindow":true}"#).unwrap();
+        let saved = serde_json::to_value(&enabled).unwrap();
+        assert_eq!(saved["composeWindow"], true);
+        for backend in [Backends::DX12, Backends::VULKAN, Backends::GL] {
+            let wanted = cfg!(target_os = "windows") && backend == Backends::DX12;
+            assert_eq!(composes_window(true, WindowRenderer::Wgpu(backend)), wanted);
+            assert_eq!(presentation_options(backend, true).dx12.presentation_system == wgpu::Dx12SwapchainKind::DxgiFromVisual, wanted);
+            assert!(!composes_window(false, WindowRenderer::Wgpu(backend)));
+        }
+        assert!(!composes_window(true, WindowRenderer::Glow));
+    }
+
+    /// The probe builds egui's pipeline on a live device before the window opens; a driver crash
+    /// there must leave the window-init marker on disk so the next launch tries another renderer.
+    #[cfg(windows)]
+    #[test]
+    fn the_window_marker_is_written_while_the_renderer_is_probed() {
+        // glow is taken without a probe, so a forced glow arms nothing here
+        let forced =
+            backend::forced_window_renderer(std::env::var("LIGHTCRAFT_GPU_BACKEND").ok().as_deref(), std::env::var("WGPU_BACKEND").ok().as_deref());
+        if forced == Some(WindowRenderer::Glow) {
+            return;
+        }
+        let d = dir("probe-marker");
+        let f = Files::new(Some(d.clone()));
+        choose(&f, false);
+        assert!(f.armed(), "the window-init marker must be written while the renderer is probed");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -56,6 +56,10 @@ impl MonotoneCurve {
     }
 
     pub fn eval(&self, x: f64) -> f64 {
+        // NaN passes both bound checks below and would send the search past either end
+        if x.is_nan() {
+            return x;
+        }
         let n = self.xs.len();
         if x <= self.xs[0] {
             return self.ys[0] + self.ms[0] * (x - self.xs[0]).min(0.0) * 0.0;
@@ -76,8 +80,9 @@ impl MonotoneCurve {
             + (t3 - t2) * h * self.ms[i + 1]
     }
 
-    /// Sample into a LUT of `n` entries over `0..1`.
+    /// Sample into a LUT of `n` entries (at least 2) over `0..1`.
     pub fn to_lut(&self, n: usize) -> Lut1 {
+        let n = n.max(2);
         Lut1 { v: (0..n).map(|i| self.eval(i as f64 / (n - 1) as f64) as f32).collect() }
     }
 
@@ -93,16 +98,24 @@ pub struct Lut1 {
 }
 
 impl Lut1 {
+    /// At least 2 entries, like [`Lut1::from_fn`].
     pub fn identity(n: usize) -> Lut1 {
-        Lut1 { v: (0..n).map(|i| i as f32 / (n - 1) as f32).collect() }
+        Lut1::from_fn(n, |x| x)
     }
+    /// `f` sampled at `n` evenly spaced points over `0..1` (at least 2).
     pub fn from_fn(n: usize, f: impl Fn(f32) -> f32) -> Lut1 {
+        let n = n.max(2);
         Lut1 { v: (0..n).map(|i| f(i as f32 / (n - 1) as f32)).collect() }
     }
+    /// `v` is public, so a table shorter than 2 entries is read as constant (1) or the identity (0).
     #[inline]
     pub fn eval(&self, x: f32) -> f32 {
+        let x = x.clamp(0.0, 1.0);
         let n = self.v.len();
-        let f = x.clamp(0.0, 1.0) * (n - 1) as f32;
+        if n < 2 {
+            return self.v.first().copied().unwrap_or(x);
+        }
+        let f = x * (n - 1) as f32;
         let i = (f as usize).min(n - 2);
         let t = f - i as f32;
         self.v[i] + (self.v[i + 1] - self.v[i]) * t
@@ -161,6 +174,22 @@ mod tests {
         let b = Lut1::from_fn(1024, |x| x.sqrt());
         let c = a.compose(&b);
         assert!((c.eval(0.3) - 0.3).abs() < 2e-3);
+    }
+
+    #[test]
+    fn nan_input_and_short_luts_do_not_panic() {
+        let c = MonotoneCurve::new(&[(0.0, 0.0), (0.5, 0.6), (1.0, 1.0)]);
+        assert!(c.eval(f64::NAN).is_nan());
+        assert!(c.eval(-f64::NAN).is_nan());
+        for n in [0, 1] {
+            assert_eq!(c.to_lut(n).v.len(), 2, "{n}");
+            assert!(Lut1::identity(n).is_identity(), "{n}");
+            assert_eq!(Lut1::from_fn(n, |x| x).v.len(), 2, "{n}");
+        }
+        assert_eq!(Lut1 { v: vec![] }.eval(0.3), 0.3);
+        assert_eq!(Lut1 { v: vec![] }.eval(-1.0), 0.0, "inputs outside 0..1 clamp, as for any table");
+        assert_eq!(Lut1 { v: vec![] }.eval(2.0), 1.0);
+        assert_eq!(Lut1 { v: vec![0.7] }.eval(0.3), 0.7);
     }
 
     proptest::proptest! {

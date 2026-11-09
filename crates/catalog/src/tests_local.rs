@@ -1,5 +1,6 @@
 //! Forgetting untouched Local browse records (see [`crate::local`]).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use lightcraft_develop::DevelopSettings;
@@ -264,4 +265,52 @@ fn op_photo_ids_cover_nested_ops() {
     let mut ids = Vec::new();
     op.photo_ids(&mut |id| ids.push(id.0));
     assert_eq!(ids, vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn drive_and_share_root_records_are_forgotten() {
+    for (path, folder) in [("C:\\IMG_1.JPG", "C:\\"), ("//srv/share/x.jpg", "//srv/share/")] {
+        let mut c = Catalog::new();
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: path.into() }, "x.jpg", "JPEG", 60, 40, OLD);
+        p.local = true;
+        p.set_local_baseline();
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        c.apply(Op::SetBrowsed { folder: folder.into(), at: Some(OLD.into()) }).unwrap();
+        assert_eq!(plan(&c, 30).evict, vec![id], "{path}");
+    }
+}
+
+fn paths(folder: &str, ns: &[u32]) -> HashSet<String> {
+    ns.iter().map(|i| format!("/pics/{folder}/IMG_{i}.JPG")).collect()
+}
+
+#[test]
+fn local_records_of_files_tell_what_can_give_way_from_what_holds_something() {
+    let mut c = Catalog::new();
+    let untouched = local(&mut c, "trip", 1);
+    let rated = local(&mut c, "trip", 2);
+    let in_album = local(&mut c, "trip", 3);
+    let _elsewhere = local(&mut c, "trip", 4);
+    c.apply(Op::SetRating { id: rated, rating: 3 }).unwrap();
+    let a = c.alloc_album_id();
+    let mut album = Album::new(a, "A");
+    album.photos.push(in_album);
+    c.apply(Op::AddAlbum { album }).unwrap();
+
+    let found = c.local_records_of(&paths("trip", &[1, 2, 3]));
+    assert_eq!(found.untouched, vec![untouched]);
+    assert_eq!(found.kept, vec![(rated, "/pics/trip/IMG_2.JPG".to_string()), (in_album, "/pics/trip/IMG_3.JPG".to_string())]);
+}
+
+#[test]
+fn local_records_of_files_leave_out_library_photos_and_recently_deleted_ones() {
+    let mut c = Catalog::new();
+    let gone = local(&mut c, "trip", 1);
+    c.apply(Op::SetDeleted { id: gone, deleted: true }).unwrap();
+    let id = c.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: "/pics/trip/IMG_2.JPG".into() }, "IMG_2.JPG", "JPEG", 60, 40, OLD);
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    assert_eq!(c.local_records_of(&paths("trip", &[1, 2])), LocalRecords::default());
+    assert_eq!(c.local_records_of(&HashSet::new()), LocalRecords::default());
 }

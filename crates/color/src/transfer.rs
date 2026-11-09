@@ -49,6 +49,7 @@ pub fn hlg_encode(e: f64) -> f64 {
 }
 
 pub fn hlg_decode(s: f64) -> f64 {
+    let s = s.max(0.0);
     if s <= 0.5 { s * s / 3.0 } else { (((s - HLG_C) / HLG_A).exp() + HLG_B) / 12.0 }
 }
 
@@ -110,6 +111,11 @@ mod tests {
         for v in 0..=255u8 {
             assert_eq!(encode_srgb8(decode_srgb8(v)), v);
         }
+    }
+
+    #[test]
+    fn hlg_decode_clamps_negative() {
+        assert_eq!(hlg_decode(-0.5), 0.0);
     }
 
     #[test]
