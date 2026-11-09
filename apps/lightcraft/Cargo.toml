@@ -58,3 +58,6 @@ lightcraft-testkit = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 craft-update = { workspace = true }
+# the colour profile of the monitor showing the window (`win_screen_profile`)
+lightcraft-wincolor = { workspace = true }
+raw-window-handle = "0.6"
