@@ -2125,6 +2125,7 @@
   "No folders to browse": "Brak folderów do przeglądania",
   "No graphics processor found: LightCraft renders on the CPU, which is much slower. Details in Help → System Info.": "Nie znaleziono procesora graficznego: LightCraft renderuje na CPU, co jest znacznie wolniejsze. Szczegóły w Pomoc → Informacje o systemie.",
   "No imported folders yet": "Brak zaimportowanych folderów",
+  "Folders on this computer, browsed without adding them": "Foldery na tym komputerze, przeglądane bez dodawania ich",
   "No photos yet": "Brak zdjęć",
   "On NixOS, start it from `nix develop`.": "W systemie NixOS uruchom go z `nix develop`.",
   "Open Recent Library": "Otwórz ostatnią bibliotekę",
