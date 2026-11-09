@@ -44,9 +44,10 @@
   its bytes. NEF, ORF, PEF, ARW6, JPEG and other rendered files, and files under 4 MB, are still read whole, and so
   is a folder shown in Local.
 - Copy and Move read each original once and check the copy against a hash taken while copying, so copied photos
-  still get a content hash. A Move that links the file into place reads none of it, and a raw added in place from
-  its headers has no content hash until a duplicate check or a later read of the file takes one. Files read whole
-  get their hash as before.
+  still get a content hash. A Move that hard-links the file into place doesn't read it to transfer it, nor, on
+  macOS, Linux and BSD, to verify it (on Windows the check compares the bytes): a raw it probed from its headers
+  then has no content hash, like a raw added in place from its headers, until a duplicate check or a later read of
+  the file takes one. Files read whole get their hash as before.
 - Copies are still found without that hash: files of the same size and dimensions are compared by their first
   512 KB, and only then read whole. The 16-photo limit on that comparison is gone.
 
