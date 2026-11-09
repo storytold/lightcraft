@@ -12,6 +12,21 @@ pub(crate) fn ci_jobs(available_mb: Option<u64>, cpus: usize) -> usize {
     available_mb.map_or(4, |mb| usize::try_from(mb / 1536).unwrap_or(usize::MAX)).clamp(1, cpus.max(1))
 }
 
+/// CI's build jobs and test threads for `ram_mb` ([`ci_ram_mb`]) and `cpus`: [`ci_jobs`], and that
+/// capped at 4 for test threads. More test threads barely shorten CI (a few heavy tests dominate)
+/// but make the wall-clock frame-budget tests flaky on a loaded machine.
+pub(crate) fn ci_sizing(ram_mb: Option<u64>, cpus: usize) -> (usize, usize) {
+    let jobs = ci_jobs(ram_mb, cpus);
+    (jobs, jobs.min(4))
+}
+
+/// [`ci_sizing`] for this machine, worked out once per process, so `cargo()`'s runs and the test
+/// binaries `ci --quick` starts itself ([`test_selected`]) get the same numbers.
+pub(crate) fn machine_ci_sizing() -> (usize, usize) {
+    static SIZING: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+    *SIZING.get_or_init(|| ci_sizing(ci_ram_mb(available_ram_mb(), total_ram_gb), std::thread::available_parallelism().map_or(4, |n| n.get())))
+}
+
 /// The RAM (MB) CI sizes its jobs from ([`ci_jobs`]): the available RAM, or when that can't be read
 /// half the total (GB), which on Linux and Windows is already held to a cgroup or job limit.
 /// `total_gb` is read only when needed.
@@ -168,8 +183,9 @@ fn test_selected(root: &Path, packages: &std::collections::BTreeSet<String>, ski
         let mut c = Command::new(exe);
         c.current_dir(dir).env("CARGO_MANIFEST_DIR", dir).env("CARGO_PKG_NAME", name).env(ci_report::SKIP_LOG_ENV, skip_log);
         if std::env::var_os("RUST_TEST_THREADS").is_none() {
-            // as the cargo runs of ci (`cargo()`): more threads make the frame-budget tests flaky
-            c.env("RUST_TEST_THREADS", std::thread::available_parallelism().map_or(4, |n| n.get()).min(4).to_string());
+            // as the cargo runs of ci (`cargo()`): from the RAM CI may use (a cgroup or job limit
+            // included), at most 4
+            c.env("RUST_TEST_THREADS", machine_ci_sizing().1.to_string());
         }
         let file = Path::new(exe).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
         if run(c, &format!("{name}: {file}")).is_err() {
@@ -462,7 +478,18 @@ fn probe_gpu(backend: Option<&str>) -> Result<String, String> {
 
 #[cfg(test)]
 mod ci_jobs_tests {
-    use super::ci_jobs;
+    use super::{ci_jobs, ci_sizing};
+
+    /// `ci --quick`'s test binaries take the RAM-based thread count too, not one per CPU (#3705):
+    /// 1.5 GB to spare on a 32-CPU machine is one test thread, not four.
+    #[test]
+    fn test_threads_follow_the_build_jobs_capped_at_4() {
+        assert_eq!(ci_sizing(Some(1536), 32), (1, 1), "a small job or cgroup limit");
+        assert_eq!(ci_sizing(Some(3 * 1024), 32), (2, 2));
+        assert_eq!(ci_sizing(Some(64 * 1024), 32), (32, 4), "capped at 4 threads");
+        assert_eq!(ci_sizing(None, 32), (4, 4), "unknown RAM keeps the old default");
+        assert_eq!(ci_sizing(None, 2), (2, 2), "never more than the CPUs");
+    }
 
     #[test]
     fn jobs_follow_available_ram_and_never_exceed_the_cpus() {
@@ -551,5 +578,6 @@ mod ci_jobs_tests {
         let (total, available) = (super::total_ram_gb(), super::available_ram_mb());
         let cpus = std::thread::available_parallelism().map_or(4, |n| n.get());
         println!("ram_total_gb {total:?}, ram_available_mb {available:?}, ci jobs {}", ci_jobs(available, cpus));
+        println!("ci (build jobs, test threads), also for ci --quick's test binaries: {:?}", super::machine_ci_sizing());
     }
 }
