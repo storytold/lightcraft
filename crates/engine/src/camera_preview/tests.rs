@@ -2956,7 +2956,7 @@ fn camera_vignetting_amount_follows_a_cr3_proxys_framing() {
     let measure = |reference: &Rgb32f, framing: Option<Cr3Framing>| {
         camera_vignetting_amount(&sensor, reference, &clipped, &vignette, ProxyFrame { orientation: Orientation::Normal, framing })
     };
-    for shown in [0.0f32, 1.0] {
+    for shown in [0.0f32, 0.75, 1.0] {
         let mut reference = sensor.clone();
         for (p, g) in reference.data.iter_mut().zip(&source_gains) {
             *p = p.map(|c| (c * (1.0 + (g - 1.0) * shown)).powf(1.0 / 2.2));
