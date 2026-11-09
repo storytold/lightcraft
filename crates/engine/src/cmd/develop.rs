@@ -85,7 +85,7 @@ fn recipe_partial(recipe: &[(String, f64)]) -> Option<Value> {
 /// The longest name or group a saved recipe preset may have (characters).
 const MAX_PRESET_TEXT: usize = 100;
 
-fn crop_dims(s: &Session, id: PhotoId) -> (f64, f64) {
+pub(super) fn crop_dims(s: &Session, id: PhotoId) -> (f64, f64) {
     let p = s.catalog.photo(id);
     let (w, h) = p.map(|p| (p.width.max(1) as f64, p.height.max(1) as f64)).unwrap_or((3.0, 2.0));
     let o = p.map(|p| p.develop.orientation).unwrap_or_default();
