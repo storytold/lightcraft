@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use lightcraft_develop::{DevelopSettings, Spot};
+use lightcraft_develop::{DevelopSettings, Spot, SpotMode};
 use lightcraft_geom::Point;
 use lightcraft_gpu::{Output, wgpu};
 use lightcraft_pipeline::{Overlay, PixelWindow, Quality, RenderRequest, SourceInfo, StageCache};
@@ -71,7 +71,13 @@ fn display_renders_match_readback_renders() {
     let src = Arc::new(lightcraft_scenes::demo_library()[0].render(3000, 2000));
     let req = RenderRequest { overlay: Overlay::Spots(50), ..RenderRequest::fit(800, 800) };
     assert!(matches!(lightcraft_gpu::render_display(&src, &raw, &s, &req, None), Some(Output::Image(_))), "overlay");
-    s.spots = vec![Spot { points: vec![Point::new(0.5, 0.5)], size: 0.02, source_offset: Some(Point::new(0.15, 0.0)), ..Default::default() }];
+    s.spots = vec![Spot {
+        mode: SpotMode::Heal,
+        points: vec![Point::new(0.5, 0.5)],
+        size: 0.02,
+        source_offset: Some(Point::new(0.15, 0.0)),
+        ..Default::default()
+    }];
     let req = RenderRequest { window: Some(PixelWindow { x: 1200, y: 800, w: 500, h: 400 }), ..RenderRequest::fit(3000, 2000) };
     match lightcraft_gpu::render_display(&src, &raw, &s, &req, None) {
         Some(Output::Image(r)) => assert_eq!((r.image.width, r.image.height), (500, 400)),

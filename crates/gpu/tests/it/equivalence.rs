@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use lightcraft_develop::{
-    BrushStroke, DevelopSettings, Mask, MaskComponent, MaskOp, MaskShape, Process, Spot, Treatment, VignetteStyle, WbMode, Wheel,
+    BrushStroke, DevelopSettings, Mask, MaskComponent, MaskOp, MaskShape, Process, Spot, SpotMode, Treatment, VignetteStyle, WbMode, Wheel,
 };
 use lightcraft_geom::{Orientation, Point, Rect};
 use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo, StageCache, render};
@@ -502,7 +502,13 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.calibration.blue_hue = 25.0;
         }),
         ("spots + defringe", |s| {
-            s.spots = vec![Spot { points: vec![Point::new(0.3, 0.3)], size: 0.03, source_offset: Some(Point::new(0.1, 0.0)), ..Default::default() }];
+            s.spots = vec![Spot {
+                mode: SpotMode::Heal,
+                points: vec![Point::new(0.3, 0.3)],
+                size: 0.03,
+                source_offset: Some(Point::new(0.1, 0.0)),
+                ..Default::default()
+            }];
             s.optics.defringe_purple_amount = 5.0;
         }),
     ]
@@ -962,7 +968,13 @@ fn red_eye_matches() {
     // with a spot the scene-linear stage runs on the CPU (eyes included)
     let s = DevelopSettings {
         red_eye: eyes,
-        spots: vec![Spot { points: vec![Point::new(0.1, 0.2)], size: 0.02, source_offset: Some(Point::new(0.05, 0.0)), ..Default::default() }],
+        spots: vec![Spot {
+            mode: SpotMode::Heal,
+            points: vec![Point::new(0.1, 0.2)],
+            size: 0.02,
+            source_offset: Some(Point::new(0.05, 0.0)),
+            ..Default::default()
+        }],
         ..Default::default()
     };
     check("red eye + spot", &src, &info, &s, &RenderRequest::fit(600, 600));
@@ -1037,12 +1049,12 @@ fn windows_match() {
     }));
     cases.push(("spot reading from outside", |s| {
         s.spots.push(Spot {
+            mode: SpotMode::Heal,
             points: vec![Point::new(0.45, 0.45)],
             size: 0.03,
             feather: 30.0,
             opacity: 100.0,
             source_offset: Some(Point::new(0.15, 0.0)),
-            ..Default::default()
         });
     }));
     for (name, edit) in cases {
@@ -1382,7 +1394,6 @@ fn spots_match() {
     if !gpu() {
         return;
     }
-    use lightcraft_develop::SpotMode;
     let src = scene(3, 900, 600);
     let raw = SourceInfo { raw: true, ..Default::default() };
     let spot = |mode, pts: &[(f64, f64)], size, feather, off: Option<(f64, f64)>| Spot {
@@ -1393,11 +1404,13 @@ fn spots_match() {
         opacity: 100.0,
         source_offset: off.map(|o| Point::new(o.0, o.1)),
     };
+    // (Remove and Fill are content-aware and render on the CPU; a Heal spot without a source
+    // picks one automatically)
     let sets: Vec<(&str, Vec<Spot>)> = vec![
         ("clone", vec![spot(SpotMode::Clone, &[(0.3, 0.4)], 0.04, 40.0, Some((0.15, 0.05)))]),
         ("heal", vec![spot(SpotMode::Heal, &[(0.6, 0.5)], 0.05, 60.0, Some((-0.12, 0.1)))]),
-        ("remove (auto source)", vec![spot(SpotMode::Remove, &[(0.5, 0.45)], 0.03, 50.0, None)]),
-        ("remove near the edge (auto)", vec![spot(SpotMode::Remove, &[(0.04, 0.5)], 0.03, 50.0, None)]),
+        ("heal (auto source)", vec![spot(SpotMode::Heal, &[(0.5, 0.45)], 0.03, 50.0, None)]),
+        ("heal near the edge (auto)", vec![spot(SpotMode::Heal, &[(0.04, 0.5)], 0.03, 50.0, None)]),
         ("brushed heal stroke", vec![spot(SpotMode::Heal, &[(0.2, 0.7), (0.3, 0.72), (0.4, 0.69)], 0.02, 30.0, Some((0.0, -0.15)))]),
         ("feather 0, half opacity", vec![Spot { opacity: 50.0, ..spot(SpotMode::Clone, &[(0.7, 0.3)], 0.04, 0.0, Some((-0.2, 0.0))) }]),
         ("cut by the edge", vec![spot(SpotMode::Heal, &[(0.99, 0.02)], 0.05, 50.0, Some((-0.2, 0.2)))]),
@@ -1405,7 +1418,7 @@ fn spots_match() {
             "overlapping, auto after manual",
             vec![
                 spot(SpotMode::Clone, &[(0.45, 0.5)], 0.04, 50.0, Some((0.1, 0.0))),
-                spot(SpotMode::Remove, &[(0.47, 0.52)], 0.04, 50.0, None),
+                spot(SpotMode::Heal, &[(0.47, 0.52)], 0.04, 50.0, None),
                 spot(SpotMode::Heal, &[(0.5, 0.5)], 0.03, 70.0, Some((0.0, 0.12))),
             ],
         ),
@@ -1415,6 +1428,12 @@ fn spots_match() {
         typical(&mut s);
         s.spots = spots;
         check(&format!("spots: {name}"), &src, &raw, &s, &RenderRequest::fit(640, 640));
+    }
+    // content-aware spots have no GPU kernel: the CPU renders the photo
+    for mode in [SpotMode::Remove, SpotMode::Fill] {
+        let s = DevelopSettings { spots: vec![spot(mode, &[(0.5, 0.45)], 0.03, 50.0, None)], ..Default::default() };
+        let r = lightcraft_gpu::try_render(&src, &raw, &s, &RenderRequest::fit(640, 640), None);
+        assert_eq!(r.err(), Some(lightcraft_gpu::Fallback::NotTried), "{mode:?}");
     }
 }
 
@@ -1460,7 +1479,13 @@ fn device_histogram_is_exact() {
     }
     // a window with a spot reading from outside it: the render grows, the histogram is of the cut
     let src = scene(0, 3000, 2000);
-    s.spots = vec![Spot { points: vec![Point::new(0.5, 0.5)], size: 0.02, source_offset: Some(Point::new(0.15, 0.0)), ..Default::default() }];
+    s.spots = vec![Spot {
+        mode: SpotMode::Heal,
+        points: vec![Point::new(0.5, 0.5)],
+        size: 0.02,
+        source_offset: Some(Point::new(0.15, 0.0)),
+        ..Default::default()
+    }];
     let req = RenderRequest { window: Some(lightcraft_pipeline::PixelWindow { x: 1200, y: 800, w: 500, h: 400 }), ..RenderRequest::fit(3000, 2000) };
     let r = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu render");
     assert_eq!((r.image.width, r.image.height), (500, 400));

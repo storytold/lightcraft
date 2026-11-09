@@ -524,4 +524,50 @@ mod tests {
         assert!(!s.masks.iter().any(|m| m.id == next), "{next}");
         assert_eq!(next, 2);
     }
+
+    /// Remove spots saved before Remove was content-aware (#2359) carry no marker: they load as the
+    /// Heal spots they rendered as, source and all. Remove spots made now keep the marker, and spots
+    /// of other modes are written as before.
+    #[test]
+    fn remove_spots_saved_before_content_aware_load_as_heal() {
+        use lightcraft_geom::Point;
+        let old = json!({"mode": "remove", "points": [{"x": 0.4, "y": 0.5}], "size": 0.03, "feather": 40.0, "opacity": 90.0, "source_offset": {"x": 0.1, "y": -0.02}});
+        let spot: Spot = serde_json::from_value(old.clone()).unwrap();
+        let healed = Spot {
+            mode: SpotMode::Heal,
+            points: vec![Point::new(0.4, 0.5)],
+            size: 0.03,
+            feather: 40.0,
+            opacity: 90.0,
+            source_offset: Some(Point::new(0.1, -0.02)),
+        };
+        assert_eq!(spot, healed);
+        // one without a source kept picking it automatically, as Heal does
+        let auto: Spot = serde_json::from_value(json!({"mode": "remove", "points": [{"x": 0.4, "y": 0.5}]})).unwrap();
+        assert_eq!((auto.mode, auto.source_offset), (SpotMode::Heal, None));
+        // whole settings, as a catalog, sidecar or snapshot holds them
+        let s = DevelopSettings::from_json(&json!({"spots": [old]})).unwrap();
+        assert_eq!(s.spots, vec![healed.clone()]);
+        // a Remove spot made now is written with the marker and stays Remove
+        let new = Spot { mode: SpotMode::Remove, ..healed.clone() };
+        let v = serde_json::to_value(&new).unwrap();
+        assert_eq!(v["content_aware"], true);
+        assert_eq!(serde_json::from_value::<Spot>(v).unwrap(), new);
+        let both = DevelopSettings { spots: vec![healed.clone(), new.clone()], ..Default::default() };
+        let back = DevelopSettings::from_json(&both.to_json()).unwrap();
+        assert_eq!(back, both);
+        assert_eq!(back.hash64(), both.hash64());
+        // Heal, Clone and Fill spots are written exactly as before
+        for mode in [SpotMode::Heal, SpotMode::Clone, SpotMode::Fill] {
+            let v = serde_json::to_value(Spot { mode, ..healed.clone() }).unwrap();
+            assert_eq!(
+                v.as_object().unwrap().keys().collect::<Vec<_>>(),
+                ["feather", "mode", "opacity", "points", "size", "source_offset"],
+                "{mode:?}"
+            );
+            assert_eq!(serde_json::from_value::<Spot>(v).unwrap().mode, mode);
+        }
+        // the mode alone (spot.add, spot.update) is unchanged: "remove" is Remove
+        assert_eq!(serde_json::from_value::<SpotMode>(json!("remove")).unwrap(), SpotMode::Remove);
+    }
 }

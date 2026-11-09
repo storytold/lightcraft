@@ -46,6 +46,13 @@ only what was added, and with the mask's Invert it gave the whole photo. Such ma
 first component, on every process. It landed in place as a bug fix: intersecting with nothing is not
 a look anyone chose.
 
+**Content-aware Remove** (issue #2359) changed what the Remove tool does, not how a stage
+interprets a value: Remove spots used to heal from an automatic source, the same as Heal, and are
+rebuilt from their surroundings now. A spot carries its own mode, so the change is kept off saved
+edits by the spot rather than the process: a Remove spot saved without `"content_aware": true` (any
+from before) loads as the Heal spot it rendered as, and a new Remove spot is content-aware on every
+process.
+
 ## Adding a process
 
 1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in

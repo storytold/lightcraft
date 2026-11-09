@@ -1211,8 +1211,18 @@ pub enum SpotMode {
     Fill,
 }
 
+impl SpotMode {
+    /// Rebuilt from its surroundings rather than copied from a source: Remove (as in Lightroom)
+    /// and Fill, which renders the same and stays for spots saved with it (issue #2359).
+    pub fn content_aware(self) -> bool {
+        matches!(self, SpotMode::Remove | SpotMode::Fill)
+    }
+}
+
+/// A retouch spot. Saved through [`SpotWire`]: a Remove spot from before Remove was content-aware loads
+/// as the Heal spot it rendered as (issue #2359).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(from = "SpotWire", into = "SpotWire")]
 pub struct Spot {
     pub mode: SpotMode,
     /// Target: a single point (circle spot) or a brushed path. Normalized coords.
@@ -1228,6 +1238,46 @@ pub struct Spot {
 impl Default for Spot {
     fn default() -> Self {
         Self { mode: SpotMode::Remove, points: Vec::new(), size: 0.02, feather: 50.0, opacity: 100.0, source_offset: None }
+    }
+}
+
+/// A [`Spot`] as saved: its fields, and `content_aware: true` on a Remove spot. Remove healed from a
+/// source it picked itself (the same as Heal) until it became content-aware (issue #2359), so a Remove
+/// spot saved without the marker is one of those: it loads as Heal, with the source it had, and the
+/// photo keeps its look wherever the spot comes from (catalog, its log, snapshots and history, an
+/// `lc:settings` sidecar, a browser library). New Remove spots are written with the marker; spots of
+/// other modes are written as before, so their JSON (and the settings' hash) doesn't change.
+#[derive(Serialize, Deserialize)]
+#[serde(default)]
+struct SpotWire {
+    mode: SpotMode,
+    points: Vec<Point>,
+    size: f64,
+    feather: f64,
+    opacity: f64,
+    source_offset: Option<Point>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    content_aware: bool,
+}
+
+impl Default for SpotWire {
+    fn default() -> Self {
+        let Spot { mode, points, size, feather, opacity, source_offset } = Spot::default();
+        Self { mode, points, size, feather, opacity, source_offset, content_aware: false }
+    }
+}
+
+impl From<SpotWire> for Spot {
+    fn from(w: SpotWire) -> Self {
+        let mode = if w.mode == SpotMode::Remove && !w.content_aware { SpotMode::Heal } else { w.mode };
+        Self { mode, points: w.points, size: w.size, feather: w.feather, opacity: w.opacity, source_offset: w.source_offset }
+    }
+}
+
+impl From<Spot> for SpotWire {
+    fn from(s: Spot) -> Self {
+        let content_aware = s.mode == SpotMode::Remove;
+        Self { mode: s.mode, points: s.points, size: s.size, feather: s.feather, opacity: s.opacity, source_offset: s.source_offset, content_aware }
     }
 }
 

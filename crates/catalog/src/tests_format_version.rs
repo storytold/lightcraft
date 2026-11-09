@@ -97,6 +97,47 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
 }
 
+/// A library from before Remove was content-aware (#2359): its Remove spots, in the snapshot and in
+/// the log, load as the Heal spots they rendered as, with their sources; a Remove spot made after the
+/// upgrade is still one when the library is opened again.
+#[test]
+fn v12_remove_spots_load_as_heal_and_new_ones_stay_remove() {
+    use lightcraft_develop::{Spot, SpotMode};
+    use lightcraft_geom::Point;
+    let spot = |x| Spot { mode: SpotMode::Remove, points: vec![Point::new(x, 0.5)], source_offset: Some(Point::new(0.1, 0.0)), ..Spot::default() };
+    let develop = |id, spots: Vec<Spot>| Op::SetDevelop {
+        id,
+        settings: Arc::new(DevelopSettings { spots, ..DevelopSettings::default() }),
+        label: "Remove".into(),
+        edited: None,
+    };
+    // what v12 and earlier wrote: Remove spots without the marker
+    let v12 = |json: String| {
+        assert!(json.contains(",\"content_aware\":true"), "{json}");
+        json.replace(",\"content_aware\":true", "")
+    };
+    let mut c = Catalog::new();
+    let op = photo(&mut c);
+    c.apply(op).unwrap();
+    let id = c.photos().next().unwrap().id;
+    c.apply(develop(id, vec![spot(0.2)])).unwrap();
+    let body = v12(serde_json::to_string(&develop(id, vec![spot(0.2), spot(0.6)])).unwrap());
+    let log = format!("{{\"seq\":3,\"crc\":{},\"op\":{body}}}\n", crc32fast::hash(body.as_bytes()));
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":12,\"seq\":2,\"catalog\":{}}}\n", v12(c.to_snapshot())).into_bytes());
+    m.set(LOG, log.into_bytes());
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.upgraded_from), (1, Some(12)));
+    let spots = &loaded.photo(id).unwrap().develop.spots;
+    let healed = |x| Spot { mode: SpotMode::Heal, ..spot(x) };
+    assert_eq!(*spots, vec![healed(0.2), healed(0.6)]);
+    // a Remove spot made now is written with the marker and stays Remove
+    j.append(&[develop(id, vec![healed(0.2), healed(0.6), spot(0.8)])]).unwrap();
+    drop(j);
+    let (_, again, _) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(again.photo(id).unwrap().develop.spots, vec![healed(0.2), healed(0.6), spot(0.8)]);
+}
+
 #[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
@@ -238,9 +279,10 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v12: `Catalog.grids` and `SegMask.grid`, shared by a snapshot's masks (#2154) (v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
-    /// `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 12;
+    /// v13: `Spot.content_aware` (a Remove spot without it loads as Heal, #2359); v12: `Catalog.grids` and
+    /// `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`; v10: `Mask.on_photo`;
+    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
+    const NEWEST_FIELDS: u32 = 13;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
