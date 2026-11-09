@@ -540,7 +540,7 @@ impl crate::Session {
     /// on screen: a focus check needs the pixels at once, and a 45 MP render of the window takes
     /// seconds. Not kept in any cache (a full-size picture is 180 MB). `None` for other photos.
     pub fn embedded_full_job(&mut self, id: PhotoId, max_edge: usize) -> Option<QuickJob> {
-        let p = self.catalog.photo(id)?.clone();
+        let p = self.cache_photo(id)?;
         let (path, l) = self.embedded_of(&p)?;
         let key = Hasher128::new().str(&content_key(&p)).str("embedded-full").u64(id.0).u64(max_edge as u64).finish().0 as u64;
         Some(QuickJob {

@@ -1151,3 +1151,17 @@ fn a_render_from_another_models_product_is_not_kept_under_the_active_models_key(
         assert_eq!(model_of(&mut s), expected, "product made with {model}");
     }
 }
+
+#[test]
+fn a_fenced_raw_asks_for_its_full_size_camera_preview_again() {
+    let mut s = crate::Session::new();
+    s.media.preview_loader = Some(Arc::new(|_: &str, _: usize| None::<Rgba8>));
+    let mut raw = Photo::new(PhotoId(1), Source::File { path: "replaced.cr3".into() }, "replaced.cr3", "CR3", 6000, 4000, "2026-01-01");
+    raw.kind = MediaKind::Raw;
+    raw.develop = Arc::new(raw.camera_defaults());
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    let before = s.embedded_full_job(PhotoId(1), 8192).unwrap().key;
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.media.identities.invalidate(&p, None, || ()).unwrap();
+    assert_ne!(s.embedded_full_job(PhotoId(1), 8192).unwrap().key, before, "the previous file's picture is not the replacement's");
+}
