@@ -55,12 +55,15 @@ pub(crate) fn ifd0_orientation(bytes: &[u8]) -> Option<Orientation> {
     tiff.ifds.first().and_then(|i| i.u16(t::ORIENTATION)).filter(|v| (1..=8).contains(v)).map(Orientation::from_exif)
 }
 
+/// The ISO an Exif IFD states beyond the 16-bit ISOSpeedRatings: RecommendedExposureIndex, else
+/// ISOSpeedRatingsExt. A zero states nothing.
 fn extended_iso(exif: Option<&Ifd>) -> Option<u64> {
     let e = exif?;
     let stated = |tag| e.u64(tag).filter(|&v| v > 0);
     stated(t::RECOMMENDED_EXPOSURE_INDEX).or_else(|| stated(t::ISO_SPEED_RATINGS_EXT))
 }
 
+/// `iso`, unless it is only the overflow marker of this stream's ISOSpeedRatings, which states no ISO.
 fn without_iso_overflow(iso: Option<u32>, tiff: &Tiff) -> Option<u32> {
     // 65535 is an overflow marker only in the short field; a LONG or an extended measurement may equal it.
     let entry = tiff.exif().and_then(|e| e.get(t::ISO_SPEED)).or_else(|| tiff.ifds.first().and_then(|i| i.get(t::ISO_SPEED)));
@@ -434,6 +437,7 @@ pub(crate) mod tests {
         rw2_with_options(inner, raw_iso, None, true, None)
     }
 
+    /// [`rw2_with`], also with the 32-bit raw ISO, an optional JpgFromRaw and an ISO in the raw's own Exif IFD.
     fn rw2_with_options(inner: Option<IfdBuilder>, raw_iso: Option<u16>, raw_iso32: Option<u32>, with_jpg: bool, exif_iso: Option<u16>) -> Vec<u8> {
         let mut jpg = vec![0xff, 0xd8];
         if let Some(e) = inner {

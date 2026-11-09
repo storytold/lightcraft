@@ -61,6 +61,7 @@ fn write_png_with_metadata(path: &Path, seed: u8, exif: Option<&[u8]>, xmp: Opti
     std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
 
+/// A RW2 for the import tests: the ISO fields it holds are the arguments.
 fn rw2_iso_fixture(private_iso: u16, standard_iso: Option<u16>, preview_iso: Option<u16>) -> Vec<u8> {
     use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
 
