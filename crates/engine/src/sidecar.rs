@@ -430,10 +430,19 @@ impl SidecarData {
     }
 
     /// Whether a `crs:` develop patch places anything on the image (a crop, masks): what [`SidecarData::develop_frame`]
-    /// turns.
+    /// turns. The whole photo, unrotated, is no placement: Lightroom writes `crs:HasCrop="False"` on every uncropped
+    /// photo, which reads as that crop, and turning it changes nothing, so it needn't read the photo file.
     pub fn has_positioned_develop(&self) -> bool {
-        matches!(&self.develop, Some(DevelopPatch::Partial(v)) if v.pointer("/crop/geometry").is_some() || v.get("masks").is_some())
+        let Some(DevelopPatch::Partial(v)) = &self.develop else { return false };
+        v.get("masks").is_some() || v.pointer("/crop/geometry").is_some_and(|g| !whole_photo(g))
     }
+}
+
+/// Whether a crop geometry (`{"rect": {x0, y0, x1, y1}, "angle"}`) is the whole photo, unrotated.
+fn whole_photo(g: &serde_json::Value) -> bool {
+    let at = |p: &str| g.pointer(p).and_then(serde_json::Value::as_f64);
+    let rect = [at("/rect/x0"), at("/rect/y0"), at("/rect/x1"), at("/rect/y1")];
+    rect == [Some(0.0), Some(0.0), Some(1.0), Some(1.0)] && at("/angle").unwrap_or(0.0) == 0.0
 }
 
 /// The orientation the photo file at `path` states, matching what the import stores on [`crate::media::ProbeInfo`]:
@@ -1839,6 +1848,36 @@ mod tests {
         let sc = sc.with_file_orientation(&there.to_string_lossy()).unwrap();
         assert_eq!(sc.develop_frame, Some(lightcraft_meta::Orientation::Normal));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_uncropped_sidecar_does_not_read_the_photo_file() {
+        // Lightroom writes HasCrop="False" on every uncropped photo: the whole photo, which turning leaves as it is
+        let packet = |crop: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+0.50" {crop}/>
+                </rdf:RDF></x:xmpmeta>"#
+            )
+        };
+        let missing = std::env::temp_dir().join(format!("lightcraft-uncropped-{}", std::process::id())).join("gone.CR3");
+        let missing = missing.to_string_lossy();
+        for crop in [r#"crs:HasCrop="False""#, r#"crs:HasCrop="True" crs:CropLeft="0" crs:CropTop="0" crs:CropRight="1" crs:CropBottom="1""#] {
+            let sc = parse_sidecar(&packet(crop), crate::crs::Target::RawAbsolute).unwrap();
+            assert!(!sc.has_positioned_develop(), "{crop}");
+            // nothing to turn: the missing original is never opened, and no frame is set
+            let sc = sc.with_file_orientation(&missing).unwrap();
+            assert_eq!(sc.develop_frame, None, "{crop}");
+        }
+        // a real crop, or a straightened whole photo, still needs the file
+        for crop in [
+            r#"crs:HasCrop="True" crs:CropLeft="0.1" crs:CropTop="0" crs:CropRight="1" crs:CropBottom="1""#,
+            r#"crs:HasCrop="True" crs:CropAngle="2""#,
+        ] {
+            let sc = parse_sidecar(&packet(crop), crate::crs::Target::RawAbsolute).unwrap();
+            assert!(sc.has_positioned_develop(), "{crop}");
+            assert!(sc.with_file_orientation(&missing).is_err(), "{crop}");
+        }
     }
 
     fn look_packet(name: &str) -> String {
