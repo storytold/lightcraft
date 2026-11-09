@@ -933,3 +933,24 @@ fn a_header_read_file_hashed_to_compare_keeps_that_hash() {
     drop(s);
     std::fs::remove_dir_all(base).unwrap();
 }
+
+#[test]
+fn a_header_read_file_hashed_by_the_review_keeps_that_hash() {
+    let base = crate::tests_xmp::temp_dir("reviewed-keeps-hash");
+    let old = big_dng(104);
+    let mut other = old.clone();
+    let middle = other.len() / 2;
+    other[middle] ^= 0xff;
+    let original = write(&base, "original.dng", &old);
+    let incoming = write(&base, "incoming.dng", &other);
+    let mut s = Session::new().with_fs();
+    import(&mut s, &[&original], "add", &base.join("out"));
+    let scanned = crate::import::scan(&mut s, &[incoming.to_string_lossy().into_owned()]);
+    assert_eq!(scanned[0].duplicate, None, "{scanned:?}");
+    let r = import(&mut s, &[&incoming], "add", &base.join("out"));
+    assert_eq!(r["imported"].as_array().unwrap().len(), 1, "{r}");
+    let expected = lightcraft_preview::hash_bytes(&other).to_string();
+    assert_eq!(hash_of(&s, &r["imported"][0]), Some(expected), "{r}");
+    drop(s);
+    std::fs::remove_dir_all(base).unwrap();
+}

@@ -364,9 +364,9 @@ impl ImportJob {
             }
             // same bytes as a library photo: skipped below, once its capture time is known (a photo
             // added from its headers has no hash yet: it is hashed now if it has this file's size)
-            let unhashed = info.content_hash.is_none();
             let found = if opts.local { None } else { self.dups.find(&path, &mut info, cancel) };
-            if found.is_none() && unhashed && info.content_hash.is_some() && info.native_read.is_some() {
+            if found.is_none() && info.content_hash.is_some() && info.native_read.as_ref().is_some_and(|e| !e.matches(&self.originals, &path, &info))
+            {
                 info.native_read = self.originals.candidate_probe(&path, &info);
             }
             let duplicate_of = found.map(|existing| {
