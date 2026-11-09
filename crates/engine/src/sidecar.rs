@@ -842,6 +842,7 @@ pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Op
     let _binding = crate::originals::standalone_binding();
     read_packet_with(original, kind, lookup, None)
 }
+/// [`read_packet`] with the original's `bytes` when the caller already read them.
 pub(crate) fn read_packet_with(original: &str, kind: MediaKind, lookup: SidecarLookup, bytes: Option<&[u8]>) -> Option<(String, PathBuf)> {
     if let Some(sc) = lookup.find(original) {
         // A discovered sidecar keeps precedence even when reading it fails.

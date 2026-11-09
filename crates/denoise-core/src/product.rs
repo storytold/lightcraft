@@ -250,6 +250,10 @@ pub fn is_current(path: &Path, key: &str) -> bool {
     check().unwrap_or(false)
 }
 
+/// Copy the product at `from`, stored under `old_key`, to a staging file beside `to` with its
+/// header naming `new_key`; the pixels are copied unchanged. `publish` gives the staging file its
+/// place; the staging file is removed afterwards. Fails with [`ProductError::Stale`] when `from`
+/// is not stored under `old_key`.
 pub fn copy_rekey(
     from: &Path,
     to: &Path,

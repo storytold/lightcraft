@@ -132,6 +132,8 @@ fn write_temp(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> i
     write_temp_owned(path, sync, fill).map(|(path, n, _)| (path, n))
 }
 
+/// [`write_temp`], also returning the written file's handle so the caller can tell its temp file
+/// from one put in its place.
 fn write_temp_owned(path: &Path, sync: bool, fill: &mut dyn FnMut(&mut dyn Write) -> io::Result<()>) -> io::Result<(PathBuf, u64, File)> {
     let (tmp, file) = create_temp(path)?;
     let r = (|| {
@@ -226,6 +228,10 @@ pub fn write_new_unique(candidates: &mut dyn Iterator<Item = PathBuf>, data: &[u
     r
 }
 
+/// Write `data` to the first free name among `candidates`, never replacing a file, then run
+/// `verify` on the published file. `same` tells whether two handles are one file: a file that is
+/// not the one written is never removed, and an error names the path left behind. Returns the
+/// name taken and what `verify` returned.
 pub fn write_new_unique_verified<T>(
     candidates: &mut dyn Iterator<Item = PathBuf>,
     data: &[u8],
@@ -235,6 +241,8 @@ pub fn write_new_unique_verified<T>(
     write_new_unique_verified_with(candidates, data, verify, same, &publish_new, &|path| fs::remove_file(path))
 }
 
+/// [`write_new_unique_verified`] with the publishing and alias removal steps passed in (tests
+/// inject failures there).
 fn write_new_unique_verified_with<T>(
     candidates: &mut dyn Iterator<Item = PathBuf>,
     data: &[u8],

@@ -8,6 +8,8 @@ use std::time::SystemTime;
 use lightcraft_catalog::{PhotoId, Source};
 use lightcraft_preview::{Hash128, Hasher128};
 
+/// What identifies one version of a file: its length and modification time, and on Unix its device, inode and
+/// change time.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Stamp {
     len: u64,
@@ -16,6 +18,7 @@ struct Stamp {
     identity: (u64, u64, i64, i64),
 }
 impl Stamp {
+    /// The stamp of a regular file's metadata; `None` for anything else or without a modification time.
     fn of(meta: &Metadata) -> Option<Self> {
         if !meta.is_file() {
             return None;
@@ -32,7 +35,10 @@ impl Stamp {
     }
 }
 
+/// Open handles held by live read proofs, process-wide; [`ReadProof::new`] stops at 128.
 static READ_HANDLES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// An open handle on the file a read came from, kept so a later check can tell that the file at the path is
+/// still that one (on Windows the handle also keeps writers out, unless it shares writes).
 #[derive(Debug)]
 struct ReadProof {
     file: Mutex<Option<File>>,
@@ -40,6 +46,8 @@ struct ReadProof {
     identity: (u64, [u8; 16]),
 }
 impl ReadProof {
+    /// Keeps `file` as proof; `None` when the handle can't prove anything (`share_safe` false) or 128 proofs
+    /// are already open.
     fn new(file: File, share_safe: bool) -> Option<Arc<Self>> {
         if !share_safe {
             return None;
@@ -63,6 +71,7 @@ impl ReadProof {
             identity,
         }))
     }
+    /// Whether the file at `path` is still the one held, with the stamp `stamp`.
     fn current(&self, path: &str, stamp: &Stamp) -> bool {
         #[cfg(unix)]
         {
@@ -78,6 +87,7 @@ impl ReadProof {
             false
         }
     }
+    /// Closes the held handle; every later check fails.
     fn release(&self) {
         if self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take().is_some() {
             READ_HANDLES.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -112,9 +122,11 @@ impl Drop for ReadProof {
     }
 }
 
+/// The [`Originals`] a piece of evidence came from, without keeping it alive.
 #[derive(Clone, Debug)]
 pub(crate) struct ReaderOrigin(std::sync::Weak<RwLock<State>>);
 impl ReaderOrigin {
+    /// Whether `reader` is that reader and has not been retired.
     fn matches(&self, reader: &Originals) -> bool {
         self.0
             .upgrade()
@@ -122,6 +134,7 @@ impl ReaderOrigin {
     }
 }
 
+/// A header read's stamp and the handle it read from.
 #[derive(Clone, Debug)]
 struct HeaderObservation {
     stamp: Stamp,
@@ -131,6 +144,7 @@ impl HeaderObservation {
     fn current(&self, path: &str) -> bool {
         self.proof.current(path, &self.stamp)
     }
+    /// Whether `fp` is a read of the same file version as this header read.
     fn same_snapshot(&self, fp: &Fingerprint) -> bool {
         if self.stamp != fp.stamp {
             return false;
@@ -145,6 +159,8 @@ impl HeaderObservation {
     }
 }
 
+/// What a probe of an original learned (hash, size, dimensions, preview) and the reads that back it, carried
+/// from the probe to the import that adds the photo.
 #[derive(Clone, Debug)]
 pub struct ProbeEvidence {
     origin: ReaderOrigin,
@@ -161,9 +177,11 @@ impl ProbeEvidence {
     fn same_facts(&self, info: &crate::media::ProbeInfo) -> bool {
         self.size == info.file_size && self.dimensions == (info.width, info.height) && self.preview == info.preview_only
     }
+    /// Whether this evidence comes from `reader` and states `info`'s facts for `path`.
     pub(crate) fn matches(&self, reader: &Originals, path: &str, info: &crate::media::ProbeInfo) -> bool {
         self.origin.matches(reader) && self.path == path && self.hash == info.content_hash && self.same_facts(info)
     }
+    /// Whether a whole read of the file still at `path` proves the content hash `hash`.
     pub(crate) fn confirms_hash(&self, reader: &Originals, path: &str, hash: &str) -> bool {
         self.origin.matches(reader)
             && self.path == path
@@ -172,6 +190,8 @@ impl ProbeEvidence {
                 .as_ref()
                 .is_some_and(|fp| self.metadata_hash == Some(fp.hash) && crate::sync::base_hash(hash) == fp.hash.to_string() && fp.current(path))
     }
+    /// Whether a held proof shows the file changed since it was read. A released proof proves nothing either
+    /// way and is not stale.
     pub(crate) fn stale(&self) -> bool {
         self.fingerprint.as_ref().is_some_and(|fp| {
             let live = fp.proof.as_ref().is_some_and(|p| p.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some());
@@ -181,12 +201,14 @@ impl ProbeEvidence {
             live && !header.current(&self.path)
         })
     }
+    /// Whether `fp`, a whole read of `path`, is of the same file version as this evidence.
     fn binds(&self, reader: &Originals, path: &str, info: &crate::media::ProbeInfo, fp: &Fingerprint) -> bool {
         self.origin.matches(reader)
             && self.path == path
             && self.same_facts(info)
             && (self.metadata_hash == Some(fp.hash) || self.header.as_ref().is_some_and(|h| h.same_snapshot(fp)))
     }
+    /// Closes the handles this evidence holds.
     pub(crate) fn release(&self) {
         if let Some(fp) = &self.fingerprint {
             fp.release();
@@ -199,6 +221,8 @@ impl ProbeEvidence {
         }
     }
 }
+/// Evidence for `info` from `reader`, keeping `fp` only when it is the whole read that hashed to `info`'s
+/// content hash.
 fn evidence(
     reader: &Originals,
     path: &str,
@@ -224,11 +248,13 @@ fn evidence(
         preview: info.preview_only.clone(),
     }
 }
+/// Evidence for a probe of `path` from the bound reader; `None` with no reader bound.
 pub(crate) fn probe_evidence(path: &str, info: &crate::media::ProbeInfo, fp: Option<Fingerprint>) -> Option<ProbeEvidence> {
     let reader = bound_reader()?;
     Some(evidence(&reader, path, info, fp, info.content_hash.as_deref().and_then(Hash128::parse)))
 }
 
+/// A header probe in progress: the open file, its stamp before reading and the reader it reports to.
 pub(crate) struct HeaderRead {
     pub file: File,
     path: String,
@@ -238,6 +264,7 @@ pub(crate) struct HeaderRead {
     registration: Arc<()>,
 }
 impl HeaderRead {
+    /// Opens `path` for a header probe, keeping writers out on Windows.
     pub(crate) fn open(path: &str) -> io::Result<Self> {
         let reader = current_reader()?;
         let registration = reader.registration();
@@ -245,6 +272,8 @@ impl HeaderRead {
         let before = file.metadata().ok().as_ref().and_then(Stamp::of);
         Ok(Self { file, path: path.to_owned(), before, share_safe, reader, registration })
     }
+    /// Ends the probe: fails when the file changed while its headers were read, else attaches the read's
+    /// evidence to `info`.
     pub(crate) fn finish(self, mut info: crate::media::ProbeInfo) -> io::Result<crate::media::ProbeInfo> {
         let after = self.file.metadata().ok().as_ref().and_then(Stamp::of);
         if self.before != after {
@@ -260,6 +289,8 @@ impl HeaderRead {
     }
 }
 
+/// The content hash of one whole read of a file, the stamp of the version read and, while it lasts, the
+/// handle that proves the file is still that version.
 #[derive(Clone, Debug)]
 pub struct Fingerprint {
     pub hash: Hash128,
@@ -269,21 +300,27 @@ pub struct Fingerprint {
     replaced: bool,
 }
 impl Fingerprint {
+    /// The facts probed from the bytes read, when the read probed them.
     pub(crate) fn probe_info(&self) -> Option<crate::media::ProbeInfo> {
         self.facts.clone()
     }
+    /// The length of the file version read.
     pub fn len(&self) -> u64 {
         self.stamp.len
     }
+    /// Whether the file read was empty.
     pub fn is_empty(&self) -> bool {
         self.stamp.len == 0
     }
+    /// Whether the path's current metadata still has the stamp read (no handle check).
     fn observed(&self, path: &str) -> bool {
         std::fs::metadata(path).ok().as_ref().and_then(Stamp::of).as_ref() == Some(&self.stamp)
     }
+    /// Whether the file at `path` is still the version this fingerprint read.
     pub(crate) fn current(&self, path: &str) -> bool {
         self.proof.as_ref().is_some_and(|proof| proof.current(path, &self.stamp))
     }
+    /// Closes the proof's handle.
     pub(crate) fn release(&self) {
         if let Some(proof) = &self.proof {
             proof.release();
@@ -291,12 +328,16 @@ impl Fingerprint {
     }
 }
 
+/// Where a read's hash lets cached smart previews and denoise products under the photo's old keys be reached
+/// under the new one.
 #[derive(Clone, PartialEq, Eq)]
 struct Migration {
     keys: Vec<String>,
     smart: Option<std::path::PathBuf>,
     denoise: Option<(std::path::PathBuf, String)>,
 }
+/// The library's interest in reads of one path: the masters there, their catalogued facts, whether a read
+/// should hash, and the stamp seen when the watch was made.
 struct Watch {
     migration: Migration,
     ids: Vec<PhotoId>,
@@ -315,16 +356,20 @@ impl Watch {
         self.observed.as_ref().is_some_and(|observed| observed != stamp)
     }
 }
+/// A whole read of a watched path, waiting for [`crate::Session::learn_read_hashes`].
 pub(crate) struct ReadEvent {
     pub path: String,
     pub fingerprint: Fingerprint,
     watch: Arc<Watch>,
 }
+/// Whether the reader is still in use, the watched paths, and the registration a folder change replaces.
 struct State {
     active: bool,
     wanted: HashMap<String, Arc<Watch>>,
     registration: Arc<()>,
 }
+/// The session's reader of originals: every whole read of a photo's file goes through it, and a read of a
+/// path the library watches hashes the bytes so the catalog learns them without a second read.
 #[derive(Clone)]
 pub struct Originals {
     state: Arc<RwLock<State>>,
@@ -352,17 +397,30 @@ impl Default for Originals {
         }
     }
 }
-thread_local! { static CURRENT: RefCell<Option<Originals>> = const { RefCell::new(None) }; }
-thread_local! { static LAST_READ: RefCell<Option<(String, Fingerprint)>> = const { RefCell::new(None) }; }
+thread_local! {
+    /// The reader bound on this thread, which the free functions read through.
+    static CURRENT: RefCell<Option<Originals>> = const { RefCell::new(None) };
+}
+thread_local! {
+    /// The last whole read on this thread, for a [`ReadCapture`] to pick up.
+    static LAST_READ: RefCell<Option<(String, Fingerprint)>> = const { RefCell::new(None) };
+}
 #[cfg(test)]
 thread_local! { static COMPARE_OPENED: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) }; }
-thread_local! { static CAPTURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+thread_local! {
+    /// How many [`ReadCapture`]s are open on this thread.
+    static CAPTURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+/// Collects the fingerprint of the last read a call made on this thread, restoring the outer capture's on
+/// drop.
 pub(crate) struct ReadCapture(Option<(String, Fingerprint)>);
 impl ReadCapture {
+    /// Starts a capture, putting the outer one's last read aside.
     pub(crate) fn new() -> Self {
         CAPTURES.with(|depth| depth.set(depth.get().saturating_add(1)));
         Self(LAST_READ.with(|slot| slot.take()))
     }
+    /// The fingerprint of the last read of `path` since the capture started.
     pub(crate) fn fingerprint(&self, path: &str) -> Option<Fingerprint> {
         LAST_READ.with(|slot| slot.borrow().as_ref().filter(|(p, _)| p == path).map(|(_, fp)| fp.clone()))
     }
@@ -373,11 +431,13 @@ impl Drop for ReadCapture {
         CAPTURES.with(|depth| depth.set(depth.get().saturating_sub(1)));
     }
 }
+/// Records `fp` as this thread's last read of `path`.
 fn remember(path: &str, fp: &Fingerprint) {
     LAST_READ.with(|slot| {
         slot.replace(Some((path.to_owned(), fp.clone())));
     });
 }
+/// Binds a reader to this thread until dropped; a standalone binding also retires its own reader then.
 pub(crate) struct Binding {
     previous: Option<Originals>,
     _capture: ReadCapture,
@@ -394,12 +454,16 @@ impl Drop for Binding {
     }
 }
 impl Originals {
+    /// A weak reference to this reader, for evidence to name where it came from.
     pub(crate) fn origin(&self) -> ReaderOrigin {
         ReaderOrigin(Arc::downgrade(&self.state))
     }
+    /// Whether evidence from `origin` came from this reader.
     pub(crate) fn accepts_origin(&self, origin: &ReaderOrigin) -> bool {
         origin.matches(self)
     }
+    /// Reports the read behind a probe's evidence for photo `id` when the photo is still the file and facts
+    /// the evidence describes.
     pub(crate) fn adopt_probe(&self, s: &crate::Session, id: PhotoId, evidence: &ProbeEvidence) {
         let Some(p) = s.catalog.photo(id) else { return };
         if !evidence.origin.matches(self)
@@ -418,6 +482,7 @@ impl Originals {
         };
         self.report(&evidence.path, fp, self.watch(&evidence.path));
     }
+    /// The evidence for an import candidate at `path`, bound to a whole read of it when one is known.
     pub(crate) fn candidate_probe(&self, path: &str, info: &crate::media::ProbeInfo) -> Option<ProbeEvidence> {
         let source = info.native_read.as_ref()?;
         if source.matches(self, path, info) && source.metadata_hash.is_some() {
@@ -431,6 +496,8 @@ impl Originals {
         }
         Some(evidence(self, path, info, bound, hash))
     }
+    /// The evidence for a file a Copy or Move placed at `path`, taking the hash from the copy's read or the
+    /// source's evidence; releases the source's proofs.
     pub(crate) fn transfer_probe(
         &self,
         source_path: &str,
@@ -463,6 +530,8 @@ impl Originals {
         self.discard_candidate(source_path);
         native
     }
+    /// Forgets the read of `path` kept for an import that no longer needs it, unless the library watches the
+    /// path.
     pub(crate) fn discard_candidate(&self, path: &str) {
         if self.watch_any(path).is_none()
             && let Some(fp) = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(path)
@@ -470,6 +539,7 @@ impl Originals {
             fp.release();
         }
     }
+    /// Runs `f` with this reader bound and passes its read of `path` on to an outer capture.
     fn native_scope<T>(&self, path: &str, f: impl FnOnce() -> T) -> T {
         let binding = self.bind();
         let result = f();
@@ -482,14 +552,17 @@ impl Originals {
         }
         result
     }
+    /// Runs `f` with this reader bound to the thread.
     pub fn in_scope<T>(&self, f: impl FnOnce() -> T) -> T {
         let _binding = self.bind();
         f()
     }
+    /// Binds this reader to the thread until the binding drops.
     pub(crate) fn bind(&self) -> Binding {
         let previous = CURRENT.with(|slot| slot.replace(Some(self.clone())));
         Binding { previous, _capture: ReadCapture::new(), standalone: None }
     }
+    /// Stops this reader: it closes every proof and drops pending reads and candidates.
     pub(crate) fn retire(&self) {
         self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner).active = false;
         for proof in self.proofs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain(..).filter_map(|(_, p)| p.upgrade()) {
@@ -498,9 +571,12 @@ impl Originals {
         self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
     }
+    /// The current registration; a read registered under an older one is not kept.
     fn registration(&self) -> Arc<()> {
         self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner).registration.clone()
     }
+    /// Closes the proofs and forgets the watches, reads and candidates under `root`, before a folder there is
+    /// renamed or moved.
     pub(crate) fn revoke_under(&self, root: &std::path::Path) {
         let under = |path: &str| std::path::Path::new(path).starts_with(root);
         let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -519,6 +595,8 @@ impl Originals {
         self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|event| !under(&event.path));
         self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|path, _| !under(path));
     }
+    /// Releases `fp`, a read made only to copy a file, and forgets it as a candidate unless the path is
+    /// watched.
     pub(crate) fn discard_scratch(&self, path: &str, fp: &Fingerprint) {
         if self.watch_any(path).is_some() {
             return;
@@ -529,6 +607,8 @@ impl Originals {
         }
         fp.release();
     }
+    /// Keeps a weak handle on `proof` so [`Originals::retire`] and [`Originals::revoke_under`] can close it;
+    /// closes it at once when the reader was retired or its registration replaced.
     fn track(&self, path: &str, proof: &Option<Arc<ReadProof>>, registration: &Arc<()>) {
         let Some(proof) = proof else { return };
         let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -546,6 +626,8 @@ impl Originals {
         drop(proofs);
         drop(state);
     }
+    /// Rebuilds the watches from the catalog: one per path of a physical master, wanting a hash when any
+    /// master there lacks one or needs validation.
     pub(crate) fn refresh(&self, s: &crate::Session) {
         let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut wanted: HashMap<String, Vec<PhotoId>> = HashMap::new();
@@ -596,9 +678,11 @@ impl Originals {
         }
         state.wanted = next;
     }
+    /// Forgets the watches of the photos `ids` before they leave the catalog.
     pub(crate) fn drop_membership(&self, ids: &[PhotoId]) {
         self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner).wanted.retain(|_, w| !w.ids.iter().any(|id| ids.contains(id)));
     }
+    /// Reports the reads kept for import candidates that became the photos `ids`.
     pub(crate) fn adopt_candidates(&self, s: &crate::Session, ids: &[PhotoId]) {
         for id in ids {
             let Some(p) = s.catalog.photo(*id) else { continue };
@@ -611,13 +695,17 @@ impl Originals {
             }
         }
     }
+    /// The watch on `path` when it wants reads hashed.
     fn watch(&self, path: &str) -> Option<Arc<Watch>> {
         self.watch_any(path).filter(|w| w.wants)
     }
+    /// The watch on `path`, if any, while the reader is active.
     fn watch_any(&self, path: &str) -> Option<Arc<Watch>> {
         let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.active.then(|| state.wanted.get(path).cloned()).flatten()
     }
+    /// Queues `fp` for `watch` when the file is still the one read and the photo's cache identity hasn't
+    /// moved on.
     fn report(&self, path: &str, fp: &Fingerprint, watch: Option<Arc<Watch>>) {
         let Some(watch) = watch else { return };
         if !fp.current(path) || !watch.ticket.current() {
@@ -630,9 +718,11 @@ impl Originals {
             log::warn!("original read hash queue full; a later read can retry learning");
         }
     }
+    /// Reads the file at `path` into memory; the fingerprint is there when the read was hashed and proven.
     pub fn read_whole(&self, path: &str) -> io::Result<(Vec<u8>, Option<Fingerprint>)> {
         self.read_buffer(path, false).map(|(bytes, fp, _)| (bytes, fp))
     }
+    /// Reads `path` whole, hashing it when the path is watched or `force` is set.
     fn read_buffer(&self, path: &str, force: bool) -> io::Result<(Vec<u8>, Option<Fingerprint>, Option<Hash128>)> {
         let registration = self.registration();
         let watch = if force { self.watch_any(path) } else { self.watch(path) };
@@ -678,6 +768,8 @@ impl Originals {
         }
         Ok((bytes, fp, hash))
     }
+    /// Links the smart preview and denoise product kept under the photo's old keys to the hash just read,
+    /// when the read proves the file is the one catalogued.
     fn migrate(&self, path: &str, fp: &Fingerprint, watch: &Watch) {
         let hash = fp.hash.to_string();
         if watch.quarantined || fp.replaced || watch.known_hash.as_deref().is_some_and(|h| crate::sync::base_hash(h) != hash) {
@@ -713,9 +805,11 @@ impl Originals {
             crate::denoise::migrate_product(dir, model, &watch.migration.keys, &hash, &watch.ticket, || fp.current(path));
         }
     }
+    /// Streams the file at `path` into `out` and fingerprints it.
     pub fn copy_whole(&self, path: &str, out: &mut impl Write) -> io::Result<Fingerprint> {
         self.copy_stream(path, out, true)
     }
+    /// [`Originals::copy_whole`], keeping a proof and reporting the read only when `observe` is set.
     fn copy_stream(&self, path: &str, out: &mut impl Write, observe: bool) -> io::Result<Fingerprint> {
         self.copy_from(path, out, observe, || open_read(path, if observe { Open::DenyingWrites } else { Open::Plain }))
     }
@@ -763,15 +857,19 @@ impl Originals {
         self.report(path, &fp, watch);
         Ok(fp)
     }
+    /// Fingerprints the file at `path` without keeping its bytes.
     pub fn hash_whole(&self, path: &str) -> io::Result<Fingerprint> {
         self.copy_whole(path, &mut io::sink())
     }
+    /// Takes the queued reads.
     pub(crate) fn drain(&self) -> Vec<ReadEvent> {
         std::mem::take(&mut *self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
     }
+    /// Whether `event` was made for the watch the path still has.
     pub(crate) fn same_lifecycle(&self, event: &ReadEvent) -> bool {
         self.watch_any(&event.path).is_some_and(|w| Arc::ptr_eq(&w, &event.watch)) && event.watch.ticket.current()
     }
+    /// A byte reader that reads originals through this reader.
     pub fn reader(&self) -> crate::merge::ByteReader {
         let reader = self.clone();
         Arc::new(move |path| reader.read_whole(path).map(|(b, _)| b).map_err(|e| format!("{path}: {e}")))
@@ -783,6 +881,7 @@ impl Originals {
     }
 }
 
+/// Reads back the file just written at `path` and checks it holds exactly `data`.
 pub(crate) fn verify_generated(path: &std::path::Path, data: &[u8]) -> io::Result<Fingerprint> {
     struct Exact<'a> {
         data: &'a [u8],
@@ -809,6 +908,7 @@ pub(crate) fn verify_generated(path: &std::path::Path, data: &[u8]) -> io::Resul
     }
     Ok(fp)
 }
+/// Whether two open handles are the same regular file.
 pub(crate) fn same_file_handles(owned: &File, current: &File) -> bool {
     let (Ok(a), Ok(b)) = (owned.metadata(), current.metadata()) else { return false };
     if !a.is_file() || !b.is_file() {
@@ -828,6 +928,8 @@ pub(crate) fn same_file_handles(owned: &File, current: &File) -> bool {
         false
     }
 }
+/// Keeps the fingerprint of a file LightCraft just wrote at `path`, with the facts probed from its `bytes`,
+/// as an import candidate.
 pub(crate) fn record_generated(path: &str, bytes: &[u8], mut fp: Fingerprint) -> Result<(), String> {
     if fp.proof.is_some() && !fp.current(path) {
         return Err(format!("{path}: generated file changed after verification; original retained"));
@@ -845,12 +947,14 @@ pub(crate) fn record_generated(path: &str, bytes: &[u8], mut fp: Fingerprint) ->
     }
     Ok(())
 }
+/// The reader bound on this thread.
 pub(crate) fn bound_reader() -> Option<Originals> {
     CURRENT.with(|slot| slot.borrow().clone())
 }
 fn current_reader() -> io::Result<Originals> {
     CURRENT.with(|slot| slot.borrow().clone()).ok_or_else(|| io::Error::other("original read requires a session reader binding"))
 }
+/// Binds a reader of its own when none is bound; `None` (keeping the session's) when one is.
 pub(crate) fn standalone_binding() -> Option<Binding> {
     CURRENT.with(|slot| slot.borrow().is_none()).then(|| {
         let reader = Originals::default();
@@ -859,16 +963,20 @@ pub(crate) fn standalone_binding() -> Option<Binding> {
         binding
     })
 }
+/// Reads the file at `path` into memory through the bound reader.
 pub fn read_whole(path: &str) -> io::Result<Vec<u8>> {
     current_reader()?.read_whole(path).map(|(bytes, _)| bytes)
 }
+/// Reads `path` whole and hashes it, through the bound reader.
 pub(crate) fn read_with_hash(path: &str) -> io::Result<(Vec<u8>, Hash128)> {
     let (bytes, _, hash) = current_reader()?.read_buffer(path, true)?;
     hash.map(|hash| (bytes, hash)).ok_or_else(|| io::Error::other("original fingerprint unavailable"))
 }
+/// Fingerprints the file at `path` through the bound reader.
 pub fn hash_whole(path: &str) -> io::Result<Fingerprint> {
     current_reader()?.hash_whole(path)
 }
+/// Streams the file at `path` into `out` through the bound reader.
 pub fn copy_whole(path: &str, out: &mut impl Write) -> io::Result<Fingerprint> {
     current_reader()?.copy_whole(path, out)
 }
@@ -891,6 +999,7 @@ pub(crate) fn read_bytes() -> u64 {
 }
 #[cfg(all(test, windows))]
 thread_local! { static FAIL_ID_QUERY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+/// The volume serial number and 128-bit file ID of an open file.
 #[cfg(windows)]
 fn physical_identity(file: &File) -> io::Result<(u64, [u8; 16])> {
     #[cfg(test)]
@@ -900,6 +1009,7 @@ fn physical_identity(file: &File) -> io::Result<(u64, [u8; 16])> {
     lightcraft_file_identity_sys::identity(file)
 }
 
+/// How [`open_read`] shares the file with writers on Windows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Open {
     Plain,
@@ -907,6 +1017,8 @@ enum Open {
     DenyingWrites,
 }
 
+/// Opens `path` for reading, refusing anything but a regular file or folder; the flag says whether the handle
+/// can serve as proof.
 fn open_read(path: &str, open: Open) -> io::Result<(File, bool)> {
     regular(&std::fs::metadata(path)?)?;
     #[cfg(windows)]
@@ -926,10 +1038,12 @@ fn open_read(path: &str, open: Open) -> io::Result<(File, bool)> {
     Ok((file, cfg!(unix)))
 }
 
+/// Refuses anything but a regular file or folder.
 fn regular(meta: &std::fs::Metadata) -> io::Result<()> {
     if meta.is_file() || meta.is_dir() { Ok(()) } else { Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")) }
 }
 
+/// Reads into `out`, retrying when interrupted.
 fn read_retry(reader: &mut impl Read, out: &mut [u8]) -> io::Result<usize> {
     loop {
         match reader.read(out) {
@@ -943,6 +1057,7 @@ fn read_retry(reader: &mut impl Read, out: &mut [u8]) -> io::Result<usize> {
         }
     }
 }
+/// Reads everything from `reader`, at most `limit` bytes, reserving `reserve` up front.
 fn read_bounded(reader: &mut impl Read, limit: usize, reserve: usize) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(reserve.min(limit)).map_err(io::Error::other)?;
@@ -964,6 +1079,7 @@ fn read_bounded(reader: &mut impl Read, limit: usize, reserve: usize) -> io::Res
     }
 }
 
+/// The session's media hooks wrapped to read through its [`Originals`].
 pub(crate) struct NativeHooks {
     loader: crate::media::FileLoader,
     probe: crate::media::FileProbe,
@@ -974,6 +1090,7 @@ pub(crate) struct NativeHooks {
     bytes: crate::merge::ByteReader,
 }
 impl NativeHooks {
+    /// The hooks, each bound to `reader`.
     fn new(reader: &Originals) -> Self {
         let (loader, probe) = crate::files::fs_hooks();
         let a = reader.clone();
@@ -994,6 +1111,8 @@ impl NativeHooks {
         let reduced: crate::media::ReducedLoader = Arc::new(move |p, e, w| a.native_scope(p, || reduced(p, e, w)));
         Self { loader, probe, header, preview, pair, reduced, bytes: reader.reader() }
     }
+    /// Installs the hooks; with `old`, replaces only the hooks `old` installed, keeping one a caller set
+    /// since.
     fn install(&self, s: &mut crate::Session, old: Option<&Self>) {
         macro_rules! hook {
             ($field:expr, $name:ident) => {
@@ -1012,15 +1131,18 @@ impl NativeHooks {
     }
 }
 impl crate::Session {
+    /// The session's reader of originals, for a worker that reads them off the session's thread.
     pub fn original_reader(&self) -> Originals {
         self.originals.clone()
     }
+    /// Installs the native file hooks that read through the session's reader.
     pub(crate) fn install_native_hooks(&mut self) {
         self.originals.refresh(self);
         let hooks = NativeHooks::new(&self.originals);
         hooks.install(self, None);
         self.native_hooks = Some(hooks);
     }
+    /// Retires the reader and starts a new one for the library now open, moving the native hooks over.
     pub(crate) fn reset_originals(&mut self) {
         self.originals.retire();
         self.originals = Originals::default();
@@ -1031,6 +1153,8 @@ impl crate::Session {
             self.native_hooks = Some(hooks);
         }
     }
+    /// Applies the hashes learned by queued reads to the catalog. On an error the unapplied reads stay
+    /// queued.
     pub(crate) fn learn_read_hashes(&mut self) -> crate::Result<()> {
         let mut events = self.originals.drain().into_iter();
         while let Some(event) = events.next() {
@@ -1049,6 +1173,8 @@ impl crate::Session {
         }
         Ok(())
     }
+    /// Applies one queued read: its hash and probed facts to every master at the path that it still
+    /// describes, or clears a hash the file no longer has.
     fn accept_read_event(&mut self, event: &ReadEvent) -> crate::Result<()> {
         if !self.originals.same_lifecycle(event) {
             return Ok(());
@@ -1829,6 +1955,8 @@ mod lifecycle_tests {
     }
 }
 impl Originals {
+    /// Compares the open files `fa` and `fb` byte for byte, hashing the sides the library watches, and
+    /// reports equal only when neither changed while read.
     pub(crate) fn compare_open(&self, a: &str, b: &str, fa: &mut File, fb: &mut File) -> io::Result<bool> {
         let registration = self.registration();
         #[cfg(windows)]
@@ -1899,6 +2027,7 @@ impl Originals {
         Ok(equal)
     }
 }
+/// Fills `bytes` from `reader` as far as the file goes; the number of bytes read.
 fn fill_reader(reader: &mut impl Read, bytes: &mut [u8]) -> io::Result<usize> {
     let mut n = 0;
     while let Some(rest) = bytes.get_mut(n..).filter(|s| !s.is_empty()) {
@@ -1910,6 +2039,7 @@ fn fill_reader(reader: &mut impl Read, bytes: &mut [u8]) -> io::Result<usize> {
     }
     Ok(n)
 }
+/// [`Originals::compare_open`] through the bound reader.
 pub(crate) fn compare_open(a: &str, b: &str, fa: &mut File, fb: &mut File) -> io::Result<bool> {
     current_reader()?.compare_open(a, b, fa, fb)
 }

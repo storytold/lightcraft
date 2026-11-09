@@ -1,6 +1,8 @@
 #![deny(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// The volume serial number and 128-bit file ID of the open `file` (Windows `FileIdInfo`): equal
+/// for two handles on one file, hard links included. Unsupported on other platforms.
 pub fn identity(file: &std::fs::File) -> std::io::Result<(u64, [u8; 16])> {
     #[cfg(windows)]
     {
@@ -22,6 +24,7 @@ mod windows {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx};
 
+    /// [`super::identity`] through `GetFileInformationByHandleEx`.
     pub(super) fn identity(file: &File) -> io::Result<(u64, [u8; 16])> {
         let mut info = MaybeUninit::<FILE_ID_INFO>::uninit();
         let size = u32::try_from(size_of::<FILE_ID_INFO>()).map_err(|_| io::Error::other("FILE_ID_INFO exceeds the OS buffer size"))?;
