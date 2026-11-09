@@ -1810,6 +1810,7 @@ impl Originals {
         let (fa, fb) = (if safe_a { &mut leased_a } else { fa }, if safe_b { &mut leased_b } else { fb });
         #[cfg(not(windows))]
         let (safe_a, safe_b) = (cfg!(unix), cfg!(unix));
+        let (sa, sb) = (fa.metadata().ok().as_ref().and_then(Stamp::of), fb.metadata().ok().as_ref().and_then(Stamp::of));
         #[cfg(test)]
         COMPARE_OPENED.with(|hook| {
             if let Some(hook) = hook.borrow_mut().take() {
@@ -1817,7 +1818,6 @@ impl Originals {
             }
         });
         let (wa, wb) = (self.watch(a), self.watch(b));
-        let (sa, sb) = (fa.metadata().ok().as_ref().and_then(Stamp::of), fb.metadata().ok().as_ref().and_then(Stamp::of));
         let (mut ha, mut hb) = (wa.as_ref().map(|_| Hasher128::new()), Some(Hasher128::new()));
         let (mut ba, mut bb) = (vec![0u8; 1 << 20], vec![0u8; 1 << 20]);
         let (mut la, mut lb) = (0u64, 0u64);
@@ -1840,6 +1840,10 @@ impl Originals {
                 break true;
             }
         };
+        let unchanged = |file: &File, stamp: &Option<Stamp>, len: u64| {
+            stamp.as_ref().is_some_and(|s| s.len == len && file.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(s))
+        };
+        let equal = equal && unchanged(fa, &sa, la) && unchanged(fb, &sb, lb);
         for (path, file, stamp, hash, len, watch, safe) in [(a, fa, sa, ha, la, wa, safe_a), (b, fb, sb, hb, lb, wb, safe_b)] {
             #[cfg(test)]
             self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1881,6 +1885,27 @@ pub(crate) fn compare_open(a: &str, b: &str, fa: &mut File, fb: &mut File) -> io
 #[cfg(all(test, windows))]
 pub(crate) fn verification_hash(path: &str) -> io::Result<Hash128> {
     current_reader()?.copy_stream(path, &mut io::sink(), false).map(|fp| fp.hash)
+}
+
+#[cfg(all(test, unix))]
+mod compare_tests {
+    use super::*;
+    #[test]
+    fn a_file_rewritten_during_comparison_is_not_reported_equal() {
+        let dir = crate::tests_xmp::temp_dir("compare-rewritten");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.bin"), dir.join("b.bin"));
+        std::fs::write(&a, b"first bytes").unwrap();
+        std::fs::write(&b, b"other bytes").unwrap();
+        let (mut fa, mut fb) = (File::open(&a).unwrap(), File::open(&b).unwrap());
+        let rewrite = a.clone();
+        COMPARE_OPENED.with(|hook| *hook.borrow_mut() = Some(Box::new(move || std::fs::write(&rewrite, b"other bytes").unwrap())));
+        let reader = Originals::default();
+        assert!(!reader.compare_open(a.to_str().unwrap(), b.to_str().unwrap(), &mut fa, &mut fb).unwrap());
+        reader.retire();
+        drop((fa, fb));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[cfg(test)]
