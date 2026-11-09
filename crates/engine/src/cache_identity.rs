@@ -109,8 +109,15 @@ fn read_expected(path: &Path) -> (Option<PhysicalIdentity>, usize) {
     (expected, bytes.len())
 }
 
+/// Marker contents read when a store opens; markers past it are known by name only and keep their aliases closed.
+const MAX_LOADED_MARKER_BYTES: usize = 64 << 20;
+
 impl CacheIdentity {
     pub fn open(dir: &Path) -> Self {
+        Self::open_reading(dir, MAX_LOADED_MARKER_BYTES)
+    }
+
+    fn open_reading(dir: &Path, budget: usize) -> Self {
         let cache = Self::default();
         let mut state = cache.0.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.dir = Some(dir.to_path_buf());
@@ -123,12 +130,13 @@ impl CacheIdentity {
                         continue;
                     };
                     if let Some(hash) = name.strip_suffix(".invalid").and_then(|s| u128::from_str_radix(s, 16).ok()) {
-                        let (expected, bytes) = read_expected(&dir.join(name));
-                        loaded_bytes = loaded_bytes.saturating_add(bytes);
-                        if loaded_bytes > 64 << 20 {
-                            state.uncertain = true;
-                            break;
-                        }
+                        let expected = if loaded_bytes < budget {
+                            let (expected, bytes) = read_expected(&dir.join(name));
+                            loaded_bytes = loaded_bytes.saturating_add(bytes);
+                            expected
+                        } else {
+                            None
+                        };
                         state.invalid.insert(Hash128(hash), expected);
                     } else {
                         state.uncertain = true;
@@ -445,6 +453,28 @@ mod tests {
             assert!(!CacheIdentity::open(&markers).keys(&p).contains(&path_key(&p).unwrap()), "recreate={recreate}");
             std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    #[test]
+    fn markers_past_the_read_budget_close_only_their_own_aliases() {
+        let dir = crate::tests_xmp::temp_dir("marker-budget");
+        let markers = dir.join("source-invalidations");
+        let photo = |name: &str| {
+            let mut p = Photo::new(lightcraft_catalog::PhotoId(1), Source::File { path: name.into() }, name, "JPEG", 8, 8, "");
+            p.content_hash = Some(format!("hash-{name}"));
+            p
+        };
+        let retired: Vec<_> = ["a.jpg", "b.jpg", "c.jpg"].map(photo).into();
+        let cache = CacheIdentity::open(&markers);
+        for p in &retired {
+            cache.invalidate(p, PhysicalIdentity::of(p), || ()).unwrap();
+        }
+        let reopened = CacheIdentity::open_reading(&markers, 1);
+        let untouched = photo("d.jpg");
+        assert!(reopened.keys(&untouched).contains(&path_key(&untouched).unwrap()), "an unrelated alias stays usable");
+        let closed = retired.iter().filter(|p| reopened.keys(p).iter().all(|key| key.starts_with("uncached:"))).count();
+        assert_eq!(closed, 2, "the markers whose contents were not read close their aliases");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
