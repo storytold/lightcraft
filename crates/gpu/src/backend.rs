@@ -529,8 +529,6 @@ pub fn window_renderer_order(
         let fallback = default_window_backends(os) & compiled;
         if !fallback.is_empty() {
             out.push(WindowRenderer::Wgpu(fallback));
-        } else if glow {
-            out.push(WindowRenderer::Glow);
         } else {
             // No compiled backend is usable and glow is unavailable: keep the
             // never-empty contract with the platform default, which on
