@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### File dialogs open as a sheet on macOS
+- On macOS, the file dialogs that commands open (Import Photos…, Import from Folder…, New Library…, Open Library…,
+  the export dialogs, preset and keyword lists…) now open as a sheet attached to the LightCraft window, made on the
+  window's own thread instead of being handed to it from another one. On macOS 26.6 every one of them hung: the
+  window stopped responding and no dialog appeared (issue #3735). The sheet is the window's own, so one shows at a
+  time: a command chosen while a sheet is open waits and opens its dialog when the first has closed. Local ▸ Browse
+  Folder… and the buttons inside dialogs open their dialogs as before.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

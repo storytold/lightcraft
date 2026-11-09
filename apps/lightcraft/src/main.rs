@@ -31,6 +31,8 @@ mod colord;
 mod control_server;
 mod dialog_filter;
 mod editors;
+#[cfg(any(target_os = "macos", test))]
+mod file_sheet;
 mod hdr_display;
 mod logging;
 #[cfg(target_os = "macos")]
