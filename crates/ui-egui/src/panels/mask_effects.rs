@@ -74,6 +74,8 @@ pub fn apply(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, params: V
     }
 }
 
+/// Take the brush settings an applied effect carries (size, feather, flow, density, Auto Mask),
+/// each clamped to its slider's range; settings it doesn't carry stay as they are.
 fn take_brush(app: &mut LightcraftApp, b: &Value) {
     let Some(b) = b.as_object() else { return };
     let f = |k: &str| b.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
