@@ -309,6 +309,9 @@ struct Proof {
 fn handshake_io_error(error: io::Error) -> String {
     match error.kind() {
         io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => "SAM handshake timed out: time budget exhausted".into(),
+        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted | io::ErrorKind::BrokenPipe => {
+            format!("SAM handshake connection closed early: {error}; {}", token_hint())
+        }
         _ => format!("SAM handshake: {error}"),
     }
 }
@@ -640,6 +643,45 @@ mod tests {
         let (mut server, _) = listener.accept().unwrap();
         let mut deadline = Deadline::new(&mut server, Duration::ZERO);
         let error = receive::<String>(&mut deadline).unwrap_err();
+        assert!(error.contains("time budget exhausted"), "{error}");
+        assert!(!error.contains(TOKEN_ENV), "{error}");
+    }
+
+    /// Only an early close suggests a possible one-sided token configuration.
+    #[test]
+    fn early_handshake_closes_explain_token_alignment() {
+        for kind in [io::ErrorKind::UnexpectedEof, io::ErrorKind::ConnectionReset, io::ErrorKind::ConnectionAborted, io::ErrorKind::BrokenPipe] {
+            let error = handshake_io_error(io::Error::from(kind));
+            assert!(error.contains("closed early"), "{error}");
+            assert!(error.contains(TOKEN_ENV), "{error}");
+        }
+        let error = receive::<String>(&mut io::Cursor::new(Vec::<u8>::new())).unwrap_err();
+        assert!(error.contains(TOKEN_ENV), "{error}");
+        assert!(!handshake_io_error(io::Error::from(io::ErrorKind::PermissionDenied)).contains(TOKEN_ENV));
+    }
+
+    /// An idle socket must time out in the kernel; a watchdog prevents a missing timeout hanging CI.
+    #[test]
+    fn an_idle_handshake_socket_has_a_positive_read_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let watchdog_socket = server.try_clone().unwrap();
+        let (done, finished) = std::sync::mpsc::channel();
+        let watchdog = thread::spawn(move || {
+            if finished.recv_timeout(Duration::from_secs(10)).is_err() {
+                let _ = watchdog_socket.shutdown(std::net::Shutdown::Both);
+                true
+            } else {
+                false
+            }
+        });
+        let result = receive::<String>(&mut Deadline::new(&mut server, Duration::from_millis(100)));
+        let _ = done.send(());
+        let watchdog_fired = watchdog.join().unwrap();
+        assert!(!watchdog_fired, "idle read exceeded the watchdog budget");
+        assert!(server.read_timeout().unwrap().is_some(), "deadline must configure the socket timeout");
+        let error = result.unwrap_err();
         assert!(error.contains("time budget exhausted"), "{error}");
         assert!(!error.contains(TOKEN_ENV), "{error}");
     }
