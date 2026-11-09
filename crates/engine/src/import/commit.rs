@@ -209,17 +209,20 @@ fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool 
         }
 }
 
-/// Why a duplicate can't be reported as one and asks for a retry instead: it names no photo and
-/// repeats a file this commit refused (`rejected`, by base hash), or the photo it matched by
-/// content no longer has that content.
+/// Why a duplicate can't be reported as one and asks for a retry instead: the library photo its
+/// preparation named (`named`) was removed since, it names no photo and repeats a file this commit
+/// refused (`rejected`, by base hash), or the photo it matched by content no longer has that content.
 fn duplicate_refused(
     s: &Session,
+    named: Option<PhotoId>,
     existing: Option<PhotoId>,
     reason: &str,
     hash: Option<&str>,
     rejected: &std::collections::HashSet<String>,
 ) -> Option<&'static str> {
-    if existing.is_none() && hash.is_some_and(|h| rejected.contains(crate::sync::base_hash(h))) {
+    if named.is_some_and(|id| s.catalog.photo(id).is_none()) {
+        Some("the photo it repeats was removed from the library; retry the import")
+    } else if existing.is_none() && hash.is_some_and(|h| rejected.contains(crate::sync::base_hash(h))) {
         Some("the file it repeats in this import was not added; retry the import")
     } else if reason == "content" && existing_no_longer_matches(s, existing, hash) {
         Some("the original changed during duplicate comparison; retry the import")
@@ -335,11 +338,12 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     continue;
                 }
                 let expected = hash.clone();
+                let named = existing;
                 let existing = existing.or_else(|| {
                     let h = hash?;
                     new_hash.get(&h).copied().or_else(|| s.catalog.photos().find(|p| p.content_hash.as_deref() == Some(h.as_str())).map(|p| p.id))
                 });
-                if let Some(why) = duplicate_refused(s, existing, reason, expected.as_deref(), &rejected) {
+                if let Some(why) = duplicate_refused(s, named, existing, reason, expected.as_deref(), &rejected) {
                     report.failed.push((path, why.into()));
                     continue;
                 }

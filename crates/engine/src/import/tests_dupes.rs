@@ -355,3 +355,25 @@ fn a_fresh_import_replaces_a_trashed_photo_whose_hash_is_dup_suffixed() {
     assert!(s.catalog.photo(old).is_none(), "the trashed record of the same bytes is replaced");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_duplicate_of_a_photo_removed_before_commit_asks_for_a_retry() {
+    let dir = temp_dir("matched-removed");
+    let data = bytes(11, 4096);
+    let first = write(&dir, "a.dng", &data);
+    let second = write(&dir, "b.dng", &data);
+    let mut s = Session::new();
+    hashing_probe(&mut s);
+    let id = PhotoId(add(&mut s, std::slice::from_ref(&first)).imported[0]);
+    let opts = ImportOptions { mode: ImportMode::Add, ..Default::default() };
+    let mut job = ImportJob::new(&mut s, opts.clone()).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let prepared = job.prepare_files(vec![first.clone(), second.clone()], &cancel);
+    let removal = s.catalog.delete_photos_permanently_ops(&[id]);
+    s.commit("remove", removal).unwrap();
+    let report = commit_prepared(&mut s, &opts, job.now(), prepared).unwrap();
+    assert!(report.duplicates.is_empty(), "no duplicate names the removed photo: {report:?}");
+    let failed: Vec<&str> = report.failed.iter().map(|(path, _)| path.as_str()).collect();
+    assert_eq!(failed, [first.as_str(), second.as_str()], "{report:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
