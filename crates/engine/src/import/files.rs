@@ -831,6 +831,31 @@ mod prepared_tests {
         assert!(matches!(prepared.items.first(), Some(PreparedItem::Duplicate { reason: "content", existing: Some(PhotoId(1)), .. })));
     }
 
+    #[test]
+    fn revalidate_add_passes_over_a_virtual_copys_stale_hash() {
+        let mut s = Session::new();
+        let shared = std::env::temp_dir().join("lightcraft-revalidate-stale-copy-master.jpg");
+        let incoming = std::env::temp_dir().join("lightcraft-revalidate-stale-copy-incoming.jpg");
+        let source = Source::File { path: shared.to_string_lossy().into() };
+        let mut master = Photo::new(PhotoId(1), source.clone(), "master.jpg", "JPG", 1, 1, "now");
+        master.content_hash = Some("new".into());
+        let mut copy = Photo::new(PhotoId(2), source, "master.jpg", "JPG", 1, 1, "now");
+        copy.copy_of = Some(PhotoId(1));
+        copy.content_hash = Some("old".into());
+        s.commit("master", Op::AddPhoto { photo: Box::new(master) }).unwrap();
+        s.commit("copy", Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+        let ready = ReadyFile {
+            path: incoming.to_string_lossy().into(),
+            stored: incoming.to_string_lossy().into(),
+            info: ProbeInfo { format: "JPG".into(), content_hash: Some("old".into()), ..ProbeInfo::default() },
+            sidecar: None,
+            placed: None,
+        };
+        let mut prepared = Prepared { scanned: 1, items: vec![PreparedItem::Ready(Box::new(ready))], ..Prepared::default() };
+        prepared.revalidate_add(&s);
+        assert!(matches!(prepared.items.first(), Some(PreparedItem::Ready(_))), "the copy's file no longer has that content");
+    }
+
     fn unread_paths(n: usize) -> Vec<String> {
         (0..n).map(|i| std::env::temp_dir().join(format!("lightcraft-probe-progress-{i}.jpg")).to_string_lossy().into()).collect()
     }

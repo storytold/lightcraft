@@ -143,8 +143,9 @@ impl Prepared {
             if let Source::File { path } = &photo.source {
                 paths.insert(normalize_import_path(path), photo.id);
             }
-            if let Some(hash) = &photo.content_hash
-                && s.source_hash_authorized(photo.id)
+            let owner = s.physical_photo(photo.id);
+            if let Some(hash) = super::dupes::file_hash(photo, owner.as_deref())
+                && owner.is_some_and(|owner| !s.media.identities.needs_validation(&owner))
             {
                 hashes.insert(crate::sync::base_hash(hash).to_string(), photo.id);
             }

@@ -52,8 +52,7 @@ impl Duplicates {
     /// file (its master relinked) is compared like any other photo.
     pub(crate) fn add_library(&mut self, p: &Photo, physical: Option<&Photo>, authorized: bool) {
         let owns_file = physical.is_some_and(|m| m.id == p.id);
-        let same_content = |h: &String| owns_file || physical.and_then(|m| m.content_hash.as_deref()).is_some_and(|m| base_hash(m) == base_hash(h));
-        let hash = p.content_hash.as_ref().filter(|_| authorized).filter(|h| same_content(h));
+        let hash = file_hash(p, physical).filter(|_| authorized);
         if let Some(h) = hash {
             self.by_hash.insert(base_hash(h).to_string(), Some(p.id));
         }
@@ -200,6 +199,14 @@ impl Duplicates {
         }
         hash
     }
+}
+
+/// Library photo `p`'s content hash while it is still the content of the file `p` shows: `physical` is
+/// the photo that owns that file ([`crate::media::physical_photo`]), and a virtual copy's own hash
+/// counts only while it is that photo's.
+pub(crate) fn file_hash<'a>(p: &'a Photo, physical: Option<&Photo>) -> Option<&'a String> {
+    let owns_file = physical.is_some_and(|m| m.id == p.id);
+    p.content_hash.as_ref().filter(|h| owns_file || physical.and_then(|m| m.content_hash.as_deref()).is_some_and(|m| base_hash(m) == base_hash(h)))
 }
 
 /// Whether `b` may have `a`'s content: the same hash, or, without both hashes, the same size,
