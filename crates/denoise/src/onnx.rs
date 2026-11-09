@@ -13,7 +13,7 @@ use std::path::Path;
 use crate::onnx_proto::{self, AttributeProto, NodeProto, TensorProto, ValueInfoProto};
 use std::io::Read;
 
-use crate::net::{Conv, ConvT2, MAX_WEIGHTS, Net, NetError, Op, TensorId};
+use crate::net::{Conv, ConvT2, MAX_OPS, MAX_WEIGHTS, Net, NetError, Op, TensorId};
 
 fn unsupported<T>(why: impl Into<String>) -> Result<T, NetError> {
     Err(NetError::Unsupported(why.into()))
@@ -70,6 +70,9 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
     let nodes = &graph.node;
     let mut i = 0;
     while i < nodes.len() {
+        if ops.len() >= MAX_OPS {
+            return invalid("the network has too many layers");
+        }
         let Some(node) = nodes.get(i) else { break };
         i += 1;
         if node.output.len() != 1 || node.output.first().is_none_or(|n| n.is_empty() || ids.contains_key(n) || joins.contains_key(n)) {
@@ -213,13 +216,14 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("Add without an output".into()))?;
                 let (ca, la) = shapes.get(src).copied().ok_or_else(|| NetError::Invalid("Add reads a tensor with no shape".into()))?;
                 let (cb, lb) = shapes.get(src2).copied().ok_or_else(|| NetError::Invalid("Add reads a tensor with no shape".into()))?;
-                // broadcast addition of two same-shape tensors as a 1x1 identity convolution over both sources (src2
-                // channels follow src's). initializer broadcast is not a residual connection, reject it.
+                // same-shape addition as a 1x1 identity convolution over both sources (src2 channels follow src's):
+                // O(C^2) per pixel where elementwise addition is O(C). initializer broadcast is not a residual
+                // connection, reject it.
                 if ca != cb || la != lb {
                     return unsupported("Add of tensors of different shapes");
                 }
                 if ca == 0 {
-                    return invalid("Add");
+                    return invalid("Add with zero channels");
                 }
                 if ca > 4096 {
                     return unsupported("Add with more than 4096 channels");
@@ -247,11 +251,14 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 if joins.contains_key(a) {
                     return unsupported("LeakyRelu reading a Concat output");
                 }
+                if initialisers.contains_key(a.as_str()) {
+                    return unsupported("LeakyRelu with an initializer operand");
+                }
                 let src = lookup(a)?;
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("LeakyRelu without an output".into()))?;
                 let (ca, la) = shapes.get(src).copied().ok_or_else(|| NetError::Invalid("LeakyRelu reads a tensor with no shape".into()))?;
                 if ca == 0 {
-                    return invalid("LeakyRelu");
+                    return invalid("LeakyRelu with zero channels");
                 }
                 if ca > 4096 {
                     return unsupported("LeakyRelu with more than 4096 channels");
@@ -577,8 +584,14 @@ mod tests {
             model
         }
 
-        let concat_model =
-            model(&[node("Concat", &["data", "data"], "joined", &[("axis", 1)]), node("Add", &["joined", "data"], "a1", &[])], 4, "a1");
+        let concat_model = model(
+            &[
+                node("Concat", &["data", "data"], "joined", &[("axis", 1)]),
+                node("Add", &["joined", "data"], "a1", &[]),
+            ],
+            4,
+            "a1",
+        );
         assert!(matches!(read_bytes(&concat_model), Err(NetError::Unsupported(_))));
 
         let oversized_model = model(&[node("Add", &["data", "data"], "a1", &[])], 4097, "a1");
@@ -592,6 +605,48 @@ mod tests {
         len_field(5, &mode, &mut depth);
         let zero_model = model(&[depth, node("Add", &["d", "d"], "a1", &[])], 3, "a1");
         assert!(matches!(read_bytes(&zero_model), Err(NetError::Invalid(_))));
+    }
+
+    #[test]
+    fn many_adds_on_a_wide_input_are_rejected_as_too_many_weights() {
+        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
+
+        fn node(op: &str, inputs: &[&str], output: &str) -> Vec<u8> {
+            let mut n = Vec::new();
+            for i in inputs {
+                len_field(1, i.as_bytes(), &mut n);
+            }
+            len_field(2, output.as_bytes(), &mut n);
+            len_field(4, op.as_bytes(), &mut n);
+            n
+        }
+
+        fn model(nodes: &[Vec<u8>], in_channels: u64, out: &str) -> Vec<u8> {
+            let mut graph = Vec::new();
+            for n in nodes {
+                len_field(1, n, &mut graph);
+            }
+            len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(in_channels), Ok(8), Ok(8)]), &mut graph);
+            len_field(12, &value_info_bytes(out, 1, &[Ok(1), Ok(3), Ok(8), Ok(8)]), &mut graph);
+            let mut ops = Vec::new();
+            len_field(1, b"", &mut ops);
+            varint_field(2, 13, &mut ops);
+            let mut model = Vec::new();
+            varint_field(1, 8, &mut model);
+            len_field(7, &graph, &mut model);
+            len_field(8, &ops, &mut model);
+            model
+        }
+
+        let mut nodes = Vec::new();
+        let mut prev = "data".to_string();
+        for i in 0..32 {
+            let out = format!("a{i}");
+            nodes.push(node("Add", &[prev.as_str(), prev.as_str()], &out));
+            prev = out;
+        }
+        let wide_model = model(&nodes, 4096, &prev);
+        assert!(matches!(read_bytes(&wide_model), Err(NetError::Invalid(_))));
     }
 
     #[test]
@@ -698,5 +753,89 @@ mod tests {
         len_field(8, &ops, &mut model);
 
         assert!(matches!(read_bytes(&model), Err(NetError::Unsupported(_))));
+    }
+
+    #[test]
+    fn leaky_relu_with_initializer_operand_is_unsupported() {
+        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
+
+        fn node(op: &str, inputs: &[&str], output: &str) -> Vec<u8> {
+            let mut n = Vec::new();
+            for i in inputs {
+                len_field(1, i.as_bytes(), &mut n);
+            }
+            len_field(2, output.as_bytes(), &mut n);
+            len_field(4, op.as_bytes(), &mut n);
+            n
+        }
+
+        fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
+            let mut t = Vec::new();
+            for d in dims {
+                varint_field(1, *d, &mut t);
+            }
+            varint_field(2, 1, &mut t);
+            len_field(8, name.as_bytes(), &mut t);
+            let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            len_field(9, &raw, &mut t);
+            t
+        }
+
+        let mut graph = Vec::new();
+        len_field(1, &node("LeakyRelu", &["w1"], "l1"), &mut graph);
+        len_field(5, &tensor("w1", &[4], &[0.1; 4]), &mut graph);
+        len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
+        len_field(12, &value_info_bytes("l1", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
+        let mut ops = Vec::new();
+        len_field(1, b"", &mut ops);
+        varint_field(2, 13, &mut ops);
+        let mut model = Vec::new();
+        varint_field(1, 8, &mut model);
+        len_field(7, &graph, &mut model);
+        len_field(8, &ops, &mut model);
+
+        assert!(matches!(read_bytes(&model), Err(NetError::Unsupported(_))));
+    }
+
+    #[test]
+    fn more_than_max_ops_small_adds_are_rejected_as_too_many_layers() {
+        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
+
+        fn node(op: &str, inputs: &[&str], output: &str) -> Vec<u8> {
+            let mut n = Vec::new();
+            for i in inputs {
+                len_field(1, i.as_bytes(), &mut n);
+            }
+            len_field(2, output.as_bytes(), &mut n);
+            len_field(4, op.as_bytes(), &mut n);
+            n
+        }
+
+        fn model(nodes: &[Vec<u8>], in_channels: u64, out: &str) -> Vec<u8> {
+            let mut graph = Vec::new();
+            for n in nodes {
+                len_field(1, n, &mut graph);
+            }
+            len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(in_channels), Ok(8), Ok(8)]), &mut graph);
+            len_field(12, &value_info_bytes(out, 1, &[Ok(1), Ok(3), Ok(8), Ok(8)]), &mut graph);
+            let mut ops = Vec::new();
+            len_field(1, b"", &mut ops);
+            varint_field(2, 13, &mut ops);
+            let mut model = Vec::new();
+            varint_field(1, 8, &mut model);
+            len_field(7, &graph, &mut model);
+            len_field(8, &ops, &mut model);
+            model
+        }
+
+        let mut nodes = Vec::new();
+        let mut prev = "data".to_string();
+        for i in 0..=MAX_OPS {
+            let out = format!("a{i}");
+            nodes.push(node("Add", &[prev.as_str(), prev.as_str()], &out));
+            prev = out;
+        }
+        let many_model = model(&nodes, 1, &prev);
+        assert!(matches!(read_bytes(&many_model), Err(NetError::Invalid(_))));
     }
 }
