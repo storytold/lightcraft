@@ -389,3 +389,21 @@ fn show_original_does_not_light_the_before_after_button() {
     assert_eq!(h.request("ui.clickWidget", json!({"id": "icon:beforeAfter"}), T)["ok"], true);
     assert_eq!(h.app.ui.before_after, BeforeAfter::Off, "a second click closes it");
 }
+
+/// #2248: until the Before render of a photo arrives, its preview and thumbnail (which show the
+/// current, edited settings) don't stand in for it, so switching photos with Before on no longer
+/// flashes the edits first. They still stand in for the After view, and for Before when the photo's
+/// settings are its before settings (nothing to tell apart).
+#[test]
+fn an_edited_photo_shows_no_edited_stand_in_for_before() {
+    use crate::panels::detail::stand_in_shows;
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let id = app.session.visible_cloned()[0];
+    app.session.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    app.session.execute("beforeAfter.setBefore", &json!({"source": "current"})).unwrap();
+    assert!(stand_in_shows(&app, id, Slot::Before), "settings = before settings: the stand-in looks the same");
+    app.session.execute("develop.set", &json!({"control": "light.exposure", "value": 1.5})).unwrap();
+    assert!(!stand_in_shows(&app, id, Slot::Before), "edited: the stand-in would show the edits");
+    assert!(stand_in_shows(&app, id, Slot::Main), "the After view still uses the stand-in");
+    assert!(stand_in_shows(&app, id, Slot::Preview));
+}
