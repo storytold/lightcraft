@@ -2471,9 +2471,9 @@ fn a_photo_no_look_fits_keeps_its_camera_profiles_colour() {
     let look = with_profile_colour(None, Some(colour.clone()), None, |c| Some(CameraLook { matrix: c.0, ..toned.clone() })).unwrap();
     assert_eq!((look.matrix, look.tone), (colour.0, toned.tone));
     // a photo's own look wins; without a profile there is nothing to keep (the neutral fallback follows)
-    let own = with_profile_colour(Some(toned.clone()), Some(colour), None, |_| unreachable!()).unwrap();
+    let own = with_profile_colour(Some(toned.clone()), Some(colour), None, |_| panic!("the photo's own look is used")).unwrap();
     assert_eq!(own.matrix, toned.matrix);
-    assert!(with_profile_colour(None, None, None, |_| unreachable!()).is_none());
+    assert!(with_profile_colour(None, None, None, |_| panic!("no colour to fit")).is_none());
 }
 
 /// A camera curve: a toe, then a shoulder toward 0.95, the shape camera JPEG curves have.
