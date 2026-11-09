@@ -161,6 +161,8 @@ fn gpu_status_never_moves_the_performance_controls() {
 
 /// Settings ▸ Performance says where AI masks run and how long the last photo took (issue #932): before the model
 /// loads, its two lines are there all the same, at the end of the tab, so nothing above them moves when it loads.
+/// The tab is taller than the dialog, so the test scrolls to its foot first, as a user would, and clicks the
+/// choice there (a press on a row scrolled out of view is refused, not delivered).
 #[test]
 fn performance_tab_shows_where_ai_masks_run() {
     let mut h = demo([1300.0, 820.0]);
@@ -174,7 +176,16 @@ fn performance_tab_shows_where_ai_masks_run() {
         assert!(!has(&h, "settings:aiMasksDevice"), "a build without AI masks says nothing about them");
         return;
     }
+    // (the AI masks lines end the page, below the room for it: scrolled to its foot)
+    let r = h.request("ui.hoverWidget", json!({"id": "settings:pageRoom"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.request("ui.scroll", json!({"dy": -5000.0}), T);
+    h.settle(T);
+    let room = rect(&h, "settings:pageRoom");
     let (device, time) = (rect(&h, "settings:aiMasksDevice"), rect(&h, "settings:aiMasksTime"));
+    for (what, r) in [("the choice", rect(&h, "button:settingsAiMasksRunOn-1")), ("the device line", device), ("the time line", time)] {
+        assert!(room.contains_rect(r), "{what} {r:?} is in view in {room:?}");
+    }
     assert!(device.bottom() <= time.top() + 1.0, "the device line comes first: {device:?} {time:?}");
     let choice = rect(&h, "button:settingsAiMasksRunOn-1");
     assert!(choice.bottom() <= device.top() + 1.0, "the choice of where they run comes first: {choice:?} {device:?}");
