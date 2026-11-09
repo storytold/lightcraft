@@ -470,9 +470,17 @@ impl WindowRenderer {
 }
 
 /// The renderer the environment forces for the window: `LIGHTCRAFT_GPU_BACKEND` (`app`), else
-/// `WGPU_BACKEND` (`wgpu`), when it names exactly one renderer.
+/// `WGPU_BACKEND` (`wgpu`), when it names exactly one renderer. On Linux, when no startup marker
+/// can be written (`--memory` / `LIGHTCRAFT_NO_PREFS`), it also returns glow: without a marker a
+/// failed wgpu start cannot be relaunched with the next renderer (see [`glow_without_marker`]).
 pub fn forced_window_renderer(app: Option<&str>, wgpu: Option<&str>) -> Option<WindowRenderer> {
-    app.and_then(WindowRenderer::parse).or_else(|| wgpu.and_then(WindowRenderer::parse))
+    if let Some(r) = app.and_then(WindowRenderer::parse).or_else(|| wgpu.and_then(WindowRenderer::parse)) {
+        return Some(r);
+    }
+    let marker_available =
+        std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none() && !std::env::args().any(|a| a == "--memory" || a.starts_with("--memory="));
+    initial_window_renderer(None, None, None, marker_available, std::env::consts::OS, wgpu::Instance::enabled_backend_features(), true)
+        .filter(|r| *r == WindowRenderer::Glow)
 }
 
 /// The order in which the window's renderers are tried on `os`: the forced one (environment)
@@ -575,7 +583,7 @@ pub fn initial_window_renderer(
     let remembered_vulkan = matches!(remembered, Some(WindowRenderer::Wgpu(b)) if b.contains(Backends::VULKAN));
     if glow_without_marker(forced, marker_available, os, glow)
         && failed != Some(WindowRenderer::Glow)
-        && remembered != failed
+        && (remembered.is_none() || remembered != failed)
         && (remembered_vulkan || !matches!(remembered, Some(WindowRenderer::Wgpu(_))))
     {
         return Some(WindowRenderer::Glow);
