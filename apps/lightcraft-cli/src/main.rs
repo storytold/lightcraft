@@ -303,7 +303,12 @@ fn calibrate(args: &[String]) -> Result<(), String> {
                         let result = std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| pool.add(&bytes));
                         let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         match result {
-                            Ok(Some(model)) => eprintln!("[{n}/{}] {} ({model})", files.len(), path.display()),
+                            Ok(Some(model)) => {
+                                eprintln!("[{n}/{}] {} ({model})", files.len(), path.display());
+                                if pairs_out.is_some() && !lightcraft_engine::camera_pairs::shareable_model(&model) {
+                                    eprintln!("{}: left out of --pairs: a pairs file can't hold its camera model", path.display());
+                                }
+                            }
                             Ok(None) => eprintln!("[{n}/{}] {}: skipped (no usable camera JPEG or colour)", files.len(), path.display()),
                             Err(e) => eprintln!("[{n}/{}] {}: {e}", files.len(), path.display()),
                         }
@@ -325,7 +330,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
         let tmp = path.with_extension("tmp");
         std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
         std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let photos: usize = pool.files().iter().map(|(_, n)| n).sum();
+        let photos = pool.shareable_photos().len();
         println!("{photos} photos, {} bytes of colour pairs → {}", bytes.len(), path.display());
         if photos == 0 {
             return Err("no photo contributed colour pairs".into());
