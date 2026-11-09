@@ -897,6 +897,16 @@ mod tests {
         assert_eq!(linux.first(), Some(&gl));
     }
 
+    /// Without a marker, non-Linux platforms keep their default renderer: FreeBSD
+    /// starts with Vulkan, not glow.
+    #[test]
+    fn freebsd_without_a_marker_does_not_start_with_glow() {
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        assert!(!glow_without_marker(None, false, "freebsd", true));
+        assert_eq!(initial_window_renderer(None, None, None, false, "freebsd", all, true), Some(vk));
+    }
+
     /// Without a startup marker (`--memory` / no prefs directory) a failed wgpu-GL start cannot
     /// be relaunched with the next renderer, so Linux starts with glow directly; with a marker
     /// the existing order (GL first, glow last) is kept, and a forced renderer still wins.
