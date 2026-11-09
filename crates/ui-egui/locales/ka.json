@@ -3720,5 +3720,8 @@
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
   "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
-  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის"
+  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "Network sources in this catalog": "ამ კატალოგის ქსელური წყაროები",
+  "Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.": "აირჩიეთ გაზიარებული საქაღალდეები, რომელთა წაკითხვის უფლებაც LightCraft-ს ექნება ამ იმპორტის დროს. კატალოგი და თქვენი ფოტოები არსებულ ადგილას დარჩება. მოუნიშნავი წყაროები არ დაიმპორტდება.",
+  "Select up to 32 network sources for this import.": "ამ იმპორტისთვის აირჩიეთ მაქსიმუმ 32 ქსელური წყარო."
 }

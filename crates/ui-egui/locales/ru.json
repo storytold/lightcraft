@@ -2660,5 +2660,8 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Запустите приложение с --control 7980 (или LIGHTCRAFT_CONTROL_PORT), и команда lightcraft-cli mcp --connect подключит к нему одного агента.",
   "Welcome": "Добро пожаловать",
   "Next": "Далее",
-  "Get Started": "Начать"
+  "Get Started": "Начать",
+  "Network sources in this catalog": "Сетевые источники в этом каталоге",
+  "Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.": "Выберите общие сетевые папки, которые LightCraft может читать при этом импорте. Каталог и фотографии останутся на своих местах. Неотмеченные источники не будут импортированы.",
+  "Select up to 32 network sources for this import.": "Выберите до 32 сетевых источников для этого импорта."
 }

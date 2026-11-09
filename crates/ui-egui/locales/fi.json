@@ -2411,5 +2411,8 @@
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
   "Bottom bar": "Alapalkki",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Network sources in this catalog": "Tämän luettelon verkkolähteet",
+  "Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.": "Valitse verkkojaot, joista LightCraft saa lukea tämän tuonnin aikana. Luettelo ja valokuvasi pysyvät nykyisissä sijainneissaan. Valitsemattomia lähteitä ei tuoda.",
+  "Select up to 32 network sources for this import.": "Valitse enintään 32 verkkolähdettä tätä tuontia varten."
 }

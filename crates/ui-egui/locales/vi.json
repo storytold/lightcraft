@@ -2739,5 +2739,8 @@
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
   "Bottom bar": "Thanh dưới cùng",
-  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "Network sources in this catalog": "Nguồn mạng trong danh mục này",
+  "Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.": "Chọn các thư mục chia sẻ mà LightCraft được phép đọc trong lần nhập này. Danh mục và ảnh của bạn vẫn ở vị trí hiện tại. Các nguồn không được đánh dấu sẽ không được nhập.",
+  "Select up to 32 network sources for this import.": "Chọn tối đa 32 nguồn mạng cho lần nhập này."
 }
