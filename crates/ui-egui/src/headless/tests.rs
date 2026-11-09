@@ -1032,7 +1032,7 @@ fn a_persons_face_becomes_their_picture_from_its_menu() {
     assert_eq!(cached, Some((asked_at.unwrap(), Some((ids[0].0, 0)))));
     assert_eq!(picture(&mut h), Some(ids[0]), "the People view shows the chosen face");
     let page = h.app.session.execute("faces.person", &json!({"name": "Jane Doe"})).unwrap();
-    assert_eq!(page["cover"], json!({"photo": ids[0].0, "index": 0}));
+    assert_eq!((&page["cover"]["photo"], &page["cover"]["index"]), (&json!(ids[0].0), &json!(0)), "{page}");
     menu(&mut h, "person-face-menu:autoCover");
     assert!(h.app.session.person_covers.is_empty());
     assert_eq!(picture(&mut h), Some(ids[1]));

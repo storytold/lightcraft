@@ -941,7 +941,9 @@ impl Session {
     /// undone when it can't be saved leaves nothing unsaved behind; one that stands goes through
     /// [`Session::save_people_or_keep_unsaved`].
     pub fn save_people(&mut self) -> Result<()> {
-        let v = serde_json::to_vec_pretty(&PeopleFile { covers: self.person_covers.clone() }).unwrap_or_default();
+        // never an empty file in its place: a choice that can't be written out is not saved
+        let v =
+            serde_json::to_vec_pretty(&PeopleFile { covers: self.person_covers.clone() }).map_err(|e| EngineError::Other(format!("people: {e}")))?;
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if lib.blocked.contains(&"people.json") {
             return Err(EngineError::Other(

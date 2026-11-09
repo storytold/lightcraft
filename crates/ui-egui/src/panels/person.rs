@@ -312,8 +312,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 app.ui.dismissed_faces.insert((f.photo, f.index));
             }
             Hit::MakeCover | Hit::AutoCover => {
-                let photo = if what == Hit::MakeCover { json!(f.photo) } else { Value::Null };
-                match app.run("faces.setCover", json!({"name": shown_name, "photo": photo, "index": f.index})) {
+                let params = if what == Hit::MakeCover {
+                    json!({"name": shown_name, "photo": f.photo, "index": f.index})
+                } else {
+                    json!({"name": shown_name, "photo": null})
+                };
+                match app.run("faces.setCover", params) {
                     Ok(_) => {
                         // the star moves on the page as shown: asking `faces.person` again would also redo its "More"
                         // faces, which takes long in a large library and changes nothing here

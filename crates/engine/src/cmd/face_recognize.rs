@@ -211,7 +211,18 @@ fn set_cover(s: &mut Session, p: &Value) -> Result<Value> {
     let key = name.to_lowercase();
     let cover = match p.get("photo") {
         None => return Err(bad(C, "missing `photo` (null for their largest face)")),
-        Some(Value::Null) => None,
+        Some(Value::Null) => {
+            if p.get("index").is_some() {
+                return Err(bad(C, "`index` goes with a photo; `photo: null` alone goes back to their largest face"));
+            }
+            let named = |r: &lightcraft_meta::Region| {
+                r.kind == lightcraft_meta::RegionKind::Face && r.name.as_deref().is_some_and(|n| n.trim().to_lowercase() == key)
+            };
+            if !s.catalog.photos().filter(|ph| ph.in_library()).any(|ph| ph.meta.regions.iter().any(named)) {
+                return Err(bad(C, format!("no person named {name}")));
+            }
+            None
+        }
         Some(v) => {
             let id = lightcraft_catalog::PhotoId(v.as_u64().ok_or_else(|| bad(C, "`photo` is a photo id, or null"))?);
             let index =
@@ -223,9 +234,10 @@ fn set_cover(s: &mut Session, p: &Value) -> Result<Value> {
                 .get(index)
                 .filter(|r| r.kind == lightcraft_meta::RegionKind::Face && r.name.as_deref().is_some_and(|n| n.trim().to_lowercase() == key))
                 .ok_or_else(|| bad(C, format!("that face is not named {name}")))?;
-            Some(lightcraft_catalog::PersonCover { photo: id, face: region.rect })
+            Some((lightcraft_catalog::PersonCover { photo: id, face: region.rect }, index))
         }
     };
+    let (cover, index) = (cover.map(|(c, _)| c), cover.map(|(_, i)| i));
     let before = match cover {
         Some(c) => s.person_covers.insert(key.clone(), c),
         None => s.person_covers.remove(&key),
@@ -239,7 +251,8 @@ fn set_cover(s: &mut Session, p: &Value) -> Result<Value> {
         };
         return Err(e);
     }
-    Ok(json!({"name": name, "cover": cover.map(|c| json!({"photo": c.photo.0, "rect": rect_json(&c.face)}))}))
+    // the same shape as `faces.person` gives
+    Ok(json!({"name": name, "cover": cover.zip(index).map(|(c, i)| json!({"photo": c.photo.0, "index": i, "rect": rect_json(&c.face)}))}))
 }
 
 /// Most faces `faces.unnamed` lists.
@@ -319,7 +332,7 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
             }
             total += 1;
             if chosen.is_some_and(|c| c.is(ph.id, &r.rect)) {
-                cover = json!({"photo": ph.id.0, "index": index});
+                cover = json!({"photo": ph.id.0, "index": index, "rect": rect_json(&r.rect)});
             }
             if confirmed.len() < MAX_CONFIRMED {
                 confirmed.push(json!({"photo": ph.id.0, "index": index, "rect": rect_json(&r.rect), "view": rect_json(&s.face_view(ph.id, r.rect))}));
@@ -1253,7 +1266,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Faces of a Person",
             [],
             None,
-            "{name, more?: 120} → {name, total, cover: {photo, index} | null, confirmed: [{photo, index, rect}], more: [{photo, index, rect, score}], ready, pendingPhotos} — the faces named `name` across the library, and the unnamed faces that look most like them (best first, already embedded ones only, once recognition is on); confirm one with `faces.setName`",
+            "{name, more?: 120} → {name, total, cover: {photo, index, rect} | null, confirmed: [{photo, index, rect}], more: [{photo, index, rect, score}], ready, pendingPhotos} — the faces named `name` across the library, and the unnamed faces that look most like them (best first, already embedded ones only, once recognition is on); confirm one with `faces.setName`",
             super::always,
             person
         ),
@@ -1271,7 +1284,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Use as Person's Picture",
             [],
             None,
-            "{name, photo, index} → {name, cover: {photo, rect} | null} — show `name` in the People view by this face of theirs (it must bear their name) instead of their largest one; `photo: null` goes back to the largest. Kept in the library's people.json, outside the catalog; a face that loses the name, or a photo the filter hides, falls back to the largest",
+            "{name, photo: id | null, index?} → {name, cover: {photo, index, rect} | null} — show `name` in the People view by this face of theirs (`index` among the photo's regions; it must bear their name) instead of their largest one; `photo: null`, without `index`, goes back to the largest. Kept in the library's people.json, outside the catalog; a face that loses the name, or a photo the filter hides, falls back to the largest",
             super::always,
             set_cover
         ),

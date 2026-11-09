@@ -343,8 +343,8 @@
   face instead of their largest one (often a blurred close-up, or the moment they blinked). A star marks it on their
   page, and Use Their Largest Face goes back. The choice follows the person through Rename Person, and a face that
   loses their name no longer stands for them. It is kept in the library's `people.json`, beside the catalog, so the
-  catalog format does not change. Agents: `faces.setCover {name, photo, index}` (`photo: null` for the largest face);
-  `faces.person` says which face is chosen (`cover`). (#3246)
+  catalog format does not change. Agents: `faces.setCover {name, photo, index}` (`photo: null`, without `index`, for the largest face);
+  `faces.person` says which face is chosen (`cover`, as `faces.setCover` gives it). (#3246)
 
 ## 2026-10-24
 

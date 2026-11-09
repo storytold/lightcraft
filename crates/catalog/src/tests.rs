@@ -538,6 +538,21 @@ fn people_from_named_face_regions() {
     assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((d, big)), "Sam's face is not John Roe's");
     covers.insert("john roe".to_string(), PersonCover { photo: b, face: big });
     assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((d, big)), "no such face in that photo");
+    // the very face, give or take the last digit: any coordinate further off, or another photo, is another face
+    let near = 1e-12;
+    let far = 1e-6;
+    assert!(
+        PersonCover { photo: b, face: small }.is(b, &Rect { x0: small.x0 + near, y0: small.y0 - near, x1: small.x1 + near, y1: small.y1 - near })
+    );
+    for off in [
+        Rect { x0: small.x0 + far, ..small },
+        Rect { y0: small.y0 + far, ..small },
+        Rect { x1: small.x1 - far, ..small },
+        Rect { y1: small.y1 - far, ..small },
+    ] {
+        assert!(!PersonCover { photo: b, face: small }.is(b, &off), "{off:?}");
+    }
+    assert!(!PersonCover { photo: b, face: small }.is(d, &small));
     // the counts are the same either way
     covers.insert("john roe".to_string(), PersonCover { photo: b, face: small });
     let counts = |covers| c.people_in_with(&Filter::default(), covers).into_iter().map(|p| (p.name, p.count)).collect::<Vec<_>>();
