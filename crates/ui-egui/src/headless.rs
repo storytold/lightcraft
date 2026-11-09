@@ -394,6 +394,7 @@ impl Headless {
         self.app.renderer.in_flight() > 0
             || crate::panels::left::fs_cached_running(&self.view.ctx) > 0
             || self.app.merge.busy()
+            || self.app.caches.count_running(&self.view.ctx)
             || self.app.scan.is_some()
             || self.app.sync.is_some()
             || self.app.sync_run.is_some()
