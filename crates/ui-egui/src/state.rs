@@ -126,6 +126,12 @@ pub struct UiState {
     /// so they stay folded ([`UiState::sanitized`] moves them over), never written.
     #[serde(skip_serializing)]
     pub collapsed_sidebar: Vec<String>,
+    /// The order generation `sidebar` was saved in ([`crate::sidebar::ORDER_VERSION`]). Settings
+    /// without it hold generation 0; [`UiState::sanitized`] moves Folders above Local once in a
+    /// layout still in generation 0's usual order, then records the current one, so a person who
+    /// later drags Folders back keeps that order.
+    #[serde(default, deserialize_with = "lenient_generation")]
+    pub sidebar_order_version: u32,
     /// A face's name being typed in the loupe.
     #[serde(skip)]
     pub name_edit: Option<NameEdit>,
@@ -437,6 +443,7 @@ impl Default for UiState {
             face_boxes: true,
             sidebar: Default::default(),
             collapsed_sidebar: Vec::new(),
+            sidebar_order_version: crate::sidebar::ORDER_VERSION,
             name_edit: None,
             person_page: None,
             person_from: None,
@@ -612,6 +619,8 @@ impl UiState {
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
+        self.sidebar.adopt_order_version(self.sidebar_order_version);
+        self.sidebar_order_version = self.sidebar_order_version.max(crate::sidebar::ORDER_VERSION);
         self.dialog = None;
         self.fullscreen = false;
         if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {
@@ -634,6 +643,13 @@ impl UiState {
     pub fn record_startup_dialog_seen(&mut self) {
         self.seen_version = Some(env!("CARGO_PKG_VERSION").to_string());
     }
+}
+
+/// A generation number read leniently: what isn't a whole number that fits reads as 0, the
+/// generation of settings from before the number was written.
+fn lenient_generation<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0))
 }
 
 /// A list of ids read leniently: what isn't a list is none, and what isn't text in it is left out.
