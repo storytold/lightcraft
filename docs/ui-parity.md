@@ -24,7 +24,7 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 |---|---|---|---:|---|
 | Layout and views | Lightroom: grid / detail / edit; Classic: Library, Develop, Map, Book, Slideshow, Print, Web modules, filmstrip, panels | Lightroom-style single window: Photo Grid, Square Grid, Detail, Compare, Survey (≤ 48), Before / After, People, quick slideshow, second window, filmstrip | 75% | no Classic module switcher (by design) or output modules; dark theme only |
 | Develop panels and sliders | Light, Color, Effects, Detail, Optics, Geometry, Lens Blur, Calibration | every global slider; scrub, double-click reset, Alt-drag previews where implemented | 80% | Lens Blur, Calibration panel depth; slider feel (acceleration, fine Shift-drag) unmeasured |
-| Crop, Upright, transform handles | handles, aspect lock, angle, overlays (O / ⇧O), guided Upright | ✅ all of them; overlay cycle on ⇧O | 85% | crop opacity of cut-out area (15.5) |
+| Crop, Upright, transform handles | handles, aspect lock, angle, overlays (O / ⇧O), guided Upright | ✅ all of them; overlay cycle on ⇧O | 100% | outside-crop opacity is adjustable from the crop context menu (#2287) |
 | Masking tools | brush (A / B, flow, density, auto mask, pressure), linear / radial, range masks, AI masks, pins | brush, linear, radial, colour / luminance range, add / subtract / intersect / invert, masks panel, pins | 60% | brush live preview (#517 / #518), no pen pressure, no depth range, AI masks, Feather / Edge controls (15.5) |
 | Remove / heal | content-aware remove, heal, clone, visualize spots | heal, clone, auto source, visualize spots, red / pet eye | 65% | content-aware (patch synthesis) remove, generative remove, detect distractions |
 | Zoom and navigation | Fit / Fill / 1:1 / 2:1 … 11:1, Navigator, spacebar pan | Fit to 800%, pinch zoom, pan, Navigator-like, Space-held hand over tools; every view, mask and diagnostic overlays (Visualize Spots, Point Color range, HDR range) and soft proofing included, is sharp at 1:1–8:1 | 60% | zoom stops at 800 % (Adobe's reference goes to 11:1) |
@@ -178,6 +178,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | Crop tool: add six crop-mask opacity levels and persist the app preference (#2287). |
 | 2026-10-28 | minor | Shortcuts: in the Masking panel H toggles the mask pins (the same switch as View → Show Mask Pins) instead of opening Remove; only an unmodified H toggles and it yields only to an explicit assignment of H itself, a Remove key reassigned in Help → Keyboard Shortcuts still opens Remove there, and outside Masking — and the full-screen preview, where no panel shows — H keeps its own binding (Remove, by default) |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⌥K / Ctrl+Alt+K (Photo ▸ Enable Painting) paints the painter box's keyword, stops painting when pressed again, and with the box empty opens the Keywords panel |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⇧K / Ctrl+Shift+K (Edit Keywords) opens the keyword picked in the Keyword List in Edit Keyword Tag |

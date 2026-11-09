@@ -33,7 +33,7 @@ cited here still exists. Formerly docs/parity.md.
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
 | F. Edit panel — global adjustments (EDIT) | 42 | 5 | 3 | 1 | 25/28 (89%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
-| H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
+| H. Crop & rotate (CROP) | 11 | 1 | 0 | 1 | 8/8 (100%) | 3/4 (75%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
 | K. Masking (MASK) | 15 | 5 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 419 | 70 | 57 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 420 | 70 | 57 | 35 | 193/203 (95%) | 148/164 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 56.7% of 179.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 547 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 56.7% of 179.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -259,6 +259,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-CROP-ROTATE90 | Rotate 90° | P0 | ✅ | `cmd:photo.rotateLeft`, `cmd:photo.rotateRight` | |
 | LR-CROP-FLIP | Flip | P0 | ✅ | `cmd:photo.flipHorizontal`, `cmd:photo.flipVertical`, `crates/pipeline/src/geometry.rs` | the crop tool's uncropped view shows the flips too, with the crop box and its dimming mirrored to match |
 | LR-CROP-OVERLAY | Crop overlays | P1 | ✅ | `cmd:view.cropOverlay`, `cmd:view.cropOverlayOrientation`, `crates/ui-egui/src/panels/crop_overlay.rs` | thirds, grid, golden ratio, diagonal, triangle, golden spiral (mirrored with ⇧O while cropping); no aspect-ratio overlays |
+| LR-CROP-DIMMING | Crop-mask opacity | P1 | ✅ | `cmd:view.cropMaskOpacity`, `crates/ui-egui/src/panels/detail/crop.rs` | right-click while cropping for Off, 20%, 50%, 60%, 80% or 100%; saved as an app preference with a 60% default; both labels translated in all 17 catalogs |
 | LR-CROP-ZOOM | Zoom while cropping | P1 | ✅ | `cmd:view.zoom100`, `cmd:view.zoomIn`, `crates/ui-egui/src/panels/detail.rs` | zoom levels apply with the crop tool open (verified: 100% shows the photo at native size with the crop frame) |
 | LR-CROP-GENEXPAND | Generative expand | OOS | 🚫 | | |
 
@@ -802,6 +803,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | LR-CROP-DIMMING: add adjustable crop-mask opacity with settings recovery and translations in all 17 catalogs (#2287) |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-28 | minor | KEY-HIDEPINS ✅ → 🟡: in the Masking panel an unmodified H toggles the mask pins (`view.maskPins`, the View ▸ Show Mask Pins switch) instead of opening Remove; the toggle yields only to an explicit assignment of H itself, a Remove key reassigned to anything else still opens Remove there, and outside Masking — and the full-screen preview, where no panel shows — H keeps its own binding (Remove, by default). Remove's spot pins keep ⇧H as their only hide toggle (`tests/keymap` `h_toggles_the_mask_pins_while_masking`, `a_remapped_remove_key_still_opens_remove_while_masking`, `h_still_toggles_the_pins_when_remove_moves_to_another_key`) |
