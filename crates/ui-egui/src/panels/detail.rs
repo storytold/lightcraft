@@ -482,22 +482,21 @@ fn prefetch_neighbours(app: &mut LightcraftApp, id: PhotoId, main_area: Rect, pp
     if app.renderer.is_pending(Slot::Main) || app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id) {
         return;
     }
-    let ids = app.session.visible_cloned();
+    let (visible_gen, ids) = app.session.visible_shared();
     let mode = prep_mode(app);
     let prep = app.session.prep_settings();
     let ahead = prep.ahead(mode);
     // editing: the next photos are decoded and kept, ready for their edits (their view render is not
     // what is wanted, and a cached one would leave the photo undecoded)
     let develop = mode == lightcraft_engine::prep::Mode::Develop;
-    let Some(i) = ids.iter().position(|p| *p == id).filter(|_| ahead > 0) else { return };
-    let mut targets = app.look_ahead.targets_n(&ids, i, ahead, BEHIND);
+    let Some(i) = app.look_ahead.position(&ids, visible_gen, id).filter(|_| ahead > 0) else { return };
+    let mut targets = app.look_ahead.targets_at(&ids, i, ahead, BEHIND);
     if prep.scope(mode) == lightcraft_engine::prep::Scope::Marked {
-        targets.retain(|t| lightcraft_engine::prep::marked(&app.session, *t));
+        targets.retain(|(_, t)| lightcraft_engine::prep::marked(&app.session, *t));
     }
     // a few at a time, nearest first (the pool keeps workers free for the photo the user goes to)
     let mut room = PREFETCH_AT_ONCE.saturating_sub(app.renderer.prefetches_pending());
-    let todo: Vec<(usize, PhotoId)> = targets.into_iter().filter_map(|nid| ids.iter().position(|p| *p == nid).map(|at| (at, nid))).collect();
-    for (at, nid) in todo {
+    for (at, nid) in targets {
         if room == 0 {
             break;
         }

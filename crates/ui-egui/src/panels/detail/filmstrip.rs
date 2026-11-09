@@ -50,6 +50,14 @@ pub(super) fn film_label(name: &str) -> String {
     if name.chars().nth(14).is_some() { format!("{}…", name.chars().take(13).collect::<String>()) } else { name.to_string() }
 }
 
+/// The cells `first..last` of a strip of `len` cells (`cell_w` wide) that the viewport `left..right`
+/// reaches, with 4 cells of margin on either side and one more for rounding.
+pub(super) fn visible_cells(left: f32, right: f32, cell_w: f32, len: usize) -> (usize, usize) {
+    let first = ((left / cell_w).floor() - 5.0).max(0.0) as usize;
+    let last = ((right / cell_w).ceil() + 5.0).max(0.0) as usize;
+    (first.min(len), last.min(len))
+}
+
 /// Draw the horizontal filmstrip in `r`: selectable thumbnail cells with names and format when
 /// film names are on, badges when film badges are on, and stack counts, following the active
 /// photo and scrolling sideways with the wheel. Clicks select: Command toggles and Shift extends
@@ -59,7 +67,8 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_filled(r, 0.0, t.canvas);
     ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 4.0)), 0.0, Color32::from_gray(0x20));
-    let ids = app.session.visible_cloned();
+    // the shared list, not a copy: a frame must not cost what the view holds (a library of millions)
+    let (visible_gen, ids) = app.session.visible_shared();
     let active = app.session.selection.active;
     let cell_w = 120.0;
     let ppp = ui.ctx().pixels_per_point();
@@ -86,13 +95,22 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
         }
         let (area, _) = ui.allocate_exact_size(vec2(ids.len() as f32 * cell_w, r.height() - 16.0), Sense::hover());
         app.film_scroll = Some(vp.left());
-        for (i, id) in ids.iter().enumerate() {
+        // only the cells near the viewport are visited: a frame costs what the strip shows, not the view
+        let (first, last) = visible_cells(vp.left(), vp.right(), cell_w, ids.len());
+        if follow
+            && let Some(active) = active
+            && let Some(i) = app.look_ahead.position(&ids, visible_gen, active)
+        {
+            let local = Rect::from_min_size(pos2(i as f32 * cell_w, 0.0), vec2(cell_w, area.height()));
+            // centred when it is (partly) off screen; a click on a visible thumbnail leaves the strip alone
+            if !(local.left() >= vp.left() && local.right() <= vp.right()) {
+                ui.scroll_to_rect(local.translate(vec2(area.left(), area.top())), Some(egui::Align::Center));
+            }
+        }
+        for (k, id) in ids.get(first..last).unwrap_or(&[]).iter().enumerate() {
+            let i = first + k;
             let cr = Rect::from_min_size(pos2(area.left() + i as f32 * cell_w, area.top()), vec2(cell_w, area.height()));
             let local = Rect::from_min_size(pos2(i as f32 * cell_w, 0.0), cr.size());
-            // centred when it is (partly) off screen; a click on a visible thumbnail leaves the strip alone
-            if follow && Some(*id) == active && !(local.left() >= vp.left() && local.right() <= vp.right()) {
-                ui.scroll_to_rect(cr, Some(egui::Align::Center));
-            }
             if !local.intersects(vp.expand2(vec2(cell_w * 4.0, 0.0))) {
                 continue;
             }
@@ -232,5 +250,23 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
     }
     if edited {
         paint(p, Rect::from_min_size(pos2(bar.right() - 13.0, y - 5.0), vec2(10.0, 10.0)), Icon::Sliders, t.text_label);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visible_cells;
+
+    /// A strip of millions of cells visits the few its viewport reaches (and a margin), wherever it is scrolled.
+    #[test]
+    fn only_the_cells_near_the_viewport_are_visited() {
+        let (first, last) = visible_cells(1_200_000.0, 1_201_600.0, 120.0, 2_000_000);
+        assert!(first <= 10_000 && last >= 10_013, "reaches the viewport: {first}..{last}");
+        assert!(last - first < 40, "{first}..{last}");
+        assert_eq!(visible_cells(0.0, 1600.0, 120.0, 3), (0, 3), "a short strip is all of it");
+        assert_eq!(visible_cells(0.0, 1600.0, 120.0, 0), (0, 0), "an empty one nothing");
+        let (first, last) = visible_cells(-50.0, 100.0, 120.0, 10);
+        assert_eq!(first, 0);
+        assert!(last >= 2);
     }
 }

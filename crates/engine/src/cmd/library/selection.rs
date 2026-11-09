@@ -156,7 +156,8 @@ fn advance_if(s: &mut Session, p: &Value) {
 }
 
 pub(super) fn step(s: &mut Session, d: isize) -> Result<Value> {
-    let vis = s.visible_cloned();
+    // (the shared list: every Next / Previous keypress comes through here, and a copy costs what the view holds)
+    let vis = s.visible_shared().1;
     if vis.is_empty() {
         return ok();
     }

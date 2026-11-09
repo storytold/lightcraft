@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### The loupe stays smooth in a big library
+- Opening the loupe and stepping through photos no longer freezes the window for seconds in a library of many photos
+  (about 2.4 s at 100,000 photos). The filmstrip and the photos prepared ahead used to copy and search the whole
+  view on every frame, and the first steps started the background preparation (Settings ▸ Performance), which planned
+  every photo in view in one go. They now work on what the filmstrip shows, and the preparation plans a few hundred
+  photos per frame (LRC-PERF-PREP). The "Preparing photos in the background" row shows while they are planned, with no
+  count until the photos are planned and the build starts, and its ✕ stops the planning.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

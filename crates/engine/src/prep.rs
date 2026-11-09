@@ -227,6 +227,36 @@ pub struct PrepState {
     steps_in: Option<u64>,
     last_at: Option<PhotoId>,
     steps: usize,
+    /// The library this state is of ([`Session::library_generation`]): another one open (opened, or opened again)
+    /// starts it afresh ([`Session::follow_library`]), though its view may look the same (the same photo ids, as
+    /// many photos).
+    library_gen: Option<u64>,
+    /// The signature of the visible list of a generation ([`Session::view_signature`]).
+    signed: Option<(u64, Scope, u64)>,
+    /// The build whose photos are being planned a slice at a time, and whether the last slice left
+    /// photos to plan (the app draws another frame for the next).
+    plan: Option<Planning>,
+    advancing: bool,
+    /// Tests: signatures worked out, photos planned, and the photos a slice plans.
+    #[cfg(test)]
+    pub(crate) signatures: usize,
+    #[cfg(test)]
+    pub(crate) planned: usize,
+    #[cfg(test)]
+    pub(crate) slice: Option<usize>,
+}
+
+/// A background build whose photos are being planned ([`crate::cmd::previews::BuildPlan`]): the
+/// view it is for (its signature), the plan, and what the jobs planned so far were made against: the
+/// library's preview cache (as it was: its `generation`) and the catalog at `revision` (as of the last tick that found
+/// the plan current).
+/// A plan that no longer matches them ([`Session::plan_outdated`]) is planned again.
+struct Planning {
+    sig: u64,
+    plan: crate::cmd::previews::BuildPlan,
+    cache: Arc<lightcraft_preview::PreviewCache>,
+    generation: u64,
+    revision: u64,
 }
 
 impl std::fmt::Debug for PrepState {
@@ -354,6 +384,11 @@ impl Session {
     /// Advance the background preparation (cheap; call every frame). `mode`: what the user is doing;
     /// `at`: the photo in the loupe (`None` in the grid), `backward`: stepping back.
     pub fn prep_tick(&mut self, mode: Mode, at: Option<PhotoId>, backward: bool) {
+        self.follow_library();
+        // the ✕ of the row the plan holds: its photos are not planned any further, nor that view again
+        if self.prep.plan.as_ref().is_some_and(|p| p.plan.cancelled()) {
+            self.decline_plan();
+        }
         let settings = self.prep.settings();
         let want = settings.mode(mode);
         // the whole view's build follows its own row (Culling, or Library also while editing): its
@@ -364,7 +399,7 @@ impl Session {
             if b.running() {
                 if !wanted {
                     b.cancel.store(true, Ordering::Relaxed);
-                } else if self.prep.started_for.is_some_and(|sig| sig != signature(&self.visible_cloned(), self, want.scope)) {
+                } else if self.prep.started_for.is_some_and(|sig| sig != self.view_signature(want.scope).0) {
                     // another view (a folder, a filter, another library): this build's photos are
                     // not the ones shown; stopped, and the view now shown is prepared in its place
                     // (not counted as stopped by the user)
@@ -388,11 +423,26 @@ impl Session {
             }
         }
         if !wanted {
+            self.drop_plan();
             return;
         }
-        let Some(at) = at else { return };
-        let ids = self.visible_cloned();
-        let sig = signature(&ids, self, want.scope);
+        let Some(at) = at else {
+            // (the grid: no photo to build from, and no frame wanted for it)
+            self.prep.advancing = false;
+            return;
+        };
+        let (sig, ids) = self.view_signature(want.scope);
+        if self.prep.plan.as_ref().is_some_and(|p| p.sig != sig || self.plan_outdated(p)) {
+            // the view changed while its photos were being planned (or the library, its preview cache or what a
+            // photo is rendered from did): the plan is of another view, or its jobs are out of date
+            self.drop_plan();
+        }
+        // (a plan that is still current is current as of this catalog: the next tick looks only at what changes from
+        // here, so many unrelated changes over a long plan never outrun what the catalog remembers photo by photo)
+        let revision = self.catalog.revision;
+        if let Some(p) = self.prep.plan.as_mut() {
+            p.revision = revision;
+        }
         if self.prep.steps_in != Some(sig) {
             self.prep.steps_in = Some(sig);
             self.prep.steps = 0;
@@ -403,6 +453,15 @@ impl Session {
             self.prep.steps = self.prep.steps.saturating_add(1);
         }
         let busy = self.preview_build.as_ref().is_some_and(|b| b.running());
+        if self.prep.plan.is_some() {
+            if busy {
+                // a build that was asked for began: this one starts over once it is done
+                self.drop_plan();
+            } else {
+                self.advance_plan(at, backward);
+            }
+            return;
+        }
         if busy
             || self.prep.steps < STEPS_BEFORE_BUILD
             || self.prep.started_for == Some(sig)
@@ -412,24 +471,136 @@ impl Session {
         {
             return;
         }
-        let ids: Vec<u64> = match want.scope {
-            Scope::Marked => ids.into_iter().filter(|id| marked(self, *id)).map(|id| id.0).collect(),
-            _ => ids.into_iter().map(|id| id.0).collect(),
-        };
         self.prep.started_for = Some(sig);
-        if ids.is_empty() {
+        let edge = Some(crate::cmd::previews::standard_edge(self));
+        let plan = crate::cmd::previews::BuildPlan::new(self, ids, want.scope == Scope::Marked, edge);
+        let (cache, revision) = (self.media.rendered.clone(), self.catalog.revision);
+        let generation = cache.generation();
+        self.prep.plan = Some(Planning { sig, plan, cache, generation, revision });
+        self.advance_plan(at, backward);
+    }
+
+    /// Whether the build's photos are still being planned: the app asks for another frame to go on.
+    pub fn prep_planning(&self) -> bool {
+        self.prep.advancing
+    }
+
+    /// The view's identity ([`signature`]) with its photos. Worked out once per generation of the
+    /// visible list, not on every call: a frame asks every time, a whole view hashed each time
+    /// is what a big library can't afford.
+    fn view_signature(&mut self, scope: Scope) -> (u64, Arc<[PhotoId]>) {
+        let (generation, ids) = self.visible_shared();
+        if let Some((g, sc, sig)) = self.prep.signed
+            && g == generation
+            && sc == scope
+        {
+            return (sig, ids);
+        }
+        let sig = signature(&ids, self, scope);
+        self.prep.signed = Some((generation, scope, sig));
+        #[cfg(test)]
+        {
+            self.prep.signatures += 1;
+        }
+        (sig, ids)
+    }
+
+    /// Whether the jobs `p` has planned are out of date: another library's preview cache is in use (the plan is of
+    /// the library before, though its view looks the same), the cache was cleared (the jobs would save into the
+    /// cache as it was and fail), or a photo's settings, file or presence changed since the plan was last found
+    /// current (its jobs would render, and be keyed, as it was). A rating, a keyword or a photo's analysis (which no
+    /// job reads) changes none of them. (A catalog the library has just loaded doesn't know what changed since its
+    /// revision, but nothing has when the revision is the same.)
+    fn plan_outdated(&self, p: &Planning) -> bool {
+        const RENDERED_FROM: lightcraft_catalog::Aspects =
+            lightcraft_catalog::Aspects::DEVELOP.with(lightcraft_catalog::Aspects::FILE).with(lightcraft_catalog::Aspects::PRESENCE);
+        !Arc::ptr_eq(&p.cache, &self.media.rendered)
+            || p.cache.generation() != p.generation
+            || (self.catalog.revision != p.revision && self.catalog.aspects_since(p.revision).is_none_or(|changed| changed.any_of(RENDERED_FROM)))
+    }
+
+    /// Another library than the one the preparation state is of is open: what it holds is of the library before and
+    /// its view may look the same as this one's (the same photo ids and as many photos), so it must not stand for it.
+    /// The build that runs is stopped (it renders for a preview cache that is gone), the plan is dropped, and the
+    /// views that were started, stopped by the user or that failed to start are tried afresh, with the steps counted
+    /// again.
+    fn follow_library(&mut self) {
+        if self.prep.library_gen == Some(self.library_generation()) {
             return;
         }
-        let p = json!({"ids": ids, "background": true, "from": at.0, "backward": backward});
-        // (tests: a start made to fail, as a build thread that can't be spawned fails)
+        self.prep.library_gen = Some(self.library_generation());
+        if let Some(b) = self.prep.build.as_ref().filter(|b| b.running()) {
+            b.cancel.store(true, Ordering::Relaxed);
+        }
+        self.drop_plan();
+        let p = &mut self.prep;
+        (p.started_for, p.declined_for, p.retry_at) = (None, None, None);
+        (p.steps_in, p.last_at, p.steps) = (None, None, 0);
+    }
+
+    /// Give up the plan under way; its view is prepared afresh when it is next due.
+    fn drop_plan(&mut self) {
+        if self.prep.plan.take().is_some() {
+            self.prep.started_for = None;
+        }
+        self.prep.advancing = false;
+    }
+
+    /// `library.cancelPreviews` while the photos of a build are being planned (nothing runs yet to cancel): the plan
+    /// is ended like its row's ✕ ends it ([`Self::decline_plan`]). A build that is running is the one cancelled instead.
+    pub(crate) fn cancel_prep_plan(&mut self) {
+        if self.preview_build.as_ref().is_some_and(|b| b.running()) {
+            return;
+        }
+        self.decline_plan();
+    }
+
+    /// The plan under way is dropped, and its view not prepared again, as if its build had been stopped from its row.
+    fn decline_plan(&mut self) {
+        if let Some(p) = &self.prep.plan {
+            self.prep.declined_for = Some(p.sig);
+        }
+        self.drop_plan();
+    }
+
+    /// Plan one more slice of the build's photos; once all are planned, start the build.
+    fn advance_plan(&mut self, at: PhotoId, backward: bool) {
+        let Some(Planning { sig, mut plan, cache, generation, revision }) = self.prep.plan.take() else { return };
         #[cfg(test)]
-        let fail = self.prep.fail_starts.checked_sub(1).map(|left| self.prep.fail_starts = left).is_some();
+        let slice = self.prep.slice.unwrap_or(crate::cmd::previews::PLAN_SLICE);
         #[cfg(not(test))]
-        let fail = false;
-        let started = if fail {
-            Err(crate::EngineError::Disabled("library.buildPreviews".into(), "test: the build couldn't start".into()))
-        } else {
-            self.execute("library.buildPreviews", &p)
+        let slice = crate::cmd::previews::PLAN_SLICE;
+        let done = crate::guard::catch("preparing photos", || plan.advance(self, slice));
+        self.prep.advancing = matches!(done, Ok(false));
+        let started = match done {
+            Ok(false) => {
+                self.prep.plan = Some(Planning { sig, plan, cache, generation, revision });
+                return;
+            }
+            Ok(true) if plan.selected == 0 => return,
+            Ok(true) => {
+                let launch = crate::cmd::previews::Launch {
+                    edge: plan.edge(),
+                    background: true,
+                    force: false,
+                    row: true,
+                    wait: cfg!(target_arch = "wasm32"),
+                    from: Some((at, backward)),
+                    #[cfg(test)]
+                    gate: crate::cmd::previews::test_gate::take(),
+                };
+                // (tests: a start made to fail, as a build thread that can't be spawned fails)
+                #[cfg(test)]
+                let fail = self.prep.fail_starts.checked_sub(1).map(|left| self.prep.fail_starts = left).is_some();
+                #[cfg(not(test))]
+                let fail = false;
+                if fail {
+                    Err(crate::EngineError::Disabled("library.buildPreviews".into(), "test: the build couldn't start".into()))
+                } else {
+                    self.execute_fn("library.buildPreviews", |s| crate::cmd::previews::start_planned(s, plan, launch))
+                }
+            }
+            Err(e) => Err(crate::EngineError::Other(e)),
         };
         match started {
             Ok(_) => {

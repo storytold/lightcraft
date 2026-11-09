@@ -35,7 +35,7 @@ pub fn compare_pair(app: &mut LightcraftApp) -> Option<(PhotoId, PhotoId)> {
             return Some((a, b));
         }
     }
-    let vis = app.session.visible_cloned();
+    let vis = app.session.visible_shared().1;
     let sel = app.session.active().or(vis.first().copied())?;
     let cand = app.session.selection.ids.iter().copied().find(|x| *x != sel).or_else(|| {
         let i = vis.iter().position(|x| *x == sel)?;
