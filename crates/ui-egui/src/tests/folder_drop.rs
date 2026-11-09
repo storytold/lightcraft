@@ -28,6 +28,11 @@ fn folders(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
 /// The photos at `paths` in the catalog (`local`: browsed, not in the library), in the grid with
 /// the sidebar out, tall enough for the Folders section.
 fn app(paths: &[(PathBuf, bool)]) -> Headless {
+    app_prepared(paths, |_| {})
+}
+
+/// [`app`], with `prepare` run on the app before its first frame.
+fn app_prepared(paths: &[(PathBuf, bool)], prepare: impl FnOnce(&mut LightcraftApp)) -> Headless {
     use lightcraft_catalog::{Op, Photo, Source};
     let mut session = lightcraft_engine::Session::new().with_fs();
     for (path, local) in paths {
@@ -37,7 +42,9 @@ fn app(paths: &[(PathBuf, bool)]) -> Headless {
         p.local = *local;
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
-    let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1300.0, 1600.0], 1.0);
+    let mut app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    prepare(&mut app);
+    let mut h = Headless::new(app, [1300.0, 1600.0], 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true, "sidebar": ["folders"]}), std::time::Duration::from_secs(10));
     assert_eq!(r["ok"], true, "{r}");
     for _ in 0..6 {
@@ -317,11 +324,18 @@ fn cancelling_the_question_moves_nothing() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Issue #3822: the folder rows are read for the second drop only once the sidebar settled. The
+/// first move changes the Missing Photos count, which a worker takes: a count that was running
+/// when the photo moved finds its old place empty and adds the Missing Photos row, and the
+/// recount takes it away again. Each moves every folder row below it, so on a busy machine a drop
+/// aimed at the row read before the count landed went to the folder above (here, a slow count).
 #[test]
 fn dont_ask_again_moves_the_next_drop_at_once() {
+    let count = std::time::Duration::from_secs(1);
     let (root, trip, home) = folders("dont-ask");
     std::fs::copy(trip.join("beach.png"), trip.join("dunes.png")).unwrap();
-    let mut h = app(&[(trip.join("beach.png"), false), (trip.join("dunes.png"), false), (home.join("garden.png"), false)]);
+    let photos = [(trip.join("beach.png"), false), (trip.join("dunes.png"), false), (home.join("garden.png"), false)];
+    let mut h = app_prepared(&photos, |app| app.missing_count_test_delay = Some(count));
     click(&mut h, &format!("libraryFolderToggle:{}", folder_key(&root)));
     let target = folder_row(&h, &home).unwrap();
     let beach = id_of(&h, "beach.png");
@@ -335,13 +349,28 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
     // the next drop goes at once
     let dunes = id_of(&h, "dunes.png");
     h.app.session.selection = lightcraft_engine::Selection::single(lightcraft_catalog::PhotoId(dunes));
-    h.step();
+    assert!(h.settle(std::time::Duration::from_secs(120)), "the sidebar settles after the move");
     let target = folder_row(&h, &home).unwrap();
-    drop_beach(&mut h, dunes, target);
+    // nothing moves the folder rows once settled, however long the count takes
+    let t0 = std::time::Instant::now();
+    while t0.elapsed() < count {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(folder_row(&h, &home), Some(target), "home stays where the drop aims");
+    let from = widget(&h, &format!("thumb:{dunes}")).unwrap().center();
+    press(&mut h, from);
+    glide(&mut h, from, target.center());
+    // (synthetic pointer events reach the app one a frame, the press's two included: one more
+    // frame brings the pointer to the end of the glide)
+    h.step();
+    assert_eq!(hint(&h).as_deref(), Some("Move 1 photo to “home”"), "over home");
+    release(&mut h, target.center());
+    h.step();
     assert!(h.app.ui.dialog.is_none(), "not asked");
-    // no question comes first, but the file itself can take a moment on a busy machine
-    let moved = home.join("dunes.png");
-    assert!(h.step_until(std::time::Duration::from_secs(20), |_| moved.is_file()), "moved without a question");
+    // the move runs within the frame of the drop: a file not there now never moves, and the
+    // toast says why
+    assert!(home.join("dunes.png").is_file(), "moved without a question (toast: {:?})", toast(&h));
     let _ = std::fs::remove_dir_all(&root);
 }
 
