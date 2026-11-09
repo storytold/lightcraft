@@ -15,7 +15,7 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 # Canon CRW decoder shared with the other Craft apps
 craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "f3b62ec61f45534392376492fc5ad33047375205" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "c365d75c48b0e47f4b43cdb6592d0cdc39d2d52e", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "1b34eba41e62138fc2438d2734523b302840b45d", features = ["egui"] }
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
