@@ -1059,30 +1059,34 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
     use lightcraft_catalog::Op;
     let mut h = demo([1400.0, 900.0]);
     let t = Duration::from_secs(10);
-    let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(2).collect();
+    let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(3).collect();
     let region = |name: Option<&str>| lightcraft_meta::Region {
         rect: lightcraft_geom::Rect { x0: 0.25, y0: 0.2, x1: 0.55, y1: 0.6 },
         kind: lightcraft_meta::RegionKind::Face,
         name: name.map(str::to_string),
         description: None,
     };
-    for (id, name) in ids.iter().zip([Some("Jane Doe"), None]) {
+    for (id, name) in ids.iter().zip([Some("Jane Doe"), None, None]) {
         let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
         meta.regions = vec![region(name)];
         h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
     }
     h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
     h.settle(SETTLE);
-    // the demo has no recognition: the page is given its one look-alike
+    // the demo has no recognition: the page is given two look-alikes
     let page = crate::panels::person::PersonPage {
         name: "Jane Doe".into(),
         total: 1,
         confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }],
-        more: vec![crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, score: 0.9 }],
+        more: vec![
+            crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, score: 0.9 },
+            crate::panels::person::Face { photo: ids[2].0, index: 0, rect: region(None).rect, score: 0.8 },
+        ],
         ready: true,
         pending: 0,
         cover: None,
         dismissed: 0,
+        like_set_aside: Default::default(),
     };
     h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page.clone())));
     h.step();
@@ -1094,6 +1098,13 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
     assert!(h.app.ui.dismissed_faces.contains(&("jane doe".into(), ids[1].0, 0)), "and hidden at once, for her only");
     assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].name, None, "the face itself is not touched");
     assert!(h.app.widgets.iter().any(|(w, _)| w == "person:restoreDismissed"), "the button that brings it back");
+    // the last face offered set aside too: the page is asked for again, for the next ones (none in the demo)
+    assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.more.len()), Some(2), "not asked for again while one is left");
+    let r = h.request("ui.clickWidget", json!({"id": format!("more-face-x:{}:0", ids[2].0)}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.person_dismissed.get("jane doe").map(Vec::len), Some(2));
+    assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.more.len()), Some(0), "the next ones are looked for");
     // set aside for her, not for someone else: the same face offered on another person's page is shown there
     let other = crate::panels::person::PersonPage {
         name: "John Roe".into(),
@@ -1104,6 +1115,7 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
         pending: 0,
         cover: None,
         dismissed: 0,
+        like_set_aside: Default::default(),
     };
     h.app.caches.person_page = Some(("John Roe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(other)));
     h.app.ui.person_page = Some("John Roe".into());
@@ -1166,6 +1178,7 @@ fn person_more_confirms_all_above_with_one_undo_step() {
         pending: 0,
         cover: None,
         dismissed: 0,
+        like_set_aside: Default::default(),
     };
     // a face just set aside, hidden until the page is asked for again (which then leaves it out itself)
     let set_page = |h: &mut Headless| {

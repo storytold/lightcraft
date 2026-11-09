@@ -309,10 +309,18 @@ fn dismiss(s: &mut Session, p: &Value) -> Result<Value> {
     let rect = s
         .catalog
         .photo(id)
+        .filter(|ph| ph.in_library())
         .and_then(|ph| ph.meta.regions.get(index))
         .filter(|r| r.kind == lightcraft_meta::RegionKind::Face)
         .ok_or_else(|| bad(C, "no such face"))?
         .rect;
+    // set aside for someone: a name no face bears (a typo) would keep it for nobody
+    let named = |r: &lightcraft_meta::Region| {
+        r.kind == lightcraft_meta::RegionKind::Face && r.name.as_deref().is_some_and(|n| n.trim().to_lowercase() == key)
+    };
+    if !s.catalog.photos().filter(|ph| ph.in_library()).any(|ph| ph.meta.regions.iter().any(named)) {
+        return Err(bad(C, format!("no person named {name}")));
+    }
     let list = s.person_dismissed.entry(key.clone()).or_default();
     if !list.iter().any(|f| f.is(id, &rect)) {
         if list.len() >= MAX_DISMISSED {
@@ -921,9 +929,9 @@ mod imp {
         scored.truncate(limit);
         let items = scored
             .into_iter()
-            .map(|(_, score, photo, index, rect)| {
+            .map(|(kept, score, photo, index, rect)| {
                 let view = s.face_view(PhotoId(photo), rect);
-                json!({"photo": photo, "index": index, "rect": super::rect_json(&rect), "view": super::rect_json(&view), "score": score})
+                json!({"photo": photo, "index": index, "rect": super::rect_json(&rect), "view": super::rect_json(&view), "score": score, "likeSetAside": !kept})
             })
             .collect();
         Similar { items, ..ready }
@@ -1367,7 +1375,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Faces of a Person",
             [],
             None,
-            "{name, more?: 120} → {name, total, cover: {photo, index, rect} | null, confirmed: [{photo, index, rect}], more: [{photo, index, rect, score}], ready, pendingPhotos} — the faces named `name` across the library, and the unnamed faces that look most like them (best first, already embedded ones only, once recognition is on); confirm one with `faces.setName`",
+            "{name, more?: 120} → {name, total, cover: {photo, index, rect} | null, confirmed: [{photo, index, rect}], more: [{photo, index, rect, score, likeSetAside}], ready, pendingPhotos} — the faces named `name` across the library, and the unnamed faces that look most like them (best first, already embedded ones only, once recognition is on); confirm one with `faces.setName`",
             super::always,
             person
         ),
