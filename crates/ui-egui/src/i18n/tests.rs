@@ -163,6 +163,36 @@ fn the_welcome_tour_is_translated_in_every_catalog() {
     }
 }
 
+/// The menus and the question for several chosen sidebar rows have a translation in every language:
+/// one without a translation shows the English.
+#[test]
+fn the_texts_for_several_chosen_sidebar_rows_are_translated_in_every_language() {
+    const TEXTS: [&str; 17] = [
+        "Another library was opened since this window appeared: nothing was changed",
+        "Choose one album to rename it",
+        "Choose one folder to rename it",
+        "Choose one folder to synchronize it",
+        "Choose one keyword to create a keyword inside it",
+        "Choose one keyword to edit it",
+        "Choose one keyword to rename it",
+        "Create Keyword Tag Inside…",
+        "Delete Albums",
+        "Delete Folder",
+        "Delete Keywords",
+        "Moves the photos imported from these folders to Recently Deleted; no file is touched",
+        "No photo has them; the keywords below them go too.",
+        "One of them is a whole disk: remove a disk by itself",
+        "Remove Folders from Library",
+        "That includes the photos in the folders inside them.",
+        "The photos stay in All Photos. Undo brings the albums back.",
+    ];
+    for language in Locale::ALL.iter().filter(|language| **language != Locale::En) {
+        let catalog = language.catalog();
+        let lacking: Vec<&str> = TEXTS.into_iter().filter(|text| catalog.get(*text).is_none_or(|translation| translation.is_empty())).collect();
+        assert!(lacking.is_empty(), "{language:?} shows English for {lacking:?}");
+    }
+}
+
 /// Locale tags are matched leniently, so a system locale reaches a shipped language.
 /// The message box for a desktop start that failed (issue #260) names the error and the log
 /// file, in the UI language.

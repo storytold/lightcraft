@@ -241,3 +241,30 @@ fn relative_clock_held_view_keeps_expired_photos_admits_new_matches_and_refreshe
     s.execute("library.refresh", &json!({})).unwrap();
     assert_eq!(s.visible_cloned(), vec![ids[1]], "explicit refresh releases the expired photo");
 }
+
+#[test]
+fn a_held_view_of_several_albums_keeps_a_photo_only_while_one_of_them_has_it() {
+    // The view looks in the albums shown, a smart album among them asked live: a photo that stops matching its rules
+    // stays only if another album shown has it. Either album may be the source (the last one named is).
+    for names in [["Rated", "Plain"], ["Plain", "Rated"]] {
+        // Given a smart album of the photos rated 3 or more and a plain album that has the second of them, shown together, held
+        let mut s = Session::with_demo();
+        let ids: Vec<u64> = s.visible_cloned().iter().take(2).map(|p| p.0).collect();
+        s.execute("library.select", &json!({"ids": ids})).unwrap();
+        s.execute("photo.rate", &json!({"rating": 4})).unwrap();
+        let plain = s.execute("album.create", &json!({"name": "Plain"})).unwrap()["id"].as_u64().unwrap();
+        s.execute("album.addPhotos", &json!({"id": plain, "ids": [ids[1]]})).unwrap();
+        let smart = s.execute("album.createSmart", &json!({"name": "Rated", "rules": {"rating": 3}})).unwrap()["id"].as_u64().unwrap();
+        let named: Vec<u64> = names.iter().map(|n| if *n == "Rated" { smart } else { plain }).collect();
+        s.execute("library.source", &json!({"kind": "album", "ids": named})).unwrap();
+        hold(&mut s);
+        let shown = s.visible_cloned();
+        assert!(ids.iter().all(|id| shown.contains(&PhotoId(*id))), "{names:?}: both are shown");
+        // When both are rated under the smart album's rules
+        s.execute("photo.rate", &json!({"rating": 1})).unwrap();
+        // Then the one the plain album has stays, and the one only the smart album had goes at once
+        let left = s.visible_cloned();
+        assert!(left.contains(&PhotoId(ids[1])), "{names:?}: the plain album still has it");
+        assert!(!left.contains(&PhotoId(ids[0])), "{names:?}: no album shown has it now");
+    }
+}

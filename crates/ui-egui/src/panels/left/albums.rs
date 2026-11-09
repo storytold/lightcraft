@@ -1,6 +1,6 @@
 use super::folders::{folder_menu, is_within};
 use super::rows::{INDENT_STEP, Row, indent_x, set_tree_open, tree_open, tree_toggle};
-use super::{Album, AlbumId, Align2, Icon, LibrarySource, LightcraftApp, Rect, Sense, Tokens, json, pos2, register, vec2};
+use super::{Album, AlbumId, Align2, Icon, LightcraftApp, Rect, Sense, Tokens, json, pos2, register, vec2};
 
 /// Albums: the tree of albums and the folders they are sorted into. `reveal`: an album just made,
 /// whose folders open down to it.
@@ -61,7 +61,8 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, open_to);
             }
         } else {
-            let sel = app.session.source == LibrarySource::Album(a.id);
+            let sel = crate::panels::side_select::album_shown(app, a.id);
+            app.ui.side.albums.saw(a.id.0);
             let icon = if a.is_smart() { Icon::SmartAlbum } else { Icon::Album };
             // cached: a smart album's count scans the catalog
             let now = (app.session.clock)();
@@ -79,6 +80,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 .indent(indent)
                 .sense(Sense::click_and_drag())
                 .show(app, ui);
+            crate::panels::side_select::outline(app, ui, crate::panels::side_select::SideList::Albums, sel, resp.rect, 8.0);
             if !problems.is_empty() {
                 crate::widgets::register(ui, format!("albumProblem:{}", a.id.0), resp.rect);
             }
@@ -103,7 +105,7 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
                 resp = resp.on_hover_text(tip);
             }
             if resp.clicked() {
-                let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
+                crate::panels::side_select::album_clicked(app, ui, a.id);
             }
             folder_menu(app, &resp, a);
         }
@@ -178,13 +180,22 @@ pub(super) const MARK_W: f32 = 12.0;
 /// How long a dragged album must rest on a closed folder before it opens.
 const HOVER_OPEN_SECS: f64 = 0.6;
 
-/// Whether the album `dragged` may be dropped into the folder `target` (`None`: the top level):
-/// a folder other than where it already is, and not itself or something inside it.
+/// Whether the album `dragged`, with the albums chosen beside it when it is one of several, may be
+/// dropped into the folder `target` (`None`: the top level): at least one of them has to move
+/// there (it is not in that folder already), and none may go into itself or something inside it.
 fn can_drop_album(app: &LightcraftApp, dragged: AlbumId, target: Option<AlbumId>) -> bool {
-    let Some(d) = app.session.catalog.album(dragged) else { return false };
+    let cat = &app.session.catalog;
+    if cat.album(dragged).is_none() {
+        return false;
+    }
+    let group: Vec<AlbumId> = crate::panels::side_select::albums_dragged(app, dragged).into_iter().map(AlbumId).collect();
     match target {
-        None => d.parent.is_some(),
-        Some(t) => app.session.catalog.album(t).is_some_and(|f| f.folder) && d.parent != Some(t) && !is_within(app, t, dragged),
+        None => group.iter().any(|id| cat.album(*id).is_some_and(|a| a.parent.is_some())),
+        Some(t) => {
+            cat.album(t).is_some_and(|f| f.folder)
+                && group.iter().any(|id| cat.album(*id).is_some_and(|a| a.parent != Some(t)))
+                && !group.iter().any(|id| is_within(app, t, *id))
+        }
     }
 }
 
@@ -213,14 +224,27 @@ fn forget_hover(app: &LightcraftApp, ctx: &egui::Context) {
 
 /// Moves the dragged album into a folder (`album.move`, one undo step; `None`: the top level).
 fn drop_album(app: &mut LightcraftApp, ui: &egui::Ui, dragged: AlbumId, target: Option<AlbumId>) {
-    let r = app.run("album.move", json!({"id": dragged.0, "parent": target.map(|t| t.0)}));
+    // picked up as one of several albums chosen: they all go, as one step
+    let several = crate::panels::side_select::albums_dragged(app, dragged);
+    let r = if several.len() > 1 {
+        app.run("album.move", json!({"ids": several, "parent": target.map(|t| t.0)}))
+    } else {
+        app.run("album.move", json!({"id": dragged.0, "parent": target.map(|t| t.0)}))
+    };
     finish_drop(app, ui, dragged, r);
 }
 
 /// Places the dragged album in `parent` before the sibling `before` (`None`: last of its kind), by
 /// hand (`album.reorder`, one undo step).
 fn place_album(app: &mut LightcraftApp, ui: &egui::Ui, dragged: AlbumId, parent: Option<AlbumId>, before: Option<AlbumId>) {
-    let r = app.run("album.reorder", json!({"id": dragged.0, "parent": parent.map(|p| p.0), "before": before.map(|b| b.0)}));
+    // picked up as one of several albums chosen: the others that are elsewhere come into that folder
+    // in the same step (`with`); the one dragged is placed
+    let several = crate::panels::side_select::albums_dragged(app, dragged);
+    let mut params = json!({"id": dragged.0, "parent": parent.map(|p| p.0), "before": before.map(|b| b.0)});
+    if several.len() > 1 {
+        params["with"] = json!(several);
+    }
+    let r = app.run("album.reorder", params);
     finish_drop(app, ui, dragged, r);
 }
 
@@ -261,11 +285,14 @@ fn album_drop_at(app: &LightcraftApp, dragged: AlbumId, target: &Album, frac: f3
     let sibs = cat.album_children(parent);
     let at = sibs.iter().position(|a| a.id == target.id)?;
     let was = sibs.iter().position(|a| a.id == dragged);
+    // (placed where it already is is nothing, unless an album chosen with it is elsewhere: `place_album` moves those here)
+    let group = crate::panels::side_select::albums_dragged(app, dragged);
+    let others_move = group.iter().any(|id| cat.album(AlbumId(*id)).is_some_and(|a| a.parent != parent));
     if !after {
-        (was.map(|w| w + 1) != Some(at)).then_some(AlbumDrop::Place { parent, before: Some(target.id), above: true })
+        (others_move || was.map(|w| w + 1) != Some(at)).then_some(AlbumDrop::Place { parent, before: Some(target.id), above: true })
     } else {
         let next = sibs.iter().skip(at + 1).find(|a| a.id != dragged).filter(|a| a.folder == target.folder).map(|a| a.id);
-        (was != Some(at + 1)).then_some(AlbumDrop::Place { parent, before: next, above: false })
+        (others_move || was != Some(at + 1)).then_some(AlbumDrop::Place { parent, before: next, above: false })
     }
 }
 
@@ -328,9 +355,9 @@ fn album_drag_over(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Resp
     opened
 }
 
-/// While an album that sits in a folder is dragged: the "Albums" header takes it back to the top
-/// level (outlined, with a hint). The header stays in view however long the tree is, and nothing
-/// moves when it appears.
+/// While an album that sits in a folder, or chosen with one that does, is dragged: the "Albums"
+/// header takes it back to the top level (outlined, with a hint). The header stays in view however
+/// long the tree is, and nothing moves when it appears.
 pub(super) fn top_level_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, header: Rect) {
     let Some(dragged) = app.ui.dragging_album.map(AlbumId) else { return };
     if !can_drop_album(app, dragged, None) {
@@ -361,6 +388,9 @@ pub fn album_drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     let (Some(pos), Some(name)) = (pos, app.session.catalog.album(AlbumId(id)).map(|a| a.name.clone())) else { return };
+    // picked up as one of several albums chosen: they all go
+    let several = crate::panels::side_select::albums_dragged(app, AlbumId(id)).len();
+    let name = if several > 1 { crate::i18n::tr_format!("{n} albums", n = several) } else { name };
     let t = Tokens::get(ctx);
     ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
     egui::Area::new(egui::Id::unique("drag-album")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pos + vec2(14.0, 10.0)).show(

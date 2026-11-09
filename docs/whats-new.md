@@ -344,6 +344,32 @@
   1200–1500-point-wide window on a Retina display.
 
 
+## 2026-10-26
+
+### Choose several albums, folders, keywords or dates in the sidebars
+- In the left panel, Cmd+click (Ctrl+click on Windows and Linux) adds an album, a folder, a keyword or a date to the
+  ones chosen, or takes it away; Shift+click takes every row between the last one clicked and this one, except rows
+  inside a folder that is closed. The grid shows the photos of any of them, each once, and the title says how many
+  albums or folders are shown. A plain click chooses one row alone, as before.
+- In the Keyword List (right panel, Keywords) the same clicks pick several keywords. Picking does not change the grid.
+- With several albums shown, Remove from Album is not offered and the Delete key is the photos' Delete once you click
+  elsewhere (it asks first while Settings ▸ Confirm before moving photos to Recently Deleted is on), because there is no
+  telling which album is meant.
+- Right-click one of several rows chosen to act on them all: move albums into a folder, export them, or delete them;
+  give folders a color label or remove them from the library; give keywords to the selected photos, take them away,
+  merge them or delete them. Each change is one step to undo; exporting writes files and is not an undo step.
+  Deleting or removing several asks first and says what goes; if another library is opened while it asks, OK changes
+  nothing and says so. Right-click a row that is not among them and you get that row's own menu; the others stay
+  chosen.
+- Dragging one of several albums or keywords moves them all (albums go into the folder they are dropped in or
+  beside; dropped beside a row, the one you dragged is placed there and the others come into that folder).
+- Right after choosing several rows with Cmd or Shift, the Delete key asks about those rows. Click anywhere else,
+  or select photos or change what is shown in any other way, and Delete is about the photos again; after a plain
+  click on an album it always was.
+- For agents: `album.delete` and `album.move` take `ids`, `keyword.delete` and `keyword.move` take `keywords`,
+  `library.removeFolder` and `folder.label` take `paths`, as one undo step each; `album.reorder` takes `with`, the
+  albums chosen beside the one it places, which come to the same folder in the same step.
+
 ## 2026-10-24
 
 ### AI Denoise follows the photo's real noise
@@ -761,6 +787,21 @@
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
 
+### Several albums, folders, keywords or dates shown at once (agents)
+- `library.source` takes `ids` (albums) or `paths` (folders of the library, as `library.folders` lists them, not a
+  browsed Local folder) and shows the photos of any of them, each once; `library.filter` takes `keywords`, `dates`,
+  `libraryFolders` and `albums`. The single fields stay and count as one
+  more of them. `library.state` lists `albums` and `libraryFolders`. New Smart Album from Filter… is grayed out and
+  says why when several albums are shown and one of them is a smart album, or when the filter names a smart album
+  (one smart album shown alone can still be saved). `album.createSmart` refuses the same views, but only when it is
+  called without `rules`: given `rules`, it does not look at the view.
+- With View ▸ Hold View Until Refreshed on, a view of several albums holds a photo only while one of them has it: a
+  photo that stops matching the rules of a smart album among them goes at once, unless another album shown has it.
+- `library.filter` refuses an album that is not there (`no such album N`), as `library.source` does. Deleting a shown
+  album moves the active photo into what is left. A filter put aside by Enable Filters that a deleted album or folder
+  leaves with only the rating operator is dropped, as one a deleted keyword leaves.
+- `album.setRules` with `replace` keeps a smart album's album, as it already kept its folder (`album: null` drops
+  it), so editing a smart album saved from a view of several albums no longer loses them.
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
