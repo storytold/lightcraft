@@ -850,6 +850,22 @@ fn catalog_masks_follow_the_photo_orientation() {
     assert!(close(&radial["rx"], 0.1) && close(&radial["ry"], 0.1), "{radial}");
 }
 
+#[test]
+fn inverted_radial_mask_keeps_its_inversion_on_import() {
+    // #2475: an inverted radial (LocalExposure2012 applies outside the ellipse) keeps its
+    // inversion when the catalog import also turns the mask for the photo's orientation
+    let s = r#"s = { MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+        { What = "Mask/CircularGradient", Left = 0, Right = 0.2, Top = 0.1, Bottom = 0.3, Angle = 10, Feather = 50, Version = 2, Flipped = true, Inverted = true } } } } }"#;
+    let (partial, _) = mapped_settings(s, crate::crs::Target::RawAbsolute, 1.5, Orientation::Rotate90, 1.5, Orientation::Normal).unwrap();
+    let c = &partial["masks"][0]["components"][0];
+    let close = |v: &Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-9;
+    // the orientation is applied: (x, y) → (1 − y, x), a quarter turn clockwise; the radii swap
+    let shape = &c["shape"];
+    assert!(close(&shape["center"]["x"], 0.8) && close(&shape["center"]["y"], 0.1), "{shape}");
+    // but the effect stays outside the ellipse
+    assert!(c["invert"].as_bool().unwrap_or(false) || shape["invert"].as_bool().unwrap_or(false), "{c}");
+}
+
 /// The `crs` corners and angle Lightroom would store for LightCraft crop `g` on a stored image
 /// of aspect `w` (height 1) shown with orientation `o`.
 fn lightroom_crop(g: CropGeometry, o: Orientation, w: f64) -> String {
