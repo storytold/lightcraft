@@ -407,7 +407,7 @@ cargo xtask web --serve                                 # the same app in the br
 cargo run --release -p lightcraft-cli -- render photo.jpg -o out.jpg --set light.exposure=0.5
 cargo xtask ci                                          # fmt, clippy, HEIF, tests, parity, layers, assets, WASM
 cargo xtask ci --quick                                  # only what your branch's changes can break (minutes)
-cargo xtask test -p lightcraft-raw --keep-going         # tests only, with ci's caps; every failing test binary
+cargo xtask test -p lightcraft-raw --keep-going         # tests only, with ci's caps; runs every binary, names each that failed
 ```
 
 `cargo xtask ci --quick` compares with the merge base of `origin/main` (`--base REF` for another)
