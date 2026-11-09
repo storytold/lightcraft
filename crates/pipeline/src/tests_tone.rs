@@ -272,7 +272,7 @@ fn isolated_lines_up_to_the_detail_radius_stay_out_of_the_base() {
 }
 
 #[test]
-fn only_process_v7_on_takes_the_detail_free_base() {
+fn only_process_v8_on_takes_the_detail_free_base() {
     // V2 to V7 keep the plain median (V1 has none): they are released and frozen (`tests_legacy`)
     for p in Process::ALL {
         let s = DevelopSettings { process: p.version(), ..Default::default() };
