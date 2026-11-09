@@ -23,6 +23,129 @@ fn render_failure_paths_are_escaped_and_missing_sources_still_identified() {
     assert!(render_failure_message(Slot::Main, PhotoId(42), Some(&demo), "decode failed").contains("demo scene 7"));
 }
 
+/// Issue #2682: the log could not tell a file asked for 37 times from one asked once and failing
+/// inside. At debug level every request is a line naming its file, and so is how it ended when it
+/// drew nothing (a failure stays the warning it was).
+#[test]
+fn each_render_request_and_how_it_ended_is_a_debug_line_with_its_file() {
+    let ends =
+        |lines: &[String]| -> Vec<String> { lines.iter().map(|l| l.rsplit_once(": ").map_or(l.clone(), |(_, end)| end.to_string())).collect() };
+    let (mut app, work, ctx) = fixture();
+    let slot = Slot::Thumb(PhotoId(1));
+    let job = |app: &mut crate::LightcraftApp, edge| app.session.render_job(PhotoId(1), edge, edge, false, true).unwrap();
+    // asked once, drawn
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, j.run());
+    // asked twice: the first answer comes after the second request and is dropped
+    let (a, b) = (job(&mut app, 128), job(&mut app, 160));
+    app.renderer.request(slot, a, 10);
+    app.renderer.request(slot, b, 10);
+    let (_, b) = take_job(&work);
+    let (_, a) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, a.run());
+    finish(&mut app, &work, &ctx, slot, b.run());
+    // a stand-in that comes back after the thumbnail itself is not used
+    let quick = Slot::ThumbQuick(PhotoId(1));
+    let mut j = job(&mut app, 64);
+    j.request_id = lightcraft_preview::next_tick();
+    app.renderer.requests.insert(quick, Requested { look: None, id: j.request_id, source: Some(j.origin.clone()) });
+    finish(&mut app, &work, &ctx, quick, j.run());
+    // a render still running when everything is forgotten says so once, when it comes back
+    let j = job(&mut app, 200);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    app.renderer.forget_all();
+    finish(&mut app, &work, &ctx, slot, j.run());
+    assert_eq!(
+        ends(&app.renderer.decisions),
+        [
+            "requested",
+            "produced in 0 ms",
+            "requested",
+            "requested",
+            "abandoned, a newer request replaced it",
+            "produced in 0 ms",
+            "abandoned, the thumbnail itself came first",
+            "requested",
+            "abandoned, no longer wanted when it finished"
+        ]
+    );
+    let named = |app: &crate::LightcraftApp| {
+        assert!(
+            app.renderer.decisions.iter().all(|l| l.starts_with("render Thumb") && l.contains(", PhotoId(1), file \"audit.jpg\": ")),
+            "{:?}",
+            app.renderer.decisions
+        );
+    };
+    named(&app);
+
+    // a file that fails asks nothing while its failure stands, and says so when it is asked again
+    let (mut app, work, ctx) = fixture();
+    app.session.media.file_loader = Some(Arc::new(|_, _, _| Err("simulated decode failure".into())));
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let (_, j) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, j.run());
+    assert_eq!(app.renderer.failure_messages.len(), 1, "the failure is the warning it was");
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    app.session.catalog.apply(Op::SetRating { id: PhotoId(1), rating: 3 }).unwrap();
+    app.renderer.poll(&ctx, &mut app.session);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    assert_eq!(ends(&app.renderer.decisions), ["requested", "requested again after a failure"]);
+    named(&app);
+
+    // requests that end before they run: the same render moved to another priority, a newer render
+    // in its place, scrolled out of view, everything forgotten
+    let (mut app, _, _) = fixture();
+    app.renderer.set_offload(Box::new(Blocked));
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 5);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 10);
+    let j = job(&mut app, 128);
+    app.renderer.request(slot, j, 10);
+    app.renderer.evict_thumbs(&Default::default(), 0);
+    let j = job(&mut app, 64);
+    app.renderer.request(slot, j, 5);
+    app.renderer.forget_all();
+    assert_eq!(
+        ends(&app.renderer.decisions),
+        [
+            "requested",
+            "still waiting, moved to priority 10",
+            "abandoned, a newer request replaced it before it started",
+            "requested",
+            "abandoned, scrolled out of view before it started",
+            "requested",
+            "abandoned, the renderer started over (another library, or the previews were cleared)"
+        ]
+    );
+    named(&app);
+
+    // a stand-in still waiting that the grid moves up while it scrolls says so
+    let mut s = Session::new();
+    s.media.preview_loader = Some(Arc::new(|_, _| Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })));
+    let mut raw = (*photo()).clone();
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    raw.develop = Arc::new(raw.camera_defaults());
+    let (mut app, _, _) = fixture_with(s, raw);
+    app.renderer.pool = JobPool::new(0); // nothing starts until run_inline
+    crate::panels::grid::request_thumb(&mut app, PhotoId(1), 384, 5);
+    crate::panels::grid::request_thumb(&mut app, PhotoId(1), 384, 10);
+    assert_eq!(ends(&app.renderer.decisions), ["stand-in requested", "still waiting, moved to priority 11"]);
+    named(&app);
+    // a view shows whichever photo is open: its file names it
+    let main = Requested { look: None, id: 1, source: Some(Source::File { path: "trip/IMG_1.nef".into() }) };
+    assert_eq!(
+        abandoned_line(Slot::Main, Some(&main), "a newer request replaced it"),
+        "render Main, file \"trip/IMG_1.nef\": abandoned, a newer request replaced it"
+    );
+}
+
 struct Blocked;
 impl RenderOffload for Blocked {
     fn try_start(&mut self, _: Slot, job: RenderJob) -> Option<RenderJob> {
@@ -206,6 +329,7 @@ fn larger_texture_for_another_key_does_not_count_as_current() {
         ms: 0.0,
         quick: None,
         pixels: None,
+        native: None,
     };
     let mut r = Renderer::default();
     // A completed larger bucket: the remembered request is bucket 512, key 77.
@@ -270,7 +394,7 @@ fn a_failed_thumbnail_is_retried_only_when_its_photo_changes() {
 #[test]
 fn a_fast_draft_is_drawn_in_the_frame_that_asked_for_it() {
     let mut s = Session::new();
-    s.media.file_loader = Some(Arc::new(|_, _| Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))));
     s.catalog.apply(Op::AddPhoto { photo: Box::new((*photo()).clone()) }).unwrap();
     let mut r = Renderer::with_worker_threads(1);
     let ctx = egui::Context::default();
@@ -317,7 +441,7 @@ fn raw_quick_fixture() -> (crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<
     fixture_with(s, raw)
 }
 fn fixture_with(mut s: Session, photo: Photo) -> (crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context) {
-    s.media.file_loader = Some(Arc::new(|_, _| {
+    s.media.file_loader = Some(Arc::new(|_, _, _| {
         let mut image = lightcraft_raster::Rgb32f::new(8, 8);
         image.data.fill([0.3, 0.2, 0.1]);
         Ok((image, Default::default()))
@@ -344,6 +468,117 @@ fn request(app: &mut crate::LightcraftApp) {
     crate::panels::grid::request_thumb(app, PhotoId(1), 256, 10);
 }
 
+/// Draws GPU-resident renders under one fixed id, and reads them back from the test's device.
+#[cfg(not(target_arch = "wasm32"))]
+struct TestScreen(lightcraft_engine::gpu::wgpu::Device, lightcraft_engine::gpu::wgpu::Queue, std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>);
+#[cfg(not(target_arch = "wasm32"))]
+impl ScreenTextures for TestScreen {
+    fn show(&mut self, _: &lightcraft_engine::media::ScreenFrame, _: Option<egui::TextureId>) -> Option<egui::TextureId> {
+        Some(egui::TextureId::User(7))
+    }
+    fn free(&mut self, id: egui::TextureId) {
+        self.2.lock().unwrap().push(id);
+    }
+    fn read(&self, frame: &lightcraft_engine::media::ScreenFrame) -> Option<egui::ColorImage> {
+        let img = lightcraft_engine::gpu::read_texture(&self.0, &self.1, &frame.texture, frame.width, frame.height).ok()?;
+        Some(color_image(&img))
+    }
+}
+
+/// A headless screenshot (driven by the control channel: `keep_pixels`) of a view drawn straight
+/// from the GPU has its pixels. Before, a mid-drag `ui.screenshot {"headless": true}` showed the
+/// photo as a white rectangle: the GPU-resident draft left no CPU copy (review of PR #1065).
+/// The test fixture with a small GPU texture (5 × 3 known texels) and a [`TestScreen`] that
+/// records the ids it frees; `None` without a GPU adapter.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::type_complexity)]
+fn gpu_drawn_fixture(
+    freed: std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>,
+) -> Option<(crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context, lightcraft_engine::media::ScreenFrame)> {
+    use lightcraft_engine::gpu::wgpu;
+    let device = (|| {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = lightcraft_engine::gpu::backend::window_backends();
+        desc.backend_options = lightcraft_engine::gpu::backend::backend_options();
+        let instance = wgpu::Instance::new(desc);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { label: Some("test window"), ..Default::default() })).ok()
+    })();
+    let (device, queue) = device?;
+    let (w, h) = (5usize, 3usize);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let texels: Vec<u8> = (0..w * h).flat_map(|i| [i as u8 * 10, 100, 200, 255]).collect();
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        &texels,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 4), rows_per_image: Some(h as u32) },
+        wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
+    );
+    let (mut app, work, ctx) = fixture();
+    app.renderer.set_screen_textures(Box::new(TestScreen(device, queue, freed)));
+    Some((app, work, ctx, lightcraft_engine::media::ScreenFrame { texture, width: w, height: h }))
+}
+
+/// A headless screenshot (driven by the control channel: `keep_pixels`) of a view drawn straight
+/// from the GPU has its pixels. Before, a mid-drag `ui.screenshot {"headless": true}` showed the
+/// photo as a white rectangle: the GPU-resident draft left no CPU copy (review of PR #1065).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_headless_screenshot_reads_back_a_view_drawn_from_the_gpu() {
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default()) else {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    };
+    let (w, h) = (frame.width, frame.height);
+    assert!(app.renderer.keep_pixels);
+    let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap().draft();
+    app.renderer.request(Slot::Main, job, 100);
+    let (slot, job) = take_job(&work);
+    let mut result = job.run();
+    result.frame = Some(frame);
+    finish(&mut app, &work, &ctx, slot, result);
+    let t = app.renderer.textures.get(&Slot::Main).unwrap();
+    assert_eq!(t.id(), egui::TextureId::User(7), "the draft is drawn from the GPU");
+    assert!(t.pixels.is_none());
+    let cpu = app.renderer.cpu_textures();
+    let shot = cpu.get(&egui::TextureId::User(7)).expect("the headless screenshot has the view's pixels");
+    assert_eq!(shot.image.size, [w, h]);
+    assert_eq!(shot.image.pixels[4], egui::Color32::from_rgb(40, 100, 200));
+}
+
+/// Releasing a slot (a zoomed loupe leaving its window, a Compare region) lets go of its
+/// GPU-resident texture too, which can be window-sized (review of PR #1065: it was kept until
+/// the slot was drawn from the GPU again).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn releasing_a_slot_frees_its_gpu_texture() {
+    let freed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(freed.clone()) else {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    };
+    let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap().draft();
+    app.renderer.request(Slot::Main, job, 100);
+    let (slot, job) = take_job(&work);
+    let mut result = job.run();
+    result.frame = Some(frame);
+    finish(&mut app, &work, &ctx, slot, result);
+    assert_eq!(app.renderer.textures.get(&Slot::Main).map(|t| t.id()), Some(egui::TextureId::User(7)));
+    assert!(freed.lock().unwrap().is_empty());
+    app.renderer.release(Slot::Main);
+    assert_eq!(*freed.lock().unwrap(), vec![egui::TextureId::User(7)], "the window's texture is freed");
+    assert!(app.renderer.natives.is_empty() && app.renderer.native_frames.is_empty());
+}
+
 fn relink_destination() -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("lc-render-relinked-{}-{}.nef", std::process::id(), lightcraft_preview::next_tick()));
     std::fs::write(&path, b"replacement source").unwrap();
@@ -355,7 +590,7 @@ fn completed_failure_keeps_requested_source_after_relink() {
     let replacement = relink_destination();
     for slot in [Slot::Thumb(PhotoId(1)), Slot::Main, Slot::Before, Slot::Compare(1), Slot::Region] {
         let (mut app, work, ctx) = fixture();
-        app.session.media.file_loader = Some(Arc::new(|_, _| Err("simulated decode failure".into())));
+        app.session.media.file_loader = Some(Arc::new(|_, _, _| Err("simulated decode failure".into())));
         let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
         app.renderer.request(slot, job, 100);
         let (submitted, job) = take_job(&work);
@@ -381,7 +616,7 @@ fn completed_failure_keeps_requested_source_after_relink() {
 fn superseded_failure_does_not_take_the_new_requests_source() {
     let replacement = relink_destination();
     let (mut app, work, ctx) = fixture();
-    app.session.media.file_loader = Some(Arc::new(|_, _| Err("simulated decode failure".into())));
+    app.session.media.file_loader = Some(Arc::new(|_, _, _| Err("simulated decode failure".into())));
     let slot = Slot::Main;
     let old_job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
     app.renderer.request(slot, old_job, 100);
@@ -564,7 +799,7 @@ fn resizing_the_disk_cache_keeps_textures_and_skips_rebuilds() {
 #[test]
 fn a_panicking_render_is_a_failure_not_a_dead_worker() {
     let (mut app, _, ctx) = fixture_with(Session::new(), (*photo()).clone());
-    app.session.media.file_loader = Some(Arc::new(|_, _| panic!("decoder bug")));
+    app.session.media.file_loader = Some(Arc::new(|_, _, _| panic!("decoder bug")));
     app.renderer.offload = None; // the real job pool
     let slot = Slot::Thumb(PhotoId(1));
     let ask = |app: &mut crate::LightcraftApp| {
@@ -800,7 +1035,7 @@ fn library_reset_rejects_old_job_even_when_photo_id_and_key_are_reused() {
     let photo = app.session.catalog.photo(PhotoId(1)).unwrap().as_ref().clone();
     app.session = lightcraft_engine::Session::new();
     app.session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
-    app.session.media.file_loader = Some(Arc::new(|_, _| {
+    app.session.media.file_loader = Some(Arc::new(|_, _, _| {
         let mut image = lightcraft_raster::Rgb32f::new(8, 8);
         image.data.fill([0.1, 0.2, 0.9]);
         Ok((image, Default::default()))
@@ -1305,4 +1540,408 @@ fn undo_to_embedded_thumb_rejects_late_full_render() {
     assert_eq!(quick.quick, Some(QuickSource::Embedded));
     assert_eq!(quick.pixels.as_ref().unwrap().pixels, pixels_a);
     assert!(!app.renderer.is_pending(full_slot));
+}
+
+/// PERF-CULL-2: the loupe's stand-ins made ahead are taken over at the step (no job, the texture
+/// at once), a photo still wanted keeps its slot as the photos shift, and a step to a photo whose
+/// stand-in is still being made shows it when it arrives.
+#[test]
+fn a_step_takes_over_the_camera_preview_made_ahead() {
+    let gate = Arc::new(std::sync::Mutex::new(()));
+    let mut s = Session::new();
+    let g = gate.clone();
+    s.media.preview_loader = Some(Arc::new(move |_: &str, _| {
+        drop(g.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })
+    }));
+    let raw = |id: u64| {
+        let mut p = Photo::new(PhotoId(id), Source::File { path: format!("r{id}.cr3") }, &format!("r{id}.cr3"), "CR3", 6000, 4000, "2026-01-01");
+        p.kind = lightcraft_catalog::MediaKind::Raw;
+        p.develop = Arc::new(p.camera_defaults());
+        p
+    };
+    let (mut app, _, ctx) = fixture_with(s, raw(1));
+    for id in 2..=4 {
+        app.session.catalog.apply(Op::AddPhoto { photo: Box::new(raw(id)) }).unwrap();
+    }
+    let job = |app: &mut crate::LightcraftApp, id: u64| app.session.quick_view_job(PhotoId(id), 64, true).unwrap();
+    let wait = |app: &mut crate::LightcraftApp, done: &dyn Fn(&Renderer) -> bool| {
+        let t0 = std::time::Instant::now();
+        while !done(&app.renderer) {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the stand-ins never arrived");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            app.renderer.poll(&ctx, &mut app.session);
+        }
+    };
+    let ahead_of = |r: &Renderer, id: u64| r.textures.iter().any(|(s, t)| matches!(s, Slot::QuickAhead(_)) && t.photo == PhotoId(id));
+    let jobs = vec![job(&mut app, 2), job(&mut app, 3)];
+    app.renderer.look_ahead(jobs, 96);
+    wait(&mut app, &|r| ahead_of(r, 2) && ahead_of(r, 3));
+    // the step to photo 2: its stand-in is the loupe's at once, nothing is made again
+    let q = job(&mut app, 2);
+    app.renderer.request_quick(Slot::Preview, q, 110);
+    assert!(!app.renderer.is_pending(Slot::Preview));
+    assert_eq!(app.renderer.textures.get(&Slot::Preview).map(|t| t.photo), Some(PhotoId(2)));
+    assert!(!ahead_of(&app.renderer, 2));
+    // the next look-ahead (3 and 4): 3 keeps its slot and is not made again
+    let held = gate.lock().unwrap();
+    let jobs = vec![job(&mut app, 3), job(&mut app, 4)];
+    app.renderer.look_ahead(jobs, 96);
+    assert!(ahead_of(&app.renderer, 3), "a photo still wanted keeps what was made for it");
+    let pending_ahead: Vec<Slot> = app.renderer.pending.keys().copied().filter(|s| matches!(s, Slot::QuickAhead(_))).collect();
+    assert_eq!(pending_ahead.len(), 1, "only photo 4 is being made: {pending_ahead:?}");
+    // the step to photo 4 while its stand-in is still being made: shown when it arrives
+    let q = job(&mut app, 4);
+    app.renderer.request_quick(Slot::Preview, q, 110);
+    drop(held);
+    wait(&mut app, &|r| r.textures.get(&Slot::Preview).is_some_and(|t| t.photo == PhotoId(4)) && !r.is_pending(Slot::Preview));
+    wait(&mut app, &|r| !r.pending.keys().any(|s| matches!(s, Slot::QuickAhead(_) | Slot::Preview)));
+    assert_eq!(app.renderer.textures.get(&Slot::Preview).map(|t| t.photo), Some(PhotoId(4)));
+}
+
+/// A loupe with unedited raws 1..=n whose camera previews are read at once, on a renderer
+/// that runs nothing until asked (`run_inline`).
+fn raw_loupe(n: u64) -> (crate::LightcraftApp, egui::Context) {
+    let mut s = Session::new();
+    s.media.preview_loader = Some(Arc::new(|_: &str, _| Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })));
+    let raw = |id: u64| {
+        let mut p = Photo::new(PhotoId(id), Source::File { path: format!("r{id}.cr3") }, &format!("r{id}.cr3"), "CR3", 6000, 4000, "2026-01-01");
+        p.kind = lightcraft_catalog::MediaKind::Raw;
+        p.develop = Arc::new(p.camera_defaults());
+        p
+    };
+    let (mut app, _, ctx) = fixture_with(s, raw(1));
+    for id in 2..=n {
+        app.session.catalog.apply(Op::AddPhoto { photo: Box::new(raw(id)) }).unwrap();
+    }
+    app.renderer.pool = JobPool::new(0);
+    (app, ctx)
+}
+
+/// The look-ahead with every photo allowed (the default preparation settings).
+const ALL: crate::panels::detail::Prepare = crate::panels::detail::Prepare::Photos(lightcraft_engine::prep::Scope::All);
+
+fn quick(app: &mut crate::LightcraftApp, id: u64, edge: usize) -> QuickJob {
+    app.session.quick_view_job(PhotoId(id), edge, true).unwrap()
+}
+
+/// The loupe's stand-ins ahead follow Settings ▸ Performance: none when the mode prepares only the photo on
+/// screen (or none ahead), and the ones still queued are dropped then; only marked photos in the marked scope
+/// (CodeRabbit on #3077).
+#[test]
+fn the_look_ahead_prepares_only_what_the_preparation_settings_allow() {
+    use crate::panels::detail::{Prepare, look_ahead};
+    use lightcraft_engine::prep::Scope;
+    let (mut app, _ctx) = raw_loupe(4);
+    app.session.sort.key = lightcraft_catalog::SortKey::FileName;
+    app.session.sort.ascending = true;
+    // (asked for: queued, running or made)
+    let ahead = |r: &Renderer| r.quick_tried.keys().filter(|s| matches!(s, Slot::QuickAhead(_))).count();
+    look_ahead(&mut app, PhotoId(1), 64, true, Prepare::of(5, Scope::All));
+    assert_eq!(ahead(&app.renderer), 3, "photos 2 to 4 are made ahead");
+    // the photo on screen only: nothing ahead, and what was queued goes
+    look_ahead(&mut app, PhotoId(1), 64, true, Prepare::of(0, Scope::OnScreen));
+    assert_eq!(ahead(&app.renderer), 0, "nothing is made ahead for the photo on screen only");
+    look_ahead(&mut app, PhotoId(1), 64, true, Prepare::of(0, Scope::All));
+    assert_eq!(ahead(&app.renderer), 0, "nor with no photos ahead");
+    // picks, rated and labelled: only those
+    app.session.execute("library.select", &serde_json::json!({"ids": [3]})).unwrap();
+    app.session.execute("photo.rate", &serde_json::json!({"rating": 2})).unwrap();
+    look_ahead(&mut app, PhotoId(1), 64, true, Prepare::of(5, Scope::Marked));
+    let k3 = quick(&mut app, 3, 64).key;
+    let queued: Vec<u64> = app.renderer.quick_tried.iter().filter(|(s, _)| matches!(s, Slot::QuickAhead(_))).map(|(_, k)| *k).collect();
+    assert_eq!(queued, vec![k3], "only the rated photo is made ahead");
+}
+
+/// A renderer reset (`forget_all`: a library switch, a colour-management change) drops the stand-ins asked
+/// for ahead; the same photo asks for them again (CodeRabbit on #3577: the look-ahead took them for made).
+#[test]
+fn the_look_ahead_asks_again_after_a_renderer_reset() {
+    use crate::panels::detail::look_ahead;
+    let (mut app, _ctx) = raw_loupe(4);
+    let ahead = |r: &Renderer| r.quick_tried.keys().filter(|s| matches!(s, Slot::QuickAhead(_))).count();
+    look_ahead(&mut app, PhotoId(1), 64, true, ALL);
+    let asked = ahead(&app.renderer);
+    assert!(asked > 0);
+    app.renderer.forget_all();
+    assert_eq!(ahead(&app.renderer), 0);
+    look_ahead(&mut app, PhotoId(1), 64, true, ALL);
+    assert_eq!(ahead(&app.renderer), asked, "asked for again");
+}
+
+/// A stand-in still queued ahead whose photo moves up in the order (the user stepped) is
+/// queued at its new place, not left behind photos now further away (CodeRabbit on #3055).
+#[test]
+fn a_kept_ahead_job_moves_to_its_new_place_in_the_order() {
+    let (mut app, _ctx) = raw_loupe(3);
+    let jobs = vec![quick(&mut app, 2, 64), quick(&mut app, 3, 64)];
+    let (k2, k3) = (jobs[0].key, jobs[1].key);
+    app.renderer.look_ahead(jobs, 96);
+    let priority_of = |r: &Renderer, key: u64| {
+        let slot = r.quick_tried.iter().find(|(s, k)| matches!(s, Slot::QuickAhead(_)) && **k == key).map(|(s, _)| *s).unwrap();
+        r.pending[&slot].1
+    };
+    assert_eq!((priority_of(&app.renderer, k2), priority_of(&app.renderer, k3)), (96, 95));
+    let jobs = vec![quick(&mut app, 3, 64), quick(&mut app, 2, 64)];
+    app.renderer.look_ahead(jobs, 96);
+    assert_eq!((priority_of(&app.renderer, k3), priority_of(&app.renderer, k2)), (96, 95));
+    assert_eq!(app.renderer.pool.queued(), 2, "nothing is queued twice");
+}
+
+/// A stand-in made ahead that is no longer wanted while it is being made is thrown away when it
+/// arrives, not kept as a hidden texture (CodeRabbit on #3077); one the loupe waits for is kept.
+#[test]
+fn an_ahead_stand_in_no_longer_wanted_is_dropped_when_it_arrives() {
+    let gate = Arc::new(std::sync::Mutex::new(()));
+    let mut s = Session::new();
+    let g = gate.clone();
+    s.media.preview_loader = Some(Arc::new(move |_: &str, _| {
+        drop(g.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })
+    }));
+    let raw = |id: u64| {
+        let mut p = Photo::new(PhotoId(id), Source::File { path: format!("r{id}.cr3") }, &format!("r{id}.cr3"), "CR3", 6000, 4000, "2026-01-01");
+        p.kind = lightcraft_catalog::MediaKind::Raw;
+        p.develop = Arc::new(p.camera_defaults());
+        p
+    };
+    let (mut app, _, ctx) = fixture_with(s, raw(1));
+    app.session.catalog.apply(Op::AddPhoto { photo: Box::new(raw(2)) }).unwrap();
+    let wait = |app: &mut crate::LightcraftApp, done: &dyn Fn(&Renderer) -> bool, what: &str| {
+        let t0 = std::time::Instant::now();
+        while !done(&app.renderer) {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(20), "{what}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            app.renderer.poll(&ctx, &mut app.session);
+        }
+    };
+    let any_ahead = |r: &Renderer| r.textures.keys().any(|s| matches!(s, Slot::QuickAhead(_)));
+    let held = gate.lock().unwrap();
+    let job = quick(&mut app, 2, 64);
+    app.renderer.look_ahead(vec![job], 96);
+    wait(&mut app, &|r| r.pool.queued() == 0, "the stand-in never started");
+    // not wanted any more (the user went elsewhere) while it is being made
+    app.renderer.look_ahead(Vec::new(), 96);
+    assert!(!app.renderer.pending.keys().any(|s| matches!(s, Slot::QuickAhead(_))));
+    let done = app.renderer.completed;
+    drop(held);
+    wait(&mut app, &|r| r.completed > done, "the stand-in never finished");
+    assert!(!any_ahead(&app.renderer), "a stand-in nobody wants is left as a hidden texture");
+    // the step to photo 2 while its stand-in is being made: the loupe takes it when it arrives
+    let held = gate.lock().unwrap();
+    let job = quick(&mut app, 2, 32);
+    app.renderer.look_ahead(vec![job], 96);
+    wait(&mut app, &|r| r.pool.queued() == 0, "the stand-in never started");
+    let job = quick(&mut app, 2, 32);
+    app.renderer.request_quick(Slot::Preview, job, 110);
+    app.renderer.look_ahead(Vec::new(), 96);
+    drop(held);
+    wait(&mut app, &|r| r.textures.get(&Slot::Preview).is_some_and(|t| t.photo == PhotoId(2)), "the loupe never got its stand-in");
+}
+
+/// The loupe waits for a stand-in made ahead that is still being made when the next look-ahead
+/// brings new photos: its slot stays reserved, so the result still reaches the loupe (CodeRabbit
+/// on #3055 and #3080).
+#[test]
+fn a_running_stand_in_the_loupe_waits_for_keeps_its_slot() {
+    // the first camera preview read (photo 2's, made ahead) waits for `first`, every later one
+    // for `later`
+    let first = Arc::new(std::sync::Mutex::new(()));
+    let later = Arc::new(std::sync::Mutex::new(()));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut s = Session::new();
+    let (f, l, c) = (first.clone(), later.clone(), calls.clone());
+    s.media.preview_loader = Some(Arc::new(move |_: &str, _| {
+        let gate = if c.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 { &f } else { &l };
+        drop(gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })
+    }));
+    let raw = |id: u64| {
+        let mut p = Photo::new(PhotoId(id), Source::File { path: format!("r{id}.cr3") }, &format!("r{id}.cr3"), "CR3", 6000, 4000, "2026-01-01");
+        p.kind = lightcraft_catalog::MediaKind::Raw;
+        p.develop = Arc::new(p.camera_defaults());
+        p
+    };
+    let (mut app, _, ctx) = fixture_with(s, raw(1));
+    for id in 2..=3 {
+        app.session.catalog.apply(Op::AddPhoto { photo: Box::new(raw(id)) }).unwrap();
+    }
+    app.renderer.pool = JobPool::new(4);
+    let wait = |app: &mut crate::LightcraftApp, done: &dyn Fn(&Renderer) -> bool, what: &str| {
+        let t0 = std::time::Instant::now();
+        while !done(&app.renderer) {
+            assert!(t0.elapsed() < std::time::Duration::from_secs(20), "{what}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            app.renderer.poll(&ctx, &mut app.session);
+        }
+    };
+    let held_first = first.lock().unwrap();
+    let held_later = later.lock().unwrap();
+    let job = quick(&mut app, 2, 64);
+    app.renderer.look_ahead(vec![job], 96);
+    wait(&mut app, &|r| r.pool.queued() == 0, "photo 2's stand-in never started");
+    wait(&mut app, &|_| calls.load(std::sync::atomic::Ordering::SeqCst) == 1, "photo 2's preview was never read");
+    // the step to photo 2, then the next look-ahead, for photos 3 and 1
+    let job = quick(&mut app, 2, 64);
+    app.renderer.request_quick(Slot::Preview, job, 110);
+    assert!(app.renderer.is_pending(Slot::Preview));
+    let jobs = vec![quick(&mut app, 3, 64), quick(&mut app, 1, 64)];
+    app.renderer.look_ahead(jobs, 96);
+    let done = app.renderer.completed;
+    drop(held_first);
+    wait(&mut app, &|r| r.completed > done, "photo 2's stand-in never finished");
+    assert_eq!(app.renderer.textures.get(&Slot::Preview).map(|t| t.photo), Some(PhotoId(2)), "the loupe lost the stand-in it waited for");
+    drop(held_later);
+    wait(&mut app, &|r| r.pool.queued() == 0 && !r.pending.keys().any(|s| matches!(s, Slot::QuickAhead(_))), "the look-ahead never finished");
+}
+
+/// The stand-in made ahead still shows when the loupe's own request for it failed first
+/// (CodeRabbit on #3055).
+#[test]
+fn a_stand_in_made_ahead_shows_after_the_loupes_own_request_failed() {
+    let (mut app, ctx) = raw_loupe(2);
+    let job = quick(&mut app, 2, 64);
+    let key = job.key;
+    app.renderer.look_ahead(vec![job], 96);
+    let job = quick(&mut app, 2, 64);
+    app.renderer.request_quick(Slot::Preview, job, 110);
+    assert!(app.renderer.is_pending(Slot::Preview));
+    // the loupe's request fails (its job never runs)
+    assert!(app.renderer.drop_queued(Slot::Preview));
+    app.renderer.failed.insert(Slot::Preview, (key, "unreadable".into(), 0, PhotoId(2)));
+    assert_eq!(app.renderer.pool.run_inline(1), 1);
+    app.renderer.poll(&ctx, &mut app.session);
+    assert_eq!(app.renderer.textures.get(&Slot::Preview).map(|t| t.photo), Some(PhotoId(2)));
+    assert!(!app.renderer.failed.contains_key(&Slot::Preview));
+    // the user has stepped on to photo 3 when photo 2's stand-in arrives: 3's request stays
+    let (mut app, ctx) = raw_loupe(3);
+    let job = quick(&mut app, 2, 64);
+    let key = job.key;
+    app.renderer.look_ahead(vec![job], 96);
+    let job = quick(&mut app, 2, 64);
+    app.renderer.request_quick(Slot::Preview, job, 110);
+    assert!(app.renderer.drop_queued(Slot::Preview));
+    app.renderer.failed.insert(Slot::Preview, (key, "unreadable".into(), 0, PhotoId(2)));
+    let job = quick(&mut app, 3, 64);
+    let key3 = job.key;
+    // (queued behind the stand-in made ahead, so that one arrives first)
+    app.renderer.request_quick(Slot::Preview, job, 50);
+    let ahead = app.renderer.pool.run_inline(1);
+    assert_eq!(ahead, 1);
+    app.renderer.poll(&ctx, &mut app.session);
+    assert!(app.renderer.textures.get(&Slot::Preview).is_none_or(|t| t.photo != PhotoId(2)), "photo 2 took photo 3's place");
+    assert_eq!(app.renderer.pending.get(&Slot::Preview).map(|p| p.0), Some(key3), "photo 3's request is kept");
+}
+
+/// A stand-in made ahead for a smaller loupe isn't taken over when the loupe has grown: the
+/// larger one is made (CodeRabbit on #3077).
+#[test]
+fn a_stand_in_made_ahead_for_a_smaller_loupe_is_not_taken_over() {
+    let (mut app, ctx) = raw_loupe(2);
+    let small = quick(&mut app, 2, 32);
+    let large = quick(&mut app, 2, 64);
+    assert_eq!(small.key, large.key, "the same stand-in, at another size");
+    app.renderer.look_ahead(vec![small], 96);
+    assert_eq!(app.renderer.pool.run_inline(1), 1);
+    app.renderer.poll(&ctx, &mut app.session);
+    assert!(app.renderer.textures.keys().any(|s| matches!(s, Slot::QuickAhead(_))));
+    app.renderer.request_quick(Slot::Preview, large, 110);
+    assert!(app.renderer.is_pending(Slot::Preview), "the larger stand-in is made");
+    assert!(!app.renderer.textures.contains_key(&Slot::Preview));
+    // the same size is taken over at once
+    let (mut app, ctx) = raw_loupe(2);
+    let job = quick(&mut app, 2, 64);
+    app.renderer.look_ahead(vec![job], 96);
+    assert_eq!(app.renderer.pool.run_inline(1), 1);
+    app.renderer.poll(&ctx, &mut app.session);
+    let job = quick(&mut app, 2, 64);
+    app.renderer.request_quick(Slot::Preview, job, 110);
+    assert!(!app.renderer.is_pending(Slot::Preview));
+    assert_eq!(app.renderer.textures.get(&Slot::Preview).map(|t| t.photo), Some(PhotoId(2)));
+}
+
+/// The benchmark's thumbnail count is per photo: a render replacing a photo's stand-in isn't
+/// counted again (CodeRabbit on #3055).
+#[test]
+fn a_thumbnail_replacing_its_stand_in_is_not_counted_again() {
+    let mut s = Session::new();
+    s.media.preview_loader = Some(Arc::new(|_, _| Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })));
+    let mut raw = (*photo()).clone();
+    raw.kind = lightcraft_catalog::MediaKind::Raw;
+    raw.develop = Arc::new(raw.camera_defaults());
+    let (mut app, work, ctx) = fixture_with(s, raw);
+    app.renderer.pool = JobPool::new(0);
+    let id = PhotoId(1);
+    crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+    assert_eq!(app.renderer.pool.run_inline(1), 1);
+    app.renderer.poll(&ctx, &mut app.session);
+    assert!(app.renderer.textures.contains_key(&Slot::ThumbQuick(id)));
+    assert_eq!(app.renderer.thumbs_made, 1);
+    let mut edited = (*app.session.catalog.photo(id).unwrap().develop).clone();
+    edited.light.exposure += 0.5;
+    app.session.commit("Exposure", Op::SetDevelop { id, settings: Arc::new(edited), label: "Exposure".into(), edited: None }).unwrap();
+    crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+    let (slot, job) = take_job(&work);
+    assert_eq!(slot, Slot::Thumb(id));
+    finish(&mut app, &work, &ctx, slot, job.run());
+    assert!(app.renderer.textures.contains_key(&Slot::Thumb(id)), "the render replaced the stand-in");
+    assert_eq!(app.renderer.thumbs_made, 1, "still one photo");
+    // evicted and made again (scrolled away and back): the same photo (CodeRabbit on #3055)
+    app.renderer.evict_thumbs(&Default::default(), 0);
+    assert!(!app.renderer.textures.contains_key(&Slot::Thumb(id)), "evicted");
+    crate::panels::grid::request_thumb(&mut app, id, 384, 10);
+    let (slot, job) = take_job(&work);
+    finish(&mut app, &work, &ctx, slot, job.run());
+    assert!(app.renderer.textures.contains_key(&slot), "made again");
+    assert_eq!(app.renderer.thumbs_made, 1, "an evicted photo made again is not counted again");
+}
+
+/// The loupe's look-ahead asks again when only the crop changes (its stand-ins' keys include the
+/// crop), instead of keeping stand-ins the loupe can no longer use (CodeRabbit on #3077).
+#[test]
+fn the_look_ahead_asks_again_when_only_the_crop_changes() {
+    let (mut app, _ctx) = raw_loupe(3);
+    let ahead_keys = |r: &Renderer| r.quick_tried.iter().filter(|(s, _)| matches!(s, Slot::QuickAhead(_))).map(|(_, k)| *k).collect::<Vec<u64>>();
+    crate::panels::detail::look_ahead(&mut app, PhotoId(1), 64, true, ALL);
+    let cropped = app.session.quick_view_job(PhotoId(2), 64, true).unwrap().key;
+    assert!(ahead_keys(&app.renderer).contains(&cropped));
+    crate::panels::detail::look_ahead(&mut app, PhotoId(1), 64, false, ALL);
+    let uncropped = app.session.quick_view_job(PhotoId(2), 64, false).unwrap().key;
+    assert_ne!(cropped, uncropped);
+    assert!(ahead_keys(&app.renderer).contains(&uncropped), "the stand-ins are made again without the crop");
+}
+
+/// The loupe's look-ahead asks again when the view's order changes around the same photo (a new
+/// sort, filter or source changes its neighbours without an edit; CodeRabbit on #3055).
+#[test]
+fn the_look_ahead_follows_a_new_order_around_the_same_photo() {
+    let (mut app, _ctx) = raw_loupe(5);
+    let ahead_keys = |r: &Renderer| r.quick_tried.iter().filter(|(s, _)| matches!(s, Slot::QuickAhead(_))).map(|(_, k)| *k).collect::<Vec<u64>>();
+    app.session.sort.key = lightcraft_catalog::SortKey::FileName;
+    app.session.sort.ascending = true;
+    crate::panels::detail::look_ahead(&mut app, PhotoId(3), 64, true, ALL);
+    let one = quick(&mut app, 1, 64).key;
+    assert!(!ahead_keys(&app.renderer).contains(&one), "r1 is two behind: not prepared");
+    // reversed: r1 is two ahead now
+    app.session.sort.ascending = false;
+    crate::panels::detail::look_ahead(&mut app, PhotoId(3), 64, true, ALL);
+    assert!(ahead_keys(&app.renderer).contains(&one), "the new neighbours are prepared");
+}
+
+/// Stepping fast (an arrow held down), the raw renders still queued for the photo left behind are
+/// dropped, the Before view's too (CodeRabbit on #3055); the whole-frame render on screen stays.
+#[test]
+fn stepping_fast_drops_the_queued_before_render() {
+    let (mut app, _work, ctx) = fixture();
+    app.renderer.set_offload(Box::new(Blocked));
+    for slot in [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore] {
+        let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
+        app.renderer.request(slot, job, 100);
+    }
+    app.renderer.poll(&ctx, &mut app.session);
+    assert!(app.renderer.is_pending(Slot::Before), "queued behind the blocked worker");
+    crate::panels::detail::drop_unsettled(&mut app.renderer, PhotoId(2));
+    for slot in [Slot::Main, Slot::Before, Slot::Region, Slot::RegionBefore] {
+        assert!(!app.renderer.is_pending(slot), "{slot:?} still queued");
+    }
 }

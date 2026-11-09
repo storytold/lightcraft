@@ -345,6 +345,36 @@ fn mwg_regions_quarter_turn_rotation_is_mapped_to_the_upright_frame() {
     assert!(near(regions[4].rect, [0.6, 0.45, 0.8, 0.75]), "−π (orientation 3): {:?}", regions[4].rect);
 }
 
+/// The size a packet's boxes were drawn on is its `AppliedToDimensions`, unless a box says how the photo was turned
+/// (Lightroom's `mwg-rs:Rotation`: those are upright already) or there is no size to go by.
+#[test]
+fn regions_drawn_on_is_the_applied_to_size_unless_a_box_says_how_it_was_turned() {
+    let packet = |dims: &str, rotation: &str| {
+        format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+                xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#" xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#">
+              <mwg-rs:Regions rdf:parseType="Resource">{dims}
+                <mwg-rs:RegionList><rdf:Bag>
+                  <rdf:li rdf:parseType="Resource" mwg-rs:Type="Face">
+                    <mwg-rs:Area rdf:parseType="Resource" stArea:x="0.3" stArea:y="0.4" stArea:w="0.2" stArea:h="0.3"/>
+                  </rdf:li>
+                  <rdf:li rdf:parseType="Resource" mwg-rs:Type="Face"{rotation}>
+                    <mwg-rs:Area rdf:parseType="Resource" stArea:x="0.6" stArea:y="0.4" stArea:w="0.2" stArea:h="0.3"/>
+                  </rdf:li>
+                </rdf:Bag></mwg-rs:RegionList>
+              </mwg-rs:Regions>
+            </rdf:Description></rdf:RDF>"#
+        )
+    };
+    let dims = r#"<mwg-rs:AppliedToDimensions rdf:parseType="Resource" stDim:w="6000" stDim:h="4000" stDim:unit="pixel"/>"#;
+    let drawn_on = |x: &str| parse_xmp(x).unwrap().regions_drawn_on();
+    assert_eq!(drawn_on(&packet(dims, "")), Some((6000.0, 4000.0)));
+    assert_eq!(drawn_on(&packet(dims, r#" mwg-rs:Rotation="-1.57080""#)), None, "one box turned by Lightroom");
+    assert_eq!(drawn_on(&packet("", "")), None, "no AppliedToDimensions");
+    assert_eq!(drawn_on(r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""/></rdf:RDF>"#), None);
+}
+
 /// A second, differently-shaped encoding: each region is its own `rdf:Description` (rather than an
 /// `rdf:li rdf:parseType="Resource"`), `mwg-rs:Type` as an attribute instead of an element, and an
 /// unrecognised `mwg-rs:Type` value kept verbatim.

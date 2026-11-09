@@ -464,6 +464,31 @@ pub fn specs() -> Vec<CommandSpec> {
                 let exclude = bool_or(p, "exclude", false);
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let mid = mask_id(p, s.active_mask, c)?;
+                // an old mask (on the corrected frame, as the click then is) goes onto the photo
+                // first, and the click with it: the model works on the photo before lens
+                // corrections, Upright and Transform, and reads every click there
+                let mut at = at;
+                if let Some(cur) = s.develop_of(id).filter(|d| d.masks.iter().any(|m| m.id == mid && !m.on_photo)) {
+                    if let Some(f) = s.mask_frame(id, &cur) {
+                        // a click on the corrected frame's blank space is off the photo, not on
+                        // its edge (a hair past it, from rounding, is on the edge)
+                        const EDGE: f64 = 1e-6;
+                        let n = f.for_mask(true).norm_to_mask(at);
+                        let on = |v: f64| v.is_finite() && (-EDGE..=1.0 + EDGE).contains(&v);
+                        if !(on(n.x) && on(n.y)) {
+                            return Err(bad(c, "the point is outside the photo"));
+                        }
+                        at = Point::new(n.x.clamp(0.0, 1.0), n.y.clamp(0.0, 1.0));
+                    }
+                    let mut on = (*cur).clone();
+                    s.attach_masks(id, &cur, &mut on);
+                    s.apply_silent(lightcraft_catalog::Op::SetDevelop {
+                        id,
+                        settings: std::sync::Arc::new(on),
+                        label: "Masks".into(),
+                        edited: None,
+                    })?;
+                }
                 let d = s.develop_of(id).unwrap_or_default();
                 let m = d.masks.iter().find(|m| m.id == mid).ok_or_else(|| bad(c, format!("no mask {mid}")))?;
                 let k = m
