@@ -405,6 +405,26 @@ the pending name. `ui.dialog.confirm` starts the same import into the selected a
 
 Library, Tools, and Presets panels can be regrouped, split, floated within the app window, closed, and reopened. Tools keeps the current Edit/Crop/Masking mode; the photo view and filmstrip stay together. The document/session view is protected. Layouts, active tabs, panel visibility, and floating rectangles are saved with the app's existing UI preferences as a craft-ui docking workspace (`docking`: `version`, `layout`, `hidden`, `saved`, `locked`); settings written before workspaces had a `version` load as version 1. These operations do not edit document contents.
 
+In the interface, the double chevrons collapse a column to icons; they do not close its panels.
+Right-click a panel's tab and choose **Close panel** to remove it. The fixed right-hand tool icons
+also offer **Close panel**, including while Tools is collapsed or behind the Presets tab. Edit,
+Crop, Remove, Masking, Red Eye, Versions, History & Activity, Keywords and Info are modes of the
+single **Tools** panel, not separate dockable panels. Their context menus all act on that same
+panel. Closing Tools leaves Presets open, and closing Presets leaves Tools open.
+Click the **Presets** icon to reopen Presets; click **Edit** or the desired tool icon to reopen Tools
+in that mode, at its recorded place. The existing panel shortcuts also reopen them. Photo tools
+need a selected photo; History & Activity remains available without one.
+
+With both panels open, right-click an Edit/Crop/other tool icon and choose **Move to group → Presets**
+to share one tab group. The Presets icon offers the reverse destination, **Tools**. Dragging a panel
+tab onto the middle of the other panel is still supported. These context-menu actions are disabled
+when the workspace is locked or the icon's panel is closed; grouping is also disabled when the
+other panel is closed. Only layout
+changes: no preset is applied and no photo or undo entry is changed.
+Primary clicks on the currently exposed Presets or tool icon also respect the lock: they keep
+that panel open, including without a selected photo. Opening a closed panel, selecting a
+background tab and switching Tools modes remain available in a locked workspace.
+
 Panel IDs: `library`, `tools`, `presets`. The protected center is `canvas`.
 
 `ui.dock` accepts `operation` and `panel`. Operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|tab|left|right|top|bottom|above|below`; `Center`, `Left`, `Right`, `Top` and `Bottom` also parse, while `tab`, `above` and `below` are lowercase only). Center and tab group with the target; side zones split beside it; above and below put the panel in a new group above or below the target's group. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout. Both commands return `{"docking": workspace}`.

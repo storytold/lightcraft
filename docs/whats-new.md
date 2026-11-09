@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Close or group panels from their tool icons
+- Right-click Presets or a tool icon to close its panel or move it into the other panel's tab group.
+  Tools and Presets can be closed independently, including while collapsed; click Presets or the
+  desired tool icon to reopen the panel in its saved place. Layout actions are disabled in locked
+  workspaces, and grouping needs both panels open.
+- Clicking the active panel icon in a locked workspace keeps its arrangement and lock, even
+  with no photo selected. Opening a panel or selecting another tool or tab still works.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
