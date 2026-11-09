@@ -1051,3 +1051,32 @@ fn a_replacement_retires_every_record_of_the_same_file() {
     .unwrap();
     assert!(!s.media.content_keys(s.catalog.photo(PhotoId(2)).unwrap()).contains(&"old".to_string()));
 }
+
+#[test]
+fn a_damaged_smart_preview_gives_way_to_the_next_candidate() {
+    let dir = crate::tests_xmp::temp_dir("smart-candidates");
+    std::fs::create_dir_all(&dir).unwrap();
+    let good = crate::smart::encode(&Rgb32f::new(8, 8), None).unwrap();
+    let body = good.windows(2).position(|w| w == [0xFF, 0xD8]).unwrap();
+    let mut damaged = good[..body].to_vec();
+    damaged.extend([0xFF, 0xD8, 0, 0, 0, 0, 0xFF, 0xD9]);
+    let (first, second) = (dir.join("first.lcsp"), dir.join("second.lcsp"));
+    std::fs::write(&first, &damaged).unwrap();
+    std::fs::write(&second, &good).unwrap();
+    assert!(crate::smart::is_valid(&first) && crate::smart::load(&first).is_err());
+    let paths = vec![first, second];
+    assert!(SourceRef::Smart { paths: paths.clone() }.load_source().is_ok());
+    let offline = SourceRef::File {
+        path: dir.join("offline.jpg").to_string_lossy().to_string(),
+        max_edge: 64,
+        loader: Some(Arc::new(|_, _, _| Err("offline".into()))),
+        fallback: Some(paths),
+        denoise: None,
+        ticket: None,
+        camera_profile: None,
+        outliers: false,
+        reduced: None,
+    };
+    assert!(offline.load_source().is_ok());
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -378,12 +378,10 @@ impl SourceRef {
                 // An offline original renders from its smart preview (no decoder facts: header ones).
                 let result = match (r, fallback) {
                     #[cfg(not(target_arch = "wasm32"))]
-                    (Err(e), Some(paths)) if denoise.as_deref().is_none_or(|(spec, _)| spec.make.is_none()) => {
-                        match paths.iter().find(|sp| crate::smart::is_valid(sp)) {
-                            Some(sp) => crate::smart::load(sp).map_err(|e2| format!("{e}; smart preview: {e2}")),
-                            None => Err(e),
-                        }
-                    }
+                    (Err(e), Some(paths)) if denoise.as_deref().is_none_or(|(spec, _)| spec.make.is_none()) => match load_smart(paths) {
+                        Some(r) => r.map_err(|e2| format!("{e}; smart preview: {e2}")),
+                        None => Err(e),
+                    },
                     (r, _) => r,
                 };
                 if ticket.as_ref().is_some_and(|ticket| !ticket.current()) {
@@ -392,18 +390,26 @@ impl SourceRef {
                 return result;
             }
             #[cfg(not(target_arch = "wasm32"))]
-            SourceRef::Smart { paths } => {
-                return paths
-                    .iter()
-                    .find(|path| crate::smart::is_valid(path))
-                    .ok_or_else(|| "no readable smart preview".to_string())
-                    .and_then(|path| crate::smart::load(path));
-            }
+            SourceRef::Smart { paths } => return load_smart(paths).unwrap_or_else(|| Err("no readable smart preview".to_string())),
             #[cfg(target_arch = "wasm32")]
             SourceRef::Smart { .. } => return Err("smart previews are not available here".into()),
         };
         Ok(DecodedSource::new(image, None))
     }
+}
+
+/// The first of `paths` whose smart preview decodes; a damaged one gives way to the next. `None` when none looks
+/// like a smart preview, else the last decode error when none decodes.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_smart(paths: &[std::path::PathBuf]) -> Option<Result<DecodedSource, String>> {
+    let mut last = None;
+    for path in paths.iter().filter(|path| crate::smart::is_valid(path)) {
+        match crate::smart::load(path) {
+            Ok(source) => return Some(Ok(source)),
+            Err(e) => last = Some(Err(e)),
+        }
+    }
+    last
 }
 
 /// What an import learns from a file header (set by the app from `lightcraft-codecs`/`-raw`).
