@@ -234,15 +234,18 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>, forc
         // forced: the thumbnail job's cache is only written to, after the render (a job reads its cache first;
         // CodeRabbit on #3577)
         let rewrite = if force { j.cache.take().map(|c| (c, j.cache_generation)) } else { None };
+        let keyed = j.learned_cache_key();
         let r = j.run();
+        let read = r.loaded.as_ref().or(decoded.as_ref());
+        let learned = |key: lightcraft_preview::Hash128, view: bool| read.and_then(|source| keyed(source, view)).unwrap_or(key);
         if let (Some(((cache, key), generation)), Ok(img)) = (rewrite, r.rendered.as_ref())
-            && !cache.put_at(generation, key, Arc::new(img.image.clone()))
+            && !cache.put_at(generation, learned(key, false), Arc::new(img.image.clone()))
         {
             log::warn!("building previews: the grid thumbnail could not be kept");
             ok = false;
         }
         if let (Some(((cache, key), generation)), Ok(img)) = (keep, r.rendered.as_ref())
-            && !cache.put_at(generation, key, Arc::new(img.image.clone()))
+            && !cache.put_at(generation, learned(key, true), Arc::new(img.image.clone()))
         {
             if cache.generation() == generation {
                 log::warn!("building previews: the view preview could not be written to the cache folder");
@@ -1065,6 +1068,36 @@ mod tests {
             ticket: None,
         };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
+    }
+
+    #[test]
+    fn a_built_preview_is_found_once_its_read_hash_is_learned() {
+        let dir = crate::tests_xmp::temp_dir("build-learned-key");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.png");
+        let image = lightcraft_raster::Rgba8::from_fn(64, 48, |x, y| [x as u8 * 3, y as u8 * 4, 90, 255]);
+        let options = crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() };
+        std::fs::write(&path, crate::export::encode_image(&image, &options).unwrap()).unwrap();
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [path.to_string_lossy()], "mode": "add"})).unwrap();
+        let p = s.catalog.photos().next().unwrap().clone();
+        s.apply_system(lightcraft_catalog::Op::SetContent {
+            id: p.id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: None,
+            preview_only: p.preview_only.clone(),
+            preview_checked: p.preview_checked.clone(),
+        })
+        .unwrap();
+        s.originals.refresh(&s);
+        assert!(run_photo(jobs_for(&mut s, p.id, Some(64))));
+        s.persist().unwrap();
+        assert!(s.catalog.photo(p.id).unwrap().content_hash.is_some(), "the build's read taught the photo its hash");
+        assert!(super::already_built(&jobs_for(&mut s, p.id, Some(64))), "the build is found under the learned hash");
+        drop(s);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // Given many photos, a standard preview build renders them side by side and counts every one

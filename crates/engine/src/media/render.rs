@@ -281,6 +281,18 @@ impl RenderJob {
         self
     }
 
+    /// Where a result of this job goes in its thumbnail cache (`view` false) or its view cache once it was rendered
+    /// from a source: under the hash that source's read learned, when it learned one, so the photo finds it after
+    /// the catalog learns that hash too. `None`: under the job's own key.
+    pub(crate) fn learned_cache_key(&self) -> impl Fn(&DecodedSource, bool) -> Option<Hash128> + use<> {
+        let (recipe, settings, profile) = (self.cache_recipe.clone(), self.settings.clone(), self.cache_profile);
+        move |source, view| {
+            let fp = source.fingerprint.as_ref()?;
+            let recipe = recipe.as_ref().filter(|recipe| recipe.is_view() == view)?;
+            Some(recipe.key(&fp.hash.to_string(), &settings, profile))
+        }
+    }
+
     /// Render. A panic inside (a decoder or pipeline bug) is this job's failure: the view waiting
     /// for it is told, instead of waiting forever on a worker that died (the pool doesn't replace
     /// it, so a few such panics used to stop every render).
@@ -356,6 +368,7 @@ impl RenderJob {
 
     /// The photo's render (without slide composition).
     fn run_photo(self) -> RenderResult {
+        let keyed = self.learned_cache_key();
         // the loupe: a cached view render of these settings at least this big is the render (built
         // previews and the photos prepared ahead are used, not rendered again; PERF-PREVIEW-REUSE)
         if let Some(mut image) = self.cached_view() {
@@ -495,13 +508,7 @@ impl RenderJob {
                     }
                     _ => None,
                 };
-                let learned_key = |view: bool| {
-                    source
-                        .fingerprint
-                        .as_ref()
-                        .zip(self.cache_recipe.as_ref().filter(|recipe| recipe.is_view() == view))
-                        .map(|(fp, recipe)| recipe.key(&fp.hash.to_string(), &self.settings, self.cache_profile))
-                };
+                let learned_key = |view: bool| keyed(&source, view);
                 if let Some((cache, key)) = &self.cache {
                     cache.put_at(self.cache_generation, learned_key(false).unwrap_or(*key), Arc::new(rendered.image.clone()));
                 }
