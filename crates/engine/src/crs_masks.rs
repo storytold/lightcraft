@@ -270,7 +270,12 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             let comps = c.field("crs:CorrectionMasks").map(XmpValue::items).unwrap_or_default();
             let mut parts = Vec::new();
             for m in comps {
-                match component(m, container, aspect, values) {
+                let part = component(m, container, aspect, values);
+                // a selection Lightroom stored that couldn't be read or placed: our own stand-in, if any, isn't it
+                if crate::crs_mask_table::stored(values, m) && !matches!(&part, Ok(v) if v["shape"].get("seg").is_some()) {
+                    skipped.push("AI mask (stored selection unreadable)".into());
+                }
+                match part {
                     Ok(v) => parts.push(v),
                     Err(kind) => skipped.push(kind),
                 }

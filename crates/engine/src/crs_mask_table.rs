@@ -31,6 +31,8 @@ const ALPHABET: &[u8; 85] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN
 const MAX_TEXT: usize = 32 << 20;
 /// Largest selection image decoded.
 const MAX_PIXELS: u64 = 64 << 20;
+/// How far a selection's box may stick out of the image (a fraction of it) before its placement is taken as wrong.
+const BOX_SLACK: f64 = 0.01;
 /// Longest side of a selection image (Lightroom's seen so far are 2880 px wide): bounds the grid's resampling.
 const MAX_EDGE: u64 = 1 << 15;
 /// Most tiles a selection image may claim.
@@ -135,10 +137,9 @@ fn decode_tile(data: &[u8], compression: u64, tw: usize, th: usize) -> Option<(u
         return (v.len() == tw * th).then_some((tw, th, v));
     }
     let d = lightcraft_codecs::decode(data, lightcraft_codecs::DecodeOptions { max_size: None, max_pixels: MAX_PIXELS }).ok()?;
-    // the decoder hands back linear light; the stored samples are in the tile's own encoding
-    // (Lightroom's declare a linear one, so this is the identity for them)
-    let trc = d.space.trc.as_ref().map(|t| t[0].clone());
-    let v = d.image.data.iter().map(|p| trc.as_ref().map_or(p[0], |t| t.from_linear(p[0])).clamp(0.0, 1.0)).collect();
+    // the decoder hands back linear light: Lightroom's tiles declare a linear transfer, so that is the stored
+    // selection (a tile declaring another transfer would come back linearised)
+    let v = d.image.data.iter().map(|p| p[0].clamp(0.0, 1.0)).collect();
     (d.image.width > 0 && d.image.height > 0).then_some((d.image.width, d.image.height, v))
 }
 
@@ -170,16 +171,28 @@ pub fn image_mask(values: &Values, m: &XmpValue) -> Option<Value> {
     let digest = m.field("crs:MaskDigest").and_then(XmpValue::text).filter(|d| d.bytes().all(|b| b.is_ascii_hexdigit()))?;
     let text = values.get(&format!("crs:Table_{digest}")).and_then(XmpValue::text)?;
     let (w, h, px) = decode_image(&decode_text(text)?)?;
-    let (ox, oy) = pair(m, "crs:Origin").unwrap_or((0.0, 0.0));
+    // where the selection sits: without its corner, or with a box outside the image, it would land in the wrong place
+    let (ox, oy) = pair(m, "crs:Origin")?;
     let [t, l, b, r] = area(m).or_else(|| pair(m, "crs:FullMaskSize").map(|(fw, fh)| [0.0, 0.0, fh, fw])).filter(|a| a[2] > a[0] && a[3] > a[1])?;
     let rect = [(ox - l) / (r - l), (oy - t) / (b - t), (ox + w as f64 - l) / (r - l), (oy + h as f64 - t) / (b - t)];
-    if !rect.iter().all(|v| v.is_finite()) {
+    if !rect.iter().all(|v| v.is_finite() && (-BOX_SLACK..=1.0 + BOX_SLACK).contains(v)) {
         return None;
     }
     let side = w.max(h).clamp(16, lightcraft_develop::segmask::MAX_SIDE);
     let logits = grid(w, h, &px, side);
     let seg = serde_json::to_value(SegMask::from_logits_in(side, &logits, rect)).ok()?;
-    Some(json!({"kind": "object", "hint": [], "seg": seg}))
+    // Subject and Sky keep their name (a selection by description, its segmentation the stored one); other kinds
+    // are a selection of their own
+    Some(match m.field("crs:MaskSubType").and_then(XmpValue::text) {
+        Some("1") => json!({"kind": "prompt", "text": "subject", "seg": seg}),
+        Some("2") => json!({"kind": "prompt", "text": "sky", "seg": seg}),
+        _ => json!({"kind": "object", "hint": [], "seg": seg}),
+    })
+}
+
+/// Whether `m` names a selection the packet stores (`crs:Table_<MaskDigest>`), readable or not.
+pub fn stored(values: &Values, m: &XmpValue) -> bool {
+    m.field("crs:MaskDigest").and_then(XmpValue::text).is_some_and(|d| values.get(&format!("crs:Table_{d}")).is_some())
 }
 
 /// `side × side` logits from a `w × h` image of values 0..1, one axis at a time ([`taps`]); the longer axis goes
@@ -339,13 +352,19 @@ mod tests {
         out
     }
 
+    /// The attributes of the test's `Mask/Image` component: a Subject selection at (2, 1) of an 8 × 4 mask.
+    const SUBJECT_AT_2_1: &str = r#"crs:MaskSubType="1" crs:MaskDigest="ABCD" crs:MaskBlendMode="1" crs:Origin="2,1" crs:WholeImageArea="0/1,0/1,4/1,8/1" crs:FullMaskSize="8,4""#;
+
     fn component(xmp_attrs: &str) -> (Values, XmpValue) {
+        component_with(SUBJECT_AT_2_1, xmp_attrs)
+    }
+
+    fn component_with(mask_attrs: &str, xmp_attrs: &str) -> (Values, XmpValue) {
         let x = format!(
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
             <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" {xmp_attrs}>
             <crs:MaskGroupBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What="Correction">
-            <crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Image" crs:MaskSubType="1" crs:MaskDigest="ABCD" crs:MaskBlendMode="1"
-             crs:Origin="2,1" crs:WholeImageArea="0/1,0/1,4/1,8/1" crs:FullMaskSize="8,4"/></rdf:Seq></crs:CorrectionMasks>
+            <crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Image" {mask_attrs}/></rdf:Seq></crs:CorrectionMasks>
             </rdf:Description></rdf:li></rdf:Seq></crs:MaskGroupBasedCorrections></rdf:Description></rdf:RDF></x:xmpmeta>"#
         );
         let d = lightcraft_meta::parse_xmp(&x).unwrap();
@@ -360,7 +379,7 @@ mod tests {
         let text = encode(&tiff(4, 2, &[255, 255, 0, 0, 255, 255, 0, 0]));
         let (values, m) = component(&format!("crs:Table_ABCD=\"{text}\""));
         let shape = image_mask(&values, &m).expect("decoded");
-        assert_eq!(shape["kind"], "object");
+        assert_eq!((shape["kind"].as_str(), shape["text"].as_str()), (Some("prompt"), Some("subject")), "a Subject keeps its name");
         let seg: SegMask = serde_json::from_value(shape["seg"].clone()).unwrap();
         assert_eq!(seg.bounds(), Some([0.25, 0.25, 0.75, 0.75]));
         let (side, l) = (seg.side as usize, seg.logits().unwrap());
@@ -375,7 +394,7 @@ mod tests {
         let (masks, skipped) = crate::crs_masks::masks(&values, crate::crs_masks::DEFAULT_ASPECT);
         assert!(skipped.is_empty(), "{skipped:?}");
         let c = &masks[0]["components"][0];
-        assert_eq!((c["op"].as_str(), c["shape"]["kind"].as_str()), (Some("subtract"), Some("object")));
+        assert_eq!((c["op"].as_str(), c["shape"]["kind"].as_str()), (Some("subtract"), Some("prompt")));
         // without the table: Subject our way, as before
         let (values, _) = component("");
         let (masks, _) = crate::crs_masks::masks(&values, crate::crs_masks::DEFAULT_ASPECT);
@@ -427,6 +446,159 @@ mod tests {
         let row = |w: u64| tiff(w as u32, 1, &vec![255; w as usize]);
         assert_eq!(decode_image(&row(MAX_EDGE)).map(|(w, h, _)| (w, h)), Some((MAX_EDGE as usize, 1)));
         assert_eq!(decode_image(&row(MAX_EDGE + 1)), None);
+    }
+
+    /// A table's bytes: the 16-byte header, then a little-endian TIFF of one IFD with `tags` (`(tag, type, values)`:
+    /// type 3 short or 4 long, several values only as longs). The values of `offsets` are replaced by the positions
+    /// of `blobs`, which follow the IFD.
+    fn tiff_ifd(tags: &[(u16, u16, Vec<u32>)], offsets: u16, blobs: &[Vec<u8>]) -> Vec<u8> {
+        let ifd_end = 8 + 2 + 12 * tags.len() + 4;
+        let arrays: usize =
+            tags.iter().map(|(tag, _, v)| if *tag == offsets { blobs.len() } else { v.len() }).filter(|n| *n > 1).map(|n| 4 * n).sum();
+        let mut at = (ifd_end + arrays) as u32;
+        let positions: Vec<u32> = blobs
+            .iter()
+            .map(|b| {
+                let p = at;
+                at += b.len() as u32;
+                p
+            })
+            .collect();
+        let (mut t, mut extra) = (b"II*\x00\x08\x00\x00\x00".to_vec(), Vec::new());
+        t.extend_from_slice(&(tags.len() as u16).to_le_bytes());
+        for (tag, typ, values) in tags {
+            let values = if *tag == offsets { &positions } else { values };
+            t.extend_from_slice(&tag.to_le_bytes());
+            t.extend_from_slice(&typ.to_le_bytes());
+            t.extend_from_slice(&(values.len() as u32).to_le_bytes());
+            if values.len() > 1 {
+                t.extend_from_slice(&((ifd_end + extra.len()) as u32).to_le_bytes());
+                values.iter().for_each(|v| extra.extend_from_slice(&v.to_le_bytes()));
+            } else {
+                t.extend_from_slice(&values[0].to_le_bytes());
+            }
+        }
+        t.extend_from_slice(&0u32.to_le_bytes());
+        t.extend(extra);
+        blobs.iter().for_each(|b| t.extend_from_slice(b));
+        let mut out = [2u32, 1, 0, 0].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        out.extend(t);
+        out
+    }
+
+    #[test]
+    fn a_tiled_jpeg_xl_selection_decodes() {
+        // as Lightroom stores them: tiles coded in JPEG XL, here 6 × 3 in 4 × 2 tiles whose edge tiles are coded at
+        // the full tile size. This encoder declares sRGB, so the values come back linearised (Lightroom's declare a
+        // linear transfer, which leaves them as stored)
+        use zune_core::{bit_depth::BitDepth, colorspace::ColorSpace, options::EncoderOptions};
+        let (w, h, tw, th) = (6usize, 3usize, 4usize, 2usize);
+        let value = |x: usize, y: usize| (x * 40 + y * 13) as u8;
+        let mut tiles = Vec::new();
+        for ty in 0..2 {
+            for tx in 0..2 {
+                let px: Vec<u8> = (0..th).flat_map(|y| (0..tw).map(move |x| value((tx * tw + x).min(w - 1), (ty * th + y).min(h - 1)))).collect();
+                let mut out = Vec::new();
+                zune_jpegxl::JxlSimpleEncoder::new(&px, EncoderOptions::new(tw, th, ColorSpace::Luma, BitDepth::Eight)).encode(&mut out).unwrap();
+                tiles.push(out);
+            }
+        }
+        let counts = tiles.iter().map(|t| t.len() as u32).collect();
+        let tags = [
+            (0x100, 4, vec![w as u32]),
+            (0x101, 4, vec![h as u32]),
+            (0x102, 3, vec![8]),
+            (0x103, 3, vec![JPEG_XL as u32]),
+            (0x106, 3, vec![1]),
+            (0x115, 3, vec![1]),
+            (0x142, 4, vec![tw as u32]),
+            (0x143, 4, vec![th as u32]),
+            (0x144, 4, vec![]),
+            (0x145, 4, counts),
+        ];
+        let (gw, gh, px) = decode_image(&tiff_ifd(&tags, 0x144, &tiles)).expect("decoded");
+        assert_eq!((gw, gh), (w, h));
+        for y in 0..h {
+            for x in 0..w {
+                let v = f32::from(value(x, y)) / 255.0;
+                let want = if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+                assert!((px[y * w + x] - want).abs() < 1e-3, "({x}, {y}): {} for {want}", px[y * w + x]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_hostile_selection_image_is_refused() {
+        // a 4 × 2 strip image; each case breaks one thing about it
+        let strip = |change: &dyn Fn(&mut Vec<(u16, u16, Vec<u32>)>)| {
+            let mut tags = vec![
+                (0x100, 4, vec![4]),
+                (0x101, 4, vec![2]),
+                (0x102, 3, vec![8]),
+                (0x103, 3, vec![1]),
+                (0x111, 4, vec![]),
+                (0x115, 3, vec![1]),
+                (0x117, 4, vec![8]),
+            ];
+            change(&mut tags);
+            decode_image(&tiff_ifd(&tags, 0x111, &[vec![255; 8]]))
+        };
+        let set =
+            |tag: u16, v: Vec<u32>| move |tags: &mut Vec<(u16, u16, Vec<u32>)>| tags.iter_mut().filter(|t| t.0 == tag).for_each(|t| t.2 = v.clone());
+        assert!(strip(&|_| {}).is_some(), "the unbroken image decodes");
+        for (what, case) in [
+            ("16-bit samples", strip(&set(0x102, vec![16]))),
+            ("three samples", strip(&set(0x115, vec![3]))),
+            ("old-style JPEG", strip(&set(0x103, vec![6]))),
+            ("Deflate", strip(&set(0x103, vec![8]))),
+            ("a strip longer than the file", strip(&set(0x117, vec![4096]))),
+            ("no width", strip(&|tags| tags.retain(|t| t.0 != 0x100))),
+        ] {
+            assert_eq!(case, None, "{what}");
+        }
+        // more tiles than allowed (1 × 1 tiles over 128 × 64), refused before any is read
+        let tags = [
+            (0x100, 4, vec![128]),
+            (0x101, 4, vec![64]),
+            (0x102, 3, vec![8]),
+            (0x103, 3, vec![1]),
+            (0x115, 3, vec![1]),
+            (0x142, 4, vec![1]),
+            (0x143, 4, vec![1]),
+        ];
+        assert_eq!(decode_image(&tiff_ifd(&tags, 0, &[])), None);
+    }
+
+    #[test]
+    fn a_selection_that_cannot_be_placed_is_refused_and_reported() {
+        let text = encode(&tiff(4, 2, &[255, 255, 0, 0, 255, 255, 0, 0]));
+        let table = format!("crs:Table_ABCD=\"{text}\"");
+        let without_origin = SUBJECT_AT_2_1.replace(r#"crs:Origin="2,1" "#, "");
+        let outside = SUBJECT_AT_2_1.replace(r#"crs:Origin="2,1""#, r#"crs:Origin="6,3""#);
+        for (what, attrs) in [("no origin", without_origin.as_str()), ("a box past the image", outside.as_str())] {
+            let (values, m) = component_with(attrs, &table);
+            assert_eq!(image_mask(&values, &m), None, "{what}");
+            // our Subject stands in, and the import says the stored one wasn't used
+            let (masks, skipped) = crate::crs_masks::masks(&values, crate::crs_masks::DEFAULT_ASPECT);
+            assert_eq!(masks[0]["components"][0]["shape"]["kind"], "subject", "{what}");
+            assert_eq!(skipped, vec!["AI mask (stored selection unreadable)".to_string()], "{what}");
+        }
+        // a readable one is not reported
+        let (values, _) = component(&table);
+        assert!(crate::crs_masks::masks(&values, crate::crs_masks::DEFAULT_ASPECT).1.is_empty());
+    }
+
+    #[test]
+    fn a_stored_selection_keeps_its_kind() {
+        let text = encode(&tiff(4, 2, &[255; 8]));
+        let table = format!("crs:Table_ABCD=\"{text}\"");
+        for (subtype, kind, label) in [("1", "prompt", Some("subject")), ("2", "prompt", Some("sky")), ("3", "object", None)] {
+            let attrs = SUBJECT_AT_2_1.replace(r#"crs:MaskSubType="1""#, &format!(r#"crs:MaskSubType="{subtype}""#));
+            let (values, m) = component_with(&attrs, &table);
+            let shape = image_mask(&values, &m).expect("decoded");
+            assert_eq!((shape["kind"].as_str(), shape["text"].as_str()), (Some(kind), label), "subtype {subtype}");
+            assert!(shape["seg"].is_object(), "subtype {subtype}");
+        }
     }
 
     #[test]

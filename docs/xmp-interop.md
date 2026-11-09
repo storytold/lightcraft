@@ -241,7 +241,7 @@ mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive correct
 | `Mask/Gradient` (`FullX/Y`, `ZeroX/Y`) | linear gradient | full effect at the Full point |
 | `Mask/CircularGradient` (`Top/Left/Bottom/Right`, `Angle`, `Feather`, `Flipped`) | radial gradient | box fractions → long-edge radii (presets assume 3:2; sidecars use the photo's shape). `Flipped="true"` means effect inside: in `MaskGroupBasedCorrections` with `Version` 2 (what Lightroom writes for an ordinary radial) and in the legacy `CircularGradientBasedCorrections` Radial Filter, whose default (no `Flipped`) is outside. A `MaskGroupBasedCorrections` radial without `Version` is inside whatever `Flipped` says, and its `Feather` is halved (Lightroom rescales it that way when it upgrades one). Inverting is `MaskInverted` |
 | `Mask/Paint` (`Dabs` "d x y", `Radius`, `Flow`, `CenterWeight`, `MaskValue`) | brush | one brush component per correction; `MaskValue` ≤ 0 erases |
-| `Mask/Image` with its stored selection (`MaskDigest`, `Origin`, `WholeImageArea`, `FullMaskSize`; the packet's `Table_<MaskDigest>`) | an Object selection holding Lightroom's own selection | any kind (Subject, Sky, Object, People…); see *AI selections Lightroom stored* below |
+| `Mask/Image` with its stored selection (`MaskDigest`, `Origin`, `WholeImageArea`, `FullMaskSize`; the packet's `Table_<MaskDigest>`) | a selection holding Lightroom's own: Subject and Sky as a described selection (“subject”, “sky”), other kinds as an Object selection | any kind (Subject, Sky, Object, People…); see *AI selections Lightroom stored* below |
 | `Mask/Image` `MaskSubType` 1 / 2 without a readable stored selection | Subject / Sky | ours; other AI selections are reported, not guessed |
 | `Mask/RangeMask` `Type` 2 / 3 (`LumRange`, `DepthRange`) | luminance / depth range | lightness converted to our range scale; a range at full strength at white (third `LumRange` value 1) stays open above our scene white; colour ranges are reported |
 | `MaskBlendMode` 0 / 1 / 2, `MaskInverted` | add / subtract / intersect, invert | |
@@ -255,10 +255,14 @@ written least significant first, with Z85's alphabet except that `&`, `<` and `>
 a TIFF: one tiled 8-bit grey image, compressed with JPEG XL (52546, as in DNG 1.7; lossy, linear), 255 fully
 selected. It covers the selection's bounding box, placed by `Origin` (`x,y`) inside `WholeImageArea`
 (`top,left,bottom,right`, rationals) of a `FullMaskSize` (`width,height`) mask over the photo as stored, before its
-orientation. LightCraft keeps it as an Object selection's grid (logits, at most 1024², over that box), turned into the
-photo's frame with the component's other positions; Refine Edges and the photo-guided edge apply as to selections made
-here. A selection whose table is missing or unreadable (Lightroom writes none when its model failed,
-`crs:ErrorReason`) falls back to our Subject or Sky, or is reported.
+orientation. LightCraft keeps it as a selection's grid (logits, at most 1024², over that box; along an axis longer than the grid
+each cell averages what it covers), turned into the photo's frame with the component's other positions: a Subject or
+Sky (`MaskSubType` 1, 2) as a selection by description named “subject” or “sky”, any other kind as an Object
+selection. Refine Edges and the photo-guided edge apply as to selections made here. The decoder hands back linear
+light, which for Lightroom's tiles (linear transfer) is the stored selection. Without a table (Lightroom writes none
+when its model failed, `crs:ErrorReason`) a Subject or Sky is made our way and other kinds are reported. A table that
+can't be read, or placed (no `Origin`, or a box outside the image), is reported as `AI mask (stored selection
+unreadable)`, and the component is made our way if it is a Subject or Sky.
 
 Applying a preset adds its masks to the photo's own (masks the photo already has are not added twice), and the Amount
 slider scales them. A sidecar's masks replace the photo's, because a sidecar holds the whole edit. Components we can't

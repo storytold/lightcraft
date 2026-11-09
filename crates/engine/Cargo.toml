@@ -60,6 +60,9 @@ denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-g
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
 
 [dev-dependencies]
+# Lightroom's stored AI selections: JPEG XL tiles for the decoding test (lossless, test fixtures only)
+zune-jpegxl = { workspace = true }
+zune-core = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 # HDR JPEG XL tests read the file's colour encoding
