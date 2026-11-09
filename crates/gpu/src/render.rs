@@ -15,7 +15,7 @@ use lightcraft_raster::resample::Filter;
 use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
 
 use crate::ctx::{Buf, FailKind, Gpu, fail, groups1, groups2};
-use crate::params::{Present, finish_block};
+use crate::params::{DEEP_WRITTEN, Present, finish_block};
 
 /// Device-resident stages of one view, kept next to the CPU [`lightcraft_pipeline::StageCache`]
 /// (as its extension). Holds the last two output sizes, like the CPU cache.
@@ -136,6 +136,10 @@ pub(crate) struct Cx<'a> {
     enc: Option<wgpu::CommandEncoder>,
     /// Kernel invocations recorded since the last submit.
     pending: u64,
+    /// Buffers shared with other renders that recorded commands read from (the resident grain
+    /// tables): kept until those commands are submitted. Declared after `enc`, so an unsubmitted
+    /// encoder is dropped before them.
+    held: Vec<std::sync::Arc<Buf>>,
 }
 
 /// Kernel invocations recorded before a render submits them (under one full-size pass over a
@@ -147,7 +151,7 @@ const BAND_PIXELS: usize = 4 << 20;
 
 impl<'a> Cx<'a> {
     pub fn new(gpu: &'a Gpu) -> Cx<'a> {
-        Cx { gpu, enc: Some(gpu.encoder()), pending: 0 }
+        Cx { gpu, enc: Some(gpu.encoder()), pending: 0, held: Vec::new() }
     }
 
     /// Record kernel `name` (see [`Gpu::run`]).
@@ -161,11 +165,27 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// The finish kernel's `aux` buffer: `aux`, then the crystal grain's tables when it has them
+    /// (copied on the GPU from the resident ones, see [`Gpu::grain_tables`]).
+    pub fn finish_aux(&mut self, aux: &[f32], grain: Option<&lightcraft_pipeline::finish::GrainModel>) -> Buf {
+        let Some(lightcraft_pipeline::finish::GrainModel::Crystal(g)) = grain else { return self.gpu.upload(aux) };
+        let tables: usize = g.tile.sats.iter().map(Vec::len).sum();
+        let out = self.gpu.buffer(aux.len().saturating_add(tables));
+        if !aux.is_empty() && out.raw().size() >= (aux.len() as u64) * 4 {
+            self.gpu.queue.write_buffer(out.raw(), 0, bytemuck::cast_slice(aux));
+        }
+        let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
+        self.held.extend(self.gpu.grain_tables(enc, &g.tile, &out, aux.len()));
+        out
+    }
+
     /// Submit what is recorded and read back `len` values of `b`.
     pub fn read<T: bytemuck::Pod>(&mut self, b: &Buf, len: usize) -> Vec<T> {
         self.pending = 0;
         let enc = self.enc.take().unwrap_or_else(|| self.gpu.encoder());
-        self.gpu.finish_and_read(enc, b, len)
+        let out = self.gpu.finish_and_read(enc, b, len);
+        self.held.clear();
+        out
     }
 
     /// Submit what is recorded so far without waiting. Renders submit stage by stage and every
@@ -177,6 +197,7 @@ impl<'a> Cx<'a> {
         if let Some(enc) = self.enc.take() {
             self.gpu.submit([enc.finish()]);
         }
+        self.held.clear();
     }
 
     /// Submit what is recorded and wait for it (profiling only: stage timings).
@@ -185,6 +206,7 @@ impl<'a> Cx<'a> {
         if let Some(enc) = self.enc.take() {
             self.gpu.submit([enc.finish()]);
         }
+        self.held.clear();
         let _ = self.gpu.poll(wgpu::PollType::wait_indefinitely());
     }
 
@@ -749,10 +771,13 @@ pub fn render(
         px_per_long: plan.px_per_long,
         air_pre: prep.air,
         space: req.space,
+        draft: req.quality == lightcraft_pipeline::Quality::Draft,
     });
     // soft proofing as the CPU's `finish` sets it up (an output-device table never gets here: see `render`)
     fp.proof = req.proof.map(|pr| pr.params(req.space));
-    if let Some(d) = &req.display {
+    // a float render is `finish_deep`: its samples are the output space's, whatever the display
+    let deep = req.depth != lightcraft_pipeline::OutputDepth::U8;
+    if let Some(d) = req.display.as_ref().filter(|_| !deep) {
         fp.for_display(d, req.proof);
     }
     let present = Present {
@@ -774,13 +799,13 @@ pub fn render(
         (Some(b), None) | (None, Some(b)) => Some(b.clone()),
         (None, None) => None,
     };
-    let (p, aux) = finish_block(&fp, &terms, &present);
+    let (p, aux) = finish_block(&fp, &terms, &present, deep);
     if crate::ctx::failed() {
         return None; // a malformed parameter block failed the render: the CPU fallback redoes it
     }
-    let aux = gpu.upload(&aux);
+    let aux = cx.finish_aux(&aux, fp.grain.as_ref());
     // cleared, so that work which never ran cannot pass for an image (see the check below)
-    let out = cx.zeroed(n);
+    let out = cx.zeroed(if deep { 3 * n } else { n });
     if fault == Some(crate::Fault::Validation) {
         // a dispatch the device rejects (too many workgroups)
         cx.run("box_h", &[0; 5], &[Some(&aux), Some(&out)], [gpu.device.limits().max_compute_workgroups_per_dimension + 1, 1, 1]);
@@ -807,6 +832,11 @@ pub fn render(
             ],
             groups2(w, rows.min(h - y0), [16, 16]),
         );
+    }
+    if deep {
+        let rendered = read_deep(&mut cx, &out, &plan, req);
+        lap("finish + readback (deep)", &mut t, &mut cx);
+        return rendered.map(Output::Image);
     }
     if display && can_display(gpu, &plan, req) {
         return to_texture(&mut cx, &out, w, h).map(|(frame, histogram)| Output::Display { frame, histogram });
@@ -888,6 +918,36 @@ pub fn render(
         image = image.crop(k.x, k.y, k.w, k.h);
     }
     Some(Output::Image(Rendered { image, histogram, deep: None }))
+}
+
+/// The finished float output `out` (three words per pixel) read back as the CPU's float render
+/// returns it, with the same checks as an 8-bit readback: every pixel written, not entirely black.
+fn read_deep(cx: &mut Cx<'_>, out: &Buf, plan: &Plan<'_>, req: &RenderRequest) -> Option<Rendered> {
+    use lightcraft_pipeline::{DeepImage, DeepSamples};
+    let (w, h) = (plan.w, plan.h);
+    let n = w * h;
+    let words: Vec<u32> = cx.read(out, 3 * n);
+    if crate::ctx::failed() {
+        return None;
+    }
+    let unwritten = words.as_chunks::<3>().0.iter().filter(|p| p.iter().any(|v| v & DEEP_WRITTEN == 0)).count();
+    if unwritten > 0 {
+        fail(FailKind::Fatal, format!("the GPU returned an incomplete image ({unwritten} of {n} pixels unwritten)"));
+        return None;
+    }
+    let samples = words.into_iter().map(|v| f32::from_bits(v & !DEEP_WRITTEN)).collect();
+    let deep = DeepImage { width: w, height: h, space: req.space, samples: DeepSamples::F32(samples) };
+    let deep = match plan.keep {
+        Some(k) => deep.crop(k.x, k.y, k.w, k.h),
+        None => deep,
+    };
+    let image = deep.to_rgba8();
+    let histogram = Histogram::of_srgb8(&image);
+    if n >= 4096 && [&histogram.r, &histogram.g, &histogram.b].iter().all(|c| c.first() == Some(&histogram.total)) {
+        fail(FailKind::Blank, "the GPU result is entirely black; rendering it on the CPU to be sure".into());
+        return None;
+    }
+    Some(Rendered { image, histogram, deep: Some(deep) })
 }
 
 /// The finished output `out` (`w × h` packed RGBA8) as a texture on the device, with its
@@ -1480,7 +1540,7 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
         let mut first = true;
         for comp in &m.components {
             let op = match comp.op {
-                _ if first && comp.op != MaskOp::Intersect => 0u32,
+                _ if first => 0u32,
                 MaskOp::Add => 1,
                 MaskOp::Subtract => 2,
                 MaskOp::Intersect => 3,
