@@ -470,17 +470,9 @@ impl WindowRenderer {
 }
 
 /// The renderer the environment forces for the window: `LIGHTCRAFT_GPU_BACKEND` (`app`), else
-/// `WGPU_BACKEND` (`wgpu`), when it names exactly one renderer. On Linux, when no startup marker
-/// can be written (`--memory` / `LIGHTCRAFT_NO_PREFS`), it also returns glow: without a marker a
-/// failed wgpu start cannot be relaunched with the next renderer (see [`glow_without_marker`]).
+/// `WGPU_BACKEND` (`wgpu`), when it names exactly one renderer.
 pub fn forced_window_renderer(app: Option<&str>, wgpu: Option<&str>) -> Option<WindowRenderer> {
-    if let Some(r) = app.and_then(WindowRenderer::parse).or_else(|| wgpu.and_then(WindowRenderer::parse)) {
-        return Some(r);
-    }
-    let marker_available =
-        std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none() && !std::env::args().any(|a| a == "--memory" || a.starts_with("--memory="));
-    initial_window_renderer(None, None, None, marker_available, std::env::consts::OS, wgpu::Instance::enabled_backend_features(), true)
-        .filter(|r| *r == WindowRenderer::Glow)
+    app.and_then(WindowRenderer::parse).or_else(|| wgpu.and_then(WindowRenderer::parse))
 }
 
 /// The order in which the window's renderers are tried on `os`: the forced one (environment)
@@ -985,6 +977,15 @@ mod tests {
         assert_eq!(forced_window_renderer(None, None), None);
         // `glow` only concerns the window: compute keeps its default, without a warning
         assert_eq!(parse_backends("glow"), Some(BackendChoice::Auto));
+    }
+
+    /// The `--memory` glow case lives in the pure helpers, not in `forced_window_renderer`:
+    /// `forced_window_renderer` only parses the environment names.
+    #[test]
+    fn memory_glow_case_is_in_the_pure_helpers() {
+        assert!(glow_without_marker(None, false, "linux", true));
+        assert_eq!(initial_window_renderer(None, None, None, false, "linux", Backends::GL, true), Some(WindowRenderer::Glow));
+        assert_eq!(forced_window_renderer(None, None), None);
     }
 
     #[test]
