@@ -51,6 +51,36 @@ fn denoise_mix_is_reserved_before_the_source_enters_the_cache() {
     assert_eq!(source.bytes(), reserved, "changing Amount replaces the reserved mix");
 }
 
+/// Smart-preview camera tables reserve their retained capacities, including all three RGB tables.
+#[test]
+fn smart_camera_tables_count_toward_the_source_budget() {
+    use lightcraft_raw::profile::{HsvTable, ToneCurve};
+    let table = || HsvTable {
+        hue_divisions: 1,
+        sat_divisions: 2,
+        val_divisions: 1,
+        data: {
+            let mut v = Vec::with_capacity(128);
+            v.extend([[0.0, 1.0, 1.0]; 2]);
+            v
+        },
+        srgb_value: false,
+    };
+    let mut tags = lightcraft_raw::ColorData::default();
+    tags.profile.hue_sat_map = [Some(table()), Some(table())];
+    tags.profile.look_table = Some(table());
+    tags.profile.tone_curve = Some(ToneCurve { points: vec![[0.0, 0.0], [1.0, 1.0]] });
+    tags.kelvin_presets =
+        lightcraft_raw::kelvin_presets::KelvinPresets::new([(2500.0, [1.0, 1.0, 3.0]), (4500.0, [2.0, 1.0, 2.0]), (6500.0, [3.0, 1.0, 1.0])]);
+    assert!(tags.kelvin_presets.is_some());
+    let color = Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: lightcraft_color::D65 });
+    let tables = 3 * 128 * 12 + 2 * 8 + color.tags.kelvin_presets.as_ref().unwrap().bytes();
+    let mut source = DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), Some(SourceInfo::default()));
+    let before = source.bytes();
+    source.info.as_mut().unwrap().camera_color = Some(color);
+    assert!(source.bytes() >= before + tables + std::mem::size_of::<lightcraft_pipeline::CameraColor>());
+}
+
 #[test]
 fn hidden_grading_wheels_render_neutral_without_touching_the_photo() {
     let mut s = crate::Session::with_demo();

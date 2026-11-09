@@ -30,7 +30,7 @@ Each audience with its own hours (Opus 5.5 agent wall-clock hours to ~95%):
 
 The gap between breadth and readiness is quality and coverage, not missing buttons: camera colour is
 estimated rather than measured, CR3 decodes on 26 verified Canon bodies (rarer CRX variants still open as previews), HE NEF opens
-as preview, as does compressed ORF when an embedded preview is available; rendering is tuned by eye, AI masks are heuristics, there is no lens database, and
+as preview; measured lossless ORF streams decode from sensor data on 23 pinned fixtures; rendering is tuned by eye, AI masks are heuristics, there is no lens database, and
 tests run in CI on Linux x64 (every pull request and push to `main`) and FreeBSD (nightly), not on macOS or Windows. **Why alpha:** core workflows run end to end, but readiness is below
 the ~75% beta bar (it is above the ~40% alpha bar) and Lightroom's main inputs, raw files, still have gaps (Nikon HE NEF opens as preview; Canon,
 ~30% of raw users, decodes CR3 on 26 verified bodies). It passes the alpha gate: all six core workflows
@@ -45,7 +45,7 @@ Hours are calibrated on this repo's PR history; see
 | Dimension | Ready | Breadth | Remaining | Doc |
 |---|---:|---:|---:|---|
 | Features | ~61% | ~77% (checklist 81.1%) | 600–1,100 h | [target-app-parity](docs/target-app-parity.md#features) |
-| ↳ RAW cameras, colour, lens profiles | ~60% | 85% of 1,446 Adobe models decode, 39% verified | 255–480 h | [raw-parity](docs/raw-parity.md) |
+| ↳ RAW cameras, colour, lens profiles | ~60% | 89% of 1,446 Adobe models decode, 40% verified | 255–480 h | [raw-parity](docs/raw-parity.md) |
 | UI/UX fidelity | ~70% | ~85% | 32–54 h | [ui-parity](docs/ui-parity.md) |
 | File formats (non-raw) | ~70% | ~85% | 30–55 h | [file-format-parity](docs/file-format-parity.md) |
 | Hardware | ~40% | ~50% | 40–80 h | [hardware-parity](docs/hardware-parity.md) |
@@ -107,12 +107,15 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 3. Render-fidelity suite against Lightroom, then tuning (30–60 h)
 4. ~~Full-resolution zoom~~ (done 2026-10-12)
 5. AI masks: Subject / Sky / People (40–70 h + model decision)
-6. Compressed ORF (support withdrawn; estimate pending provenance review) and HE NEF (20–40 h)
+6. Compressed ORF (23 sensor references; provenance and unmeasured-mode review pending) and HE NEF (20–40 h)
 7. Lens profile database of our own (40–80 h, #329)
 8. Tests in CI on macOS and Windows, and the GPU tests in CI (6–12 h)
 9. Per-model raw verification (20–35 h)
 
 ## Progress log
+
+- 2026-11-07: Extracted #1162 ORF decoder with 23 pinned sensor references, rechecked against the black-box executable; 577 models verified, 703 unverified, 129 preview-only, 37 unsupported. Implementation provenance review remains separate from output validation.
+
 
 - 2026-11-07: Compressed ORF support withdrawn pending provenance review; uncompressed support remains. Regenerated camera coverage: 557 verified, 665 unverified, 187 preview-only and 37 unsupported; 94% use-weighted coverage. See [ORF status](docs/orf-compression.md).
 
@@ -199,6 +202,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Extract #1162 lossless ORF decoder with 23 pinned full-sensor references and repeatable black-box verification. Coverage: 577 verified, 703 unverified, 129 preview-only, 37 unsupported; 97% use-weighted. Provenance/mode review remains open; readiness and hour estimates not re-scored. |
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
 | 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |
 | 2026-10-22 | minor | Print: Japanese photo and postcard paper sizes (L判, 2L判, KG判, はがき, 往復はがき, 六切, 四切, 名刺) in the page setup, Print dialog and PDF output; headline numbers unchanged |

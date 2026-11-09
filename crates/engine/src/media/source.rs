@@ -207,11 +207,20 @@ impl DecodedSource {
         mixed
     }
 
-    /// Cache cost: the picture, its segmentation mattes, its denoised twin and room for the lazy mix.
+    /// Cache cost: pixels, decoder tables, mattes, denoised twin and room for its lazy mix.
     pub fn bytes(&self) -> usize {
         let mattes = self.info.as_ref().and_then(|i| i.mattes.as_ref()).map_or(0, |m| m.bytes());
-        let mattes = mattes + self.info.as_ref().and_then(|i| i.local_tone.as_ref()).map_or(0, |t| t.map.gains.len() * 4);
-        self.image.data.len() * 12 + 64 + std::mem::size_of::<SourceInfo>() + mattes + self.denoised.as_ref().map_or(0, |t| t.bytes())
+        let local = self.info.as_ref().and_then(|i| i.local_tone.as_ref()).map_or(0, |t| t.map.gains.capacity().saturating_mul(4));
+        let color = self.info.as_ref().and_then(|i| i.camera_color.as_ref()).map_or(0, |c| c.bytes());
+        self.image
+            .data
+            .len()
+            .saturating_mul(12)
+            .saturating_add(64 + std::mem::size_of::<SourceInfo>())
+            .saturating_add(mattes)
+            .saturating_add(local)
+            .saturating_add(color)
+            .saturating_add(self.denoised.as_ref().map_or(0, |t| t.bytes()))
     }
 
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)
@@ -266,7 +275,7 @@ pub enum SourceRef {
         loader: Option<FileLoader>,
         /// The photo's smart preview, used when the original can't be read (offline drive). The
         /// UI thread never checks whether the original is there; the render worker finds out.
-        fallback: Option<std::path::PathBuf>,
+        fallback: Option<crate::smart::PreviewPath>,
         /// The photo has a cached denoised picture: load it with the plain one (see [`PairLoader`]).
         denoise: Option<(DenoiseSpec, PairLoader)>,
         /// The photo's imported camera profile (id and profile): its raw file is developed with it.
@@ -278,7 +287,7 @@ pub enum SourceRef {
     },
     /// A smart preview standing in for a missing original.
     Smart {
-        path: std::path::PathBuf,
+        path: crate::smart::PreviewPath,
     },
 }
 
@@ -287,6 +296,7 @@ impl SourceRef {
         self.load_source().map(|s| s.image)
     }
 
+    /// Resolve this reference to pixels and decoder facts, trying a compatible proxy when its original cannot be read.
     pub fn load_source(&self) -> Result<DecodedSource, String> {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
@@ -352,14 +362,14 @@ impl SourceRef {
                 // An offline original renders from its smart preview (no decoder facts: header ones).
                 return match (r, fallback) {
                     #[cfg(not(target_arch = "wasm32"))]
-                    (Err(e), Some(sp)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) && crate::smart::is_valid(sp) => {
-                        crate::smart::load(sp).map_err(|e2| format!("{e}; smart preview: {e2}"))
+                    (Err(e), Some(sp)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) => {
+                        sp.load().map_err(|e2| format!("{e}; smart preview: {e2}"))
                     }
                     (r, _) => r,
                 };
             }
             #[cfg(not(target_arch = "wasm32"))]
-            SourceRef::Smart { path } => return crate::smart::load(path),
+            SourceRef::Smart { path } => return path.load(),
             #[cfg(target_arch = "wasm32")]
             SourceRef::Smart { .. } => return Err("smart previews are not available here".into()),
         };

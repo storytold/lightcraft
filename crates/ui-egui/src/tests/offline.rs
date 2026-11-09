@@ -24,6 +24,27 @@ const N: u64 = 12;
 /// How long the drive stays asleep at most: only a frame stuck waiting for it gets this far.
 const WATCHDOG: Duration = Duration::from_secs(120);
 
+/// The control query waits for its worker while frames continue and its activity row remains visible.
+#[test]
+fn smart_preview_control_status_does_not_probe_on_the_ui_thread() {
+    let calls = Calls::default();
+    let nas = Nas::asleep();
+    let app = LightcraftApp::new(offline_library(&calls, &nas), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.step();
+    let ui_thread = std::thread::current().id();
+    let rx = h.send("engine.execute", json!({"command": "photo.smartPreview", "params": {"id": 1}})).unwrap();
+    frames_while_asleep(&mut h, &nas, 3, "smart-preview query");
+    assert!(rx.try_recv().is_err(), "status waits for the actual disk check");
+    assert!(h.app.session.activity.list().iter().any(|r| r.kind == "smart-preview-status"));
+    nas.wake();
+    assert!(h.step_until(Duration::from_secs(5), |h| h.app.tasks.is_empty()));
+    let answer = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(answer["result"], json!({"smartPreview": false, "originalOnline": false}));
+    assert_eq!(calls.on(ui_thread), 0);
+    assert!(!h.app.session.activity.list().iter().any(|r| r.kind == "smart-preview-status"));
+}
+
 /// Threads the probe ran on, and how often.
 #[derive(Clone, Default)]
 struct Calls {
@@ -172,6 +193,53 @@ fn offline_originals_never_block_a_frame() {
     }
     assert_eq!(h.app.session.visible().len(), N as usize, "every photo found missing in the end");
     assert_eq!(calls.on(ui_thread), 0, "the slow probe never ran on the UI thread");
+}
+
+/// Info recognizes offline sensor proxies in both legacy layouts through background validation.
+#[test]
+fn info_panel_reports_compatible_legacy_orf_previews() {
+    for flat in [false, true] {
+        let dir = std::env::temp_dir().join(format!("lc-info-legacy-orf-{}-{flat}", std::process::id()));
+        let mut s = Session::new();
+        let p = Photo::new(
+            PhotoId(1),
+            Source::File { path: dir.join("offline.orf").to_string_lossy().into_owned() },
+            "offline.orf",
+            "ORF",
+            48,
+            32,
+            "2026-01-01T00:00:00",
+        );
+        let mut old = p.clone();
+        old.preview_only = Some("previous interpretation".into());
+        let name = lightcraft_engine::smart::file_name(&old);
+        let path = if flat { dir.join(&name) } else { dir.join(&name[..2]).join(&name) };
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let bytes = lightcraft_engine::smart::encode(
+            &lightcraft_raster::Rgb32f::filled(48, 32, [0.2; 3]),
+            Some(&lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() }),
+        )
+        .unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s.media.smart_dir = Some(dir.clone());
+        s.execute("library.select", &json!({"ids": [1]})).unwrap();
+        let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+        let mut h = Headless::new(app, [1200.0, 2400.0], 1.0);
+        h.app.ui.right = RightPanel::Info;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            h.step();
+            assert!(h.app.session.media.smart_availability.is_background(), "proxy validation stays off the UI thread");
+            if h.painted_text().iter().any(|text| text.contains("Original offline · editing the smart preview")) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "flat={flat}: {:?}", h.painted_text());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(h);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 /// An import whose files take long to read (probe: decoding headers and hashing on a slow drive)

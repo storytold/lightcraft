@@ -263,6 +263,7 @@ fn smallest_covering<'a>(found: &[&'a [u8]], largest: &[u8], min_edge: u32) -> O
         .map(|(s, _)| s)
 }
 
+/// Extract a usable embedded JPEG, preferring one that covers the requested edge when the container permits it.
 fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
     if bytes.starts_with(b"FUJIFILMCCD-RAW") {
         let j = crate::vendor::raf::header(bytes).ok()?.jpeg?;
@@ -320,10 +321,14 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
         .and_then(|(min, big)| smallest_covering(&found, big, min))
         .or(largest)
         .map(|s| if is_jxl(s) { s.to_vec() } else { trim_eoi(s).to_vec() });
-    // a TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), or Epson ERF (in its maker note)
-    best.or_else(|| format.filter(|f| !f.is_supported() || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)))
-        // Hasselblad 3FR / FFF carry no JPEG, only uncompressed RGB images: one wrapped as a baseline TIFF
-        .or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| crate::vendor::hasselblad::rgb_preview(&tiff, bytes)).flatten())
+    // A TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), Epson ERF
+    // (in its maker note), or ORF. ORF's sensor capability must not remove this fallback for
+    // unsupported modes and damaged files whose preview pointers we cannot follow.
+    best.or_else(|| {
+        format.filter(|f| !f.is_supported() || matches!(f, crate::RawFormat::Erf | crate::RawFormat::Orf)).and_then(|_| scan_for_jpeg(bytes))
+    })
+    // Hasselblad 3FR / FFF carry no JPEG, only uncompressed RGB images: one wrapped as a baseline TIFF
+    .or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| crate::vendor::hasselblad::rgb_preview(&tiff, bytes)).flatten())
 }
 
 /// The end of the DCT JPEG whose SOI is at `soi` (exclusive index after its EOI) and its component count,

@@ -131,6 +131,7 @@ fn camera_tone_travels_with_the_proxy() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Decoder facts and matte planes survive a proxy round trip; incomplete tails are rejected.
 #[test]
 fn facts_and_mattes_travel_with_the_proxy() {
     let img = lightcraft_scenes::demo_library()[0].render(32, 20);
@@ -152,10 +153,13 @@ fn facts_and_mattes_travel_with_the_proxy() {
     // a proxy cut inside its tail is incomplete (rebuilt, not taken for a source of facts)
     let dir = temp("facts");
     let path = dir.join("f.lcsp");
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(stored_raw(&path), Some(true), "valid matte planes establish sensor compatibility without decoding");
     std::fs::write(&path, &bytes[..bytes.len() - 8]).unwrap();
     assert!(!is_valid(&path));
+    assert_eq!(stored_raw(&path), None);
     let _ = std::fs::remove_dir_all(&dir);
-    // an old proxy (no tail) has no facts, and neither has one with a malformed tail
+    // An old proxy (no tail) has no facts; a malformed declared tail is an error.
     assert!(decode(&encode(&img, None).unwrap()).unwrap().2.is_none());
     let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
     let mut head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
@@ -164,6 +168,103 @@ fn facts_and_mattes_travel_with_the_proxy() {
     lying.extend_from_slice(head.to_string().as_bytes());
     lying.extend_from_slice(&bytes[nl..]);
     assert!(decode(&lying).map(|(_, _, i)| i.is_none()).unwrap_or(true), "an over-large tail is not trusted");
+}
+
+/// Supported maximum-size gain maps survive both decoding and legacy compatibility inspection.
+#[test]
+fn largest_supported_gain_tables_keep_their_facts_in_a_proxy() {
+    use lightcraft_raw::gaintable::{GainTableMap, SourcePlacement};
+    let map = GainTableMap {
+        points_v: 64,
+        points_h: 64,
+        points_n: 1024,
+        spacing_v: 1.0 / 63.0,
+        spacing_h: 1.0 / 63.0,
+        origin_v: 0.0,
+        origin_h: 0.0,
+        weights: [0.0, 1.0, 0.0, 0.0, 0.0],
+        gamma: 1.0,
+        gains: vec![2.0; 1 << 22],
+    };
+    let (v2, tag) = map.to_bytes(lightcraft_tiff::ByteOrder::Little);
+    assert_eq!(GainTableMap::parse(&tag, lightcraft_tiff::ByteOrder::Little, v2).as_ref(), Some(&map));
+    let mut tags = lightcraft_raw::ColorData::default();
+    tags.profile.gain_table_map = Some(map.clone());
+    let info = SourceInfo {
+        raw: true,
+        as_shot_temp: 4200.0,
+        camera_color: Some(Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: lightcraft_color::D65 })),
+        local_tone: Some(Arc::new(lightcraft_pipeline::local_tone::LocalTone {
+            map,
+            placement: SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: lightcraft_geom::Orientation::Normal },
+        })),
+        ..Default::default()
+    };
+    let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), Some(&info)).unwrap();
+    assert!(bytes.len() > 4 * 1024 * 1024, "a supported gain table exceeds the old facts budget");
+    let (_, _, decoded) = decode(&bytes).unwrap();
+    let decoded = decoded.expect("large valid decoder facts must survive");
+    assert_eq!(decoded.local_tone, info.local_tone);
+    assert_eq!(decoded.camera_color, info.camera_color);
+    assert_eq!(decoded.as_shot_temp, info.as_shot_temp);
+    let source = crate::media::DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), Some(decoded));
+    assert!(source.bytes() >= 2 * (1 << 22) * 4, "both independently allocated gain maps count toward eviction");
+    let mut cache = crate::media::MediaCache::default();
+    cache.set_budget(source.bytes() + 1024);
+    cache.insert_source(lightcraft_catalog::PhotoId(1), crate::media::SourceLevel::Preview, source.clone());
+    cache.insert_source(lightcraft_catalog::PhotoId(2), crate::media::SourceLevel::Preview, source);
+    assert!(!cache.has_source(lightcraft_catalog::PhotoId(1), crate::media::SourceLevel::Preview));
+    assert!(cache.has_source(lightcraft_catalog::PhotoId(2), crate::media::SourceLevel::Preview));
+    let dir = temp("large-facts");
+    let path = dir.join("sensor.lcsp");
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(stored_raw(&path), Some(true), "legacy compatibility must accept the same facts");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A sparse file with an oversized facts length cannot establish sensor compatibility.
+#[test]
+fn oversized_facts_are_rejected_before_reading_a_sparse_tail() {
+    let dir = temp("oversized-facts");
+    let path = dir.join("huge.lcsp");
+    let n = FACTS_MAX + 1;
+    let mut bytes = format!("LCSP1\n{{\"w\":1,\"h\":1,\"tail\":{}}}\n", n + 4).into_bytes();
+    bytes.extend_from_slice(&[0xff, 0xd8, 0xff, 0xd9]);
+    bytes.extend_from_slice(&(n as u32).to_le_bytes());
+    std::fs::write(&path, &bytes).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len((bytes.len() + n) as u64).unwrap();
+    assert!(is_valid(&path), "the file has enough bytes, but its facts exceed the bounded read");
+    assert_eq!(stored_raw(&path), None);
+    assert!(load_compatible(&path, true).err().unwrap().contains("missing or incomplete"), "legacy facts are checked before loading the sparse tail");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Both direct loads and candidate inspection reject oversized files using metadata, before allocation.
+#[test]
+fn oversized_proxy_files_are_rejected_before_reading() {
+    let dir = temp("oversized-proxy");
+    let path = dir.join("huge.lcsp");
+    std::fs::write(&path, b"LCSP1\n").unwrap();
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(FILE_MAX as u64 + 1).unwrap();
+    assert!(load(&path).err().unwrap().contains("file-size budget"));
+    assert_eq!(stored_raw(&path), None);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// An invalid declared tail is an error; the pre-facts format (absent or zero tail) still loads.
+#[test]
+fn declared_facts_must_be_valid_but_old_tail_less_proxies_still_load() {
+    let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), None).unwrap();
+    let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let base: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
+    assert!(decode(&bytes).unwrap().2.is_none());
+    for tail in [serde_json::json!(0), serde_json::json!("0"), serde_json::json!(-1), serde_json::json!(null), serde_json::json!(1)] {
+        let mut head = base.clone();
+        head["tail"] = tail.clone();
+        let mut changed = format!("LCSP1\n{head}\n").into_bytes();
+        changed.extend_from_slice(&bytes[nl + 1..]);
+        assert_eq!(decode(&changed).is_ok(), tail == 0, "tail={tail}");
+    }
 }
 
 #[test]

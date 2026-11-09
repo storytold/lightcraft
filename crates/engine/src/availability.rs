@@ -53,6 +53,9 @@ struct State {
     /// The files found not there (and not found there since).
     gone: HashSet<String>,
     worker: bool,
+    /// The sole worker's current probe, and whether a write/delete made its answer obsolete.
+    in_flight: Option<String>,
+    invalidated: bool,
     /// Bumped when the sweep under way is dropped for another one ([`Availability::restart_sweeps`]).
     sweep_epoch: u64,
     /// Whether file work a sweep gives way to is going on.
@@ -119,6 +122,23 @@ impl Availability {
 
     pub fn is_background(&self) -> bool {
         self.background.is_some()
+    }
+
+    /// Forget a changed file and refuse any probe that began before the change. A queued or
+    /// in-flight request is rechecked; otherwise the next caller queues it. Never performs I/O.
+    pub fn invalidate(&self, path: &str) {
+        let mut st = lock(&self.state);
+        st.known.remove(path);
+        if st.gone.remove(path) {
+            st.gone_generation += 1;
+        }
+        if st.in_flight.as_deref() == Some(path) {
+            st.invalidated = true;
+        }
+        drop(st);
+        if let Some(wake) = &self.background {
+            wake();
+        }
     }
 
     /// Does `path` exist? Synchronous mode: checked now. Background mode: the cached answer
@@ -215,6 +235,7 @@ impl Availability {
         }
     }
 
+    /// Drain requested checks before sweeps, refusing answers invalidated while their probe ran.
     fn spawn_worker(&self, wake: Waker) {
         let (state, probe) = (self.state.clone(), self.probe.clone());
         let started = std::thread::Builder::new().name("lc-availability".into()).spawn(move || {
@@ -233,7 +254,7 @@ impl Availability {
                         }
                         st = lock(&state);
                     }
-                    match st.queue.pop_front() {
+                    let next = match st.queue.pop_front() {
                         Some(p) => (p, true),
                         None => loop {
                             let Some(p) = st.sweep.pop_front() else {
@@ -245,11 +266,22 @@ impl Availability {
                                 break (p, false);
                             }
                         },
-                    }
+                    };
+                    st.in_flight = Some(next.0.clone());
+                    st.invalidated = false;
+                    next
                 };
                 let ok = probe(&path);
                 let wakes = {
                     let mut st = lock(&state);
+                    st.in_flight = None;
+                    if st.invalidated {
+                        // The answer predates a write/delete. Keep the request pending and
+                        // retry instead of restoring stale state after the invalidation.
+                        st.queued.insert(path.clone());
+                        st.queue.push_back(path);
+                        continue;
+                    }
                     if asked {
                         st.queued.remove(&path);
                     }
@@ -293,6 +325,33 @@ mod tests {
         assert_eq!(a.exists("gone"), Some(false));
         assert_eq!(a.exists("gone"), Some(false));
         assert_eq!(n.load(Ordering::SeqCst), 3, "every question is a fresh check");
+    }
+
+    /// Invalidation wins over a probe already in flight, for both stale positive and negative answers.
+    #[test]
+    fn invalidation_rechecks_in_flight_answers_before_caching_them() {
+        for previous in [false, true] {
+            let mut a = Availability::default();
+            let count = Arc::new(AtomicUsize::new(0));
+            let (started, starts) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel();
+            let released = Mutex::new(released);
+            a.set_probe(Arc::new(move |_| {
+                let n = count.fetch_add(1, Ordering::SeqCst);
+                started.send(n).unwrap();
+                released.lock().unwrap().recv().unwrap();
+                if n == 0 { previous } else { !previous }
+            }));
+            a.run_in_background(Arc::new(|| {}));
+            assert_eq!(a.exists("changed"), None);
+            assert_eq!(starts.recv_timeout(Duration::from_secs(5)).unwrap(), 0);
+            a.invalidate("changed");
+            release.send(()).unwrap();
+            assert_eq!(starts.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
+            assert_eq!(a.exists("changed"), None, "the obsolete answer was not restored");
+            release.send(()).unwrap();
+            wait_until("new answer", || a.exists("changed") == Some(!previous));
+        }
     }
 
     #[test]

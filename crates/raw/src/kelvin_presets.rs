@@ -126,6 +126,11 @@ fn locus_uv(t: f64) -> (f64, f64) {
 }
 
 impl KelvinPresets {
+    /// Heap storage retained by the calibrated temperature/multiplier points.
+    pub fn bytes(&self) -> usize {
+        self.points.capacity().saturating_mul(std::mem::size_of::<(f32, [f32; 3])>())
+    }
+
     /// `points` as (Kelvin, multipliers), ascending in Kelvin; `None` unless they make a curve: three to
     /// [`MAX_POINTS`] of them, positive multipliers, red rising and blue falling from one preset to the next.
     pub fn new(points: impl IntoIterator<Item = (f32, [f32; 3])>) -> Option<KelvinPresets> {

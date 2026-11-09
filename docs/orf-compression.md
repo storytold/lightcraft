@@ -1,11 +1,23 @@
-# Olympus compressed ORF: support withdrawn
+# Olympus compressed ORF: implementation history
 
-Compressed ORF sensor decoding introduced in #3775 has been removed while its provenance remains unresolved. The earlier clean-room and derivation claims are withdrawn; this note makes no legal determination and is not a format specification.
+The decoder introduced by #3775 was removed by #3916 pending provenance review.
+Its earlier clean-room and derivation claims remain withdrawn; that implementation
+is not restored here, and this note makes no legal determination.
 
-Compressed ORF files are unsupported for sensor decoding. They use an embedded JPEG preview when one is available; a file without a usable preview cannot be rendered. Preview-only editing and export operate on that rendered preview, not the raw sensor data.
+This branch proposes the different decoder extracted from #1162. Its recorded
+methodology, 23 pinned full-sensor references, reproduction command and limitations
+are documented in [ORF decoding](orf.md). Output verification and historical
+provenance acceptance are separate questions.
 
-Uncompressed 16-bit, packed 12-bit, two-field 12-bit and 12.8 bpp ORF support remains in `crates/raw/src/vendor/orf.rs`. This includes supported uncompressed high-resolution modes; it does not imply compressed-mode support on the same camera.
-
-Existing ORF records are rechecked in the background when a library opens, including files previously marked as sensor-decodable. Supported uncompressed ORFs remain supported; compressed files become preview-only. Missing or offline files are left unchanged and retried on the next open. **Reload from Disk** (`photo.reload`) can also refresh this status manually. ORF render-cache identities invalidate older sensor-derived thumbnails and loupe renders. Existing edits may look different when applied to the camera JPEG instead of sensor data.
-
-Coverage records no longer count the removed decoder as support or verification. See [raw-parity.md](raw-parity.md) and [raw/coverage.tsv](raw/coverage.tsv). Any future compressed ORF decoder requires independently established provenance and validation before support is claimed again. Git history is preserved.
+Uncompressed 16-bit, packed 12-bit, two-field 12-bit and 12.8 bpp support remains.
+Recognized lossless streams decode from sensor data; files rejected by the decoder
+retain embedded-JPEG fallback when a usable preview exists. This is not guaranteed
+for every damaged file: a damaged compressed header or invalid compressed codes can
+send a strip with at least two bytes per pixel through Word16 decoding, producing
+distorted sensor data instead of reaching the JPEG fallback. Complete valid compressed
+streams retain priority over Word16, including padded streams. See [ORF limits](orf.md#colour-and-limits).
+Existing ORFs retain
+the background status recheck and ORF-specific render-cache identity introduced
+by #3916. Sensor ORFs also use a separate smart-preview identity, and Reload/recheck fill
+missing source metadata on same-file virtual copies. Broader reload-family and proxy
+invalidation changes remain separate PRs.

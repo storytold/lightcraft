@@ -49,6 +49,7 @@ impl DenoiseIndex {
 }
 
 impl Default for MediaCache {
+    /// Create an empty media cache with memory budgets and synchronous availability probes.
     fn default() -> Self {
         let budget = crate::memory::cache_share(crate::memory::budget());
         MediaCache {
@@ -67,6 +68,7 @@ impl Default for MediaCache {
             file_bytes: None,
             smart_dir: None,
             availability: Default::default(),
+            smart_availability: Default::default(),
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
             denoise: DenoiseIndex::default(),
@@ -333,6 +335,7 @@ impl MediaCache {
         matches!(&p.source, Source::File { path } if self.availability.is_offline(path))
     }
 
+    /// Choose cached pixels, an original, or a proxy while preserving source level and camera-profile identity.
     fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
         let outliers = p.develop.removes_hot_pixels();
         // (a source developed with another camera profile, or none, doesn't stand in; a smart preview
@@ -368,12 +371,11 @@ impl MediaCache {
         // be offline is tried first and its smart preview is the render worker's fallback.
         #[cfg(not(target_arch = "wasm32"))]
         if let (Source::File { path }, Some(dir)) = (&p.source, &self.smart_dir) {
-            let sharded = crate::smart::sharded_file_path(dir, p);
-            let legacy = dir.join(crate::smart::file_name(p));
-            let sp = if self.availability.exists(&sharded.to_string_lossy()) == Some(true) { sharded } else { legacy };
-            // (a proxy cut short fails to load, like the offline original; the worker's fallback
-            // in `SourceRef::load` only uses a proxy that passes `smart::is_valid`)
-            if self.availability.is_offline(path) && self.availability.exists(&sp.to_string_lossy()) == Some(true) {
+            let sp = crate::smart::PreviewPath::new(dir, p);
+            // The worker checks completeness and old ORF compatibility before using any of
+            // these candidates; existence alone does not establish the pixel interpretation.
+            if self.availability.is_offline(path) && sp.candidates(true).iter().any(|p| self.availability.exists(&p.to_string_lossy()) == Some(true))
+            {
                 return SourceRef::Smart { path: sp };
             }
             let mut r = self.origin_ref(&p.source, max_edge);
