@@ -78,6 +78,25 @@ pub struct CameraColor {
     pub developed_for: lightcraft_color::Xy,
 }
 
+impl CameraColor {
+    /// Retained camera model and heap tables, including spare vector capacity. Charge shared
+    /// models conservatively to each cached source so independent decodes cannot evade eviction.
+    pub fn bytes(&self) -> usize {
+        let p = &self.tags.profile;
+        let tables = p
+            .hue_sat_map
+            .iter()
+            .flatten()
+            .chain(p.look_table.iter())
+            .fold(0_usize, |n, t| n.saturating_add(t.data.capacity().saturating_mul(std::mem::size_of::<[f32; 3]>())));
+        std::mem::size_of::<Self>()
+            .saturating_add(tables)
+            .saturating_add(p.tone_curve.as_ref().map_or(0, |t| t.points.capacity().saturating_mul(std::mem::size_of::<[f32; 2]>())))
+            .saturating_add(p.gain_table_map.as_ref().map_or(0, |m| m.gains.capacity().saturating_mul(std::mem::size_of::<f32>())))
+            .saturating_add(self.tags.kelvin_presets.as_ref().map_or(0, |p| p.bytes()))
+    }
+}
+
 /// Facts about the source the settings are interpreted against.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {

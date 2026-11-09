@@ -24,6 +24,27 @@ const N: u64 = 12;
 /// How long the drive stays asleep at most: only a frame stuck waiting for it gets this far.
 const WATCHDOG: Duration = Duration::from_secs(120);
 
+/// The control query waits for its worker while frames continue and its activity row remains visible.
+#[test]
+fn smart_preview_control_status_does_not_probe_on_the_ui_thread() {
+    let calls = Calls::default();
+    let nas = Nas::asleep();
+    let app = LightcraftApp::new(offline_library(&calls, &nas), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    h.step();
+    let ui_thread = std::thread::current().id();
+    let rx = h.send("engine.execute", json!({"command": "photo.smartPreview", "params": {"id": 1}})).unwrap();
+    frames_while_asleep(&mut h, &nas, 3, "smart-preview query");
+    assert!(rx.try_recv().is_err(), "status waits for the actual disk check");
+    assert!(h.app.session.activity.list().iter().any(|r| r.kind == "smart-preview-status"));
+    nas.wake();
+    assert!(h.step_until(Duration::from_secs(5), |h| h.app.tasks.is_empty()));
+    let answer = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(answer["result"], json!({"smartPreview": false, "originalOnline": false}));
+    assert_eq!(calls.on(ui_thread), 0);
+    assert!(!h.app.session.activity.list().iter().any(|r| r.kind == "smart-preview-status"));
+}
+
 /// Threads the probe ran on, and how often.
 #[derive(Clone, Default)]
 struct Calls {

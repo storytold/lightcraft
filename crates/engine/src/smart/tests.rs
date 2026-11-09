@@ -159,7 +159,7 @@ fn facts_and_mattes_travel_with_the_proxy() {
     assert!(!is_valid(&path));
     assert_eq!(stored_raw(&path), None);
     let _ = std::fs::remove_dir_all(&dir);
-    // an old proxy (no tail) has no facts, and neither has one with a malformed tail
+    // An old proxy (no tail) has no facts; a malformed declared tail is an error.
     assert!(decode(&encode(&img, None).unwrap()).unwrap().2.is_none());
     let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
     let mut head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
@@ -207,6 +207,14 @@ fn largest_supported_gain_tables_keep_their_facts_in_a_proxy() {
     assert_eq!(decoded.local_tone, info.local_tone);
     assert_eq!(decoded.camera_color, info.camera_color);
     assert_eq!(decoded.as_shot_temp, info.as_shot_temp);
+    let source = crate::media::DecodedSource::new(Arc::new(Rgb32f::new(8, 8)), Some(decoded));
+    assert!(source.bytes() >= 2 * (1 << 22) * 4, "both independently allocated gain maps count toward eviction");
+    let mut cache = crate::media::MediaCache::default();
+    cache.set_budget(source.bytes() + 1024);
+    cache.insert_source(lightcraft_catalog::PhotoId(1), crate::media::SourceLevel::Preview, source.clone());
+    cache.insert_source(lightcraft_catalog::PhotoId(2), crate::media::SourceLevel::Preview, source);
+    assert!(!cache.has_source(lightcraft_catalog::PhotoId(1), crate::media::SourceLevel::Preview));
+    assert!(cache.has_source(lightcraft_catalog::PhotoId(2), crate::media::SourceLevel::Preview));
     let dir = temp("large-facts");
     let path = dir.join("sensor.lcsp");
     std::fs::write(&path, &bytes).unwrap();
@@ -227,7 +235,36 @@ fn oversized_facts_are_rejected_before_reading_a_sparse_tail() {
     std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len((bytes.len() + n) as u64).unwrap();
     assert!(is_valid(&path), "the file has enough bytes, but its facts exceed the bounded read");
     assert_eq!(stored_raw(&path), None);
+    assert!(load_compatible(&path, true).err().unwrap().contains("missing or incomplete"), "legacy facts are checked before loading the sparse tail");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Both direct loads and candidate inspection reject oversized files using metadata, before allocation.
+#[test]
+fn oversized_proxy_files_are_rejected_before_reading() {
+    let dir = temp("oversized-proxy");
+    let path = dir.join("huge.lcsp");
+    std::fs::write(&path, b"LCSP1\n").unwrap();
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(FILE_MAX as u64 + 1).unwrap();
+    assert!(load(&path).err().unwrap().contains("file-size budget"));
+    assert_eq!(stored_raw(&path), None);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// An invalid declared tail is an error; the pre-facts format (absent or zero tail) still loads.
+#[test]
+fn declared_facts_must_be_valid_but_old_tail_less_proxies_still_load() {
+    let bytes = encode(&Rgb32f::filled(8, 8, [0.2; 3]), None).unwrap();
+    let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let base: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
+    assert!(decode(&bytes).unwrap().2.is_none());
+    for tail in [serde_json::json!(0), serde_json::json!("0"), serde_json::json!(-1), serde_json::json!(null), serde_json::json!(1)] {
+        let mut head = base.clone();
+        head["tail"] = tail.clone();
+        let mut changed = format!("LCSP1\n{head}\n").into_bytes();
+        changed.extend_from_slice(&bytes[nl + 1..]);
+        assert_eq!(decode(&changed).is_ok(), tail == 0, "tail={tail}");
+    }
 }
 
 #[test]

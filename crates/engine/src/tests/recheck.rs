@@ -484,6 +484,95 @@ fn orf_discard_cleans_obsolete_proxies_unless_another_photo_uses_them() {
     }
 }
 
+/// Rebuilding a legacy sensor proxy must not replace the content-only identity used by an older interpretation.
+#[test]
+fn smart_rebuild_writes_the_current_identity_and_preserves_legacy_bytes() {
+    for flat in [false, true] {
+        for corrupt in [false, true] {
+            let mut x = orf_library(&format!("smart-rebuild-identity-{flat}-{corrupt}"), true);
+            let p = x.s.catalog.photo(x.id).unwrap().clone();
+            let dir = x.s.media.smart_dir.clone().unwrap();
+            let legacy = old_smart_path(&dir, &p, flat);
+            let mut bytes = write_proxy(&legacy, Some(&lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() }), true);
+            if corrupt {
+                let start = b"LCSP1\n".len();
+                let end = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+                bytes[end + 3..end + 12].fill(0);
+                std::fs::write(&legacy, &bytes).unwrap();
+            }
+            let r = x.s.execute("library.smartPreviews", &json!({"id": x.id.0})).unwrap();
+            assert_eq!(r["built"], 1, "{r}");
+            assert_eq!(std::fs::read(&legacy).unwrap(), bytes, "a rebuild cannot change another interpretation's pixels");
+            let current = crate::smart::sharded_file_path(&dir, &p);
+            assert!(crate::smart::load(&current).unwrap().info.unwrap().raw);
+            assert!(!crate::smart::is_stale(&current));
+        }
+    }
+}
+
+/// A malformed current tail cannot hide a compatible fallback or become a successful Build result.
+#[test]
+fn smart_current_malformed_facts_fall_through_to_a_valid_candidate() {
+    for fallback in [false, true] {
+        let mut x = orf_library(&format!("smart-current-bad-facts-{fallback}"), true);
+        let p = x.s.catalog.photo(x.id).unwrap().clone();
+        let dir = x.s.media.smart_dir.clone().unwrap();
+        let current = crate::smart::sharded_file_path(&dir, &p);
+        let info = lightcraft_pipeline::SourceInfo { raw: true, as_shot_temp: 4200.0, ..Default::default() };
+        let mut bytes = write_proxy(&current, Some(&info), false);
+        let start = b"LCSP1\n".len();
+        let end = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+        let header: serde_json::Value = serde_json::from_slice(&bytes[start..end]).unwrap();
+        let tail = bytes.len() - header["tail"].as_u64().unwrap() as usize;
+        bytes[tail + 4] = b'!';
+        std::fs::write(&current, bytes).unwrap();
+        if fallback {
+            write_proxy(&old_smart_path(&dir, &p, true), Some(&info), false);
+        }
+        std::fs::remove_file(&x.file).unwrap();
+        assert_eq!(crate::cmd::previews::has_smart_preview(&x.s, x.id), fallback);
+        assert_eq!(x.s.media.smart_availability.exists(&dir, &p), fallback);
+        let source = x.s.media.source_ref(&p, crate::media::SourceLevel::Preview).load_source();
+        if fallback {
+            assert_eq!(source.unwrap().info.unwrap().as_shot_temp, 4200.0);
+        } else {
+            assert!(source.is_err());
+        }
+        assert_eq!(x.s.execute("library.smartPreviews", &json!({"id": x.id.0})).unwrap()["built"], usize::from(fallback));
+    }
+}
+
+/// Build and Discard invalidate fresh cached answers immediately in synchronous and worker modes.
+#[test]
+fn smart_operations_refresh_cached_availability() {
+    for background in [false, true] {
+        let mut x = orf_library(&format!("smart-cache-refresh-{background}"), true);
+        let p = x.s.catalog.photo(x.id).unwrap().clone();
+        let dir = x.s.media.smart_dir.clone().unwrap();
+        let checked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let wake = checked.clone();
+        x.s.media.smart_availability.run_in_background(std::sync::Arc::new(move || {
+            wake.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let availability = x.s.media.smart_availability.clone();
+        assert!(!availability.exists(&dir, &p));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while checked.load(std::sync::atomic::Ordering::SeqCst) < 4 {
+            assert!(std::time::Instant::now() < deadline, "the four candidate misses are cached");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(!availability.exists(&dir, &p));
+        for discard in [false, true] {
+            x.s.execute("library.smartPreviews", &json!({"id": x.id.0, "background": background, "discard": discard})).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while x.s.preview_build.as_ref().is_some_and(|b| b.running()) || availability.exists(&dir, &p) == discard {
+                assert!(std::time::Instant::now() < deadline, "availability did not change after discard={discard}");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+    }
+}
+
 /// An unselected offline copy retains its shared current proxy even without a legacy fallback.
 #[test]
 fn discard_keeps_shared_current_proxies_without_an_offline_fallback() {
@@ -641,7 +730,7 @@ fn orf_legacy_proxy_compatibility_validates_the_entire_matte_tail() {
         broken.extend_from_slice(&(facts.len() as u32).to_le_bytes());
         broken.extend(facts);
         broken.extend(planes);
-        assert!(crate::smart::decode(&broken).unwrap().2.is_none(), "malformed tail {i}");
+        assert!(crate::smart::decode(&broken).is_err(), "malformed tail {i}");
         std::fs::write(&path, broken).unwrap();
         assert!(crate::smart::is_valid(&path), "cheap JPEG framing alone cannot validate the tail");
         std::fs::remove_file(&x.file).unwrap();

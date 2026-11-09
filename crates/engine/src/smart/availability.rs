@@ -40,6 +40,15 @@ impl Availability {
         self.current.is_background() && self.sensor.is_background()
     }
 
+    /// A write/delete changes both interpretations of a shared filename, including in-flight checks.
+    pub(crate) fn invalidate(&self, paths: &[std::path::PathBuf]) {
+        for path in paths {
+            let path = path.to_string_lossy();
+            self.current.invalidate(&path);
+            self.sensor.invalidate(&path);
+        }
+    }
+
     /// Whether a compatible, decodable proxy is known to be available in either folder layout.
     /// Unknown candidates count as absent until their worker answers.
     pub fn exists(&self, dir: &Path, photo: &Photo) -> bool {

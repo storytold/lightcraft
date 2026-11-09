@@ -22,6 +22,38 @@ use crate::LightcraftApp;
 
 pub type ControlResponse = Value;
 
+/// Read and decode status-query files on a tracked worker, then reply on completion. The
+/// response belongs to the snapshotted library, never a different library opened meanwhile.
+fn smart_preview_status(app: &mut LightcraftApp, params: &Value, reply: Sender<Value>) -> Outcome {
+    const LABEL: &str = "Smart Preview Status";
+    let job = match lightcraft_engine::cmd::previews::smart_status_job(&app.session, params) {
+        Ok(job) => job,
+        Err(e) => return err(e.to_string()),
+    };
+    let library = app.session.library_generation();
+    let started = crate::tasks::spawn(
+        app,
+        LABEL,
+        Some("smart-preview-status"),
+        move || lightcraft_engine::guard::catch(LABEL, job),
+        move |app, _, result| {
+            let response = if app.session.library_generation() != library {
+                failure("Smart Preview Status: another library was opened before the check ended")
+            } else {
+                match result {
+                    Ok(value) => success(value),
+                    Err(e) => failure(e),
+                }
+            };
+            let _ = reply.send(response);
+        },
+    );
+    match started {
+        Ok(()) => Outcome::Later,
+        Err(e) => err(e),
+    }
+}
+
 pub struct ControlRequest {
     pub method: String,
     pub params: Value,
@@ -348,6 +380,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             if id == "library.findSimilar" {
                 // reads every photo: on a worker thread, answered when it is done
                 let started = crate::find_similar::ask(app, &params, req.reply.clone());
+                ctx.request_repaint();
+                return started;
+            }
+            if id == "photo.smartPreview" {
+                let started = smart_preview_status(app, &params, req.reply.clone());
                 ctx.request_repaint();
                 return started;
             }

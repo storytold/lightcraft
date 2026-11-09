@@ -580,6 +580,7 @@ struct SmartJob {
     raw: Option<bool>,
     /// Only identities that no unselected photo uses, in either folder layout.
     discard_paths: Vec<std::path::PathBuf>,
+    availability: crate::smart::Availability,
 }
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
@@ -652,11 +653,12 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for SmartJob { id, path, source, look, raw, discard_paths } in jobs {
+    for SmartJob { id, path, source, look, raw, discard_paths, availability } in jobs {
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
         let _one = SMART_WRITE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let candidates = path.candidates(true);
         // Read either the new shard or a pre-upgrade flat file, without making new work
         // depend on having the original online.
         if discard {
@@ -668,13 +670,14 @@ fn smart_run(
         } else {
             let reusable = path.load_with_path().ok().map(|(path, _)| path);
             let valid = reusable.is_some();
-            let path = reusable.unwrap_or_else(|| path.resolve());
+            let existing = reusable.unwrap_or_else(|| path.resolve());
+            let path = path.write_path();
             // a complete, current proxy is kept; a missing or damaged one (cut short by a crash or a
             // full drive) is (re)built, and so is one written by an older encoding or camera-look
             // fit (see `smart::ENCODE_VERSION` and `camera_preview::LOOK_VERSION`) when its
             // original can be read
-            let damaged = path.exists();
-            let stale = damaged && crate::smart::is_stale_for(&path, look);
+            let damaged = existing.exists();
+            let stale = damaged && crate::smart::is_stale_for(&existing, look);
             if valid && !stale {
                 n.built += 1;
             } else {
@@ -706,7 +709,7 @@ fn smart_run(
                         if !parent.is_dir() {
                             std::fs::create_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
                         }
-                        lightcraft_catalog::safe_file::write_atomic(&path, &b).map_err(|e| format!("{}: {e}", path.display()))
+                        lightcraft_catalog::safe_file::write_atomic(path, &b).map_err(|e| format!("{}: {e}", path.display()))
                     });
                 match r {
                     Ok(()) => {
@@ -722,7 +725,7 @@ fn smart_run(
                     }
                     Err(e) if valid && stale && !loaded => {
                         // offline (or unreadable) original: the proxy is all there is, keep its look
-                        log::info!("smart preview {} keeps its older look: {e}", path.display());
+                        log::info!("smart preview {} keeps its older look: {e}", existing.display());
                         n.built += 1;
                         n.stale_kept += 1;
                     }
@@ -736,6 +739,7 @@ fn smart_run(
                 }
             }
         }
+        availability.invalidate(&candidates);
         if let Some((st, task)) = state {
             let done = st.done.fetch_add(1, Ordering::Relaxed).saturating_add(1);
             task.progress(done as u64, st.total as u64);
@@ -795,6 +799,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             look: preview_fitted_look(&ph),
             raw: ph.format.eq_ignore_ascii_case("ORF").then(|| ph.develops_raw()),
             discard_paths,
+            availability: s.media.smart_availability.clone(),
         });
     }
     let custom = s.smart_previews_dir.is_some();
@@ -863,6 +868,7 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
             look: preview_fitted_look(p),
             raw: p.format.eq_ignore_ascii_case("ORF").then(|| p.develops_raw()),
             discard_paths: Vec::new(),
+            availability: s.media.smart_availability.clone(),
         })
         .collect();
     std::thread::Builder::new()
@@ -967,6 +973,24 @@ pub fn has_smart_preview(s: &Session, id: lightcraft_catalog::PhotoId) -> bool {
     }
 }
 
+/// Snapshot a status query without filesystem work. The returned job checks both the original
+/// and proxy on its caller's thread, so desktop control requests can run it on a worker.
+pub fn smart_status_job(s: &Session, p: &Value) -> Result<impl FnOnce() -> Value + Send + 'static> {
+    let id = s.targets(p)?.first().copied().ok_or_else(|| bad("photo.smartPreview", "no photo"))?;
+    let photo = s.catalog.photo(id);
+    let original = photo.and_then(|p| match &p.source {
+        lightcraft_catalog::Source::File { path } => Some(path.clone()),
+        _ => None,
+    });
+    let preview = s.media.smart_dir.as_ref().zip(photo).map(|(dir, p)| crate::smart::PreviewPath::new(dir, p));
+    let exists = s.media.availability.probe();
+    Ok(move || {
+        let online = original.as_ref().is_none_or(|path| exists(path));
+        let smart = preview.is_some_and(|path| path.load_with_path().is_ok());
+        json!({"smartPreview": smart, "originalOnline": online})
+    })
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         #[cfg(not(target_arch = "wasm32"))]
@@ -990,12 +1014,7 @@ pub fn specs() -> Vec<CommandSpec> {
             smart_location
         ),
         cmd!(query "photo.smartPreview", "Smart Preview Status", [], None, "{id?} → {smartPreview: bool, originalOnline: bool}", always, |s, p| {
-            let id = s.targets(p)?.first().copied().ok_or_else(|| bad("photo.smartPreview", "no photo"))?;
-            let online = match s.catalog.photo(id).map(|p| p.source.clone()) {
-                Some(lightcraft_catalog::Source::File { path }) => std::path::Path::new(&path).exists(),
-                _ => true,
-            };
-            Ok(json!({"smartPreview": has_smart_preview(s, id), "originalOnline": online}))
+            Ok(smart_status_job(s, p)?())
         }),
         cmd!(
             "library.buildPreviews",
