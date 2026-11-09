@@ -30,6 +30,9 @@ pub struct QuickJob {
     /// the cache (memory only, never its disk), the key for this photo and edge, and the cache's
     /// generation when the job was made (a Discard Preview Cache since then keeps the picture out).
     pub embedded_cache: Option<(Arc<PreviewCache>, Hash128, u64)>,
+    /// Older keys of the same preview in [`Self::embedded_cache`]'s cache (the photo's keys from before its hash was
+    /// known), tried after its own.
+    pub embedded_fallback: Vec<Hash128>,
     /// Whether [`Self::embedded_cache`] keeps the decoded preview on disk too: a grid thumbnail,
     /// so a folder seen before fills in from small files at once instead of every raw being read
     /// and its camera JPEG decoded again (the loupe's large stand-ins stay in memory).
@@ -89,8 +92,11 @@ impl QuickJob {
         }
         let mut embedded_fallback = None;
         if let Some((path, loader, edge)) = &self.embedded {
-            let kept =
-                self.embedded_cache.as_ref().and_then(|(cache, k, _)| if self.embedded_on_disk { cache.get(*k) } else { cache.get_memory(*k) });
+            let kept = self.embedded_cache.as_ref().and_then(|(cache, k, _)| {
+                std::iter::once(k)
+                    .chain(&self.embedded_fallback)
+                    .find_map(|k| if self.embedded_on_disk { cache.get(*k) } else { cache.get_memory(*k) })
+            });
             let image = match kept {
                 Some(img) => Some(Arc::unwrap_or_clone(img)),
                 None => {

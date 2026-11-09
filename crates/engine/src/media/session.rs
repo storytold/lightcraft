@@ -516,6 +516,7 @@ impl crate::Session {
             cached,
             embedded,
             embedded_cache,
+            embedded_fallback: Vec::new(),
             embedded_on_disk: false,
             minimum_embedded_edge: None,
             small: apply_crop.then(|| Box::new(small)),
@@ -537,6 +538,7 @@ impl crate::Session {
             cached: Vec::new(),
             embedded: Some((path, l, max_edge.max(1))),
             embedded_cache: None,
+            embedded_fallback: Vec::new(),
             embedded_on_disk: false,
             minimum_embedded_edge: None,
             small: None,
@@ -562,6 +564,7 @@ impl crate::Session {
             // the camera JPEG is this thumbnail (an unedited raw): kept with the rendered ones, under
             // a key of its own, so the folder's next visit reads it from the thumbnail cache
             embedded_cache: job.cache.as_ref().map(|(c, k)| (c.clone(), embedded_thumb_key(*k), c.generation())),
+            embedded_fallback: job.cache_fallback.iter().map(|k| embedded_thumb_key(*k)).collect(),
             embedded_on_disk: true,
             minimum_embedded_edge: None,
             small: Some(Box::new(job.clone())),

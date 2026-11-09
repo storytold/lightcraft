@@ -872,6 +872,7 @@ fn a_render_that_panics_fails_instead_of_never_answering() {
         cached: Vec::new(),
         embedded: Some(("x.arw".into(), Arc::new(|_: &str, _: usize| -> Option<Rgba8> { panic!("preview reader bug") }), 256)),
         embedded_cache: None,
+        embedded_fallback: Vec::new(),
         embedded_on_disk: false,
         minimum_embedded_edge: None,
         small: None,
@@ -974,6 +975,7 @@ fn a_camera_jpeg_decoded_across_a_cache_clear_is_not_kept() {
             cached: Vec::new(),
             embedded: Some(("x.arw".into(), Arc::new(|_: &str, _: usize| Some(Rgba8::new(16, 16))), 256)),
             embedded_cache: Some((cache.clone(), key, made_in)),
+            embedded_fallback: Vec::new(),
             embedded_on_disk: on_disk,
             minimum_embedded_edge: None,
             small: None,
@@ -990,6 +992,7 @@ fn a_camera_jpeg_decoded_across_a_cache_clear_is_not_kept() {
             cached: Vec::new(),
             embedded: Some(("x.arw".into(), Arc::new(|_: &str, _: usize| Some(Rgba8::new(16, 16))), 256)),
             embedded_cache: Some((cache.clone(), key, cache.generation())),
+            embedded_fallback: Vec::new(),
             embedded_on_disk: on_disk,
             minimum_embedded_edge: None,
             small: None,
@@ -1087,4 +1090,33 @@ fn a_damaged_smart_preview_gives_way_to_the_next_candidate() {
     };
     assert!(offline.load_source().is_ok());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_offline_raw_keeps_its_camera_thumbnail_after_learning_its_hash() {
+    let mut s = crate::Session::new();
+    s.media.preview_loader = Some(Arc::new(|_: &str, edge: usize| Some(Rgba8::new(edge.min(64), 2))));
+    let mut raw = Photo::new(PhotoId(1), Source::File { path: "offline.cr3".into() }, "offline.cr3", "CR3", 6000, 4000, "2026-01-01");
+    raw.kind = MediaKind::Raw;
+    raw.develop = Arc::new(raw.camera_defaults());
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+    let job = s.thumb_job(PhotoId(1), 256).unwrap();
+    assert_eq!(s.quick_thumb_job(&job).unwrap().run().quick, Some(QuickSource::Embedded));
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("learned".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    s.media.preview_loader = Some(Arc::new(|_: &str, _: usize| None::<Rgba8>));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("offline".into())));
+    let job = s.thumb_job(PhotoId(1), 256).unwrap();
+    let r = s.quick_thumb_job(&job).unwrap().run();
+    assert!(r.rendered.is_ok(), "{:?}", r.rendered.err());
+    assert_eq!(r.quick, Some(QuickSource::Embedded));
 }
