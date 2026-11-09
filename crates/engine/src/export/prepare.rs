@@ -33,8 +33,16 @@ pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, 
 /// [`ExportFormat::Original`] / [`ExportFormat::Dng`]).
 pub fn export_photo(session: &mut crate::Session, id: lightcraft_catalog::PhotoId, o: &ExportOptions, seq: usize) -> Result<Exported, String> {
     let result = prepare_export(session, id, o, seq)?.run();
-    let saved = session.persist().map_err(|e| e.to_string());
-    saved.and(result)
+    persist_after_export(session);
+    result
+}
+
+/// Save what the export's reads learned. A failed save keeps the export's result: the changes stay queued and
+/// [`crate::Session::unsaved`] reports them.
+fn persist_after_export(session: &mut crate::Session) {
+    if let Err(e) = session.persist() {
+        log::error!("export: {e}");
+    }
 }
 
 /// One photo's export, set up from the session ([`prepare_export`]). [`PreparedExport::run`] does
@@ -423,6 +431,6 @@ pub fn export_batch(
 ) -> Result<Vec<serde_json::Value>, String> {
     let items = prepare_batch(session, ids, o)?;
     let result = run_batch(items, o, to, write, exists, true, &mut |_, _| true);
-    let saved = session.persist().map_err(|e| e.to_string());
-    saved.and(result)
+    persist_after_export(session);
+    result
 }

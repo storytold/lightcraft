@@ -290,3 +290,21 @@ fn a_replacement_whose_cache_fence_cannot_be_written_never_blocks_other_edits() 
     drop(reopened);
     std::fs::remove_dir_all(base).unwrap();
 }
+
+#[test]
+fn an_export_keeps_its_files_when_the_save_after_it_fails() {
+    let store = Flaky::default();
+    let mut s = open(&store, true);
+    let id = s.selection.active.unwrap();
+    store.set_failing(true);
+    assert!(s.execute("photo.rate", &json!({"rating": 2})).is_err());
+    let dir = crate::tests_xmp::temp_dir("export-unsaved");
+    std::fs::create_dir_all(&dir).unwrap();
+    let to = crate::export::Destination { dir: dir.to_string_lossy().to_string(), exact: None };
+    let o = crate::export::ExportOptions { resize: Some(crate::export::Resize::long_edge(32)), ..Default::default() };
+    let files = crate::export::export_batch(&mut s, &[id], &o, &to, &mut crate::export::write_file, &|p| std::path::Path::new(p).exists()).unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(s.unsaved().is_some(), "the unsaved rating is still reported");
+    assert!(crate::export::export_photo(&mut s, id, &o, 1).is_ok());
+    std::fs::remove_dir_all(dir).unwrap();
+}

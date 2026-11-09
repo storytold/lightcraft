@@ -99,8 +99,8 @@ impl Headless {
                 !cancelled
             },
         );
-        let saved = self.session.persist().map_err(|e| e.to_string());
-        let files = saved.and(files)?;
+        let save_error = self.session.persist().err().map(|e| e.to_string());
+        let files = files?;
         if !cancelled && let Some(hook) = hook.as_mut() {
             cancelled = !hook(total, total, "");
         }
@@ -113,6 +113,9 @@ impl Headless {
             out["applePhotos"] = photos;
         }
         out["files"] = json!(files);
+        if let Some(error) = save_error {
+            out["saveError"] = json!(error);
+        }
         Ok(out)
     }
 }
@@ -299,6 +302,52 @@ mod tests {
             .call("engine.execute", json!({"command": "app.export", "params": {"dir": dir.to_string_lossy(), "longEdge": 64, "format": "png"}}))
             .unwrap();
         assert_eq!(r["files"].as_array().map(Vec::len), Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A catalog store whose appends fail (a full disk).
+    #[derive(Clone)]
+    struct FullDisk(lightcraft_engine::catalog::MemStore);
+
+    impl lightcraft_engine::catalog::Store for FullDisk {
+        fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+            self.0.read(name)
+        }
+        fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+            self.0.write_atomic(name, data)
+        }
+        fn append(&mut self, _: &str, _: &[u8]) -> std::io::Result<()> {
+            Err(std::io::Error::other("disk full"))
+        }
+        fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+            self.0.truncate(name, len)
+        }
+        fn describe(&self) -> String {
+            "full disk".into()
+        }
+    }
+
+    /// An export whose files were written reports them, and the save that failed after it beside them.
+    #[test]
+    fn an_export_reports_its_files_when_the_save_after_it_fails() {
+        let dir = std::env::temp_dir().join(format!("lc-mcp-export-unsaved-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut session = Session::new();
+        let catalog = Box::new(FullDisk(lightcraft_engine::catalog::MemStore::new()));
+        let files = Box::new(lightcraft_engine::catalog::MemStore::new());
+        let stores = lightcraft_engine::library::LibraryStores { dir: "full".into(), catalog, files, on_disk: false };
+        session.open_library_in(stores, true).unwrap();
+        let mut h = Headless::new(session);
+        let id = h.session.selection.active.unwrap().0;
+        assert!(h.call("engine.execute", json!({"command": "photo.rate", "params": {"ids": [id], "rating": 2}})).is_err());
+        let r = h
+            .call(
+                "engine.execute",
+                json!({"command": "app.export", "params": {"ids": [id], "dir": dir.to_string_lossy(), "longEdge": 32, "format": "png"}}),
+            )
+            .unwrap();
+        assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{r}");
+        assert!(r["saveError"].as_str().is_some_and(|e| e.contains("disk full")), "{r}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
