@@ -332,65 +332,6 @@ fn burst_params(p: &Value) -> Result<(f64, f32)> {
     Ok((num("burstGap", BURST_GAP, MAX_GAP)?, num("similarity", SAME, 1.0)? as f32))
 }
 
-/// Find Similar: photos that look like `id` (signatures from thumbnail-level sources, cached by
-/// content), most similar first; the view is filtered to them.
-fn find_similar(s: &mut Session, p: &Value) -> Result<Value> {
-    const C: &str = "library.findSimilar";
-    let id = super::photo_id(p, C)?.or(s.active()).ok_or_else(|| super::bad(C, "no photo"))?;
-    let min = p.get("similarity").and_then(Value::as_f64).unwrap_or(0.8) as f32;
-    let all: Vec<PhotoId> = s.catalog.photos().filter(|q| q.in_library()).map(|q| q.id).collect();
-    // signatures not cached yet, measured side by side: once for each content, from the next photo
-    // with that content when one can't be read (an offline copy)
-    let mut todo: Vec<(PhotoId, String)> = std::iter::once(id)
-        .chain(all.iter().copied().filter(|q| *q != id))
-        .filter_map(|q| Some((q, crate::media::content_key(s.catalog.photo(q)?))))
-        .filter(|(_, key)| !s.signatures.contains_key(key))
-        .collect();
-    while !todo.is_empty() {
-        let mut seen = std::collections::HashSet::new();
-        let (now, later): (Vec<_>, Vec<_>) = todo.into_iter().partition(|(_, key)| seen.insert(key.clone()));
-        let ids: Vec<PhotoId> = now.iter().map(|m| m.0).collect();
-        let found = measure_all(
-            s,
-            &ids,
-            SourceLevel::Thumb,
-            |s, q| s.source_load(q, SourceLevel::Thumb),
-            |_, r| match r.and_then(|r| r.load_source()) {
-                Ok(src) => (Some(lightcraft_pipeline::cull::signature(&src.image)), Some(src), None),
-                Err(_) => (None, None, None),
-            },
-        );
-        for ((_, key), v) in now.into_iter().zip(found) {
-            if let Some(v) = v {
-                s.signatures.insert(key, v);
-            }
-        }
-        todo = later.into_iter().filter(|(_, key)| !s.signatures.contains_key(key)).collect();
-    }
-    let sig = |s: &Session, id: PhotoId| -> Option<[f32; 64]> {
-        let key = s.catalog.photo(id).map(|p| crate::media::content_key(p))?;
-        s.signatures.get(&key).copied()
-    };
-    let me = sig(s, id).ok_or_else(|| super::bad(C, "can't read the photo"))?;
-    let mut hits: Vec<(PhotoId, f32)> = Vec::new();
-    for q in all {
-        if let Some(v) = sig(s, q) {
-            let sim = lightcraft_pipeline::cull::similarity(&me, &v);
-            if sim >= min {
-                hits.push((q, sim.clamp(0.0, 1.0)));
-            }
-        }
-    }
-    hits.sort_by(|a, b| b.1.total_cmp(&a.1));
-    if p.get("filter").and_then(Value::as_bool).unwrap_or(true) {
-        s.shelved_filter = None;
-        s.filter.only = hits.iter().map(|h| h.0).collect();
-        // an empty `only` means "no constraint": no hits is its own state that shows no photos
-        s.filter.only_none = s.filter.only.is_empty();
-    }
-    Ok(json!({"photos": hits.iter().map(|(i, v)| json!({"id": i.0, "similarity": (v * 1000.0).round() / 1000.0})).collect::<Vec<_>>()}))
-}
-
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -398,9 +339,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find Similar Photos",
             ["Photo"],
             None,
-            "{id?, similarity?: 0..1 (0.8), filter?: bool (true)} — photos that look like the active one (composition and tones), most similar first; filters the view to them (Clear Filters to go back) → {photos: [{id, similarity}]}",
-            always,
-            find_similar
+            "{id?, similarity?: 0..1 (0.8), filter?: bool (true)} — photos that look like the active one (composition and tones), most similar first; filters the view to them (Clear Filters to go back) → {photos: [{id, similarity}]}. In the app the photos are read on a worker thread under an activity row: a control request is answered with this when the search ends, and from a menu the answer is {background: true, count}",
+            super::similar::no_search_running,
+            super::similar::run
         ),
         cmd!(
             "photo.analyze",
