@@ -141,9 +141,11 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     // the file may differ from the one imported (another export, a raw that decodes now or not):
     // its size, dimensions and preview-only state follow it
     let mut ops = vec![relink_op(id, &abs)];
+    let mut evidence = None;
     if s.media.file_probe.is_some()
         && let (Some(Ok(info)), Some(ph)) = (crate::import::probe_paths(s, std::slice::from_ref(&abs)).pop(), s.catalog.photo(id))
     {
+        evidence = info.native_read.clone();
         ops.extend(crate::cmd::convert::content_op(id, ph, info));
     }
     let op = match <[Op; 1]>::try_from(ops) {
@@ -151,6 +153,9 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
         Err(ops) => Op::Batch { ops },
     };
     s.commit("Relink Photo", op)?;
+    if let Some(evidence) = evidence {
+        s.originals.adopt_probe(s, id, &evidence);
+    }
     s.media.forget(id);
     Ok(json!({"id": id.0, "path": abs}))
 }
@@ -163,58 +168,14 @@ fn stored_hash(p: &Photo) -> Option<&str> {
 /// The content hash of the file at `path` (as import computes it), if it can be read. Read in
 /// pieces: the file is whatever is on the disk, of any size.
 fn file_hash(path: &str) -> Option<String> {
-    use std::io::Read;
-    // the opened file must be regular (a FIFO or device would never end), and no more than its size at open is read
-    let file = std::fs::File::open(path).ok()?;
-    let meta = file.metadata().ok().filter(|m| m.is_file())?;
-    hash_reader(file.take(meta.len()))
-}
-
-/// The content hash of what `r` gives, read in pieces (the hash import computes of the whole).
-fn hash_reader(mut r: impl std::io::Read) -> Option<String> {
-    let mut hasher = lightcraft_preview::Hasher128::new();
-    let mut piece = vec![0u8; 1 << 16];
-    loop {
-        match r.read(&mut piece) {
-            Ok(0) => return Some(hasher.finish().to_string()),
-            Ok(n) => {
-                hasher.update(piece.get(..n)?);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return None,
-        }
-    }
+    let _standalone = crate::originals::standalone_binding();
+    std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file)?;
+    crate::originals::hash_whole(path).ok().map(|fp| fp.hash.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A reader that gives its bytes a few at a time, and an interruption in between.
-    struct Trickle<'a>(&'a [u8], bool);
-
-    impl std::io::Read for Trickle<'_> {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            self.1 = !self.1;
-            if self.1 {
-                return Err(std::io::ErrorKind::Interrupted.into());
-            }
-            let n = self.0.len().min(buf.len()).min(7);
-            buf[..n].copy_from_slice(&self.0[..n]);
-            self.0 = &self.0[n..];
-            Ok(n)
-        }
-    }
-
-    #[test]
-    fn a_hash_read_in_pieces_is_the_hash_of_the_whole() {
-        // longer than one piece, so the read loop runs more than once
-        let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
-        let whole = lightcraft_preview::hash_bytes(&bytes).to_string();
-        assert_eq!(hash_reader(bytes.as_slice()).as_deref(), Some(whole.as_str()));
-        assert_eq!(hash_reader(Trickle(&bytes[..1000], false)).as_deref(), Some(lightcraft_preview::hash_bytes(&bytes[..1000]).to_string().as_str()));
-        assert_eq!(hash_reader(std::io::empty()).as_deref(), Some(lightcraft_preview::hash_bytes(&[]).to_string().as_str()));
-    }
 
     /// A scratch folder that goes away with the test, however it ends.
     struct Scratch(std::path::PathBuf);
@@ -369,6 +330,7 @@ fn name_key(path: &str) -> String {
 /// Files that are already some photo's original, or that another photo was just matched with,
 /// are not used.
 pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::result::Result<FindPlan, String> {
+    let _standalone = crate::originals::standalone_binding();
     if !Path::new(folder).is_dir() {
         return Err(format!("{folder}: not a folder"));
     }

@@ -121,7 +121,6 @@ fn photo_changed_while_probing_is_skipped() {
     let listed = recheck::stale(&x.s.catalog, false);
     assert_eq!(listed.iter().map(|i| i.id).collect::<Vec<_>>(), vec![x.id]);
     let probed = recheck::probe(&recheck::file_probe(&x.s).unwrap(), listed);
-    decodable_now(&x);
     let other = x.dir.join("files").join("IMG_0001-moved.cr3");
     std::fs::write(&other, cr3_with_preview(96, 64)).unwrap();
     x.s.execute("photo.relink", &json!({"id": x.id.0, "path": other.to_string_lossy()})).unwrap();

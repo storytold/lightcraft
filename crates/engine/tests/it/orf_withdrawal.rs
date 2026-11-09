@@ -58,6 +58,13 @@ fn decoder_keys(s: &mut Session) -> (Vec<u64>, Vec<Hash128>, String) {
 fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity() {
     // Before the withdrawal, format was not part of any of these keys: an otherwise identical
     // non-ORF photo gives the old keys, preserved for every other camera and ordinary image.
+    // Decoded-source keys belong to one cache-identity lifetime, so the sessions compared share one.
+    let lifetime = lightcraft_engine::cache_identity::CacheIdentity::default();
+    let decoder_session = |format: &str| {
+        let mut s = decoder_session(format);
+        s.media.identities = lifetime.clone();
+        s
+    };
     let legacy = decoder_keys(&mut decoder_session("DNG"));
     assert_eq!(legacy, decoder_keys(&mut decoder_session("JPEG")));
     let orf = decoder_keys(&mut decoder_session("ORF"));

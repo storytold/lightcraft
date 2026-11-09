@@ -243,7 +243,7 @@ fn the_shown_library_folder_survives_reopen() {
     // a view file that names the source but no folder opens on everything, never an empty grid
     std::fs::write(dir.join("view.json"), br#"{"source": {"kind": "libraryFolder"}}"#).unwrap();
     let s = open(&dir, false);
-    assert_eq!((s.source, s.library_folder), (crate::LibrarySource::All, None));
+    assert_eq!((s.source, s.library_folder.clone()), (crate::LibrarySource::All, None));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

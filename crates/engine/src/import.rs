@@ -37,6 +37,7 @@ use crate::media::ProbeInfo;
 
 mod commit;
 mod defaults;
+mod dupes;
 mod files;
 mod job;
 mod scan;
@@ -51,16 +52,18 @@ pub use files::{
     launch_path, launch_path_until,
 };
 pub(crate) use files::{expand_noting, probe_all, probe_paths, probe_with};
-#[cfg(test)]
-use job::PreparedItem;
+#[cfg(not(target_arch = "wasm32"))]
+use job::hash_file;
 pub use job::{ImportJob, Prepared, candidate_thumb_key, import, import_with};
-pub(crate) use scan::scan_files;
-pub use scan::{
-    ScanInput, ScanOutput, ScanProgress, browse_files, browse_order, browse_path, browse_queue, browse_queue_until, browse_spelling, scan,
-    scan_report, scan_with,
-};
 #[cfg(test)]
-use scan::{library_files, library_hashes};
+use job::{PreparedItem, full_hashes, reset_full_hashes};
+#[cfg(test)]
+use scan::library_files;
+pub use scan::{
+    ScanInput, ScanOutput, ScanProgress, begin_import_log, browse_files, browse_order, browse_path, browse_queue, browse_queue_until,
+    browse_spelling, finish_import_log, import_persist_outcome, scan, scan_report, scan_with,
+};
+pub(crate) use scan::{command_import_terminal, import_report_counts, scan_files};
 pub use types::{
     Duplicate, FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode, Kept, Moved,
     OnDeleted, Organize,
@@ -69,3 +72,10 @@ pub use types::{
 #[cfg(test)]
 #[path = "import/tests_known.rs"]
 mod tests_known;
+
+#[cfg(test)]
+#[path = "import/tests_dupes.rs"]
+mod tests_dupes;
+
+#[cfg(test)]
+pub(crate) mod lifecycle_tests;

@@ -3280,14 +3280,17 @@ fn recipe_values_are_clamped_like_a_slider() {
 /// nothing here renders them), to see what an import does to a raw's as-shot white balance.
 fn session_with_raw_probe() -> Session {
     let mut s = Session::new().with_fs();
-    let real = s.media.file_probe.clone().unwrap();
-    s.media.file_probe = Some(std::sync::Arc::new(move |path: &str| {
-        let mut info = real(path)?;
-        info.kind = lightcraft_catalog::MediaKind::Raw;
-        info.format = "DNG".into();
-        info.as_shot_wb = Some((4800.0, 12.0));
-        Ok(info)
-    }));
+    let as_raw = |real: crate::media::FileProbe| -> crate::media::FileProbe {
+        std::sync::Arc::new(move |path: &str| {
+            let mut info = real(path)?;
+            info.kind = lightcraft_catalog::MediaKind::Raw;
+            info.format = "DNG".into();
+            info.as_shot_wb = Some((4800.0, 12.0));
+            Ok(info)
+        })
+    };
+    s.media.file_probe = s.media.file_probe.clone().map(as_raw);
+    s.media.header_probe = s.media.header_probe.clone().map(as_raw);
     s
 }
 

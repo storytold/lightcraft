@@ -1,0 +1,2333 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::fs::{File, Metadata};
+use std::io::{self, Read, Write};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::SystemTime;
+
+use lightcraft_catalog::{PhotoId, Source};
+use lightcraft_preview::{Hash128, Hasher128};
+
+/// What identifies one version of a file: its length and modification time, and on Unix its device, inode and
+/// change time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: SystemTime,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+impl Stamp {
+    /// Whether `other` is a stamp of the same file with the same length and modification time,
+    /// whatever its status change time.
+    fn same_version(&self, other: &Self) -> bool {
+        #[cfg(unix)]
+        let same_file = (self.identity.0, self.identity.1) == (other.identity.0, other.identity.1);
+        #[cfg(not(unix))]
+        let same_file = true;
+        same_file && self.len == other.len && self.modified == other.modified
+    }
+    /// The stamp of a regular file's metadata; `None` for anything else or without a modification time.
+    fn of(meta: &Metadata) -> Option<Self> {
+        if !meta.is_file() {
+            return None;
+        }
+        Some(Self {
+            len: meta.len(),
+            modified: meta.modified().ok()?,
+            #[cfg(unix)]
+            identity: {
+                use std::os::unix::fs::MetadataExt;
+                (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
+            },
+        })
+    }
+}
+
+/// Open handles held by live read proofs, process-wide; [`ReadProof::new`] stops at 128.
+static READ_HANDLES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// An open handle on the file a read came from, kept so a later check can tell that the file at the path is
+/// still that one (on Windows the handle also keeps writers out, unless it shares writes).
+#[derive(Debug)]
+struct ReadProof {
+    file: Mutex<Option<File>>,
+    #[cfg(windows)]
+    identity: (u64, [u8; 16]),
+}
+impl ReadProof {
+    /// Keeps `file` as proof; `None` when the handle can't prove anything (`share_safe` false) or 128 proofs
+    /// are already open.
+    fn new(file: File, share_safe: bool) -> Option<Arc<Self>> {
+        if !share_safe {
+            return None;
+        }
+        #[cfg(windows)]
+        let identity = physical_identity(&file).ok()?;
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut count = READ_HANDLES.load(Relaxed);
+        loop {
+            if count >= 128 {
+                return None;
+            }
+            match READ_HANDLES.compare_exchange_weak(count, count + 1, Relaxed, Relaxed) {
+                Ok(_) => break,
+                Err(current) => count = current,
+            }
+        }
+        Some(Arc::new(Self {
+            file: Mutex::new(Some(file)),
+            #[cfg(windows)]
+            identity,
+        }))
+    }
+    /// Whether the file at `path` is still the one held, with the stamp `stamp`.
+    fn current(&self, path: &str, stamp: &Stamp) -> bool {
+        #[cfg(unix)]
+        {
+            self.matches(stamp) && std::fs::metadata(path).ok().as_ref().and_then(Stamp::of).as_ref() == Some(stamp)
+        }
+        #[cfg(windows)]
+        {
+            self.matches_path(path, stamp)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (path, stamp);
+            false
+        }
+    }
+    /// Closes the held handle; every later check fails.
+    fn release(&self) {
+        if self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take().is_some() {
+            READ_HANDLES.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    /// Whether the held handle still has the stamp `stamp`.
+    #[cfg(unix)]
+    fn matches(&self, stamp: &Stamp) -> bool {
+        self.file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|file| file.metadata().ok())
+            .as_ref()
+            .and_then(Stamp::of)
+            .as_ref()
+            == Some(stamp)
+    }
+    /// Whether the held handle and the file now at `path` are the same file, both with the stamp `stamp`.
+    #[cfg(windows)]
+    fn matches_path(&self, path: &str, stamp: &Stamp) -> bool {
+        let held = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(held) = held.as_ref() else { return false };
+        if held.metadata().ok().as_ref().and_then(Stamp::of).as_ref() != Some(stamp) || physical_identity(held).ok() != Some(self.identity) {
+            return false;
+        }
+        let Ok((current, true)) = open_read(path, Open::DenyingWrites) else { return false };
+        current.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(stamp) && physical_identity(&current).ok() == Some(self.identity)
+    }
+}
+impl Drop for ReadProof {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// The [`Originals`] a piece of evidence came from, without keeping it alive.
+#[derive(Clone, Debug)]
+pub(crate) struct ReaderOrigin(std::sync::Weak<RwLock<State>>);
+impl ReaderOrigin {
+    /// Whether `reader` is that reader and has not been retired.
+    fn matches(&self, reader: &Originals) -> bool {
+        self.0
+            .upgrade()
+            .is_some_and(|state| Arc::ptr_eq(&state, &reader.state) && state.read().unwrap_or_else(std::sync::PoisonError::into_inner).active)
+    }
+}
+
+/// A header read's stamp and the handle it read from.
+#[derive(Clone, Debug)]
+struct HeaderObservation {
+    stamp: Stamp,
+    proof: Arc<ReadProof>,
+}
+impl HeaderObservation {
+    /// Whether the file at `path` is still the version whose headers were read.
+    fn current(&self, path: &str) -> bool {
+        self.proof.current(path, &self.stamp)
+    }
+    /// Whether `fp` is a read of the same file version as this header read.
+    fn same_snapshot(&self, fp: &Fingerprint) -> bool {
+        if self.stamp != fp.stamp {
+            return false;
+        }
+        let Some(other) = &fp.proof else { return false };
+        if Arc::ptr_eq(&self.proof, other) {
+            return true;
+        }
+        let a = self.proof.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let b = other.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        a.as_ref().zip(b.as_ref()).is_some_and(|(a, b)| same_file_handles(a, b))
+    }
+}
+
+/// What a probe of an original learned (hash, size, dimensions, preview) and the reads that back it, carried
+/// from the probe to the import that adds the photo.
+#[derive(Clone, Debug)]
+pub struct ProbeEvidence {
+    origin: ReaderOrigin,
+    path: String,
+    fingerprint: Option<Arc<Fingerprint>>,
+    metadata_hash: Option<Hash128>,
+    header: Option<HeaderObservation>,
+    hash: Option<String>,
+    size: u64,
+    dimensions: (u32, u32),
+    preview: Option<String>,
+}
+impl ProbeEvidence {
+    /// Whether `info` states the size, dimensions and preview state this evidence does.
+    fn same_facts(&self, info: &crate::media::ProbeInfo) -> bool {
+        self.size == info.file_size && self.dimensions == (info.width, info.height) && self.preview == info.preview_only
+    }
+    /// Whether this evidence comes from `reader` and states `info`'s facts for `path`.
+    pub(crate) fn matches(&self, reader: &Originals, path: &str, info: &crate::media::ProbeInfo) -> bool {
+        self.origin.matches(reader) && self.path == path && self.hash == info.content_hash && self.same_facts(info)
+    }
+    /// Whether a whole read of the file still at `path` proves the content hash `hash`.
+    pub(crate) fn confirms_hash(&self, reader: &Originals, path: &str, hash: &str) -> bool {
+        self.origin.matches(reader)
+            && self.path == path
+            && self
+                .fingerprint
+                .as_ref()
+                .is_some_and(|fp| self.metadata_hash == Some(fp.hash) && crate::sync::base_hash(hash) == fp.hash.to_string() && fp.current(path))
+    }
+    /// Whether a held proof shows the file changed since it was read. A released proof proves nothing either
+    /// way and is not stale.
+    pub(crate) fn stale(&self) -> bool {
+        self.fingerprint.as_ref().is_some_and(|fp| {
+            let live = fp.proof.as_ref().is_some_and(|p| p.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some());
+            live && !fp.current(&self.path)
+        }) || self.header.as_ref().is_some_and(|header| {
+            let live = header.proof.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some();
+            live && !header.current(&self.path)
+        })
+    }
+    /// Whether `fp`, a whole read of `path`, is of the same file version as this evidence.
+    fn binds(&self, reader: &Originals, path: &str, info: &crate::media::ProbeInfo, fp: &Fingerprint) -> bool {
+        self.origin.matches(reader)
+            && self.path == path
+            && self.same_facts(info)
+            && (self.metadata_hash == Some(fp.hash) || self.header.as_ref().is_some_and(|h| h.same_snapshot(fp)))
+    }
+    /// Closes the handles this evidence holds.
+    pub(crate) fn release(&self) {
+        if let Some(fp) = &self.fingerprint {
+            fp.release();
+        }
+        self.release_header();
+    }
+    /// Closes the header read's handle.
+    fn release_header(&self) {
+        if let Some(header) = &self.header {
+            header.proof.release();
+        }
+    }
+}
+/// Evidence for `info` from `reader`, keeping `fp` only when it is the whole read that hashed to `info`'s
+/// content hash.
+fn evidence(
+    reader: &Originals,
+    path: &str,
+    info: &crate::media::ProbeInfo,
+    fp: Option<Fingerprint>,
+    metadata_hash: Option<Hash128>,
+) -> ProbeEvidence {
+    ProbeEvidence {
+        origin: reader.origin(),
+        path: path.to_owned(),
+        fingerprint: fp
+            .filter(|fp| {
+                metadata_hash == Some(fp.hash)
+                    && info.content_hash.as_deref().is_some_and(|h| crate::sync::base_hash(h) == fp.hash.to_string())
+                    && fp.len() == info.file_size
+            })
+            .map(Arc::new),
+        metadata_hash,
+        header: None,
+        hash: info.content_hash.clone(),
+        size: info.file_size,
+        dimensions: (info.width, info.height),
+        preview: info.preview_only.clone(),
+    }
+}
+/// Evidence for a probe of `path` from the bound reader; `None` with no reader bound.
+pub(crate) fn probe_evidence(path: &str, info: &crate::media::ProbeInfo, fp: Option<Fingerprint>) -> Option<ProbeEvidence> {
+    let reader = bound_reader()?;
+    Some(evidence(&reader, path, info, fp, info.content_hash.as_deref().and_then(Hash128::parse)))
+}
+
+/// A header probe in progress: the open file, its stamp before reading and the reader it reports to.
+pub(crate) struct HeaderRead {
+    /// The file being probed.
+    pub file: File,
+    path: String,
+    before: Option<Stamp>,
+    share_safe: bool,
+    reader: Originals,
+    registration: Arc<()>,
+}
+impl HeaderRead {
+    /// Opens `path` for a header probe, keeping writers out on Windows.
+    pub(crate) fn open(path: &str) -> io::Result<Self> {
+        let reader = current_reader()?;
+        let registration = reader.registration();
+        let (file, share_safe) = open_read(path, Open::DenyingWrites)?;
+        let before = file.metadata().ok().as_ref().and_then(Stamp::of);
+        Ok(Self { file, path: path.to_owned(), before, share_safe, reader, registration })
+    }
+    /// Ends the probe: fails when the file changed while its headers were read, else attaches the read's
+    /// evidence to `info`.
+    pub(crate) fn finish(self, mut info: crate::media::ProbeInfo) -> io::Result<crate::media::ProbeInfo> {
+        let after = self.file.metadata().ok().as_ref().and_then(Stamp::of);
+        if self.before != after {
+            return Err(io::Error::other("original changed while reading headers"));
+        }
+        let proof = ReadProof::new(self.file, self.share_safe);
+        self.reader.track(&self.path, &proof, &self.registration);
+        let header = self.before.zip(proof).map(|(stamp, proof)| HeaderObservation { stamp, proof });
+        let mut native = evidence(&self.reader, &self.path, &info, None, None);
+        native.header = header;
+        info.native_read = Some(native);
+        Ok(info)
+    }
+}
+
+/// The content hash of one whole read of a file, the stamp of the version read and, while it lasts, the
+/// handle that proves the file is still that version.
+#[derive(Clone, Debug)]
+pub struct Fingerprint {
+    /// The hash of the bytes read.
+    pub hash: Hash128,
+    stamp: Stamp,
+    proof: Option<Arc<ReadProof>>,
+    facts: Option<crate::media::ProbeInfo>,
+    replaced: bool,
+}
+impl Fingerprint {
+    /// The facts probed from the bytes read, when the read probed them.
+    pub(crate) fn probe_info(&self) -> Option<crate::media::ProbeInfo> {
+        self.facts.clone()
+    }
+    /// The length of the file version read.
+    pub fn len(&self) -> u64 {
+        self.stamp.len
+    }
+    /// Whether the file read was empty.
+    pub fn is_empty(&self) -> bool {
+        self.stamp.len == 0
+    }
+    /// Whether the path's current metadata still has the stamp read (no handle check).
+    fn observed(&self, path: &str) -> bool {
+        std::fs::metadata(path).ok().as_ref().and_then(Stamp::of).as_ref() == Some(&self.stamp)
+    }
+    /// Whether the file at `path` is still the version this fingerprint read.
+    pub(crate) fn current(&self, path: &str) -> bool {
+        self.proof.as_ref().is_some_and(|proof| proof.current(path, &self.stamp))
+    }
+    /// Closes the proof's handle.
+    pub(crate) fn release(&self) {
+        if let Some(proof) = &self.proof {
+            proof.release();
+        }
+    }
+}
+
+/// Where a read's hash lets cached smart previews and denoise products under the photo's old keys be reached
+/// under the new one.
+#[derive(Clone, PartialEq, Eq)]
+struct Migration {
+    keys: Vec<String>,
+    smart: Option<std::path::PathBuf>,
+    denoise: Option<(std::path::PathBuf, String)>,
+}
+/// The library's interest in reads of one path: the masters there, their catalogued facts, whether a read
+/// should hash, and the stamp seen when the watch was made.
+struct Watch {
+    migration: Migration,
+    ids: Vec<PhotoId>,
+    size: u64,
+    dimensions: (u32, u32),
+    preview: Option<String>,
+    known_hash: Option<String>,
+    wants: bool,
+    quarantined: bool,
+    observed: Option<Stamp>,
+    ticket: crate::cache_identity::SourceTicket,
+}
+impl Watch {
+    /// Whether the file read with `stamp` is no longer the one this watch observed when it was made:
+    /// another file, or the same one rewritten. A change of status alone (a hard link added or
+    /// removed, as a Move's cleanup does) is not a replacement.
+    fn replaced_by(&self, stamp: &Stamp) -> bool {
+        self.observed.as_ref().is_some_and(|observed| !observed.same_version(stamp))
+    }
+}
+/// A whole read of a watched path, waiting for [`crate::Session::learn_read_hashes`].
+pub(crate) struct ReadEvent {
+    /// The path read.
+    pub path: String,
+    /// The read's hash and proof.
+    pub fingerprint: Fingerprint,
+    watch: Arc<Watch>,
+}
+/// Whether the reader is still in use, the watched paths, and the registration a folder change replaces.
+struct State {
+    active: bool,
+    wanted: HashMap<String, Arc<Watch>>,
+    registration: Arc<()>,
+}
+/// The session's reader of originals: every whole read of a photo's file goes through it, and a read of a
+/// path the library watches hashes the bytes so the catalog learns them without a second read.
+#[derive(Clone)]
+pub struct Originals {
+    state: Arc<RwLock<State>>,
+    sink: Arc<Mutex<Vec<ReadEvent>>>,
+    candidates: Arc<Mutex<HashMap<String, Fingerprint>>>,
+    proofs: Arc<Mutex<Vec<(String, std::sync::Weak<ReadProof>)>>>,
+    overflow_reported: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(test)]
+    reads: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(test)]
+    hashes: Arc<std::sync::atomic::AtomicUsize>,
+}
+impl Default for Originals {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(RwLock::new(State { active: true, wanted: HashMap::new(), registration: Arc::new(()) })),
+            sink: Default::default(),
+            candidates: Default::default(),
+            proofs: Default::default(),
+            overflow_reported: Default::default(),
+            #[cfg(test)]
+            reads: Default::default(),
+            #[cfg(test)]
+            hashes: Default::default(),
+        }
+    }
+}
+thread_local! {
+    /// The reader bound on this thread, which the free functions read through.
+    static CURRENT: RefCell<Option<Originals>> = const { RefCell::new(None) };
+}
+thread_local! {
+    /// The last whole read on this thread, for a [`ReadCapture`] to pick up.
+    static LAST_READ: RefCell<Option<(String, Fingerprint)>> = const { RefCell::new(None) };
+}
+#[cfg(test)]
+thread_local! { static COMPARE_OPENED: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) }; }
+thread_local! {
+    /// How many [`ReadCapture`]s are open on this thread.
+    static CAPTURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+/// Collects the fingerprint of the last read a call made on this thread, restoring the outer capture's on
+/// drop.
+pub(crate) struct ReadCapture(Option<(String, Fingerprint)>);
+impl ReadCapture {
+    /// Starts a capture, putting the outer one's last read aside.
+    pub(crate) fn new() -> Self {
+        CAPTURES.with(|depth| depth.set(depth.get().saturating_add(1)));
+        Self(LAST_READ.with(|slot| slot.take()))
+    }
+    /// The fingerprint of the last read of `path` since the capture started.
+    pub(crate) fn fingerprint(&self, path: &str) -> Option<Fingerprint> {
+        LAST_READ.with(|slot| slot.borrow().as_ref().filter(|(p, _)| p == path).map(|(_, fp)| fp.clone()))
+    }
+}
+impl Drop for ReadCapture {
+    fn drop(&mut self) {
+        LAST_READ.with(|slot| slot.replace(self.0.take()));
+        CAPTURES.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+/// Records `fp` as this thread's last read of `path`.
+fn remember(path: &str, fp: &Fingerprint) {
+    LAST_READ.with(|slot| {
+        slot.replace(Some((path.to_owned(), fp.clone())));
+    });
+}
+/// Binds a reader to this thread until dropped; a standalone binding also retires its own reader then.
+pub(crate) struct Binding {
+    previous: Option<Originals>,
+    _capture: ReadCapture,
+    standalone: Option<Originals>,
+}
+impl Drop for Binding {
+    fn drop(&mut self) {
+        if let Some(reader) = self.standalone.take() {
+            reader.retire();
+        }
+        CURRENT.with(|slot| {
+            slot.replace(self.previous.take());
+        });
+    }
+}
+impl Originals {
+    /// A weak reference to this reader, for evidence to name where it came from.
+    pub(crate) fn origin(&self) -> ReaderOrigin {
+        ReaderOrigin(Arc::downgrade(&self.state))
+    }
+    /// Whether evidence from `origin` came from this reader.
+    pub(crate) fn accepts_origin(&self, origin: &ReaderOrigin) -> bool {
+        origin.matches(self)
+    }
+    /// Reports the read behind a probe's evidence for photo `id` when the photo is still the file and facts
+    /// the evidence describes.
+    pub(crate) fn adopt_probe(&self, s: &crate::Session, id: PhotoId, evidence: &ProbeEvidence) {
+        let Some(p) = s.catalog.photo(id) else { return };
+        if !evidence.origin.matches(self)
+            || !matches!(&p.source, Source::File { path } if path == &evidence.path)
+            || (p.width, p.height) != evidence.dimensions
+            || p.file_size != evidence.size
+            || p.preview_only != evidence.preview
+        {
+            return;
+        }
+        evidence.release_header();
+        let Some(fp) = evidence.fingerprint.as_deref().filter(|fp| {
+            evidence.metadata_hash == Some(fp.hash) && evidence.hash.as_deref().is_some_and(|h| crate::sync::base_hash(h) == fp.hash.to_string())
+        }) else {
+            return;
+        };
+        self.report(&evidence.path, fp, self.watch(&evidence.path));
+    }
+    /// The evidence for an import candidate at `path`, bound to a whole read of it when one is known.
+    pub(crate) fn candidate_probe(&self, path: &str, info: &crate::media::ProbeInfo) -> Option<ProbeEvidence> {
+        let source = info.native_read.as_ref()?;
+        if source.matches(self, path, info) && source.metadata_hash.is_some() {
+            return Some(source.clone());
+        }
+        let fp = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(path).cloned();
+        let bound = fp.as_ref().filter(|fp| source.binds(self, path, info, fp)).cloned();
+        let hash = bound.as_ref().map(|fp| fp.hash);
+        if bound.is_some() {
+            source.release_header();
+        }
+        Some(evidence(self, path, info, bound, hash))
+    }
+    /// [`Originals::candidate_probe`] for a file found to repeat a known one by its content hash: when that
+    /// evidence holds no live proof of the hash (none could be kept while 128 were open), the file is read
+    /// again for a fresh one, so commit can still check the file did not change.
+    pub(crate) fn confirmed_probe(&self, path: &str, info: &crate::media::ProbeInfo) -> Option<ProbeEvidence> {
+        let found = self.candidate_probe(path, info)?;
+        let Some(hash) = info.content_hash.as_deref() else { return Some(found) };
+        if found.stale() || found.confirms_hash(self, path, hash) {
+            return Some(found);
+        }
+        let Ok(fp) = self.hash_whole(path) else { return Some(found) };
+        let fresh = fp.hash;
+        let reread = evidence(self, path, info, Some(fp), Some(fresh));
+        if !reread.confirms_hash(self, path, hash) {
+            reread.release();
+            return Some(found);
+        }
+        found.release();
+        Some(reread)
+    }
+    /// The evidence for a file a Copy or Move placed at `path`, taking the hash from the copy's read or the
+    /// source's evidence; releases the source's proofs.
+    pub(crate) fn transfer_probe(
+        &self,
+        source_path: &str,
+        source: Option<&ProbeEvidence>,
+        path: &str,
+        info: &crate::media::ProbeInfo,
+        fp: Option<Fingerprint>,
+    ) -> ProbeEvidence {
+        let source_fp = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(source_path).cloned();
+        let fp = fp.or_else(|| self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(path).cloned());
+        let hash = fp
+            .as_ref()
+            .filter(|fp| {
+                fp.facts.as_ref().is_some_and(|facts| {
+                    (facts.width, facts.height, facts.file_size, &facts.preview_only) == (info.width, info.height, info.file_size, &info.preview_only)
+                }) || source.is_none()
+                    || source.is_some_and(|source| {
+                        source.origin.matches(self)
+                            && source.path == source_path
+                            && source.same_facts(info)
+                            && (source.metadata_hash == Some(fp.hash)
+                                || source_fp.as_ref().is_some_and(|read| read.hash == fp.hash && source.binds(self, source_path, info, read)))
+                    })
+            })
+            .map(|fp| fp.hash);
+        let native = evidence(self, path, info, fp, hash);
+        if let Some(source) = source {
+            source.release();
+        }
+        self.discard_candidate(source_path);
+        native
+    }
+    /// Forgets the read of `path` kept for an import that no longer needs it, unless the library watches the
+    /// path.
+    pub(crate) fn discard_candidate(&self, path: &str) {
+        if self.watch_any(path).is_none()
+            && let Some(fp) = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(path)
+        {
+            fp.release();
+        }
+    }
+    /// Runs `f` with this reader bound and passes its read of `path` on to an outer capture.
+    fn native_scope<T>(&self, path: &str, f: impl FnOnce() -> T) -> T {
+        let binding = self.bind();
+        let result = f();
+        let fp = binding._capture.fingerprint(path);
+        drop(binding);
+        if CAPTURES.with(|depth| depth.get() > 0)
+            && let Some(fp) = fp
+        {
+            remember(path, &fp);
+        }
+        result
+    }
+    /// Runs `f` with this reader bound to the thread.
+    pub fn in_scope<T>(&self, f: impl FnOnce() -> T) -> T {
+        let _binding = self.bind();
+        f()
+    }
+    /// Binds this reader to the thread until the binding drops.
+    pub(crate) fn bind(&self) -> Binding {
+        let previous = CURRENT.with(|slot| slot.replace(Some(self.clone())));
+        Binding { previous, _capture: ReadCapture::new(), standalone: None }
+    }
+    /// Stops this reader: it closes every proof and drops pending reads and candidates.
+    pub(crate) fn retire(&self) {
+        self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner).active = false;
+        for proof in self.proofs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain(..).filter_map(|(_, p)| p.upgrade()) {
+            proof.release();
+        }
+        self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+        self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+    }
+    /// The current registration; a read registered under an older one is not kept.
+    fn registration(&self) -> Arc<()> {
+        self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner).registration.clone()
+    }
+    /// Closes the proofs and forgets the watches, reads and candidates under `root`, before a folder there is
+    /// renamed or moved.
+    pub(crate) fn revoke_under(&self, root: &std::path::Path) {
+        let under = |path: &str| std::path::Path::new(path).starts_with(root);
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.registration = Arc::new(());
+        state.wanted.retain(|path, _| !under(path));
+        self.proofs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(path, weak)| {
+            if let Some(proof) = weak.upgrade() {
+                if under(path) {
+                    proof.release();
+                    return false;
+                }
+                return proof.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some();
+            }
+            false
+        });
+        self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|event| !under(&event.path));
+        self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|path, _| !under(path));
+    }
+    /// Releases `fp`, a read made only to copy a file, and forgets it as a candidate unless the path is
+    /// watched.
+    pub(crate) fn discard_scratch(&self, path: &str, fp: &Fingerprint) {
+        if self.watch_any(path).is_some() {
+            return;
+        }
+        let mut candidates = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if candidates.get(path).is_some_and(|saved| saved.proof.as_ref().zip(fp.proof.as_ref()).is_some_and(|(a, b)| Arc::ptr_eq(a, b))) {
+            candidates.remove(path);
+        }
+        fp.release();
+    }
+    /// Keeps a weak handle on `proof` so [`Originals::retire`] and [`Originals::revoke_under`] can close it;
+    /// closes it at once when the reader was retired or its registration replaced.
+    fn track(&self, path: &str, proof: &Option<Arc<ReadProof>>, registration: &Arc<()>) {
+        let Some(proof) = proof else { return };
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.active || !Arc::ptr_eq(&state.registration, registration) {
+            proof.release();
+            return;
+        }
+        let mut proofs = self.proofs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        proofs.retain(|(_, weak)| weak.upgrade().is_some_and(|proof| proof.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()));
+        if proofs.len() < 128 && proofs.try_reserve(1).is_ok() {
+            proofs.push((path.to_owned(), Arc::downgrade(proof)));
+        } else {
+            proof.release();
+        }
+        drop(proofs);
+        drop(state);
+    }
+    /// Rebuilds the watches from the catalog: one per path of a physical master, wanting a hash when any
+    /// master there lacks one or needs validation.
+    pub(crate) fn refresh(&self, s: &crate::Session) {
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut wanted: HashMap<String, Vec<PhotoId>> = HashMap::new();
+        for p in s.catalog.photos().filter(|p| {
+            !p.local && !p.deleted && (p.copy_of.is_none() || crate::media::physical_photo(&s.catalog, p.id).is_some_and(|master| master.id == p.id))
+        }) {
+            let Source::File { path } = &p.source else { continue };
+            wanted.entry(path.clone()).or_default().push(p.id);
+        }
+        let mut next = HashMap::new();
+        for (path, mut ids) in wanted {
+            ids.sort_unstable();
+            let masters: Vec<_> = ids.iter().filter_map(|id| s.catalog.photo(*id)).collect();
+            let Some(p) = masters.first().copied() else { continue };
+            let quarantined = masters.iter().any(|m| s.media.identities.needs_validation(m));
+            let wants = quarantined || masters.iter().any(|m| m.content_hash.is_none());
+            let migration = Migration {
+                keys: s.media.content_keys(p),
+                smart: s.media.smart_dir.clone(),
+                denoise: s.denoise_products_dir().zip(s.denoise.active.as_ref().map(|a| a.fingerprint.clone())),
+            };
+            let old = state.wanted.get(&path).filter(|w| {
+                w.ids == ids
+                    && w.size == p.file_size
+                    && w.dimensions == (p.width, p.height)
+                    && w.preview == p.preview_only
+                    && w.known_hash == p.content_hash
+                    && w.wants == wants
+                    && w.quarantined == quarantined
+                    && w.migration == migration
+                    && w.ticket.current()
+            });
+            let watch = old.cloned().unwrap_or_else(|| {
+                Arc::new(Watch {
+                    migration,
+                    ids,
+                    size: p.file_size,
+                    dimensions: (p.width, p.height),
+                    preview: p.preview_only.clone(),
+                    known_hash: p.content_hash.clone(),
+                    wants,
+                    quarantined,
+                    observed: wants.then(|| std::fs::metadata(&path).ok().as_ref().and_then(Stamp::of)).flatten(),
+                    ticket: s.media.identities.ticket(p),
+                })
+            });
+            next.insert(path, watch);
+        }
+        state.wanted = next;
+    }
+    /// Forgets the watches of the photos `ids` before they leave the catalog.
+    pub(crate) fn drop_membership(&self, ids: &[PhotoId]) {
+        self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner).wanted.retain(|_, w| !w.ids.iter().any(|id| ids.contains(id)));
+    }
+    /// Reports the reads kept for import candidates that became the photos `ids`.
+    pub(crate) fn adopt_candidates(&self, s: &crate::Session, ids: &[PhotoId]) {
+        for id in ids {
+            let Some(p) = s.catalog.photo(*id) else { continue };
+            let Source::File { path } = &p.source else { continue };
+            let fp = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(path);
+            if let Some(fp) =
+                fp.filter(|fp| fp.current(path) && p.content_hash.as_deref().is_none_or(|h| crate::sync::base_hash(h) == fp.hash.to_string()))
+            {
+                self.report(path, &fp, self.watch(path));
+            }
+        }
+    }
+    /// The watch on `path` when it wants reads hashed.
+    fn watch(&self, path: &str) -> Option<Arc<Watch>> {
+        self.watch_any(path).filter(|w| w.wants)
+    }
+    /// The watch on `path`, if any, while the reader is active.
+    fn watch_any(&self, path: &str) -> Option<Arc<Watch>> {
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.active.then(|| state.wanted.get(path).cloned()).flatten()
+    }
+    /// Queues `fp` for `watch` when the file is still the one read and the photo's cache identity hasn't
+    /// moved on.
+    fn report(&self, path: &str, fp: &Fingerprint, watch: Option<Arc<Watch>>) {
+        let Some(watch) = watch else { return };
+        if !fp.current(path) || !watch.ticket.current() {
+            return;
+        }
+        let mut sink = self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if sink.len() < 4096 && sink.try_reserve(1).is_ok() {
+            sink.push(ReadEvent { path: path.to_owned(), fingerprint: fp.clone(), watch });
+        } else if !self.overflow_reported.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            log::warn!("original read hash queue full; a later read can retry learning");
+        }
+    }
+    /// Reads the file at `path` into memory; the fingerprint is there when the read was hashed and proven.
+    pub fn read_whole(&self, path: &str) -> io::Result<(Vec<u8>, Option<Fingerprint>)> {
+        self.read_buffer(path, false).map(|(bytes, fp, _)| (bytes, fp))
+    }
+    /// Reads `path` whole, hashing it when the path is watched or `force` is set.
+    fn read_buffer(&self, path: &str, force: bool) -> io::Result<(Vec<u8>, Option<Fingerprint>, Option<Hash128>)> {
+        let registration = self.registration();
+        let watch = if force { self.watch_any(path) } else { self.watch(path) };
+        let open = match (&watch, force) {
+            (Some(_), _) => Open::SharingWrites,
+            (None, true) => Open::DenyingWrites,
+            (None, false) => Open::Plain,
+        };
+        let (mut file, share_safe) = open_read(path, open)?;
+        let before = file.metadata().ok().as_ref().and_then(Stamp::of);
+        let reserve = before.as_ref().map_or(Ok(0), |stamp| buffer_len(stamp.len))?;
+        let bytes = read_bounded(&mut file, usize::MAX, reserve)?;
+        #[cfg(test)]
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let hash = if watch.is_some() || force {
+            #[cfg(test)]
+            self.hashes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some(lightcraft_preview::hash_bytes(&bytes))
+        } else {
+            None
+        };
+        let fp = hash.and_then(|hash| {
+            before
+                .filter(|b| b.len == bytes.len() as u64 && file.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(b))
+                .map(|stamp| {
+                    let replaced = watch.as_ref().is_some_and(|w| w.observed.as_ref().is_some_and(|before| before != &stamp));
+                    let changed_hash =
+                        watch.as_ref().and_then(|w| w.known_hash.as_deref()).is_some_and(|h| crate::sync::base_hash(h) != hash.to_string());
+                    let facts = (replaced || changed_hash || watch.as_ref().is_some_and(|w| w.wants))
+                        .then(|| crate::files::probe_bytes_with(path, &bytes, false).ok())
+                        .flatten();
+                    Fingerprint { hash, stamp, facts, replaced, proof: ReadProof::new(file, share_safe) }
+                })
+                .filter(|fp| fp.current(path))
+        });
+        if let Some(fp) = &fp {
+            self.track(path, &fp.proof, &registration);
+            remember(path, fp);
+            if let Some(watch) = &watch {
+                self.migrate(path, fp, watch);
+            }
+            self.report(path, fp, watch);
+        }
+        Ok((bytes, fp, hash))
+    }
+    /// Links the smart preview and denoise product kept under the photo's old keys to the hash just read,
+    /// when the read proves the file is the one catalogued.
+    fn migrate(&self, path: &str, fp: &Fingerprint, watch: &Watch) {
+        let hash = fp.hash.to_string();
+        if watch.quarantined || fp.replaced || watch.known_hash.as_deref().is_some_and(|h| crate::sync::base_hash(h) != hash) {
+            return;
+        }
+        if fp.facts.as_ref().is_some_and(|facts| {
+            facts.file_size != watch.size || (facts.width, facts.height) != watch.dimensions || facts.preview_only != watch.preview
+        }) || (watch.known_hash.is_none() && fp.facts.is_none())
+        {
+            return;
+        }
+        if let Some(dir) = &watch.migration.smart {
+            let target = crate::smart::paths_for_keys(dir, std::slice::from_ref(&hash)).into_iter().next();
+            if let Some(target) = target {
+                watch.ticket.publish(|| {
+                    if !fp.current(path) || crate::smart::is_valid(&target) {
+                        return;
+                    }
+                    let Some(source) = crate::smart::paths_for_keys(dir, &watch.migration.keys).into_iter().find(|p| crate::smart::is_valid(p))
+                    else {
+                        return;
+                    };
+                    if let Some(parent) = target.parent()
+                        && std::fs::create_dir_all(parent).is_err()
+                    {
+                        return;
+                    }
+                    let _ = std::fs::hard_link(source, target);
+                });
+            }
+        }
+        if let Some((dir, model)) = &watch.migration.denoise {
+            crate::denoise::migrate_product(dir, model, &watch.migration.keys, &hash, &watch.ticket, || fp.current(path));
+        }
+    }
+    /// Streams the file at `path` into `out` and fingerprints it.
+    pub fn copy_whole(&self, path: &str, out: &mut impl Write) -> io::Result<Fingerprint> {
+        self.copy_stream(path, out, true)
+    }
+    /// [`Originals::copy_whole`], keeping a proof and reporting the read only when `observe` is set.
+    fn copy_stream(&self, path: &str, out: &mut impl Write, observe: bool) -> io::Result<Fingerprint> {
+        self.copy_from(path, out, observe, || open_read(path, if observe { Open::DenyingWrites } else { Open::Plain }))
+    }
+    /// Streams the file `open` returns for `path` into `out` and fingerprints it, as
+    /// [`Originals::copy_whole`] does for the file it opens itself.
+    fn copy_from(&self, path: &str, out: &mut impl Write, observe: bool, open: impl FnOnce() -> io::Result<(File, bool)>) -> io::Result<Fingerprint> {
+        let registration = self.registration();
+        let watch = observe.then(|| self.watch(path)).flatten();
+        let (mut file, share_safe) = open()?;
+        let before = file.metadata().ok().as_ref().and_then(Stamp::of);
+        let mut hash = Hasher128::new();
+        let mut buf = vec![0; 1 << 20];
+        let mut len = 0u64;
+        loop {
+            let n = read_retry(&mut file, &mut buf)?;
+            if n == 0 {
+                break;
+            }
+            let bytes = buf.get(..n).ok_or_else(|| io::Error::other("invalid file read length"))?;
+            out.write_all(bytes)?;
+            hash.update(bytes);
+            len = len.checked_add(n as u64).ok_or_else(|| io::Error::other("file too large"))?;
+        }
+        #[cfg(test)]
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(test)]
+        self.hashes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let stamp = before
+            .filter(|b| b.len == len && file.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(b))
+            .ok_or_else(|| io::Error::other("original changed while reading"))?;
+        let proof = observe.then(|| ReadProof::new(file, share_safe)).flatten();
+        let replaced = watch.as_ref().is_some_and(|w| w.replaced_by(&stamp));
+        let fp = Fingerprint { hash: hash.finish(), stamp, facts: None, replaced, proof };
+        if !fp.observed(path) {
+            return Err(io::Error::other("original changed while reading"));
+        }
+        self.track(path, &fp.proof, &registration);
+        remember(path, &fp);
+        if observe && watch.is_none() && fp.current(path) {
+            let mut candidates = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if candidates.len() < 4096 && candidates.try_reserve(1).is_ok() {
+                candidates.insert(path.to_owned(), fp.clone());
+            }
+        }
+        self.report(path, &fp, watch);
+        Ok(fp)
+    }
+    /// Fingerprints the file at `path` without keeping its bytes.
+    pub fn hash_whole(&self, path: &str) -> io::Result<Fingerprint> {
+        self.copy_whole(path, &mut io::sink())
+    }
+    /// Takes the queued reads.
+    pub(crate) fn drain(&self) -> Vec<ReadEvent> {
+        std::mem::take(&mut *self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+    /// Whether `event` was made for the watch the path still has.
+    pub(crate) fn same_lifecycle(&self, event: &ReadEvent) -> bool {
+        self.watch_any(&event.path).is_some_and(|w| Arc::ptr_eq(&w, &event.watch)) && event.watch.ticket.current()
+    }
+    /// A byte reader that reads originals through this reader.
+    pub fn reader(&self) -> crate::merge::ByteReader {
+        let reader = self.clone();
+        Arc::new(move |path| reader.read_whole(path).map(|(b, _)| b).map_err(|e| format!("{path}: {e}")))
+    }
+    /// How many whole reads this reader made, and how many of them it hashed.
+    #[cfg(test)]
+    pub(crate) fn counts(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (self.reads.load(Relaxed), self.hashes.load(Relaxed))
+    }
+}
+
+/// Reads back the file just written at `path` and checks it holds exactly `data`.
+pub(crate) fn verify_generated(path: &std::path::Path, data: &[u8]) -> io::Result<Fingerprint> {
+    /// A writer that fails as soon as what it is given differs from `data`.
+    struct Exact<'a> {
+        data: &'a [u8],
+        at: usize,
+    }
+    impl Write for Exact<'_> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let end = self.at.checked_add(bytes.len()).ok_or_else(|| io::Error::other("verification offset overflow"))?;
+            if self.data.get(self.at..end) != Some(bytes) {
+                return Err(io::Error::other("the written file reads back different"));
+            }
+            self.at = end;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let path = path.to_str().ok_or_else(|| io::Error::other("generated path is not UTF-8"))?;
+    let mut out = Exact { data, at: 0 };
+    let fp = current_reader()?.copy_whole(path, &mut out)?;
+    if out.at != data.len() {
+        return Err(io::Error::other("the written file is truncated"));
+    }
+    Ok(fp)
+}
+/// Whether two open handles are the same regular file.
+pub(crate) fn same_file_handles(owned: &File, current: &File) -> bool {
+    let (Ok(a), Ok(b)) = (owned.metadata(), current.metadata()) else { return false };
+    if !a.is_file() || !b.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        a.ino() != 0 && (a.dev(), a.ino()) == (b.dev(), b.ino())
+    }
+    #[cfg(windows)]
+    {
+        physical_identity(owned).ok().zip(physical_identity(current).ok()).is_some_and(|(a, b)| a == b)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
+}
+/// Keeps the fingerprint of a file LightCraft just wrote at `path`, with the facts probed from its `bytes`,
+/// as an import candidate.
+pub(crate) fn record_generated(path: &str, bytes: &[u8], mut fp: Fingerprint) -> Result<(), String> {
+    if fp.proof.is_some() && !fp.current(path) {
+        return Err(format!("{path}: generated file changed after verification; original retained"));
+    }
+    let mut info = crate::files::probe_bytes_with(path, bytes, false)?;
+    info.content_hash = Some(fp.hash.to_string());
+    fp.facts = Some(info);
+    remember(path, &fp);
+    let reader = current_reader().map_err(|e| e.to_string())?;
+    if fp.current(path) {
+        let mut candidates = reader.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if candidates.len() < 4096 && candidates.try_reserve(1).is_ok() {
+            candidates.insert(path.to_owned(), fp);
+        }
+    }
+    Ok(())
+}
+/// The reader bound on this thread.
+pub(crate) fn bound_reader() -> Option<Originals> {
+    CURRENT.with(|slot| slot.borrow().clone())
+}
+/// The reader bound on this thread; an error without one.
+fn current_reader() -> io::Result<Originals> {
+    CURRENT.with(|slot| slot.borrow().clone()).ok_or_else(|| io::Error::other("original read requires a session reader binding"))
+}
+/// Binds a reader of its own when none is bound; `None` (keeping the session's) when one is.
+pub(crate) fn standalone_binding() -> Option<Binding> {
+    CURRENT.with(|slot| slot.borrow().is_none()).then(|| {
+        let reader = Originals::default();
+        let mut binding = reader.bind();
+        binding.standalone = Some(reader);
+        binding
+    })
+}
+/// Reads the file at `path` into memory through the bound reader.
+pub fn read_whole(path: &str) -> io::Result<Vec<u8>> {
+    current_reader()?.read_whole(path).map(|(bytes, _)| bytes)
+}
+/// Reads `path` whole and hashes it, through the bound reader.
+pub(crate) fn read_with_hash(path: &str) -> io::Result<(Vec<u8>, Hash128)> {
+    let (bytes, _, hash) = current_reader()?.read_buffer(path, true)?;
+    hash.map(|hash| (bytes, hash)).ok_or_else(|| io::Error::other("original fingerprint unavailable"))
+}
+/// Fingerprints the file at `path` through the bound reader.
+pub fn hash_whole(path: &str) -> io::Result<Fingerprint> {
+    current_reader()?.hash_whole(path)
+}
+/// Streams the file at `path` into `out` through the bound reader.
+pub fn copy_whole(path: &str, out: &mut impl Write) -> io::Result<Fingerprint> {
+    current_reader()?.copy_whole(path, out)
+}
+/// [`copy_whole`] from the handle `open` returns, never from a second open of `path`: the copy is
+/// of the very file the caller checked.
+pub(crate) fn copy_opened(path: &str, open: impl FnOnce() -> io::Result<File>, out: &mut impl Write) -> io::Result<Fingerprint> {
+    current_reader()?.copy_from(path, out, true, || open().map(|file| (file, cfg!(unix))))
+}
+
+/// The in-memory buffer length for an original of `len` bytes: any length the address space can
+/// hold, so a BigTIFF or large raw over 4 GiB reads as it did through `std::fs::read`.
+fn buffer_len(len: u64) -> io::Result<usize> {
+    usize::try_from(len).map_err(|_| io::Error::other("original is too large to read into memory"))
+}
+#[cfg(test)]
+thread_local! { static ORIGINAL_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
+/// The bytes of originals read on this thread.
+#[cfg(test)]
+pub(crate) fn read_bytes() -> u64 {
+    ORIGINAL_BYTES.get()
+}
+#[cfg(all(test, windows))]
+thread_local! { static FAIL_ID_QUERY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+/// The volume serial number and 128-bit file ID of an open file.
+#[cfg(windows)]
+fn physical_identity(file: &File) -> io::Result<(u64, [u8; 16])> {
+    #[cfg(test)]
+    if FAIL_ID_QUERY.get() {
+        return Err(io::Error::new(io::ErrorKind::Unsupported, "injected unsupported FileIdInfo"));
+    }
+    lightcraft_file_identity_sys::identity(file)
+}
+
+/// How [`open_read`] shares the file with writers on Windows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Open {
+    Plain,
+    SharingWrites,
+    DenyingWrites,
+}
+
+/// Opens `path` for reading, refusing anything but a regular file or folder; the flag says whether the handle
+/// can serve as proof.
+fn open_read(path: &str, open: Open) -> io::Result<(File, bool)> {
+    regular(&std::fs::metadata(path)?)?;
+    #[cfg(windows)]
+    if open != Open::Plain {
+        use std::os::windows::fs::OpenOptionsExt;
+        const SHARE_READ_AND_DELETE: u32 = 0x1 | 0x4;
+        const SHARE_WRITE: u32 = 0x2;
+        let share = if open == Open::SharingWrites { SHARE_READ_AND_DELETE | SHARE_WRITE } else { SHARE_READ_AND_DELETE };
+        if let Ok(file) = File::options().read(true).share_mode(share).open(path) {
+            regular(&file.metadata()?)?;
+            return Ok((file, true));
+        }
+    }
+    let _ = open;
+    let file = File::open(path)?;
+    regular(&file.metadata()?)?;
+    Ok((file, cfg!(unix)))
+}
+
+/// Refuses anything but a regular file or folder.
+fn regular(meta: &std::fs::Metadata) -> io::Result<()> {
+    if meta.is_file() || meta.is_dir() { Ok(()) } else { Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")) }
+}
+
+/// Reads into `out`, retrying when interrupted.
+fn read_retry(reader: &mut impl Read, out: &mut [u8]) -> io::Result<usize> {
+    loop {
+        match reader.read(out) {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Ok(n) => {
+                #[cfg(test)]
+                ORIGINAL_BYTES.set(ORIGINAL_BYTES.get().saturating_add(n as u64));
+                return Ok(n);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+/// Reads everything from `reader`, at most `limit` bytes, reserving `reserve` up front.
+fn read_bounded(reader: &mut impl Read, limit: usize, reserve: usize) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(reserve.min(limit)).map_err(io::Error::other)?;
+    let mut chunk = [0u8; 64 << 10];
+    loop {
+        let remaining = limit.saturating_sub(bytes.len());
+        let take = remaining.min(chunk.len()).max(1);
+        let slice = chunk.get_mut(..take).ok_or_else(|| io::Error::other("invalid original read buffer"))?;
+        let n = read_retry(reader, slice)?;
+        if n == 0 {
+            return Ok(bytes);
+        }
+        if n > remaining {
+            return Err(io::Error::other("original exceeds supported buffer size"));
+        }
+        let data = slice.get(..n).ok_or_else(|| io::Error::other("invalid original read length"))?;
+        bytes.try_reserve(n).map_err(io::Error::other)?;
+        bytes.extend_from_slice(data);
+    }
+}
+
+/// The session's media hooks wrapped to read through its [`Originals`].
+pub(crate) struct NativeHooks {
+    loader: crate::media::FileLoader,
+    probe: crate::media::FileProbe,
+    header: crate::media::FileProbe,
+    preview: crate::media::PreviewLoader,
+    pair: crate::media::PairLoader,
+    reduced: crate::media::ReducedLoader,
+    bytes: crate::merge::ByteReader,
+}
+impl NativeHooks {
+    /// The hooks, each bound to `reader`.
+    fn new(reader: &Originals) -> Self {
+        let (loader, probe) = crate::files::fs_hooks();
+        let a = reader.clone();
+        let loader: crate::media::FileLoader = Arc::new(move |p, e, w| a.native_scope(p, || loader(p, e, w)));
+        let a = reader.clone();
+        let probe: crate::media::FileProbe = Arc::new(move |p| a.native_scope(p, || probe(p)));
+        let header = crate::files::fs_header_probe();
+        let a = reader.clone();
+        let header: crate::media::FileProbe = Arc::new(move |p| a.native_scope(p, || header(p)));
+        let preview = crate::files::fs_preview_loader();
+        let a = reader.clone();
+        let preview: crate::media::PreviewLoader = Arc::new(move |p, e| a.native_scope(p, || preview(p, e)));
+        let pair = crate::files::fs_pair_loader();
+        let a = reader.clone();
+        let pair: crate::media::PairLoader = Arc::new(move |p, e, s, w| a.native_scope(p, || pair(p, e, s, w)));
+        let reduced = crate::files::fs_reduced_loader();
+        let a = reader.clone();
+        let reduced: crate::media::ReducedLoader = Arc::new(move |p, e, w| a.native_scope(p, || reduced(p, e, w)));
+        Self { loader, probe, header, preview, pair, reduced, bytes: reader.reader() }
+    }
+    /// Installs the hooks; with `old`, replaces only the hooks `old` installed, keeping one a caller set
+    /// since.
+    fn install(&self, s: &mut crate::Session, old: Option<&Self>) {
+        macro_rules! hook {
+            ($field:expr, $name:ident) => {
+                if old.is_none_or(|o| $field.as_ref().is_some_and(|f| Arc::ptr_eq(f, &o.$name))) {
+                    $field = Some(self.$name.clone());
+                }
+            };
+        }
+        hook!(s.media.file_loader, loader);
+        hook!(s.media.file_probe, probe);
+        hook!(s.media.header_probe, header);
+        hook!(s.media.preview_loader, preview);
+        hook!(s.media.denoise.loader, pair);
+        hook!(s.media.reduced_loader, reduced);
+        hook!(s.media.file_bytes, bytes);
+    }
+}
+impl crate::Session {
+    /// The session's reader of originals, for a worker that reads them off the session's thread.
+    pub fn original_reader(&self) -> Originals {
+        self.originals.clone()
+    }
+    /// Installs the native file hooks that read through the session's reader.
+    pub(crate) fn install_native_hooks(&mut self) {
+        self.originals.refresh(self);
+        let hooks = NativeHooks::new(&self.originals);
+        hooks.install(self, None);
+        self.native_hooks = Some(hooks);
+    }
+    /// Retires the reader and starts a new one for the library now open, moving the native hooks over.
+    pub(crate) fn reset_originals(&mut self) {
+        self.originals.retire();
+        self.originals = Originals::default();
+        self.originals.refresh(self);
+        if let Some(old) = self.native_hooks.take() {
+            let hooks = NativeHooks::new(&self.originals);
+            hooks.install(self, Some(&old));
+            self.native_hooks = Some(hooks);
+        }
+    }
+    /// Applies the hashes learned by queued reads to the catalog. On an error the unapplied reads stay
+    /// queued.
+    pub(crate) fn learn_read_hashes(&mut self) -> crate::Result<()> {
+        let mut events = self.originals.drain().into_iter();
+        while let Some(event) = events.next() {
+            if let Err(error) = self.accept_read_event(&event) {
+                self.originals.refresh(self);
+                let mut sink = self.originals.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                for event in std::iter::once(event).chain(events) {
+                    if sink.len() >= 4096 || sink.try_reserve(1).is_err() {
+                        break;
+                    }
+                    sink.push(event);
+                }
+                return Err(error);
+            }
+            event.fingerprint.release();
+        }
+        Ok(())
+    }
+    /// Applies one queued read: its hash and probed facts to every master at the path that it still
+    /// describes, or clears a hash the file no longer has.
+    fn accept_read_event(&mut self, event: &ReadEvent) -> crate::Result<()> {
+        if !self.originals.same_lifecycle(event) {
+            return Ok(());
+        }
+        if !event.fingerprint.current(&event.path) {
+            if let Some(p) = event.watch.ids.first().and_then(|id| self.catalog.photo(*id)).cloned() {
+                self.invalidate_cache_source(&p, None, true)?;
+                if p.content_hash.is_some() {
+                    self.apply_system(lightcraft_catalog::Op::SetContent {
+                        id: p.id,
+                        width: p.width,
+                        height: p.height,
+                        file_size: p.file_size,
+                        content_hash: None,
+                        preview_only: p.preview_only.clone(),
+                        preview_checked: p.preview_checked.clone(),
+                    })?;
+                }
+                self.originals.refresh(self);
+            }
+            return Ok(());
+        }
+        for id in &event.watch.ids {
+            let Some(p) = self.catalog.photo(*id).cloned() else { continue };
+            if p.local
+                || p.deleted
+                || self.physical_photo(p.id).is_none_or(|master| master.id != p.id)
+                || !matches!(&p.source, Source::File { path } if path == &event.path)
+            {
+                continue;
+            }
+            let hash = event.fingerprint.hash.to_string();
+            let same = p.content_hash.as_deref().is_some_and(|h| crate::sync::base_hash(h) == hash);
+            let changed = event.fingerprint.replaced || p.content_hash.is_some() && !same;
+            if changed && event.fingerprint.facts.is_none() {
+                self.invalidate_cache_source(&p, None, true)?;
+                continue;
+            }
+            if !changed && p.file_size != event.fingerprint.len() {
+                continue;
+            }
+            if event.fingerprint.facts.is_none()
+                && p.content_hash.is_none()
+                && ((p.width, p.height), &p.preview_only) != (event.watch.dimensions, &event.watch.preview)
+            {
+                continue;
+            }
+            let mut target = (*p).clone();
+            if let Some(info) = &event.fingerprint.facts {
+                target.width = info.width;
+                target.height = info.height;
+                target.preview_only = info.preview_only.clone();
+                target.preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
+            }
+            target.file_size = event.fingerprint.len();
+            target.content_hash = Some(if same {
+                p.content_hash.clone().unwrap_or_else(|| hash.clone())
+            } else if self.catalog.photos().any(|other| {
+                other.id != p.id && other.copy_of.is_none() && other.content_hash.as_deref().is_some_and(|h| crate::sync::base_hash(h) == hash)
+            }) {
+                format!("{hash}:dup{}", p.id.0)
+            } else {
+                hash
+            });
+            let quarantined = self.media.identities.needs_validation(&p);
+            let hash_only_reconciliation = quarantined
+                && !event.fingerprint.replaced
+                && (target.width, target.height, target.file_size, &target.preview_only) == (p.width, p.height, p.file_size, &p.preview_only);
+            if !self
+                .media
+                .identities
+                .reconcile(&target, &event.watch.ticket, || event.fingerprint.current(&event.path))
+                .map_err(|e| crate::EngineError::Other(format!("can't validate original cache identity: {e}")))?
+            {
+                continue;
+            }
+            if event.fingerprint.replaced && (same || p.content_hash.is_none()) {
+                self.invalidate_cache_source(&p, crate::cache_identity::PhysicalIdentity::of(&target), true)?;
+            }
+            let source = target.source.clone();
+            if target.content_hash != p.content_hash
+                || (target.width, target.height, target.file_size, &target.preview_only) != (p.width, p.height, p.file_size, &p.preview_only)
+            {
+                let op = lightcraft_catalog::Op::SetContent {
+                    id: *id,
+                    width: target.width,
+                    height: target.height,
+                    file_size: target.file_size,
+                    content_hash: target.content_hash,
+                    preview_only: target.preview_only,
+                    preview_checked: target.preview_checked,
+                };
+                if hash_only_reconciliation {
+                    self.catalog.apply(op.clone())?;
+                    self.pending_log.push(op);
+                } else {
+                    self.apply_system(op)?;
+                }
+            }
+            self.media.identities.confirm(std::slice::from_ref(&event.path));
+            let related: Vec<_> = self.catalog.photos().filter(|other| other.source == source).map(|p| p.id).collect();
+            for id in related {
+                self.denoise_rebind_learned(id);
+            }
+            self.originals.refresh(self);
+        }
+        Ok(())
+    }
+}
+impl Drop for crate::Session {
+    fn drop(&mut self) {
+        self.originals.retire();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_or_device_is_never_read_whole() {
+        let dir = std::env::temp_dir().join(format!("lc-originals-regular-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let reader = Originals::default();
+        let folder = dir.to_string_lossy().to_string();
+        assert!(reader.hash_whole(&folder).is_err());
+        assert!(reader.read_whole(&folder).is_err());
+        #[cfg(unix)]
+        assert_eq!(reader.hash_whole("/dev/zero").unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        let file = dir.join("a.raw");
+        std::fs::write(&file, b"bytes").unwrap();
+        assert!(reader.hash_whole(&file.to_string_lossy()).is_ok());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn g_completed_copy_releases_unowned_source_proofs() {
+        let dir = crate::tests_xmp::temp_dir("g-copy-proof-release");
+        let path = dir.join("source.dng");
+        std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        let mut s = crate::Session::new().with_fs();
+        s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()], "mode": "copy", "destination": dir.join("out").to_string_lossy(), "organize": "flat"})).unwrap();
+        assert!(
+            s.originals.candidates.lock().unwrap().get(path.to_str().unwrap()).is_none_or(|fp| !fp.current(path.to_str().unwrap())),
+            "a completed Copy must not keep an unowned source read lease until library close"
+        );
+        #[cfg(windows)]
+        assert!(File::options().write(true).open(&path).is_ok(), "source writes must work after owner completion");
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn g_unbound_read_is_an_actionable_error_and_nested_scope_restores() {
+        let dir = crate::tests_xmp::temp_dir("g-reader-binding");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.bin");
+        std::fs::write(&path, b"abc").unwrap();
+        let path = path.to_str().unwrap();
+        assert!(read_whole(path).unwrap_err().to_string().contains("binding"));
+        let outer = Originals::default();
+        let inner = Originals::default();
+        {
+            let _outer = outer.bind();
+            read_whole(path).unwrap();
+            {
+                let _inner = inner.bind();
+                read_whole(path).unwrap();
+            }
+            read_whole(path).unwrap();
+        }
+        assert_eq!(outer.counts().0, 2);
+        assert_eq!(inner.counts().0, 1);
+        assert!(read_whole(path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn w_copy_failure_revokes_unowned_proof_without_changing_the_original() {
+        let dir = crate::tests_xmp::temp_dir("w-copy-failure-proof");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("source.bin");
+        std::fs::write(&path, b"unchanged source").unwrap();
+        let original = File::open(&path).unwrap();
+        let stamp = Stamp::of(&original.metadata().unwrap()).unwrap();
+        let reader = Originals::default();
+        let fp = reader.hash_whole(path.to_str().unwrap()).unwrap();
+        assert!(fp.current(path.to_str().unwrap()));
+        crate::import_move::inject(crate::import_move::Fault::FailWrite);
+        let result = reader.in_scope(|| crate::import_move::copy_new(&path, &dir.join("out"), "copy.bin", None));
+        crate::import_move::inject(crate::import_move::Fault::None);
+        assert!(result.is_err());
+        let current = File::open(&path).unwrap();
+        assert!(same_file_handles(&original, &current));
+        assert_eq!(Stamp::of(&current.metadata().unwrap()).as_ref(), Some(&stamp));
+        assert_eq!(std::fs::read(&path).unwrap(), b"unchanged source");
+        assert!(!dir.join("out/copy.bin").exists());
+        assert!(!fp.current(path.to_str().unwrap()), "cleanup revokes proof without changing physical identity");
+        assert!(!reader.candidates.lock().unwrap().contains_key(path.to_str().unwrap()));
+        assert!(reader.drain().is_empty());
+        let fresh = reader.hash_whole(path.to_str().unwrap()).unwrap();
+        assert!(fresh.current(path.to_str().unwrap()), "a new read may learn the unchanged source");
+        reader.retire();
+        drop((original, current));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn w_fix_standalone_scope_releases_only_its_own_proof() {
+        let dir = crate::tests_xmp::temp_dir("w-standalone-scope");
+        let path = dir.join("source.bin");
+        std::fs::write(&path, b"unchanged bytes").unwrap();
+        let path = path.to_str().unwrap();
+        let fp = {
+            let _binding = standalone_binding().unwrap();
+            hash_whole(path).unwrap()
+        };
+        assert!(!fp.current(path), "temporary standalone owner must not leave a retained lease");
+        assert!(LAST_READ.with(|last| last.borrow().is_none()));
+        let reader = Originals::default();
+        {
+            let _outer = reader.bind();
+            let fp = hash_whole(path).unwrap();
+            {
+                let _nested = reader.bind();
+                hash_whole(path).unwrap();
+            }
+            assert!(fp.current(path), "nested shared binding must not retire its reader or pending proof");
+        }
+        assert!(reader.hash_whole(path).unwrap().current(path));
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn w_fix_completed_sidecar_copy_drops_only_unwatched_evidence() {
+        use crate::rename::MoveFs;
+        let dir = crate::tests_xmp::temp_dir("w-sidecar-proof");
+        let source = dir.join("a.xmp");
+        std::fs::write(&source, b"retained edits").unwrap();
+        let reader = Originals::default();
+        reader.in_scope(|| crate::rename::RealFs.copy_no_replace(&source, &dir.join("b.xmp"))).unwrap();
+        assert!(
+            reader.candidates.lock().unwrap().get(source.to_str().unwrap()).is_none_or(|fp| !fp.current(source.to_str().unwrap())),
+            "completed sidecar copy has no pending catalog hash consumer"
+        );
+        #[cfg(windows)]
+        assert!(File::options().write(true).open(&source).is_ok());
+        assert!(reader.state.read().unwrap().active);
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn w_fix_folder_history_revokes_registered_header_proofs() {
+        let dir = crate::tests_xmp::temp_dir("w-folder-proof");
+        let from = dir.join("Trip");
+        let to = dir.join("Holiday");
+        std::fs::create_dir(&from).unwrap();
+        std::fs::write(from.join("a.jpg"), b"unchanged bytes").unwrap();
+        let unrelated = dir.join("unrelated.bin");
+        std::fs::write(&unrelated, b"other bytes").unwrap();
+        let mut s = crate::Session::new();
+        let mut photo = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            Source::File { path: from.join("a.jpg").to_string_lossy().into_owned() },
+            "a.jpg",
+            "JPG",
+            1,
+            1,
+            "2026-01-01T00:00:00",
+        );
+        photo.file_size = 15;
+        photo.content_hash = Some(lightcraft_preview::hash_bytes(b"unchanged bytes").to_string());
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.originals.refresh(&s);
+        for (command, params, source, destination) in [
+            ("folder.rename", serde_json::json!({"path":from,"name":"Holiday"}), &from, &to),
+            ("edit.undo", serde_json::json!({}), &to, &from),
+            ("edit.redo", serde_json::json!({}), &from, &to),
+        ] {
+            let reader = s.originals.clone();
+            let binding = reader.bind();
+            let info = HeaderRead::open(source.join("a.jpg").to_str().unwrap()).unwrap().finish(crate::media::ProbeInfo::default()).unwrap();
+            let header = info.native_read.as_ref().unwrap().header.as_ref().unwrap();
+            let other = reader.hash_whole(unrelated.to_str().unwrap()).unwrap();
+            s.execute(command, &params).unwrap();
+            assert!(
+                !header.proof.current(destination.join("a.jpg").to_str().unwrap(), &header.stamp),
+                "{command} must release even header-only proof clones before directory mutation"
+            );
+            assert!(other.current(unrelated.to_str().unwrap()), "unrelated source proof must remain valid");
+            assert!(destination.join("a.jpg").is_file());
+            drop(binding);
+        }
+        s.originals.retire();
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn w_fix_compare_open_cannot_adopt_pre_fence_leases_after_refused_rename() {
+        let dir = crate::tests_xmp::temp_dir("w-compare-fence");
+        let from = dir.join("Trip");
+        let occupied = dir.join("Holiday");
+        std::fs::create_dir(&from).unwrap();
+        std::fs::create_dir(&occupied).unwrap();
+        std::fs::write(occupied.join("occupied"), b"keep").unwrap();
+        let a = from.join("a.bin");
+        let b = from.join("b.bin");
+        let other = dir.join("unrelated.bin");
+        for path in [&a, &b, &other] {
+            std::fs::write(path, b"same bytes").unwrap();
+        }
+        let mut s = crate::Session::new();
+        let photo = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            Source::File { path: a.to_string_lossy().into_owned() },
+            "a.bin",
+            "JPG",
+            1,
+            1,
+            "2026-01-01T00:00:00",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.originals.refresh(&s);
+        let unrelated = s.originals.hash_whole(other.to_str().unwrap()).unwrap();
+        let reader = s.originals.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let (wa, wb) = (a.clone(), b.clone());
+        let worker = std::thread::spawn(move || {
+            let mut fa = File::open(&wa).unwrap();
+            let mut fb = File::open(&wb).unwrap();
+            COMPARE_OPENED.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    entered_tx.send(()).unwrap();
+                    resume_rx.recv().unwrap();
+                }))
+            });
+            reader.compare_open(wa.to_str().unwrap(), wb.to_str().unwrap(), &mut fa, &mut fb).unwrap()
+        });
+        entered_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(s.execute("folder.rename", &serde_json::json!({"path":from,"name":"Holiday"})).is_err());
+        assert!(a.is_file());
+        resume_tx.send(()).unwrap();
+        assert!(worker.join().unwrap(), "comparison bytes still succeed");
+        assert!(s.originals.drain().is_empty(), "pre-fence comparison cannot report on rebuilt watches");
+        assert!(!s.originals.candidates.lock().unwrap().contains_key(b.to_str().unwrap()), "pre-fence comparison cannot become an unowned candidate");
+        assert!(unrelated.current(other.to_str().unwrap()));
+        let mut fa = File::open(&a).unwrap();
+        let mut fb = File::open(&b).unwrap();
+        assert!(s.originals.compare_open(a.to_str().unwrap(), b.to_str().unwrap(), &mut fa, &mut fb).unwrap());
+        assert_eq!(s.originals.drain().len(), 1, "new comparison can learn on fresh watches");
+        assert!(s.originals.candidates.lock().unwrap().contains_key(b.to_str().unwrap()));
+        s.originals.retire();
+        drop((fa, fb, s));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn w_fix_inflight_header_registration_cannot_cross_folder_fence() {
+        let dir = crate::tests_xmp::temp_dir("w-header-fence");
+        let from = dir.join("Trip");
+        std::fs::create_dir(&from).unwrap();
+        let path = from.join("a.bin");
+        std::fs::write(&path, b"unchanged bytes").unwrap();
+        let mut s = crate::Session::new();
+        let photo = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            Source::File { path: path.to_string_lossy().into_owned() },
+            "a.bin",
+            "JPG",
+            1,
+            1,
+            "2026-01-01T00:00:00",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.originals.refresh(&s);
+        let reader = s.originals.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let worker_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            let _binding = reader.bind();
+            let pending = HeaderRead::open(worker_path.to_str().unwrap()).unwrap();
+            entered_tx.send(()).unwrap();
+            let _ = resume_rx.recv();
+            pending.finish(crate::media::ProbeInfo::default()).unwrap()
+        });
+        entered_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let result = s.execute("folder.rename", &serde_json::json!({"path":from,"name":"Holiday"}));
+        let current = if result.is_ok() {
+            dir.join("Holiday/a.bin")
+        } else {
+            assert!(path.is_file());
+            path.clone()
+        };
+        resume_tx.send(()).unwrap();
+        let info = worker.join().unwrap();
+        let header = info.native_read.as_ref().unwrap().header.as_ref().unwrap();
+        assert!(
+            !header.proof.current(current.to_str().unwrap(), &header.stamp),
+            "a pre-fence open cannot register a fresh authoritative proof after mutation or refusal"
+        );
+        let fresh = dir.join("new-unowned.bin");
+        std::fs::write(&fresh, b"new source").unwrap();
+        let reader = s.originals.clone();
+        let _binding = reader.bind();
+        let info = HeaderRead::open(fresh.to_str().unwrap()).unwrap().finish(crate::media::ProbeInfo::default()).unwrap();
+        assert!(!info.native_read.as_ref().unwrap().stale(), "new unowned/Add reads after the fence remain supported");
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn w_fix_failed_folder_mutation_restores_fresh_watches_only() {
+        for phase in ["forward", "undo", "redo", "rollback", "forward-rollback"] {
+            let dir = crate::tests_xmp::temp_dir(&format!("w-folder-failure-{phase}"));
+            let from = dir.join("Trip");
+            let to = dir.join("Holiday");
+            std::fs::create_dir(&from).unwrap();
+            let bytes = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+            std::fs::write(from.join("a.dng"), &bytes).unwrap();
+            let library = dir.join("library");
+            let smart = crate::smart::dir(&library);
+            std::fs::create_dir_all(&smart).unwrap();
+            crate::smart::mark_look_checked(&smart).unwrap();
+            let mut s = crate::Session::new().with_fs();
+            s.open_library(&library, false).unwrap();
+            let original = from.join("a.dng");
+            let info = crate::files::probe_bytes_with(original.to_str().unwrap(), &bytes, false).unwrap();
+            let id = PhotoId(1);
+            let mut photo = lightcraft_catalog::Photo::new(
+                id,
+                Source::File { path: original.to_string_lossy().into_owned() },
+                "a.dng",
+                "DNG",
+                info.width,
+                info.height,
+                "2026-01-01T00:00:00",
+            );
+            photo.file_size = bytes.len() as u64;
+            s.commit("Legacy hashless fixture", lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+            s.persist().unwrap();
+            if phase != "forward" && phase != "forward-rollback" {
+                s.execute("folder.rename", &serde_json::json!({"path":from,"name":"Holiday"})).unwrap();
+            }
+            if phase == "redo" {
+                s.execute("edit.undo", &serde_json::json!({})).unwrap();
+            }
+            let (current, occupied, command, params) = match phase {
+                "undo" | "rollback" => (&to, &from, "edit.undo", serde_json::json!({})),
+                "redo" => (&from, &to, "edit.redo", serde_json::json!({})),
+                _ => (&from, &to, "folder.rename", serde_json::json!({"path":from,"name":"Holiday"})),
+            };
+            if phase != "rollback" && phase != "forward-rollback" {
+                std::fs::create_dir(occupied).unwrap();
+            }
+            s.originals.refresh(&s);
+            let path = current.join("a.dng").to_string_lossy().into_owned();
+            s.originals.read_whole(&path).unwrap();
+            let old = s.originals.drain().pop().unwrap();
+            assert!(s.originals.same_lifecycle(&old));
+            let fault = (phase == "rollback" || phase == "forward-rollback").then(|| lightcraft_catalog::safe_file::fail_writes_after(0));
+            assert!(s.execute(command, &params).is_err(), "{phase} must reach its injected failure");
+            drop(fault);
+            assert!(std::path::Path::new(&path).is_file());
+            assert!(!s.originals.same_lifecycle(&old), "{phase}: old event stays fenced even though physical mutation failed");
+            assert!(!old.fingerprint.current(&path));
+            s.originals.read_whole(&path).unwrap();
+            s.persist().unwrap();
+            assert_eq!(
+                s.catalog.photo(id).unwrap().content_hash.as_deref(),
+                Some(lightcraft_preview::hash_bytes(&bytes).to_string().as_str()),
+                "{phase}: new watch must allow fresh learning after failure"
+            );
+            drop(s);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+    #[test]
+    fn w_fix_shared_binding_and_sidecar_copy_preserve_pending_owner_learning() {
+        use crate::rename::MoveFs;
+        let dir = crate::tests_xmp::temp_dir("w-owner-proof");
+        let path = dir.join("source.dng");
+        let bytes = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        std::fs::write(&path, &bytes).unwrap();
+        let info = crate::files::probe_bytes_with(path.to_str().unwrap(), &bytes, false).unwrap();
+        let mut s = crate::Session::new().with_fs();
+        let mut photo = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            Source::File { path: path.to_string_lossy().into_owned() },
+            "source.dng",
+            "DNG",
+            info.width,
+            info.height,
+            "2026-01-01T00:00:00",
+        );
+        photo.file_size = bytes.len() as u64;
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.originals.refresh(&s);
+        let reader = s.originals.clone();
+        let fp = {
+            let _outer = reader.bind();
+            let (_, fp) = reader.read_whole(path.to_str().unwrap()).unwrap();
+            let sidecar = dir.join("a.xmp");
+            std::fs::write(&sidecar, b"retained edits").unwrap();
+            {
+                let _nested = reader.bind();
+                crate::rename::RealFs.copy_no_replace(&sidecar, &dir.join("b.xmp")).unwrap();
+            }
+            fp.unwrap()
+        };
+        assert!(fp.current(path.to_str().unwrap()), "explicit owner evidence survives both shared binding exits");
+        s.persist().unwrap();
+        assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().content_hash.as_deref(), Some(lightcraft_preview::hash_bytes(&bytes).to_string().as_str()));
+        assert!(!fp.current(path.to_str().unwrap()), "owner acceptance releases its own proof");
+        assert_eq!(reader.counts(), (2, 2), "one original read plus one sidecar copy, no reread for learning");
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    #[test]
+    fn a_duplicate_whose_probe_kept_no_proof_is_read_again_for_one() {
+        let dir = crate::tests_xmp::temp_dir("unproven-duplicate");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("incoming");
+        std::fs::write(&path, b"duplicate bytes").unwrap();
+        let path = path.to_str().unwrap();
+        let reader = Originals::default();
+        let read = reader.hash_whole(path).unwrap();
+        let unproven = Fingerprint { proof: None, ..read.clone() };
+        read.release();
+        let hash = unproven.hash.to_string();
+        let mut info = crate::media::ProbeInfo { content_hash: Some(hash.clone()), file_size: unproven.len(), ..Default::default() };
+        info.native_read = Some(evidence(&reader, path, &info, Some(unproven.clone()), Some(unproven.hash)));
+        assert!(!reader.candidate_probe(path, &info).unwrap().confirms_hash(&reader, path, &hash), "no proof was kept");
+        let confirmed = reader.confirmed_probe(path, &info).unwrap();
+        assert!(confirmed.confirms_hash(&reader, path, &hash));
+        std::fs::write(path, b"replaced bytes!").unwrap();
+        assert!(confirmed.stale() && !confirmed.confirms_hash(&reader, path, &hash), "the fresh proof still sees a change");
+        confirmed.release();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn g_retirement_revokes_new_proofs_after_released_fingerprints_fill_the_registry() {
+        let dir = crate::tests_xmp::temp_dir("g-released-proof-registry");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("original");
+        std::fs::write(&path, b"owned proof bytes").unwrap();
+        let reader = Originals::default();
+        let mut released = Vec::new();
+        for _ in 0..128 {
+            let fp = reader.hash_whole(path.to_str().unwrap()).unwrap();
+            fp.release();
+            released.push(fp);
+        }
+        let current = reader.hash_whole(path.to_str().unwrap()).unwrap();
+        assert!(current.current(path.to_str().unwrap()));
+        reader.retire();
+        assert!(!current.current(path.to_str().unwrap()), "all live proofs are registered even when released Arcs survive");
+        assert!(File::options().write(true).open(&path).is_ok());
+        drop((current, released));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn g_concurrent_retirement_revokes_reads_registered_on_either_side() {
+        let dir = crate::tests_xmp::temp_dir("g-concurrent-proof-retire");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("original");
+        std::fs::write(&path, b"owned proof bytes").unwrap();
+        for _ in 0..32 {
+            let reader = Originals::default();
+            let start = Arc::new(std::sync::Barrier::new(3));
+            let (r, gate, file) = (reader.clone(), start.clone(), path.clone());
+            let read = std::thread::spawn(move || {
+                gate.wait();
+                r.hash_whole(file.to_str().unwrap()).unwrap()
+            });
+            let (r, gate) = (reader.clone(), start.clone());
+            let retire = std::thread::spawn(move || {
+                gate.wait();
+                r.retire();
+            });
+            start.wait();
+            let fp = read.join().unwrap();
+            retire.join().unwrap();
+            assert!(!fp.current(path.to_str().unwrap()));
+            assert!(File::options().write(true).open(&path).is_ok());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn g_bounded_original_retries_interrupted_and_refuses_growth() {
+        struct InterruptedOnce(bool);
+        impl Read for InterruptedOnce {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if !self.0 {
+                    self.0 = true;
+                    return Err(io::Error::from(io::ErrorKind::Interrupted));
+                }
+                let mut bytes: &[u8] = b"growing original";
+                bytes.read(buf)
+            }
+        }
+        assert!(read_bounded(&mut InterruptedOnce(false), 8, usize::MAX).unwrap_err().to_string().contains("buffer size"));
+        assert_eq!(read_bounded(&mut &b"small"[..], 5, usize::MAX).unwrap(), b"small");
+        assert_eq!(read_bounded(&mut &b""[..], 0, usize::MAX).unwrap(), b"");
+    }
+
+    #[test]
+    fn an_original_over_4_gib_is_not_refused_by_the_read_buffer() {
+        let over_4_gib = u64::from(u32::MAX) + 1;
+        if cfg!(target_pointer_width = "64") {
+            assert_eq!(buffer_len(over_4_gib).unwrap() as u64, over_4_gib);
+        } else {
+            assert!(buffer_len(over_4_gib).is_err());
+        }
+    }
+
+    #[test]
+    fn g_delayed_read_rejects_replacement_even_with_preserved_mtime() {
+        let base = crate::tests_xmp::temp_dir("g-delayed-preserved-time");
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("a.png");
+        let image = lightcraft_raster::Rgba8::from_fn(8, 8, |x, y| [x as u8, y as u8, 10, 255]);
+        let bytes =
+            crate::export::encode_image(&image, &crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() })
+                .unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut s = crate::Session::new().with_fs();
+        s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let p = s.catalog.photos().next().unwrap().clone();
+        s.apply_system(lightcraft_catalog::Op::SetContent {
+            id: p.id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: None,
+            preview_only: p.preview_only.clone(),
+            preview_checked: p.preview_checked.clone(),
+        })
+        .unwrap();
+        let time = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let (read, fingerprint) = s.originals.read_whole(path.to_str().unwrap()).unwrap();
+        assert_eq!(read, bytes);
+        #[cfg(not(any(unix, windows)))]
+        assert!(fingerprint.is_none(), "unsupported physical identity: do not confirm");
+        #[cfg(any(unix, windows))]
+        assert!(fingerprint.is_some());
+        let replacement = base.join("b.png");
+        let mut other = bytes.clone();
+        *other.last_mut().unwrap() ^= 1;
+        std::fs::write(&replacement, other).unwrap();
+        File::options().write(true).open(&replacement).unwrap().set_times(std::fs::FileTimes::new().set_modified(time)).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        s.persist().unwrap();
+        assert!(s.catalog.photo(p.id).unwrap().content_hash.is_none());
+        drop(s);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use lightcraft_catalog::Op;
+    fn hashless(tag: &str) -> (crate::Session, std::path::PathBuf, PhotoId) {
+        let dir = crate::tests_xmp::temp_dir(tag);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("original.dng");
+        std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        let mut s = crate::Session::new().with_fs();
+        s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let p = s.catalog.photos().next().unwrap().clone();
+        s.apply_system(Op::SetContent {
+            id: p.id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: None,
+            preview_only: p.preview_only.clone(),
+            preview_checked: p.preview_checked.clone(),
+        })
+        .unwrap();
+        (s, dir, p.id)
+    }
+    #[test]
+    fn g_deleted_and_readded_photo_rejects_old_read_event() {
+        let (mut s, dir, id) = hashless("g-read-reimport");
+        let p = s.catalog.photo(id).unwrap().clone();
+        s.media.file_bytes.as_ref().unwrap()(dir.join("original.dng").to_str().unwrap()).unwrap();
+        s.commit("Replace membership", Op::Batch { ops: vec![Op::RemovePhoto { id }, Op::AddPhoto { photo: Box::new((*p).clone()) }] }).unwrap();
+        s.persist().unwrap();
+        assert!(s.catalog.photo(id).unwrap().content_hash.is_none(), "old physical read belongs to removed photo lifecycle");
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_hashless_master_sharing_a_hashed_masters_path_learns_from_a_read() {
+        let dir = crate::tests_xmp::temp_dir("shared-path-masters");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("original.dng");
+        std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        let mut s = crate::Session::new().with_fs();
+        s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let first = s.catalog.photos().next().unwrap().clone();
+        assert!(first.content_hash.is_some());
+        let second = s.catalog.alloc_photo_id();
+        let mut twin = (*first).clone();
+        twin.id = second;
+        twin.content_hash = None;
+        s.commit("Second master", Op::AddPhoto { photo: Box::new(twin) }).unwrap();
+        s.originals.read_whole(path.to_str().unwrap()).unwrap();
+        s.persist().unwrap();
+        let learned = s.catalog.photo(second).unwrap().content_hash.clone();
+        assert_eq!(learned.as_deref().map(crate::sync::base_hash), first.content_hash.as_deref().map(crate::sync::base_hash));
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_hashless_master_with_stale_dimensions_takes_the_files_from_a_read() {
+        let dir = crate::tests_xmp::temp_dir("shared-path-stale-master");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("original.dng");
+        std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        let mut s = crate::Session::new().with_fs();
+        s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let first = s.catalog.photos().next().unwrap().clone();
+        let second = s.catalog.alloc_photo_id();
+        let mut twin = (*first).clone();
+        twin.id = second;
+        twin.content_hash = None;
+        twin.width = first.width + 7;
+        s.commit("Second master", Op::AddPhoto { photo: Box::new(twin) }).unwrap();
+        s.originals.hash_whole(path.to_str().unwrap()).unwrap();
+        s.persist().unwrap();
+        assert!(s.catalog.photo(second).unwrap().content_hash.is_none(), "a streamed read can't check the dimensions it would vouch for");
+        s.originals.read_whole(path.to_str().unwrap()).unwrap();
+        s.persist().unwrap();
+        let learned = s.catalog.photo(second).unwrap().clone();
+        assert_eq!(learned.content_hash.as_deref().map(crate::sync::base_hash), first.content_hash.as_deref().map(crate::sync::base_hash));
+        assert_eq!((learned.width, learned.height), (first.width, first.height), "the hash comes with the file's own dimensions");
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_streamed_read_of_a_replaced_hashless_original_saves_no_hash() {
+        for compare in [false, true] {
+            let (mut s, dir, id) = hashless(if compare { "replaced-hashless-compare" } else { "replaced-hashless-copy" });
+            let path = dir.join("original.dng");
+            let mut replacement = std::fs::read(&path).unwrap();
+            *replacement.last_mut().unwrap() ^= 1;
+            std::fs::write(&path, &replacement).unwrap();
+            if compare {
+                let twin = dir.join("twin.dng");
+                std::fs::write(&twin, &replacement).unwrap();
+                let (mut fa, mut fb) = (File::open(&path).unwrap(), File::open(&twin).unwrap());
+                assert!(s.originals.compare_open(path.to_str().unwrap(), twin.to_str().unwrap(), &mut fa, &mut fb).unwrap());
+            } else {
+                s.originals.hash_whole(path.to_str().unwrap()).unwrap();
+            }
+            s.persist().unwrap();
+            assert!(s.catalog.photo(id).unwrap().content_hash.is_none(), "compare={compare}: the replacement's hash must not join the old facts");
+            drop(s);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+    #[test]
+    fn dropping_the_session_releases_the_proofs_of_a_retained_reader() {
+        let dir = crate::tests_xmp::temp_dir("session-drop-proofs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("source.bin");
+        std::fs::write(&path, b"import candidate").unwrap();
+        let s = crate::Session::new();
+        let retained = s.original_reader();
+        let fp = retained.hash_whole(path.to_str().unwrap()).unwrap();
+        assert!(fp.current(path.to_str().unwrap()));
+        drop(s);
+        assert!(!fp.current(path.to_str().unwrap()), "a reader clone must not keep the session's read leases");
+        assert!(retained.candidates.lock().unwrap().is_empty());
+        drop(retained);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn g_native_worker_read_uses_captured_session_reader() {
+        let (mut s, dir, id) = hashless("g-read-worker");
+        let read = s.media.file_bytes.clone().unwrap();
+        let before = s.originals.counts();
+        let path = dir.join("original.dng");
+        std::thread::spawn(move || read(path.to_str().unwrap()).unwrap()).join().unwrap();
+        s.persist().unwrap();
+        assert!(s.catalog.photo(id).unwrap().content_hash.is_some());
+        let after = s.originals.counts();
+        assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1));
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn g_library_switch_retires_native_worker_read_and_preserves_custom_hook() {
+        let (mut s, dir, _) = hashless("g-read-library-switch");
+        let old_reader = s.media.file_bytes.clone().unwrap();
+        let custom: crate::media::FileLoader = Arc::new(|_, _, _| Err("custom decoder".into()));
+        s.media.file_loader = Some(custom.clone());
+        s.open_library(dir.join("new-library"), false).unwrap();
+        assert!(s.media.file_loader.as_ref().is_some_and(|loader| Arc::ptr_eq(loader, &custom)));
+        let path = dir.join("original.dng");
+        s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let p = s.catalog.photos().next().unwrap().clone();
+        s.apply_system(Op::SetContent {
+            id: p.id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: None,
+            preview_only: p.preview_only.clone(),
+            preview_checked: p.preview_checked.clone(),
+        })
+        .unwrap();
+        old_reader(path.to_str().unwrap()).unwrap();
+        s.persist().unwrap();
+        assert!(s.catalog.photo(p.id).unwrap().content_hash.is_none());
+        s.media.file_bytes.as_ref().unwrap()(path.to_str().unwrap()).unwrap();
+        s.persist().unwrap();
+        assert!(s.catalog.photo(p.id).unwrap().content_hash.is_some());
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+impl Originals {
+    /// Compares the open files `fa` and `fb` byte for byte, hashing the sides the library watches, and
+    /// reports equal only when neither changed while read.
+    pub(crate) fn compare_open(&self, a: &str, b: &str, fa: &mut File, fb: &mut File) -> io::Result<bool> {
+        let registration = self.registration();
+        #[cfg(windows)]
+        let ((mut leased_a, safe_a), (mut leased_b, safe_b)) = (open_read(a, Open::DenyingWrites)?, open_read(b, Open::DenyingWrites)?);
+        #[cfg(windows)]
+        let safe_a = safe_a && physical_identity(fa).ok().is_some_and(|id| physical_identity(&leased_a).ok() == Some(id));
+        #[cfg(windows)]
+        let safe_b = safe_b && physical_identity(fb).ok().is_some_and(|id| physical_identity(&leased_b).ok() == Some(id));
+        #[cfg(windows)]
+        let (fa, fb) = (if safe_a { &mut leased_a } else { fa }, if safe_b { &mut leased_b } else { fb });
+        #[cfg(not(windows))]
+        let (safe_a, safe_b) = (cfg!(unix), cfg!(unix));
+        let (sa, sb) = (fa.metadata().ok().as_ref().and_then(Stamp::of), fb.metadata().ok().as_ref().and_then(Stamp::of));
+        #[cfg(test)]
+        COMPARE_OPENED.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook();
+            }
+        });
+        let (wa, wb) = (self.watch(a), self.watch(b));
+        let (mut ha, mut hb) = (wa.as_ref().map(|_| Hasher128::new()), Some(Hasher128::new()));
+        let (mut ba, mut bb) = (vec![0u8; 1 << 20], vec![0u8; 1 << 20]);
+        let (mut la, mut lb) = (0u64, 0u64);
+        let equal = loop {
+            let (na, nb) = (fill_reader(fa, &mut ba)?, fill_reader(fb, &mut bb)?);
+            let ca = ba.get(..na).ok_or_else(|| io::Error::other("invalid original read length"))?;
+            let cb = bb.get(..nb).ok_or_else(|| io::Error::other("invalid original read length"))?;
+            if let Some(h) = &mut ha {
+                h.update(ca);
+            }
+            if let Some(h) = &mut hb {
+                h.update(cb);
+            }
+            la = la.saturating_add(na as u64);
+            lb = lb.saturating_add(nb as u64);
+            if ca != cb {
+                break false;
+            }
+            if na == 0 {
+                break true;
+            }
+        };
+        let unchanged = |file: &File, stamp: &Option<Stamp>, len: u64| {
+            stamp.as_ref().is_some_and(|s| s.len == len && file.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(s))
+        };
+        let equal = equal && unchanged(fa, &sa, la) && unchanged(fb, &sb, lb);
+        for (path, file, stamp, hash, len, watch, safe) in [(a, fa, sa, ha, la, wa, safe_a), (b, fb, sb, hb, lb, wb, safe_b)] {
+            #[cfg(test)]
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Some(hash) = hash {
+                #[cfg(test)]
+                self.hashes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if let Some(stamp) = stamp.filter(|s| s.len == len && file.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(s)) {
+                    let proof = file.try_clone().ok().and_then(|file| ReadProof::new(file, safe));
+                    let replaced = watch.as_ref().is_some_and(|w| w.replaced_by(&stamp));
+                    let fp = Fingerprint { hash: hash.finish(), stamp, proof, facts: None, replaced };
+                    self.track(path, &fp.proof, &registration);
+                    if equal && watch.is_none() && fp.current(path) {
+                        let mut candidates = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if candidates.len() < 4096 && candidates.try_reserve(1).is_ok() {
+                            candidates.insert(path.to_owned(), fp.clone());
+                        }
+                    }
+                    self.report(path, &fp, watch);
+                }
+            }
+        }
+        Ok(equal)
+    }
+}
+/// Fills `bytes` from `reader` as far as the file goes; the number of bytes read.
+fn fill_reader(reader: &mut impl Read, bytes: &mut [u8]) -> io::Result<usize> {
+    let mut n = 0;
+    while let Some(rest) = bytes.get_mut(n..).filter(|s| !s.is_empty()) {
+        let read = read_retry(reader, rest)?;
+        if read == 0 {
+            break;
+        }
+        n = n.checked_add(read).ok_or_else(|| io::Error::other("original read overflow"))?;
+    }
+    Ok(n)
+}
+/// [`Originals::compare_open`] through the bound reader.
+pub(crate) fn compare_open(a: &str, b: &str, fa: &mut File, fb: &mut File) -> io::Result<bool> {
+    current_reader()?.compare_open(a, b, fa, fb)
+}
+#[cfg(all(test, windows))]
+pub(crate) fn verification_hash(path: &str) -> io::Result<Hash128> {
+    current_reader()?.copy_stream(path, &mut io::sink(), false).map(|fp| fp.hash)
+}
+
+#[cfg(all(test, unix))]
+mod compare_tests {
+    use super::*;
+    #[test]
+    fn a_file_rewritten_during_comparison_is_not_reported_equal() {
+        let dir = crate::tests_xmp::temp_dir("compare-rewritten");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.bin"), dir.join("b.bin"));
+        std::fs::write(&a, b"first bytes").unwrap();
+        std::fs::write(&b, b"other bytes").unwrap();
+        let (mut fa, mut fb) = (File::open(&a).unwrap(), File::open(&b).unwrap());
+        let rewrite = a.clone();
+        COMPARE_OPENED.with(|hook| *hook.borrow_mut() = Some(Box::new(move || std::fs::write(&rewrite, b"other bytes").unwrap())));
+        let reader = Originals::default();
+        assert!(!reader.compare_open(a.to_str().unwrap(), b.to_str().unwrap(), &mut fa, &mut fb).unwrap());
+        reader.retire();
+        drop((fa, fb));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+#[cfg(windows)]
+mod windows_tests {
+    use super::*;
+    fn source(tag: &str) -> (Originals, std::path::PathBuf, String) {
+        let dir = crate::tests_xmp::temp_dir(tag);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("source");
+        std::fs::write(&path, b"same bytes").unwrap();
+        (Originals::default(), dir, path.to_string_lossy().into_owned())
+    }
+    #[test]
+    fn retained_read_denies_writes_allows_rename_and_revokes_every_clone() {
+        let (reader, dir, path) = source("g-windows-lease");
+        let fp = reader.hash_whole(&path).unwrap();
+        assert!(fp.current(&path));
+        let clone = fp.clone();
+        assert!(File::options().write(true).open(&path).is_err());
+        let moved = dir.join("moved");
+        std::fs::rename(&path, &moved).unwrap();
+        assert!(!fp.current(&path));
+        assert!(fp.current(moved.to_str().unwrap()));
+        assert!(File::options().write(true).open(&moved).is_err());
+        reader.retire();
+        assert!(!clone.current(moved.to_str().unwrap()));
+        assert!(File::options().write(true).open(&moved).is_ok());
+        drop((fp, clone));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn existing_writer_and_unsupported_query_preserve_bytes_and_stream_hash_without_proof() {
+        let (reader, dir, path) = source("g-windows-unavailable");
+        let writer = File::options().write(true).open(&path).unwrap();
+        let mut out = Vec::new();
+        let fp = reader.copy_whole(&path, &mut out).unwrap();
+        assert_eq!(out, b"same bytes");
+        assert_eq!(fp.hash, lightcraft_preview::hash_bytes(&out));
+        assert!(!fp.current(&path));
+        drop(writer);
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                FAIL_ID_QUERY.set(false);
+            }
+        }
+        let reset = Reset;
+        FAIL_ID_QUERY.set(true);
+        let mut copied = Vec::new();
+        let fp = reader.copy_whole(&path, &mut copied).unwrap();
+        assert_eq!(copied, out);
+        assert!(!fp.current(&path));
+        drop(reset);
+        assert!(reader.hash_whole(&path).unwrap().current(&path));
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn destination_verification_remains_compatible_with_the_synced_writer() {
+        use std::io::Write;
+        let (reader, dir, path) = source("g-windows-destination-verification");
+        let mut writer = File::options().write(true).open(&path).unwrap();
+        writer.write_all(b"same bytes").unwrap();
+        writer.sync_all().unwrap();
+        let hash = reader.in_scope(|| verification_hash(&path)).unwrap();
+        assert_eq!(hash, lightcraft_preview::hash_bytes(b"same bytes"));
+        drop(writer);
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn protected_source_append_is_denied_and_copy_failure_keeps_original() {
+        let (reader, dir, path) = source("w-protected-grow");
+        let original = File::open(&path).unwrap();
+        let before = Stamp::of(&original.metadata().unwrap()).unwrap();
+        let fp = reader.hash_whole(&path).unwrap();
+        assert!(fp.current(&path));
+        let denied = File::options().append(true).open(&path).unwrap_err();
+        assert_eq!(denied.raw_os_error(), Some(32), "the live source proof must deny an in-place append");
+        crate::import_move::inject(crate::import_move::Fault::Grow);
+        let result = reader.in_scope(|| crate::import_move::copy_new(std::path::Path::new(&path), &dir.join("out"), "copy.bin", None));
+        crate::import_move::inject(crate::import_move::Fault::None);
+        assert!(result.is_err(), "the denied in-place append must fail the copy safely");
+        assert_eq!(std::fs::read(&path).unwrap(), b"same bytes");
+        assert!(!dir.join("out/copy.bin").exists());
+        let current = File::open(&path).unwrap();
+        assert!(same_file_handles(&original, &current), "the protected original remains the same physical object");
+        assert_eq!(Stamp::of(&current.metadata().unwrap()).as_ref(), Some(&before));
+        assert!(!fp.current(&path), "failed-copy cleanup revokes the unowned candidate proof");
+        assert!(!reader.candidates.lock().unwrap().contains_key(&path));
+        assert!(reader.drain().is_empty());
+        assert!(File::options().append(true).open(&path).is_ok(), "cleanup must release the unowned write-denial lease");
+        reader.retire();
+        assert!(File::options().write(true).open(&path).is_ok());
+        drop((original, current));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn full_identity_rejects_a_difference_only_in_the_high_64_bits() {
+        let (_, dir, path) = source("g-windows-high-id");
+        let (file, safe) = open_read(&path, Open::DenyingWrites).unwrap();
+        let mut proof = ReadProof::new(file, safe).unwrap();
+        let stamp = Stamp::of(&File::open(&path).unwrap().metadata().unwrap()).unwrap();
+        assert!(proof.matches_path(&path, &stamp));
+        Arc::get_mut(&mut proof).unwrap().identity.1[15] ^= 1;
+        assert!(!proof.matches_path(&path, &stamp));
+        drop(proof);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn junction_retarget_rejects_the_old_fingerprint() {
+        let dir = crate::tests_xmp::temp_dir("g-windows-junction");
+        let (a, b, link) = (dir.join("a"), dir.join("b"), dir.join("junction"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("source"), b"same bytes").unwrap();
+        std::fs::write(b.join("source"), b"same bytes").unwrap();
+        let junction = |target: &std::path::Path| {
+            let output = std::process::Command::new("cmd").args(["/D", "/C", "mklink", "/J"]).arg(&link).arg(target).output().unwrap();
+            assert!(output.status.success(), "junction creation failed: {}", String::from_utf8_lossy(&output.stderr));
+        };
+        junction(&a);
+        let reader = Originals::default();
+        let path = link.join("source");
+        let fp = reader.hash_whole(path.to_str().unwrap()).unwrap();
+        assert!(fp.current(path.to_str().unwrap()));
+        let time = std::fs::metadata(&path).unwrap().modified().unwrap();
+        File::options().write(true).open(b.join("source")).unwrap().set_times(std::fs::FileTimes::new().set_modified(time)).unwrap();
+        std::fs::remove_dir(&link).unwrap();
+        junction(&b);
+        assert!(!fp.current(path.to_str().unwrap()));
+        reader.retire();
+        std::fs::remove_dir(&link).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn ancestor_retarget_rejects_equal_size_and_preserved_time() {
+        let dir = crate::tests_xmp::temp_dir("g-windows-ancestor");
+        let parent = dir.join("parent");
+        std::fs::create_dir_all(&parent).unwrap();
+        let path = parent.join("source");
+        std::fs::write(&path, b"same bytes").unwrap();
+        let reader = Originals::default();
+        let fp = reader.hash_whole(path.to_str().unwrap()).unwrap();
+        let time = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let retired = dir.join("retired-parent");
+        if let Err(error) = std::fs::rename(&parent, &retired) {
+            assert!(error.kind() == io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(32), "unexpected rename failure: {error}");
+            assert!(fp.current(path.to_str().unwrap()), "OS prevention must leave the existing source valid");
+            assert!(File::options().write(true).open(&path).is_err());
+            reader.retire();
+            std::fs::rename(&parent, &retired).unwrap();
+            assert!(File::options().write(true).open(retired.join("source")).is_ok(), "retirement releases the owned lease");
+            eprintln!("ancestor rename prevented until explicit retirement");
+        } else {
+            eprintln!("ancestor rename succeeded; replacement must reject the old proof");
+        }
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::write(&path, b"same bytes").unwrap();
+        File::options().write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(time)).unwrap();
+        assert!(!fp.current(path.to_str().unwrap()));
+        reader.retire();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

@@ -109,9 +109,10 @@ pub type ReducedLoader = Arc<dyn Fn(&str, usize, RawDecode<'_>) -> Result<(Rgb32
 pub type PreviewLoader = Arc<dyn Fn(&str, usize) -> Option<Rgba8> + Send + Sync>;
 
 /// Makes a photo's denoised picture when it is not cached yet (an export does not wait for the background queue):
-/// `Ok(true)` once it is there, `Ok(false)` when denoise does not apply to this photo (render it plain), `Err` when it
+/// `Ok(Some(spec))` names the product once it is there, `Ok(None)` when denoise does not apply to this photo (render it
+/// plain), `Err` when it
 /// should have worked and did not.
-pub type MakeProduct = Arc<dyn Fn() -> Result<bool, String> + Send + Sync>;
+pub type MakeProduct = Arc<dyn Fn() -> Result<Option<DenoiseSpec>, String> + Send + Sync>;
 
 /// A raw photo's cached AI-denoised picture (see [`crate::denoise`]): where the file is and the key it must have been
 /// made with. A file that is missing, damaged or made for something else is a cache miss, never an error.
@@ -148,6 +149,8 @@ impl Twin {
 /// Pixels and the source interpretation learned while decoding; they must be cached together.
 #[derive(Clone)]
 pub struct DecodedSource {
+    /// The whole read the pixels were decoded from, when it was hashed.
+    pub fingerprint: Option<crate::originals::Fingerprint>,
     pub image: Arc<Rgb32f>,
     pub info: Option<SourceInfo>,
     /// A smart preview's stored camera tone curve: the one decoder fact its pixels need that the
@@ -170,7 +173,17 @@ pub struct DecodedSource {
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None, camera_profile: None, outliers: false, from_proxy: false, reduced: false }
+        DecodedSource {
+            image,
+            info,
+            camera_tone: None,
+            denoised: None,
+            camera_profile: None,
+            outliers: false,
+            from_proxy: false,
+            reduced: false,
+            fingerprint: None,
+        }
     }
 
     /// Whether this source can stand for one decoded with `outliers`: a raw decode must match it; anything without a
@@ -266,9 +279,10 @@ pub enum SourceRef {
         loader: Option<FileLoader>,
         /// The photo's smart preview, used when the original can't be read (offline drive). The
         /// UI thread never checks whether the original is there; the render worker finds out.
-        fallback: Option<std::path::PathBuf>,
+        fallback: Option<Vec<std::path::PathBuf>>,
         /// The photo has a cached denoised picture: load it with the plain one (see [`PairLoader`]).
-        denoise: Option<(DenoiseSpec, PairLoader)>,
+        denoise: Option<Box<(DenoiseSpec, PairLoader)>>,
+        ticket: Option<crate::cache_identity::SourceTicket>,
         /// The photo's imported camera profile (id and profile): its raw file is developed with it.
         camera_profile: Option<(String, Arc<DcpProfile>)>,
         /// Replace a raw's single outlier photosites before developing it (`detail.nr_outliers`).
@@ -278,7 +292,7 @@ pub enum SourceRef {
     },
     /// A smart preview standing in for a missing original.
     Smart {
-        path: std::path::PathBuf,
+        paths: Vec<std::path::PathBuf>,
     },
 }
 
@@ -300,7 +314,11 @@ impl SourceRef {
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
-            SourceRef::File { path, max_edge, loader, fallback, denoise, camera_profile, outliers, reduced } => {
+            SourceRef::File { path, max_edge, loader, fallback, denoise, ticket, camera_profile, outliers, reduced } => {
+                if ticket.as_ref().is_some_and(|ticket| !ticket.current()) {
+                    return Err("the original changed before loading; retry the operation".into());
+                }
+                let capture = crate::originals::ReadCapture::new();
                 let with = RawDecode { dcp: camera_profile.as_ref().map(|(_, p)| p.as_ref()), outliers: *outliers };
                 let made_with = camera_profile.as_ref().map(|(id, _)| id.clone());
                 let plain = || match (reduced, loader) {
@@ -319,21 +337,23 @@ impl SourceRef {
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
                 // pair loader gives the plain picture alone (the cached file is never a reason to fail a render)
-                let r = match denoise {
+                let r = match denoise.as_deref() {
                     Some((spec, pair)) => {
                         // a job that needs the denoised picture has it made first; if that fails the job fails (no smart
                         // preview stands in: an export must not quietly come out without the denoise it was asked for)
+                        let needed = spec.make.is_some();
                         let made = match &spec.make {
                             Some(make) => make()?,
-                            None => true,
+                            None => Some(spec.clone()),
                         };
-                        if made {
-                            pair(path, *max_edge, spec, with).and_then(|(image, twin, info)| {
-                                if spec.make.is_some() && twin.is_none() {
+                        if let Some(spec) = made {
+                            pair(path, *max_edge, &spec, with).and_then(|(image, twin, info)| {
+                                if needed && twin.is_none() {
                                     return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
                                 }
                                 Ok(DecodedSource {
                                     image: Arc::new(image),
+                                    fingerprint: None,
                                     info: Some(info),
                                     camera_tone: None,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
@@ -349,22 +369,48 @@ impl SourceRef {
                     }
                     None => plain(),
                 };
+                if ticket.as_ref().is_some_and(|ticket| !ticket.current()) {
+                    return Err("the original changed while loading; retry the operation".into());
+                }
+                let r = r.map(|mut source| {
+                    source.fingerprint = capture.fingerprint(path);
+                    source
+                });
                 // An offline original renders from its smart preview (no decoder facts: header ones).
-                return match (r, fallback) {
+                let result = match (r, fallback) {
                     #[cfg(not(target_arch = "wasm32"))]
-                    (Err(e), Some(sp)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) && crate::smart::is_valid(sp) => {
-                        crate::smart::load(sp).map_err(|e2| format!("{e}; smart preview: {e2}"))
-                    }
+                    (Err(e), Some(paths)) if denoise.as_deref().is_none_or(|(spec, _)| spec.make.is_none()) => match load_smart(paths) {
+                        Some(r) => r.map_err(|e2| format!("{e}; smart preview: {e2}")),
+                        None => Err(e),
+                    },
                     (r, _) => r,
                 };
+                if ticket.as_ref().is_some_and(|ticket| !ticket.current()) {
+                    return Err("the original changed while loading its fallback; retry the operation".into());
+                }
+                return result;
             }
             #[cfg(not(target_arch = "wasm32"))]
-            SourceRef::Smart { path } => return crate::smart::load(path),
+            SourceRef::Smart { paths } => return load_smart(paths).unwrap_or_else(|| Err("no readable smart preview".to_string())),
             #[cfg(target_arch = "wasm32")]
             SourceRef::Smart { .. } => return Err("smart previews are not available here".into()),
         };
         Ok(DecodedSource::new(image, None))
     }
+}
+
+/// The first of `paths` whose smart preview decodes; a damaged one gives way to the next. `None` when none looks
+/// like a smart preview, else the last decode error when none decodes.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_smart(paths: &[std::path::PathBuf]) -> Option<Result<DecodedSource, String>> {
+    let mut last = None;
+    for path in paths.iter().filter(|path| crate::smart::is_valid(path)) {
+        match crate::smart::load(path) {
+            Ok(source) => return Some(Ok(source)),
+            Err(e) => last = Some(Err(e)),
+        }
+    }
+    last
 }
 
 /// What an import learns from a file header (set by the app from `lightcraft-codecs`/`-raw`).
@@ -396,6 +442,10 @@ pub struct ProbeInfo {
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
+    /// Hash (hex) of the file's first bytes, for finding duplicates without reading whole files.
+    pub head_hash: Option<String>,
+    /// The reads behind this probe, for the import that adds the file to trust its facts.
+    pub native_read: Option<crate::originals::ProbeEvidence>,
 }
 
 pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync>;

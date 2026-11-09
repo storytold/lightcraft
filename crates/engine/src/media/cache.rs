@@ -1,6 +1,8 @@
 use super::settings_hash::SettingsHashes;
 use super::source::{DecodedSource, DenoiseSpec, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
-use super::{Arc, DcpProfile, DevelopSettings, HashMap, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo};
+use super::{
+    Arc, DcpProfile, DevelopSettings, Hash128, HashMap, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo,
+};
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
 /// file system, so it can be asked on the UI thread.
@@ -63,6 +65,7 @@ impl Default for MediaCache {
             file_loader: None,
             reduced_loader: None,
             file_probe: None,
+            header_probe: None,
             preview_loader: None,
             file_bytes: None,
             smart_dir: None,
@@ -70,6 +73,7 @@ impl Default for MediaCache {
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
             denoise: DenoiseIndex::default(),
+            identities: Default::default(),
             camera_profiles: HashMap::new(),
         }
     }
@@ -88,7 +92,15 @@ impl MediaCache {
     /// into a directory a later clear emptied (`dir` may be the same one).
     pub fn attach_disk_cache(&mut self, dir: &std::path::Path, disk_bytes: u64) {
         self.rendered.retire();
+        self.identities.retire();
+        self.identities = crate::cache_identity::CacheIdentity::open(&dir.parent().unwrap_or(dir).join("source-invalidations"));
         self.rendered = Arc::new(PreviewCache::with_disk(rendered_budget(self.budget), dir, disk_bytes));
+    }
+
+    /// Retire the rendered cache and continue with one in memory only (a library without a folder).
+    pub(crate) fn detach_disk_cache(&mut self) {
+        self.rendered.retire();
+        self.rendered = Arc::new(PreviewCache::memory(rendered_budget(self.budget)));
     }
 
     /// Change the disk budget of the cache in `dir`: in place when that cache is attached (its
@@ -322,8 +334,11 @@ impl MediaCache {
     /// [`Self::source_ref_with`] developed with camera profile `wanted` (none: the file's own colour).
     fn source_ref_for(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
         let mut r = self.source_ref_plain(p, level, cached, wanted);
+        if let SourceRef::File { ticket, .. } = &mut r {
+            *ticket = Some(self.identities.ticket(p));
+        }
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
-            *denoise = Some((spec.clone(), loader.clone()));
+            *denoise = Some(Box::new((spec.clone(), loader.clone())));
         }
         r
     }
@@ -368,17 +383,21 @@ impl MediaCache {
         // be offline is tried first and its smart preview is the render worker's fallback.
         #[cfg(not(target_arch = "wasm32"))]
         if let (Source::File { path }, Some(dir)) = (&p.source, &self.smart_dir) {
-            let sharded = crate::smart::sharded_file_path(dir, p);
-            let legacy = dir.join(crate::smart::file_name(p));
-            let sp = if self.availability.exists(&sharded.to_string_lossy()) == Some(true) { sharded } else { legacy };
+            let paths = crate::smart::paths_for_keys(dir, &self.content_keys(p));
+            let sp = paths
+                .iter()
+                .find(|path| self.availability.exists(&path.to_string_lossy()) == Some(true))
+                .or_else(|| paths.first())
+                .cloned()
+                .unwrap_or_else(|| crate::smart::sharded_file_path(dir, p));
             // (a proxy cut short fails to load, like the offline original; the worker's fallback
             // in `SourceRef::load` only uses a proxy that passes `smart::is_valid`)
             if self.availability.is_offline(path) && self.availability.exists(&sp.to_string_lossy()) == Some(true) {
-                return SourceRef::Smart { path: sp };
+                return SourceRef::Smart { paths };
             }
             let mut r = self.origin_ref(&p.source, max_edge);
             if let SourceRef::File { fallback, camera_profile, outliers: o, .. } = &mut r {
-                *fallback = Some(sp);
+                *fallback = Some(paths);
                 *camera_profile = wanted;
                 *o = outliers;
             }
@@ -430,6 +449,7 @@ impl MediaCache {
                         camera_profile: None,
                         outliers: false,
                         reduced: None,
+                        ticket: None,
                     },
                 }
             }
@@ -442,7 +462,18 @@ impl MediaCache {
                 camera_profile: None,
                 outliers: false,
                 reduced: None,
+                ticket: None,
             },
         }
+    }
+
+    /// `p`'s cache keys, best first, as [`crate::cache_identity::CacheIdentity::keys`] allows them.
+    pub fn content_keys(&self, p: &Photo) -> Vec<String> {
+        self.identities.keys(p)
+    }
+
+    /// The identity of a source decoded for `p` under content `key`, tied to its source epoch.
+    pub(crate) fn source_hash(&self, p: &Photo, key: &str) -> Hash128 {
+        super::quick::source_identity(p, &self.identities.tag(p, key))
     }
 }

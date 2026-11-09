@@ -30,6 +30,9 @@ pub struct QuickJob {
     /// the cache (memory only, never its disk), the key for this photo and edge, and the cache's
     /// generation when the job was made (a Discard Preview Cache since then keeps the picture out).
     pub embedded_cache: Option<(Arc<PreviewCache>, Hash128, u64)>,
+    /// Older keys of the same preview in [`Self::embedded_cache`]'s cache (the photo's keys from before its hash was
+    /// known), tried after its own.
+    pub embedded_fallback: Vec<Hash128>,
     /// Whether [`Self::embedded_cache`] keeps the decoded preview on disk too: a grid thumbnail,
     /// so a folder seen before fills in from small files at once instead of every raw being read
     /// and its camera JPEG decoded again (the loupe's large stand-ins stay in memory).
@@ -89,8 +92,11 @@ impl QuickJob {
         }
         let mut embedded_fallback = None;
         if let Some((path, loader, edge)) = &self.embedded {
-            let kept =
-                self.embedded_cache.as_ref().and_then(|(cache, k, _)| if self.embedded_on_disk { cache.get(*k) } else { cache.get_memory(*k) });
+            let kept = self.embedded_cache.as_ref().and_then(|(cache, k, _)| {
+                std::iter::once(k)
+                    .chain(&self.embedded_fallback)
+                    .find_map(|k| if self.embedded_on_disk { cache.get(*k) } else { cache.get_memory(*k) })
+            });
             let image = match kept {
                 Some(img) => Some(Arc::unwrap_or_clone(img)),
                 None => {
@@ -149,9 +155,9 @@ pub(super) fn decoder_key(p: &Photo) -> u64 {
 /// ([`lens_key`]; the decode fits the starting colour through it). A job's source is kept only when this still
 /// matches when the job finishes ([`super::Session::accept`]), so a decode started before a profile change never
 /// returns to the cache after `cmd::lens_refresh` has dropped the photo's sources.
-pub fn source_identity(p: &Photo) -> Hash128 {
+pub(super) fn source_identity(p: &Photo, content: &str) -> Hash128 {
     let mut k = Hasher128::new();
-    k.str(&content_key(p));
+    k.str(content);
     let decoder = decoder_key(p);
     if decoder != 0 {
         k.str("decoder").u64(decoder);
@@ -169,6 +175,26 @@ pub fn content_key(p: &Photo) -> String {
         (None, Source::Demo { scene }) => format!("demo:{scene}"),
         (None, Source::File { path }) => format!("file:{path}:{}", p.file_size),
     }
+}
+
+/// The keys `p`'s cached work may be under, best first: its content key, the hash a duplicate's suffix stands for,
+/// and its path-and-size alias from before the hash was known.
+pub fn content_keys(p: &Photo) -> Vec<String> {
+    let mut keys = vec![content_key(p)];
+    if let Some(hash) = &p.content_hash {
+        if let Some((base, suffix)) = hash.split_once(":dup")
+            && !base.contains(':')
+            && suffix.split(":dup").all(|id| id.parse::<u64>().is_ok())
+        {
+            keys.push(base.to_string());
+        }
+        if let Some(alias) = crate::cache_identity::path_key(p)
+            && !keys.contains(&alias)
+        {
+            keys.push(alias);
+        }
+    }
+    keys
 }
 
 /// What a photo's lens profile adds to its render and thumbnail keys: a database profile (0 without one), with the

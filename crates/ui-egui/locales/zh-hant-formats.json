@@ -48,6 +48,7 @@
   "Imported {n} preset{}, {f} file{} not readable": "已匯入 {n} 個預設集{:.0}，{f} 個檔案無法讀取{:.0}",
   "Imported {} photo{}": "已匯入 {} 張照片{:.0}",
   "Lightroom catalog inspected: {photos} photos, {collections} collections, {missing} missing": "已檢查 Lightroom 目錄：{photos} 張相片，{collections} 個收藏集，{missing} 個遺失",
+  "Lightroom import cancelled · {imported} photos added": "已取消 Lightroom 匯入 · 已加入 {imported} 張相片",
   "Lightroom import complete: {imported} photos added": "Lightroom 匯入完成：已加入 {imported} 張相片",
   "Lightroom import complete: {imported} photos added, {failed} failed": "Lightroom 匯入完成：已加入 {imported} 張相片，{failed} 張失敗",
   "Lightroom import complete: {imported} photos added; index warning: {warning}": "Lightroom 匯入完成：已加入 {imported} 張相片；索引警告：{warning}",

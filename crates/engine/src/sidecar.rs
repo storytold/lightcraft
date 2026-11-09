@@ -837,14 +837,27 @@ fn file_path(p: &Photo) -> Option<&str> {
 }
 
 /// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
+/// Reads through the session's original reader when one is bound, else through a reader of its own.
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
+    let _binding = crate::originals::standalone_binding();
+    read_packet_with(original, kind, lookup, None)
+}
+/// [`read_packet`] with the original's `bytes` when the caller already read them.
+pub(crate) fn read_packet_with(original: &str, kind: MediaKind, lookup: SidecarLookup, bytes: Option<&[u8]>) -> Option<(String, PathBuf)> {
     if let Some(sc) = lookup.find(original) {
         // A discovered sidecar keeps precedence even when reading it fails.
         return std::fs::read_to_string(&sc).ok().map(|s| (s, sc));
     }
     if kind == MediaKind::Raw {
-        let bytes = std::fs::read(original).ok()?;
-        let x = lightcraft_meta::embedded(&bytes).xmp?;
+        let owned;
+        let bytes = match bytes {
+            Some(bytes) => bytes,
+            None => {
+                owned = crate::originals::read_whole(original).ok()?;
+                &owned
+            }
+        };
+        let x = lightcraft_meta::embedded(bytes).xmp?;
         return Some((x, PathBuf::from(original)));
     }
     if kind == MediaKind::Image {
@@ -1167,6 +1180,7 @@ impl Session {
 
     /// Like [`Session::read_sidecar_op`], retaining transient diagnostics for the command report.
     pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
+        let _binding = self.originals.bind();
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else { return Ok(None) };
@@ -1704,6 +1718,20 @@ mod tests {
             &mut v,
         );
         assert_eq!(v, vec![PhotoId(1), PhotoId(3)]);
+    }
+
+    #[test]
+    fn a_standalone_read_finds_the_xmp_embedded_in_a_dng() {
+        let dir = crate::tests_xmp::temp_dir("standalone-embedded-xmp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.dng");
+        let xmp = lightcraft_meta::write_xmp(&lightcraft_meta::Metadata { title: Some("Dune".into()), ..Default::default() }, None);
+        std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(Some(&xmp), Default::default())).unwrap();
+        let lookup = SidecarLookup { naming: SidecarNaming::Stem, owns_stem: true };
+        let (packet, from) = super::read_packet(path.to_str().unwrap(), MediaKind::Raw, lookup).expect("embedded packet");
+        assert!(packet.contains("Dune"));
+        assert_eq!(from, path);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 

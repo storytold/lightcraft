@@ -93,6 +93,7 @@ fn decoder_info_survives_render_jobs_cache_and_eviction() {
         camera_profile: None,
         outliers: false,
         reduced: None,
+        ticket: None,
     };
     job.info = SourceInfo::default(); // Header facts cannot override decoder facts.
     job.settings = Arc::new(DevelopSettings::default());
@@ -151,6 +152,7 @@ fn old_relative_white_balance_on_a_kelvin_camera_keeps_its_look_and_learns_the_a
         camera_profile: None,
         outliers: false,
         reduced: None,
+        ticket: None,
     };
     let undo_before = s.undo.len();
     let request = job.request;

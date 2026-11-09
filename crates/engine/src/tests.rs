@@ -1462,7 +1462,8 @@ fn find_similar_of_a_flat_photo_shows_an_empty_view_and_counts_zero() {
     let mut s = demo();
     let photo = s.catalog.photos().next().unwrap().clone();
     // a flat photo's signature is all zeros: it is not similar even to itself
-    s.signatures.insert(crate::media::content_key(&photo), [0.0; 64]);
+    let key = s.media.identities.tag(&photo, &crate::media::content_key(&photo));
+    s.signatures.insert(key, [0.0; 64]);
     let r = s.execute("library.findSimilar", &json!({"id": photo.id.0})).unwrap();
     assert_eq!(r["photos"].as_array().map(Vec::len), Some(0));
     assert_eq!(s.visible_cloned().len(), 0, "no matches show nothing, not the whole library");

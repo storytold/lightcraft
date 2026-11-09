@@ -662,9 +662,13 @@ impl Session {
         let presets_saved = PresetsSaved::state_of(self);
         // photo ids are per library: drop decoded sources of the previous one
         self.media.clear_sources();
+        self.media.identities.retire();
+        self.media.identities = Default::default();
         if on_disk {
             self.media.attach_disk_cache(&dir.join("thumbs"), self.cache_bytes());
             self.tidy_thumbnail_cache();
+        } else {
+            self.media.detach_disk_cache();
         }
         let view_written = self.view_json();
         self.library = Some(Library {
@@ -698,6 +702,7 @@ impl Session {
                 lib.forgot_local = Some(plan);
             }
         }
+        self.reset_originals();
         // smart previews written by an older camera-look fit are brought up to date in the background
         #[cfg(not(target_arch = "wasm32"))]
         if on_disk {
@@ -714,6 +719,30 @@ impl Session {
     /// Called after every top-level command; cheap when nothing changed. Fails (with
     /// [`EngineError::NotSaved`]) only when the queued ops couldn't be written; they stay queued.
     pub fn persist(&mut self) -> Result<()> {
+        let learned = self.learn_read_hashes();
+        let saved = self.persist_queued();
+        if let Err(e) = learned {
+            self.report_unlearned_reads(&e);
+        }
+        saved
+    }
+
+    /// [`Session::learn_read_hashes`] where its failure must not stop other work: a read whose replacement could not
+    /// be fenced in the render caches stays queued for a later try and is reported (`library.info` → `lastError`).
+    pub(crate) fn learn_read_hashes_or_report(&mut self) {
+        if let Err(e) = self.learn_read_hashes() {
+            self.report_unlearned_reads(&e);
+        }
+    }
+
+    fn report_unlearned_reads(&mut self, e: &EngineError) {
+        log::error!("original read identity: {e}");
+        if let Some(lib) = self.library.as_mut() {
+            lib.last_error = Some(format!("original read identity: {e}"));
+        }
+    }
+
+    fn persist_queued(&mut self) -> Result<()> {
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if !self.pending_log.is_empty() {
             if let Err(e) = lib.journal.append(&self.pending_log) {
@@ -773,6 +802,7 @@ impl Session {
     /// Persist if commands left ops pending (cheap; frontends call it once per frame for state
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
+        self.learn_read_hashes_or_report();
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
         let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
         // records the log's thread can't write: a snapshot (a fresh file holding everything) is due

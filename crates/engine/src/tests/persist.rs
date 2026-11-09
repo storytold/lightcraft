@@ -216,3 +216,95 @@ fn a_preset_that_cannot_be_written_counts_as_unsaved_until_it_is() {
     assert!(s.unsaved().is_none(), "written once the disk works again");
     assert!(String::from_utf8_lossy(&stored(&files)).contains("Mine"));
 }
+
+#[test]
+fn logging_public_import_reports_failed_journal_after_applied_counts() {
+    let thread = crate::import::lifecycle_tests::capture();
+    let store = Flaky::default();
+    let mut s = open(&store, false);
+    let base = crate::tests_xmp::temp_dir("PRIVATE-logging-persist");
+    let path = base.join("PRIVATE.jpg");
+    std::fs::write(&path, b"synthetic").unwrap();
+    s.media.file_probe = Some(Arc::new(|_| Ok(crate::media::ProbeInfo { width: 32, height: 24, format: "JPEG".into(), ..Default::default() })));
+    store.set_failing(true);
+    assert!(matches!(s.execute("library.import", &json!({"paths":[path],"mode":"add"})), Err(EngineError::NotSaved(_))));
+    assert_eq!(s.catalog.len(), 1);
+    assert!(s.unsaved().is_some());
+    let records = crate::import::lifecycle_tests::rows(thread, "import");
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert!(records[1].contains("event=terminal status=error cause=persist"), "{records:?}");
+    assert!(records[1].contains("persist=failed"), "{records:?}");
+    assert!(records[1].contains("imported=1"), "applied count survives failed append: {records:?}");
+    assert!(!records.join(" ").contains("PRIVATE"));
+    store.set_failing(false);
+    s.persist().unwrap();
+    assert_eq!(open(&store, false).catalog.len(), 1);
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn a_replacement_whose_cache_fence_cannot_be_written_never_blocks_other_edits() {
+    let base = crate::tests_xmp::temp_dir("unfenced-replacement-persist");
+    std::fs::create_dir_all(&base).unwrap();
+    let path = base.join("a.png");
+    let image = lightcraft_raster::Rgba8::from_fn(8, 8, |x, y| [x as u8, y as u8, 10, 255]);
+    let options = crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() };
+    let bytes = crate::export::encode_image(&image, &options).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let library = base.join("library");
+    let mut s = Session::new().with_fs();
+    s.open_library(&library, false).unwrap();
+    s.execute("library.import", &json!({"paths": [path.to_string_lossy()], "mode": "add"})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.selection = crate::Selection { active: Some(id), ids: vec![id] };
+    let p = s.catalog.photo(id).unwrap().clone();
+    s.apply_system(lightcraft_catalog::Op::SetContent {
+        id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: None,
+        preview_only: p.preview_only.clone(),
+        preview_checked: p.preview_checked.clone(),
+    })
+    .unwrap();
+    s.originals.refresh(&s);
+    s.originals.read_whole(path.to_str().unwrap()).unwrap();
+    let replacement = base.join("b.png");
+    let mut other = bytes.clone();
+    *other.last_mut().unwrap() ^= 1;
+    std::fs::write(&replacement, other).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    let markers = library.join("source-invalidations");
+    let _ = std::fs::remove_dir_all(&markers);
+    std::fs::write(&markers, b"not a directory").unwrap();
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+    s.persist().unwrap();
+    assert!(s.unsaved().is_none());
+    assert!(s.media.identities.needs_validation(s.catalog.photo(id).unwrap()), "the replaced original stays fenced in this session");
+    drop(s);
+    let mut reopened = Session::new().with_fs();
+    reopened.open_library(&library, false).unwrap();
+    assert_eq!(reopened.catalog.photo(id).unwrap().rating, 4);
+    drop(reopened);
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn an_export_keeps_its_files_when_the_save_after_it_fails() {
+    let store = Flaky::default();
+    let mut s = open(&store, true);
+    let id = s.selection.active.unwrap();
+    store.set_failing(true);
+    assert!(s.execute("photo.rate", &json!({"rating": 2})).is_err());
+    let dir = crate::tests_xmp::temp_dir("export-unsaved");
+    std::fs::create_dir_all(&dir).unwrap();
+    let to = crate::export::Destination { dir: dir.to_string_lossy().to_string(), exact: None };
+    let o = crate::export::ExportOptions { resize: Some(crate::export::Resize::long_edge(32)), ..Default::default() };
+    let files = crate::export::export_batch(&mut s, &[id], &o, &to, &mut crate::export::write_file, &|p| std::path::Path::new(p).exists()).unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(s.unsaved().is_some(), "the unsaved rating is still reported");
+    assert!(crate::export::export_photo(&mut s, id, &o, 1).is_ok());
+    std::fs::remove_dir_all(dir).unwrap();
+}

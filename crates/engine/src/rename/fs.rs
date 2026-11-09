@@ -151,10 +151,24 @@ impl MoveFs for RealFs {
             return Err(std::io::Error::other(format!("{} is not a regular file", a.display())));
         }
         let copied = (|| {
-            let mut from = open_regular(a, &checked)?;
+            let _binding = crate::originals::standalone_binding();
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial)?;
-            std::io::copy(&mut from, &mut f)?;
-            f.sync_all()
+            let _capture = crate::originals::ReadCapture::new();
+            let path = a.to_string_lossy();
+            let checked_file = || {
+                let file = open_regular(a, &checked);
+                #[cfg(test)]
+                copy_step();
+                file
+            };
+            let fp = crate::originals::copy_opened(&path, checked_file, &mut f)?;
+            #[cfg(test)]
+            copy_step();
+            let result = open_regular(a, &checked).and_then(|_| f.sync_all());
+            if let Some(reader) = crate::originals::bound_reader() {
+                reader.discard_scratch(&path, &fp);
+            }
+            result
         })();
         let placed = copied.and_then(|()| self.rename_no_replace(&partial, b));
         if placed.is_err() {
@@ -169,6 +183,15 @@ impl MoveFs for RealFs {
 
     fn stem_sibling(&self, sidecar: &Path) -> Option<String> {
         crate::import_move::sibling_photo(sidecar)
+    }
+}
+
+#[cfg(test)]
+thread_local! { static COPY_STEPS: std::cell::RefCell<std::collections::VecDeque<Box<dyn FnOnce()>>> = Default::default(); }
+#[cfg(test)]
+fn copy_step() {
+    if let Some(step) = COPY_STEPS.with(|steps| steps.borrow_mut().pop_front()) {
+        step();
     }
 }
 
@@ -201,7 +224,7 @@ fn open_regular(a: &Path, checked: &std::fs::Metadata) -> std::io::Result<std::f
 
 /// Move `a` to `b` on another volume: copy (never replacing), compare the copy with the original
 /// byte for byte, and only then remove the original. A copy that doesn't match is removed.
-fn move_across_volumes(fs: &RealFs, a: &Path, b: &Path) -> std::io::Result<()> {
+pub(super) fn move_across_volumes(fs: &RealFs, a: &Path, b: &Path) -> std::io::Result<()> {
     fs.copy_no_replace(a, b)?;
     if !same_contents(a, b).unwrap_or(false) {
         let _ = std::fs::remove_file(b);
@@ -216,37 +239,12 @@ fn move_across_volumes(fs: &RealFs, a: &Path, b: &Path) -> std::io::Result<()> {
 /// Whether files `a` and `b` hold the same bytes: lengths first, then 1 MiB chunks at a time, so
 /// a large raw or video is never read into memory whole.
 pub(super) fn same_contents(a: &Path, b: &Path) -> std::io::Result<bool> {
-    const CHUNK: usize = 1 << 20;
+    let _binding = crate::originals::standalone_binding();
     let (mut fa, mut fb) = (std::fs::File::open(a)?, std::fs::File::open(b)?);
     if fa.metadata()?.len() != fb.metadata()?.len() {
         return Ok(false);
     }
-    let (mut ba, mut bb) = (vec![0u8; CHUNK], vec![0u8; CHUNK]);
-    loop {
-        let n = read_full(&mut fa, &mut ba)?;
-        let m = read_full(&mut fb, &mut bb)?;
-        if n != m || ba.get(..n) != bb.get(..m) {
-            return Ok(false);
-        }
-        if n == 0 {
-            return Ok(true);
-        }
-    }
-}
-
-/// Fill `buf` from `r` as far as the file goes; the number of bytes read (less than the buffer
-/// only at the end of the file).
-fn read_full(r: &mut impl std::io::Read, buf: &mut [u8]) -> std::io::Result<usize> {
-    let mut filled = 0;
-    while let Some(rest) = buf.get_mut(filled..).filter(|r| !r.is_empty()) {
-        match r.read(rest) {
-            Ok(0) => break,
-            Ok(k) => filled = filled.saturating_add(k),
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(filled)
+    crate::originals::compare_open(&a.to_string_lossy(), &b.to_string_lossy(), &mut fa, &mut fb)
 }
 
 /// `from` → `to` differs only in letter case and `to` is that very file (a case-insensitive
@@ -295,6 +293,35 @@ mod open_regular_tests {
         std::os::unix::fs::symlink(&other, &link).unwrap();
         std::fs::rename(&link, &file).unwrap();
         assert!(open_regular(&file, &checked).is_err(), "the link's target must not be opened");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_link_swapped_in_during_the_copy_does_not_publish_its_target() {
+        use super::{COPY_STEPS, MoveFs, RealFs};
+        let dir = std::env::temp_dir().join(format!("lightcraft-copy-checked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (file, secret, held, copy) = (dir.join("a.xmp"), dir.join("secret"), dir.join("held"), dir.join("b.xmp"));
+        std::fs::write(&file, b"edits").unwrap();
+        std::fs::write(&secret, b"secret").unwrap();
+        let (f, s, h) = (file.clone(), secret.clone(), held.clone());
+        let swap: Box<dyn FnOnce()> = Box::new(move || {
+            std::fs::rename(&f, &h).unwrap();
+            std::os::unix::fs::symlink(&s, &f).unwrap();
+        });
+        let (f, h) = (file.clone(), held.clone());
+        let restore: Box<dyn FnOnce()> = Box::new(move || {
+            std::fs::remove_file(&f).unwrap();
+            std::fs::rename(&h, &f).unwrap();
+        });
+        COPY_STEPS.with(|steps| steps.borrow_mut().extend([swap, restore]));
+        let copied = RealFs.copy_no_replace(&file, &copy);
+        for step in COPY_STEPS.with(|steps| steps.borrow_mut().drain(..).collect::<Vec<_>>()) {
+            step();
+        }
+        assert!(copied.is_err() || std::fs::read(&copy).unwrap() == b"edits", "the link's target must never be published");
+        assert_eq!(std::fs::read(&file).unwrap(), b"edits");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

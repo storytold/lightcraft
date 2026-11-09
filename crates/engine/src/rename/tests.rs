@@ -44,6 +44,31 @@ fn same_contents_compares_in_chunks() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn g_cross_volume_stream_and_verification_learn_without_an_extra_original_pass() {
+    let dir = crate::tests_xmp::temp_dir("g-rename-cross-volume");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("original.dng"), dir.join("moved.dng"));
+    let bytes = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+    std::fs::write(&a, &bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    let id = PhotoId(901);
+    let mut photo = Photo::new(id, Source::File { path: a.to_string_lossy().into_owned() }, "original.dng", "DNG", 8, 8, "");
+    photo.file_size = bytes.len() as u64;
+    s.commit("Add", Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    let before = crate::originals::read_bytes();
+    s.original_reader().in_scope(|| move_across_volumes(&RealFs, &a, &b)).unwrap();
+    assert!(!a.exists());
+    assert_eq!(std::fs::read(&b).unwrap(), bytes);
+    s.commit("Move", Op::SetFile { id, file_name: "moved.dng".into(), source: Source::File { path: b.to_string_lossy().into_owned() } }).unwrap();
+    s.persist().unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().content_hash, Some(lightcraft_preview::hash_bytes(&bytes).to_string()));
+    assert_eq!(s.originals.counts().0, 3, "one streamed copy plus existing source/destination verification");
+    assert_eq!(crate::originals::read_bytes() - before, 3 * bytes.len() as u64);
+    drop(s);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A model volume: files by path with contents; case-insensitive (default APFS/NTFS) or
 /// case-sensitive (Linux, case-sensitive APFS). `fail` makes renames from a matching source fail.
 pub(crate) struct FakeFs {
