@@ -1016,15 +1016,24 @@ fn a_folder_the_app_moves_keeps_its_photos_cached_work_both_ways() {
         s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }
     s.faces.scanned.insert(100);
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    assert!(s.thumb_job(PhotoId(100), 256).unwrap().run().rendered.is_ok());
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("must use the cached thumbnail".into())));
+    let cached = |s: &mut crate::Session| {
+        let r = s.thumb_job(PhotoId(100), 256).unwrap().run();
+        r.rendered.is_ok() && r.loaded.is_none()
+    };
     let syncs = lightcraft_catalog::safe_file::syncs_on_this_thread();
     s.execute("folder.rename", &serde_json::json!({"path": trip, "name": "holiday"})).unwrap();
     assert!(lightcraft_catalog::safe_file::syncs_on_this_thread() - syncs < 10, "one fence write for the whole folder");
     assert!(s.catalog.photos().all(|p| !s.media.identities.needs_validation(p)), "moved photos keep their cache keys");
     assert!(s.faces.scanned.contains(100));
+    assert!(cached(&mut s), "the moved photo's thumbnail is read from the cache");
     s.execute("edit.undo", &serde_json::json!({})).unwrap();
     assert!(s.catalog.photos().all(|p| p.source == Source::File { path: trip.join(p.file_name.as_str()).to_string_lossy().to_string() }));
     assert!(s.catalog.photos().all(|p| !s.media.identities.needs_validation(p)), "and keep them when undo moves the folder back");
     assert!(s.faces.scanned.contains(100));
+    assert!(cached(&mut s), "and again after undo");
     let _ = std::fs::remove_dir_all(dir);
 }
 
