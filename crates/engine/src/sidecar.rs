@@ -837,7 +837,9 @@ fn file_path(p: &Photo) -> Option<&str> {
 }
 
 /// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
+/// Reads through the session's original reader when one is bound, else through a reader of its own.
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
+    let _binding = crate::originals::standalone_binding();
     read_packet_with(original, kind, lookup, None)
 }
 pub(crate) fn read_packet_with(original: &str, kind: MediaKind, lookup: SidecarLookup, bytes: Option<&[u8]>) -> Option<(String, PathBuf)> {
@@ -1715,6 +1717,20 @@ mod tests {
             &mut v,
         );
         assert_eq!(v, vec![PhotoId(1), PhotoId(3)]);
+    }
+
+    #[test]
+    fn a_standalone_read_finds_the_xmp_embedded_in_a_dng() {
+        let dir = crate::tests_xmp::temp_dir("standalone-embedded-xmp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.dng");
+        let xmp = lightcraft_meta::write_xmp(&lightcraft_meta::Metadata { title: Some("Dune".into()), ..Default::default() }, None);
+        std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(Some(&xmp), Default::default())).unwrap();
+        let lookup = SidecarLookup { naming: SidecarNaming::Stem, owns_stem: true };
+        let (packet, from) = super::read_packet(path.to_str().unwrap(), MediaKind::Raw, lookup).expect("embedded packet");
+        assert!(packet.contains("Dune"));
+        assert_eq!(from, path);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
