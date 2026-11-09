@@ -135,7 +135,17 @@ pub fn export_plan(
     let mut out = Vec::new();
     for item in items {
         let (photo, name, guard, source_dir) = (item.photo, item.file_name.clone(), item.guard.clone(), item.source_dir.clone());
-        let (w, h) = session.catalog.photo(photo).map(|p| output_size(p, o)).unwrap_or((0, 0));
+        let (w, h) = session
+            .catalog
+            .photo(photo)
+            .map(|p| {
+                if o.format == ExportFormat::Original {
+                    (p.width as usize, p.height as usize)
+                } else {
+                    output_size(p, o)
+                }
+            })
+            .unwrap_or((0, 0));
         let dir = if to.exact.is_some() && single { Ok(String::new()) } else { folder_for(o, to, exists, &name, source_dir.as_deref()) };
         let dir = match dir {
             Ok(d) => d,
@@ -150,7 +160,7 @@ pub fn export_plan(
             Ok(p.to_string())
         } else {
             let path = join_path(&dir, &name);
-            let busy = |main: &str| group(main).iter().any(|p| taken.contains(p) || exists(p));
+            let busy = |main: &str| group(main).iter().any(|p| taken.contains(&p.to_lowercase()) || exists(p));
             if !busy(&path) {
                 Ok(path)
             } else {
@@ -181,7 +191,7 @@ pub fn export_plan(
                     out.push(json!({"photo": photo.0, "file": name, "error": e}));
                     continue;
                 }
-                taken.extend(group(&path));
+                taken.extend(group(&path).into_iter().map(|p| p.to_lowercase()));
                 out.push(json!({"path": path, "sidecars": sidecar_exts.iter().map(|x| sidecar_path(&path, x)).collect::<Vec<_>>(), "width": w, "height": h}));
             }
             Err(e) => out.push(json!({"photo": photo.0, "file": name, "error": e})),
@@ -244,5 +254,51 @@ mod export_plan_id_tests {
         let result = session.execute("export.plan", &serde_json::json!({"id": explicit, "dir": "out"})).unwrap();
         let files = result["files"].as_array().unwrap();
         assert_eq!(files.len(), 1, "explicit id should plan one photo, got {result}");
+    }
+
+    #[test]
+    fn export_plan_reports_original_dimensions_for_original_format() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        let mut session = crate::Session::with_demo();
+        let photo = Photo::new(
+            PhotoId(9001),
+            Source::File { path: "IMG_1.NEF".into() },
+            "IMG_1.NEF",
+            "NEF",
+            6000,
+            4000,
+            "2026-01-01T00:00:00",
+        );
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let o = ExportOptions::from_json(&serde_json::json!({"format": "original", "longEdge": 100}));
+        let to = Destination { dir: "out".into(), exact: None };
+        let files = export_plan(&mut session, &[PhotoId(9001)], &o, &to, &|_| false).unwrap();
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(files[0]["width"], 6000, "{files:?}");
+        assert_eq!(files[0]["height"], 4000, "{files:?}");
+    }
+
+    #[test]
+    fn export_plan_treats_case_only_names_as_colliding() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        let mut session = crate::Session::with_demo();
+        for (id, name) in [(9001, "Photo.jpg"), (9002, "photo.jpg")] {
+            let photo = Photo::new(
+                PhotoId(id),
+                Source::File { path: name.into() },
+                name,
+                "jpeg",
+                6000,
+                4000,
+                "2026-01-01T00:00:00",
+            );
+            session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        }
+        let o = ExportOptions::from_json(&serde_json::json!({"format": "png", "conflict": "unique"}));
+        let to = Destination { dir: "out".into(), exact: None };
+        let files = export_plan(&mut session, &[PhotoId(9001), PhotoId(9002)], &o, &to, &|_| false).unwrap();
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert_eq!(files[0]["path"], "out/Photo.png", "{files:?}");
+        assert_eq!(files[1]["path"], "out/photo-2.png", "{files:?}");
     }
 }
