@@ -420,7 +420,8 @@ turn. `LIGHTCRAFT_CI_SLOTS=2` allows two; `LIGHTCRAFT_CI_LOCK=off` skips the loc
 gives up after `LIGHTCRAFT_CI_LOCK_WAIT` minutes (default 120; `0` waits as long as it takes) and
 names the run holding the slot. The build isn't timed (a first build can rightly take long), but the
 test binaries are: each may run for `LIGHTCRAFT_TEST_BINARY_TIMEOUT` minutes (default 30, timed from
-cargo's `Running` line for it; `0` for no limit). One that runs longer, a test hung on a GPU device say, is killed with the
+cargo's `Running` line for it; `0` for no limit). The GPU probe's test binaries get 5 minutes each, or
+`LIGHTCRAFT_TEST_BINARY_TIMEOUT` when that is shorter (5 minutes even at `0`: the probe is optional). One that runs longer, a test hung on a GPU device say, is killed with the
 processes it started (on Linux found by an environment variable they inherit, so those that outlived
 their parent too, unless they cleared their environment; on macOS and the BSDs only the process xtask
 started is killed, which under the full `ci` is cargo, so a hung test binary may keep running), and the run reports it as `timed out after 30 min` with the tests still running
