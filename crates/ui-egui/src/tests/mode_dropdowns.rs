@@ -96,35 +96,25 @@ fn crop_overlay_dropdown_is_translated() {
     crate::i18n::set_language(Locale::En);
 }
 
-/// The dropdown keeps one width whichever item is chosen, so the row does not jump.
+/// Like White Balance, a mode dropdown is as wide as the chosen item, so the chevron follows the
+/// text instead of leaving a gap after a short name.
 #[test]
-fn a_mode_dropdown_keeps_its_width() {
+fn a_mode_dropdown_fits_the_chosen_item() {
     let mut h = detail("panel.crop");
-    let first = rect(&h, "dropdown:upright").width();
-    for key in ["vertical", "auto", "full"] {
-        choose(&mut h, "upright", key);
-        assert_eq!(rect(&h, "dropdown:upright").width(), first, "{key}");
-    }
-    let first = rect(&h, "dropdown:cropAspect").width();
-    for aspect in ["1x1", "4x5", "free", "16x10"] {
-        let r = h.request("engine.execute", json!({"command": "crop.aspect", "params": {"aspect": aspect}}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.step();
-        assert_eq!(rect(&h, "dropdown:cropAspect").width(), first, "aspect {aspect}");
+    for (id, short, long) in [("cropOverlay", "thirds", "golden"), ("upright", "off", "vertical")] {
+        choose(&mut h, id, short);
+        let narrow = rect(&h, &format!("dropdown:{id}")).width();
+        choose(&mut h, id, long);
+        let wide = rect(&h, &format!("dropdown:{id}")).width();
+        assert!(narrow < wide, "{id}: {short} ({narrow}) is narrower than {long} ({wide})");
+        choose(&mut h, id, short);
+        assert_eq!(rect(&h, &format!("dropdown:{id}")).width(), narrow, "{id}: back to {short}");
     }
     let mut h = detail("panel.remove");
-    let first = rect(&h, "dropdown:removeMode").width();
-    for key in ["none", "fill", "heal"] {
-        choose(&mut h, "removeMode", key);
-        assert_eq!(rect(&h, "dropdown:removeMode").width(), first, "{key}");
-    }
-    let first = rect(&h, "dropdown:toolOverlay").width();
-    for mode in ["always", "selected", "never", "auto"] {
-        let r = h.request("engine.execute", json!({"command": "view.toolOverlay", "params": {"mode": mode}}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.step();
-        assert_eq!(rect(&h, "dropdown:toolOverlay").width(), first, "tool overlay {mode}");
-    }
+    choose(&mut h, "removeMode", "none");
+    let narrow = rect(&h, "dropdown:removeMode").width();
+    choose(&mut h, "removeMode", "fill");
+    assert!(narrow < rect(&h, "dropdown:removeMode").width(), "None is narrower than Content-Aware");
 }
 
 /// The number of spots on the active photo.

@@ -80,9 +80,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.label(crate::i18n::tr("Aspect Ratio"));
             let cur = aspect_label(app.crop_tool_aspect(), original);
             let t = Tokens::get(ui.ctx());
-            // as wide as the longest preset; a custom ratio (`1.37 : 1`) is shorter than that
-            let choices = ASPECT_PRESETS.map(|(label, _)| crate::i18n::tr(label));
-            let r = crate::widgets::dropdown_fitting(ui, "cropAspect", crate::i18n::tr(&cur), &choices, t.font(12.5), t.text);
+            let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.font(12.5), t.text);
 
             egui::Popup::menu(&r).show(|ui| {
                 for (label, a) in ASPECT_PRESETS {
@@ -402,8 +400,7 @@ pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Tool Overlay")).color(t.text_dim));
         let current = app.ui.tool_overlay;
-        let choices = ToolOverlay::ALL.map(|m| crate::i18n::tr(m.label()));
-        let r = crate::widgets::dropdown_fitting(ui, "toolOverlay", crate::i18n::tr(current.label()), &choices, t.font(12.5), t.text_label)
+        let r = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
             .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
         egui::Popup::menu(&r).show(|ui| {
             for m in ToolOverlay::ALL {
