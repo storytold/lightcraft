@@ -172,20 +172,22 @@ pub(super) fn fit_tone_with_shadows(
 
 /// Ridge-regularised 3×3 chromaticity matrix (luminance-normalised RGB) on the training pairs.
 /// Whether a matrix fitted to one photo's camera JPEG can be a camera's colour: in every row the
-/// channel's own input weighs most, and no other channel's weighs more than [`MAX_CROSS_WEIGHT`]. A fit on a proxy with few saturated colours can pass the holdout
+/// channel's own input weighs at least [`MIN_OWN_TO_CROSS`] times any other channel's positive weight. A fit on a proxy with few saturated colours can pass the holdout
 /// gates with a row such as blue = 2.97·R − 4.50·G + 2.57·B (a Canon EOS 400D CR2, #3973; also
 /// #3452), which gives a saturated orange as much blue as red and turns it magenta. Such a fit is
 /// refused by [`fit_matrix`], for every fit that uses it (the full look, the partial look's matrix,
 /// a pooled camera profile), so the photo falls back as when no matrix can be fitted (the camera's
 /// measured spectral matrices, where there are some).
 pub(super) fn plausible_matrix(m: &Mat3) -> bool {
-    (0..3).all(|r| (0..3).all(|c| c == r || (m.0[r][c] < m.0[r][r] && m.0[r][c] <= MAX_CROSS_WEIGHT)))
+    (0..3).all(|r| (0..3).all(|c| c == r || m.0[r][c] <= 0.0 || m.0[r][r] >= MIN_OWN_TO_CROSS * m.0[r][c]))
 }
 
-/// The largest weight [`plausible_matrix`] lets another channel's input have in a row. Camera
-/// colour matrices keep their positive cross terms well under half; the refused fits have 1.58 and
-/// more (#3973 refit: 2.97, its fit on all pixels: 2.07; #3452: 1.58).
-const MAX_CROSS_WEIGHT: f64 = 1.0;
+/// How many times a row's own weight must exceed any positive weight of another channel's input
+/// ([`plausible_matrix`]). Measured on blue rows: the refused fits have 0.87 (#3973's refit,
+/// `[2.97, −4.50, 2.57]`), 1.15 (its fit on all pixels, `[2.07, −3.37, 2.38]`) and 0.88 (#3452,
+/// `[−1.9, 1.58, 1.39]`), and turn oranges magenta or greens blue; a Canon EOS 6D fit that renders a
+/// turquoise scene like its camera JPEG has 2.08 (`[1.86, −4.65, 3.87]`, review of #3992).
+const MIN_OWN_TO_CROSS: f64 = 1.5;
 
 pub(super) fn fit_matrix(pairs: &[([f64; 3], [f64; 3])]) -> Option<Mat3> {
     let mut gram = [[0.0; 3]; 3];

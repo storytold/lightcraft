@@ -2647,7 +2647,12 @@ fn a_fitted_matrix_led_by_another_channel_is_refused() {
     assert!(!plausible_matrix(&x_s10_row), "blue row led by green");
     // the 400D's fit on all its pixels: led by blue, but red still weighs 2.07 in the blue row
     let eos_400d_all = Mat3([[1.063, 0.073, -0.169], [-0.205, 1.267, -0.055], [2.066, -3.371, 2.376]]);
-    assert!(!plausible_matrix(&eos_400d_all), "a cross weight of 2.07");
+    assert!(!plausible_matrix(&eos_400d_all), "red at 2.07 under a blue of only 2.38");
     assert!(plausible_matrix(&z7_ii));
+    // an EOS 6D fit that renders a turquoise scene like its camera JPEG keeps red at 1.86 in its blue
+    // row, but blue weighs twice that (review of #3992; only the blue row was reported, the first two
+    // are the Z 7II's)
+    let eos_6d_row = Mat3([z7_ii.0[0], z7_ii.0[1], [1.862, -4.651, 3.871]]);
+    assert!(plausible_matrix(&eos_6d_row), "a cross weight of 1.86 under a blue of 3.87 is kept");
     assert!(plausible_matrix(&Mat3([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])));
 }
