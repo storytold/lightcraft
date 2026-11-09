@@ -609,10 +609,13 @@ fn candidate_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDial
 }
 
 /// A cell's tooltip: path, size, format and capture time, after, for an unreadable file, the error
-/// the scan hit (issue #3342), so "Unreadable" says why. The error comes first: a tooltip doesn't
-/// scroll, so what a deep path pushes past the window's edge is lost.
+/// the scan hit (issue #3342), so "Unreadable" says why. The error comes first, without the path a
+/// scan error starts with: a tooltip doesn't scroll, so what a deep path pushes past the window's
+/// edge is lost.
 pub(super) fn candidate_tip(c: &super::ImportCandidate) -> String {
-    let error = c.error.as_deref().map(str::trim).filter(|e| !e.is_empty());
+    let reason = |e: &'_ str| e.strip_prefix(c.path.as_str()).and_then(|r| r.strip_prefix(':')).map(str::to_owned).unwrap_or_else(|| e.to_owned());
+    let error = c.error.as_deref().map(reason);
+    let error = error.as_deref().map(str::trim).filter(|e| !e.is_empty());
     format!(
         "{}{}\n{} × {} · {} · {:.1} MB{}",
         error.map(|e| format!("{e}\n")).unwrap_or_default(),

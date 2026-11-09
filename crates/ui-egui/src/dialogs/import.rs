@@ -397,6 +397,11 @@ mod tests {
         assert_eq!(candidate_tip(&bad), "Permission denied (os error 13)\na.ARW\n0 × 0 · ARW · 2.5 MB");
         let deep = ImportCandidate { path: "folder/".repeat(600) + "a.ARW", ..bad.clone() };
         assert_eq!(candidate_tip(&deep).lines().next(), Some("Permission denied (os error 13)"));
+        // the scan's `{path}: {reason}`: the tooltip has the path already
+        let with_path = ImportCandidate { error: Some("a.ARW: Permission denied (os error 13)".into()), ..ok.clone() };
+        assert_eq!(candidate_tip(&with_path), candidate_tip(&bad));
+        let other = ImportCandidate { error: Some("b.ARW: Permission denied".into()), ..ok.clone() };
+        assert_eq!(candidate_tip(&other).lines().next(), Some("b.ARW: Permission denied"));
         let blank = ImportCandidate { error: Some("  ".into()), ..ok.clone() };
         assert_eq!(candidate_tip(&blank), candidate_tip(&ok));
     }

@@ -43,6 +43,7 @@ mod histogram_drag;
 mod import_recipe;
 mod import_scan_note;
 mod import_thumbnails;
+mod import_tooltip;
 mod info_dialogs;
 mod keymap;
 mod keyword_files;
