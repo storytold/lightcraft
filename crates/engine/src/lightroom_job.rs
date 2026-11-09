@@ -77,7 +77,7 @@ impl LightroomLibraryToken {
 
 /// What reading the catalog gives the owner thread before the first batch ([`LightroomImport::begin`]).
 pub struct LightroomStart {
-    source: String,
+    origin: lightroom_catalog::CatalogOrigin,
     index: ImportIndex,
     archive_path: Option<PathBuf>,
     warnings: Vec<String>,
@@ -94,7 +94,7 @@ pub struct LightroomStart {
 
 impl LightroomStart {
     pub fn source(&self) -> &str {
-        &self.source
+        &self.origin.source
     }
 
     pub fn photo_count(&self) -> usize {
@@ -303,8 +303,14 @@ impl LightroomJob {
             return Err(cancelled());
         }
         // (reading stops with a message when `cancel` is set: the flag says it was cancelled)
-        let mut data = lightroom_catalog::read_with_progress(&self.path, cancel, &self.progress.catalog_total, &self.progress.catalog_done)
-            .map_err(|e| if cancel.load(Ordering::Relaxed) { cancelled() } else { error(e) })?;
+        let mut data = lightroom_catalog::read_source(
+            &self.path,
+            self.archive_dir.as_deref(),
+            cancel,
+            &self.progress.catalog_total,
+            &self.progress.catalog_done,
+        )
+        .map_err(|e| if cancel.load(Ordering::Relaxed) { cancelled() } else { error(e) })?;
         lightroom_catalog::validate_for_job(&data).map_err(error)?;
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
@@ -328,7 +334,7 @@ impl LightroomJob {
         self.progress.photos.store(true, Ordering::Relaxed);
         self.queue = photos.into();
         Ok(LightroomStart {
-            source: data.source,
+            origin: lightroom_catalog::CatalogOrigin::of(&data),
             index,
             archive_path,
             warnings: data.warnings,
@@ -431,7 +437,7 @@ impl LightroomImport {
         if !start.token.matches(s) {
             return Err(error("Lightroom import belongs to a different open library"));
         }
-        let mut apply = LightroomApply::new(s, start.source, start.update_existing, start.index, start.warnings, start.now.clone());
+        let mut apply = LightroomApply::new(s, start.origin, start.update_existing, start.index, start.warnings, start.now.clone());
         apply.skipped = start.skipped;
         Ok(Self {
             apply,
@@ -550,7 +556,7 @@ mod tests {
 
     fn start(s: &crate::Session, photos: usize) -> LightroomStart {
         LightroomStart {
-            source: "fixture.lrcat".into(),
+            origin: lightroom_catalog::CatalogOrigin { source: "fixture.lrcat".into(), ..Default::default() },
             index: ImportIndex::default(),
             archive_path: None,
             warnings: Vec::new(),
@@ -862,6 +868,8 @@ mod tests {
         let archive_dir = std::env::temp_dir().join(format!("lightcraft-lr-prepared-scale-{}", std::process::id()));
         let mut data = CatalogImport {
             source: "fixture.lrcat".into(),
+            catalog_id: None,
+            catalog_path: None,
             photos: Vec::new(),
             collections: Vec::new(),
             members: Vec::new(),
