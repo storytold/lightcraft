@@ -866,7 +866,11 @@ pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, target
             let Some(png) = app.services.png.as_ref() else {
                 return json!({"ok": false, "error": "no PNG encoder available"});
             };
-            return inline_result(w, h, &png(&img));
+            let png = png(&img);
+            if png.len() > MAX_INLINE_PNG_BYTES {
+                return json!({"ok": false, "error": format!("the PNG is {} bytes, over the {MAX_INLINE_PNG_BYTES}-byte limit for an inline reply; use a smaller view", png.len())});
+            }
+            return inline_result(w, h, &png);
         }
         return json!({"ok": true, "result": {"width": w, "height": h}});
     };
@@ -921,6 +925,10 @@ fn preview_cache_json(app: &crate::LightcraftApp) -> serde_json::Value {
         "loupeEdge": app.session.loupe_edge,
     })
 }
+
+/// Largest PNG answered inline: base64 and the JSON copy hold about two and a third times its size beside the
+/// capture budget, so an inline reply is capped well under it.
+const MAX_INLINE_PNG_BYTES: usize = 24 * 1024 * 1024;
 
 /// The reply for a screenshot with no file to write: its size and the PNG as base64 (`pngBase64`).
 fn inline_result(w: usize, h: usize, png: &[u8]) -> Value {
