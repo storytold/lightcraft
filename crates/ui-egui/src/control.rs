@@ -859,10 +859,13 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
 pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, target: Option<&lightcraft_engine::originals::WriteTarget>) -> Value {
     let [w, h] = image.size;
     let Some(target) = target else {
-        if cfg!(target_arch = "wasm32")
-            && let Some(img) = lightcraft_raster::Rgba8::from_pixels(w, h, image.pixels.iter().map(|c| c.to_array()))
-            && let Some(png) = app.services.png.as_ref()
-        {
+        if cfg!(target_arch = "wasm32") {
+            let Some(img) = lightcraft_raster::Rgba8::from_pixels(w, h, image.pixels.iter().map(|c| c.to_array())) else {
+                return json!({"ok": false, "error": "bad screenshot buffer"});
+            };
+            let Some(png) = app.services.png.as_ref() else {
+                return json!({"ok": false, "error": "no PNG encoder available"});
+            };
             return inline_result(w, h, &png(&img));
         }
         return json!({"ok": true, "result": {"width": w, "height": h}});
