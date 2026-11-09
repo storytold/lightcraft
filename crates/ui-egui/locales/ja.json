@@ -2424,5 +2424,8 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "アプリを --control 7980 (または LIGHTCRAFT_CONTROL_PORT) で起動してから、lightcraft-cli mcp --connect でエージェントを接続できます。",
   "Welcome": "ようこそ",
   "Next": "次へ",
-  "Get Started": "始める"
+  "Get Started": "始める",
+  "Mixed": "混在",
+  "Reading metadata": "メタデータを読み込み中",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "別のダイアログが開いているため、すべてのメタデータを表示しませんでした。もう一度すべてのメタデータを選んでください。"
 }

@@ -325,5 +325,8 @@
   "View › Detail View ({keys}).": "Visualizza › Vista dettaglio ({keys}).",
   "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
   "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}",
+  "{} selected photos": "{} foto selezionate",
+  "Showing the target photo: at most {} selected photos can be compared": "Mostrata la foto di destinazione: si possono confrontare al massimo {} foto selezionate",
+  "Not compared, could not be read: {}": "Esclusi dal confronto, illeggibili: {}"
 }

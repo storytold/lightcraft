@@ -2632,5 +2632,8 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Запустите приложение с --control 7980 (или LIGHTCRAFT_CONTROL_PORT), и команда lightcraft-cli mcp --connect подключит к нему одного агента.",
   "Welcome": "Добро пожаловать",
   "Next": "Далее",
-  "Get Started": "Начать"
+  "Get Started": "Начать",
+  "Mixed": "Разные",
+  "Reading metadata": "Чтение метаданных",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "«Все метаданные» не показаны, потому что открыто другое окно. Выберите «Все метаданные» снова."
 }

@@ -44,7 +44,6 @@ Hours are Opus 5.5 agent wall-clock hours (see [target-app-parity.md](target-app
 | 27 | **Windows / Linux runtime coverage**: the Windows x64 installer is verified on Windows 11 (0.9.1: install and upgrade end on the completion page, a custom folder is kept, Launch works, removal is clean), but uninstalling from Settings → Apps ends with no confirmation (#892, #931); GPU path proven on Apple and on one AMD GPU on Linux (Radeon 8060S, Vulkan); NVIDIA, Intel and DX12 unverified; Windows DirectComposition VRR workaround implemented, monitor verification pending; the Linux riscv64 tarball (new in 0.6.0, #844) is cross-compiled and never run beyond a QEMU smoke test | ROADMAP, issues, `release.yml` | non-Mac users find bugs first | 13–27 | [hardware-parity](hardware-parity.md) |
 | 29 | **HDR merge leftovers** (LR-MERGE-HDR): AI Denoise doesn't run on merged (linear) DNGs; JPEG brackets are treated as linear (no camera response curve); every frame is held as 32-bit float, ~0.86 GB per 67 MP frame (half-float frames would halve it) | tested on Sony A7R VI brackets 2026-10-14 ([merge.md](merge.md)); Lightroom's Denoise supports HDR DNGs | HDR shooters who denoise their merges, merge JPEGs, or merge 7+ frames of high-resolution raws on 16 GB machines | 10–20 (+ denoise linear-RGB contract, gap 11) | [merge](merge.md) |
 | 28 | **Small Classic shortcuts and keys**: Tab / ⇧Tab (hide the side panels / all panels; Tab moves the keyboard focus here) and F5. Rating `[` `]`, flag cycling (`` ` ``), `\` (Filter Bar), ⌘L (Enable Filters), ⌘⌥⇧C / ⌘⌥⇧V (Copy / Paste Metadata), F1 help, F6 / F7 / F8 (filmstrip, left panel, right panel) are bound; the grid-cycle key is shown beside both grid rows in View (#2500) | [ui-parity](ui-parity.md#shortcuts) | Classic muscle memory | 2–4 | [ui-parity](ui-parity.md) |
-| 30 | **Multi-select metadata editing in the UI**: `photo.setMeta` already iterates all selected photos, so the engine applies changes to every target. The Info panel's Show Metadata For choice (Target Photo / Selected Photos) shows the values the selected photos share and marks each field where they differ as Mixed; the All Metadata dialog still shows one photo's values with no "mixed" indication | standard in Lightroom Classic's multi-select Info panel | anyone editing metadata on a batch (copyright, keywords, custom fields) | 1–3 | [ui-parity](ui-parity.md) |
 
 Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform work they need around them,
 **~340–600 h** to beta (incl. 40–80 h for the ~92 open core-path user issues) (see [target-app-parity.md](target-app-parity.md#stage)).
@@ -52,7 +51,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 ## Gaps by kind
 
 - **Feature:** 5, 8, 11, 12, 13, 15, 16, 18, 19, 29
-- **UI / UX:** 4, 23, 24, 28, 30
+- **UI / UX:** 4, 23, 24, 28
 - **File format:** 2, 6, 7, 10, 13, 20, 25 (raw ones in [raw-parity.md](raw-parity.md))
 - **Hardware:** 14, 17, 22, 27
 - **Localization:** 21
@@ -60,6 +59,8 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 - **Stability and platforms:** 9, 26, 27
 
 ## Closed recently (kept for calibration)
+
+- 2026-11-07: gap 30, multi-select metadata in the UI: with several photos selected and Show Metadata For on Selected Photos, Photo ▸ All Metadata… compares up to 100 of them (`photo.allMetadata {ids}`), keeps the EXIF / XMP fields they share and says Mixed where their values differ or some lack the field, reading their files in the background (activity row `metadata`) and naming any it could not read; on Target Photo, or past 100 photos (the dialog says so), it shows the target photo as before.
 
 - 2026-10-29: the import review has a remembered 80–320 pt thumbnail-size slider, density-aware previews and bounded visible retention (#2237, part of #2056). Small sources do not reconstruct the same preview job every frame. The pre-import loupe and keyboard culling remain open in #2056; no ranked gap or headline feature count closes.
 
@@ -90,6 +91,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Gap 30 closes: All Metadata shows the selected photos' shared fields and marks the others Mixed (`photo.allMetadata {ids}`, up to 100 photos, read in the background) |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-11-05 | minor | Gap 3: process V5 rolls a raw's tone curve off into white in stops, so raising Exposure keeps the highlights the sensor recorded (#1632); the gap stays open (no Lightroom comparison) and hours are unchanged |

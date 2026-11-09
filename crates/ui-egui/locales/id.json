@@ -2397,5 +2397,8 @@
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
   "Bottom bar": "Bilah bawah",
-  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "Mixed": "Campuran",
+  "Reading metadata": "Membaca metadata",
+  "All Metadata was not shown because another dialog is open. Choose All Metadata again.": "Semua metadata tidak ditampilkan karena dialog lain sedang terbuka. Pilih Semua metadata lagi."
 }
