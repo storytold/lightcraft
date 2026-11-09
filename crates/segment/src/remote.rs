@@ -7,7 +7,7 @@
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{Click, Encoded, INPUT, MASK_SIDE, Sam3};
 use serde::{Deserialize, Serialize};
@@ -91,30 +91,132 @@ fn write_frame(writer: &mut impl Write, data: &[u8]) -> io::Result<()> {
     writer.write_all(data)
 }
 
+/// Bound the caller's DNS wait and allow at most one outstanding system lookup.
+fn resolve(endpoint: &str) -> Result<Vec<SocketAddr>, String> {
+    use std::sync::{Mutex, TryLockError, mpsc};
+    type Lookup = mpsc::Receiver<Result<Vec<SocketAddr>, String>>;
+    static LOOKUP: Mutex<Option<Lookup>> = Mutex::new(None);
+    if let Ok(address) = endpoint.parse::<SocketAddr>() {
+        return Ok(vec![address]);
+    }
+    let mut lookup = match LOOKUP.try_lock() {
+        Ok(lookup) => lookup,
+        Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(TryLockError::WouldBlock) => return Err("SAM hostname resolution already in progress".into()),
+    };
+    if let Some(previous) = lookup.as_ref() {
+        match previous.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => return Err("SAM hostname resolution still in progress".into()),
+            _ => *lookup = None,
+        }
+    }
+    let target = endpoint.to_owned();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("sam-dns".into())
+        .spawn(move || {
+            let result = target.to_socket_addrs().map_err(|e| e.to_string()).and_then(|addresses| {
+                let addresses: Vec<_> = addresses.take(65).collect();
+                if addresses.len() > 64 { Err("too many SAM endpoint addresses".into()) } else { Ok(addresses) }
+            });
+            let _ = sender.send(result);
+        })
+        .map_err(|e| e.to_string())?;
+    *lookup = Some(receiver);
+    let result = wait_for_lookup(lookup.as_ref().ok_or("SAM resolver unavailable")?, Duration::from_secs(5));
+    match result {
+        Ok(result) => {
+            *lookup = None;
+            result.map_err(|e| format!("SAM endpoint must be a host:port: {e}"))
+        }
+        Err(error) => Err(format!("SAM hostname resolution: {error}")),
+    }
+}
+
+/// Wait only for the caller's DNS budget; a stalled system resolver cannot extend it.
+fn wait_for_lookup(
+    receiver: &std::sync::mpsc::Receiver<Result<Vec<SocketAddr>, String>>,
+    timeout: Duration,
+) -> Result<Result<Vec<SocketAddr>, String>, std::sync::mpsc::RecvTimeoutError> {
+    receiver.recv_timeout(timeout)
+}
+
+/// Apply the remaining handshake budget before every socket operation, including partial frames.
+struct Deadline<'a> {
+    stream: &'a mut TcpStream,
+    expires: Instant,
+}
+
+impl<'a> Deadline<'a> {
+    fn new(stream: &'a mut TcpStream, timeout: Duration) -> Self {
+        Self { stream, expires: Instant::now() + timeout }
+    }
+
+    fn remaining(&self) -> io::Result<Duration> {
+        self.expires
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "SAM handshake deadline expired"))
+    }
+}
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.stream.set_read_timeout(Some(self.remaining()?))?;
+        let count = self.stream.read(buffer)?;
+        self.remaining()?;
+        Ok(count)
+    }
+}
+
+impl Write for Deadline<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.stream.set_write_timeout(Some(self.remaining()?))?;
+        let count = self.stream.write(buffer)?;
+        self.remaining()?;
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
 pub struct Client {
     stream: TcpStream,
     pub key: Option<u64>,
 }
 
 impl Client {
+    /// Connect using the configured shared token, if present.
     pub fn connect(endpoint: &str) -> Result<Self, String> {
         Self::connect_with(endpoint, token().as_deref())
     }
 
+    /// Validate configuration before resolving a hostname or opening a socket.
     fn connect_with(endpoint: &str, token: Option<&str>) -> Result<Self, String> {
-        let addresses: Vec<SocketAddr> = endpoint.to_socket_addrs().map_err(|e| format!("SAM endpoint must be a host:port: {e}"))?.collect();
+        validate_token(token)?;
+        let addresses = resolve(endpoint)?;
+        Self::connect_addresses(endpoint, &addresses, token)
+    }
+
+    /// Try every resolved address, including when a reachable peer fails authentication.
+    fn connect_addresses(endpoint: &str, addresses: &[SocketAddr], token: Option<&str>) -> Result<Self, String> {
         if token.is_none() && addresses.iter().any(|a| !a.ip().is_loopback()) {
             return Err(format!("SAM endpoint off this machine needs {TOKEN_ENV}; or use an SSH tunnel for remote access"));
         }
         let mut last = format!("SAM endpoint {endpoint} has no address");
         for address in addresses {
-            match TcpStream::connect_timeout(&address, Duration::from_secs(5)) {
+            match TcpStream::connect_timeout(address, Duration::from_secs(5)) {
                 Ok(mut stream) => {
                     stream.set_write_timeout(Some(Duration::from_secs(30))).map_err(|e| e.to_string())?;
                     if let Some(token) = token {
-                        stream.set_read_timeout(Some(HELLO_TIMEOUT)).map_err(|e| e.to_string())?;
-                        say_hello(&mut stream, token)?;
+                        if let Err(error) = say_hello(&mut Deadline::new(&mut stream, HELLO_TIMEOUT), token) {
+                            last = error;
+                            continue;
+                        }
                     }
+                    stream.set_write_timeout(Some(Duration::from_secs(30))).map_err(|e| e.to_string())?;
                     stream.set_read_timeout(Some(TIMEOUT)).map_err(|e| e.to_string())?;
                     return Ok(Self { stream, key: None });
                 }
@@ -187,13 +289,15 @@ struct Proof {
     proof: String,
 }
 
+/// Serialize one bounded handshake message into the framed transport.
 fn send<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<(), String> {
     write_frame(writer, &serde_json::to_vec(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
+/// Decode one handshake message, rejecting oversized or malformed frames.
 fn receive<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Result<T, String> {
-    let frame = read_frame(reader, CONTROL_LIMIT).map_err(|e| format!("SAM handshake: {e}"))?;
-    serde_json::from_slice(&frame).map_err(|_| "unexpected SAM handshake".to_string())
+    let frame = read_frame(reader, CONTROL_LIMIT).map_err(|e| format!("SAM handshake: {e}; {}", token_hint()))?;
+    serde_json::from_slice(&frame).map_err(|_| format!("unexpected SAM handshake; {}", token_hint()))
 }
 
 /// The client's half of the handshake: the worker proves the token before any pixels go.
@@ -202,7 +306,7 @@ fn say_hello(stream: &mut (impl Read + Write), token: &str) -> Result<(), String
     send(stream, &mine)?;
     let reply: Proof = receive(stream)?;
     if reply.nonce.len() < 32 || !same_proof(&reply.proof, &hmac(token, &["worker", &mine, &reply.nonce])) {
-        return Err("SAM worker doesn't know the token: is something else listening on that port?".into());
+        return Err(format!("SAM worker doesn't know the token; {}", token_hint()));
     }
     send(stream, &hmac(token, &["client", &mine, &reply.nonce]))
 }
@@ -211,12 +315,12 @@ fn say_hello(stream: &mut (impl Read + Write), token: &str) -> Result<(), String
 fn check_hello(stream: &mut (impl Read + Write), token: &str) -> Result<(), String> {
     let theirs: String = receive(stream)?;
     if theirs.len() < 32 {
-        return Err("unexpected SAM handshake".into());
+        return Err(format!("unexpected SAM handshake; {}", token_hint()));
     }
     let mine = nonce();
     send(stream, &Proof { nonce: mine.clone(), proof: hmac(token, &["worker", &theirs, &mine]) })?;
     let proof: String = receive(stream)?;
-    if same_proof(&proof, &hmac(token, &["client", &theirs, &mine])) { Ok(()) } else { Err("wrong SAM worker token".into()) }
+    if same_proof(&proof, &hmac(token, &["client", &theirs, &mine])) { Ok(()) } else { Err(format!("wrong SAM worker token; {}", token_hint())) }
 }
 
 pub fn text_logits(model: &mut Sam3, enc: &mut Encoded, text: &str) -> crate::Result<Option<Vec<f32>>> {
@@ -249,11 +353,12 @@ fn predict(model: &mut Sam3, enc: &mut Encoded, operation: Operation) -> Result<
     }
 }
 
+/// Authenticate before accepting image data, then serve requests with a per-session model cache.
 fn serve_client(stream: &mut TcpStream, dir: &Path, device: candle_core::Device, token: Option<&str>) -> Result<(), String> {
     stream.set_write_timeout(Some(Duration::from_secs(30))).map_err(|e| e.to_string())?;
     if let Some(token) = token {
-        stream.set_read_timeout(Some(HELLO_TIMEOUT)).map_err(|e| e.to_string())?;
-        check_hello(stream, token)?;
+        check_hello(&mut Deadline::new(stream, HELLO_TIMEOUT), token)?;
+        stream.set_write_timeout(Some(Duration::from_secs(30))).map_err(|e| e.to_string())?;
     }
     stream.set_read_timeout(Some(Duration::from_secs(10 * 60))).map_err(|e| e.to_string())?;
     let mut model = None;
@@ -300,15 +405,31 @@ fn serve_client(stream: &mut TcpStream, dir: &Path, device: candle_core::Device,
     }
 }
 
+/// Explain how to align optional authentication on a loopback connection.
+fn token_hint() -> String {
+    format!("set the same {TOKEN_ENV} on both ends, or unset it on both (loopback only)")
+}
+
+/// Enforce the documented character minimum on clients and workers before any network I/O.
+fn validate_token(token: Option<&str>) -> Result<(), String> {
+    if token.is_some_and(|value| value.chars().take(TOKEN_MIN).count() < TOKEN_MIN) {
+        return Err(format!("{TOKEN_ENV} must have at least {TOKEN_MIN} characters"));
+    }
+    Ok(())
+}
+
 /// Why a worker may not listen like this, if it may not: off loopback it needs a real token.
 fn listen_error(address: SocketAddr, token: Option<&str>) -> Option<String> {
+    if let Err(error) = validate_token(token) {
+        return Some(error);
+    }
     match token {
-        Some(t) if t.len() < TOKEN_MIN => Some(format!("{TOKEN_ENV} must have at least {TOKEN_MIN} characters")),
         None if !address.ip().is_loopback() => Some(format!("SAM worker off loopback requires {TOKEN_ENV}")),
         _ => None,
     }
 }
 
+/// Listen only with valid authentication settings and isolate failures to the current session.
 pub fn serve(address: SocketAddr, dir: &Path, device: candle_core::Device, token: Option<&str>) -> Result<(), String> {
     if let Some(error) = listen_error(address, token) {
         return Err(error);
@@ -369,10 +490,14 @@ mod tests {
         let eavesdropper = thread::spawn(move || {
             let mut stream = listener.accept().unwrap().0;
             let hello = read_frame(&mut stream, CONTROL_LIMIT).unwrap();
-            send(&mut stream, &Proof { nonce: "0".repeat(32), proof: "0".repeat(64) }).unwrap();
-            hello
+            let client_nonce: String = serde_json::from_slice(&hello).unwrap();
+            let worker_nonce = "0".repeat(32);
+            let proof = hmac(TOKEN, &["worker", &client_nonce, &worker_nonce]);
+            send(&mut stream, &Proof { nonce: worker_nonce, proof }).unwrap();
+            let response = read_frame(&mut stream, CONTROL_LIMIT).unwrap();
+            [hello, response].concat()
         });
-        assert!(Client::connect_with(&address.to_string(), Some(TOKEN)).is_err());
+        assert!(Client::connect_with(&address.to_string(), Some(TOKEN)).is_ok());
         let hello = eavesdropper.join().unwrap();
         assert!(!String::from_utf8_lossy(&hello).contains(TOKEN));
     }
@@ -399,7 +524,11 @@ mod tests {
 
     #[test]
     fn a_short_token_is_refused_everywhere() {
-        assert!(listen_error("127.0.0.1:8793".parse().unwrap(), Some("short")).is_some());
+        for token in ["short", "😀😀😀😀"] {
+            assert!(listen_error("127.0.0.1:8793".parse().unwrap(), Some(token)).is_some());
+            let error = Client::connect_with("invalid endpoint", Some(token)).err().unwrap();
+            assert!(error.contains("at least 16 characters"), "{error}");
+        }
     }
 
     #[test]
@@ -422,6 +551,59 @@ mod tests {
         let outer = Sha256::new().chain_update(block.map(|b| b ^ 0x5c)).chain_update(inner).finalize();
         let expected: String = outer.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(hmac("Jefe", &[message]), expected);
+    }
+
+    #[test]
+    fn long_key_hmac_matches_known_digest() {
+        // Independently calculated HMAC-SHA256 of u64-length-framed "worker" and "nonce".
+        assert_eq!(hmac(&"k".repeat(100), &["worker", "nonce"]), "ca680cdb3c168664794fc03fad171b59b7922939bf1357ea334ac215e3c422cf");
+    }
+
+    #[test]
+    fn handshake_failure_tries_the_next_address() {
+        let (wrong, rejected) = worker("fedcba9876543210");
+        let (right, accepted) = worker(TOKEN);
+        assert!(Client::connect_addresses("test", &[wrong, right], Some(TOKEN)).is_ok());
+        assert!(rejected.join().unwrap().is_err());
+        assert!(accepted.join().unwrap().is_ok());
+    }
+
+    #[test]
+    fn handshake_errors_explain_token_configuration() {
+        let mut invalid = Vec::new();
+        send(&mut invalid, &Proof { nonce: "0".repeat(32), proof: "0".repeat(64) }).unwrap();
+        let mut stream = io::Cursor::new(invalid);
+        let error = check_hello(&mut stream, TOKEN).unwrap_err();
+        assert!(error.contains(TOKEN_ENV), "{error}");
+        assert!(error.contains("both ends"), "{error}");
+    }
+
+    #[test]
+    fn expired_handshake_budget_prevents_further_reads_and_writes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        client.write_all(b"ab").unwrap();
+        let mut deadline = Deadline::new(&mut server, HELLO_TIMEOUT);
+        let mut byte = [0];
+        deadline.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, [b'a']);
+        // Advance the same connection's deadline deterministically, with unread data available.
+        deadline.expires = Instant::now();
+        assert_eq!(deadline.read(&mut byte).unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert_eq!(deadline.write(b"x").unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn a_stalled_resolver_has_a_bounded_wait() {
+        let (_sender, receiver) = std::sync::mpsc::sync_channel(1);
+        assert_eq!(wait_for_lookup(&receiver, Duration::ZERO), Err(std::sync::mpsc::RecvTimeoutError::Timeout));
+    }
+
+    #[test]
+    fn numeric_endpoints_need_no_dns() {
+        let address: SocketAddr = "127.0.0.1:8793".parse().unwrap();
+        assert_eq!(resolve(&address.to_string()).unwrap(), vec![address]);
     }
 
     #[test]

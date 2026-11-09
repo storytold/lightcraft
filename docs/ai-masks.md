@@ -96,6 +96,11 @@ LIGHTCRAFT_SAM3_WORKER_TOKEN=… lightcraft-sam3-worker /models/sam3 0.0.0.0:879
 LIGHTCRAFT_SAM3_WORKER_TOKEN=… LIGHTCRAFT_SAM3_REMOTE=sam3-worker:8793 lightcraft
 ```
 
+The client and worker both reject tokens shorter than 16 Unicode characters before connecting
+or listening. Set the same token on both ends, or unset it on both for loopback-only use.
+Hostname lookup waits at most five seconds; each authentication handshake has one ten-second
+deadline, including partial reads and writes.
+
 `LIGHTCRAFT_SAM3_REMOTE` then takes a host name or an address. A worker off loopback refuses to
 start without the token, and a client refuses to send anything off this machine without it. On
 every connection both ends prove they know the token, with an HMAC over fresh nonces, before any
