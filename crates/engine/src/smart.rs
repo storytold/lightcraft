@@ -67,7 +67,6 @@ impl PreviewPath {
     }
 
     /// Both folder layouts, including the superseded content-only ORF identity when requested.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn candidates(&self, previous: bool) -> Vec<PathBuf> {
         std::iter::once(&self.current)
             .chain(self.previous.iter().filter(|_| previous))
@@ -75,35 +74,42 @@ impl PreviewPath {
             .collect()
     }
 
+    /// A preview-only ORF's current name is itself content-only. Preserve that file too when
+    /// an unselected photo may still need it, even if that photo now develops sensor data.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn discard_candidates(&self, keep_content: bool) -> Vec<PathBuf> {
+        if keep_content && self.previous.is_none() { Vec::new() } else { self.candidates(!keep_content) }
+    }
+
+    fn is_previous(&self, path: &Path) -> bool {
+        self.previous.is_some() && path.file_name() != self.current.file_name()
+    }
+
+    fn compatible(&self, path: &Path) -> bool {
+        // Old uncompressed ORFs already had sensor proxies. Their complete stored facts must
+        // prove that interpretation: a JPEG proxy or one with missing facts cannot stand in.
+        is_valid(path) && (!self.is_previous(path) || stored_raw(path) == Some(true))
+    }
+
     pub(crate) fn resolve(&self) -> PathBuf {
-        let current = existing_file_path(&self.dir, self.current.clone());
-        if current.exists() {
-            return current;
-        }
-        // Old uncompressed ORFs already had sensor proxies. Their stored facts must prove
-        // that interpretation: a JPEG proxy or one with missing facts cannot stand in.
-        if let Some(previous) = &self.previous {
-            let previous = existing_file_path(&self.dir, previous.clone());
-            if stored_raw(&previous) == Some(true) && is_valid(&previous) {
-                return previous;
-            }
-        }
-        current
+        self.candidates(true).into_iter().find(|path| self.compatible(path)).unwrap_or_else(|| existing_file_path(&self.dir, self.current.clone()))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn load(&self) -> Result<crate::media::DecodedSource, String> {
-        let path = self.resolve();
-        if !is_valid(&path) {
-            return Err(format!("{}: missing or incomplete smart preview", path.display()));
+        let mut error = format!("{}: missing or incomplete smart preview", self.current.display());
+        for path in self.candidates(true).into_iter().filter(|path| self.compatible(path)) {
+            match load(&path) {
+                // Recheck the facts read with the pixels in case the proxy was replaced since
+                // validation. A damaged candidate must not hide a usable file in another layout.
+                Ok(source) if self.is_previous(&path) && source.info.as_ref().is_none_or(|i| !i.raw) => {
+                    error = "smart preview has no compatible sensor facts".into();
+                }
+                Ok(source) => return Ok(source),
+                Err(e) => error = e,
+            }
         }
-        let source = load(&path)?;
-        // Recheck the facts that came with the pixels in case a shared old proxy was replaced
-        // between resolving its name and reading it.
-        if self.previous.is_some() && path.file_name() != self.current.file_name() && source.info.as_ref().is_none_or(|i| !i.raw) {
-            return Err("smart preview has no compatible sensor facts".into());
-        }
-        Ok(source)
+        Err(error)
     }
 }
 
@@ -127,6 +133,9 @@ pub fn existing_file_path(dir: &Path, sharded: PathBuf) -> PathBuf {
 /// The most header [`is_valid`] reads (the JSON line before the JPEG).
 const HEADER_MAX: u64 = 4096;
 
+/// Camera facts are bounded separately from the potentially much larger matte planes.
+const FACTS_MAX: usize = 4 * 1024 * 1024;
+
 /// Read only the bounded facts JSON, without decoding JPEG pixels or allocating matte planes.
 /// A missing/invalid tail cannot establish compatibility with the old ORF identity.
 fn stored_raw(path: &Path) -> Option<bool> {
@@ -148,12 +157,15 @@ fn stored_raw(path: &Path) -> Option<bool> {
     let n = u64::from(u32::from_le_bytes(n));
     // File-derived lengths are hostile. Camera facts fit within this budget; the potentially
     // much larger matte planes follow the JSON and are not needed for the raw flag.
-    if n > 4 * 1024 * 1024 || n > tail - 4 {
+    if n > FACTS_MAX as u64 || n > tail - 4 {
         return None;
     }
     let mut json = Vec::new();
     f.take(n).read_to_end(&mut json).ok()?;
-    let facts: SmartFacts = serde_json::from_slice(&json).ok()?;
+    if json.len() as u64 != n {
+        return None;
+    }
+    let facts = parse_facts(&json, tail - 4 - n)?;
     Some(facts.raw)
 }
 
@@ -213,6 +225,24 @@ struct StoredMatte {
     len: usize,
 }
 
+/// Use the same shape and length checks for compatibility and decoding, without allocating
+/// matte planes just to inspect an offline proxy. Every tail byte must belong to a known matte.
+fn parse_facts(json: &[u8], plane_bytes: u64) -> Option<SmartFacts> {
+    if json.len() > FACTS_MAX {
+        return None;
+    }
+    let facts: SmartFacts = serde_json::from_slice(json).ok()?;
+    let mut total = 0_u64;
+    for m in &facts.mattes {
+        MatteKind::from_code(m.kind)?;
+        if m.w == 0 || m.h == 0 || m.w.checked_mul(m.h)? != m.len {
+            return None;
+        }
+        total = total.checked_add(m.len as u64)?;
+    }
+    (total == plane_bytes).then_some(facts)
+}
+
 /// The facts and mattes a proxy's tail holds: the length-prefixed JSON, then one byte plane per
 /// stored matte. `None` for an old proxy or a malformed tail; like a missing curve, the offline
 /// render then keeps its header facts.
@@ -223,19 +253,14 @@ fn stored_facts(head: &serde_json::Value, bytes: &[u8]) -> Option<(SmartFacts, M
     }
     let t = bytes.get(bytes.len() - tail..)?;
     let n = u32::from_le_bytes(t.get(..4)?.try_into().ok()?) as usize;
-    let facts: SmartFacts = serde_json::from_slice(t.get(4..4 + n)?).ok()?;
+    let mut at = 4_usize.checked_add(n)?;
+    let facts = parse_facts(t.get(4..at)?, t.len().checked_sub(at)? as u64)?;
     let mut mattes = Mattes::default();
-    let mut at = 4 + n;
     for m in &facts.mattes {
         let kind = MatteKind::from_code(m.kind)?;
-        if m.w == 0 || m.h == 0 || m.w.checked_mul(m.h)? != m.len {
-            return None;
-        }
-        mattes.push(kind, Image { width: m.w, height: m.h, data: t.get(at..at.checked_add(m.len)?)?.to_vec() });
-        at += m.len;
-    }
-    if at != t.len() {
-        return None;
+        let end = at.checked_add(m.len)?;
+        mattes.push(kind, Image { width: m.w, height: m.h, data: t.get(at..end)?.to_vec() });
+        at = end;
     }
     Some((facts, mattes))
 }

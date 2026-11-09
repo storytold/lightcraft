@@ -152,8 +152,11 @@ fn facts_and_mattes_travel_with_the_proxy() {
     // a proxy cut inside its tail is incomplete (rebuilt, not taken for a source of facts)
     let dir = temp("facts");
     let path = dir.join("f.lcsp");
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(stored_raw(&path), Some(true), "valid matte planes establish sensor compatibility without decoding");
     std::fs::write(&path, &bytes[..bytes.len() - 8]).unwrap();
     assert!(!is_valid(&path));
+    assert_eq!(stored_raw(&path), None);
     let _ = std::fs::remove_dir_all(&dir);
     // an old proxy (no tail) has no facts, and neither has one with a malformed tail
     assert!(decode(&encode(&img, None).unwrap()).unwrap().2.is_none());

@@ -579,7 +579,7 @@ struct SmartJob {
     look: bool,
     raw: Option<bool>,
     /// The old content-only proxy may still be used by an unselected photo.
-    discard_previous: bool,
+    keep_content: bool,
 }
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
@@ -652,7 +652,7 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for SmartJob { id, path, source, look, raw, discard_previous } in jobs {
+    for SmartJob { id, path, source, look, raw, keep_content } in jobs {
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
@@ -660,7 +660,7 @@ fn smart_run(
         // Read either the new shard or a pre-upgrade flat file, without making new work
         // depend on having the original online.
         if discard {
-            for path in path.candidates(discard_previous) {
+            for path in path.discard_candidates(keep_content) {
                 if std::fs::remove_file(&path).is_ok() {
                     n.removed += 1;
                 }
@@ -785,7 +785,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             source,
             look: preview_fitted_look(&ph),
             raw: ph.format.eq_ignore_ascii_case("ORF").then(|| ph.develops_raw()),
-            discard_previous: !retained.contains(&crate::media::content_key(&ph)),
+            keep_content: ph.format.eq_ignore_ascii_case("ORF") && retained.contains(&crate::media::content_key(&ph)),
         });
     }
     let custom = s.smart_previews_dir.is_some();
@@ -853,7 +853,7 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
             source: Some(s.media.origin_ref(&p.source, max_edge)),
             look: preview_fitted_look(p),
             raw: p.format.eq_ignore_ascii_case("ORF").then(|| p.develops_raw()),
-            discard_previous: false,
+            keep_content: false,
         })
         .collect();
     std::thread::Builder::new()

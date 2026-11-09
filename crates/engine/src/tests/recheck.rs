@@ -144,6 +144,48 @@ fn virtual_copies_follow_their_photo() {
     assert!(x.s.catalog.photo(copy).unwrap().develops_raw());
 }
 
+#[test]
+fn copies_without_a_matching_parent_recheck_are_probed_independently() {
+    for (relinked, all) in [(true, false), (true, true), (false, false)] {
+        let mut x = library(&format!("independent-copy-{relinked}-{all}"));
+        let r = x.s.execute("photo.virtualCopy", &json!({"id": x.id.0})).unwrap();
+        let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+        x.s.execute("develop.set", &json!({"id": copy.0, "control": "light.exposure", "value": 0.5})).unwrap();
+        if relinked {
+            let path = x.dir.join("other.dng");
+            std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+            x.s.catalog
+                .apply(Op::Relink {
+                    id: copy,
+                    file_name: "other.dng".into(),
+                    source: lightcraft_catalog::Source::File { path: path.to_string_lossy().into_owned() },
+                    format: None,
+                })
+                .unwrap();
+            std::fs::remove_file(&x.file).unwrap();
+        } else {
+            // The parent was already checked, but its same-file copy still has a stale flag.
+            x.s.execute("library.recheckPreviewOnly", &json!({})).unwrap();
+            let mut p = (**x.s.catalog.photo(copy).unwrap()).clone();
+            p.preview_checked = OTHER.into();
+            x.s.catalog.apply(Op::RemovePhoto { id: copy }).unwrap();
+            x.s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+            decodable_now(&x);
+        }
+        let parent = x.s.catalog.photo(x.id).unwrap().clone();
+        let before = x.s.catalog.photo(copy).unwrap().clone();
+        let undo = x.s.undo.len();
+        let r = x.s.execute("library.recheckPreviewOnly", &json!({"all": all})).unwrap();
+        assert_eq!(r["cleared"], json!([copy.0]), "{relinked}/{all}: {r}");
+        let after = x.s.catalog.photo(copy).unwrap();
+        assert!(after.develops_raw());
+        assert_eq!(after.develop, before.develop);
+        assert_eq!(after.history, before.history);
+        assert_eq!(x.s.undo.len(), undo);
+        assert_eq!(x.s.catalog.photo(x.id).unwrap(), &parent);
+    }
+}
+
 /// Reload and automatic recheck fill newly readable GPS on same-file copies without
 /// overwriting their own metadata or importing GPS from a different source file.
 #[test]
@@ -430,6 +472,104 @@ fn orf_discard_cleans_obsolete_proxies_unless_another_photo_uses_them() {
         assert!(!paths[0].exists() && !paths[1].exists(), "both current layouts must be removed");
         assert_eq!(paths[2].exists(), shared.is_some());
         assert_eq!(paths[3].exists(), shared.is_some());
+    }
+}
+
+#[test]
+fn orf_discard_preview_only_copy_keeps_an_offline_sensor_photos_proxy() {
+    for flat in [false, true] {
+        let mut x = orf_library(&format!("smart-discard-preview-only-{flat}"), true);
+        let r = x.s.execute("photo.virtualCopy", &json!({"id": x.id.0})).unwrap();
+        let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+        let mut other = (**x.s.catalog.photo(copy).unwrap()).clone();
+        other.preview_only = Some("not rechecked yet".into());
+        x.s.catalog.apply(Op::RemovePhoto { id: copy }).unwrap();
+        x.s.catalog.apply(Op::AddPhoto { photo: Box::new(other) }).unwrap();
+        let p = x.s.catalog.photo(x.id).unwrap().clone();
+        let path = old_smart_path(x.s.media.smart_dir.as_ref().unwrap(), &p, flat);
+        let bytes = write_proxy(&path, Some(&lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() }), false);
+        std::fs::remove_file(&x.file).unwrap();
+        x.s.execute("library.smartPreviews", &json!({"id": copy.0, "discard": true})).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "the unselected sensor photo needs this proxy");
+        let source = x.s.media.source_ref(&p, crate::media::SourceLevel::Preview).load_source().unwrap();
+        assert!(source.from_proxy && source.info.unwrap().raw);
+        x.s.execute("library.smartPreviews", &json!({"ids": [copy.0, x.id.0], "discard": true})).unwrap();
+        assert!(!path.exists(), "selecting every consumer allows deletion");
+    }
+}
+
+#[test]
+fn orf_damaged_proxies_do_not_hide_compatible_fallbacks() {
+    for decode_failure in [false, true] {
+        for good_at in 1..4 {
+            let mut x = orf_library(&format!("smart-damaged-fallback-{decode_failure}-{good_at}"), true);
+            let dir = x.s.media.smart_dir.as_ref().unwrap();
+            let p = x.s.catalog.photo(x.id).unwrap();
+            let paths = crate::smart::PreviewPath::new(dir, p).candidates(true);
+            let info = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
+            for path in &paths[..good_at] {
+                let mut bytes = write_proxy(path, Some(&info), false);
+                if decode_failure {
+                    let start = b"LCSP1\n".len();
+                    let end = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+                    let header: serde_json::Value = serde_json::from_slice(&bytes[start..end]).unwrap();
+                    let tail = bytes.len() - header["tail"].as_u64().unwrap() as usize;
+                    bytes[end + 3..tail - 2].fill(0); // Keep SOI/EOI; only a decode can detect this.
+                } else {
+                    bytes.truncate(10);
+                }
+                std::fs::write(path, bytes).unwrap();
+                assert_eq!(crate::smart::is_valid(path), decode_failure);
+            }
+            write_proxy(&paths[good_at], Some(&info), false);
+            std::fs::remove_file(&x.file).unwrap();
+            if !decode_failure {
+                assert_eq!(crate::smart::file_path(dir, p), paths[good_at]);
+                assert!(crate::cmd::previews::has_smart_preview(&x.s, x.id));
+            }
+            let source = x.s.media.source_ref(p, crate::media::SourceLevel::Preview).load_source().unwrap();
+            assert!(source.from_proxy && source.info.unwrap().raw);
+            assert!((source.image.data[0][0] - 0.2).abs() < 0.02);
+        }
+    }
+}
+
+#[test]
+fn orf_legacy_proxy_compatibility_validates_the_entire_matte_tail() {
+    let cases = [
+        (json!([]), vec![0]), // Undeclared trailing bytes.
+        (json!([{"kind": 255, "w": 1, "h": 1, "len": 1}]), vec![0]),
+        (json!([{"kind": 0, "w": 0, "h": 1, "len": 0}]), vec![]),
+        (json!([{"kind": 0, "w": 2, "h": 2, "len": 1}]), vec![0]),
+        (json!([{"kind": 0, "w": usize::MAX, "h": 2, "len": 1}]), vec![0]),
+        (json!([{"kind": 0, "w": 2, "h": 2, "len": 4}]), vec![0; 3]),
+    ];
+    for (i, (mattes, planes)) in cases.into_iter().enumerate() {
+        let mut x = orf_library(&format!("smart-invalid-tail-{i}"), true);
+        let p = x.s.catalog.photo(x.id).unwrap().clone();
+        let dir = x.s.media.smart_dir.clone().unwrap();
+        let path = old_smart_path(&dir, &p, i % 2 == 0);
+        let bytes = write_proxy(&path, Some(&lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() }), false);
+        let start = b"LCSP1\n".len();
+        let end = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+        let mut header: serde_json::Value = serde_json::from_slice(&bytes[start..end]).unwrap();
+        let tail = bytes.len() - header["tail"].as_u64().unwrap() as usize;
+        let mut facts: serde_json::Value = serde_json::from_slice(&bytes[tail + 4..]).unwrap();
+        facts["mattes"] = mattes;
+        let facts = serde_json::to_vec(&facts).unwrap();
+        header["tail"] = json!(4 + facts.len() + planes.len());
+        let mut broken = format!("LCSP1\n{header}\n").into_bytes();
+        broken.extend_from_slice(&bytes[end + 1..tail]);
+        broken.extend_from_slice(&(facts.len() as u32).to_le_bytes());
+        broken.extend(facts);
+        broken.extend(planes);
+        assert!(crate::smart::decode(&broken).unwrap().2.is_none(), "malformed tail {i}");
+        std::fs::write(&path, broken).unwrap();
+        assert!(crate::smart::is_valid(&path), "cheap JPEG framing alone cannot validate the tail");
+        std::fs::remove_file(&x.file).unwrap();
+        assert!(!crate::cmd::previews::has_smart_preview(&x.s, x.id), "malformed tail {i}");
+        assert!(x.s.media.source_ref(&p, crate::media::SourceLevel::Preview).load_source().is_err());
+        assert_eq!(x.s.execute("library.smartPreviews", &json!({"id": x.id.0})).unwrap()["built"], 0);
     }
 }
 
