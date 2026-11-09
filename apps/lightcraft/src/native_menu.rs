@@ -28,6 +28,11 @@ use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::Value;
 
+/// Resolve a submenu's display label and escape literal ampersands for muda.
+fn native_submenu_title(id: Option<&str>, label: &str) -> String {
+    display_submenu_label(id, label).replace('&', "&&")
+}
+
 const QUIT: &str = "app.quit";
 /// Settings… (the app menu on macOS; Edit elsewhere).
 const SETTINGS: &str = "app.settings";
@@ -546,7 +551,7 @@ impl NativeMenu {
                     let _ = sub.append(&PredefinedMenuItem::separator());
                 }
                 MenuNode::Submenu { id, label, children } => {
-                    let s = Submenu::new(display_submenu_label(id.as_deref(), label).replace('&', "&&"), true);
+                    let s = Submenu::new(native_submenu_title(id.as_deref(), label), true);
                     self.append_nodes(&s, children, keymap, swappable, ids);
                     let _ = sub.append(&s);
                 }
@@ -767,6 +772,53 @@ mod tests {
         fn show_checked(&mut self, checked: bool) {
             self.checked = Some(checked);
         }
+    }
+
+    /// User text reaches the native constructor literally, with ampersands escaped for muda.
+    #[test]
+    fn native_album_folder_titles_keep_user_text_and_escape_ampersands() {
+        use lightcraft_ui_egui::i18n::{Locale, language, set_language};
+        struct RestoreLanguage(Locale);
+        impl Drop for RestoreLanguage {
+            fn drop(&mut self) {
+                set_language(self.0);
+            }
+        }
+        let _restore = RestoreLanguage(language());
+        set_language(Locale::De);
+        assert_eq!(native_submenu_title(Some("albumFolder:7"), "File"), "File");
+        assert_eq!(native_submenu_title(Some("albumFolder:7"), "Trips & Family"), "Trips && Family");
+        assert_eq!(native_submenu_title(Some(""), "File"), Locale::De.tr("File"));
+    }
+
+    /// Renamed album destinations and changes to selection sync without rebuilding the menu.
+    #[test]
+    fn native_album_rows_sync_renames_and_enabled_state() {
+        let keymap = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default()).ui.settings.keymap.clone();
+        let model = |label: &str, enabled| {
+            vec![MenuNode::Submenu {
+                id: Some("albumFolder:7".into()),
+                label: "Trips".into(),
+                children: vec![MenuNode::Item {
+                    id: "album.addPhotos".into(),
+                    params: serde_json::json!({"id": 9}),
+                    label: label.into(),
+                    shortcut: None,
+                    enabled,
+                    checked: None,
+                }],
+            }]
+        };
+        let before = vec![("Photo".into(), model("Favorites", false))];
+        let after = vec![("Photo".into(), model("Vacation", true))];
+        assert_eq!(structure_of(&before, &keymap), structure_of(&after, &keymap));
+        let mut rows = Vec::new();
+        native_rows(&before[0].1, &mut RowIds::default(), &mut rows);
+        let id = rows[0].0.clone();
+        let mut items = HashMap::from([(id.clone(), FakeRow { label: "Favorites".into(), enabled: false, checked: None })]);
+        sync_rows(&after[0].1, &mut items, &keymap);
+        assert_eq!(items[&id].label, "Vacation");
+        assert!(items[&id].enabled);
     }
 
     /// Two rows with the same command and params keep their own label, enabled and checked state

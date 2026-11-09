@@ -214,9 +214,9 @@ impl Index {
             for (k, e) in &self.entries {
                 buf.extend(self.record(k, e));
             }
-            let part = path.with_extension("part");
-            std::fs::write(&part, &buf)?;
-            std::fs::rename(&part, &path)?;
+            // a fresh temp file (never a `.part` entry left in the library, which could be a link
+            // to a file outside it) renamed over the cache
+            lightcraft_catalog::safe_file::write_atomic_nosync(&path, &buf)?;
             self.file_matches = true;
             self.rewrite = false;
         }
@@ -367,9 +367,9 @@ impl Scanned {
         } else {
             let mut buf = self.header();
             buf.extend(self.set.iter().flat_map(|id| id.to_le_bytes()));
-            let part = path.with_extension("part");
-            std::fs::write(&part, &buf)?;
-            std::fs::rename(&part, &path)?;
+            // a fresh temp file (never a `.part` entry left in the library, which could be a link
+            // to a file outside it) renamed over the cache
+            lightcraft_catalog::safe_file::write_atomic_nosync(&path, &buf)?;
             self.file_matches = true;
             self.rewrite = false;
         }

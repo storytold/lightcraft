@@ -1,4 +1,4 @@
-//! Malformed vendor raw files (NEF, ARW, PEF, ORF, RW2 of every raw format, CR2, RAF) must decode to an error, never panic.
+//! Malformed vendor raw files (NEF, ARW, PEF, ORF, RW2 of every raw format, CR2, RAF, CRW) must decode to an error, never panic.
 
 use lightcraft_tiff::tags as t;
 use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
@@ -226,8 +226,48 @@ fn raf() -> Vec<u8> {
     raf_file(W, H, 16, strip, Some(layout), b"\xff\xd8\xff\xd9")
 }
 
+/// A Canon CRW: CIFF header, a raw-data payload of pseudo-random bytes, and a nested properties
+/// heap with the records the decoder reads.
+fn crw() -> Vec<u8> {
+    let le16 = |v: u16| v.to_le_bytes();
+    let le32 = |v: u32| v.to_le_bytes();
+    let heap = |records: &[(u16, Vec<u8>)]| -> Vec<u8> {
+        let mut b = Vec::new();
+        let mut entries = Vec::new();
+        for (tc, v) in records {
+            entries.push((*tc, v.len() as u32, b.len() as u32));
+            b.extend_from_slice(v);
+            if b.len() % 2 == 1 {
+                b.push(0);
+            }
+        }
+        let tbl = b.len() as u32;
+        b.extend_from_slice(&le16(entries.len() as u16));
+        for (tc, l, off) in entries {
+            b.extend_from_slice(&le16(tc));
+            b.extend_from_slice(&le32(l));
+            b.extend_from_slice(&le32(off));
+        }
+        b.extend_from_slice(&le32(tbl));
+        b
+    };
+    let sensor: Vec<u8> = [34u16, W as u16, H as u16, 0, 0, 2, 2, W as u16 - 3, H as u16 - 3].iter().flat_map(|&v| le16(v)).collect();
+    let dtable: Vec<u8> = [0u32, 0, 514, 0].iter().flat_map(|&v| le32(v)).collect();
+    let props = heap(&[(0x1031, sensor), (0x1835, dtable), (0x080a, b"Canon\0Canon EOS D60\0".to_vec())]);
+    let payload: Vec<u8> = (0..514 + 256).map(|i| (i * 41 % 253) as u8).collect();
+    let root = heap(&[(0x2005, payload), (0x300a, props)]);
+    let mut f = b"II".to_vec();
+    f.extend_from_slice(&le32(26));
+    f.extend_from_slice(b"HEAPCCDR");
+    f.extend_from_slice(&le32(0x0001_0002));
+    f.extend_from_slice(&[0; 8]);
+    f.extend_from_slice(&root);
+    f
+}
+
 fn samples() -> Vec<Vec<u8>> {
     vec![
+        crw(),
         cfa_tiff("NIKON CORPORATION", 1, 12, ByteOrder::Big),
         cfa_tiff("NIKON CORPORATION", 34713, 14, ByteOrder::Big),
         cfa_tiff("SONY", 32767, 12, ByteOrder::Little),
@@ -283,7 +323,7 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 2000, .. ProptestConfig::default() })]
 
     #[test]
-    fn mutated_vendor_files_never_panic(kind in 0usize..18, flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>()) {
+    fn mutated_vendor_files_never_panic(kind in 0usize..19, flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>()) {
         let mut data = samples().swap_remove(kind);
         let n = data.len();
         for (i, v) in flips {

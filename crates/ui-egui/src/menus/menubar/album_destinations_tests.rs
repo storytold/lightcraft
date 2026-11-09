@@ -93,6 +93,7 @@ fn add_to_album_destinations_preserve_folders_order_and_identity() {
     let other = create(&mut app, "Alpha", Some(earlier), false);
     let empty = create(&mut app, "Empty", Some(year), true);
     app.session.execute("album.createSmart", &json!({"name": "Smart only", "parent": empty, "rules": {"rating": 1}})).unwrap();
+    app.session.execute("album.createSmart", &json!({"name": "Top-level smart", "rules": {"rating": 1}})).unwrap();
     let nodes = expanded(&app, "Add to Album").unwrap();
     let destinations = children(children(&nodes, "2026"), "Travel");
     let ids: Vec<_> = destinations
@@ -104,8 +105,16 @@ fn add_to_album_destinations_preserve_folders_order_and_identity() {
         .collect();
     assert_eq!(ids, [first, second], "manual order beats alphabetical order");
     assert!(matches!(&children(&nodes, "2025")[0], MenuNode::Item { params, .. } if params["id"] == other));
-    assert!(!format!("{nodes:?}").contains("Smart only"));
-    assert!(!format!("{nodes:?}").contains("Empty"));
+    fn contains_label(nodes: &[MenuNode], name: &str) -> bool {
+        nodes.iter().any(|node| match node {
+            MenuNode::Item { label, .. } => label == name,
+            MenuNode::Submenu { label, children, .. } => label == name || contains_label(children, name),
+            MenuNode::Separator => false,
+        })
+    }
+    for label in ["Smart only", "Top-level smart", "Empty"] {
+        assert!(!contains_label(&nodes, label), "{label} must be pruned: {nodes:?}");
+    }
     assert!(matches!(nodes.last(), Some(MenuNode::Item { id, .. }) if id == "dialog.newAlbum"));
     let photo = app.session.catalog.photos().next().unwrap().id;
     app.session.execute("library.select", &json!({"ids": [photo.0]})).unwrap();
@@ -121,21 +130,31 @@ fn add_to_album_destinations_keep_user_names_and_native_cache_identity() {
     let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
     let folder = create(&mut app, "File", None, true);
     create(&mut app, "Photo Grid", Some(folder), false);
-    let bar = menu_bar(&app);
+    use crate::i18n::{Locale, language, set_language};
+    struct RestoreLanguage(Locale);
+    impl Drop for RestoreLanguage {
+        fn drop(&mut self) {
+            set_language(self.0);
+        }
+    }
+    // The locale is thread-local. Restore the previous value on this thread even on panic.
+    let _restore = RestoreLanguage(language());
+    set_language(Locale::De);
     let nodes = expanded(&app, "Add to Album").unwrap();
     let MenuNode::Submenu { id, label, children } = &nodes[0] else { panic!("folder") };
     assert_eq!(id.as_deref(), Some(format!("albumFolder:{folder}").as_str()));
-    crate::i18n::set_language(crate::i18n::Locale::De);
     assert_eq!(display_submenu_label(id.as_deref(), label), "File");
-    assert_eq!(display_submenu_label(None, "File"), crate::i18n::tr("File"));
+    assert_ne!(Locale::De.tr("File"), "File");
+    for id in [None, Some(""), Some("albumFolder:"), Some("albumFolder:+7"), Some("albumFolder:invalid")] {
+        assert_eq!(display_submenu_label(id, "File"), Locale::De.tr("File"));
+    }
     let MenuNode::Item { id: command, params, label, enabled, .. } = &children[0] else { panic!("album") };
     assert_eq!(display_item_label(command, params, label), "Photo Grid");
     assert!(!enabled, "no photo selected: nested destinations are off");
     assert_eq!(serde_json::to_value(&nodes).unwrap()[0]["id"], format!("albumFolder:{folder}"));
-    let before = native_menu_structure(&bar, &app.ui.settings.keymap);
+    let before = native_menu_structure(&menu_bar(&app), &app.ui.settings.keymap);
     app.session.execute("album.rename", &json!({"id": folder, "name": "Renamed"})).unwrap();
     assert_ne!(before, native_menu_structure(&menu_bar(&app), &app.ui.settings.keymap));
-    crate::i18n::set_language(crate::i18n::Locale::En);
 }
 
 /// Navigate actual egui submenus on both surfaces. Same-named folders and albums in different
@@ -177,5 +196,60 @@ fn add_to_album_destinations_both_menus_add_selection_to_the_chosen_branch() {
         request("ui.clickWidget", json!({"id": format!("button:contextAlbum:{target}")}));
         assert_eq!(h.app.session.catalog.album_photos(lightcraft_catalog::AlbumId(target)), photos, "{context}");
         assert!(h.app.session.catalog.album_photos(lightcraft_catalog::AlbumId(other)).is_empty());
+    }
+}
+
+/// Unexpected depth gaps or rows beyond the picker bound cannot swallow top-level siblings.
+#[test]
+fn album_destinations_skip_invalid_depths_and_keep_later_siblings() {
+    use crate::widgets::album_picker::{AlbumEntry, MAX_ALBUM_DEPTH};
+    let entry = |id, depth, folder| AlbumEntry { id, depth, folder, name: format!("Entry {id}"), parent: None, smart: false, blocked: None };
+    let jumped = vec![entry(1, 0, true), entry(2, 3, false)];
+    let mut too_deep: Vec<_> = (0..=MAX_ALBUM_DEPTH).map(|depth| entry(10 + depth as u64, depth, true)).collect();
+    too_deep.push(entry(100, MAX_ALBUM_DEPTH + 1, false));
+    for mut entries in [jumped, too_deep] {
+        entries.push(entry(200, 0, false));
+        let mut cursor = 0;
+        let nodes = album_destinations::level(&entries, &mut cursor, 0, true);
+        assert_eq!(cursor, entries.len());
+        assert!(matches!(nodes.as_slice(), [MenuNode::Item { params, .. }] if params["id"] == 200));
+    }
+}
+
+/// Both menus keep New Album as the only row when the catalog has no ordinary destinations.
+#[test]
+fn add_to_album_destinations_open_new_album_without_ordinary_destinations() {
+    use crate::headless::Headless;
+    use std::time::Duration;
+    let timeout = Duration::from_secs(30);
+    for context in [false, true] {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
+        assert!(matches!(expanded(&app, "Add to Album").unwrap().as_slice(), [MenuNode::Item { id, .. }] if id == "dialog.newAlbum"));
+        // A procedural photo gives the context menu a target without creating any albums.
+        use lightcraft_catalog::{Op, Photo, Source};
+        let photo = app.session.catalog.alloc_photo_id();
+        let record = Photo::new(photo, Source::Demo { scene: 1 }, "Demo.jpg", "JPEG", 1200, 800, "2026-11-09T12:00:00");
+        app.session.catalog.apply(Op::AddPhoto { photo: Box::new(record) }).unwrap();
+        app.session.execute("library.select", &json!({"ids": [photo.0]})).unwrap();
+        app.ui.view = ViewMode::PhotoGrid;
+        app.session.execute("album.createSmart", &json!({"name": "Smart only", "rules": {"rating": 1}})).unwrap();
+        assert!(matches!(expanded(&app, "Add to Album").unwrap().as_slice(), [MenuNode::Item { id, .. }] if id == "dialog.newAlbum"));
+        let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
+        h.settle(Duration::from_secs(120));
+        let mut request = |command: &str, params: Value| {
+            let r = h.request(command, params, timeout);
+            assert_eq!(r["ok"], true, "{context}: {command}: {r}");
+            h.step();
+            h.step();
+        };
+        if context {
+            request("ui.clickWidget", json!({"id": format!("thumb:{}", photo.0), "button": "right"}));
+            request("ui.hoverWidget", json!({"id": "button:contextAddToAlbum"}));
+        } else {
+            request("ui.clickWidget", json!({"id": "menu:Photo"}));
+            request("ui.hoverWidget", json!({"id": "menusub:Add to Album"}));
+        }
+        request("ui.clickWidget", json!({"id": "button:contextNewAlbum"}));
+        assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::NewAlbum { folder: false, .. })));
     }
 }

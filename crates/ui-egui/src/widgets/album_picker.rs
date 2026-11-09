@@ -30,6 +30,9 @@ pub struct AlbumEntry {
     pub blocked: Option<String>,
 }
 
+/// Greatest depth returned by the shared sidebar traversal (roots are depth zero).
+pub(crate) const MAX_ALBUM_DEPTH: usize = 64;
+
 /// Every album, smart album and folder of `cat` in the sidebar's order (folders first, the user's
 /// order, else by name), each folder followed by what it holds. `blocked` says why an album can't
 /// be picked, if so.
@@ -46,7 +49,7 @@ pub fn entries_from(cat: &lightcraft_catalog::Catalog, blocked: impl Fn(&lightcr
         out: &mut Vec<AlbumEntry>,
         depth: usize,
     ) {
-        if depth > 64 {
+        if depth > MAX_ALBUM_DEPTH {
             return;
         }
         for a in kids.get(&parent).map(Vec::as_slice).unwrap_or_default() {

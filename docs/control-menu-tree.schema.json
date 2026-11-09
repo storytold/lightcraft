@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LightCraft ui.menu.tree result",
+  "description": "The result value of a successful ui.menu.tree control response.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "label": {
+        "type": "string"
+      },
+      "children": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/node"
+        }
+      }
+    },
+    "required": [
+      "label",
+      "children"
+    ]
+  },
+  "$defs": {
+    "node": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "item"
+            },
+            "id": {
+              "type": "string"
+            },
+            "params": {},
+            "label": {
+              "type": "string"
+            },
+            "shortcut": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "checked": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "label",
+            "enabled"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "separator"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "submenu"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Optional opaque identity for a user-named submenu."
+            },
+            "label": {
+              "type": "string"
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/node"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "label",
+            "children"
+          ]
+        }
+      ]
+    }
+  }
+}

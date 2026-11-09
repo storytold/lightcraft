@@ -50,7 +50,11 @@ impl MenuNode {
 
 /// User-named submenus keep their names in every UI language, including native menus.
 pub fn display_submenu_label<'a>(id: Option<&str>, label: &'a str) -> &'a str {
-    if id.is_some() { label } else { crate::i18n::tr(label) }
+    if id.and_then(|id| id.strip_prefix("albumFolder:")).is_some_and(|id| id.parse::<u64>().is_ok() && id.bytes().all(|b| b.is_ascii_digit())) {
+        label
+    } else {
+        crate::i18n::tr(label)
+    }
 }
 
 /// User-defined names in parameterized menus are data, not message keys.
@@ -116,7 +120,8 @@ pub fn native_menu_structure(bar: &[(String, Vec<MenuNode>)], keymap: &crate::sh
             None => out.push('0'),
         }
     }
-    /// Add stable identities and effective native keys; live checked values stay outside the cache key.
+    /// Add stable identities and effective native keys. The native host syncs live item labels,
+    /// enabled state and checked values in place, so those do not trigger a rebuild.
     fn walk(n: &[MenuNode], out: &mut String, keymap: &crate::shortcuts::Keymap) {
         size(out, n.len());
         for x in n {
@@ -498,17 +503,31 @@ fn live_label(app: &LightcraftApp, id: &str, label: &str) -> String {
 }
 
 /// The parameterized submenus.
+/// The params of Build Standard-Sized Previews: automatic builds as big as the loupe on this screen shows photos
+/// (the engine's standard size, once a loupe has been drawn); before that, in a fresh session, the standard
+/// 2560 px, not the engine's 2048 px minimum, so a typical fit view needn't render again; a chosen limit is used as is.
+pub(crate) fn standard_build_params(settings: &crate::state::AppSettings, loupe_edge: usize) -> Value {
+    match settings.preview_limit {
+        0 if loupe_edge == 0 => json!({"size": "standard", "edge": settings.standard_preview_edge()}),
+        0 => json!({"size": "standard"}),
+        edge => json!({"size": "standard", "edge": edge}),
+    }
+}
+
 pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
     let has = active.is_some();
     Some(match name {
         "Previews" => {
-            let running = app.session.preview_build.as_ref().is_some_and(|b| !b.finished.load(std::sync::atomic::Ordering::Relaxed));
+            // (the background preparation's build gives way to one asked for here)
+            let running = app.session.preview_build.as_ref().is_some_and(|b| b.running() && !b.background);
+            let stoppable = app.session.preview_build.as_ref().is_some_and(|b| b.running());
+            let standard = standard_build_params(&app.ui.settings, app.session.loupe_edge);
             let scope = if app.session.selection.ids.len() > 1 { "Selected" } else { "Visible" };
             vec![
                 item(
                     "library.buildPreviews",
-                    json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge()}),
+                    standard,
                     crate::i18n::tr_format!("Build Standard-Sized Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
                     !running,
@@ -522,7 +541,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
                     !running,
                     None,
                 ),
-                item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, running, None),
+                item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, stoppable, None),
                 MenuNode::Separator,
                 // (read and written on a worker thread: the originals may be on a slow drive)
                 item(

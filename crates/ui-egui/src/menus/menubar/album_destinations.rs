@@ -1,6 +1,6 @@
 //! Add-to-album destinations in the sidebar's folder and custom sibling order.
 
-use crate::widgets::album_picker::{AlbumEntry, entries_from};
+use crate::widgets::album_picker::{AlbumEntry, MAX_ALBUM_DEPTH, entries_from};
 
 use super::{MenuNode, item, json};
 
@@ -12,13 +12,18 @@ pub(super) fn nodes(cat: &lightcraft_catalog::Catalog, enabled: bool) -> Vec<Men
 
 /// Consume one depth of the bounded, depth-first picker list; the cursor then points at the
 /// next sibling level. Empty folders are pruned only after processing their descendants.
-fn level(entries: &[AlbumEntry], at: &mut usize, depth: usize, enabled: bool) -> Vec<MenuNode> {
-    if depth > 64 {
-        return Vec::new();
-    }
+pub(super) fn level(entries: &[AlbumEntry], at: &mut usize, depth: usize, enabled: bool) -> Vec<MenuNode> {
     let mut out = Vec::new();
-    while let Some(e) = entries.get(*at).filter(|e| e.depth == depth) {
+    while let Some(e) = entries.get(*at) {
+        if e.depth < depth {
+            break;
+        }
         *at = at.saturating_add(1);
+        // The picker already bounds its output. Consume invalid descendants defensively
+        // so a future caller cannot hide valid siblings behind a depth jump.
+        if e.depth > depth || depth > MAX_ALBUM_DEPTH {
+            continue;
+        }
         if e.folder {
             let children = level(entries, at, depth + 1, enabled);
             if !children.is_empty() {
