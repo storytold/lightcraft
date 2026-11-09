@@ -326,5 +326,6 @@
   "{name} is installed and in use: face recognition is on": "{name} está instalado e em uso: o reconhecimento facial está ativado",
   "Bring photos in with File › Import Photos… ({keys}).": "Traga fotos com Arquivo › Importar fotos… ({keys}).",
   "View › Detail View ({keys}).": "Exibir › Exibição de detalhe ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys}).",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "Ele volta para si mesmo pelo álbum “{}”: mude as regras de um álbum do ciclo (Editar álbum inteligente…)"
 }

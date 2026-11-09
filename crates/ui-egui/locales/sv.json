@@ -2486,5 +2486,7 @@
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
   "Bottom bar": "Nedre fältet",
-  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "This album is in a loop, so it shows nothing": "Det här albumet ingår i en loop och visar därför ingenting",
+  "It tests itself: change its rules (Edit Smart Album…)": "Det testar sig självt: ändra dess regler (Redigera smart album…)"
 }

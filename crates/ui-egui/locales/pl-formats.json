@@ -325,5 +325,6 @@
   "View › Detail View ({keys}).": "Widok › Widok szczegółów ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Plik › Eksportuj… · Plik › Drukuj… ({keys}).",
   "{n} folder{} could not be read": "Nie udało się odczytać folderów: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}",
+  "It leads back to itself through “{}”: change the rules of one album on the loop (Edit Smart Album…)": "Wraca do siebie przez album „{}”: zmień reguły jednego z albumów w pętli (Edytuj album inteligentny…)"
 }
