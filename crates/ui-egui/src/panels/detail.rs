@@ -307,9 +307,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     } else if show_before {
         shown = draw(Slot::Before, img_rect, canvas);
         // an edited photo has no stand-in for Before (#2248): say why the view is empty
-        if shown == "none" {
-            none_message(app, &p, &t, canvas, id, Slot::Before);
-        }
+        none_message(app, &p, &t, canvas, id, (Slot::Before, shown));
         // on the photo itself, so it gets the hover label's dark pill to stay readable over light
         // pictures; painted after the window renders below, which would cover it zoomed in
         let g = p.layout_no_wrap(crate::i18n::tr("Before").to_string(), t.font(12.0), Color32::WHITE);
@@ -321,9 +319,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         shown = "hover";
     } else {
         shown = draw(Slot::Main, img_rect, canvas);
-        if shown == "none" {
-            none_message(app, &p, &t, canvas, id, Slot::Main);
-        }
+        none_message(app, &p, &t, canvas, id, (Slot::Main, shown));
     }
     // a wipe shows the Before whole-frame render on its side of the line…
     let line = crate::region::wipe_line(img_rect, canvas);
@@ -618,9 +614,12 @@ fn window_views(mode: ViewMode, v: &Views) -> Vec<WindowView> {
     out
 }
 
-/// What the canvas says when `slot` could draw nothing: why its render failed, or that it is
-/// rendering.
-fn none_message(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, canvas: Rect, id: PhotoId, slot: Slot) {
+/// What the canvas says when `slot` drew nothing (`shown` is "none"): why its render failed, or
+/// that it is rendering.
+fn none_message(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, canvas: Rect, id: PhotoId, (slot, shown): (Slot, &str)) {
+    if shown != "none" {
+        return;
+    }
     match app.renderer.failure_of(slot, id) {
         Some(e) => {
             p.text(canvas.center() - vec2(0.0, 10.0), Align2::CENTER_CENTER, crate::i18n::tr("This photo can't be opened"), t.semibold(14.0), t.text);
