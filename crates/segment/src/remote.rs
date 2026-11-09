@@ -228,6 +228,7 @@ pub fn serve(address: SocketAddr, dir: &Path, device: candle_core::Device) -> Re
 mod tests {
     use super::*;
 
+    /// Both GPU backends require loopback, including IPv6.
     #[test]
     fn worker_requires_loopback_for_each_gpu_backend() {
         for gpu in ["Metal", "CUDA"] {
@@ -241,6 +242,7 @@ mod tests {
         }
     }
 
+    /// A real CUDA device passes endpoint validation before model files are checked.
     #[cfg(feature = "cuda")]
     #[test]
     fn worker_accepts_cuda_before_checking_model_files() {
@@ -251,10 +253,8 @@ mod tests {
                 return;
             }
         };
-        let dir = std::env::temp_dir().join(format!("lightcraft-sam3-cuda-empty-{}", std::process::id()));
-        std::fs::create_dir(&dir).unwrap();
-        let result = serve("127.0.0.1:0".parse().unwrap(), &dir, device);
-        std::fs::remove_dir(&dir).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let result = serve("127.0.0.1:0".parse().unwrap(), dir.path(), device);
         assert_eq!(result.unwrap_err(), "SAM model files are missing");
     }
 

@@ -76,6 +76,9 @@ Install the CUDA toolkit (including `nvcc`, headers and development libraries) a
 compatible NVIDIA driver. CUDA 13.x requires driver branch 580 or newer for minor-version
 compatibility; use a driver supporting your specific toolkit and GPU, following
 [NVIDIA's compatibility guide](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html).
+Candle loads PTX kernels, so the minor-version floor alone may be insufficient for JIT
+compilation. Use a GPU-compatible driver from the toolkit release or newer, or a
+[supported NVIDIA forward-compatibility package](https://docs.nvidia.com/deploy/cuda-compatibility/forward-compatibility.html).
 The worker also needs the matching CUDA libraries at run time: keep the toolkit runtime
 libraries (including cuBLAS, cuBLASLt, cuRAND and NVRTC) available to the dynamic loader,
 and the driver's `libcuda.so.1`. Copying only the binary to a machine without these is insufficient.

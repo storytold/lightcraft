@@ -32,3 +32,4 @@ candle-nn = { workspace = true, features = ["metal"] }
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+tempfile = "3.27"
