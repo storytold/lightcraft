@@ -1152,6 +1152,11 @@ impl crate::Session {
         Ok(())
     }
 }
+impl Drop for crate::Session {
+    fn drop(&mut self) {
+        self.originals.retire();
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1761,6 +1766,22 @@ mod lifecycle_tests {
             drop(s);
             std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+    #[test]
+    fn dropping_the_session_releases_the_proofs_of_a_retained_reader() {
+        let dir = crate::tests_xmp::temp_dir("session-drop-proofs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("source.bin");
+        std::fs::write(&path, b"import candidate").unwrap();
+        let s = crate::Session::new();
+        let retained = s.original_reader();
+        let fp = retained.hash_whole(path.to_str().unwrap()).unwrap();
+        assert!(fp.current(path.to_str().unwrap()));
+        drop(s);
+        assert!(!fp.current(path.to_str().unwrap()), "a reader clone must not keep the session's read leases");
+        assert!(retained.candidates.lock().unwrap().is_empty());
+        drop(retained);
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn g_native_worker_read_uses_captured_session_reader() {
