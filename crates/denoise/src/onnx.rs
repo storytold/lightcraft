@@ -2,7 +2,9 @@
 //!
 //! Only what the denoise U-Nets are made of is understood: `Conv` (3 × 3 "same" or 1 × 1, stride 1, no groups, no
 //! dilation) optionally followed by `LeakyRelu`, `ConvTranspose` (2 × 2, stride 2) likewise, `MaxPool` (2 × 2, stride 2),
-//! a two-input `Concat` on the channels that feeds a convolution, and a final `DepthToSpace` (2, `CRD`). Any other
+//! a two-input `Concat` on the channels that feeds a convolution, an `Add` of two same-shape tensors (as a 1 × 1
+//! identity convolution over both sources), a standalone `LeakyRelu` (as a 1 × 1 identity convolution with the
+//! activation, when its source has more than one reader), and a final `DepthToSpace` (2, `CRD`). Any other
 //! operator or attribute is [`NetError::Unsupported`], which is reported to the user by both runners.
 
 use std::collections::HashMap;
@@ -79,6 +81,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
             "MaxPool" => &["kernel_shape", "pads", "strides", "dilations", "ceil_mode", "storage_order", "auto_pad"],
             "Concat" => &["axis"],
             "Add" => &[],
+            "LeakyRelu" => &["alpha"],
             "DepthToSpace" => &["blocksize", "mode"],
             _ => &[],
         };
@@ -219,6 +222,10 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                     return unsupported("Add with more than 4096 channels");
                 }
                 let nn = ca.checked_mul(ca).and_then(|n| n.checked_mul(2)).ok_or_else(|| NetError::Invalid("Add channel count overflows".into()))?;
+                weights_total = weights_total.saturating_add(nn).saturating_add(ca);
+                if weights_total > MAX_WEIGHTS {
+                    return invalid("the network has too many weights");
+                }
                 let mut weight = vec![0.0f32; nn];
                 for c in 0..ca {
                     if let Some(w) = weight.get_mut(c * ca * 2 + c) {
@@ -231,6 +238,40 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 ids.insert(out.clone(), this);
                 shapes.push((ca, la));
                 ops.push(Op::Conv(Conv { src, src2: Some(src2), cin: ca * 2, cout: ca, k: 1, weight, bias: vec![0.0; ca], leaky: None }));
+            }
+            "LeakyRelu" => {
+                let [a] = node.input.as_slice() else { return invalid("malformed LeakyRelu") };
+                if joins.contains_key(a) {
+                    return unsupported("LeakyRelu reading a Concat output");
+                }
+                let src = lookup(a)?;
+                let out = node.output.first().ok_or_else(|| NetError::Invalid("LeakyRelu without an output".into()))?;
+                let (ca, la) = shapes.get(src).copied().ok_or_else(|| NetError::Invalid("LeakyRelu reads a tensor with no shape".into()))?;
+                if ca == 0 {
+                    return invalid("LeakyRelu");
+                }
+                if ca > 4096 {
+                    return unsupported("LeakyRelu with more than 4096 channels");
+                }
+                let alpha = match node.attribute.as_slice() {
+                    [] => 0.01,
+                    [AttributeProto { f: Some(f), kind: 0 | 1, .. }] => *f,
+                    _ => return invalid("LeakyRelu alpha is not a single float"),
+                };
+                let nn = ca.checked_mul(ca).ok_or_else(|| NetError::Invalid("LeakyRelu channel count overflows".into()))?;
+                weights_total = weights_total.saturating_add(nn).saturating_add(ca);
+                if weights_total > MAX_WEIGHTS {
+                    return invalid("the network has too many weights");
+                }
+                let mut weight = vec![0.0f32; nn];
+                for c in 0..ca {
+                    if let Some(w) = weight.get_mut(c * ca + c) {
+                        *w = 1.0;
+                    }
+                }
+                ids.insert(out.clone(), this);
+                shapes.push((ca, la));
+                ops.push(Op::Conv(Conv { src, src2: None, cin: ca, cout: ca, k: 1, weight, bias: vec![0.0; ca], leaky: Some(alpha) }));
             }
             "DepthToSpace" => {
                 if attr(node, "blocksize").map(|a| a.i) != Some(2) || attr(node, "mode").map(|a| a.s.as_slice()) != Some(&b"CRD"[..]) {
@@ -533,11 +574,8 @@ mod tests {
             model
         }
 
-        let concat_model = model(
-            &[node("Concat", &["data", "data"], "joined", &[("axis", 1)]), node("Add", &["joined", "data"], "a1", &[])],
-            4,
-            "a1",
-        );
+        let concat_model =
+            model(&[node("Concat", &["data", "data"], "joined", &[("axis", 1)]), node("Add", &["joined", "data"], "a1", &[])], 4, "a1");
         assert!(matches!(read_bytes(&concat_model), Err(NetError::Unsupported(_))));
 
         let oversized_model = model(&[node("Add", &["data", "data"], "a1", &[])], 4097, "a1");
@@ -551,5 +589,69 @@ mod tests {
         len_field(5, &mode, &mut depth);
         let zero_model = model(&[depth, node("Add", &["d", "d"], "a1", &[])], 3, "a1");
         assert!(matches!(read_bytes(&zero_model), Err(NetError::Invalid(_))));
+    }
+
+    #[test]
+    fn leaky_relu_with_an_add_residual_branch_is_accepted() {
+        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
+
+        fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
+            let mut n = Vec::new();
+            for i in inputs {
+                len_field(1, i.as_bytes(), &mut n);
+            }
+            len_field(2, output.as_bytes(), &mut n);
+            len_field(4, op.as_bytes(), &mut n);
+            for (name, value) in ints {
+                let mut a = Vec::new();
+                len_field(1, name.as_bytes(), &mut a);
+                varint_field(3, *value as u64, &mut a);
+                varint_field(20, 2, &mut a);
+                len_field(5, &a, &mut n);
+            }
+            n
+        }
+
+        fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
+            let mut t = Vec::new();
+            for d in dims {
+                varint_field(1, *d, &mut t);
+            }
+            varint_field(2, 1, &mut t);
+            len_field(8, name.as_bytes(), &mut t);
+            let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            len_field(9, &raw, &mut t);
+            t
+        }
+
+        // the convolution output is read by both the LeakyRelu and the Add residual branch
+        let mut graph = Vec::new();
+        len_field(1, &node("Conv", &["data", "w1"], "c1", &[("group", 1)]), &mut graph);
+        len_field(1, &node("LeakyRelu", &["c1"], "l1", &[]), &mut graph);
+        len_field(1, &node("Add", &["c1", "l1"], "a1", &[]), &mut graph);
+        len_field(1, &node("Conv", &["a1", "w2"], "c2", &[("group", 1)]), &mut graph);
+        let mut depth_to_space = node("DepthToSpace", &["c2"], "rgb", &[("blocksize", 2)]);
+        let mut mode = Vec::new();
+        len_field(1, b"mode", &mut mode);
+        len_field(4, b"CRD", &mut mode);
+        varint_field(20, 3, &mut mode);
+        len_field(5, &mode, &mut depth_to_space);
+        len_field(1, &depth_to_space, &mut graph);
+        len_field(5, &tensor("w1", &[4, 4, 1, 1], &[0.1; 16]), &mut graph);
+        len_field(5, &tensor("w2", &[12, 4, 1, 1], &[0.1; 48]), &mut graph);
+        len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
+        len_field(12, &value_info_bytes("rgb", 1, &[Ok(1), Ok(3), Ok(16), Ok(16)]), &mut graph);
+        let mut ops = Vec::new();
+        len_field(1, b"", &mut ops);
+        varint_field(2, 13, &mut ops);
+        let mut model = Vec::new();
+        varint_field(1, 8, &mut model);
+        len_field(7, &graph, &mut model);
+        len_field(8, &ops, &mut model);
+
+        let net = read_bytes(&model);
+        assert!(net.is_ok(), "a LeakyRelu residual model was rejected: {:?}", net.err());
+        let net = net.unwrap();
+        assert_eq!((net.in_channels, net.out_channels()), (4, 3));
     }
 }
