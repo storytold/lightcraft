@@ -7,6 +7,7 @@ mod corpus;
 mod coverage_sweep_corpus;
 mod cr3_corpus;
 mod cr3_variants;
+mod crw_corpus;
 mod crx_properties;
 mod dng;
 mod lossy_dng;
