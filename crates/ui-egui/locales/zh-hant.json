@@ -2381,8 +2381,6 @@
   "Sort Albums by Name": "依名稱排序相簿",
   "Sort Contents A–Z": "依 A–Z 排序內容",
   "starting the GPU, the next launch starts with GPU rendering off and says how to turn it back on.": "啟動 GPU 時，下次啟動將以 GPU 算繪關閉狀態開始，並說明如何重新開啟。",
-  "Darker: the Light section is off, so Exposure can't compensate": "更暗：光線區段已關閉，曝光無法補償",
-  "Still darker: Exposure is at its maximum": "仍然偏暗：曝光已達最大值",
   "still saves your queued changes in the closing snapshot.": "仍會將您排入佇列的變更儲存到結束快照中。",
   "Suggest Names for Faces": "建議人臉名稱",
   "Suggests who is in a photo from the faces you have named. Everything stays on your computer.": "根據您已命名的人臉，建議照片中的人物是誰。一切資料都保留在您的電腦上。",

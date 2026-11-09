@@ -284,7 +284,7 @@
   "Delete “{name}”?": "Hapus “{name}”?",
   "Updated {name}": "{name} diperbarui",
   "Exported to {path}": "Diekspor ke {path}",
-  "Exposure raised by {ev:+.1} to keep brightness": "Eksposur dinaikkan {ev:+.1} untuk menjaga kecerahan",
+  "Darker by {ev:.1} to fit the mix in range: raise Exposure if needed": "Lebih gelap {ev:.1} agar campuran muat dalam rentang: naikkan Eksposur bila perlu",
   "Saved template {name}": "Templat {name} disimpan",
   "Imported {name}": "{name} diimpor",
   "Skipped {problem}": "Dilewati: {problem}",

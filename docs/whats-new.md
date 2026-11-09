@@ -8,7 +8,9 @@
   only its own colour, so existing photos render exactly as before until you move a slider. It is mainly for infrared
   photography: swap red and blue, or pull down a channel that white balance can't reach (issue #2158). For the usual
   infrared workflow, click the section's eyedropper and then click foliage — the photo turns neutral there — and press
-  Swap Red and Blue beside it for the classic false-colour look. Lightroom has no
+  Swap Red and Blue beside it for the classic false-colour look. The spot you click keeps the brightness it has with no
+  mix, whatever mix you start from, and the eyedropper never changes Exposure: when a mix has to be scaled down to fit
+  the sliders, it tells you how much darker the photo came out instead. Lightroom has no
   channel mixer, so these settings travel only with LightCraft.
 
 ### Colour noise reduction (process V6)

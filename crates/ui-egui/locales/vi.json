@@ -2219,8 +2219,6 @@
   "starting the GPU, the next launch starts with GPU rendering off and says how to turn it back on.": "khởi động GPU, lần mở sau bắt đầu với kết xuất GPU tắt và hướng dẫn bật lại.",
   "starts using it for AI Denoise": "bắt đầu dùng nó cho Khử nhiễu AI",
   "starts with": "bắt đầu bằng",
-  "Darker: the Light section is off, so Exposure can't compensate": "Tối hơn: mục Ánh sáng đang tắt nên Phơi sáng không thể bù lại",
-  "Still darker: Exposure is at its maximum": "Vẫn còn tối hơn: Phơi sáng đã ở mức tối đa",
   "still saves your queued changes in the closing snapshot.": "vẫn lưu thay đổi đang chờ trong snapshot khi đóng.",
   "synced. Import ▸ Copy now checks each copy against the content hash taken while scanning the card instead of": "đồng bộ. Nhập → Sao chép giờ kiểm tra mỗi bản sao với hash nội dung lấy khi quét thẻ thay vì",
   "terms unclear": "điều khoản không rõ",

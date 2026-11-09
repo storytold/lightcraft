@@ -2382,8 +2382,6 @@
   "Sony ARWs from before about 2017 (RX100, RX100 II–V, RX10, NEX, SLT, ILCE-6000, A7 / A7 II / A7R II and their": "约 2017 年之前的 Sony ARW（RX100、RX100 II–V、RX10、NEX、SLT、ILCE-6000、A7 / A7 II / A7R II 及其",
   "Sony ILCE-7M4 downsized lossless ARWs now decode subsampled YCbCr tiles into linear RGB,": "Sony ILCE-7M4 缩小尺寸的无损 ARW 现在可将子采样 YCbCr 块解码为线性 RGB，",
   "starting the GPU, the next launch starts with GPU rendering off and says how to turn it back on.": "启动 GPU 时，下次启动将以 GPU 渲染关闭状态开始，并说明如何重新开启。",
-  "Darker: the Light section is off, so Exposure can't compensate": "更暗：亮度分区已关闭，曝光无法补偿",
-  "Still darker: Exposure is at its maximum": "仍然偏暗：曝光已到最大值",
   "still saves your queued changes in the closing snapshot.": "仍会将您排队的更改保存到关闭快照中。",
   "synced. Import ▸ Copy now checks each copy against the content hash taken while scanning the card instead of": "同步。导入 → 复制 现在会根据扫描存储卡时取得的内容哈希校验每一份副本，而不是",
   "the camera; mapped-out sensor defects are filled in. `.rwl` and `.raw` files are imported too. Photos already": "相机；已标记的传感器缺陷会被填充。`.rwl` 和 `.raw` 文件也可导入。已",

@@ -637,7 +637,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Channel Mixer Neutral",
             [],
             None,
-            "Params: {x, y} normalized image coords (0..1) of a spot that should be neutral (white or grey). Returns: {scaled: the factor (0..1] the new mixer was scaled down by to fit the ±200 % sliders, 1 when it fit; exposureAdded: the stops added to Exposure to keep the brightness, log2(1/scaled), 0 when none; exposureClamped: true when Exposure hit its maximum and some darkening stays; lightOff: true when the mixer was scaled but the Light section is off, so Exposure was left alone and the photo keeps the darkening; mixer: the new mixer as {red, green, blue} rows of {red, green, blue} percentages}. Notes: the mixer, any Exposure raise and switching the section on (when its eye was off) are one undo step; the white balance is read as the render does (Color's eye off means its defaults); a mask's local temperature/tint is not modelled, as the mixer is global; the brightness kept is what the spot rendered before the pick (without the mixer when its eye was off), before the calibration's shadow tint; refused (bad params) when the spot or the mixer can't be made neutral",
+            "Params: {x, y} normalized image coords (0..1) of a spot that should be neutral (white or grey). Returns: {scaled: the factor (0..1] the new mixer was scaled down by to fit the ±200 % sliders, 1 when it fit; darker: the stops the photo came out darker by because of that scaling, log2(1/scaled), 0 when none; mixer: the new mixer as {red, green, blue} rows of {red, green, blue} percentages}. Notes: the mixer and switching the section on (when its eye was off) are one undo step; Exposure is never changed; the white balance is read as the render does (Color's eye off means its defaults); a mask's local temperature/tint is not modelled, as the mixer is global; the spot keeps the brightness it has with no mix (through Calibration, before its shadow tint), whatever mix the pick starts from, so picking the same spot again changes nothing; refused (bad params) when the spot or the mixer can't be made neutral",
             has_active,
             |s, p| {
                 let (x, y) = (f64_req(p, "x", "develop.mixerNeutralPick")?, f64_req(p, "y", "develop.mixerNeutralPick")?);
@@ -672,47 +672,34 @@ pub fn specs() -> Vec<CommandSpec> {
                 let current = d.channel_mixer;
                 // the calibration the render will apply after the mixer (the pick keeps the mixer
                 // neutral through it: it is white-preserving), gated by its own section's eye; the
-                // brightness kept is what the spot rendered BEFORE the pick, so with the mixer's own
-                // eye off (the render skipped it) the target is the calibration over the mixer's
-                // input, not over the stored mixer. The calibration's shadow tint comes after the
-                // colour matrix and touches only dark tones; it is not modelled, so a dark spot with
-                // a shadow tint set may keep a little of it.
+                // spot comes out at its own brightness with no mix, through the calibration, so the
+                // result doesn't depend on the mix the pick starts from (testers of the PR: aiming
+                // for the mixed brightness blew infrared photos out). The calibration's shadow tint
+                // comes after the colour matrix and touches only dark tones; it is not modelled, so
+                // a dark spot with a shadow tint set may keep a little of it.
                 let calib = if d.section_enabled("calibration") {
                     lightcraft_pipeline::colorops::calibration_matrix(&d.calibration).map(|m| m.map(|r| r.map(f64::from)))
                 } else {
                     None
                 };
-                let (mixer, scaled) = lightcraft_pipeline::colorops::mixer_neutral(&current, c.map(f64::from), calib, !section_off)
+                let (mixer, scaled) = lightcraft_pipeline::colorops::mixer_neutral(&current, c.map(f64::from), calib)
                     .map_err(|e| bad("develop.mixerNeutralPick", e))?;
-                // A mixer scaled down to fit the ±200 % sliders is a gain lost. Exposure is a linear
-                // gain the render applies before the mixer, so raising it by log2(1/scaled) in the
-                // same undo step keeps the photo's brightness exactly; at Exposure's maximum what's
-                // left of the darkening stays (exposureClamped). With the Light section's eye off
-                // the render ignores Exposure (`effective` resets it), so a raise would be stored
-                // but never show: Exposure stays unchanged (exposureAdded 0, lightOff true — the
-                // photo keeps the darkening) rather than switching Light on for it.
-                let light_off = !d.section_enabled("light");
-                let want = -scaled.log2();
-                let (lo, hi) = controls::find("light.exposure").map_or((-5.0, 5.0), |spec| (spec.min, spec.max));
-                let now = d.light.exposure;
-                let raised = if scaled < 1.0 && !light_off { (now + want).clamp(lo, hi) } else { now };
-                let exposure_added = raised - now;
-                let clamped = want > 0.0 && !light_off && raised < now + want - 1e-9;
+                // A mixer scaled down to fit the ±200 % sliders is a gain lost: the photo comes out
+                // darker by log2(1/scaled) stops, and the result says so (`darker`) for the picker's
+                // message. Exposure is left alone. Testers of the PR found that raising Exposure to
+                // make up for it piled up: the next pick can't tell the Exposure an earlier pick
+                // added from the photographer's own, so picking the same spot again, or after
+                // another mix, added the raise again each time.
                 edit(s, "develop.mixerNeutralPick", "Channel Mixer Neutral", |d| {
                     if section_off {
                         d.set_section_enabled("channelMixer", true);
                     }
                     d.channel_mixer = mixer;
-                    if scaled < 1.0 && !light_off {
-                        d.light.exposure = raised;
-                    }
                     Ok(())
                 })?;
                 Ok(json!({
                     "scaled": scaled,
-                    "exposureAdded": exposure_added,
-                    "exposureClamped": clamped,
-                    "lightOff": light_off && scaled < 1.0,
+                    "darker": if scaled < 1.0 { -scaled.log2() } else { 0.0 },
                     "mixer": mixer,
                 }))
             }

@@ -3405,8 +3405,6 @@
   "yet and import as \"preview only\", with the reason.": "und als „Nur Vorschau“ mit Begründung importiert.",
   "Sony A7R II (and other) raws whose camera JPEG is lens-corrected no longer open grey and too dark (issue #232): the": "RAW-Dateien der Sony A7R II (und anderer), deren Kamera-JPEG objektivkorrigiert ist, öffnen nicht mehr grau und zu dunkel (Issue #232): Der",
   "starting look is fitted to the camera JPEG away from edges when the misaligned edges spoil the fit on all pixels.": "Ausgangslook wird abseits der Ränder an das Kamera-JPEG angepasst, wenn die verschobenen Ränder die Anpassung über alle Pixel verderben.",
-  "Darker: the Light section is off, so Exposure can't compensate": "Dunkler: der Bereich Licht ist ausgeschaltet, die Belichtung kann es nicht ausgleichen",
-  "Still darker: Exposure is at its maximum": "Trotzdem dunkler: die Belichtung ist am Maximum",
   "Lightroom Classic catalogs": "Lightroom-Classic-Kataloge",
   "File → Import Lightroom Catalog… opens `.lrcat` directly, with originals referenced in place.": "Datei → Lightroom-Katalog importieren… öffnet `.lrcat` direkt, wobei die Originale an ihrem Ort referenziert werden.",
   "Ratings, flags, labels, keywords, collections/sets, virtual copies and supported edits migrate;": "Bewertungen, Markierungen, Farbmarkierungen, Stichwörter, Sammlungen/Sätze, virtuelle Kopien und unterstützte Bearbeitungen werden übernommen;",

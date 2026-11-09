@@ -3296,8 +3296,6 @@
   "With automatic XMP writing on, an edit to a photo whose folder can't be written (a network share that dropped": "XMP-ის ავტომატური ჩაწერის ჩართვისას ფოტოს რედაქტირება, რომლის საქაღალდეშიც ჩაწერა შეუძლებელია (გათიშული",
   "out, a folder that went read-only) used to be written only to the library, with a line in the log, so the sidecar": "ქსელური საქაღალდე, მხოლოდ წაკითხვადი გამხდარი საქაღალდე), ადრე მხოლოდ ბიბლიოთეკაში იწერებოდა, ჟურნალში ერთი სტრიქონით, ამიტომ თანმხლები ფაილი",
   "stayed behind the edit. LightCraft now says once that the sidecars are waiting, tries again every few seconds once": "რედაქტირებას ჩამორჩებოდა. ახლა LightCraft ერთხელ გატყობინებთ, რომ თანმხლები ფაილები ელოდება, ფაილების ხელმისაწვდომობისთანავე ყოველ რამდენიმე წამში",
-  "Darker: the Light section is off, so Exposure can't compensate": "უფრო ბნელია: სექცია სინათლე გამორთულია, ექსპოზიცია ვერ აკომპენსირებს",
-  "Still darker: Exposure is at its maximum": "მაინც ბნელია: ექსპოზიცია მაქსიმუმზეა",
   "the files are reachable, and says when they're written. `library.retrySidecars` does it on request.": "ხელახლა ცდილობს და გატყობინებთ, როცა ისინი ჩაიწერება. `library.retrySidecars` ამას მოთხოვნისას აკეთებს.",
   "A damaged or crafted raw can no longer make LightCraft set aside gigabytes of memory before finding out the file is": "დაზიანებულ ან სპეციალურად შექმნილ RAW ფაილს აღარ შეუძლია LightCraft-ს გიგაბაიტობით მეხსიერება დააჯავშნინოს, სანამ ის ფაილის გაუმართაობას",
   "bad (issue #1512): a compressed PEF whose data is too short for the size it declares, an uncompressed TIFF-based": "აღმოაჩენს (ხარვეზი #1512): შეკუმშული PEF, რომლის მონაცემები გამოცხადებული ზომისთვის მეტისმეტად მოკლეა, შეუკუმშავი TIFF-ზე დაფუძნებული",

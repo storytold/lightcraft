@@ -1936,8 +1936,6 @@
   "sidecar that isn't valid XMP is copied to `<name>.xmp.bak-<time>` first. With the default stem naming, a raw and a": "невалідний XMP спочатку копіюється до `<name>.xmp.bak-<time>`. За типовими назвами основи RAW та",
   "so none shows as missing. Renaming one of a raw + JPEG pair copies their shared `IMG_0001.xmp` instead of taking": "тому жодне не позначається як відсутнє. Перейменування одного з пари RAW + JPEG копіює спільний `IMG_0001.xmp`, замість відбирання",
   "starting the GPU, the next launch starts with GPU rendering off and says how to turn it back on.": "запуску ГП, наступний запуск вимикає рендеринг на ГП і пояснює, як увімкнути його знову.",
-  "Darker: the Light section is off, so Exposure can't compensate": "Темніше: розділ «Світло» вимкнено, Експозиція не може це компенсувати",
-  "Still darker: Exposure is at its maximum": "Усе ж темніше: Експозиція на максимумі",
   "still saves your queued changes in the closing snapshot.": "усе одно зберігає чергу змін у завершальному знімку.",
   "synced. Import ▸ Copy now checks each copy against the content hash taken while scanning the card instead of": "синхронізується. Імпорт → Копіювати тепер перевіряє кожну копію за хешем вмісту, отриманим під час сканування карти, замість",
   "the JPEG uses `IMG_0001.JPG.xmp`.": "JPEG використовує `IMG_0001.JPG.xmp`.",

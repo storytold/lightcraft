@@ -1250,17 +1250,16 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         {
             let n = map.norm(q);
             // a spot the maths refuses (too dark, too saturated) says why; a mixer scaled down to
-            // fit the sliders had Exposure raised with it, and says by how much — unless the Light
-            // section's eye is off, where the raise would not render and the photo keeps the darkening
+            // fit the sliders left the photo darker, and says by how much (Exposure is the
+            // photographer's: the picker never changes it)
             match app.run_typed("develop.mixerNeutralPick", json!({"x": n.x, "y": n.y})) {
                 Ok(r) => {
-                    let raised = r["exposureAdded"].as_f64().unwrap_or(0.0);
-                    if r["lightOff"] == true {
-                        app.toast(ui.ctx(), crate::i18n::tr("Darker: the Light section is off, so Exposure can't compensate"));
-                    } else if r["exposureClamped"] == true {
-                        app.toast(ui.ctx(), crate::i18n::tr("Still darker: Exposure is at its maximum"));
-                    } else if raised > 0.0 {
-                        app.toast(ui.ctx(), crate::i18n::tr_format!("Exposure raised by {ev:+.1} to keep brightness", ev = raised));
+                    let darker = r["darker"].as_f64().unwrap_or(0.0);
+                    if darker >= 0.05 {
+                        app.toast(
+                            ui.ctx(),
+                            crate::i18n::tr_format!("Darker by {ev:.1} to fit the mix in range: raise Exposure if needed", ev = darker),
+                        );
                     }
                 }
                 Err(e) => {

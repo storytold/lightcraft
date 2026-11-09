@@ -290,7 +290,7 @@
   "Delete “{name}”?": "Excluir “{name}”?",
   "Updated {name}": "{name} atualizado",
   "Exported to {path}": "Exportado para {path}",
-  "Exposure raised by {ev:+.1} to keep brightness": "Exposição aumentada em {ev:+.1} para manter o brilho",
+  "Darker by {ev:.1} to fit the mix in range: raise Exposure if needed": "{ev:.1} mais escuro para a mistura caber no intervalo: aumente a Exposição se precisar",
   "Saved template {name}": "Modelo {name} salvo",
   "Imported {name}": "{name} importado",
   "Skipped {problem}": "Ignorado: {problem}",

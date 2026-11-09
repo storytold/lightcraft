@@ -2398,8 +2398,6 @@
   "smart previews": "смарт-просмотры",
   "so none shows as missing. Renaming one of a raw + JPEG pair copies their shared `IMG_0001.xmp` instead of taking": "поэтому ни один не считается отсутствующим. Переименование одного файла из пары RAW + JPEG копирует их общий `IMG_0001.xmp`, а не забирает",
   "starting the GPU, the next launch starts with GPU rendering off and says how to turn it back on.": "запуска GPU, следующий запуск начинается с отключённым рендерингом на GPU и сообщает, как включить его снова.",
-  "Darker: the Light section is off, so Exposure can't compensate": "Темнее: раздел «Светлый» выключен, Экспозиция не может это скомпенсировать",
-  "Still darker: Exposure is at its maximum": "Всё же темнее: Экспозиция на максимуме",
   "still saves your queued changes in the closing snapshot.": "всё равно сохраняет вашу очередь изменений в завершающем снимке.",
   "synced. Import ▸ Copy now checks each copy against the content hash taken while scanning the card instead of": "синхронизируется. Импорт → Копировать теперь сверяет каждую копию с хешем содержимого, полученным при сканировании карты, а не",
   "the JPEG uses `IMG_0001.JPG.xmp`.": "JPEG использует `IMG_0001.JPG.xmp`.",

@@ -285,7 +285,7 @@
   "Delete “{name}”?": "„{name}“ löschen?",
   "Updated {name}": "{name} aktualisiert",
   "Exported to {path}": "Exportiert nach {path}",
-  "Exposure raised by {ev:+.1} to keep brightness": "Belichtung um {ev:+.1} erhöht, um die Helligkeit zu halten",
+  "Darker by {ev:.1} to fit the mix in range: raise Exposure if needed": "Um {ev:.1} dunkler, damit der Mix in den Bereich passt: bei Bedarf die Belichtung erhöhen",
   "Saved template {name}": "Vorlage {name} gespeichert",
   "Imported {name}": "{name} importiert",
   "Skipped {problem}": "Übersprungen: {problem}",

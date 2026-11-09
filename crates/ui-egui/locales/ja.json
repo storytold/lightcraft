@@ -2210,8 +2210,6 @@
   "sidecar that isn't valid XMP is copied to `<name>.xmp.bak-<time>` first. With the default stem naming, a raw and a": "有効な XMP でないサイドカーは、まず `<name>.xmp.bak-<time>` にコピーします。既定のファイル名ベースの命名では、raw と",
   "so none shows as missing. Renaming one of a raw + JPEG pair copies their shared `IMG_0001.xmp` instead of taking": "そのため、見つからない写真として表示されません。raw と JPEG の組の片方の名前を変えると、共有の `IMG_0001.xmp` をコピーし、",
   "starting the GPU, the next launch starts with GPU rendering off and says how to turn it back on.": "GPU を起動すると、次回起動時は GPU 描画をオフにして始め、元に戻す方法を表示します。",
-  "Darker: the Light section is off, so Exposure can't compensate": "暗くなります：明るさセクションがオフのため、露出では補えません",
-  "Still darker: Exposure is at its maximum": "それでも暗いままです：露出が最大です",
   "still saves your queued changes in the closing snapshot.": "閉じるときのスナップショットに、キューにある変更を保存します。",
   "synced. Import ▸ Copy now checks each copy against the content hash taken while scanning the card instead of": "同期しました。読み込み → コピーは、カードを走査したときのコンテンツハッシュと各コピーを照合するようになりました。",
   "the JPEG uses `IMG_0001.JPG.xmp`.": "JPEG は `IMG_0001.JPG.xmp` を使います。",

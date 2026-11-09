@@ -2043,8 +2043,6 @@
   "so none shows as missing. Renaming one of a raw + JPEG pair copies their shared `IMG_0001.xmp` instead of taking": "żaden plik nie jest oznaczany jako brakujący. Zmiana nazwy jednego z pary RAW + JPEG kopiuje ich wspólny `IMG_0001.xmp`, zamiast zabierać go",
   "starting the GPU, the next launch starts with GPU rendering off and says how to turn it back on.": "podczas uruchamiania GPU następny start odbywa się z wyłączonym renderowaniem GPU i informacją, jak je ponownie włączyć.",
   "starts with": "zaczyna się od",
-  "Darker: the Light section is off, so Exposure can't compensate": "Ciemniej: sekcja Światło jest wyłączona, Ekspozycja nie może tego wyrównać",
-  "Still darker: Exposure is at its maximum": "Wciąż ciemniej: Ekspozycja jest na maksimum",
   "still saves your queued changes in the closing snapshot.": "nadal zapisuje oczekujące zmiany w migawce zamykającej.",
   "synced. Import ▸ Copy now checks each copy against the content hash taken while scanning the card instead of": "synchronizowane. Import → Kopiuj sprawdza teraz każdą kopię względem skrótu zawartości obliczonego podczas skanowania karty, zamiast",
   "the JPEG uses `IMG_0001.JPG.xmp`.": "a JPEG korzysta z `IMG_0001.JPG.xmp`.",
