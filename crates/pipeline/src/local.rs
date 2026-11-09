@@ -375,13 +375,13 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => base_detail_radius(px_per_long),
     }
 }
 
 /// The highlights/shadows base layer of log luminance `l`: the fast guided filter ([`BASE_EPS`])
 /// at `detail` px ([`tone_base_detail`]) of its [`detail_free`] plane when `keeps_gaps`
-/// ([`base_keeps_gaps`], V7 on), else of its [`median_hv`] (V2 to V6); at 0, of `l` itself (V1).
+/// ([`base_keeps_gaps`], V8 on), else of its [`median_hv`] (V2 to V7); at 0, of `l` itself (V1).
 pub fn tone_base(l: &Plane, sigma: f32, detail: usize, keeps_gaps: bool) -> Plane {
     if detail == 0 {
         return guided_fast(l, sigma, BASE_EPS);
@@ -394,7 +394,7 @@ pub fn tone_base(l: &Plane, sigma: f32, detail: usize, keeps_gaps: bool) -> Plan
 /// times the fine one's.
 pub const BASE_COARSE_STEP: usize = 3;
 
-/// Log luminance `l` without detail finer than `r` px (the highlights/shadows base of process V7
+/// Log luminance `l` without detail finer than `r` px (the highlights/shadows base of process V8
 /// on takes its edge-aware filter): each value moves toward its [`median_hv`] at `r` only as far as the
 /// median of a [`BASE_COARSE_STEP`]× wider neighbourhood agrees (`l` clamped between the two).
 /// A twig, line or speck in an even surround has both medians on the surround's side and takes
@@ -697,10 +697,10 @@ pub fn sharpen_key(s: &DevelopSettings, sigma: f32) -> SharpenKey {
     (sigma.to_bits(), s.process.process())
 }
 
-/// Whether `s`'s highlights/shadows base takes [`detail_free`] (process V7 on) instead of V2's plain
-/// [`median_hv`] (V2 to V6, which released with it and stay frozen).
+/// Whether `s`'s highlights/shadows base takes [`detail_free`] (process V8 on) instead of V2's plain
+/// [`median_hv`] (V2 to V7, which shipped with it and stay frozen).
 pub fn base_keeps_gaps(s: &DevelopSettings) -> bool {
-    s.process.process() >= Process::V7
+    s.process.process() >= Process::V8
 }
 
 pub fn pixel_sharpen(s: &DevelopSettings) -> bool {
@@ -742,7 +742,7 @@ pub const CHROMA_SIGMA: f32 = 0.004;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlaneSigmas {
     /// Edge-aware base for highlights/shadows ([`tone_base`]: fast guided filter, [`BASE_EPS`]; from
-    /// process V2 of a median at [`BASE_DETAIL`], from V7 of a detail-free plane).
+    /// process V2 of a median at [`BASE_DETAIL`], from V8 of a detail-free plane).
     pub base: Option<f32>,
     /// Median radius (px) of that base ([`tone_base_detail`]: 0 under V1).
     pub base_detail: usize,

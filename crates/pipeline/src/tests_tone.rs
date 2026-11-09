@@ -273,10 +273,10 @@ fn isolated_lines_up_to_the_detail_radius_stay_out_of_the_base() {
 
 #[test]
 fn only_process_v7_on_takes_the_detail_free_base() {
-    // V2 to V6 keep the plain median (V1 has none): they are released and frozen (`tests_legacy`)
+    // V2 to V7 keep the plain median (V1 has none): they are released and frozen (`tests_legacy`)
     for p in Process::ALL {
         let s = DevelopSettings { process: p.version(), ..Default::default() };
-        assert_eq!(local::base_keeps_gaps(&s), p >= Process::V7, "{p:?}");
+        assert_eq!(local::base_keeps_gaps(&s), p >= Process::V8, "{p:?}");
     }
     let (l, _) = lettering(10);
     let plain = local::guided_fast(&local::median_hv(&l, 10), 100.0, local::BASE_EPS);
