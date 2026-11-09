@@ -257,6 +257,73 @@ fn search_tokens_compare_inclusively() {
     assert!(q("rating:=>3").is_empty(), "not an operator");
 }
 
+fn boolean_search_fixture() -> (Catalog, PhotoId, PhotoId, PhotoId) {
+    let mut c = Catalog::new();
+    let original = photo(&mut c, "original.jpg", "2026-05-01T10:00:00");
+    let edited = photo(&mut c, "edited.jpg", "2026-05-02T10:00:00");
+    let mut settings = DevelopSettings::default();
+    settings.light.exposure = 0.5;
+    c.apply(Op::SetDevelop { id: edited, settings: Arc::new(settings), label: "Exposure".into(), edited: None }).unwrap();
+
+    let mut virtual_copy = (**c.photo(original).unwrap()).clone();
+    virtual_copy.id = c.alloc_photo_id();
+    virtual_copy.copy_of = Some(original);
+    virtual_copy.copy_name = Some("Copy 1".into());
+    let virtual_copy_id = virtual_copy.id;
+    c.apply(Op::AddPhoto { photo: Box::new(virtual_copy) }).unwrap();
+    (c, original, edited, virtual_copy_id)
+}
+
+#[test]
+fn search_boolean_tokens_reject_invalid_values() {
+    let (c, _, _, _) = boolean_search_fixture();
+    let q = |text: &str| {
+        let mut ids = c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+        ids.sort();
+        ids
+    };
+
+    let before = c.to_snapshot();
+    for field in ["edited", "copy", "virtual"] {
+        for value in ["", "garbage", "maybe", "0", "1", "2", "trueish"] {
+            assert!(q(&format!("{field}:{value}")).is_empty(), "{field}:{value}");
+            assert!(q(&format!("{field}:\"{value}\"")).is_empty(), "{field}:\"{value}\"");
+        }
+    }
+    assert_eq!(c.to_snapshot(), before, "searching does not change catalog records");
+}
+
+#[test]
+fn search_boolean_tokens_preserve_valid_values() {
+    let (c, original, edited, virtual_copy_id) = boolean_search_fixture();
+    let q = |text: &str| {
+        let mut ids = c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+        ids.sort();
+        ids
+    };
+    let unedited = vec![original, virtual_copy_id];
+    let non_copies = vec![original, edited];
+
+    for (field, matching, not_matching) in [
+        ("edited", vec![edited], unedited.clone()),
+        ("copy", vec![virtual_copy_id], non_copies.clone()),
+        ("virtual", vec![virtual_copy_id], non_copies),
+    ] {
+        for value in ["true", "yes", "TRUE", "YES"] {
+            assert_eq!(q(&format!("{field}:{value}")), matching, "{field}:{value}");
+            assert_eq!(q(&format!("{field}:\"{value}\"")), matching, "{field}:\"{value}\"");
+        }
+        for value in ["false", "no", "FALSE", "NO"] {
+            assert_eq!(q(&format!("{field}:{value}")), not_matching, "{field}:{value}");
+            assert_eq!(q(&format!("{field}:\"{value}\"")), not_matching, "{field}:\"{value}\"");
+        }
+    }
+
+    assert_eq!(q("edited:false virtual:false"), vec![original], "conjunctions retain their meaning");
+    assert_eq!(q("copy:true edited:false"), vec![virtual_copy_id]);
+    assert_eq!(q("original"), vec![original, virtual_copy_id], "unknown fields remain free text");
+}
+
 /// A `captured` string that is not ASCII (the Lightroom importer copies `captureTime` into an
 /// `AddPhoto` op verbatim, and a JSON snapshot is valid UTF-8 whatever it holds) must not be
 /// sliced on a byte index in `date_groups`: grouping counts the well-formed dates and ignores

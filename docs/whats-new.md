@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Invalid boolean search values show no results
+- `edited:`, `copy:` and `virtual:` accept `true` / `yes` and `false` / `no`. A blank value or typo now matches no photos instead of silently showing unedited photos or originals.
+
+### Reference View hint uses a supported arrow
+- The empty-state instruction uses the same paintable arrow glyph as other navigation hints.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
