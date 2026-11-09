@@ -102,13 +102,17 @@ pub fn plan(s: &mut Session, p: &Value) -> Result<(Search, Reads)> {
         }
         let Some(key) = keys.guarded.first().cloned() else { continue };
         // (the searched photo's content is known by the time these are read, or the search has ended)
-        if keys.content == mine.content
-            && let Some(me) = me.as_mut()
-        {
-            if !me.keys.contains(&key) {
-                me.keys.push(key);
+        if keys.content == mine.content {
+            if let Some(me) = me.as_mut() {
+                if !me.keys.contains(&key) {
+                    me.keys.push(key);
+                }
+                continue;
             }
-            continue;
+            if let Some(known) = known_signature(s, &mine) {
+                s.signatures.insert(key, known);
+                continue;
+            }
         }
         let Some(q) = s.cache_photo(other) else { continue };
         let source = s.media.source_ref(&q, SourceLevel::Thumb);
@@ -431,6 +435,22 @@ mod tests {
         s.media.forget(p.id);
         s.execute(C, &json!({"id": 1})).unwrap();
         assert_eq!(files.reads(), 2);
+    }
+
+    #[test]
+    fn a_new_record_of_known_content_is_compared_without_reading_it() {
+        let files = Files::default();
+        files.unreadable.lock().unwrap().push("/p/b1.jpg".into());
+        let (mut s, files) = session(&[("a1", Some("same"))], files);
+        s.execute(C, &json!({"id": 1})).unwrap();
+        let mut other = (**s.catalog.photo(PhotoId(1)).unwrap()).clone();
+        other.id = PhotoId(2);
+        other.source = Source::File { path: "/p/b1.jpg".into() };
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(other) }).unwrap();
+        let mut found = ids(&s.execute(C, &json!({"id": 1})).unwrap());
+        found.sort_unstable();
+        assert_eq!(found, [1, 2]);
+        assert_eq!(files.reads_of("/p/b1.jpg"), 0);
     }
 
     #[test]
