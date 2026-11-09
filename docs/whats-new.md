@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Film grain that looks like film (process V7)
+- Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
+  rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
+  and blown highlights stay clean, and the fit-to-window preview shows the grain you will export. Amount, Size and
+  Roughness keep their meaning and Lightroom Classic's strength and grain size. This is rendering process 7: new photos
+  (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
+  See [film grain](grain.md).
+
 ### Lightroom edits from XMP sidecars look closer to Lightroom
 - A portrait raw's crop and masks land where Lightroom put them (issue #2239). Lightroom places them on the photo as
   the camera stored it, before turning it upright; they were taken as if on the upright photo, so the crop cut the
