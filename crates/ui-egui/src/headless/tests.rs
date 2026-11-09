@@ -1024,9 +1024,14 @@ fn a_persons_face_becomes_their_picture_from_its_menu() {
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
     };
+    let stars = |h: &mut Headless| h.request("ui.widgets", json!({"filter": "person-face-star:"}), t)["result"].to_string();
+    assert!(!stars(&mut h).contains("person-face-star:"), "no star before a choice");
     let asked_at = h.app.caches.person_page.as_ref().map(|p| p.3);
     menu(&mut h, "person-face-menu:cover");
     assert_eq!(h.app.session.person_covers.get("jane doe").map(|c| c.photo), Some(ids[0]));
+    // drawn on that face, and on no other
+    let drawn = stars(&mut h);
+    assert!(drawn.contains(&format!("person-face-star:{}:0", ids[0].0)) && !drawn.contains(&format!("person-face-star:{}:", ids[1].0)), "{drawn}");
     // the star moves on the page as shown, without asking for the page (and its slow "More" faces) again
     let cached = h.app.caches.person_page.as_ref().map(|p| (p.3, p.4.cover));
     assert_eq!(cached, Some((asked_at.unwrap(), Some((ids[0].0, 0)))));
@@ -1036,6 +1041,7 @@ fn a_persons_face_becomes_their_picture_from_its_menu() {
     menu(&mut h, "person-face-menu:autoCover");
     assert!(h.app.session.person_covers.is_empty());
     assert_eq!(picture(&mut h), Some(ids[1]));
+    assert!(!stars(&mut h).contains("person-face-star:"), "the star goes with the choice");
     // chosen elsewhere (a script, an agent) while the page is open: the page shows it too
     h.request("engine.execute", json!({"command": "faces.setCover", "params": {"name": "Jane Doe", "photo": ids[0].0, "index": 0}}), t);
     h.settle(SETTLE);

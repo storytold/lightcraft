@@ -396,6 +396,7 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
         let badge = Rect::from_min_size(pos2(r.left() + 4.0, r.bottom() - 24.0), vec2(20.0, 20.0));
         p.circle_filled(badge.center(), 10.0, Color32::from_rgba_unmultiplied(30, 30, 30, 220));
         crate::icons::paint(p, badge.shrink(4.0), crate::icons::Icon::StarFilled, Color32::WHITE);
+        register(ui, format!("person-face-star:{}:{}", f.photo, f.index), badge);
     }
     let mut hit = Hit::Nothing;
     if more && hovered {
