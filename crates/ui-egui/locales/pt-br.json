@@ -2270,5 +2270,8 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Inicie o aplicativo com --control 7980 (ou LIGHTCRAFT_CONTROL_PORT) e o lightcraft-cli mcp --connect conecta um agente a ele.",
   "Welcome": "Bem-vindo",
   "Next": "Próximo",
-  "Get Started": "Começar"
+  "Get Started": "Começar",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "As teclas estão na barra lateral: as setas movem, Enter abre, digite para achar, Esc volta às fotos",
+  "This row has no name to change": "Esta linha não tem um nome para mudar",
+  "Keyboard in Sidebar": "Teclado na barra lateral"
 }

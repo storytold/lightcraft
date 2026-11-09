@@ -2397,5 +2397,8 @@
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
   "Bottom bar": "Bilah bawah",
-  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Tombol berlaku di bilah samping: panah untuk berpindah, Enter untuk membuka, ketik untuk mencari, Esc untuk kembali ke foto",
+  "This row has no name to change": "Baris ini tidak punya nama yang bisa diubah",
+  "Keyboard in Sidebar": "Keyboard di bilah samping"
 }
