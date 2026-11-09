@@ -8,12 +8,12 @@ pub(super) struct Region {
     pub h: usize,
 }
 
-fn valid(img: &Rgba8) -> bool {
+pub(super) fn valid(img: &Rgba8) -> bool {
     img.width > 0 && img.height > 0 && img.width.checked_mul(img.height) == Some(img.data.len())
 }
 
-/// Bound the selection in the *rendered* frame, with context for the diffusion model.
-pub(super) fn region(mask: &Rgba8) -> Result<Region, String> {
+/// The bounding box of every selected (non-zero) mask pixel.
+pub(super) fn bounds(mask: &Rgba8) -> Result<Region, String> {
     if !valid(mask) {
         return Err("invalid generation mask dimensions".into());
     }
@@ -28,11 +28,16 @@ pub(super) fn region(mask: &Rgba8) -> Result<Region, String> {
     if x1 <= x0 || y1 <= y0 {
         return Err("the selected mask is empty in the cropped photo".into());
     }
-    let pad = ((x1 - x0).max(y1 - y0) / 8).max(32);
-    x0 = x0.saturating_sub(pad);
-    y0 = y0.saturating_sub(pad);
-    x1 = x1.saturating_add(pad).min(mask.width);
-    y1 = y1.saturating_add(pad).min(mask.height);
+    Ok(Region { x: x0, y: y0, w: x1 - x0, h: y1 - y0 })
+}
+
+/// Bound the selection in the *rendered* frame, with context for the diffusion model.
+pub(super) fn region(mask: &Rgba8) -> Result<Region, String> {
+    let b = bounds(mask)?;
+    let pad = (b.w.max(b.h) / 8).max(32);
+    let (x0, y0) = (b.x.saturating_sub(pad), b.y.saturating_sub(pad));
+    let x1 = (b.x + b.w).saturating_add(pad).min(mask.width);
+    let y1 = (b.y + b.h).saturating_add(pad).min(mask.height);
     Ok(Region { x: x0, y: y0, w: x1 - x0, h: y1 - y0 })
 }
 
@@ -44,7 +49,7 @@ pub(super) fn network_size(r: Region) -> (usize, usize) {
     (side(r.w), side(r.h))
 }
 
-fn sample(img: &Rgba8, x: f64, y: f64) -> [f32; 4] {
+pub(super) fn sample(img: &Rgba8, x: f64, y: f64) -> [f32; 4] {
     let x = x.clamp(0.0, img.width.saturating_sub(1) as f64);
     let y = y.clamp(0.0, img.height.saturating_sub(1) as f64);
     let (x0, y0) = (x.floor() as usize, y.floor() as usize);

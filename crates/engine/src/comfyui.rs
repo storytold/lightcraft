@@ -16,18 +16,47 @@ use serde_json::{Value, json};
 mod client;
 #[cfg(not(target_arch = "wasm32"))]
 mod image;
+#[cfg(not(target_arch = "wasm32"))]
+mod removal;
+
+/// What a generation does with the selected mask.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Mode {
+    /// Fill the mask with what the prompt describes.
+    #[default]
+    Replace,
+    /// Take what is in the mask out of the scene: a coarse fill with wide context, then
+    /// full-resolution detail tiles where the coarse fill had to be scaled down.
+    Remove,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub endpoint: String,
     pub model: String,
+    /// Replace: what to put in the mask (required).
     pub prompt: String,
     pub negative: String,
     pub seed: u64,
     /// The instruction sent to Qwen (`.gguf` models): `{prompt}` is replaced by [`Self::prompt`].
     /// SDXL checkpoints receive the prompt alone.
     pub qwen_instruction: String,
+    pub mode: Mode,
+    /// Remove: what to take out (empty: the mask's name, unless it is a default "Mask N"). Kept
+    /// apart from [`Self::prompt`], so switching modes never sends one mode's text to the other.
+    pub subject: String,
+    /// Remove: the context crop's size as a multiple of the selection's longer side.
+    pub context: f64,
+    /// Remove: pixels (at full resolution) the mask grows by, so outlines and halos go too.
+    pub grow: u32,
+    /// Remove: how strongly the detail pass may redraw the coarse fill; 0 turns it off.
+    pub detail: f64,
+    /// Remove: Qwen's instruction for the coarse fill; `{prompt}` is what to remove.
+    pub removal_instruction: String,
+    /// Remove: Qwen's instruction for each detail tile.
+    pub refine_instruction: String,
 }
 
 /// The default [`Settings::qwen_instruction`]: names the mask reference and asks Qwen to replace
@@ -36,8 +65,30 @@ pub const DEFAULT_QWEN_INSTRUCTION: &str = "Replace the entire white region show
 Remove the existing objects in that white region and reconstruct it as the requested replacement. \
 Black regions are context: keep them unchanged. Return an opaque photograph.";
 
+/// The default [`Settings::removal_instruction`]: `{prompt}` is what to remove. Naming it matters:
+/// asked only to clear "the white region", Qwen tends to redraw what is there.
+pub const DEFAULT_REMOVAL_INSTRUCTION: &str = "Remove {prompt} from <image1>: the white region in <image2> marks where it is. \
+Reconstruct what was behind it so that it seamlessly continues the surrounding scene: the same lighting, perspective, textures, \
+sharpness and grain. Do not add any new objects, people, animals, text or patterns. \
+Black regions are context: keep them unchanged. Return an opaque photograph.";
+
+/// The default [`Settings::refine_instruction`].
+pub const DEFAULT_REFINE_INSTRUCTION: &str = "Refine the white region shown in <image2> of <image1>: keep its content, layout and colours, \
+and give it the natural photographic detail, texture, sharpness and grain of the surrounding area. Do not add any new objects. \
+Black regions are context: keep them unchanged. Return an opaque photograph.";
+
+/// What SDXL is asked for when removing (what is removed goes into its negative prompt).
+pub const SDXL_REMOVAL_PROMPT: &str = "empty background, seamless continuation of the surrounding scene, natural photograph";
+/// Added to SDXL's negative prompt when removing.
+const SDXL_REMOVAL_NEGATIVE: &str = "object, person, people, animal, text, watermark";
+
 /// The placeholder in [`Settings::qwen_instruction`] that the prompt replaces.
 pub const PROMPT_PLACEHOLDER: &str = "{prompt}";
+
+/// Bounds of the removal controls.
+pub const CONTEXT_RANGE: std::ops::RangeInclusive<f64> = 1.0..=6.0;
+pub const GROW_MAX: u32 = 128;
+pub const DETAIL_MAX: f64 = 0.8;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -48,20 +99,45 @@ impl Default for Settings {
             negative: "blurry, low quality, text, watermark".into(),
             seed: 1,
             qwen_instruction: DEFAULT_QWEN_INSTRUCTION.into(),
+            mode: Mode::Replace,
+            subject: String::new(),
+            context: 2.5,
+            grow: 8,
+            detail: 0.35,
+            removal_instruction: DEFAULT_REMOVAL_INSTRUCTION.into(),
+            refine_instruction: DEFAULT_REFINE_INSTRUCTION.into(),
         }
     }
 }
 
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
-        if self.prompt.trim().is_empty() || self.prompt.len() > 4096 || self.negative.len() > 4096 {
+        if self.prompt.len() > 4096 || self.subject.len() > 4096 || self.negative.len() > 4096 {
+            return Err("prompts are limited to 4096 bytes".into());
+        }
+        if self.mode == Mode::Replace && self.prompt.trim().is_empty() {
             return Err("enter a replacement prompt (at most 4096 bytes)".into());
         }
-        if self.model.trim().is_empty() || self.model.len() > 512 || self.model.chars().any(char::is_control) || self.seed > 9_007_199_254_740_991 {
+        if self.model.trim().is_empty() || self.model.len() > 512 || self.model.chars().any(char::is_control) || self.seed > MAX_SEED {
             return Err("choose an installed ComfyUI checkpoint and a seed from 0 to 9007199254740991".into());
         }
         if !self.qwen_instruction.contains(PROMPT_PLACEHOLDER) || self.qwen_instruction.len() > 8192 {
             return Err("the Qwen instruction must contain {prompt} (at most 8192 bytes); see Settings ▸ ComfyUI".into());
+        }
+        if self.mode == Mode::Remove {
+            if !CONTEXT_RANGE.contains(&self.context) || self.grow > GROW_MAX || !(0.0..=DETAIL_MAX).contains(&self.detail) {
+                return Err(format!(
+                    "removal needs a context from {} to {}, a grow of at most {GROW_MAX} px and a detail strength from 0 to {DETAIL_MAX}",
+                    CONTEXT_RANGE.start(),
+                    CONTEXT_RANGE.end()
+                ));
+            }
+            if !self.removal_instruction.contains(PROMPT_PLACEHOLDER) || self.removal_instruction.len() > 8192 {
+                return Err("the removal instruction must contain {prompt} (at most 8192 bytes); see Settings ▸ ComfyUI".into());
+            }
+            if self.refine_instruction.trim().is_empty() || self.refine_instruction.len() > 8192 {
+                return Err("enter a detail instruction (at most 8192 bytes); see Settings ▸ ComfyUI".into());
+            }
         }
         Ok(())
     }
@@ -71,11 +147,51 @@ impl Settings {
         self.model.to_ascii_lowercase().ends_with(".gguf")
     }
 
-    /// The positive prompt exactly as it is sent to ComfyUI.
+    /// The positive prompt exactly as it is sent to ComfyUI (for removal: the coarse pass's).
     pub fn resolved_prompt(&self) -> String {
-        if self.is_qwen() { self.qwen_instruction.replace(PROMPT_PLACEHOLDER, &self.prompt) } else { self.prompt.clone() }
+        match (self.mode, self.is_qwen()) {
+            (Mode::Replace, true) => self.qwen_instruction.replace(PROMPT_PLACEHOLDER, &self.prompt),
+            (Mode::Replace, false) => self.prompt.clone(),
+            (Mode::Remove, true) => self.removal_instruction.replace(PROMPT_PLACEHOLDER, self.subject.trim()),
+            (Mode::Remove, false) => SDXL_REMOVAL_PROMPT.into(),
+        }
+    }
+
+    /// The positive prompt each removal detail tile receives.
+    pub fn resolved_refine_prompt(&self) -> String {
+        if self.is_qwen() { self.refine_instruction.clone() } else { SDXL_REMOVAL_PROMPT.into() }
+    }
+
+    /// Remove: what to take out: the typed prompt, else the mask's name when the person gave it
+    /// one (a default "Mask N" says nothing about the content).
+    pub fn removal_subject(&self, mask_name: &str) -> Result<String, String> {
+        let typed = self.subject.trim();
+        if !typed.is_empty() {
+            return Ok(typed.to_string());
+        }
+        let name = mask_name.trim();
+        let generic = name.is_empty() || name.strip_prefix("Mask ").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if generic {
+            return Err("describe what to remove, or give the mask a name that says what it selects".into());
+        }
+        Ok(name.to_string())
+    }
+
+    /// The negative prompt as sent (Qwen ignores it at CFG 1).
+    pub fn resolved_negative(&self) -> String {
+        match self.mode {
+            Mode::Remove if !self.is_qwen() => [self.negative.trim(), self.subject.trim(), SDXL_REMOVAL_NEGATIVE]
+                .into_iter()
+                .filter(|p| !p.is_empty())
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => self.negative.clone(),
+        }
     }
 }
+
+/// ComfyUI seeds are JavaScript-safe integers.
+pub const MAX_SEED: u64 = 9_007_199_254_740_991;
 
 struct Output {
     png: Vec<u8>,
@@ -153,8 +269,12 @@ pub(crate) fn start(s: &mut crate::Session, settings: Settings, mask_id: Option<
     let mask_id = mask_id.or(s.active_mask).ok_or("select a mask first")?;
     let mask = u16::try_from(mask_id).map_err(|_| "mask id exceeds the renderer's supported range")?;
     let ph = s.catalog.photo(photo).ok_or("photo is no longer in the library")?;
-    if !ph.develop.masks.iter().any(|m| m.id == mask_id && !m.components.is_empty()) {
+    let Some(selected) = ph.develop.masks.iter().find(|m| m.id == mask_id && !m.components.is_empty()) else {
         return Err("the selected mask has no components".into());
+    };
+    let mut settings = settings;
+    if settings.mode == Mode::Remove {
+        settings.subject = settings.removal_subject(&selected.name)?;
     }
     if ph.develop.hdr.enabled {
         return Err("ComfyUI generation currently requires an SDR photo".into());
@@ -188,7 +308,11 @@ pub(crate) fn start(s: &mut crate::Session, settings: Settings, mask_id: Option<
         finished: AtomicBool::new(false),
         result: Mutex::new(None),
     });
-    let guard = s.activity.start("generation", "Generating replacement", crate::activity::Cancel::Flag(run.cancelled.clone()));
+    let label = match run.settings.mode {
+        Mode::Replace => "Generating replacement",
+        Mode::Remove => "Removing from photo",
+    };
+    let guard = s.activity.start("generation", label, crate::activity::Cancel::Flag(run.cancelled.clone()));
     guard.detail(&run.stem);
     let worker = run.clone();
     std::thread::Builder::new()
@@ -206,28 +330,35 @@ pub(crate) fn start(s: &mut crate::Session, settings: Settings, mask_id: Option<
                 let original_image = rendered.rendered?.image;
                 check()?;
                 let mask = mask_job.run().rendered?.image;
-                let region = image::region(&mask)?;
-                let input = image::encode(&image::crop(&original_image, region)?)?;
-                let mask_input = image::encode(&image::crop(&mask, region)?)?;
                 check()?;
                 let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
                 let prefix = format!("Lightcraft-{}-{nonce}-{}", std::process::id(), worker.id);
-                let input_name = client.upload(&format!("{prefix}-image.png"), &input)?;
+                let settings = &worker.settings;
+                let (output, workflow, details) = match settings.mode {
+                    Mode::Replace => {
+                        let region = image::region(&mask)?;
+                        let generated = request(&client, &client::Pass::fill(settings), &original_image, &mask, region, &prefix, &cancelled)?;
+                        (image::composite(original_image, &mask, &generated, region)?, "Lightcraft-masking", json!({"region": region}))
+                    }
+                    Mode::Remove => {
+                        let grown = removal::grow(&mask, usize::try_from(settings.grow).unwrap_or(0));
+                        let progress = |done: u64, total: u64, what: &str| {
+                            guard.progress(done, total);
+                            guard.detail(&format!("{} · {what}", worker.stem));
+                        };
+                        let done = removal::run(&client, settings, &original_image, &grown, &prefix, &cancelled, &progress)?;
+                        (done.image, "Lightcraft-remove", json!({"removal": done.record}))
+                    }
+                };
                 check()?;
-                let mask_name = client.upload(&format!("{prefix}-mask.png"), &mask_input)?;
-                let bytes = client.generate(&worker.settings, &input_name, &mask_name, cancelled)?;
-                check()?;
-                let decoded = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions { max_pixels: 1024 * 1024, ..Default::default() })
-                    .map_err(|e| e.to_string())?;
-                if decoded.format != lightcraft_codecs::Format::Png || decoded.orientation != 1 {
-                    return Err("ComfyUI must return an unoriented PNG".into());
-                }
-                let output = image::composite(original_image, &mask, &decoded.to_srgb8(), region)?;
                 let preview = Arc::new(crate::media::fit_for_display(&output, 1024, 768));
-                let provenance = json!({"workflow": "Lightcraft-masking", "version": 1, "settings": worker.settings, "sentPrompt": worker.settings.resolved_prompt(),
-                "maskId": mask_id, "original": original, "region": region,
+                let mut provenance = json!({"workflow": workflow, "version": 1, "settings": worker.settings, "sentPrompt": worker.settings.resolved_prompt(),
+                "maskId": mask_id, "original": original,
                 "width": output.width, "height": output.height,
                 "created": chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now()).to_rfc3339()});
+                if let (Some(p), Some(d)) = (provenance.as_object_mut(), details.as_object()) {
+                    p.extend(d.clone());
+                }
                 let png = image::encode(&output)?;
                 check()?;
                 Ok(Output { png, preview, provenance })
@@ -241,6 +372,48 @@ pub(crate) fn start(s: &mut crate::Session, settings: Settings, mask_id: Option<
     let status = run.status();
     s.generation = Some(run);
     Ok(status)
+}
+
+/// Send `region` of `img` and `mask` (resized to the model's size) through one pass, and return
+/// the decoded result at that size.
+#[cfg(not(target_arch = "wasm32"))]
+fn request(
+    client: &client::Client,
+    pass: &client::Pass,
+    img: &Rgba8,
+    mask: &Rgba8,
+    region: image::Region,
+    prefix: &str,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<Rgba8, String> {
+    send(client, pass, &image::crop(img, region)?, &image::crop(mask, region)?, prefix, cancelled)
+}
+
+/// Upload a model-sized input and mask, run one pass, and return the decoded result.
+#[cfg(not(target_arch = "wasm32"))]
+fn send(
+    client: &client::Client,
+    pass: &client::Pass,
+    input: &Rgba8,
+    mask: &Rgba8,
+    prefix: &str,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<Rgba8, String> {
+    let check = || if cancelled() { Err("generation cancelled".to_string()) } else { Ok(()) };
+    let input = image::encode(input)?;
+    let mask_input = image::encode(mask)?;
+    check()?;
+    let input_name = client.upload(&format!("{prefix}-image.png"), &input)?;
+    check()?;
+    let mask_name = client.upload(&format!("{prefix}-mask.png"), &mask_input)?;
+    let bytes = client.generate(pass, &input_name, &mask_name, cancelled)?;
+    check()?;
+    let decoded = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions { max_pixels: 1024 * 1024, ..Default::default() })
+        .map_err(|e| e.to_string())?;
+    if decoded.format != lightcraft_codecs::Format::Png || decoded.orientation != 1 {
+        return Err("ComfyUI must return an unoriented PNG".into());
+    }
+    Ok(decoded.to_srgb8())
 }
 
 #[cfg(target_arch = "wasm32")]

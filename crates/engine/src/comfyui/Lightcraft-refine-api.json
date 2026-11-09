@@ -1,0 +1,147 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
+    },
+    "_meta": {
+      "title": "Model \u2014 SDXL checkpoint"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "Lightcraft-masking-input.png"
+    },
+    "_meta": {
+      "title": "Tile with the coarse fill"
+    }
+  },
+  "3": {
+    "class_type": "LoadImageMask",
+    "inputs": {
+      "image": "Lightcraft-masking-mask.png",
+      "channel": "red"
+    },
+    "_meta": {
+      "title": "Mask \u2014 white is redrawn, black preserves"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "PROMPT \u2014 the background to keep"
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "blurry, low quality, text, watermark",
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "Negative prompt"
+    }
+  },
+  "6": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "2",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "Encode the tile"
+    }
+  },
+  "9": {
+    "class_type": "SetLatentNoiseMask",
+    "inputs": {
+      "samples": [
+        "6",
+        0
+      ],
+      "mask": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Redraw only the mask"
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "seed": 36020261028,
+      "steps": 28,
+      "cfg": 6.0,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "latent_image": [
+        "9",
+        0
+      ],
+      "denoise": 0.35
+    },
+    "_meta": {
+      "title": "Add detail"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "Decode"
+    }
+  },
+  "10": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ],
+      "filename_prefix": "Lightcraft-masking/Lightcraft-refine"
+    },
+    "_meta": {
+      "title": "Lightcraft-refine \u2014 result"
+    }
+  }
+}

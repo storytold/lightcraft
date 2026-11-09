@@ -94,13 +94,13 @@ fn http_error_validation_failure_and_cancellation_are_errors_not_panics() {
     t.join().unwrap();
     let (url, t) = mock(vec![("200 OK", br#"{"node_errors":{"1":{"errors":["missing checkpoint"]}}}"#.to_vec())]);
     let c = client::Client::new(&url).unwrap();
-    assert!(c.generate(&Settings::default(), "a", "b", || false).unwrap_err().contains("validation"));
+    assert!(c.generate(&client::Pass::fill(&Settings::default()), "a", "b", || false).unwrap_err().contains("validation"));
     t.join().unwrap();
     let (url, t) = mock(vec![("200 OK", br#"{"prompt_id":"test-job"}"#.to_vec()), ("200 OK", b"{}".to_vec())]);
     let count = std::cell::Cell::new(0);
     let error = client::Client::new(&url)
         .unwrap()
-        .generate(&Settings::default(), "a", "b", || {
+        .generate(&client::Pass::fill(&Settings::default()), "a", "b", || {
             count.set(count.get() + 1);
             count.get() >= 2
         })
@@ -193,5 +193,173 @@ fn command_roundtrip(model: &str) {
     assert_eq!(graph.pointer("/prompt/2/inputs/image"), Some(&json!("inputs/actual-image.png")));
     assert_eq!(graph.pointer("/prompt/3/inputs/image"), Some(&json!("actual-mask.png")));
     assert!(s.generation.is_none());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn removal_needs_no_prompt_but_bounded_controls_and_instructions() {
+    let remove = Settings { mode: Mode::Remove, model: "qwen-image-2.1-UC-BF16.gguf".into(), ..Default::default() };
+    assert!(remove.validate().is_ok(), "the subject can come from the mask's name");
+    for bad in [
+        Settings { context: 0.5, ..remove.clone() },
+        Settings { context: f64::NAN, ..remove.clone() },
+        Settings { grow: GROW_MAX + 1, ..remove.clone() },
+        Settings { detail: -0.1, ..remove.clone() },
+        Settings { detail: DETAIL_MAX + 0.01, ..remove.clone() },
+        Settings { removal_instruction: " ".into(), ..remove.clone() },
+        Settings { refine_instruction: "x".repeat(9000), ..remove.clone() },
+    ] {
+        assert!(bad.validate().is_err(), "{bad:?}");
+    }
+    // Replacement still needs its prompt; removal-only fields do not affect it.
+    assert!(Settings { mode: Mode::Replace, context: 0.0, ..remove.clone() }.validate().is_err());
+    // Saved settings from before removal existed load as replacement with removal defaults.
+    let old: Settings = serde_json::from_value(json!({"model": "x.gguf", "prompt": "p"})).unwrap();
+    assert_eq!((old.mode, old.context, old.grow, old.detail), (Mode::Replace, 2.5, 8, 0.35));
+    assert_eq!(old.removal_instruction, DEFAULT_REMOVAL_INSTRUCTION);
+    assert_eq!(serde_json::to_value(&remove).unwrap()["mode"], "remove");
+}
+
+#[test]
+fn removal_names_what_it_removes() {
+    let qwen = Settings { mode: Mode::Remove, model: "q.gguf".into(), ..Default::default() };
+    // Typed text wins; otherwise a named mask says what it selects; "Mask 3" does not.
+    assert_eq!(Settings { subject: " the bin ".into(), ..qwen.clone() }.removal_subject("Person in yellow jacket").unwrap(), "the bin");
+    // The replacement prompt never leaks into a removal.
+    assert_eq!(
+        Settings { prompt: "a blue vase".into(), ..qwen.clone() }.removal_subject("Person in yellow jacket").unwrap(),
+        "Person in yellow jacket"
+    );
+    assert_eq!(qwen.removal_subject(" Person in yellow jacket ").unwrap(), "Person in yellow jacket");
+    for generic in ["Mask 3", "Mask 12", "", "  "] {
+        assert!(qwen.removal_subject(generic).unwrap_err().contains("describe what to remove"), "{generic:?}");
+    }
+    assert_eq!(qwen.removal_subject("Mask of the bench").unwrap(), "Mask of the bench");
+    let named = Settings { subject: "the person in the yellow jacket".into(), ..qwen.clone() };
+    assert!(named.resolved_prompt().starts_with("Remove the person in the yellow jacket from <image1>"));
+    assert!(!named.resolved_prompt().contains(PROMPT_PLACEHOLDER));
+    assert_eq!(named.resolved_refine_prompt(), DEFAULT_REFINE_INSTRUCTION);
+    // The removal instruction must say where the subject goes.
+    assert!(Settings { removal_instruction: "Erase the white region".into(), ..named.clone() }.validate().unwrap_err().contains("{prompt}"));
+    // SDXL is asked for empty background, with what is removed in its negative prompt.
+    let sdxl = Settings { mode: Mode::Remove, subject: "trash bins".into(), ..Default::default() };
+    assert_eq!(sdxl.resolved_prompt(), SDXL_REMOVAL_PROMPT);
+    assert_eq!(sdxl.resolved_refine_prompt(), SDXL_REMOVAL_PROMPT);
+    assert!(sdxl.resolved_negative().starts_with("blurry, low quality, text, watermark, trash bins, object, person"));
+    assert_eq!(Settings { mode: Mode::Replace, ..sdxl }.resolved_negative(), "blurry, low quality, text, watermark");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn detail_passes_redraw_lightly_with_their_own_seed() {
+    use client::{Pass, workflow};
+    let sdxl = Settings { mode: Mode::Remove, seed: 7, detail: 0.4, ..Default::default() };
+    let v = workflow(&Pass::detail(&sdxl, 2), "tile.png", "mask.png").unwrap();
+    assert_eq!(v.pointer("/6/class_type"), Some(&json!("VAEEncode")), "SDXL detail encodes the tile instead of blanking the mask");
+    assert_eq!(v.pointer("/9/class_type"), Some(&json!("SetLatentNoiseMask")));
+    assert_eq!(v.pointer("/9/inputs/mask"), Some(&json!(["3", 0])));
+    assert_eq!(v.pointer("/7/inputs/latent_image"), Some(&json!(["9", 0])));
+    assert_eq!(v.pointer("/7/inputs/denoise"), Some(&json!(0.4)));
+    assert_eq!(v.pointer("/7/inputs/seed"), Some(&json!(10)));
+    assert_eq!(v.pointer("/10/inputs/images"), Some(&json!(["8", 0])));
+    assert!(!v.to_string().contains("VAEEncodeForInpaint"));
+    // The coarse SDXL fill keeps the inpainting graph at full strength.
+    let v = workflow(&Pass::fill(&sdxl), "crop.png", "mask.png").unwrap();
+    assert_eq!(v.pointer("/6/class_type"), Some(&json!("VAEEncodeForInpaint")));
+    assert_eq!(v.pointer("/7/inputs/denoise"), Some(&json!(1.0)));
+    assert_eq!(v.pointer("/4/inputs/text"), Some(&json!(SDXL_REMOVAL_PROMPT)));
+    assert!(v.pointer("/5/inputs/text").unwrap().as_str().unwrap().contains("object, person"));
+    // Qwen's graph already encodes its input: detail binds strength and the detail instruction.
+    let qwen = Settings { model: "q.gguf".into(), ..sdxl };
+    let v = workflow(&Pass::detail(&qwen, 0), "tile.png", "mask.png").unwrap();
+    assert_eq!(v.pointer("/7/inputs/denoise"), Some(&json!(0.4)));
+    assert_eq!(v.pointer("/7/inputs/seed"), Some(&json!(8)));
+    assert_eq!(v.pointer("/4/inputs/prompt"), Some(&json!(DEFAULT_REFINE_INSTRUCTION)));
+    // Seeds wrap inside ComfyUI's range; denoise outside 0..=1 is refused.
+    assert_eq!(Pass::detail(&Settings { seed: MAX_SEED, ..qwen.clone() }, 0).seed, 0);
+    assert!(workflow(&Pass { denoise: 1.5, ..Pass::fill(&qwen) }, "a", "b").is_err());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn removal_roundtrip_runs_a_coarse_fill_then_detail_tiles_and_keeps_unselected_pixels() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-comfyui-remove-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("original.png");
+    // Large enough that the wide context must be scaled down, so a detail tile follows.
+    let mut original = Rgba8::new(2000, 1500);
+    original.data.fill([110, 70, 30, 255]);
+    std::fs::write(&path, image::encode(&original).unwrap()).unwrap();
+    let png = |w: usize, h: usize, c: [u8; 4]| {
+        let mut img = Rgba8::new(w, h);
+        img.data.fill(c);
+        image::encode(&img).unwrap()
+    };
+    let job = |n: &str| {
+        format!(r#"{{"{n}":{{"status":{{"completed":true,"status_str":"success"}},"outputs":{{"10":{{"images":[{{"filename":"{n}.png","subfolder":"Lightcraft-masking","type":"output"}}]}}}}}}}}"#)
+            .into_bytes()
+    };
+    let (url, thread) = mock(vec![
+        ("200 OK", br#"{"name":"fill-image.png"}"#.to_vec()),
+        ("200 OK", br#"{"name":"fill-mask.png"}"#.to_vec()),
+        ("200 OK", br#"{"prompt_id":"fill","node_errors":{}}"#.to_vec()),
+        ("200 OK", job("fill")),
+        // A context of 6× covers the whole 2000×1500 frame: 1024×768 at the model.
+        ("200 OK", png(1024, 768, [10, 200, 30, 255])),
+        ("200 OK", br#"{"name":"tile-image.png"}"#.to_vec()),
+        ("200 OK", br#"{"name":"tile-mask.png"}"#.to_vec()),
+        ("200 OK", br#"{"prompt_id":"tile","node_errors":{}}"#.to_vec()),
+        ("200 OK", job("tile")),
+        ("200 OK", png(1024, 1024, [10, 20, 240, 255])),
+    ]);
+    let mut s = crate::Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [path]})).unwrap();
+    let photo = s.active().unwrap();
+    s.execute("mask.add", &json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.1, "ry": 0.1, "feather": 0.0})).unwrap();
+    let rendered = s.render_now(photo, 2000, 1500).unwrap().image;
+    // A default mask name says nothing about what to remove: describe it, or name the mask.
+    let unnamed = json!({"endpoint": "http://127.0.0.1:1", "model": "q.gguf", "mode": "remove"});
+    assert!(s.execute("mask.generate", &unnamed).unwrap_err().to_string().contains("describe what to remove"));
+    assert!(s.generation.is_none());
+    s.execute("mask.rename", &json!({"name": "the brown block"})).unwrap();
+    // A leftover replacement prompt is not what gets removed.
+    let settings =
+        json!({"endpoint": url, "model": "q.gguf", "mode": "remove", "prompt": "a blue vase", "context": 6.0, "grow": 4, "detail": 0.3, "seed": 5});
+    s.execute("mask.generate", &settings).unwrap();
+    assert_eq!(s.activity.list()[0].label, "Removing from photo");
+    let start = Instant::now();
+    while s.generation.as_ref().unwrap().running() {
+        assert!(start.elapsed() < Duration::from_secs(60), "{:?}", s.generation.as_ref().unwrap().status());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let status = s.execute("mask.generationStatus", &json!({})).unwrap();
+    assert_eq!(status["ready"], true, "{status}");
+    let result = s.execute("mask.acceptGeneration", &json!({})).unwrap();
+    let out = lightcraft_codecs::decode(&std::fs::read(result["path"].as_str().unwrap()).unwrap(), Default::default()).unwrap().to_srgb8();
+    assert_eq!((out.width, out.height), (2000, 1500));
+    assert_eq!(out.data[0], rendered.data[0], "unselected corner stays byte identical");
+    assert_eq!(out.data[750 * 2000 + 1000][..3], [10, 20, 240], "the detail tile has the last word in the middle");
+    let recipe: Value = serde_json::from_slice(&std::fs::read(result["provenance"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!(recipe["workflow"], "Lightcraft-remove");
+    assert_eq!(recipe["settings"]["subject"], "the brown block", "the recipe records what was removed");
+    assert_eq!(recipe["removal"]["context"], json!({"x": 0, "y": 0, "w": 2000, "h": 1500}));
+    assert_eq!(recipe["removal"]["tiles"].as_array().unwrap().len(), 1);
+    assert_eq!(recipe["removal"]["tileSeeds"], json!([6]));
+    let requests = thread.join().unwrap();
+    assert_eq!(requests.len(), 10);
+    let fill: Value = serde_json::from_slice(&requests[2].1).unwrap();
+    assert_eq!(fill.pointer("/prompt/7/inputs/denoise"), Some(&json!(1.0)));
+    assert_eq!(fill.pointer("/prompt/4/inputs/prompt"), Some(&json!(DEFAULT_REMOVAL_INSTRUCTION.replace("{prompt}", "the brown block"))));
+    let tile: Value = serde_json::from_slice(&requests[7].1).unwrap();
+    assert_eq!(tile.pointer("/prompt/2/inputs/image"), Some(&json!("tile-image.png")));
+    assert_eq!(tile.pointer("/prompt/7/inputs/denoise"), Some(&json!(0.3)));
+    assert_eq!(tile.pointer("/prompt/7/inputs/seed"), Some(&json!(6)));
+    assert_eq!(tile.pointer("/prompt/4/inputs/prompt"), Some(&json!(DEFAULT_REFINE_INSTRUCTION)));
+    // The tile upload is the coarse result at full resolution, not the original.
+    let uploaded = &requests[5].1;
+    let start = uploaded.windows(4).position(|w| w == b"\x89PNG").unwrap();
+    let tile_in = lightcraft_codecs::decode(&uploaded[start..], Default::default()).unwrap().to_srgb8();
+    assert_eq!((tile_in.width, tile_in.height), (1024, 1024));
+    assert_eq!(tile_in.data[512 * 1024 + 512][..3], [10, 200, 30]);
     std::fs::remove_dir_all(&dir).unwrap();
 }

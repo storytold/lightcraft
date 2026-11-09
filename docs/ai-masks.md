@@ -267,4 +267,4 @@ LIGHTCRAFT_SAM3_DIR=<model dir> LIGHTCRAFT_SAM3_REF=ref.safetensors cargo test -
 
 ## Generate inside a mask
 
-After selecting a mask, **Generate replacement** in Masking sends its selected region to your own ComfyUI server. This has a separate replacement prompt; Describe above the mask list still describes the selection. See [ComfyUI setup and limits](comfyui.md).
+After selecting a mask, **Generate with ComfyUI** in Masking sends its selected region to your own ComfyUI server, either to **Replace** it with what a prompt describes or to **Remove** it and rebuild the background (wide context first, then full-resolution detail tiles). The replacement prompt is separate; Describe above the mask list still describes the selection. See [ComfyUI setup and limits](comfyui.md).

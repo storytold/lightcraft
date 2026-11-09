@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::Settings;
+use super::{MAX_SEED, Settings};
 
 const JSON_LIMIT: u64 = 4 << 20;
 const IMAGE_LIMIT: u64 = 32 << 20;
@@ -73,8 +73,8 @@ impl Client {
         Ok(if dir.is_empty() { name.to_string() } else { format!("{dir}/{name}") })
     }
 
-    pub fn generate(&self, settings: &Settings, image: &str, mask: &str, cancelled: impl Fn() -> bool) -> Result<Vec<u8>, String> {
-        let graph = workflow(settings, image, mask)?;
+    pub fn generate(&self, pass: &Pass, image: &str, mask: &str, cancelled: impl Fn() -> bool) -> Result<Vec<u8>, String> {
+        let graph = workflow(pass, image, mask)?;
         if cancelled() {
             return Err("generation cancelled".into());
         }
@@ -125,27 +125,74 @@ impl Client {
     }
 }
 
-/// Stable bindings for our original, bundled native-node workflow; the browser workflow is
+/// One request to ComfyUI: which bundled workflow, and what it is bound to.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Pass {
+    pub model: String,
+    pub qwen: bool,
+    /// Redraw the input around the mask at `denoise` instead of inpainting it from scratch.
+    /// Qwen's workflow already encodes the input, so only SDXL needs its own refine graph.
+    pub refine: bool,
+    pub prompt: String,
+    pub negative: String,
+    pub seed: u64,
+    pub denoise: f64,
+}
+
+impl Pass {
+    /// Replacement, or removal's coarse fill: the mask is generated from scratch.
+    pub fn fill(settings: &Settings) -> Self {
+        Self {
+            model: settings.model.clone(),
+            qwen: settings.is_qwen(),
+            refine: false,
+            prompt: settings.resolved_prompt(),
+            negative: settings.resolved_negative(),
+            seed: settings.seed,
+            denoise: 1.0,
+        }
+    }
+
+    /// Removal's detail tile `index` (0-based): its own seed, redrawn at the detail strength.
+    pub fn detail(settings: &Settings, index: usize) -> Self {
+        let offset = u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1);
+        Self {
+            refine: true,
+            prompt: settings.resolved_refine_prompt(),
+            seed: settings.seed.saturating_add(offset) % (MAX_SEED + 1),
+            denoise: settings.detail,
+            ..Self::fill(settings)
+        }
+    }
+}
+
+/// Stable bindings for our original, bundled native-node workflows; the browser workflow is
 /// a standalone demonstration. Save raw decoded pixels: LightCraft composites exactly once.
-pub(super) fn workflow(settings: &Settings, image: &str, mask: &str) -> Result<Value, String> {
+pub(super) fn workflow(pass: &Pass, image: &str, mask: &str) -> Result<Value, String> {
     // The supported GGUF preset is Qwen Image 2.1; safetensors checkpoints retain the SDXL
-    // workflow. Both expose the same image/mask/seed/output bindings to the caller.
-    let qwen = settings.is_qwen();
-    let template = if qwen { include_str!("Lightcraft-masking-qwen21-api.json") } else { include_str!("Lightcraft-masking-api.json") };
+    // workflows. All expose the same image/mask/seed/denoise/output bindings to the caller.
+    let template = match (pass.qwen, pass.refine) {
+        (true, _) => include_str!("Lightcraft-masking-qwen21-api.json"),
+        (false, false) => include_str!("Lightcraft-masking-api.json"),
+        (false, true) => include_str!("Lightcraft-refine-api.json"),
+    };
     let mut v: Value = serde_json::from_str(template).map_err(|e| e.to_string())?;
-    let (model, positive, negative) = if qwen {
+    let (model, positive, negative) = if pass.qwen {
         ("/1/inputs/unet_name", "/4/inputs/prompt", "/4/inputs/negative_prompt")
     } else {
         ("/1/inputs/ckpt_name", "/4/inputs/text", "/5/inputs/text")
     };
-    let prompt = settings.resolved_prompt();
+    if !(0.0..=1.0).contains(&pass.denoise) {
+        return Err("denoise must be from 0 to 1".into());
+    }
     for (path, value) in [
-        (model, json!(settings.model)),
+        (model, json!(pass.model)),
         ("/2/inputs/image", json!(image)),
         ("/3/inputs/image", json!(mask)),
-        (positive, json!(prompt)),
-        (negative, json!(settings.negative)),
-        ("/7/inputs/seed", json!(settings.seed)),
+        (positive, json!(pass.prompt)),
+        (negative, json!(pass.negative)),
+        ("/7/inputs/seed", json!(pass.seed)),
+        ("/7/inputs/denoise", json!(pass.denoise)),
     ] {
         *v.pointer_mut(path).ok_or("invalid bundled ComfyUI workflow")? = value;
     }
@@ -165,7 +212,7 @@ mod tests {
         }
         assert!(Client::new("http://127.0.0.1:8188").is_ok());
         let s = Settings { prompt: "blue vase".into(), seed: 99, ..Default::default() };
-        let v = workflow(&s, "photo.png", "mask.png").unwrap();
+        let v = workflow(&Pass::fill(&s), "photo.png", "mask.png").unwrap();
         assert_eq!(v.pointer("/4/inputs/text"), Some(&json!("blue vase")));
         assert_eq!(v.pointer("/3/inputs/channel"), Some(&json!("red")));
         assert_eq!(v.pointer("/7/inputs/seed"), Some(&json!(99)));
@@ -180,7 +227,7 @@ mod tests {
             seed: 43,
             ..Default::default()
         };
-        let v = workflow(&s, "photo.png", "mask.png").unwrap();
+        let v = workflow(&Pass::fill(&s), "photo.png", "mask.png").unwrap();
         assert_eq!(v.pointer("/1/inputs/unet_name"), Some(&json!(s.model)));
         assert_eq!(v.pointer("/4/inputs/images.image_1"), Some(&json!(["2", 0])));
         assert_eq!(v.pointer("/4/inputs/images.image_2"), Some(&json!(["17", 0])));
@@ -199,7 +246,7 @@ mod tests {
         assert_eq!(v.pointer("/15/class_type"), Some(&json!("SplitImageWithAlpha")));
         assert!(!v.to_string().contains("CheckpointLoaderSimple"));
         let custom = Settings { qwen_instruction: "Edit <image1>: {prompt}".into(), ..s };
-        let v = workflow(&custom, "photo.png", "mask.png").unwrap();
+        let v = workflow(&Pass::fill(&custom), "photo.png", "mask.png").unwrap();
         assert_eq!(v.pointer("/4/inputs/prompt"), Some(&json!("Edit <image1>: replace the block with a blue vase")));
     }
 }

@@ -69,3 +69,99 @@ fn comfyui_settings_page_edits_connection_and_resets_the_qwen_instruction() {
     assert_eq!(h.app.ui.generation.qwen_instruction, DEFAULT_QWEN_INSTRUCTION);
     assert!(h.app.session.generation.is_none(), "editing settings does not start a job");
 }
+
+/// The demo library in Detail with a radial mask selected and Generate with ComfyUI open, set to Remove.
+fn remove_mode(height: f32) -> Headless {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    let mut h = Headless::new(app, [1200.0, height], 1.0);
+    let timeout = Duration::from_secs(20);
+    let r = h.request("ui.set", json!({"view": "detail"}), timeout);
+    assert_eq!(r["ok"], true, "{r}");
+    for command in ["panel.masking", "mask.add"] {
+        let params = if command == "mask.add" { json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.2, "ry": 0.2}) } else { json!({}) };
+        let r = h.request("engine.execute", json!({"command": command, "params": params}), timeout);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    let r = h.request("ui.clickWidget", json!({"id": "generation:section"}), timeout);
+    assert_eq!(r["ok"], true, "{r}");
+    let text = h.request("ui.widgets", json!({"filter": "generation"}), timeout).to_string();
+    assert!(!text.contains("generation:context"), "Replace has no removal controls: {text}");
+    let r = h.request("ui.clickWidget", json!({"id": "button:generationMode-remove"}), timeout);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.generation.mode, lightcraft_engine::comfyui::Mode::Remove);
+    h
+}
+
+#[test]
+fn remove_mode_shows_its_own_controls_and_resets_its_instructions() {
+    use lightcraft_engine::comfyui::{DEFAULT_REFINE_INSTRUCTION, DEFAULT_REMOVAL_INSTRUCTION};
+    let mut h = remove_mode(1400.0);
+    let timeout = Duration::from_secs(20);
+    let text = h.request("ui.widgets", json!({"filter": "generation:"}), timeout).to_string();
+    for id in ["generation:subject", "generation:context", "generation:grow", "generation:detail", "generation:generate"] {
+        assert!(text.contains(id), "{id}: {text}");
+    }
+    assert!(!text.contains("generation:prompt"), "Remove has its own field: {text}");
+    assert!(h.app.ui.generation.validate().is_ok(), "the subject can come from the mask's name");
+    // Its instructions live in Settings ▸ ComfyUI and reset to the bundled defaults.
+    h.app.ui.generation.removal_instruction = "Erase it".into();
+    h.app.ui.generation.refine_instruction = "Sharpen it".into();
+    let r = h.request("ui.clickWidget", json!({"id": "generation:settings"}), timeout);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    // The removal instructions are at the bottom of the page: scroll them into view.
+    assert_eq!(h.request("ui.hoverWidget", json!({"id": "settings:pageRoom"}), timeout)["ok"], true);
+    h.request("ui.scroll", json!({"dy": -3000.0}), timeout);
+    h.step();
+    h.step();
+    for id in ["generation:resetRemovalInstruction", "generation:resetRefineInstruction"] {
+        let r = h.request("ui.clickWidget", json!({"id": id}), timeout);
+        assert_eq!(r["ok"], true, "{id}: {r}");
+        h.step();
+    }
+    assert_eq!(h.app.ui.generation.removal_instruction, DEFAULT_REMOVAL_INSTRUCTION);
+    assert_eq!(h.app.ui.generation.refine_instruction, DEFAULT_REFINE_INSTRUCTION);
+    assert!(h.app.session.generation.is_none(), "switching modes and editing settings do not start a job");
+}
+
+#[test]
+fn remove_says_why_it_did_not_start_and_removes_a_named_mask() {
+    let mut h = remove_mode(1400.0);
+    let timeout = Duration::from_secs(20);
+    h.app.ui.generation.endpoint = "http://127.0.0.1:1".into();
+    h.app.ui.generation.model = "qwen-image-2.1-UC-BF16.gguf".into();
+    // Text typed for Replace is not what Remove removes.
+    h.app.ui.generation.prompt = "a blue vase".into();
+    h.step();
+    // A default "Mask N" name says nothing about what to remove: nothing starts, and the panel
+    // says why under the button.
+    let r = h.request("ui.clickWidget", json!({"id": "generation:generate"}), timeout);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(h.app.session.generation.is_none());
+    let text = h.request("ui.widgets", json!({"filter": "generation:refused"}), timeout).to_string();
+    assert!(text.contains("generation:refused"), "{text}");
+    // A named mask is what gets removed, and the sent prompt says so.
+    let r = h.request("engine.execute", json!({"command": "mask.rename", "params": {"name": "the sun"}}), timeout);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "generation:generate"}), timeout);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let run = h.app.session.generation.clone().expect("Remove started a job");
+    assert_eq!(run.settings.subject, "the sun");
+    assert!(run.settings.resolved_prompt().starts_with("Remove the sun from <image1>"));
+    let start = std::time::Instant::now();
+    while run.running() {
+        assert!(start.elapsed() < timeout, "{}", run.status());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(run.status()["error"].is_string(), "{}", run.status());
+    // A started job clears the earlier refusal.
+    h.step();
+    let text = h.request("ui.widgets", json!({"filter": "generation:refused"}), timeout).to_string();
+    assert!(!text.contains("generation:refused"), "{text}");
+}

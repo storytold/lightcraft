@@ -58,7 +58,7 @@ fn accept(_: &mut Session, _: &Value) -> Result<Value> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "mask.generate", "Generate replacement", [], None,
-            "{endpoint?, model?, prompt, negative?, seed?, qwenInstruction?, maskId?} — send the active developed photo's selected mask region to the user-configured ComfyUI server; starts a cancellable background task; the result is a preview until explicitly accepted",
+            "{endpoint?, model?, prompt (replace), subject? (remove), negative?, seed?, qwenInstruction?, maskId?, mode?: replace|remove, context? (remove: 1–6× the selection, default 2.5), grow? (remove: px, ≤128, default 8), detail? (remove: 0–0.8, 0 = no detail pass, default 0.35), removalInstruction?, refineInstruction?} — send the active developed photo's selected mask region to the user-configured ComfyUI server; replace fills it with the prompt (required); remove takes it out of the scene (subject = what to remove; empty: the mask's name unless it is a default Mask N) with a coarse pass over a wide context and, when that crop had to be scaled down, full-resolution detail tiles; starts a cancellable background task; the result is a preview until explicitly accepted",
             has_active, generate),
         cmd!(query "mask.generationStatus", "Generation status", [], None,
             "{} → {running, ready, cancelled, error, id, photo}; no request is made to ComfyUI",
