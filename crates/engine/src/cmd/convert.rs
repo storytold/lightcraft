@@ -386,7 +386,11 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         q.source = Source::File { path: dst.to_string_lossy().to_string() };
         q.file_name = dst.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
         // the same bytes, but its own photo: no duplicate-content clash, no shared history
-        q.content_hash = q.content_hash.filter(|_| s.source_hash_authorized(id)).map(|h| format!("{h}:dup{}", new.0));
+        let physical = s.physical_photo(id).filter(|_| s.source_hash_authorized(id));
+        q.content_hash = physical.as_ref().and_then(|m| m.content_hash.as_ref()).map(|h| format!("{h}:dup{}", new.0));
+        if let Some(m) = &physical {
+            (q.file_size, q.width, q.height) = (m.file_size, m.width, m.height);
+        }
         q.copy_of = None;
         q.copy_name = None;
         q.history.clear();
@@ -443,6 +447,31 @@ pub fn edit_specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use lightcraft_catalog::{Photo, PhotoId, Source};
+
+    #[test]
+    fn duplicating_a_virtual_copy_takes_its_files_current_identity() {
+        let dir = crate::tests_xmp::temp_dir("duplicate-copy-identity");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.jpg");
+        std::fs::write(&path, b"now").unwrap();
+        let mut s = Session::new();
+        let mut master = Photo::new(PhotoId(1), Source::File { path: path.to_string_lossy().into() }, "a.jpg", "JPEG", 60, 40, "2026-01-01");
+        master.content_hash = Some("now".into());
+        master.file_size = 3;
+        let mut copy = master.clone();
+        copy.id = PhotoId(2);
+        copy.copy_of = Some(master.id);
+        copy.content_hash = Some("before".into());
+        copy.file_size = 9;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(master) }).unwrap();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+        s.selection = crate::Selection { active: Some(PhotoId(2)), ids: vec![PhotoId(2)] };
+        let r = s.execute("photo.duplicate", &serde_json::json!({"ids": [2]})).unwrap();
+        let new = s.catalog.photo(PhotoId(r["ids"][0].as_u64().unwrap())).unwrap();
+        assert_eq!(new.content_hash.as_deref().and_then(|h| h.split_once(":dup")).map(|(base, _)| base), Some("now"));
+        assert_eq!(new.file_size, 3);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     /// Reload fills camera fields a photo lacks (a CR3 imported before CR3 metadata was read) and keeps
     /// everything already set.
