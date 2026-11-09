@@ -480,14 +480,28 @@ fn faces_set_aside_move_their_look_alikes_down_and_a_merge_undone_gives_them_bac
     assert_eq!(flags, vec![json!(false), json!(true)]);
     // for Bob, whose face it may be, nothing moves
     assert_eq!(more(&mut s, "Bob")[0], (c.0, 0), "still offered to Bob, first");
-    // Ann merged into Bob: her set-aside face is his too while merged; undone, Bob has none again, and Ann keeps hers
-    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Bob", "merge": true})).unwrap();
-    assert_eq!(s.person_dismissed.get("bob").map(Vec::len), Some(1));
+    // named Ann after all (by an agent, say): while it is, it is hers, neither counted as set aside nor a
+    // counter-example; it stays in the list, so undoing the naming sets it aside again
+    s.execute("faces.setName", &json!({"id": c.0, "index": 0, "name": "Ann"})).unwrap();
+    let r = s.execute("faces.person", &json!({"name": "Ann"})).unwrap();
+    let flags: Vec<_> = r["more"].as_array().unwrap().iter().map(|f| f["likeSetAside"].clone()).collect();
+    assert_eq!((r["dismissed"].clone(), flags), (json!(0), vec![json!(false), json!(false)]), "{r}");
+    assert_eq!(s.person_dismissed.get("ann").map(Vec::len), Some(1));
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!((s.person_dismissed.get("bob"), s.person_dismissed.get("ann").map(Vec::len)), (None, Some(1)));
+    assert_eq!(s.execute("faces.person", &json!({"name": "Ann"})).unwrap()["dismissed"], 1);
+    assert_eq!(more(&mut s, "Ann"), vec![(b.0, 1), (b.0, 0)], "moved down again");
+    // Bob sets aside a face of his own; Ann merged into Bob: both lists are his while merged; undone, Bob has his own
+    // again, and Ann keeps hers
+    s.execute("faces.dismiss", &json!({"name": "Bob", "photo": b.0, "index": 1})).unwrap();
+    let aside =
+        |s: &Session, key: &str| -> Vec<(u64, f64)> { s.person_dismissed.get(key).into_iter().flatten().map(|f| (f.photo.0, f.face.x0)).collect() };
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Bob", "merge": true})).unwrap();
+    assert_eq!(aside(&s, "bob"), vec![(b.0, 0.5), (c.0, 0.1)]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((aside(&s, "bob"), aside(&s, "ann")), (vec![(b.0, 0.5)], vec![(c.0, 0.1)]));
     assert_eq!(more(&mut s, "Bob")[0], (c.0, 0), "offered to Bob again");
     s.execute("edit.redo", &json!({})).unwrap();
-    assert_eq!(s.person_dismissed.get("bob").map(Vec::len), Some(1), "redone, merged again");
+    assert_eq!(aside(&s, "bob"), vec![(b.0, 0.5), (c.0, 0.1)], "redone, merged again");
     let _ = std::fs::remove_dir_all(&d);
 }
 
