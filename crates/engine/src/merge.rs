@@ -475,6 +475,16 @@ impl Session {
         preview: bool,
     ) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
         let groups = self.merge_groups(ids);
+        self.plan_groups(kind, finish, groups, preview)
+    }
+
+    fn plan_groups(
+        &self,
+        kind: MergeKind,
+        finish: MergeFinish,
+        groups: Vec<Vec<PhotoId>>,
+        preview: bool,
+    ) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
         let read = self.merge_reader();
         let mut jobs = Vec::new();
         let mut skipped = Vec::new();
@@ -514,32 +524,7 @@ impl Session {
         groups: Vec<Vec<PhotoId>>,
         preview: bool,
     ) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
-        let read = self.merge_reader();
-        let mut jobs = Vec::new();
-        let mut skipped = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for group in groups {
-            if Self::fresh_group_size(&group, &seen) < kind.min_photos() {
-                for id in &group {
-                    seen.insert(*id);
-                }
-                skipped.push(group);
-                continue;
-            }
-            let sources = self.merge_sources(&group, &mut seen)?;
-            if sources.is_empty() {
-                continue;
-            }
-            if sources.len() < kind.min_photos() {
-                skipped.push(group);
-                continue;
-            }
-            jobs.push(MergeJob { kind: kind.clone(), finish: finish.clone(), sources, preview: preview.then_some(PREVIEW_EDGE), read: read.clone() });
-        }
-        if jobs.is_empty() {
-            return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
-        }
-        Ok((jobs, skipped))
+        self.plan_groups(kind, finish, groups, preview)
     }
 
     fn merge_reader(&self) -> ByteReader {
