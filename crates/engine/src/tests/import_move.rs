@@ -536,14 +536,20 @@ fn finish_keeps_the_original_when_the_copy_changed_to_the_same_length() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-fn without_probe_hashes(s: &mut Session) {
-    let probe = s.media.file_probe.clone().unwrap();
-    s.media.file_probe = Some(std::sync::Arc::new(move |path: &str| {
-        probe(path).map(|mut info| {
-            info.content_hash = None;
-            info
-        })
-    }));
+fn without_probe_hashes(s: &mut Session) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for slot in [&mut s.media.file_probe, &mut s.media.header_probe] {
+        let Some(probe) = slot.clone() else { continue };
+        let calls = calls.clone();
+        *slot = Some(std::sync::Arc::new(move |path: &str| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            probe(path).map(|mut info| {
+                info.content_hash = None;
+                info
+            })
+        }));
+    }
+    calls
 }
 
 fn import_copy(s: &mut Session, card: &Path, dest: &Path) -> Value {
@@ -561,8 +567,9 @@ fn a_copy_without_a_probe_hash_keeps_the_hash_it_copied() {
     write_png(&card.join("a.png"), 4);
     let source = std::fs::read(card.join("a.png")).unwrap();
     let mut s = session();
-    without_probe_hashes(&mut s);
+    let probed = without_probe_hashes(&mut s);
     let r = import_copy(&mut s, &card, &dest);
+    assert_eq!(probed.load(std::sync::atomic::Ordering::Relaxed), 1, "the import probed through the hashless probe");
     assert_eq!(len(&r, "imported"), 1, "{r}");
     let photo = s.catalog.photos().next().unwrap();
     assert_eq!(photo.content_hash, Some(lightcraft_preview::hash_bytes(&source).to_string()));
@@ -659,4 +666,38 @@ fn move_finish_rechecks_names_after_verification() {
     assert_eq!(std::fs::read(&src).unwrap(), b"original");
     assert_eq!(std::fs::read(&p.dst).unwrap(), b"replaced destination");
     std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn a_move_whose_commit_cannot_learn_earlier_reads_takes_its_placements_back() {
+    let base = temp_dir("learn-fails");
+    let (card, dest, library) = (base.join("card"), base.join("out"), base.join("library"));
+    let earlier = base.join("kept").join("x.png");
+    write_png(&earlier, 9);
+    write_png(&card.join("a.png"), 10);
+    let mut s = session();
+    without_probe_hashes(&mut s);
+    s.open_library(library.clone(), false).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [earlier.to_string_lossy()], "mode": "add"})).unwrap();
+    assert_eq!(len(&r, "imported"), 1, "{r}");
+    assert!(s.catalog.photos().all(|p| p.content_hash.is_none()), "its read is still to be learned");
+    s.media.file_bytes.as_ref().unwrap()(earlier.to_str().unwrap()).unwrap();
+    std::fs::write(&earlier, b"replaced since it was read").unwrap();
+    let sentinel = library.join("source-invalidations-enabled");
+    std::fs::create_dir(&sentinel).unwrap();
+    let opts = crate::import::ImportOptions {
+        mode: crate::import::ImportMode::Move,
+        destination: Some(dest.to_string_lossy().into_owned()),
+        organize: crate::import::Organize::Flat,
+        ..Default::default()
+    };
+    let mut job = crate::import::ImportJob::new(&mut s, opts.clone()).unwrap();
+    let prepared = job.prepare_files(vec![card.join("a.png").to_string_lossy().into_owned()], &std::sync::atomic::AtomicBool::new(false));
+    assert_eq!(files_under(&dest), vec!["a.png".to_string()], "the Move placed its file");
+    assert!(crate::import::commit_prepared(&mut s, &opts, job.now(), prepared).is_err());
+    std::fs::remove_dir(&sentinel).unwrap();
+    assert!(card.join("a.png").exists(), "the original stays");
+    assert_eq!(files_under(&dest), Vec::<String>::new(), "the placed file is taken back");
+    drop((job, s));
+    let _ = std::fs::remove_dir_all(&base);
 }

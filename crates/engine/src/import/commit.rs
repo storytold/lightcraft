@@ -209,6 +209,25 @@ fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool 
         }
 }
 
+/// Why a duplicate can't be reported as one and asks for a retry instead: it names no photo and
+/// repeats a file this commit refused (`rejected`, by base hash), or the photo it matched by
+/// content no longer has that content.
+fn duplicate_refused(
+    s: &Session,
+    existing: Option<PhotoId>,
+    reason: &str,
+    hash: Option<&str>,
+    rejected: &std::collections::HashSet<String>,
+) -> Option<&'static str> {
+    if existing.is_none() && hash.is_some_and(|h| rejected.contains(crate::sync::base_hash(h))) {
+        Some("the file it repeats in this import was not added; retry the import")
+    } else if reason == "content" && existing_no_longer_matches(s, existing, hash) {
+        Some("the original changed during duplicate comparison; retry the import")
+    } else {
+        None
+    }
+}
+
 /// The catalog half of an import: add the photos [`ImportJob::prepare`] readied (one undoable op;
 /// a Move's sources are removed once it is saved). On a failed commit a Move's placed files are
 type ByKey = HashMap<String, PhotoId>;
@@ -249,6 +268,9 @@ fn learned_identities(s: &Session, hashes: &[(PhotoId, String)], learned_paths: 
             out.insert(hash.clone(), *id);
         }
     }
+    if learned_paths.is_empty() {
+        return out;
+    }
     for p in s.catalog.photos() {
         let Source::File { path } = &p.source else { continue };
         if let Some(hash) = learned_paths.get(path)
@@ -273,7 +295,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
         prepared.rollback();
         return Err(crate::EngineError::Other("the library changed while preparing the import; retry the import".into()));
     }
-    s.learn_read_hashes()?;
+    s.learn_read_hashes().inspect_err(|_| prepared.rollback())?;
     let now = now.to_string();
     let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
     let mut ops = Vec::new();
@@ -286,6 +308,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let (trash_hash, trash_path) = if opts.on_deleted == OnDeleted::Fresh { trashed_by_content_and_path(s) } else { Default::default() };
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
+    let mut rejected: std::collections::HashSet<String> = Default::default();
     new_hash.extend(learned_identities(s, &prepared.hashes, &prepared.learned_paths));
     for it in prepared.items {
         match it {
@@ -306,8 +329,8 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                     let h = hash?;
                     new_hash.get(&h).copied().or_else(|| s.catalog.photos().find(|p| p.content_hash.as_deref() == Some(h.as_str())).map(|p| p.id))
                 });
-                if reason == "content" && existing_no_longer_matches(s, existing, expected.as_deref()) {
-                    report.failed.push((path, "the original changed during duplicate comparison; retry the import".into()));
+                if let Some(why) = duplicate_refused(s, existing, reason, expected.as_deref(), &rejected) {
+                    report.failed.push((path, why.into()));
                     continue;
                 }
                 let trashed = existing.filter(|id| s.catalog.photo(*id).is_some_and(|p| p.deleted));
@@ -334,6 +357,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             PreparedItem::Ready(r) => {
                 let ReadyFile { path, stored, info, sidecar, placed: pl } = *r;
                 if native_read_expired(&info) {
+                    rejected.extend(info.content_hash.as_deref().map(|h| crate::sync::base_hash(h).to_string()));
                     report
                         .failed
                         .push((path, format!("the stored file changed after probing; original retained; inspect {stored} and retry the import")));

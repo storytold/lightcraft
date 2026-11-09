@@ -171,7 +171,60 @@ fn logging_public_import_probe_failure_is_error_with_numeric_safe_counts() {
     pair(&records);
     assert_eq!(field(&records[1], "failed"), "1");
     assert_eq!(field(&records[1], "status"), "error");
-    assert_eq!(field(&records[1], "cause"), "probe");
+    assert_eq!(field(&records[1], "cause"), "file");
+    assert!(!records.join(" ").contains("PRIVATE"));
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn logging_public_import_transfer_failure_is_not_blamed_on_the_probe() {
+    use crate::import_move::{Fault, inject};
+    let thread = capture();
+    let base = crate::tests_xmp::temp_dir("PRIVATE-logging-copy-failure");
+    let path = base.join("card").join("PRIVATE.jpg");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"synthetic").unwrap();
+    let mut s = crate::Session::new();
+    s.media.file_probe = Some(std::sync::Arc::new(|_| {
+        Ok(crate::media::ProbeInfo { width: 32, height: 24, file_size: 9, format: "JPEG".into(), ..Default::default() })
+    }));
+    inject(Fault::FailWrite);
+    let result = s.execute("library.import", &serde_json::json!({"paths":[path],"mode":"copy","destination":base.join("out"),"organize":"flat"}));
+    inject(Fault::None);
+    assert_eq!(result.unwrap()["failed"].as_array().unwrap().len(), 1);
+    let records = rows(thread, "import");
+    pair(&records);
+    assert_eq!(field(&records[1], "status"), "error");
+    assert_eq!(field(&records[1], "cause"), "file");
+    assert!(!records.join(" ").contains("PRIVATE"));
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn logging_scan_of_an_unlistable_folder_is_an_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let thread = capture();
+    let base = crate::tests_xmp::temp_dir("PRIVATE-log-unlistable");
+    let locked = base.join("PRIVATE-locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&locked).is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(base).unwrap();
+        lightcraft_testkit::skip!(System, "permissions do not stop this user from listing a folder");
+        return;
+    }
+    let mut s = crate::Session::new();
+    let out = super::scan_report(&mut s, &[base.to_string_lossy().into_owned()]);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(out.candidates.is_empty());
+    assert_eq!(out.unreadable, 1);
+    let records = rows(thread, "scan");
+    pair(&records);
+    assert_eq!(field(&records[1], "status"), "error");
+    assert_eq!(field(&records[1], "cause"), "walk");
+    assert_eq!(field(&records[1], "failed"), "1");
     assert!(!records.join(" ").contains("PRIVATE"));
     std::fs::remove_dir_all(base).unwrap();
 }

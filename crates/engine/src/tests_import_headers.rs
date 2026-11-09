@@ -891,3 +891,45 @@ fn g_final_review_legacy_proxy_migration_checks_same_read_physical_facts_after_r
         std::fs::remove_dir_all(base).unwrap();
     }
 }
+
+#[test]
+fn a_twin_of_a_file_whose_read_proof_expired_is_not_reported_as_a_duplicate() {
+    let base = crate::tests_xmp::temp_dir("twin-of-expired");
+    let old = crate::tests_xmp::synthetic_dng_of(32, 24, "RGGB", vec![1024; 32 * 24], None, Default::default());
+    let new = crate::tests_xmp::synthetic_dng_of(32, 24, "RGGB", vec![2048; 32 * 24], None, Default::default());
+    let first = write(&base, "first.dng", &old);
+    let twin = write(&base, "twin.dng", &old);
+    let mut s = Session::new().with_fs();
+    let opts = crate::import::ImportOptions { headers_only: false, ..Default::default() };
+    let mut job = crate::import::ImportJob::new(&mut s, opts.clone()).unwrap();
+    let paths = vec![first.to_string_lossy().into_owned(), twin.to_string_lossy().into_owned()];
+    let prepared = job.prepare_files(paths, &std::sync::atomic::AtomicBool::new(false));
+    let replacement = write(&base, "replacement.dng", &new);
+    std::fs::rename(&first, base.join("retired.dng")).unwrap();
+    std::fs::rename(replacement, &first).unwrap();
+    s.originals.in_scope(|| s.media.file_probe.as_ref().unwrap()(first.to_str().unwrap())).unwrap();
+    let report = crate::import::commit_prepared(&mut s, &opts, job.now(), prepared).unwrap();
+    assert!(report.imported.is_empty() && report.duplicates.is_empty(), "nothing was added for the twin to repeat: {report:?}");
+    assert_eq!(report.failed.len(), 2, "both ask for a retry: {report:?}");
+    drop((job, s));
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn a_header_read_file_hashed_to_compare_keeps_that_hash() {
+    let base = crate::tests_xmp::temp_dir("compared-keeps-hash");
+    let old = big_dng(103);
+    let mut other = old.clone();
+    let middle = other.len() / 2;
+    other[middle] ^= 0xff;
+    let original = write(&base, "original.dng", &old);
+    let incoming = write(&base, "incoming.dng", &other);
+    let mut s = Session::new().with_fs();
+    import(&mut s, &[&original], "add", &base.join("out"));
+    let r = import(&mut s, &[&incoming], "add", &base.join("out"));
+    assert_eq!(r["imported"].as_array().unwrap().len(), 1, "{r}");
+    let expected = lightcraft_preview::hash_bytes(&other).to_string();
+    assert_eq!(hash_of(&s, &r["imported"][0]), Some(expected), "{r}");
+    drop(s);
+    std::fs::remove_dir_all(base).unwrap();
+}

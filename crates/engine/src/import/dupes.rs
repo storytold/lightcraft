@@ -33,13 +33,19 @@ pub(crate) struct Duplicates {
 }
 
 impl Duplicates {
-    pub(crate) fn add_library(&mut self, p: &Photo, authorized: bool) {
-        let hash = p.content_hash.as_ref().filter(|_| authorized);
+    /// Index library photo `p` by its content and, when it owns its file, by its size and
+    /// dimensions. `physical` is the photo whose file `p` shows ([`crate::media::physical_photo`]):
+    /// a virtual copy's own hash counts only while it is that photo's, and a copy left on its own
+    /// file (its master relinked) is compared like any other photo.
+    pub(crate) fn add_library(&mut self, p: &Photo, physical: Option<&Photo>, authorized: bool) {
+        let owns_file = physical.is_some_and(|m| m.id == p.id);
+        let same_content = |h: &String| owns_file || physical.and_then(|m| m.content_hash.as_deref()).is_some_and(|m| base_hash(m) == base_hash(h));
+        let hash = p.content_hash.as_ref().filter(|_| authorized).filter(|h| same_content(h));
         if let Some(h) = hash {
             self.by_hash.insert(base_hash(h).to_string(), Some(p.id));
         }
         let Source::File { path } = &p.source else { return };
-        if p.copy_of.is_some() {
+        if !owns_file {
             return;
         }
         if let Some(k) = key(p.file_size, p.width, p.height) {
@@ -51,7 +57,7 @@ impl Duplicates {
         &mut self,
         library: impl Iterator<Item = &'a std::sync::Arc<Photo>>,
         probes: &[&ProbeInfo],
-        authorized: impl Fn(&Photo) -> bool,
+        physical: impl Fn(&Photo) -> Option<(std::sync::Arc<Photo>, bool)>,
     ) {
         let hashes: HashSet<&str> = probes.iter().filter_map(|i| i.content_hash.as_deref()).map(base_hash).collect();
         let keys: HashSet<Key> = probes.iter().filter_map(|i| key(i.file_size, i.width, i.height)).collect();
@@ -61,7 +67,8 @@ impl Duplicates {
         for p in library {
             let by_hash = p.content_hash.as_deref().is_some_and(|h| hashes.contains(base_hash(h)));
             if by_hash || key(p.file_size, p.width, p.height).is_some_and(|k| keys.contains(&k)) {
-                self.add_library(p, authorized(p));
+                let (owner, authorized) = physical(p).map_or((None, false), |(owner, authorized)| (Some(owner), authorized));
+                self.add_library(p, owner.as_deref(), authorized);
             }
         }
     }

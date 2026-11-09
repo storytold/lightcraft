@@ -107,7 +107,7 @@ pub(crate) fn command_import_terminal(
     } else if result.is_err() {
         "command"
     } else if failed {
-        "probe"
+        "file"
     } else {
         "none"
     };
@@ -131,7 +131,7 @@ pub struct ScanProgress {
     terminal: std::sync::atomic::AtomicBool,
     found: std::sync::atomic::AtomicUsize,
     delivery_tracked: std::sync::atomic::AtomicBool,
-    summary: std::sync::OnceLock<(usize, usize, usize)>,
+    summary: std::sync::OnceLock<(usize, usize, usize, usize)>,
 }
 
 impl ScanProgress {
@@ -162,6 +162,7 @@ impl ScanProgress {
         let _ = self.summary.set((
             output.candidates.len(),
             output.candidates.iter().filter(|c| c.error.is_some()).count(),
+            output.unreadable,
             output.candidates.iter().filter(|c| c.duplicate.is_some()).count(),
         ));
         if !self.delivery_tracked.load(std::sync::atomic::Ordering::Relaxed) {
@@ -174,7 +175,8 @@ impl ScanProgress {
             return;
         }
         let load = |v: &std::sync::atomic::AtomicUsize| v.load(std::sync::atomic::Ordering::Relaxed);
-        let (candidates, failed, duplicates) = self.summary.get().copied().unwrap_or_default();
+        let (candidates, unprobed, unlisted, duplicates) = self.summary.get().copied().unwrap_or_default();
+        let failed = unprobed.saturating_add(unlisted);
         let cancelled = self.cancel.load(std::sync::atomic::Ordering::Relaxed);
         let status = if worker_failed {
             "error"
@@ -189,8 +191,10 @@ impl ScanProgress {
             "worker"
         } else if cancelled {
             "cancelled"
-        } else if failed > 0 {
+        } else if unprobed > 0 {
             "probe"
+        } else if unlisted > 0 {
+            "walk"
         } else {
             "none"
         };
@@ -456,17 +460,25 @@ pub fn scan_report(s: &mut Session, paths: &[String]) -> ScanOutput {
 pub fn scan_with(input: ScanInput, paths: &[String], progress: &ScanProgress) -> ScanOutput {
     progress.begin();
     let expansion = expand_report(paths, input.skip.as_deref(), crate::walk::Limits::default());
-    let mut out = scan_files(input, expansion.files, progress);
+    let mut out = scan_found(input, expansion.files, progress);
     out.truncated = expansion.truncated;
     out.unreadable = expansion.unreadable;
     out.unsupported = expansion.unsupported;
+    progress.computed(&out);
     out
 }
 
 /// [`scan_with`] for files that were found already (`paths` expanded, [`expand`]). The walks'
 /// diagnostics ([`ScanOutput::truncated`] and friends) are left empty: who expanded the paths has
 /// them ([`expand_report`]).
-pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
+pub(crate) fn scan_files(input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
+    let output = scan_found(input, files, progress);
+    progress.computed(&output);
+    output
+}
+
+/// [`scan_files`] without its terminal record: [`scan_with`] adds the walks' diagnostics first.
+fn scan_found(mut input: ScanInput, files: Vec<String>, progress: &ScanProgress) -> ScanOutput {
     progress.begin();
     progress.found.store(files.len(), std::sync::atomic::Ordering::Relaxed);
     let _originals = input.originals.bind();
@@ -492,7 +504,10 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     let mut dups = super::dupes::Duplicates::default();
     let probed_infos: Vec<&ProbeInfo> = probes.values().filter_map(|r| r.as_ref().ok()).collect();
     dups.add_library_matching(input.library.photos(), &probed_infos, |p| {
-        crate::media::physical_photo(&input.library, p.id).is_some_and(|p| !input.identities.needs_validation(&p))
+        crate::media::physical_photo(&input.library, p.id).map(|owner| {
+            let authorized = !input.identities.needs_validation(&owner);
+            (owner, authorized)
+        })
     });
     let mut out = Vec::with_capacity(files.len());
     let mut kept = HashMap::new();
@@ -527,7 +542,5 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         out.push(c);
     }
     // (the walks' diagnostics are [`scan_with`]'s: these files were found already)
-    let output = ScanOutput { candidates: out, probes: kept, truncated: false, unreadable: 0, unsupported: 0 };
-    progress.computed(&output);
-    output
+    ScanOutput { candidates: out, probes: kept, truncated: false, unreadable: 0, unsupported: 0 }
 }

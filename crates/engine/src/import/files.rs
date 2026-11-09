@@ -811,6 +811,26 @@ mod prepared_tests {
         assert!(matches!(prepared.items.get(1), Some(PreparedItem::Ready(_))));
     }
 
+    #[test]
+    fn revalidate_add_matches_a_dup_suffixed_hash_by_its_base() {
+        let mut s = Session::new();
+        let existing_path = std::env::temp_dir().join("lightcraft-revalidate-suffixed-existing.jpg");
+        let incoming = std::env::temp_dir().join("lightcraft-revalidate-suffixed-incoming.jpg");
+        let mut existing = Photo::new(PhotoId(1), Source::File { path: existing_path.to_string_lossy().into() }, "existing.jpg", "JPG", 1, 1, "now");
+        existing.content_hash = Some("abc:dup1".into());
+        s.commit("existing", Op::AddPhoto { photo: Box::new(existing) }).unwrap();
+        let ready = ReadyFile {
+            path: incoming.to_string_lossy().into(),
+            stored: incoming.to_string_lossy().into(),
+            info: ProbeInfo { format: "JPG".into(), content_hash: Some("abc".into()), ..ProbeInfo::default() },
+            sidecar: None,
+            placed: None,
+        };
+        let mut prepared = Prepared { scanned: 1, items: vec![PreparedItem::Ready(Box::new(ready))], ..Prepared::default() };
+        prepared.revalidate_add(&s);
+        assert!(matches!(prepared.items.first(), Some(PreparedItem::Duplicate { reason: "content", existing: Some(PhotoId(1)), .. })));
+    }
+
     fn unread_paths(n: usize) -> Vec<String> {
         (0..n).map(|i| std::env::temp_dir().join(format!("lightcraft-probe-progress-{i}.jpg")).to_string_lossy().into()).collect()
     }

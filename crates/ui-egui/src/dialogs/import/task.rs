@@ -567,7 +567,7 @@ fn undo_label(task: &ImportTask) -> String {
 /// The import is done (or cancelled): one undo step, show and select the first photo (unless the
 /// user chose another meanwhile), say what happened.
 fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
-    {
+    let worker_failed = {
         let mut completion = task.completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         completion.worker_done = true;
         completion.snapshot(&task);
@@ -586,16 +586,28 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
         } else if completion.had_errors {
             "commit"
         } else if task.failed > 0 {
-            "probe"
+            "file"
         } else if task.cancelled {
             "cancelled"
         } else {
             "none"
         };
         completion.emit(status, cause, persist);
-    }
+        completion.worker_failed
+    };
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     app.session.merge_undo(steps, &undo_label(&task));
+    if worker_failed {
+        let what = if task.auto { crate::i18n::tr("Auto Import") } else { crate::i18n::tr("Import") };
+        let msg = crate::i18n::tr_format!(
+            "{what} stopped on an internal error · {} photo{} added; see the log",
+            task.imported,
+            crate::i18n::plural_s(task.imported),
+            what = what,
+        );
+        app.toast_error(ctx, msg);
+        return;
+    }
     if task.auto || task.browse {
         quiet_finish(app, ctx, &task);
         return;

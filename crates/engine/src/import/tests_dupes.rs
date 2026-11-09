@@ -279,3 +279,57 @@ fn f_repair_undo_import_learning_preserves_existing_photo_sources_and_faces() {
     assert!(crate::smart::load(&proxy).is_ok());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_virtual_copy_left_on_the_old_file_after_its_master_is_relinked_is_found_by_size() {
+    let dir = temp_dir("divergent-copy");
+    let data = bytes(11, BIG);
+    let orig = write(&dir, "orig.dng", &data);
+    let other = write(&dir, "other.dng", &bytes(12, BIG));
+    let incoming = write(&dir, "incoming.dng", &data);
+    let mut s = header_session();
+    let master = PhotoId(add(&mut s, std::slice::from_ref(&orig)).imported[0]);
+    s.execute("library.select", &serde_json::json!({"ids": [master.0]})).unwrap();
+    let copy = s.execute("photo.virtualCopy", &serde_json::json!({})).unwrap()["ids"][0].as_u64().unwrap();
+    s.commit("relink", Op::Relink { id: master, file_name: "other.dng".into(), source: Source::File { path: other }, format: None }).unwrap();
+    assert!(matches!(&s.catalog.photo(PhotoId(copy)).unwrap().source, Source::File { path } if *path == orig));
+    let scanned = scan(&mut s, std::slice::from_ref(&incoming));
+    assert_eq!((scanned[0].duplicate.as_deref(), scanned[0].existing), (Some("content"), Some(copy)));
+    let r = add(&mut s, &[incoming]);
+    assert!(r.imported.is_empty(), "{r:?}");
+    assert_eq!((r.duplicates[0].existing, r.duplicates[0].reason), (Some(copy), "content"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_virtual_copy_does_not_keep_its_masters_replaced_content() {
+    let dir = temp_dir("stale-copy-hash");
+    let old = bytes(13, 2048);
+    let new = bytes(14, 2048);
+    let orig = write(&dir, "orig.dng", &old);
+    let incoming = write(&dir, "incoming.dng", &old);
+    let mut s = Session::new();
+    hashing_probe(&mut s);
+    let master = PhotoId(add(&mut s, std::slice::from_ref(&orig)).imported[0]);
+    s.execute("library.select", &serde_json::json!({"ids": [master.0]})).unwrap();
+    let copy = PhotoId(s.execute("photo.virtualCopy", &serde_json::json!({})).unwrap()["ids"][0].as_u64().unwrap());
+    std::fs::write(&orig, &new).unwrap();
+    let p = s.catalog.photo(master).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id: master,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some(lightcraft_preview::hash_bytes(&new).to_string()),
+        preview_only: p.preview_only.clone(),
+        preview_checked: p.preview_checked.clone(),
+    })
+    .unwrap();
+    let old_hash = lightcraft_preview::hash_bytes(&old).to_string();
+    assert_eq!(s.catalog.photo(copy).unwrap().content_hash.as_ref(), Some(&old_hash), "the copy's record still names the old bytes");
+    let scanned = scan(&mut s, std::slice::from_ref(&incoming));
+    assert_eq!(scanned[0].duplicate, None, "{scanned:?}");
+    let r = add(&mut s, &[incoming]);
+    assert_eq!((r.imported.len(), r.duplicates.len()), (1, 0), "{r:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}

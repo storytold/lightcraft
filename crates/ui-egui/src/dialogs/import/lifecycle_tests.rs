@@ -273,3 +273,20 @@ fn logging_desktop_scan_owner_drop_cancels_paused_computation() {
     drop(app);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_preparation_worker_failure_is_shown_to_the_user() {
+    capture();
+    for auto in [false, true] {
+        let (mut app, paths, dir) = fixture(if auto { "worker-toast-auto" } else { "worker-toast" }, 1);
+        app.session.media.file_probe = Some(std::sync::Arc::new(|_| panic!("PRIVATE worker panic")));
+        let task = super::ImportTask::new(paths, serde_json::json!({"mode":"add"}), 0, false);
+        app.import = Some(if auto { task.auto() } else { task });
+        finish_task(&mut app, &egui::Context::default());
+        let toast = app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("stopped"), "auto={auto}: {toast:?}");
+        assert!(!toast.contains("PRIVATE"), "{toast:?}");
+        drop(app);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

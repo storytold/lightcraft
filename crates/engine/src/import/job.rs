@@ -143,7 +143,7 @@ impl Prepared {
             if let Some(hash) = &photo.content_hash
                 && s.source_hash_authorized(photo.id)
             {
-                hashes.insert(hash.clone(), photo.id);
+                hashes.insert(crate::sync::base_hash(hash).to_string(), photo.id);
             }
         }
         let mut items = Vec::with_capacity(self.items.len());
@@ -154,7 +154,7 @@ impl Prepared {
             };
             let ReadyFile { path, stored, info, sidecar, placed } = *ready;
             let existing_path = paths.get(&normalize_import_path(&stored)).copied().or_else(|| paths.get(&normalize_import_path(&path)).copied());
-            let existing_hash = info.content_hash.as_ref().and_then(|hash| hashes.get(hash).copied());
+            let existing_hash = info.content_hash.as_deref().and_then(|hash| hashes.get(crate::sync::base_hash(hash)).copied());
             if let Some(existing) = existing_path.or(existing_hash) {
                 if let Some(placed) = &placed {
                     crate::import_move::rollback(placed);
@@ -267,8 +267,9 @@ impl ImportJob {
             if let Source::File { path } = &p.source {
                 self.by_path.insert(path.clone(), (p.id, p.local));
             }
-            let authorized = crate::media::physical_photo(&library, p.id).is_some_and(|p| !self.identities.needs_validation(&p));
-            self.dups.add_library(p, authorized);
+            let owner = crate::media::physical_photo(&library, p.id);
+            let authorized = owner.as_ref().is_some_and(|owner| !self.identities.needs_validation(owner));
+            self.dups.add_library(p, owner.as_deref(), authorized);
         }
         Some(library)
     }
@@ -360,7 +361,11 @@ impl ImportJob {
             }
             // same bytes as a library photo: skipped below, once its capture time is known (a photo
             // added from its headers has no hash yet: it is hashed now if it has this file's size)
+            let unhashed = info.content_hash.is_none();
             let found = if opts.local { None } else { self.dups.find(&path, &mut info, cancel) };
+            if found.is_none() && unhashed && info.content_hash.is_some() && info.native_read.is_some() {
+                info.native_read = self.originals.candidate_probe(&path, &info);
+            }
             let duplicate_of = found.map(|existing| {
                 let evidence = self.originals.candidate_probe(&path, &info).map(Box::new);
                 (info.content_hash.clone(), existing, evidence)
