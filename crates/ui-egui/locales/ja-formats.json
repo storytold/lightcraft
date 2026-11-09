@@ -324,6 +324,10 @@
   "Panel move was not applied: {error}": "パネルの移動は適用されませんでした：{error}",
   "{name} is installed": "{name} をインストールしました",
   "{name} is installed and in use: face recognition is on": "{name} をインストールして使用中です：顔認識はオンです",
+  "Couldn't read {name}: {error}": "{name} を読み取れませんでした: {error}",
+  "Couldn't read {n} photo{s} from {name}": "{name}: {n} 枚の写真を読み取れませんでした{s:.0}",
+  "No new photos on {name} ({n} already in the library)": "{name} に新しい写真はありません（{n} 枚はライブラリにあります）",
+  "No photos found on {name}": "{name} に写真が見つかりません",
   "Bring photos in with File › Import Photos… ({keys}).": "ファイル › 写真を読み込む… ({keys}) で写真を読み込みます。",
   "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。"
