@@ -1,6 +1,6 @@
 //! Camera colour profiles of our own, pooled from many photos of one camera model.
 //!
-//! A raw file without colour matrices (Sony ARW, Nikon NEF, Fujifilm RAF) gets its look fitted to its own embedded camera
+//! A raw file without colour matrices (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CRW) gets its look fitted to its own embedded camera
 //! JPEG (`camera_preview`), but one photo shows too little of some colours: a lime shirt covering a
 //! few dozen proxy pixels next to a hillside of foliage at the same hue. `lightcraft-cli calibrate`
 //! pools the colour pairs of many photos per model and fits one matrix and hue/saturation/value
@@ -25,6 +25,7 @@ const MAX_FILE: u64 = 4 << 20;
 /// Profiles built into LightCraft (`assets/camera-profiles/`, see `assets/ATTRIBUTION.md`):
 /// `(model, JSON)`.
 pub const BUNDLED: &[(&str, &str)] = &[
+    ("Canon EOS D60", include_str!("../../../assets/camera-profiles/Canon_EOS_D60.json")),
     ("ILCA-99M2", include_str!("../../../assets/camera-profiles/ILCA-99M2.json")),
     ("ILCE-7CR", include_str!("../../../assets/camera-profiles/ILCE-7CR.json")),
     ("ILCE-7M4", include_str!("../../../assets/camera-profiles/ILCE-7M4.json")),
@@ -115,9 +116,9 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join(file_name(&profile.model));
     let json = serde_json::to_vec_pretty(profile).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // a fresh temp file renamed over the profile: never a fixed `.tmp` name, which a planted link
+    // would have written through
+    lightcraft_catalog::safe_file::write_atomic(&path, &json).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path)
 }
 
@@ -295,6 +296,9 @@ mod tests {
             assert_eq!(bundled(model), Some(p));
         }
         assert!(bundled("No Such Camera").is_none());
+        // a model name with spaces is stored under its safe file name
+        assert!(bundled("Canon EOS D60").is_some_and(|p| p.files > 1000));
+        assert_eq!(file_name("Canon EOS D60"), "Canon_EOS_D60.json");
     }
 
     #[test]

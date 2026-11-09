@@ -163,6 +163,8 @@ impl ImportJob {
     /// Snapshot what an import with `opts` needs from the session (no file-system calls). Takes
     /// the probes a preceding scan left ([`Session::import_probes`]).
     pub fn new(s: &mut Session, opts: ImportOptions) -> crate::Result<Self> {
+        // a recipe is checked before any file is read or placed, not when the photos are committed
+        crate::cmd::check_recipe(&opts.recipe).map_err(|e| crate::cmd::bad("library.import", e))?;
         let mode = opts.mode;
         // Only a library on disk has an `Originals/` folder. The browser build keeps the bytes of
         // every added file in its own storage already, so "copy" there means "add".
@@ -329,7 +331,7 @@ impl ImportJob {
             // a copy of a file whose transfer is still pending: a duplicate only if that one succeeds
             if !opts.local
                 && let Some(h) = &info.content_hash
-                && plan.transfers.iter().any(|t| t.info.content_hash.as_ref() == Some(h))
+                && plan.pending_hashes.contains(h)
             {
                 self.run_plan(&mut plan, &mut out, cancel);
                 if cancel.load(Relaxed) {
@@ -403,7 +405,7 @@ impl ImportJob {
                     // into the same folder ends up with: that one goes first
                     let as_named = name.as_deref().unwrap_or(if own.is_empty() { "photo" } else { own.as_str() });
                     let family = (dir.to_string_lossy().to_lowercase(), name_family(as_named));
-                    if plan.transfers.iter().any(|t| t.family == family) {
+                    if plan.pending_families.contains(&family) {
                         self.run_plan(&mut plan, &mut out, cancel);
                         if cancel.load(Relaxed) {
                             break;
@@ -421,7 +423,10 @@ impl ImportJob {
                     // Copy as DNG: the copied raw becomes a DNG (the copy is ours to replace)
                     let dng = opts.convert_dng && mode == ImportMode::Copy && raw && !info.format.eq_ignore_ascii_case("DNG");
                     plan.slots.push(Slot::Transfer);
-                    plan.transfers.push(Transfer { path, info, sidecar, dir, how, dng, family });
+                    // (transfers of one folder and name family can take each other's names, so they never run together)
+                    plan.pending_families.insert(family);
+                    plan.pending_hashes.extend(info.content_hash.clone());
+                    plan.transfers.push(Transfer { path, info, sidecar, dir, how, dng });
                     continue;
                 }
                 (ImportMode::Move, _) => {
@@ -444,6 +449,8 @@ impl ImportJob {
     /// Run the transfers `plan` collected (on several threads) and append its items to `out` in
     /// file order. Transfers not started because `cancel` was set leave no item.
     fn run_plan(&mut self, plan: &mut Plan, out: &mut Prepared, cancel: &std::sync::atomic::AtomicBool) {
+        plan.pending_hashes.clear();
+        plan.pending_families.clear();
         let mut done = run_transfers(std::mem::take(&mut plan.transfers), self.file_bytes.as_ref(), cancel, &self.done).into_iter();
         for slot in std::mem::take(&mut plan.slots) {
             let item = match slot {
@@ -507,6 +514,7 @@ impl Session {
             stages: None,
             view_cache: None,
             display: None,
+            on_screen: false,
             slide: None,
             preview_cut: None,
             display_fit: None,
@@ -522,6 +530,8 @@ impl Session {
             key,
             cached: Vec::new(),
             embedded,
+            embedded_cache: None,
+            embedded_on_disk: false,
             minimum_embedded_edge,
             small: Some(Box::new(small)),
         })
