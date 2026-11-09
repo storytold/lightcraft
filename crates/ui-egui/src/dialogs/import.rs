@@ -387,13 +387,16 @@ mod tests {
         assert!(img.contains_rect(long));
     }
 
-    /// An unreadable file's tooltip ends with the scan error; a readable one has no error line (issue #3342).
+    /// An unreadable file's tooltip starts with the scan error, where no long path can push it off the window (egui
+    /// tooltips don't scroll); a readable one has no error line (issue #3342).
     #[test]
     fn an_unreadable_cell_tooltip_says_why() {
         let ok = ImportCandidate { path: "a.ARW".into(), format: "ARW".into(), file_size: 2_500_000, ..Default::default() };
         assert_eq!(candidate_tip(&ok), "a.ARW\n0 × 0 · ARW · 2.5 MB");
         let bad = ImportCandidate { error: Some(" Permission denied (os error 13)\n".into()), ..ok.clone() };
-        assert_eq!(candidate_tip(&bad), "a.ARW\n0 × 0 · ARW · 2.5 MB\nPermission denied (os error 13)");
+        assert_eq!(candidate_tip(&bad), "Permission denied (os error 13)\na.ARW\n0 × 0 · ARW · 2.5 MB");
+        let deep = ImportCandidate { path: "folder/".repeat(600) + "a.ARW", ..bad.clone() };
+        assert_eq!(candidate_tip(&deep).lines().next(), Some("Permission denied (os error 13)"));
         let blank = ImportCandidate { error: Some("  ".into()), ..ok.clone() };
         assert_eq!(candidate_tip(&blank), candidate_tip(&ok));
     }
