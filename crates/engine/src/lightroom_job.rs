@@ -495,6 +495,42 @@ mod tests {
         }
     }
 
+    /// A real UNC file lost between discovery and preparation stays missing through catalog commit.
+    #[cfg(windows)]
+    #[test]
+    fn a_missing_unc_original_keeps_its_classification_through_preparation_and_commit() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        let f = crate::doc_path::network::tests::Fixture::new();
+        let Some(unc) = f.unc().filter(|p| std::fs::metadata(p).is_ok()) else {
+            lightcraft_testkit::skip!(System, "loopback administrative share unavailable");
+            return;
+        };
+        let local = f.0.join("selected/safe/photo.jpg");
+        std::fs::write(&local, b"fixture").unwrap();
+        let path = unc.join("selected/safe/photo.jpg").to_string_lossy().into_owned();
+        let mut session = crate::Session::new();
+        let mut photo = Photo::new(PhotoId(1), Source::File { path: path.clone() }, "photo.jpg", "JPG", 1, 1, "2026-01-01T00:00:00");
+        photo.local = true;
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let mut prepared = prepared_for(&session, &path, 4);
+        let cancel = AtomicBool::new(false);
+        let (paths, missing) = original_paths(&mut prepared.data, &cancel).unwrap();
+        assert_eq!(paths, vec![path.clone()], "discovery must first see the real UNC original");
+        assert!(missing.is_empty());
+        prepared.missing_sources = missing;
+        let mut job = crate::import::ImportJob::new(&mut session, ImportOptions::default()).unwrap();
+        job.check_network_links();
+        std::fs::remove_file(&local).unwrap();
+        assert_eq!(crate::doc_path::original_metadata(Path::new(&path)).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        prepared.normal = job.prepare_files(paths, &cancel);
+        let report = commit_prepared(&mut session, prepared).unwrap().report;
+        assert_eq!(report["missing"], serde_json::json!([path]));
+        assert_eq!(report["failed"], serde_json::json!([]));
+        assert_eq!(report["imported"], 1);
+        assert_eq!(session.catalog.photos().count(), 1);
+        assert!(!session.catalog.photo(PhotoId(1)).unwrap().local);
+    }
+
     /// A redirect discovered by the second pass must not promote an existing Local record.
     #[cfg(windows)]
     #[test]
