@@ -373,12 +373,18 @@ fn page_numbers_and_info_print_in_the_bottom_margin() {
     for p in &info {
         assert!(inked(p, left.0, left.1, 550, 600) > 10, "the print settings line");
     }
-    // the packages have no Page Options in Lightroom: nothing is drawn
-    let all = PageStyle { page_numbers: true, page_info: true, crop_marks: true, ..Default::default() };
+    // the packages have no page numbers or page info in Lightroom: nothing is drawn
+    let all = PageStyle { page_numbers: true, page_info: true, ..Default::default() };
     let package = page_options_pages(&mut s, Style::PicturePackage, all);
     assert_eq!(package.len(), 2);
     for p in &package {
         assert_eq!(inked(p, 0, 400, 550, 600) + inked(p, 0, 400, 0, 50), 0);
+    }
+    // their Cut Guides are the crop marks, at each photo's corners
+    let guides = page_options_pages(&mut s, Style::PicturePackage, PageStyle { crop_marks: true, ..Default::default() });
+    assert_eq!(guides.len(), 2);
+    for (g, p) in guides.iter().zip(&package) {
+        assert!(inked(g, 0, 400, 0, 600) > inked(p, 0, 400, 0, 600), "the guides add ink");
     }
 }
 
