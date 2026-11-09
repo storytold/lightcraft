@@ -18,6 +18,15 @@ struct Stamp {
     identity: (u64, u64, i64, i64),
 }
 impl Stamp {
+    /// Whether `other` is a stamp of the same file with the same length and modification time,
+    /// whatever its status change time.
+    fn same_version(&self, other: &Self) -> bool {
+        #[cfg(unix)]
+        let same_file = (self.identity.0, self.identity.1) == (other.identity.0, other.identity.1);
+        #[cfg(not(unix))]
+        let same_file = true;
+        same_file && self.len == other.len && self.modified == other.modified
+    }
     /// The stamp of a regular file's metadata; `None` for anything else or without a modification time.
     fn of(meta: &Metadata) -> Option<Self> {
         if !meta.is_file() {
@@ -351,9 +360,11 @@ struct Watch {
     ticket: crate::cache_identity::SourceTicket,
 }
 impl Watch {
-    /// Whether the file read with `stamp` is no longer the one this watch observed when it was made.
+    /// Whether the file read with `stamp` is no longer the one this watch observed when it was made:
+    /// another file, or the same one rewritten. A change of status alone (a hard link added or
+    /// removed, as a Move's cleanup does) is not a replacement.
     fn replaced_by(&self, stamp: &Stamp) -> bool {
-        self.observed.as_ref().is_some_and(|observed| observed != stamp)
+        self.observed.as_ref().is_some_and(|observed| !observed.same_version(stamp))
     }
 }
 /// A whole read of a watched path, waiting for [`crate::Session::learn_read_hashes`].
@@ -748,7 +759,7 @@ impl Originals {
             before
                 .filter(|b| b.len == bytes.len() as u64 && file.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(b))
                 .map(|stamp| {
-                    let replaced = watch.as_ref().is_some_and(|w| w.replaced_by(&stamp));
+                    let replaced = watch.as_ref().is_some_and(|w| w.observed.as_ref().is_some_and(|before| before != &stamp));
                     let changed_hash =
                         watch.as_ref().and_then(|w| w.known_hash.as_deref()).is_some_and(|h| crate::sync::base_hash(h) != hash.to_string());
                     let facts = (replaced || changed_hash || watch.as_ref().is_some_and(|w| w.quarantined || w.known_hash.is_none()))
