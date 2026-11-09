@@ -762,7 +762,7 @@ impl Originals {
                     let replaced = watch.as_ref().is_some_and(|w| w.observed.as_ref().is_some_and(|before| before != &stamp));
                     let changed_hash =
                         watch.as_ref().and_then(|w| w.known_hash.as_deref()).is_some_and(|h| crate::sync::base_hash(h) != hash.to_string());
-                    let facts = (replaced || changed_hash || watch.as_ref().is_some_and(|w| w.quarantined || w.known_hash.is_none()))
+                    let facts = (replaced || changed_hash || watch.as_ref().is_some_and(|w| w.wants))
                         .then(|| crate::files::probe_bytes_with(path, &bytes, false).ok())
                         .flatten();
                     Fingerprint { hash, stamp, facts, replaced, proof: ReadProof::new(file, share_safe) }
@@ -1225,6 +1225,12 @@ impl crate::Session {
                 continue;
             }
             if !changed && p.file_size != event.fingerprint.len() {
+                continue;
+            }
+            if event.fingerprint.facts.is_none()
+                && p.content_hash.is_none()
+                && ((p.width, p.height), &p.preview_only) != (event.watch.dimensions, &event.watch.preview)
+            {
                 continue;
             }
             let mut target = (*p).clone();
@@ -1879,6 +1885,32 @@ mod lifecycle_tests {
         s.persist().unwrap();
         let learned = s.catalog.photo(second).unwrap().content_hash.clone();
         assert_eq!(learned.as_deref().map(crate::sync::base_hash), first.content_hash.as_deref().map(crate::sync::base_hash));
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_hashless_master_with_stale_dimensions_takes_the_files_from_a_read() {
+        let dir = crate::tests_xmp::temp_dir("shared-path-stale-master");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("original.dng");
+        std::fs::write(&path, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+        let mut s = crate::Session::new().with_fs();
+        s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let first = s.catalog.photos().next().unwrap().clone();
+        let second = s.catalog.alloc_photo_id();
+        let mut twin = (*first).clone();
+        twin.id = second;
+        twin.content_hash = None;
+        twin.width = first.width + 7;
+        s.commit("Second master", Op::AddPhoto { photo: Box::new(twin) }).unwrap();
+        s.originals.hash_whole(path.to_str().unwrap()).unwrap();
+        s.persist().unwrap();
+        assert!(s.catalog.photo(second).unwrap().content_hash.is_none(), "a streamed read can't check the dimensions it would vouch for");
+        s.originals.read_whole(path.to_str().unwrap()).unwrap();
+        s.persist().unwrap();
+        let learned = s.catalog.photo(second).unwrap().clone();
+        assert_eq!(learned.content_hash.as_deref().map(crate::sync::base_hash), first.content_hash.as_deref().map(crate::sync::base_hash));
+        assert_eq!((learned.width, learned.height), (first.width, first.height), "the hash comes with the file's own dimensions");
         drop(s);
         std::fs::remove_dir_all(dir).unwrap();
     }
