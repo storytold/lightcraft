@@ -89,8 +89,12 @@ pub fn default_window_backends(os: &str) -> Backends {
 }
 
 /// Resolve `choice` against the backends this build contains (`compiled`): `None` = GPU off.
-/// Asked-for backends that aren't compiled in fall back to `default`.
+/// Asked-for backends that aren't compiled in fall back to `default`, and a `default` this build
+/// does not contain falls back to `compiled`.
 pub fn resolve(choice: BackendChoice, default: Backends, compiled: Backends) -> Option<Backends> {
+    // A platform default this build does not contain (e.g. GL without `gles`) can select no
+    // adapter: fall back to a backend it does contain.
+    let default = if default.intersects(compiled) { default & compiled } else { compiled };
     match choice {
         BackendChoice::Off => None,
         BackendChoice::Auto => Some(default),
@@ -801,12 +805,31 @@ mod tests {
 
     /// On Linux the window must use GL only: `window_renderer_order` puts GL first, but a
     /// multi-backend set lets wgpu pick Vulkan (e.g. llvmpipe) and the GUI can fail to appear.
+    /// A build without GL returns the compiled fallback instead, and an environment override
+    /// wins over both.
     #[test]
     fn linux_window_backends_are_gl_only() {
         assert_eq!(default_window_backends("linux"), Backends::GL);
         assert!(!default_window_backends("linux").contains(Backends::VULKAN));
         if cfg!(target_os = "linux") {
-            assert_eq!(window_backends(), Backends::GL);
+            let compiled = wgpu::Instance::enabled_backend_features();
+            let default = default_window_backends("linux");
+            let default = if default.intersects(compiled) { default & compiled } else { compiled };
+            let choice = match env_choice() {
+                BackendChoice::Off => BackendChoice::Auto,
+                c => c,
+            };
+            let expected = resolve(choice, default, compiled).unwrap_or(default);
+            assert_eq!(window_backends(), expected);
+            if matches!(choice, BackendChoice::Auto) {
+                assert_eq!(window_backends(), default);
+                if compiled.contains(Backends::GL) {
+                    assert_eq!(window_backends(), Backends::GL);
+                    assert!(!window_backends().contains(Backends::VULKAN));
+                } else if !compiled.is_empty() {
+                    assert_eq!(window_backends(), compiled);
+                }
+            }
         }
     }
 
@@ -863,5 +886,46 @@ mod tests {
         assert!(r.is_err());
         assert!(!m.exists(), "the process survived, so nothing is left to report");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// On Linux the window is GL-only when GL is compiled in; a build without GL returns the
+    /// compiled fallback instead of GL, and an environment override wins over both.
+    #[test]
+    fn linux_window_backends_are_gl_only_review_regression_1() {
+        // Run on every host: pass "linux" explicitly instead of relying on the host OS, so
+        // this fails on a Windows host too when the Linux default is not GL only.
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        assert_eq!(default_window_backends("linux"), Backends::GL);
+        assert!(!default_window_backends("linux").contains(Backends::VULKAN));
+        assert_eq!(resolve(BackendChoice::Auto, default_window_backends("linux"), all), Some(Backends::GL));
+        let gl = WindowRenderer::Wgpu(Backends::GL);
+        let order = window_renderer_order(None, None, None, "linux", all, true);
+        assert_eq!(order.first(), Some(&gl), "Linux window must try GL first: {order:?}");
+        assert_eq!(order, [gl, WindowRenderer::Wgpu(Backends::VULKAN), WindowRenderer::Glow]);
+        // A build without GL: the compiled fallback, not GL.
+        let without_gl = Backends::VULKAN | Backends::DX12;
+        assert_eq!(resolve(BackendChoice::Auto, default_window_backends("linux"), without_gl), Some(without_gl));
+        assert!(!window_renderer_order(None, None, None, "linux", without_gl, true).contains(&gl));
+        // The host route itself, only where the host is Linux.
+        if cfg!(target_os = "linux") {
+            let compiled = wgpu::Instance::enabled_backend_features();
+            let default = default_window_backends("linux");
+            let default = if default.intersects(compiled) { default & compiled } else { compiled };
+            let choice = match env_choice() {
+                BackendChoice::Off => BackendChoice::Auto,
+                c => c,
+            };
+            let expected = resolve(choice, default, compiled).unwrap_or(default);
+            assert_eq!(window_backends(), expected);
+            if matches!(choice, BackendChoice::Auto) {
+                assert_eq!(window_backends(), default);
+                if compiled.contains(Backends::GL) {
+                    assert_eq!(window_backends(), Backends::GL);
+                    assert!(!window_backends().contains(Backends::VULKAN));
+                } else if !compiled.is_empty() {
+                    assert_eq!(window_backends(), compiled);
+                }
+            }
+        }
     }
 }
