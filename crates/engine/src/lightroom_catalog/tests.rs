@@ -398,6 +398,50 @@ fn a_content_duplicate_keeps_what_its_sidecar_says() {
     assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "the file's own capture time: {r}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+/// A file that becomes a content duplicate only after it was prepared (another import added a photo
+/// with its bytes while the catalog was read) is turned into one just before the commit
+/// (`revalidate_add`); its new record keeps what its sidecar says all the same (#2589).
+#[test]
+fn a_file_that_turns_out_to_be_a_content_duplicate_at_commit_keeps_what_its_sidecar_says() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-late-duplicate-sidecar-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("Photos/test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:description>
+<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">© Sidecar Author</rdf:li></rdf:Alt></dc:rights>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    s.media.file_probe = Some(Arc::new(|_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 20,
+            height: 10,
+            content_hash: Some("same-bytes".into()),
+            captured: Some("2024-05-06T07:08:09".into()),
+            ..Default::default()
+        })
+    }));
+    // prepared while the library has no photo with the file's bytes: the file is ready to add
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    // then a photo with the same bytes arrives before the commit (the library is still the one
+    // the job was prepared for: the commit checks its identity, not its photos)
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    assert_eq!(s.catalog.photos().count(), 2, "{r}");
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!((new.meta.caption.as_str(), new.meta.copyright.as_str()), ("Harbour at dawn", "© Sidecar Author"), "{r}");
+    assert_eq!(s.catalog.photo(other).unwrap().meta.caption, "Other photo's caption", "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
 /// A content duplicate's sidecar regions drawn on its photo as stored (its stored size as
 /// `AppliedToDimensions`, no `mwg-rs:Rotation`) land on the upright photo, turned by its file's own
 /// orientation as a file import of it turns them (#2674): the record's size is its file's upright one,
