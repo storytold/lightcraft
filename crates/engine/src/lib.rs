@@ -902,7 +902,8 @@ impl Session {
                     Some(v) => self.person_covers.insert(c.key.clone(), v),
                     None => self.person_covers.remove(&c.key),
                 };
-                let dismissed = match c.dismissed {
+                // an empty list is no list, so the file never keeps one
+                let dismissed = match c.dismissed.filter(|v| !v.is_empty()) {
                     Some(v) => self.person_dismissed.insert(c.key.clone(), v),
                     None => self.person_dismissed.remove(&c.key),
                 };
