@@ -627,7 +627,7 @@ impl Session {
     }
 
     fn run_command(&mut self, id: &str, journal: Option<&Value>, f: impl FnOnce(&mut Session) -> Result<Value>) -> Result<Value> {
-        self.learn_read_hashes()?;
+        self.learn_read_hashes_or_report();
         let _originals = self.originals.bind();
         let log_start = self.pending_log.len();
         let was_active = self.active();
@@ -657,7 +657,7 @@ impl Session {
             }
         }
         if self.depth == 0 {
-            self.learn_read_hashes()?;
+            self.learn_read_hashes_or_report();
         }
         if self.depth == 0 && self.library.is_some() {
             // Make the command durable before reporting success (natively: handed to the catalog
