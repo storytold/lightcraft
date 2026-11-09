@@ -8,6 +8,14 @@
   hidden stays hidden. Showing a panel by hand in between starts over. A keymap that gives Shift+Tab to another command
   keeps it, and in a text field Shift+Tab still moves the keyboard focus (carries #1195).
 
+### Film grain that looks like film (process V7)
+- Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
+  rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
+  and blown highlights stay clean, and the fit-to-window preview shows the grain you will export. Amount, Size and
+  Roughness keep their meaning and Lightroom Classic's strength and grain size. This is rendering process 7: new photos
+  (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
+  See [film grain](grain.md).
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
