@@ -279,6 +279,21 @@ fn set_cover(s: &mut Session, p: &Value) -> Result<Value> {
 /// Most faces set aside as "not this person" for one person.
 const MAX_DISMISSED: usize = 100_000;
 
+/// The faces set aside for the person whose lower-cased name is `key`, but for those that bear that name: one named for
+/// them since (by an agent, a script) is theirs, and is neither counted nor a counter-example while it is. It stays in
+/// the list, for when the naming is undone.
+fn still_set_aside<'a>(s: &'a Session, key: &'a str) -> impl Iterator<Item = &'a lightcraft_catalog::FaceRef> {
+    s.person_dismissed.get(key).into_iter().flatten().filter(move |f| {
+        !s.catalog.photo(f.photo).is_some_and(|ph| {
+            ph.meta.regions.iter().any(|r| {
+                r.kind == lightcraft_meta::RegionKind::Face
+                    && f.is(f.photo, &r.rect)
+                    && r.name.as_deref().is_some_and(|n| n.trim().to_lowercase() == key)
+            })
+        })
+    })
+}
+
 /// `faces.dismiss {name, photo, index}`: this face is not `name`; it is never suggested for them again (it may still be
 /// for someone else). `{name, restore: true}` gives all of their set-aside faces back. Kept in the library's
 /// people.json, outside the catalog (#3249).
@@ -328,12 +343,11 @@ fn dismiss(s: &mut Session, p: &Value) -> Result<Value> {
         }
         list.push(lightcraft_catalog::FaceRef { photo: id, face: rect });
     }
-    let dismissed = list.len();
     s.people_gen = s.people_gen.wrapping_add(1);
     if let Err(e) = s.save_people() {
         return undo(s, e);
     }
-    Ok(json!({"name": name, "dismissed": dismissed}))
+    Ok(json!({"name": name, "dismissed": still_set_aside(s, &key).count()}))
 }
 
 /// Most faces `faces.unnamed` lists.
@@ -422,7 +436,7 @@ fn person(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let similar = if total > 0 { imp::similar(s, &key, limit) } else { Similar { items: Vec::new(), ready: false, pending: 0 } };
     Ok(
-        json!({"name": shown, "total": total, "cover": cover, "dismissed": s.person_dismissed.get(&key).map_or(0, Vec::len), "confirmed": confirmed, "more": similar.items, "ready": similar.ready, "pendingPhotos": similar.pending}),
+        json!({"name": shown, "total": total, "cover": cover, "dismissed": still_set_aside(s, &key).count(), "confirmed": confirmed, "more": similar.items, "ready": similar.ready, "pendingPhotos": similar.pending}),
     )
 }
 
@@ -904,11 +918,10 @@ mod imp {
         let refs: Vec<&[f32]> = gallery.iter().map(|e| &e[..]).collect();
         // the faces set aside for them are counter-examples too (#3249): a face more like one of them than like this
         // person goes after every other one, so the faces like a rejected one move down with it (the latest ones)
-        let rejected: Vec<Arc<[f32]>> = s
-            .person_dismissed
-            .get(key)
+        let rejected: Vec<Arc<[f32]>> = super::still_set_aside(s, key)
+            .collect::<Vec<_>>()
             .into_iter()
-            .flat_map(|v| v.iter().rev())
+            .rev()
             .filter_map(|f| s.faces.index.get(f.photo.0, &f.face).cloned())
             .take(MAX_COUNTER_EXAMPLES)
             .collect();

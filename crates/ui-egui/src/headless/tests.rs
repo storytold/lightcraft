@@ -1098,14 +1098,10 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
     assert!(h.app.ui.dismissed_faces.contains(&("jane doe".into(), ids[1].0, 0)), "and hidden at once, for her only");
     assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].name, None, "the face itself is not touched");
     assert!(h.app.widgets.iter().any(|(w, _)| w == "person:restoreDismissed"), "the button that brings it back");
-    // the last face offered set aside too: the page is asked for again, for the next ones (none in the demo)
-    assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.more.len()), Some(2), "not asked for again while one is left");
-    let r = h.request("ui.clickWidget", json!({"id": format!("more-face-x:{}:0", ids[2].0)}), t);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert_eq!(h.app.session.person_dismissed.get("jane doe").map(Vec::len), Some(2));
-    assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.more.len()), Some(0), "the next ones are looked for");
-    // set aside for her, not for someone else: the same face offered on another person's page is shown there
+    assert!(h.app.caches.person_page_reorder, "the order may have changed: All above waits for the page made again");
+    // set aside for her, not for someone else: the same face offered on another person's page is shown there, while
+    // it is still hidden on hers
+    let jane = h.app.caches.person_page.clone();
     let other = crate::panels::person::PersonPage {
         name: "John Roe".into(),
         total: 1,
@@ -1119,21 +1115,33 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
     };
     h.app.caches.person_page = Some(("John Roe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(other)));
     h.app.ui.person_page = Some("John Roe".into());
-    h.app.caches.person_page_gen = h.app.session.people_gen;
     h.step();
     assert!(h.app.widgets.iter().any(|(w, _)| *w == x), "offered to John Roe all the same");
+    assert!(h.app.ui.dismissed_faces.contains(&("jane doe".into(), ids[1].0, 0)), "still hidden for her");
+    h.app.caches.person_page = jane;
     h.app.ui.person_page = Some("Jane Doe".into());
-    h.app.caches.person_page = None;
+    h.step();
+    assert!(!h.app.widgets.iter().any(|(w, _)| *w == x), "and not shown on her page");
+    // the last face offered set aside too: the page is asked for again, for the next ones (none in the demo)
+    assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.more.len()), Some(2), "not asked for again while one is left");
+    let r = h.request("ui.clickWidget", json!({"id": format!("more-face-x:{}:0", ids[2].0)}), t);
+    assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
+    assert_eq!(h.app.session.person_dismissed.get("jane doe").map(Vec::len), Some(2));
+    assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.more.len()), Some(0), "the next ones are looked for");
+    assert!(!h.app.caches.person_page_reorder);
     let r = h.request("ui.clickWidget", json!({"id": "person:restoreDismissed"}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(h.app.session.person_dismissed.is_empty());
     assert!(h.app.ui.dismissed_faces.is_empty());
     // set aside again, then brought back by an agent while the page is open: hidden here no longer either
-    h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page)));
-    h.app.caches.person_page_gen = h.app.session.people_gen;
-    h.step();
+    let set_page = |h: &mut Headless| {
+        h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page.clone())));
+        h.app.caches.person_page_gen = h.app.session.people_gen;
+        h.step();
+    };
+    set_page(&mut h);
     let r = h.request("ui.clickWidget", json!({"id": x}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
@@ -1141,6 +1149,35 @@ fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
     h.request("engine.execute", json!({"command": "faces.dismiss", "params": {"name": "Jane Doe", "restore": true}}), t);
     h.settle(SETTLE);
     assert!(h.app.ui.dismissed_faces.is_empty(), "{:?}", h.app.ui.dismissed_faces);
+    // All above just after a face is set aside: the page is made again first (the set-aside face may move others down),
+    // and nothing is named from the old order
+    set_page(&mut h);
+    let r = h.request("ui.clickWidget", json!({"id": x}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": format!("more-face-above:{}:0", ids[2].0)}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let named = |h: &Headless, i: usize| h.app.session.catalog.photo(ids[i]).unwrap().meta.regions[0].name.clone();
+    assert_eq!(named(&h, 2), None, "not named from the old order");
+    assert!(!h.app.caches.person_page_reorder, "the page is made again");
+    h.request("engine.execute", json!({"command": "faces.dismiss", "params": {"name": "Jane Doe", "restore": true}}), t);
+    h.settle(SETTLE);
+    // set aside by an agent while the page is open, just before A: the key waits for the page made again rather than
+    // naming from this one (which still offers the face set aside)
+    set_page(&mut h);
+    let tile = format!("more-face:{}:0", ids[2].0);
+    let rect = h.app.widgets.iter().find(|(id, _)| *id == tile).unwrap().1;
+    h.request("ui.move", json!({"x": rect.center().x, "y": rect.center().y}), t);
+    h.step();
+    // the key reaches the very next frame, before the page could be made again (`ui.key` would lay a frame out first)
+    h.app.session.execute("faces.dismiss", &json!({"name": "Jane Doe", "photo": ids[1].0, "index": 0})).unwrap();
+    for pressed in [true, false] {
+        h.app.synthetic.push(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+    }
+    h.step();
+    h.step();
+    assert_eq!((named(&h, 1), named(&h, 2)), (None, None), "nothing named from the page made before");
 }
 
 /// A person's More grid confirms a score-bounded batch through either ↑ or the focused tile's A key. Both
