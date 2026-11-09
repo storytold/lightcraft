@@ -146,16 +146,16 @@ pub struct ColorOps {
     pub skin: f32,
 }
 
-/// How much of V6's tint the global colour-grading wheel keeps under V7.
-pub const GLOBAL_WHEEL_V7: f32 = 0.45;
+/// How much of V6's tint the global colour-grading wheel keeps under V8.
+pub const GLOBAL_WHEEL_V8: f32 = 0.45;
 
-/// The global wheel: from V7 its tint is [`GLOBAL_WHEEL_V7`] of the other wheels' at the same saturation. On Lightroom
+/// The global wheel: from V8 its tint is [`GLOBAL_WHEEL_V8`] of the other wheels' at the same saturation. On Lightroom
 /// exports of real edits with Global saturation 10 (three photos) and 16 (one), V6 left the photos about +2 b* and up
 /// to +2.8 a* warmer than the exports, and 0.4 to 0.6 of the tint cancels it; the shadows and highlights wheels
 /// measured right as they are (Highlights 23 got further from the exports when halved). Its luminance is unchanged.
 fn global_wheel(w: &lightcraft_develop::Wheel, process: lightcraft_develop::Process) -> WheelK {
     let k = wheel(w);
-    if process >= lightcraft_develop::Process::V7 { WheelK { a: k.a * GLOBAL_WHEEL_V7, b: k.b * GLOBAL_WHEEL_V7, ..k } } else { k }
+    if process >= lightcraft_develop::Process::V8 { WheelK { a: k.a * GLOBAL_WHEEL_V8, b: k.b * GLOBAL_WHEEL_V8, ..k } } else { k }
 }
 
 fn wheel(w: &lightcraft_develop::Wheel) -> WheelK {
@@ -469,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn v7_global_wheel_tints_at_its_calibrated_share() {
+    fn v8_global_wheel_tints_at_its_calibrated_share() {
         use lightcraft_develop::Process;
         let tint = |p: Process, global: bool| {
             let mut s = DevelopSettings { process: p.version(), ..Default::default() };
@@ -484,9 +484,10 @@ mod tests {
             let k = wheels[if global { 3 } else { 0 }];
             (k.a, k.b)
         };
-        let (v6, v7) = (tint(Process::V6, true), tint(Process::V7, true));
+        assert_eq!(tint(Process::V6, true), tint(Process::V7, true), "V7 tints as V6");
+        let (v6, v7) = (tint(Process::V7, true), tint(Process::V8, true));
         assert!(v6.0 != 0.0 && v6.1 != 0.0);
-        assert!((v7.0 - v6.0 * GLOBAL_WHEEL_V7).abs() < 1e-7 && (v7.1 - v6.1 * GLOBAL_WHEEL_V7).abs() < 1e-7);
-        assert_eq!(tint(Process::V6, false), tint(Process::V7, false), "the shadows wheel is unchanged");
+        assert!((v7.0 - v6.0 * GLOBAL_WHEEL_V8).abs() < 1e-7 && (v7.1 - v6.1 * GLOBAL_WHEEL_V8).abs() < 1e-7);
+        assert_eq!(tint(Process::V7, false), tint(Process::V8, false), "the shadows wheel is unchanged");
     }
 }

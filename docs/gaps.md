@@ -91,7 +91,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
-| 2026-11-06 | minor | Gap 3: process V7 eases global Shadows off at large amounts, and negative Texture and the Global grading wheel act less, fitted to 56 Lightroom exports of real Canon edits (mean ΔE 9.5 → 9.0, #523); the gap stays open and hours are unchanged |
+| 2026-11-06 | minor | Gap 3: process V8 eases global Shadows off at large amounts, and negative Texture and the Global grading wheel act less, fitted to 56 Lightroom exports of real Canon edits (mean ΔE 9.5 → 9.0, #523); the gap stays open and hours are unchanged |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-11-05 | minor | Gap 3: process V5 rolls a raw's tone curve off into white in stops, so raising Exposure keeps the highlights the sensor recorded (#1632); the gap stays open (no Lightroom comparison) and hours are unchanged |
 | 2026-10-27 | minor | Gap 26: the loupe shows built previews (they were rendered again), photos ahead and the whole view are prepared in the background with settings per mode; gap not closed |

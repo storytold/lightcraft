@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-### Shadows, Texture and the Global wheel closer to Lightroom (process V7)
+### Film grain that looks like film (process V7)
+- Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
+  rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
+  and blown highlights stay clean, and the fit-to-window preview shows the grain you will export. Amount, Size and
+  Roughness keep their meaning and Lightroom Classic's strength and grain size. This is rendering process 7: new photos
+  (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
+  See [film grain](grain.md).
+
+### Shadows, Texture and the Global wheel closer to Lightroom (process V8)
 - Global Shadows eases off at large amounts as Lightroom's does (issue #523): +100 acts at 0.43 of what it did, +52 at
   0.6, and small amounts less so (about 12 % less at +10). Strong Shadows no longer lift the darkest tones about 6 L*
   above Lightroom's render of the same edit. Highlights keeps its amounts, and masks keep theirs. New photos get it; photos edited before
@@ -10,8 +18,8 @@
 - A negative Texture smooths at two thirds of what it did: at −27 it took about 8 % more fine detail than Lightroom
   does. The global colour-grading wheel tints at 0.45 of what it did: a Global tint of 16 made a photo visibly pinker
   and warmer than Lightroom's (+2.8 a*, +2.2 b*). The shadows, midtones and highlights wheels are unchanged.
-- Fitted to 56 Lightroom exports of real portrait edits (Canon EOS R6 and R5 raws): mean ΔE to the exports 9.5 → 8.7,
-  and on the 16 landscape photos the sidecar fixes of #2239 don't touch, 8.4 → 7.4.
+- Fitted to 56 Lightroom exports of real portrait edits (Canon EOS R6 and R5 raws): mean ΔE to the exports 9.5 → 9.0,
+  and on the 16 landscape photos the sidecar fixes of #2239 don't touch, 8.4 → 7.8.
 
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps

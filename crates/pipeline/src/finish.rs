@@ -110,6 +110,50 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
 /// Hash constants of [`grain_noise`] (shared with the GPU kernel).
 pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
 
+/// The grain of processes V1 to V3: two octaves of value noise. Frozen: photos on those
+/// processes keep rendering with it (`docs/process-versions.md`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ValueGrain {
+    /// Amplitude (display-encoded).
+    pub amt: f32,
+    /// Noise cell size (output pixels).
+    pub cell: f32,
+    /// Roughness 0..1: weight of the finer octave.
+    pub rough: f32,
+    pub seed: u32,
+}
+
+/// A render's film grain. The model follows the photo's process: changing it would change how
+/// existing photos look, so the crystal grain came with process V4.
+#[derive(Clone, Debug)]
+pub enum GrainModel {
+    /// V1 to V3: value noise.
+    Value(ValueGrain),
+    /// V4 and later: crystal layers ([`crate::crystal`]).
+    Crystal(crate::crystal::CrystalGrain),
+}
+
+impl GrainModel {
+    /// The grain `s` renders with at `px_per_long` output pixels per long edge (`None`: none);
+    /// `draft`: for a drag ([`crate::crystal::CrystalGrain::draft`]).
+    pub fn new(s: &DevelopSettings, px_per_long: f64, draft: bool) -> Option<GrainModel> {
+        let g = &s.grain;
+        match s.process.process() {
+            Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 => (g.amount > 0.0).then(|| {
+                let cell = (0.0006 + (g.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
+                GrainModel::Value(ValueGrain {
+                    amt: (g.amount / 100.0) as f32 * 0.13,
+                    cell: cell.max(0.6),
+                    rough: (g.roughness / 100.0) as f32,
+                    seed: g.seed,
+                })
+            }),
+            Process::V7 | Process::V8 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
+        }
+    }
+}
+
 #[inline]
 fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     // A degenerate frame (zero-width crop) maps pixels to NaN/inf coordinates: no grain there.
@@ -130,6 +174,21 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     let a = h(i, j) + (h(i + 1, j) - h(i, j)) * u;
     let b = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * u;
     a + (b - a) * v
+}
+
+/// The crystal grain of output row `y` (`w` pixels) when its pixels are axis-aligned; empty
+/// otherwise (and without crystal grain): the pixels then take it one by one.
+fn crystal_row(fp: &FinishParams, y: usize, w: usize) -> Vec<f32> {
+    let Some(GrainModel::Crystal(g)) = &fp.grain else { return Vec::new() };
+    let long = fp.ow.max(fp.oh);
+    let (a, b) = (fp.out_to_norm.apply(Point::new(0.5, y as f64 + 0.5)), fp.out_to_norm.apply(Point::new(1.5, y as f64 + 0.5)));
+    let (gx, gy) = (a.x * fp.ow / long, a.y * fp.oh / long);
+    let (dx, dy) = ((b.x - a.x) * fp.ow / long, (b.y - a.y) * fp.oh / long);
+    let mut out = vec![0.0; w];
+    if !g.row(gx, gy, dx, dy, &mut out) {
+        out.clear();
+    }
+    out
 }
 
 /// Number of per-mask terms in [`mask_terms`].
@@ -217,8 +276,8 @@ pub struct FinishParams {
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
-    /// Grain: amount, cell size (px), roughness, seed.
-    pub grain: Option<(f32, f32, f32, u32)>,
+    /// Film grain: the model of the photo's process ([`GrainModel`]).
+    pub grain: Option<GrainModel>,
     /// Output px → normalized oriented coordinates.
     pub out_to_norm: lightcraft_geom::Affine,
     pub ow: f64,
@@ -241,12 +300,14 @@ pub struct FinishParamsInput<'a> {
     pub px_per_long: f64,
     pub air_pre: f32,
     pub space: OutputSpace,
+    /// A draft render (a drag, [`crate::Quality::Draft`]): see [`GrainModel::new`].
+    pub draft: bool,
 }
 
 impl FinishParams {
     /// Parameters for a `w × h` render into `space`; `ev`/`air_pre` as in [`crate::Prepared`].
     pub fn new(input: FinishParamsInput<'_>) -> FinishParams {
-        let FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long, air_pre, space } = input;
+        let FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long, air_pre, space, draft } = input;
         let effects = s.section_enabled("effects");
         let (clar, tex, dehaze) = if effects {
             ((s.effects.clarity / 100.0) as f32, texture_slider(s.effects.texture, s.process.process()), (s.effects.dehaze / 100.0) as f32)
@@ -263,10 +324,7 @@ impl FinishParams {
             && frame.oh.is_finite()
             && frame.ow.max(frame.oh) > 0.0
             && out_to_norm.0.iter().all(|v| v.is_finite());
-        let grain = (s.grain.amount > 0.0 && effects && finite_frame).then(|| {
-            let cell = (0.0006 + (s.grain.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
-            ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
-        });
+        let grain = if effects && finite_frame { GrainModel::new(s, px_per_long, draft) } else { None };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
         FinishParams {
@@ -323,14 +381,14 @@ impl FinishParams {
     }
 }
 
-/// How much a full global Shadows (−100 or +100) eases off from V6's strength under V7: it acts at
+/// How much a full global Shadows (−100 or +100) eases off from V6's strength under V8: it acts at
 /// `1 / (1 + SHADOWS_EASE)` of it.
 pub const SHADOWS_EASE: f64 = 1.33;
 
 /// A global Shadows slider (−100..100) as the strength the local tone operator takes (−1..1), with `ease` =
 /// [`SHADOWS_EASE`].
 ///
-/// Up to V6 the strength is the slider's, linearly. From V7 it eases off as the amount grows, `a / (1 + ease·|a|)`
+/// Up to V6 the strength is the slider's, linearly. From V8 it eases off as the amount grows, `a / (1 + ease·|a|)`
 /// for `a` = slider / 100: slope 1 at 0, so small amounts change least (Shadows +10 acts at 0.88 of V6's), and
 /// `1 / (1 + ease)` of V6's at ±100.
 /// Fitted to 56 Lightroom exports of real portrait edits (Canon raws, Shadows +40 to +100): V6 left their darkest
@@ -339,7 +397,7 @@ pub const SHADOWS_EASE: f64 = 1.33;
 /// too dark, but Lightroom's response to Highlights alone is close to linear and depends on the frame's content
 /// (single-slider exports, #3923), which a fixed easing would not follow. Masks keep their linear amounts.
 pub fn tone_slider(value: f64, ease: f64, process: lightcraft_develop::Process) -> f32 {
-    if process < lightcraft_develop::Process::V7 {
+    if process < lightcraft_develop::Process::V8 {
         return (value / 100.0) as f32;
     }
     let a = (value / 100.0).clamp(-1.0, 1.0);
@@ -349,17 +407,17 @@ pub fn tone_slider(value: f64, ease: f64, process: lightcraft_develop::Process) 
     (a / (1.0 + ease * a.abs())) as f32
 }
 
-/// How much of V6's strength a global negative Texture keeps under V7.
-pub const NEGATIVE_TEXTURE_V7: f64 = 0.67;
+/// How much of V6's strength a global negative Texture keeps under V8.
+pub const NEGATIVE_TEXTURE_V8: f64 = 0.67;
 
 /// The global Texture slider (−100..100) as the strength of the texture band (−1..1).
 ///
-/// From V7 a negative amount smooths at [`NEGATIVE_TEXTURE_V7`] of V6's strength: at Texture −27, V6 left the
+/// From V8 a negative amount smooths at [`NEGATIVE_TEXTURE_V8`] of V6's strength: at Texture −27, V6 left the
 /// 1–8 px detail of four full-size Lightroom exports of real Canon EOS R6 edits at 0.87–0.94 of the exports' and
 /// 0.67 of the amount brings it to 0.94–1.02. Positive amounts, masks and V1 to V6 are unchanged.
 pub fn texture_slider(value: f64, process: lightcraft_develop::Process) -> f32 {
     let t = value / 100.0;
-    if process >= lightcraft_develop::Process::V7 && t < 0.0 { (t * NEGATIVE_TEXTURE_V7) as f32 } else { t as f32 }
+    if process >= lightcraft_develop::Process::V8 && t < 0.0 { (t * NEGATIVE_TEXTURE_V8) as f32 } else { t as f32 }
 }
 
 /// The base tone map (scene → display luminance, with Contrast, Whites and Blacks) of `s`'s
@@ -388,7 +446,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         },
         // V4, with a raw's tone curve rolling off into white in stops: a camera curve past its last
         // knot, the generic curve from half a stop below its white point instead of clipping (issue #1632)
-        Process::V5 | Process::V6 | Process::V7 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V5 | Process::V6 | Process::V7 | Process::V8 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
             None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -397,18 +455,20 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
 }
 
 /// Finish the prepared pipeline stages into an 8-bit RGBA image in `space` (or `display`).
-pub(crate) fn finish(
-    p: &Prepared,
-    s: &DevelopSettings,
-    frame: &Frame,
-    info: &SourceInfo,
-    space: OutputSpace,
-    display: Option<&crate::DisplaySpace>,
-    proof: Option<crate::Proof>,
-) -> Rgba8 {
+pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, req: &crate::RenderRequest) -> Rgba8 {
+    let (space, display, proof) = (req.space, req.display.as_ref(), req.proof);
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp =
-        FinishParams::new(FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long: p.px_per_long, air_pre: p.air, space });
+    let draft = req.quality == crate::Quality::Draft;
+    let mut fp = FinishParams::new(FinishParamsInput {
+        settings: s,
+        frame,
+        info,
+        image_size: (w, h),
+        px_per_long: p.px_per_long,
+        air_pre: p.air,
+        space,
+        draft,
+    });
     fp.proof = proof.map(|pr| pr.params(space));
     if let Some(d) = display {
         fp.for_display(d, proof);
@@ -428,19 +488,21 @@ pub(crate) fn finish(
 }
 
 /// [`finish`] into 16-bit display-encoded or 32-bit float linear samples (output primaries).
-pub(crate) fn finish_deep(
-    p: &Prepared,
-    s: &DevelopSettings,
-    frame: &Frame,
-    info: &SourceInfo,
-    space: OutputSpace,
-    depth: OutputDepth,
-    proof: Option<crate::Proof>,
-) -> DeepImage {
+pub(crate) fn finish_deep(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, req: &crate::RenderRequest) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
+    let (space, depth, proof) = (req.space, req.depth, req.proof);
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp =
-        FinishParams::new(FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long: p.px_per_long, air_pre: p.air, space });
+    let draft = req.quality == crate::Quality::Draft;
+    let mut fp = FinishParams::new(FinishParamsInput {
+        settings: s,
+        frame,
+        info,
+        image_size: (w, h),
+        px_per_long: p.px_per_long,
+        air_pre: p.air,
+        space,
+        draft,
+    });
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let samples = match depth {
@@ -492,6 +554,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let hdr = peak > 1.0;
     let mut out = vec![T::default(); w * h];
     for_rows(&mut out, w, |y, row| {
+        // the crystal grain of the whole row at once when its pixels are axis-aligned
+        let crystal_row = crystal_row(fp, y, row.len());
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;
             let raw = p.img.data[i];
@@ -626,20 +690,31 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
             }
-            if let Some((amt, cell, rough, seed)) = *grain {
-                let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                let sc = fp.px_per_long as f32 / cell;
-                let mut g = grain_noise(gx * sc, gy * sc, seed);
-                g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55) * rough * 0.7;
-                let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-                if hdr {
-                    lum = lum.clamp(0.0, 1.0);
+            match grain {
+                Some(GrainModel::Value(g)) => {
+                    // V1/V2 (frozen): exactly the arithmetic those processes always had
+                    let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                    let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
+                    let sc = fp.px_per_long as f32 / g.cell;
+                    let mut v = grain_noise(gx * sc, gy * sc, g.seed);
+                    v = v * (1.0 - g.rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, g.seed ^ 0x55) * g.rough * 0.7;
+                    let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+                    if hdr {
+                        lum = lum.clamp(0.0, 1.0);
+                    }
+                    let k = g.amt * v * (0.35 + 2.6 * lum * (1.0 - lum));
+                    if k.is_finite() {
+                        e = e.map(|v| v + k);
+                    }
                 }
-                let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
-                if k.is_finite() {
-                    e = e.map(|v| v + k);
-                }
+                Some(GrainModel::Crystal(g)) => match crystal_row.get(x) {
+                    Some(&f) => e = g.apply_field(e, f),
+                    None => {
+                        let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                        e = g.apply(e, (n.x * fp.ow / long) as f32, (n.y * fp.oh / long) as f32);
+                    }
+                },
+                None => {}
             }
             let e = match &p_lut {
                 Some((l, k)) if hdr => {
@@ -945,41 +1020,41 @@ mod tests {
     use lightcraft_develop::Process;
 
     #[test]
-    fn tone_sliders_ease_off_from_v7_only() {
+    fn tone_sliders_ease_off_from_v8_only() {
         for v in [-100.0, -52.0, 0.0, 13.0, 100.0, 250.0] {
-            for p in [Process::V1, Process::V6] {
+            for p in [Process::V1, Process::V6, Process::V7] {
                 assert_eq!(tone_slider(v, SHADOWS_EASE, p), (v / 100.0) as f32, "{p:?} keeps the linear amount");
             }
         }
-        let v7 = |v: f64, ease: f64| tone_slider(v, ease, Process::V7);
-        assert_eq!(v7(0.0, SHADOWS_EASE), 0.0);
-        assert!((v7(1.0, SHADOWS_EASE) - 0.01).abs() < 2e-4, "slope 1 at 0");
-        assert!((v7(10.0, SHADOWS_EASE) / 0.1 - 0.883).abs() < 0.005, "Shadows +10 eases off by about 12 %");
-        assert!((v7(100.0, SHADOWS_EASE) - 0.43).abs() < 0.005);
-        assert!((v7(52.0, SHADOWS_EASE) - 0.307).abs() < 0.005);
-        assert!((v7(-100.0, SHADOWS_EASE) + 0.43).abs() < 0.005, "symmetric");
-        assert_eq!(v7(250.0, SHADOWS_EASE), v7(100.0, SHADOWS_EASE), "clamped to the slider's range");
-        assert_eq!(v7(f64::NAN, SHADOWS_EASE), 0.0);
+        let v8 = |v: f64, ease: f64| tone_slider(v, ease, Process::V8);
+        assert_eq!(v8(0.0, SHADOWS_EASE), 0.0);
+        assert!((v8(1.0, SHADOWS_EASE) - 0.01).abs() < 2e-4, "slope 1 at 0");
+        assert!((v8(10.0, SHADOWS_EASE) / 0.1 - 0.883).abs() < 0.005, "Shadows +10 eases off by about 12 %");
+        assert!((v8(100.0, SHADOWS_EASE) - 0.43).abs() < 0.005);
+        assert!((v8(52.0, SHADOWS_EASE) - 0.307).abs() < 0.005);
+        assert!((v8(-100.0, SHADOWS_EASE) + 0.43).abs() < 0.005, "symmetric");
+        assert_eq!(v8(250.0, SHADOWS_EASE), v8(100.0, SHADOWS_EASE), "clamped to the slider's range");
+        assert_eq!(v8(f64::NAN, SHADOWS_EASE), 0.0);
         let mut last = -1.0;
         for i in -100..=100 {
-            let y = v7(i as f64, SHADOWS_EASE);
+            let y = v8(i as f64, SHADOWS_EASE);
             assert!(y > last, "monotonic at {i}");
             last = y;
         }
     }
 
     #[test]
-    fn v7_eases_negative_texture_only() {
+    fn v8_eases_negative_texture_only() {
         for v in [-100.0, -27.0, 0.0, 35.0] {
-            assert_eq!(texture_slider(v, Process::V6), (v / 100.0) as f32);
+            assert_eq!((texture_slider(v, Process::V6), texture_slider(v, Process::V7)), ((v / 100.0) as f32, (v / 100.0) as f32));
         }
-        assert!((texture_slider(-27.0, Process::V7) - (-0.27 * NEGATIVE_TEXTURE_V7) as f32).abs() < 1e-7);
-        assert_eq!(texture_slider(35.0, Process::V7), 0.35);
-        assert_eq!(texture_slider(0.0, Process::V7), 0.0);
+        assert!((texture_slider(-27.0, Process::V8) - (-0.27 * NEGATIVE_TEXTURE_V8) as f32).abs() < 1e-7);
+        assert_eq!(texture_slider(35.0, Process::V8), 0.35);
+        assert_eq!(texture_slider(0.0, Process::V8), 0.0);
     }
 
     #[test]
-    fn v7_shadows_lift_less_than_v6() {
+    fn v8_shadows_lift_less_than_v7() {
         let src = lightcraft_raster::Rgb32f::from_fn(64, 8, |x, _| [0.002 * 1.12f32.powi(x as i32); 3]);
         let mean = |p: Process| {
             let mut s = DevelopSettings { process: p.version(), ..Default::default() };
@@ -988,18 +1063,18 @@ mod tests {
             r.image.data.iter().take(24).map(|px| px[1] as f32).sum::<f32>() / 24.0
         };
         let base = {
-            let s = DevelopSettings { process: Process::V7.version(), ..Default::default() };
+            let s = DevelopSettings { process: Process::V8.version(), ..Default::default() };
             let r = crate::render(&src, &SourceInfo::default(), &s, &crate::RenderRequest::fit(64, 8));
             r.image.data.iter().take(24).map(|px| px[1] as f32).sum::<f32>() / 24.0
         };
-        let (v6, v7) = (mean(Process::V6), mean(Process::V7));
-        assert!(v7 > base && v7 < v6, "Shadows still lifts the darks, less than V6: none {base}, V6 {v6}, V7 {v7}");
+        let (v7, v8) = (mean(Process::V7), mean(Process::V8));
+        assert!(v8 > base && v8 < v7, "Shadows still lifts the darks, less than V7: none {base}, V7 {v7}, V8 {v8}");
     }
 
     #[test]
     fn a_render_takes_the_calibrated_tone_strengths() {
         // the strengths that matched the Lightroom exports: Shadows +52 → ~0.31 (0.6 of V6's), +100 → 0.43;
-        // Highlights stays the slider's, and V6 takes the slider's for both
+        // Highlights stays the slider's, and V7 takes the slider's for both
         let params = |p: Process, highlights: f64, shadows: f64| {
             let mut s = DevelopSettings { process: p.version(), ..Default::default() };
             (s.light.highlights, s.light.shadows) = (highlights, shadows);
@@ -1013,13 +1088,14 @@ mod tests {
                 px_per_long: 64.0,
                 air_pre: 0.0,
                 space: OutputSpace::Srgb,
+                draft: false,
             });
             (fp.hl, fp.sh)
         };
         for (highlights, shadows, hl, sh) in [(0.0, 52.0, 0.0, 0.307), (-100.0, 100.0, -1.0, 0.429), (-48.0, 0.0, -0.48, 0.0)] {
-            let (got_hl, got_sh) = params(Process::V7, highlights, shadows);
-            assert!((got_hl - hl).abs() < 0.002 && (got_sh - sh).abs() < 0.002, "V7 {highlights}/{shadows}: {got_hl}, {got_sh}");
-            assert_eq!(params(Process::V6, highlights, shadows), ((highlights / 100.0) as f32, (shadows / 100.0) as f32));
+            let (got_hl, got_sh) = params(Process::V8, highlights, shadows);
+            assert!((got_hl - hl).abs() < 0.002 && (got_sh - sh).abs() < 0.002, "V8 {highlights}/{shadows}: {got_hl}, {got_sh}");
+            assert_eq!(params(Process::V7, highlights, shadows), ((highlights / 100.0) as f32, (shadows / 100.0) as f32));
         }
     }
 
