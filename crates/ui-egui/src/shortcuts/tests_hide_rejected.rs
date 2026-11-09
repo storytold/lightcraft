@@ -48,7 +48,12 @@ fn frame(app: &mut LightcraftApp, ctx: &egui::Context, key: Option<(Key, Modifie
     out.textures_delta.clear();
 }
 
-const CMD_ALT: Modifiers = Modifiers { alt: true, ctrl: false, shift: false, mac_cmd: false, command: true };
+/// The chord as egui reports it on macOS (⌥⌘X) and on Windows and Linux (Ctrl+Alt+X, where Ctrl
+/// is also `command`).
+const CHORDS: [(&str, Modifiers); 2] = [
+    ("macOS", Modifiers { alt: true, ctrl: false, shift: false, mac_cmd: true, command: true }),
+    ("Windows/Linux", Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true }),
+];
 
 /// The photos shown, by id.
 fn shown(app: &mut LightcraftApp) -> Vec<u64> {
@@ -71,18 +76,20 @@ fn the_key_is_cmd_alt_x() {
 
 #[test]
 fn the_key_hides_the_rejects_and_shows_them_again_in_the_grids_and_the_loupe() {
-    for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail] {
-        let mut app = app().unwrap();
-        app.ui.view = view;
-        let ctx = egui::Context::default();
-        assert_eq!(shown(&mut app), vec![1, 2], "{view:?}: four stars, rejects included");
-        frame(&mut app, &ctx, Some((Key::X, CMD_ALT)), None);
-        assert_eq!(shown(&mut app), vec![1], "{view:?}: four stars and not rejected");
-        assert_eq!(crate::menubar::checked(&app, "library.hideRejected"), Some(true));
-        frame(&mut app, &ctx, Some((Key::X, CMD_ALT)), None);
-        assert_eq!(shown(&mut app), vec![1, 2], "{view:?}: the rejects are back, the stars still apply");
-        assert_eq!(crate::menubar::checked(&app, "library.hideRejected"), Some(false));
-        assert_eq!(flags(&app), vec![(1, Flag::Pick), (2, Flag::Reject), (3, Flag::None), (4, Flag::Reject)], "{view:?}: no flag changed");
+    for (os, chord) in CHORDS {
+        for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid, ViewMode::Detail] {
+            let mut app = app().unwrap();
+            app.ui.view = view;
+            let ctx = egui::Context::default();
+            assert_eq!(shown(&mut app), vec![1, 2], "{os} {view:?}: four stars, rejects included");
+            frame(&mut app, &ctx, Some((Key::X, chord)), None);
+            assert_eq!(shown(&mut app), vec![1], "{os} {view:?}: four stars and not rejected");
+            assert_eq!(crate::menubar::checked(&app, "library.hideRejected"), Some(true), "{os} {view:?}");
+            frame(&mut app, &ctx, Some((Key::X, chord)), None);
+            assert_eq!(shown(&mut app), vec![1, 2], "{os} {view:?}: the rejects are back, the stars still apply");
+            assert_eq!(crate::menubar::checked(&app, "library.hideRejected"), Some(false), "{os} {view:?}");
+            assert_eq!(flags(&app), vec![(1, Flag::Pick), (2, Flag::Reject), (3, Flag::None), (4, Flag::Reject)], "{os} {view:?}: no flag changed");
+        }
     }
 }
 
@@ -107,13 +114,15 @@ fn the_menu_item_does_the_same_and_its_check_follows_the_filter_bar() {
 fn plain_x_still_rejects_and_the_chord_yields_to_a_focused_text_field() {
     let mut app = app().unwrap();
     app.ui.view = ViewMode::PhotoGrid;
-    let ctx = egui::Context::default();
     // Ctrl+Alt is AltGr on Windows: in a text box it types a character, so the chord must not act
-    let mut text = String::new();
-    frame(&mut app, &ctx, None, Some(&mut text));
-    frame(&mut app, &ctx, Some((Key::X, CMD_ALT)), Some(&mut text));
-    assert!(ctx.egui_wants_keyboard_input());
-    assert_eq!(crate::menubar::checked(&app, "library.hideRejected"), Some(false), "the text field kept the key");
+    for (os, chord) in CHORDS {
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        frame(&mut app, &ctx, None, Some(&mut text));
+        frame(&mut app, &ctx, Some((Key::X, chord)), Some(&mut text));
+        assert!(ctx.egui_wants_keyboard_input(), "{os}");
+        assert_eq!(crate::menubar::checked(&app, "library.hideRejected"), Some(false), "{os}: the text field kept the key");
+    }
     // without a text field, X alone is still Flag as Rejected on the selected photo
     let ctx = egui::Context::default();
     frame(&mut app, &ctx, Some((Key::X, Modifiers::NONE)), None);

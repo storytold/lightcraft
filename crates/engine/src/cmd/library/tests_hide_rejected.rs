@@ -1,10 +1,11 @@
 //! `library.hideRejected` (View > Hide Rejected Photos, Cmd+Alt+X; issue #3513) through the real engine.
-use lightcraft_catalog::{Flag, Op, Photo, PhotoId, Source};
+use lightcraft_catalog::{ColorLabel, Flag, Op, Photo, PhotoId, Source};
 use serde_json::json;
 
 use crate::{Result, Session};
 
-/// Five photos: 1 picked, 2 and 5 rejected, 3 and 4 unflagged; 1, 2 and 4 have five stars.
+/// Five photos: 1 picked, 2 and 5 rejected, 3 and 4 unflagged; 1, 2 and 4 have five stars; 1, 2
+/// and 3 are labelled red.
 fn session() -> Result<Session> {
     let mut s = Session::new();
     for (id, rating, flag) in [(1, 5, Flag::Pick), (2, 5, Flag::Reject), (3, 2, Flag::None), (4, 5, Flag::None), (5, 1, Flag::Reject)] {
@@ -19,6 +20,7 @@ fn session() -> Result<Session> {
         );
         photo.rating = rating;
         photo.flag = flag;
+        photo.label = (id <= 3).then_some(ColorLabel::Red);
         s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) })?;
     }
     Ok(s)
@@ -56,6 +58,48 @@ fn the_rest_of_the_filter_stays() {
     s.execute("library.hideRejected", &json!({})).unwrap();
     assert_eq!(shown(&mut s), vec![1, 2, 4], "five stars again, rejects included");
     assert_eq!(s.filter.rating, 5);
+    // stars, a label and text together come back exactly as they were
+    s.execute("library.filter", &json!({"rating": 5, "labels": ["red"], "text": "jpg"})).unwrap();
+    let before = s.filter.clone();
+    assert_eq!(shown(&mut s), vec![1, 2]);
+    s.execute("library.hideRejected", &json!({})).unwrap();
+    assert_eq!(shown(&mut s), vec![1], "five stars, red, matching the text and not rejected");
+    assert_eq!((s.filter.rating, s.filter.labels.clone(), s.filter.text.as_str()), (5, vec![ColorLabel::Red], "jpg"));
+    s.execute("library.hideRejected", &json!({})).unwrap();
+    assert_eq!(s.filter, before);
+    assert_eq!(shown(&mut s), vec![1, 2]);
+}
+
+#[test]
+fn picked_and_unflagged_in_either_order_is_the_hidden_state() {
+    let mut s = session().unwrap();
+    s.execute("library.filter", &json!({"flags": ["none", "pick"]})).unwrap();
+    assert!(s.rejects_hidden(), "the order the flags were given in doesn't matter");
+    let r = s.execute("library.hideRejected", &json!({})).unwrap();
+    assert_eq!(r["hidden"], json!(false), "so the key shows the rejects again");
+    assert_eq!(shown(&mut s), vec![1, 2, 3, 4, 5]);
+}
+
+#[test]
+fn hide_false_leaves_another_flag_filter_alone() {
+    let mut s = session().unwrap();
+    for (flags, expect) in [(json!(["pick"]), vec![1]), (json!(["reject"]), vec![2, 5])] {
+        s.execute("library.filter", &json!({"flags": flags})).unwrap();
+        let before = s.filter.clone();
+        let r = s.execute("library.hideRejected", &json!({"hide": false})).unwrap();
+        assert_eq!((r["hidden"].clone(), r["count"].clone()), (json!(false), json!(expect.len())), "{flags}");
+        assert_eq!(s.filter, before, "{flags}: the row is already off, so nothing changes");
+        assert_eq!(shown(&mut s), expect, "{flags}");
+    }
+}
+
+#[test]
+fn hide_null_toggles_as_a_missing_hide_does() {
+    let mut s = session().unwrap();
+    assert_eq!(s.execute("library.hideRejected", &json!({"hide": null})).unwrap()["hidden"], json!(true));
+    assert_eq!(shown(&mut s), vec![1, 3, 4]);
+    assert_eq!(s.execute("library.hideRejected", &json!({"hide": null})).unwrap()["hidden"], json!(false));
+    assert_eq!(shown(&mut s), vec![1, 2, 3, 4, 5]);
 }
 
 #[test]
@@ -75,6 +119,21 @@ fn another_flag_filter_is_replaced_and_hide_sets_the_state_asked_for() {
     assert_eq!(shown(&mut s), vec![1, 2, 3, 4, 5]);
     assert!(s.execute("library.hideRejected", &json!({"hide": "yes"})).is_err(), "hide is a bool");
     assert_eq!(shown(&mut s), vec![1, 2, 3, 4, 5], "a bad call changes nothing");
+}
+
+#[test]
+fn while_filters_are_off_a_bad_call_or_hide_false_keeps_the_filter_put_aside() {
+    let mut s = session().unwrap();
+    s.execute("library.filter", &json!({"rating": 5, "flags": ["pick", "none"]})).unwrap();
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert!(s.filters_off());
+    assert!(s.execute("library.hideRejected", &json!({"hide": 1})).is_err());
+    assert!(s.filters_off(), "a refused call changes nothing");
+    s.execute("library.hideRejected", &json!({"hide": false})).unwrap();
+    assert!(s.filters_off(), "the rejects already show, so nothing changes");
+    assert_eq!(shown(&mut s), vec![1, 2, 3, 4, 5]);
+    s.execute("library.toggleFilters", &json!({})).unwrap();
+    assert_eq!(shown(&mut s), vec![1, 4], "Enable Filters still brings back the filter put aside");
 }
 
 #[test]
