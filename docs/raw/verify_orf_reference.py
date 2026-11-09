@@ -56,6 +56,7 @@ def sensor_hash(path, width, height):
 
 
 def main():
+    """Verify every pinned input and sensor hash using the selected local executable."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", type=pathlib.Path, default=ROOT / "corpus")
     parser.add_argument("--oracle", default="unprocessed_raw")
@@ -63,7 +64,13 @@ def main():
     oracle = shutil.which(args.oracle)
     if not oracle:
         parser.error("install an unprocessed_raw executable or supply --oracle")
-    text = CASES.read_text()
+    # Per-file extraction changes cwd; a relative --oracle or PATH entry must still resolve.
+    oracle = str(pathlib.Path(oracle).resolve(strict=True))
+    # Only fixture tuples belong to the manifest; assertions may name the same file again.
+    manifest = re.search(r"const CASES:.*?=\s*&\[(.*?)\n\];", CASES.read_text(), re.DOTALL)
+    if not manifest:
+        raise ValueError("cannot find the fixture array in orf_corpus.rs")
+    text = manifest.group(1)
     cases = CASE.findall(text)
     if not cases or len(cases) != len(re.findall(r'"[^"\n]+\.orf"', text)):
         raise ValueError("cannot read every fixture tuple from orf_corpus.rs")

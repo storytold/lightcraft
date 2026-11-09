@@ -19,9 +19,19 @@ use lightcraft_raster::{Image, Rgb32f, Rgba8};
 
 const MAGIC: &[u8] = b"LCSP1\n";
 
-/// The proxy's file name for a photo (by its content, so copies share one).
+/// The proxy's file name by content and ORF sensor interpretation, so matching copies share one.
 pub fn file_name(p: &Photo) -> String {
-    let h = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
+    let mut key = lightcraft_preview::Hasher128::new();
+    key.str(&crate::media::content_key(p));
+    // Keep offline preview-only proxies usable until recheck succeeds. Once sensor decoding
+    // is enabled, neither a sharded nor a flat JPEG proxy may satisfy that new interpretation.
+    if p.preview_only.is_none() {
+        let decoder = crate::media::decoder_key(p);
+        if decoder != 0 {
+            key.str("decoder").u64(decoder);
+        }
+    }
+    let h = key.finish();
     format!("{:032x}.lcsp", h.0)
 }
 

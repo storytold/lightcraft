@@ -17,6 +17,7 @@ use crate::{MAX_SAMPLES, RawError, Result};
 
 const HEADER: &[u8] = &[0, 0, 0, 0, 1, 0, 0];
 
+/// Match the measured stream prefix; ordinary pixel words can share these seven bytes.
 pub(super) fn recognizes(src: &[u8]) -> bool {
     src.starts_with(HEADER)
 }
@@ -30,6 +31,7 @@ struct Context {
 }
 
 impl Context {
+    /// Read one signed residual and advance this column parity's adaptive Rice state.
     fn residual(&mut self, bits: &mut Bits) -> Result<i32> {
         let extra = if self.flat_run < 3 { 2 } else { 0 };
         let k = (2 + extra).max((32 - self.magnitude.leading_zeros()).saturating_sub(extra));
@@ -54,6 +56,7 @@ impl Context {
     }
 }
 
+/// Predict from same-colour neighbours using the measured gradient threshold and tie rule.
 fn predictor(left: i32, up: i32, corner: i32) -> i32 {
     if (left < corner && corner < up) || (up < corner && corner < left) {
         if (left - corner).abs() > 32 || (up - corner).abs() > 32 { left + up - corner } else { (left + up) / 2 }
@@ -64,6 +67,7 @@ fn predictor(left: i32, up: i32, corner: i32) -> i32 {
     }
 }
 
+/// Count payload bits with enough arithmetic headroom for prefetch and a truncated symbol.
 fn payload_bits(byte_len: usize) -> Result<usize> {
     // Bits prefetches eight bytes, including zero padding. A truncated symbol consumes at most
     // 31 bits before we detect it; leave room for both in its byte-to-bit position arithmetic.
@@ -86,6 +90,7 @@ pub(super) fn validate(src: &[u8], w: usize, h: usize) -> Result<&[u8]> {
     Ok(payload)
 }
 
+/// Decode a full sensor, rejecting truncated symbols and samples outside the 12-bit range.
 pub(super) fn decode(src: &[u8], w: usize, h: usize) -> Result<Vec<u16>> {
     let payload = validate(src, w, h)?;
     let mut bits = Bits::new(payload);
@@ -131,6 +136,7 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// Pin observed sensor values across positive, negative and escape-coded residuals.
     #[test]
     fn independent_first_sensor_samples_include_escape_and_negative_residuals() {
         // First bytes and first 16 sensor samples of CC0 E-M1 file 1051, independently read with
@@ -142,6 +148,7 @@ mod tests {
         assert_eq!(decode(&src, 16, 1).unwrap(), [1201, 1667, 1226, 1659, 1213, 1626, 1220, 1630, 1203, 1633, 1217, 1601, 1224, 1637, 1203, 1626]);
     }
 
+    /// Cover all predictor branches, including equality and the strict gradient threshold.
     #[test]
     fn edge_prediction_and_gradient_threshold() {
         assert_eq!(predictor(20, 80, 40), 60); // high gradient, planar
@@ -154,6 +161,7 @@ mod tests {
         assert_eq!(predictor(0, 64, 33), 31); // >32, not >=32
     }
 
+    /// Refuse oversized buffers, truncated envelopes and symbols, and out-of-range samples.
     #[test]
     fn hostile_dimensions_and_truncated_codes_are_errors() {
         assert!(payload_bits(usize::MAX).is_err());

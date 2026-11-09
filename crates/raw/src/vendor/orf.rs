@@ -216,6 +216,17 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         [chunk] => chunk_bytes(bytes, chunk).filter(|src| orfc::recognizes(src)),
         _ => None,
     };
+    // When both layouts fit, a prefix alone is not evidence of compression. Validate every
+    // compressed code even for a header probe; a valid padded stream keeps priority, while
+    // ordinary words with an accidental prefix retain their existing interpretation.
+    let (compressed_strip, decoded) = match compressed_strip {
+        Some(src) if src.len() as u64 >= (n as u64) * 2 => match orfc::decode(src, w, h) {
+            Ok(data) => (Some(src), Some(data)),
+            Err(RawError::Corrupt(_)) => (None, None),
+            Err(e) => return Err(e),
+        },
+        src => (src, None),
+    };
     let (mut data, bits, from_word16) = if info.compression != 1 {
         return Err(RawError::Unsupported(format!("ORF compression {}", info.compression)));
     } else if let Some(src) = compressed_strip {
@@ -224,7 +235,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         }
         orfc::validate(src, w, h)?;
         compressed = true;
-        let d = if mode == Mode::Full || stated.is_none() { orfc::decode(src, w, h)? } else { Vec::new() };
+        let d = if mode == Mode::Full || stated.is_none() {
+            match decoded {
+                Some(data) => data,
+                None => orfc::decode(src, w, h)?,
+            }
+        } else {
+            Vec::new()
+        };
         (RawData::U16(d), 12, false)
     } else if total >= (n as u64) * 2 {
         let d = read_image(bytes, &info, tiff.order, Packing::Word16)?;
@@ -530,6 +548,7 @@ mod tests {
         assert_eq!(decode_noted(&e).black.values, vec![0.0]);
     }
 
+    /// Hand-code a zero sensor with independent even/odd state reset at each row.
     fn zero_compressed(w: usize, h: usize) -> Vec<u8> {
         let mut bits = Vec::new();
         for _ in 0..h {
@@ -543,6 +562,7 @@ mod tests {
         strip
     }
 
+    /// Header and full reads agree, and padding cannot select an uncompressed codec.
     #[test]
     fn compressed_orf_import_and_full_decode_use_sensor_data() {
         for tag in [Some(RGGB), None] {
@@ -561,9 +581,37 @@ mod tests {
         let mut padded = zero_compressed(64, 4);
         padded.resize(64 * 4 * 2, 0);
         let bytes = orf_with(64, 4, 16, padded, Some(RGGB));
-        assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(vec![0; 64 * 4]));
+        let raw = crate::decode(&bytes).unwrap();
+        assert_eq!(raw.data, RawData::U16(vec![0; 64 * 4]));
+        assert_eq!(raw.info(), crate::probe_info(&bytes).unwrap());
     }
 
+    /// A complete Word16 strip can share the compressed prefix, including a valid envelope
+    /// whose actual codes fail. Header and full reads must choose the same layout.
+    #[test]
+    fn word16_prefix_collision_preserves_uncompressed_decoding() {
+        for n in [4, 8, 64] {
+            let mut words = vec![33u16; n];
+            words[..4].copy_from_slice(&[0, 0, 1, 0]);
+            let strip: Vec<_> = words.iter().flat_map(|v| v.to_le_bytes()).collect();
+            assert!(orfc::recognizes(&strip));
+            assert!(orfc::decode(&strip, n, 1).is_err());
+            if n > 4 {
+                assert!(orfc::validate(&strip, n, 1).is_ok());
+            } else {
+                // The existing Word16 normalization shifts this nearly-black strip down.
+                words.iter_mut().for_each(|v| *v >>= 4);
+            }
+            for tag in [Some(RGGB), None] {
+                let bytes = orf_with(n as u32, 1, 16, strip.clone(), tag);
+                let raw = crate::decode(&bytes).unwrap();
+                assert_eq!(raw.data, RawData::U16(words.clone()));
+                assert_eq!(raw.info(), crate::probe_info(&bytes).unwrap());
+            }
+        }
+    }
+
+    /// Hostile crop coordinates fall back to the full sensor without overflowing.
     #[test]
     fn overflowing_maker_note_crop_does_not_panic() {
         // A new-style Olympus note points to an image-processing IFD with four LONG8 crops.

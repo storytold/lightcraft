@@ -150,6 +150,7 @@ const CASES: &[(&str, &str, (usize, usize), &str)] = &[
     ),
 ];
 
+/// Pin full sensors and the E-M1's measured crop independently of header/full-read agreement.
 #[test]
 fn olympus_and_om_sensor_pixels_match_independent_reference() {
     let root = std::env::var_os("LIGHTCRAFT_CORPUS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
@@ -171,6 +172,9 @@ fn olympus_and_om_sensor_pixels_match_independent_reference() {
         assert_eq!((raw.width, raw.height), sensor, "{name}: sensor dimensions");
         assert_eq!(raw.bits, 12, "{name}: sample depth");
         assert_eq!(raw.info(), probe_info(&bytes).unwrap(), "{name}: fast probe differs");
+        if name == "orf-olympus-em1.orf" {
+            assert_eq!(raw.active_area, lightcraft_raw::Rect::new(8, 8, 4608, 3456), "{name}: active sensor rectangle");
+        }
         let RawData::U16(samples) = &raw.data else { panic!("{name}: integer mosaic required") };
         let mut hash = Sha256::new();
         let mut block = [0u8; 8192];

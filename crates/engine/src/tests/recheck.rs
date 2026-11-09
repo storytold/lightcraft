@@ -144,6 +144,150 @@ fn virtual_copies_follow_their_photo() {
     assert!(x.s.catalog.photo(copy).unwrap().develops_raw());
 }
 
+/// Reload and automatic recheck fill newly readable GPS on same-file copies without
+/// overwriting their own metadata or importing GPS from a different source file.
+#[test]
+fn reload_and_recheck_fill_missing_copy_source_metadata() {
+    for command in ["photo.reload", "library.recheckPreviewOnly"] {
+        let mut x = library(command);
+        let copies: Vec<_> = (0..3)
+            .map(|_| {
+                let r = x.s.execute("photo.virtualCopy", &json!({"ids": [x.id.0]})).unwrap();
+                PhotoId(r["ids"][0].as_u64().unwrap())
+            })
+            .collect();
+        let mut edited = x.s.catalog.photo(copies[1]).unwrap().meta.clone();
+        edited.gps = Some((10.0, 20.0));
+        edited.caption = "Copy-specific caption".into();
+        x.s.catalog.apply(Op::SetMeta { id: copies[1], meta: Box::new(edited.clone()) }).unwrap();
+        x.s.catalog
+            .apply(Op::Relink {
+                id: copies[2],
+                file_name: "other.cr3".into(),
+                source: lightcraft_catalog::Source::File { path: "other.cr3".into() },
+                format: None,
+            })
+            .unwrap();
+        let before = x.s.catalog.photo(copies[0]).unwrap().clone();
+        let meta =
+            lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
+        std::fs::write(&x.file, crate::tests_xmp::synthetic_dng_with(None, meta)).unwrap();
+        x.s.execute(command, &json!({"ids": [x.id.0]})).unwrap();
+        for id in [x.id, copies[0]] {
+            let p = x.s.catalog.photo(id).unwrap();
+            assert!(p.develops_raw());
+            assert_eq!(p.meta.gps, Some((45.0, 7.0)), "{command}: {id:?}");
+        }
+        let copy = x.s.catalog.photo(copies[0]).unwrap();
+        assert_eq!(copy.develop, before.develop);
+        assert_eq!(copy.history, before.history);
+        let kept = &x.s.catalog.photo(copies[1]).unwrap().meta;
+        assert_eq!(kept.gps, edited.gps);
+        assert_eq!(kept.caption, edited.caption);
+        assert_eq!(x.s.catalog.photo(copies[2]).unwrap().meta.gps, None);
+    }
+}
+
+/// Decoder upgrades keep original identity but require sensor-derived offline proxies.
+#[test]
+fn orf_recheck_and_reload_rebuild_incompatible_smart_previews() {
+    use crate::media::{ProbeInfo, SourceLevel};
+    use lightcraft_catalog::MediaKind;
+    use lightcraft_pipeline::SourceInfo;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    for command in ["library.recheckPreviewOnly", "photo.reload"] {
+        let mut x = library(&format!("smart-{command}"));
+        let sensor = Arc::new(AtomicBool::new(false));
+        let upgraded = sensor.clone();
+        x.s.media.file_probe = Some(Arc::new(move |_| {
+            Ok(ProbeInfo {
+                width: 48,
+                height: 32,
+                format: "ORF".into(),
+                kind: MediaKind::Raw,
+                file_size: 1234,
+                content_hash: Some("unchanged".into()),
+                preview_only: (!upgraded.load(Ordering::SeqCst)).then(|| "compressed ORF".into()),
+                ..Default::default()
+            })
+        }));
+        let upgraded = sensor.clone();
+        x.s.media.file_loader = Some(Arc::new(move |path, _, _| {
+            std::fs::read(path).map_err(|e| e.to_string())?;
+            let raw = upgraded.load(Ordering::SeqCst);
+            Ok((
+                lightcraft_raster::Rgb32f::filled(48, 32, if raw { [0.2, 0.4, 0.6] } else { [0.8; 3] }),
+                SourceInfo { raw, relative_wb: raw, ..Default::default() },
+            ))
+        }));
+        let file = x.dir.join("photo.orf");
+        std::fs::write(&file, b"synthetic original").unwrap();
+        let r = x.s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        let id = PhotoId(r["imported"][0].as_u64().unwrap());
+        let r = x.s.execute("photo.virtualCopy", &json!({"ids": [id.0]})).unwrap();
+        let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+        let before = x.s.catalog.photo(id).unwrap().clone();
+        let dir = x.s.media.smart_dir.clone().unwrap();
+        let old_path = crate::smart::sharded_file_path(&dir, &before);
+        let legacy = dir.join(crate::smart::file_name(&before));
+        assert_eq!(x.s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap()["built"], 1);
+        let old = std::fs::read(&old_path).unwrap();
+        std::fs::write(&legacy, &old).unwrap();
+        // Keep the pre-upgrade filename for preview-only ORFs and all other formats.
+        let old_name = |p: &lightcraft_catalog::Photo| {
+            let h = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
+            format!("{:032x}.lcsp", h.0)
+        };
+        assert_eq!(crate::smart::file_name(&before), old_name(&before));
+        for format in ["DNG", "CR3", "JPEG"] {
+            let mut other = (*before).clone();
+            other.format = format.into();
+            other.preview_only = None;
+            assert_eq!(crate::smart::file_name(&other), old_name(&other));
+        }
+
+        sensor.store(true, Ordering::SeqCst);
+        x.s.execute(command, &json!({"ids": [id.0], "all": true})).unwrap();
+        let after = x.s.catalog.photo(id).unwrap().clone();
+        let path = crate::smart::sharded_file_path(&dir, &after);
+        assert_eq!(crate::media::content_key(&before), crate::media::content_key(&after));
+        assert_ne!(path, old_path, "JPEG pixels must not stand in for sensor pixels");
+        assert_eq!(path, crate::smart::sharded_file_path(&dir, x.s.catalog.photo(copy).unwrap()));
+        // Neither old sharded nor flat proxies may be read or copied into the new identity.
+        std::fs::remove_file(&file).unwrap();
+        assert!(x.s.media.source_ref(&after, SourceLevel::Preview).load_source().is_err());
+        assert_eq!(x.s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap()["built"], 0);
+        assert!(!path.exists());
+        std::fs::write(&file, b"synthetic original").unwrap();
+        let r = x.s.execute("library.smartPreviews", &json!({"ids": [id.0, copy.0]})).unwrap();
+        assert!(r["failed"].as_array().unwrap().is_empty(), "{r}");
+        assert_ne!(std::fs::read(&path).unwrap(), old);
+        std::fs::remove_file(&file).unwrap();
+        for id in [id, copy] {
+            let p = x.s.catalog.photo(id).unwrap();
+            let source = x.s.media.source_ref(p, SourceLevel::Preview).load_source().unwrap();
+            assert!(source.from_proxy && source.info.as_ref().unwrap().raw);
+            assert!((source.image.data[0][0] - 0.2).abs() < 0.02);
+        }
+        if command == "photo.reload" {
+            x.s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(crate::smart::sharded_file_path(&dir, x.s.catalog.photo(id).unwrap()), old_path);
+            std::fs::remove_file(&old_path).unwrap();
+            std::fs::remove_file(&legacy).unwrap();
+            std::fs::write(&file, b"synthetic original").unwrap();
+            let r = x.s.execute("library.smartPreviews", &json!({"ids": [id.0]})).unwrap();
+            assert_eq!(r["built"], 0, "Undo cannot label sensor pixels as preview-only: {r}");
+            assert!(r["failed"][0][1].as_str().unwrap().contains("Reload"), "{r}");
+            x.s.execute("edit.redo", &json!({})).unwrap();
+            assert_eq!(crate::smart::sharded_file_path(&dir, x.s.catalog.photo(id).unwrap()), path);
+        }
+    }
+}
+
 /// Without file access every probe would "succeed" knowing nothing and clear every flag: refused.
 #[test]
 fn session_without_file_access_refuses() {

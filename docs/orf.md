@@ -122,9 +122,25 @@ strip with at least two bytes per pixel can be read as `Word16` and appear as di
 rather than reaching the preview/error fallback. Unchecked camera models are listed as unverified
 in [raw/coverage.tsv](raw/coverage.tsv).
 
+Valid Word16 pixels can also begin with the seven-byte compressed prefix. When the strip has
+enough bytes for Word16, both header and full reads validate the entire compressed stream:
+valid compressed codes take priority (including padded streams); invalid codes select Word16.
+Synthetic regressions cover prefix collisions with both short and complete compressed envelopes.
+The formats still overlap: TIFF compression/bits tags and strip lengths do not uniquely identify
+them. Corrupt compressed data long enough for Word16 can therefore be accepted as words, and
+words that also form a valid compressed stream select compression. This is a compatibility policy,
+not proof that every damaged file can be distinguished from uncompressed sensor data.
+
+Rechecked sensor ORFs use a new smart-preview identity without changing the original content
+hash. Build Smart Previews reads the original to regenerate their proxies; neither old flat nor
+sharded JPEG proxies can supply sensor pixels while the original is offline. Preview-only ORFs
+retain their existing offline proxies, and undo restores that identity. Building after undo
+requires Reload when the decoder's raw interpretation no longer agrees with the catalog.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | patch | Validate overlapping compressed/Word16 streams, separate ORF sensor proxy identities, fill missing GPS on same-file copies, pin the E-M1 crop, preserve ORF JPEG scanning with capability reporting, and fix relative reference-executable paths. |
 | 2026-11-07 | minor | Extract #1162's decoder and 23 full sensor references; preserve current upstream guards and add a reproducible black-box reference check. General proxy/reload fixes remain separate. |
 | 2026-10-12 | minor | Original branch recorded lossless decoder derivation and 23 sensor references, including PEN E-PL7 and compressed high-resolution E-M5 Mark III. |

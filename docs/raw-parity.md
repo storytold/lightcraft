@@ -16,7 +16,7 @@ ranked in [gaps.md](gaps.md). Details per format: [cr3.md](cr3.md), [orf-compres
 |---|---:|---|
 | Adobe-listed camera models | **1,446** | measured: [raw/adobe-cameras.tsv](raw/adobe-cameras.tsv) |
 | Decoded from sensor data and **verified** on a real file | **577** (40%) | measured: [raw/evidence.tsv](raw/evidence.tsv) |
-| Decoder path should handle it, **unverified** | **703** (49%) | measured from the format rules (631 of them DNG, mostly phones) |
+| Decoder path should handle it, **unverified** | **703** (49%) | measured from the format rules (575 of them DNG, mostly phones) |
 | **Preview-only** (embedded JPEG) | **129** (9%) | measured |
 | **Unsupported** (not imported, refused or decodes wrongly) | **37** (3%) | measured |
 | Models added since 2017 (Camera Raw 10+): verified / unverified / preview / unsupported | 194 / 547 / 5 / 8 of 754 | measured |
@@ -294,6 +294,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | correction | The 703 unverified models include 575 DNG models, as counted in coverage.tsv; totals and percentages unchanged. |
 | 2026-11-07 | minor | Extract #1162 lossless ORF decoder with 23 pinned full-sensor references and repeatable black-box verification. Coverage: 577 verified, 703 unverified, 129 preview-only, 37 unsupported; 97% use-weighted. Provenance/mode review remains open; readiness and hour estimates not re-scored. |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |

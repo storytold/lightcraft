@@ -134,8 +134,9 @@ pub(super) fn embedded_thumb_key(k: Hash128) -> Hash128 {
 /// ORF decoding changed when lossless sensor decoding was restored. Keep older renders
 /// out even before catalog rechecking finishes, and distinguish sensor from preview-only
 /// pixels after Reload. Other formats keep their existing keys. This is deliberately not
-/// part of `content_key`: smart previews and denoise products identify the original file.
-pub(super) fn decoder_key(p: &Photo) -> u64 {
+/// part of `content_key`: denoise products identify the original file. Sensor smart previews
+/// include this salt separately so an older JPEG proxy cannot stand in for sensor pixels.
+pub(crate) fn decoder_key(p: &Photo) -> u64 {
     if !p.format.eq_ignore_ascii_case("ORF") {
         return 0;
     }
