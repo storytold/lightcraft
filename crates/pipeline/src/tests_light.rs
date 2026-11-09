@@ -296,7 +296,7 @@ fn v3_sliders_move_a_grey_ramp_their_way() {
     let ramp = Rgb32f::from_fn(256, 8, |x, _| [0.0005 * 1.035f32.powi(x as i32); 3]);
     let shot = |id: &str, v: f64| {
         let mut s = DevelopSettings::default();
-        assert_eq!(s.process.process(), Process::V4);
+        assert!(s.process.process() >= Process::V4, "the default process has the V4 sliders");
         controls::set(&mut s, id, v);
         let r = render(&ramp, &camera_look(), &s, &RenderRequest::fit(256, 8)).image;
         (0..256).map(|x| r.get(x, 4)).collect::<Vec<[u8; 4]>>()

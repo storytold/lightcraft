@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (monitor profile from Windows Color System on Windows); previously major (created from the code, gpu-pipeline.md and the parity checklist) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 · **Changes:** [revision history](#revision-history)
 
 What Lightroom does with the machine's hardware, per platform, and what LightCraft does. Sources:
 [gpu-pipeline.md](gpu-pipeline.md), [display-profiles.md](display-profiles.md), [denoise.md](denoise.md),

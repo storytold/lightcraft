@@ -1285,6 +1285,30 @@ fn assert_lowered(fitted: &CameraLook, fixed: &CameraLook, what: &str) {
         let x = 0.001 * 1.005f32.powi(i);
         assert!(fixed.tone.apply(x) <= fitted.tone.apply(x) + 1e-5, "{what} at {x}: {} > {}", fixed.tone.apply(x), fitted.tone.apply(x));
     }
+    // V5's shoulder stays below too whenever the lowered last segment's slope over its squared gap to
+    // white is at most the fitted one's (`dro_off` doesn't enforce it, so V1 to V4 keep their curve;
+    // issue #1632)
+    if v5_bounded(&fixed.tone, &fitted.tone) {
+        assert!(v5_below(&fixed.tone, &fitted.tone), "{what}: brighter than the fitted curve under V5");
+    }
+}
+
+/// Whether the last segment of `a`, over its squared gap to white, is at most `b`'s: then `a`'s V5
+/// shoulder ([`CameraTone::apply_rolloff`]) is nowhere above `b`'s (issue #1632).
+fn v5_bounded(a: &CameraTone, b: &CameraTone) -> bool {
+    let rate = |t: &CameraTone| {
+        let k = t.knots();
+        ((k[31][1] - k[30][1]) / (k[31][0] - k[30][0])).max(0.0) / (1.0 - k[31][1]).powi(2)
+    };
+    rate(a) <= rate(b)
+}
+
+/// Whether `a`'s V5 curve is nowhere brighter than `b`'s, from deep shadows to far past the last knot.
+fn v5_below(a: &CameraTone, b: &CameraTone) -> bool {
+    (0..=2400).all(|i| {
+        let x = 0.001 * 1.005f32.powi(i);
+        a.apply_rolloff(x) <= b.apply_rolloff(x) + 1e-5
+    })
 }
 
 /// Issue #244: Sony's Dynamic Range Optimizer lifts the camera JPEG's shadows, not the raw's. A
@@ -1423,6 +1447,8 @@ fn corpus_arw_with_dro_is_lowered_to_the_dro_off_tone() {
         let fitted = fit_look(&sensor, &reference, &clipped, colour).unwrap();
         if dro {
             assert_lowered(&fitted, &look, name);
+            // the Sony DRO samples' lowered curves stay below their fitted ones under V5 as well
+            assert!(v5_below(&look.tone, &fitted.tone), "{name}: brighter than the fitted curve under V5");
             for x in lowered {
                 assert!(look.tone.apply(x) < 0.95 * fitted.tone.apply(x), "{name} at {x}: {} vs {}", look.tone.apply(x), fitted.tone.apply(x));
             }
