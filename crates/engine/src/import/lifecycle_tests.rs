@@ -1,7 +1,9 @@
 use std::sync::{Mutex, Once};
 
+/// Import log records captured so far, with the thread that logged each.
 static RECORDS: Mutex<Vec<(std::thread::ThreadId, String)>> = Mutex::new(Vec::new());
 static INIT: Once = Once::new();
+/// The logger that keeps `lightcraft::import` records in [`RECORDS`].
 struct Capture;
 impl log::Log for Capture {
     fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
@@ -14,6 +16,7 @@ impl log::Log for Capture {
     }
     fn flush(&self) {}
 }
+/// Installs the capturing logger once; the calling thread, whose records [`rows`] returns.
 pub(crate) fn capture() -> std::thread::ThreadId {
     INIT.call_once(|| {
         log::set_logger(&Capture).unwrap();
@@ -21,9 +24,11 @@ pub(crate) fn capture() -> std::thread::ThreadId {
     });
     std::thread::current().id()
 }
+/// The records of kind `kind` (`scan`, `import`) that `thread` logged.
 pub(crate) fn rows(thread: std::thread::ThreadId, kind: &str) -> Vec<String> {
     RECORDS.lock().unwrap().iter().filter(|(id, s)| *id == thread && s.starts_with(&format!("kind={kind} "))).map(|(_, s)| s.clone()).collect()
 }
+/// The value of `key=` in a record.
 fn field<'a>(record: &'a str, key: &str) -> &'a str {
     record
         .split_whitespace()
@@ -32,6 +37,7 @@ fn field<'a>(record: &'a str, key: &str) -> &'a str {
         .map(|(_, v)| v)
         .unwrap_or_else(|| panic!("missing {key}: {record}"))
 }
+/// Asserts `records` are one run: its start, then its terminal record.
 fn pair(records: &[String]) {
     assert_eq!(records.len(), 2, "one start and one terminal: {records:?}");
     assert_eq!(field(&records[0], "event"), "start");
