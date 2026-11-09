@@ -247,7 +247,7 @@ checked between WAL chunks, root-table B-tree/overflow pages and rows; an OS rea
 flight must return before cancellation can be observed. If another dialog was opened during
 discovery, its unconfirmed input is preserved and the import asks the user to retry.
 
-On Windows, UNC originals and sidecars are opened relative to directory handles, one
+On Windows, guarded reads of UNC originals and sidecars open relative to directory handles, one
 validated component at a time. Every component is opened without following its final reparse
 point; metadata is read from that handle and a reparse point is refused before proceeding.
 Ancestors stay open during the walk, and metadata, probing and file bytes use the opened
@@ -260,6 +260,11 @@ checked handle, rejects an already oversized file before buffering it, and rejec
 after metadata was inspected. Image/preview loaders retain one original handle
 for metadata and bytes, including whole-file preview fallback. Source discovery itself still
 performs no original-file I/O.
+
+This protection covers the import, preview, region-orientation and Synchronize Folder read
+paths described above. Saving a sidecar is a separate operation: its read of an existing
+sidecar uses `std::fs::read`, not the checked-handle path. Sidecar-save reads and writes are
+not covered by this import guard.
 
 The grant is to the **logical SMB share**, not to a physical directory on the server or a fixed
 IP address. The selected server and Windows' SMB transport remain trusted to serve that share:

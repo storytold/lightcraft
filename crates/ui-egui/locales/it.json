@@ -2618,5 +2618,8 @@
   "Welcome": "Benvenuto",
   "Next": "Avanti",
   "Get Started": "Inizia",
-  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto"
+  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto",
+  "Network sources in this catalog": "Sorgenti di rete in questo catalogo",
+  "Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.": "Seleziona le condivisioni che LightCraft può leggere per questa importazione. Il catalogo e le tue foto rimangono dove sono. Le sorgenti non selezionate non verranno importate.",
+  "Select up to 32 network sources for this import.": "Seleziona fino a 32 sorgenti di rete per questa importazione."
 }

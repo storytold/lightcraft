@@ -1,5 +1,22 @@
 use super::*;
 
+/// Share authorization must be understandable in every language the UI offers.
+#[test]
+fn lightroom_network_consent_is_translated_in_every_catalog() {
+    let keys = [
+        "Network sources in this catalog",
+        "Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.",
+        "Select up to 32 network sources for this import.",
+    ];
+    for locale in Locale::ALL.iter().copied().filter(|locale| *locale != Locale::En) {
+        for key in keys {
+            let translated = locale.catalog().get(key).unwrap_or_else(|| panic!("{}: missing {key}", locale.code()));
+            assert!(!translated.trim().is_empty(), "{}: empty {key}", locale.code());
+            assert_ne!(translated, key, "{}: untranslated {key}", locale.code());
+        }
+    }
+}
+
 /// Each language through its menu command and the control channel's locale tags, saved by its
 /// code: built-in labels follow it, user values and ids don't, the window paints its text and
 /// the bundled fonts have its letters.

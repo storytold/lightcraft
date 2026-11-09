@@ -344,8 +344,8 @@ pub fn commit_prepared(s: &mut crate::Session, mut prepared: PreparedLightroom) 
 }
 
 fn classify_rechecked_originals(s: &crate::Session, prepared: &mut PreparedLightroom) {
-    // A share can go offline after original_paths. Only a current record makes that failure an
-    // offline match; a detected redirect must never retain or promote a path through catalog apply.
+    // Only a confirmed missing file with a current record is an offline match. Access and
+    // transport errors must remain visible; a redirect must never retain or promote a path.
     let known = std::cell::OnceCell::new();
     let mut redirected = HashSet::new();
     prepared.normal.retain_original_errors(|path, error| {
@@ -353,20 +353,21 @@ fn classify_rechecked_originals(s: &crate::Session, prepared: &mut PreparedLight
         if crate::doc_path::is_network_redirect(error) {
             redirected.insert(key);
             true
-        } else if known
-            .get_or_init(|| {
-                let paths: HashSet<_> = s
-                    .catalog
-                    .photos()
-                    .filter(|p| p.copy_of.is_none())
-                    .filter_map(|p| match &p.source {
-                        lightcraft_catalog::Source::File { path } => Some(normalize(path)),
-                        _ => None,
-                    })
-                    .collect();
-                paths
-            })
-            .contains(&key)
+        } else if error.kind() == std::io::ErrorKind::NotFound
+            && known
+                .get_or_init(|| {
+                    let paths: HashSet<_> = s
+                        .catalog
+                        .photos()
+                        .filter(|p| p.copy_of.is_none())
+                        .filter_map(|p| match &p.source {
+                            lightcraft_catalog::Source::File { path } => Some(normalize(path)),
+                            _ => None,
+                        })
+                        .collect();
+                    paths
+                })
+                .contains(&key)
         {
             prepared.missing_sources.insert(key);
             false
@@ -451,11 +452,9 @@ mod tests {
             if initial {
                 session.catalog.apply(Op::AddPhoto { photo: Box::new(photo.clone()) }).unwrap();
             }
-            let mut job = crate::import::ImportJob::new(&mut session, ImportOptions::default()).unwrap();
-            job.check_network_links();
             let mut prepared = prepared_for(&session, path, 4);
             prepared.missing_sources.clear(); // the first pass saw the original; the second no longer can
-            prepared.normal = job.prepare_files(vec![path.into()], &AtomicBool::new(false));
+            prepared.normal = Prepared::unavailable_original(path.into(), std::io::ErrorKind::NotFound.into());
             if current && !initial {
                 session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
             } else if initial && !current {
@@ -468,6 +467,30 @@ mod tests {
                 assert!(!session.catalog.photo(PhotoId(1)).unwrap().local);
             } else {
                 assert_eq!(report["failed"].as_array().unwrap().len(), 1, "a stale worker snapshot cannot hide a failure");
+            }
+        }
+    }
+
+    /// Permission and transport failures are actionable errors, not evidence that a file is absent.
+    #[test]
+    fn rechecked_original_access_errors_are_reported_separately_from_missing() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        use std::io::{Error, ErrorKind};
+        for kind in [ErrorKind::PermissionDenied, ErrorKind::TimedOut, ErrorKind::NetworkUnreachable, ErrorKind::Other] {
+            for known in [false, true] {
+                let mut session = crate::Session::new();
+                let path = r"\\nas\photos\photo.jpg";
+                if known {
+                    let photo = Photo::new(PhotoId(1), Source::File { path: path.into() }, "photo.jpg", "JPG", 1, 1, "2026-01-01T00:00:00");
+                    session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+                }
+                let mut prepared = prepared_for(&session, path, 4);
+                prepared.missing_sources.clear();
+                let message = format!("synthetic original access error: {kind:?}");
+                prepared.normal = Prepared::unavailable_original(path.into(), Error::new(kind, message.clone()));
+                let report = commit_prepared(&mut session, prepared).unwrap().report;
+                assert_eq!(report["missing"], serde_json::json!([]), "{kind:?}, known={known}");
+                assert_eq!(report["failed"], serde_json::json!([[path, message]]), "{kind:?}, known={known}");
             }
         }
     }

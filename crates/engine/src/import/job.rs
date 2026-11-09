@@ -96,6 +96,11 @@ pub(super) struct ReadyFile {
 }
 
 impl Prepared {
+    #[cfg(test)]
+    pub(crate) fn unavailable_original(path: String, error: std::io::Error) -> Self {
+        Self { scanned: 1, items: vec![PreparedItem::OriginalUnavailable(path, error)] }
+    }
+
     /// Let catalog import classify guarded failures against the current owner catalog, not a stale snapshot.
     pub(crate) fn retain_original_errors(&mut self, mut retain: impl FnMut(&str, &std::io::Error) -> bool) {
         self.items.retain(|item| match item {
