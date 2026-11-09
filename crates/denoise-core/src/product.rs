@@ -285,11 +285,14 @@ pub fn copy_rekey(
     fixed.get_mut(8..12).ok_or_else(|| ProductError::Format("missing header length".into()))?.copy_from_slice(&length.to_le_bytes());
     input.seek(SeekFrom::Start(12 + u64::from(old_len)))?;
     let tmp = to.with_extension("rekey-tmp");
+    let mut created = false;
     let result = (|| -> Result<(), ProductError> {
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut output = std::fs::File::create(&tmp)?;
+        let _ = std::fs::remove_file(&tmp);
+        let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        created = true;
         output.write_all(&fixed)?;
         output.write_all(&header)?;
         let copied = std::io::copy(&mut input.take(start.expected_len.saturating_sub(12 + u64::from(old_len)).saturating_add(1)), &mut output)?;
@@ -300,7 +303,9 @@ pub fn copy_rekey(
         drop(output);
         publish(&tmp)
     })();
-    let _ = std::fs::remove_file(&tmp);
+    if created {
+        let _ = std::fs::remove_file(&tmp);
+    }
     result
 }
 
@@ -746,6 +751,24 @@ mod migration_tests {
         std::fs::remove_file(&new).unwrap();
         std::fs::write(&old, &original[..original.len() - 1]).unwrap();
         assert!(copy_rekey(&old, &new, "old", "new", |_| panic!("truncated product cannot publish")).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_planted_under_the_rekey_staging_name_is_not_written_through() {
+        let dir = std::env::temp_dir().join(format!("lc-product-rekey-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (old, new, victim) = (dir.join("old.lcdn"), dir.join("new.lcdn"), dir.join("victim"));
+        let mut rgb = Rgb32f::new(3, 2);
+        rgb.data.fill([0.25, 0.5, 1.0]);
+        write(&old, &rgb, "old").unwrap();
+        std::fs::write(&victim, b"keep").unwrap();
+        std::os::unix::fs::symlink(&victim, new.with_extension("rekey-tmp")).unwrap();
+        copy_rekey(&old, &new, "old", "new", |tmp| std::fs::rename(tmp, &new).map_err(Into::into)).unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        assert!(is_current(&new, "new"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
