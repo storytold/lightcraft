@@ -565,6 +565,8 @@ impl Session {
         }
         self.undo.clear();
         self.redo.clear();
+        // a run of the old library no longer holds the new one's history
+        self.undo_hold = std::sync::Weak::new();
         self.interaction = None;
         self.pending_log.clear();
         self.selection = Selection::default();
