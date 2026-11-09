@@ -325,5 +325,22 @@
   "View › Detail View ({keys}).": "Zobrazení › Zobrazení detailu ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Soubor › Exportovat… · Soubor › Tisk… ({keys}).",
   "{n} folder{} could not be read": "Složky, které se nepodařilo přečíst: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}",
+  "{n} albums": "Alba: {n}",
+  "{n} folders": "Složky: {n}",
+  "Export {n} Albums…": "Exportovat alba ({n})…",
+  "Move {n} Albums to": "Přesunout alba ({n}) do",
+  "Delete {n} Albums…": "Odstranit alba ({n})…",
+  "Remove {n} Folders from Library…": "Odebrat složky ({n}) z knihovny…",
+  "Add {n} Keywords to Selected Photos": "Přidat klíčová slova ({n}) k vybraným fotografiím",
+  "Remove {n} Keywords from Selected Photos": "Odebrat klíčová slova ({n}) z vybraných fotografií",
+  "Show Photos with Any of {n} Keywords": "Zobrazit fotografie s kterýmkoli z klíčových slov ({n})",
+  "Merge {n} Keywords into…": "Sloučit klíčová slova ({n}) do…",
+  "Delete {n} Keywords…": "Odstranit klíčová slova ({n})…",
+  "Delete {n} albums?": "Odstranit alba ({n})?",
+  "Delete {n} keywords?": "Odstranit klíčová slova ({n})?",
+  "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Fotografie, které mají některé z nich: {count}. Smažou se i klíčová slova pod nimi. Zpět je vrátí.",
+  "Remove {n} folders from the library? Photos imported from them: {count}.": "Odebrat složky ({n}) z knihovny? Fotografie z nich importované: {count}.",
+  "…and {n} more": "…a dalších {n}",
+  "{n} keywords": "Klíčová slova: {n}"
 }

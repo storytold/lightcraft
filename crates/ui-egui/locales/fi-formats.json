@@ -322,5 +322,22 @@
   "View › Detail View ({keys}).": "Näytä › Tarkastelunäkymä ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Tiedosto › Vie… · Tiedosto › Tulosta… ({keys}).",
   "{n} folder{} could not be read": "Kansiot, joita ei voitu lukea: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Ohitetut tiedostot (ei tuettu valokuvatyyppi): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Ohitetut tiedostot (ei tuettu valokuvatyyppi): {n}{:.0}",
+  "{n} albums": "{n} albumia",
+  "{n} folders": "{n} kansiota",
+  "Export {n} Albums…": "Vie {n} albumia…",
+  "Move {n} Albums to": "Siirrä {n} albumia kohteeseen",
+  "Delete {n} Albums…": "Poista {n} albumia…",
+  "Remove {n} Folders from Library…": "Poista {n} kansiota kirjastosta…",
+  "Add {n} Keywords to Selected Photos": "Lisää {n} avainsanaa valittuihin kuviin",
+  "Remove {n} Keywords from Selected Photos": "Poista {n} avainsanaa valituista kuvista",
+  "Show Photos with Any of {n} Keywords": "Näytä kuvat, joilla on jokin {n} avainsanasta",
+  "Merge {n} Keywords into…": "Yhdistä {n} avainsanaa kohteeseen…",
+  "Delete {n} Keywords…": "Poista {n} avainsanaa…",
+  "Delete {n} albums?": "Poistetaanko {n} albumia?",
+  "Delete {n} keywords?": "Poistetaanko {n} avainsanaa?",
+  "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Kuvia, joilla on jokin niistä: {count}. Niiden alla olevat avainsanat poistetaan myös. Kumoa palauttaa ne.",
+  "Remove {n} folders from the library? Photos imported from them: {count}.": "Poistetaanko {n} kansiota kirjastosta? Niistä tuotuja kuvia: {count}.",
+  "…and {n} more": "…ja {n} muuta",
+  "{n} keywords": "{n} avainsanaa"
 }

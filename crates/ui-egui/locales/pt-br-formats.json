@@ -326,5 +326,22 @@
   "{name} is installed and in use: face recognition is on": "{name} está instalado e em uso: o reconhecimento facial está ativado",
   "Bring photos in with File › Import Photos… ({keys}).": "Traga fotos com Arquivo › Importar fotos… ({keys}).",
   "View › Detail View ({keys}).": "Exibir › Exibição de detalhe ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys}).",
+  "{n} albums": "{n} álbuns",
+  "{n} folders": "{n} pastas",
+  "Export {n} Albums…": "Exportar {n} álbuns…",
+  "Move {n} Albums to": "Mover {n} álbuns para",
+  "Delete {n} Albums…": "Excluir {n} álbuns…",
+  "Remove {n} Folders from Library…": "Remover {n} pastas da biblioteca…",
+  "Add {n} Keywords to Selected Photos": "Adicionar {n} palavras-chave às fotos selecionadas",
+  "Remove {n} Keywords from Selected Photos": "Remover {n} palavras-chave das fotos selecionadas",
+  "Show Photos with Any of {n} Keywords": "Mostrar fotos com qualquer uma das {n} palavras-chave",
+  "Merge {n} Keywords into…": "Mesclar {n} palavras-chave em…",
+  "Delete {n} Keywords…": "Excluir {n} palavras-chave…",
+  "Delete {n} albums?": "Excluir {n} álbuns?",
+  "Delete {n} keywords?": "Excluir {n} palavras-chave?",
+  "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Fotos que têm alguma delas: {count}. As palavras-chave abaixo delas também são excluídas. Desfazer as traz de volta.",
+  "Remove {n} folders from the library? Photos imported from them: {count}.": "Remover {n} pastas da biblioteca? Fotos importadas delas: {count}.",
+  "…and {n} more": "…e mais {n}",
+  "{n} keywords": "{n} palavras-chave"
 }
