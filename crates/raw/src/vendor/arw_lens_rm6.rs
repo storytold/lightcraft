@@ -41,9 +41,9 @@
 //! [`APSC_BODIES`] get it: the unit and the knot spacing are verified on the ILCE-7RM6 and, for distortion, on the
 //! ILCE-6700 (APS-C, 11 knots spanning its own crop, the same unit 15000: 0.73 px worst over 27 photos with three
 //! lenses as rendered, 1.38 px at the 10–18 mm's 10 mm end) and the ZV-E10 (the same APS-C rule with unit 16384:
-//! 0.61 px worst over 4 photos with the E PZ 16–50 mm at 16–32 mm as rendered). Another body is added by repeating the measurement on its photos shot
-//! with distortion correction on and listing its full-frame default crop (or, for an APS-C body, its model). The method
-//! and the numbers: docs/sony-ilce7rm6-lens-corrections.md.
+//! 0.64 px worst over 4 photos with the E PZ 16–50 mm at 16–32 mm as rendered). Another body is added by repeating the
+//! measurement on its photos shot with distortion correction on and listing its full-frame default crop (or, for an
+//! APS-C body, its model). The method and the numbers: docs/sony-ilce7rm6-lens-corrections.md.
 
 use super::fit_radial_warp;
 use crate::opcodes::max_radius;
@@ -317,6 +317,8 @@ mod tests {
     const FF_HQ_R: [f64; 4] = [0.9715153129, 0.02236266369, 0.0007060224765, 0.005666341563];
     const FF_HQ_B: [f64; 4] = [0.97137946, 0.02277016389, 0.0003830082563, 0.005727820598];
     const APSC_G: [f64; 4] = [1.01627551, -0.0618606692, 0.02768349621, -0.005595798468];
+    /// The ZV-E10 16 mm example's G plane (unit 16384, knots over its crop's half diagonal / 10), from the same recipe.
+    const ZV_E10_G: [f64; 4] = [1.051925248, -0.1972416727, 0.09393523723, -0.0282770833];
     const APSC_R: [f64; 4] = [1.016503991, -0.06206460153, 0.0278447625, -0.005644118171];
     const APSC_B: [f64; 4] = [1.016155702, -0.06162477627, 0.02753315326, -0.005554915901];
 
@@ -654,7 +656,7 @@ mod tests {
         assert_eq!(t.distortion.as_ref().map(Vec::len), Some(11));
         let gated = gated_warp_opcode(&t, s, 16384.0, ZV_E10_ACTIVE, ZV_E10_CROP, false, APSC_FIT_ERROR_PX_AT_1440);
         let ops = lens_opcodes(&ifd, " ZV-E10 ", Some("E PZ 16-50mm F3.5-5.6 OSS"), Some(16.0), ZV_E10_ACTIVE, ZV_E10_CROP);
-        assert!(matches!(ops.as_slice(), [Opcode::WarpRectilinear { planes, .. }] if planes.len() == 1), "{ops:?}");
+        assert_warp(ops.first().cloned(), [3011.5 / 6047.0, 0.5], &[ZV_E10_G]);
         assert_eq!(ops, gated.into_iter().collect::<Vec<_>>());
         // the ILCE-6700's unit would warp it differently
         let at_15000 = gated_warp_opcode(&t, s, DISTORTION_UNIT, ZV_E10_ACTIVE, ZV_E10_CROP, false, APSC_FIT_ERROR_PX_AT_1440);
