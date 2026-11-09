@@ -1392,6 +1392,11 @@ fn a_persons_page_is_kept_across_other_changes_and_jumps_to_its_suggestions() {
     h.request("engine.execute", json!({"command": "view.people"}), t);
     h.settle(SETTLE);
     assert!(!card(&h), "back where it was, not at the top");
+    // a jump asked for on a page with no faces is not kept for the next page
+    h.app.ui.person_jump_more = true;
+    h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Nobody"}}), t);
+    h.settle(SETTLE);
+    assert!(!h.app.ui.person_jump_more);
 }
 
 /// A person's More grid confirms a score-bounded batch through either ↑ or the focused tile's A key. Both

@@ -328,7 +328,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         if rename.clicked() {
             super::people::open_rename(app, &shown_name);
         }
-        // straight to the faces that look like them, below hundreds of their own
+        // straight to the faces that look like them, below hundreds of their own; with none yet, More says why
         let jump = ui.button(crate::i18n::tr("Go to Suggestions")).on_hover_text(crate::i18n::tr("The faces that look like them, below theirs"));
         register(ui, "person:jumpMore", jump.rect);
         if jump.clicked() {
@@ -364,6 +364,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     });
     ui.add_space(6.0);
     if page.total == 0 {
+        // nowhere to jump to: not kept for another page
+        app.ui.person_jump_more = false;
         super::empty_message(
             ui,
             ui.available_rect_before_wrap(),
@@ -642,7 +644,15 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
         p.line_segment([pos2(ac.x, ac.y - 5.0), pos2(ac.x + 4.0, ac.y - 1.0)], arrow);
     }
     if more {
-        let tip = format!("Looks like {name} (similarity {:.2}). Click to confirm, right-click to open the photo.", f.score);
+        // a face moved down says why, or the order would look broken
+        let tip = if low {
+            format!(
+                "Looks like {name} (similarity {:.2}), but more like a face set aside for them, so it comes after the others. Click to confirm, right-click to open the photo.",
+                f.score
+            )
+        } else {
+            format!("Looks like {name} (similarity {:.2}). Click to confirm, right-click to open the photo.", f.score)
+        };
         let _ = resp.clone().on_hover_text(tip);
         if let Some(x) = x_resp.as_ref() {
             let _ = x.clone().on_hover_text(format!("Not {name}: no longer offered for them (the button at the top brings these faces back)"));
