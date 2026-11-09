@@ -407,3 +407,32 @@ fn an_edited_photo_shows_no_edited_stand_in_for_before() {
     assert!(stand_in_shows(&app, id, Slot::Main), "the After view still uses the stand-in");
     assert!(stand_in_shows(&app, id, Slot::Preview));
 }
+
+/// With no stand-in for an edited photo's Before view (#2248), the view says why it is empty while
+/// its render is on its way, as the After view does, instead of a blank frame.
+#[test]
+fn an_empty_before_view_says_it_is_rendering() {
+    use std::{cell::Cell, rc::Rc};
+    let says = |h: &Headless| {
+        h.view.shapes.iter().any(|c| matches!(&c.shape, egui::epaint::Shape::Text(t) if t.galley.text() == crate::i18n::tr("Rendering…")))
+    };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    h.app.ui.settings.loupe_messages = true;
+    let id = h.app.session.visible_cloned()[2];
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
+    h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 1.5}}), T);
+    h.settle(SETTLE);
+    // the Before render is held back: nothing of its own to draw, and no stand-in for an edited photo
+    let open = Rc::new(Cell::new(false));
+    h.app.renderer.set_offload(Box::new(RenderGate::new(open.clone())));
+    h.app.ui.view = ViewMode::Detail;
+    h.app.ui.before_after = BeforeAfter::Original;
+    for _ in 0..5 {
+        h.step();
+    }
+    assert!(h.app.renderer.textures.get(&Slot::Before).is_none_or(|t| t.photo != id), "no Before render of the photo yet");
+    assert!(says(&h), "the empty Before view says it is rendering");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| !says(h)), "gone once the render lands");
+}
