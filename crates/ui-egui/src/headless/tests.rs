@@ -1217,6 +1217,7 @@ fn a_face_whose_place_on_its_photo_changed_is_not_set_aside_in_its_stead() {
         pending: 0,
         cover: None,
         dismissed: 0,
+        like_set_aside: Default::default(),
     };
     h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page)));
     h.app.caches.person_page_gen = h.app.session.people_gen;
@@ -1370,6 +1371,21 @@ fn a_persons_page_is_kept_across_other_changes_and_jumps_to_its_suggestions() {
     h.request("engine.execute", json!({"command": "view.people"}), t);
     h.settle(SETTLE);
     assert!(h.app.widgets.iter().any(|(w, _)| w == "person:Jane Doe"), "her card at the top is on screen");
+    // scrolled down the index, past her card, then her page opened and left: the index is still scrolled down
+    let card = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "person:Jane Doe");
+    let r = h.request("ui.hoverWidget", json!({"id": "person:Jane Doe"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..5 {
+        h.request("ui.scroll", json!({"dy": -2000}), t);
+        h.step();
+    }
+    h.settle(SETTLE);
+    assert!(!card(&h), "scrolled past her card");
+    h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
+    h.settle(SETTLE);
+    h.request("engine.execute", json!({"command": "view.people"}), t);
+    h.settle(SETTLE);
+    assert!(!card(&h), "back where it was, not at the top");
 }
 
 /// A person's More grid confirms a score-bounded batch through either ↑ or the focused tile's A key. Both
