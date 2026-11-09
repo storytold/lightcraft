@@ -199,6 +199,9 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
             }
             "Add" => {
                 let [a, b] = node.input.as_slice() else { return unsupported("Add of other than two tensors") };
+                if joins.contains_key(a) || joins.contains_key(b) {
+                    return unsupported("Add reading a Concat output");
+                }
                 let src = lookup(a)?;
                 let src2 = lookup(b)?;
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("Add without an output".into()))?;
@@ -209,8 +212,11 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 if ca != cb || la != lb {
                     return unsupported("Add of tensors of different shapes");
                 }
-                if ca == 0 || ca > 4096 {
+                if ca == 0 {
                     return invalid("Add");
+                }
+                if ca > 4096 {
+                    return unsupported("Add with more than 4096 channels");
                 }
                 let nn = ca.checked_mul(ca).and_then(|n| n.checked_mul(2)).ok_or_else(|| NetError::Invalid("Add channel count overflows".into()))?;
                 let mut weight = vec![0.0f32; nn];
@@ -487,5 +493,63 @@ mod tests {
         let _ = std::fs::remove_file(p);
         // a missing file
         assert!(read(Path::new("/does/not/exist.onnx")).is_err());
+    }
+
+    #[test]
+    fn add_reading_concat_and_oversized_channels_are_unsupported() {
+        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
+
+        fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
+            let mut n = Vec::new();
+            for i in inputs {
+                len_field(1, i.as_bytes(), &mut n);
+            }
+            len_field(2, output.as_bytes(), &mut n);
+            len_field(4, op.as_bytes(), &mut n);
+            for (name, value) in ints {
+                let mut a = Vec::new();
+                len_field(1, name.as_bytes(), &mut a);
+                varint_field(3, *value as u64, &mut a);
+                varint_field(20, 2, &mut a);
+                len_field(5, &a, &mut n);
+            }
+            n
+        }
+
+        fn model(nodes: &[Vec<u8>], in_channels: u64, out: &str) -> Vec<u8> {
+            let mut graph = Vec::new();
+            for n in nodes {
+                len_field(1, n, &mut graph);
+            }
+            len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(in_channels), Ok(8), Ok(8)]), &mut graph);
+            len_field(12, &value_info_bytes(out, 1, &[Ok(1), Ok(3), Ok(8), Ok(8)]), &mut graph);
+            let mut ops = Vec::new();
+            len_field(1, b"", &mut ops);
+            varint_field(2, 13, &mut ops);
+            let mut model = Vec::new();
+            varint_field(1, 8, &mut model);
+            len_field(7, &graph, &mut model);
+            len_field(8, &ops, &mut model);
+            model
+        }
+
+        let concat_model = model(
+            &[node("Concat", &["data", "data"], "joined", &[("axis", 1)]), node("Add", &["joined", "data"], "a1", &[])],
+            4,
+            "a1",
+        );
+        assert!(matches!(read_bytes(&concat_model), Err(NetError::Unsupported(_))));
+
+        let oversized_model = model(&[node("Add", &["data", "data"], "a1", &[])], 4097, "a1");
+        assert!(matches!(read_bytes(&oversized_model), Err(NetError::Unsupported(_))));
+
+        let mut depth = node("DepthToSpace", &["data"], "d", &[("blocksize", 2)]);
+        let mut mode = Vec::new();
+        len_field(1, b"mode", &mut mode);
+        len_field(4, b"CRD", &mut mode);
+        varint_field(20, 3, &mut mode);
+        len_field(5, &mode, &mut depth);
+        let zero_model = model(&[depth, node("Add", &["d", "d"], "a1", &[])], 3, "a1");
+        assert!(matches!(read_bytes(&zero_model), Err(NetError::Invalid(_))));
     }
 }
