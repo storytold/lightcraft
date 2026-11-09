@@ -9,7 +9,8 @@
 //! ([`Sam3::encode`]); each click or prompt then reuses the [`Encoded`] features.
 //!
 //! On macOS the model runs on the GPU through Metal; elsewhere (for now) on the CPU, or on an
-//! NVIDIA GPU through `lightcraft-sam3-worker` built with the `cuda` feature. The weights are not part of LightCraft: they are the `facebook/sam3` checkpoint (SAM License),
+//! NVIDIA GPU through `lightcraft-sam3-worker` built with the `cuda` feature. The weights
+//! are not part of LightCraft: they are the `facebook/sam3` checkpoint (SAM License),
 //! read from a directory the user downloads them to ([`Sam3::load`]).
 //!
 //! Ported from the Hugging Face `transformers` implementation (Apache-2.0); see `NOTICE`.
