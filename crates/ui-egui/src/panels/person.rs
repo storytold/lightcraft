@@ -39,6 +39,8 @@ pub struct PersonPage {
     pub cover: Option<(u64, usize)>,
     /// How many faces are set aside as "not them" (never offered in "More" again).
     pub dismissed: usize,
+    /// The "More" faces shown after the others because they look more like a face set aside (photo, region index).
+    pub like_set_aside: std::collections::HashSet<(u64, usize)>,
 }
 
 fn face_of(v: &Value) -> Option<Face> {
@@ -64,6 +66,13 @@ pub fn parse(v: &Value) -> PersonPage {
         pending: v["pendingPhotos"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0)),
         cover: v["cover"]["photo"].as_u64().zip(v["cover"]["index"].as_u64().and_then(|i| usize::try_from(i).ok())),
         dismissed: v["dismissed"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0)),
+        like_set_aside: v["more"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|f| f["likeSetAside"] == true)
+            .filter_map(|f| f["photo"].as_u64().zip(f["index"].as_u64().and_then(|i| usize::try_from(i).ok())))
+            .collect(),
     }
 }
 
@@ -109,14 +118,23 @@ enum Hit {
     AutoCover,
 }
 
-/// The current, session-visible candidates at or above the selected score. The score, not the tile position, is the
-/// boundary: a later tile with an equal score belongs to the batch too.
-fn at_or_above(more: &[&Face], score: f32) -> Vec<(u64, usize)> {
-    more.iter().filter(|f| f.score >= score).map(|f| (f.photo, f.index)).collect()
+/// The current, session-visible candidates at or above the selected face's score. The score, not the tile position, is
+/// the boundary: a later tile with an equal score belongs to the batch too. Faces moved down for looking like one set
+/// aside (`aside`) are shown after all the others, so they are in the batch only when the selected face is one of them.
+fn at_or_above(more: &[&Face], chosen: &Face, aside: &std::collections::HashSet<(u64, usize)>) -> Vec<(u64, usize)> {
+    let low = aside.contains(&(chosen.photo, chosen.index));
+    more.iter().filter(|f| f.score >= chosen.score && (low || !aside.contains(&(f.photo, f.index)))).map(|f| (f.photo, f.index)).collect()
 }
 
-fn confirm_above(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, more: &[&Face], score: f32) {
-    let faces: Vec<Value> = at_or_above(more, score).into_iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
+fn confirm_above(
+    app: &mut LightcraftApp,
+    ctx: &egui::Context,
+    name: &str,
+    more: &[&Face],
+    chosen: &Face,
+    aside: &std::collections::HashSet<(u64, usize)>,
+) {
+    let faces: Vec<Value> = at_or_above(more, chosen, aside).into_iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
     if !faces.is_empty()
         && let Err(error) = app.run("faces.nameFaces", json!({"faces": faces, "name": name}))
     {
@@ -158,7 +176,7 @@ pub(crate) fn handle_bulk_key(app: &mut LightcraftApp, ctx: &egui::Context) -> b
         });
     let Some(target) = target else { return false };
     let more: Vec<&Face> = page.more.iter().filter(|f| !hidden(&app.ui.dismissed_faces, &name, f)).collect();
-    confirm_above(app, ctx, &name, &more, target.score);
+    confirm_above(app, ctx, &name, &more, target, &page.like_set_aside);
     true
 }
 
@@ -300,7 +318,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                 let Some(f) = more.get(row * cols + col) else { break };
                 shown += 1;
                 let min = area.min + vec2(PAD + col as f32 * (edge + super::people::TILE_GAP), grid_top + row as f32 * row_h);
-                let above_count = more.iter().filter(|candidate| candidate.score >= f.score).count();
+                let above_count = at_or_above(&more, f, &page.like_set_aside).len();
                 let spec = TileSpec {
                     r: Rect::from_min_size(min, vec2(edge, edge)),
                     f,
@@ -335,7 +353,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
             Hit::Confirm => {
                 let _ = app.run("faces.setName", json!({"id": f.photo, "index": f.index, "name": shown_name}));
             }
-            Hit::ConfirmAbove => confirm_above(app, ui.ctx(), &shown_name, &more, f.score),
+            Hit::ConfirmAbove => confirm_above(app, ui.ctx(), &shown_name, &more, &f, &page.like_set_aside),
             Hit::Dismiss => {
                 // hidden at once; kept as "not them" for good (#3249), so a later page leaves it out too
                 let key = (shown_name.to_lowercase(), f.photo, f.index);
@@ -347,8 +365,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
                         {
                             let dismissed = v["dismissed"].as_u64().map_or(page.dismissed, |n| usize::try_from(n).unwrap_or(0));
                             *page = Arc::new(PersonPage { dismissed, ..(**page).clone() });
-                            // the page as patched is current (the face is already hidden): not asked for again
-                            app.caches.person_page_gen = app.session.people_gen;
+                            // the page as patched is current (the face is already hidden): not asked for again, unless
+                            // every face it offered is set aside now, and the next ones are wanted
+                            if page.more.iter().any(|f| !hidden(&app.ui.dismissed_faces, &shown_name, f)) {
+                                app.caches.person_page_gen = app.session.people_gen;
+                            }
                         }
                     }
                     Err(e) => {
@@ -474,7 +495,7 @@ fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, spec: &TileSpec) -> Hit {
         }
         if let Some(above) = above_resp.as_ref() {
             let _ = above.clone().on_hover_text(format!(
-                "All above: confirm {above_count} faces as {name} (this face and every shown face with equal or higher similarity). Press A."
+                "All above: confirm {above_count} faces as {name} (this face and every shown face with equal or higher similarity, except those moved down for looking like a face set aside). Press A."
             ));
         }
         if x_resp.as_ref().is_some_and(|x| x.clicked()) {
@@ -523,9 +544,22 @@ mod tests {
         let candidates = [face(1, 0.95), face(2, 0.80), face(3, 0.70), face(4, 0.80), face(5, 0.60)];
         let dismissed = (2_u64, 0_usize);
         let shown: Vec<&Face> = candidates.iter().filter(|f| (f.photo, f.index) != dismissed).collect();
-        assert_eq!(at_or_above(&shown, 0.80), vec![(1, 0), (4, 0)], "the dismissed face is excluded and the late tie included");
-        assert_eq!(at_or_above(&shown, 0.95), vec![(1, 0)], "the highest choice names only itself");
-        assert_eq!(at_or_above(&shown, 0.60), vec![(1, 0), (3, 0), (4, 0), (5, 0)], "the lowest choice names the full displayed range");
+        let none = std::collections::HashSet::new();
+        assert_eq!(at_or_above(&shown, &face(4, 0.80), &none), vec![(1, 0), (4, 0)], "the dismissed face is excluded and the late tie included");
+        assert_eq!(at_or_above(&shown, &face(1, 0.95), &none), vec![(1, 0)], "the highest choice names only itself");
+        assert_eq!(
+            at_or_above(&shown, &face(5, 0.60), &none),
+            vec![(1, 0), (3, 0), (4, 0), (5, 0)],
+            "the lowest choice names the full displayed range"
+        );
+        // a face moved down for looking like one set aside (6, shown last) is not swept in from above it, even with a
+        // higher score; from one of those, the ones above it count as usual
+        let mut candidates = candidates.to_vec();
+        candidates.push(face(6, 0.90));
+        let shown: Vec<&Face> = candidates.iter().filter(|f| (f.photo, f.index) != dismissed).collect();
+        let aside = std::iter::once((6_u64, 0_usize)).collect();
+        assert_eq!(at_or_above(&shown, &face(5, 0.60), &aside), vec![(1, 0), (3, 0), (4, 0), (5, 0)], "the face like a set-aside one is left out");
+        assert_eq!(at_or_above(&shown, &face(6, 0.90), &aside), vec![(1, 0), (6, 0)], "chosen itself, it goes with those above its score");
     }
 
     #[test]
@@ -537,13 +571,17 @@ mod tests {
                 {"photo": 4, "index": 1},
                 {"photo": "x", "index": 0, "rect": {"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.5}},
             ],
-            "more": [{"photo": 9, "index": 2, "score": 0.5, "rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}}],
+            "more": [
+                {"photo": 9, "index": 2, "score": 0.5, "rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}},
+                {"photo": 8, "index": 0, "score": 0.6, "likeSetAside": true, "rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}},
+            ],
         });
         let page = parse(&v);
         assert_eq!((page.name.as_str(), page.total, page.ready, page.pending), ("Jane Doe", 2, true, 7));
         assert_eq!(page.confirmed.len(), 1, "a face without a box or a photo is dropped");
         assert_eq!((page.confirmed[0].photo, page.confirmed[0].index), (3, 0));
-        assert_eq!((page.more.len(), page.more[0].score), (1, 0.5));
+        assert_eq!((page.more.len(), page.more[0].score), (2, 0.5));
+        assert_eq!(page.like_set_aside, std::iter::once((8, 0)).collect(), "the face moved down for looking like one set aside");
         // nothing, or nonsense, is an empty page and not a crash
         for bad in [Value::Null, json!([]), json!({"confirmed": "x", "more": 5, "total": -1})] {
             assert_eq!(parse(&bad), PersonPage::default(), "{bad}");

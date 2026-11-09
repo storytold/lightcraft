@@ -411,9 +411,19 @@ fn faces_person_lists_a_persons_faces_and_looks_for_more_only_while_recognition_
     assert_eq!(s.person_dismissed.get("bob").map(Vec::len), None);
     assert_eq!((s.catalog.revision, s.undo.len()), (revision, undo));
     assert!(s.journal.iter().any(|(id, _)| id == "faces.dismiss"), "recorded in the command journal");
-    for bad in [json!({"name": "Ann", "photo": b.0, "index": 9}), json!({"name": "Ann", "photo": b.0}), json!({"photo": b.0, "index": 0})] {
+    // a face that isn't there, a name nobody bears, or a photo removed from the library is refused
+    for bad in [
+        json!({"name": "Ann", "photo": b.0, "index": 9}),
+        json!({"name": "Ann", "photo": b.0}),
+        json!({"photo": b.0, "index": 0}),
+        json!({"name": "Nobody", "photo": b.0, "index": 0}),
+    ] {
         assert!(s.execute("faces.dismiss", &bad).is_err(), "{bad}");
     }
+    s.commit("remove", Op::SetDeleted { id: b, deleted: true }).unwrap();
+    assert!(s.execute("faces.dismiss", &json!({"name": "Ann", "photo": b.0, "index": 0})).is_err(), "removed from the library");
+    s.commit("back", Op::SetDeleted { id: b, deleted: false }).unwrap();
+    assert_eq!((s.person_dismissed.get("ann").map(Vec::len), s.person_dismissed.get("nobody")), (Some(1), None));
     assert_eq!(s.execute("faces.dismiss", &json!({"name": "Ann", "restore": true})).unwrap()["restored"], 1);
     assert_eq!(s.execute("faces.person", &json!({"name": "Ann"})).unwrap()["more"].as_array().unwrap().len(), 1);
     // confirming it moves it from one list to the other (and is one undo step)
@@ -464,6 +474,10 @@ fn faces_set_aside_move_their_look_alikes_down_and_a_merge_undone_gives_them_bac
     // the face on c is not Ann: b's first face, more like it than like Ann, goes after the other one
     s.execute("faces.dismiss", &json!({"name": "Ann", "photo": c.0, "index": 0})).unwrap();
     assert_eq!(more(&mut s, "Ann"), vec![(b.0, 1), (b.0, 0)]);
+    // and is said to be, so that "All above" leaves it out unless it is chosen itself
+    let flags: Vec<_> =
+        s.execute("faces.person", &json!({"name": "Ann"})).unwrap()["more"].as_array().unwrap().iter().map(|f| f["likeSetAside"].clone()).collect();
+    assert_eq!(flags, vec![json!(false), json!(true)]);
     // for Bob, whose face it may be, nothing moves
     assert_eq!(more(&mut s, "Bob")[0], (c.0, 0), "still offered to Bob, first");
     // Ann merged into Bob: her set-aside face is his too while merged; undone, Bob has none again, and Ann keeps hers
