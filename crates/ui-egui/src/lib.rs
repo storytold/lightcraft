@@ -669,7 +669,9 @@ pub struct Caches {
     /// A face was set aside since the open person page was made: its order, and which faces look like one set aside,
     /// may have changed, so All above has it made again before naming any.
     pub person_page_reorder: bool,
-    /// The faces the open person page was made from ([`panels::person::faces_signature`]: named, all), and how long
+    /// The library's faces as two numbers, kept up to date photo by photo, to tell when a person page must be made again.
+    pub faces_signature: panels::person::FacesSignature,
+    /// The faces the open person page was made from ([`panels::person::FacesSignature`]: named, all), and how long
     /// making it took (seconds).
     pub person_page_made: ((u64, u64), f64),
     /// The open person page was kept although unnamed faces changed (the scan found some): made again once the wait is

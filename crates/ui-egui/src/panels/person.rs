@@ -84,19 +84,59 @@ pub fn parse(v: &Value) -> PersonPage {
 /// What a person page is made from, as two numbers: the library's named faces (where, which box, which name, whether the
 /// photo is in the library), and all its faces, unnamed ones too. A catalog change that leaves both alone (a rating, an
 /// edit, a photo opened and checked) does not need the page made again.
-pub(crate) fn faces_signature(cat: &lightcraft_catalog::Catalog) -> (u64, u64) {
-    use std::hash::{Hash, Hasher};
-    let (mut named, mut all) = (std::collections::hash_map::DefaultHasher::new(), std::collections::hash_map::DefaultHasher::new());
-    for p in cat.photos() {
-        for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
-            let face = (p.id.0, p.in_library(), r.name.as_deref(), [r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1].map(f64::to_bits));
-            face.hash(&mut all);
-            if r.name.is_some() {
-                face.hash(&mut named);
+///
+/// Each photo's faces are summed up on their own, and the two numbers are the sums of those: brought up to date, only
+/// the photos changed since are looked at again (the scan names none, but finds faces on one photo after another, and a
+/// large library would be gone through whole at each).
+#[derive(Default)]
+pub struct FacesSignature {
+    /// the catalog revision it is of (`None` before it was first made)
+    revision: Option<u64>,
+    /// each photo with faces: (named faces, all faces)
+    photos: std::collections::HashMap<u64, (u64, u64)>,
+    sums: (u64, u64),
+}
+
+impl FacesSignature {
+    /// The two numbers for the catalog as it is now.
+    pub fn of(&mut self, cat: &lightcraft_catalog::Catalog) -> (u64, u64) {
+        if self.revision == Some(cat.revision) {
+            return self.sums;
+        }
+        match self.revision.and_then(|r| cat.touched_since(r)) {
+            Some(ids) => {
+                for id in ids {
+                    let now = cat.photo(id).map_or((0, 0), |p| photo_faces(p));
+                    let before = if now == (0, 0) { self.photos.remove(&id.0) } else { self.photos.insert(id.0, now) }.unwrap_or((0, 0));
+                    self.sums = (self.sums.0.wrapping_sub(before.0).wrapping_add(now.0), self.sums.1.wrapping_sub(before.1).wrapping_add(now.1));
+                }
+            }
+            // what changed isn't known: every photo
+            None => {
+                self.photos = cat.photos().map(|p| (p.id.0, photo_faces(p))).filter(|(_, f)| *f != (0, 0)).collect();
+                self.sums = self.photos.values().fold((0, 0), |(n, a), f| (n.wrapping_add(f.0), a.wrapping_add(f.1)));
             }
         }
+        self.revision = Some(cat.revision);
+        self.sums
     }
-    (named.finish(), all.finish())
+}
+
+/// One photo's share of [`FacesSignature`]: (its named faces, all its faces), `(0, 0)` without faces.
+fn photo_faces(p: &lightcraft_catalog::Photo) -> (u64, u64) {
+    use std::hash::{Hash, Hasher};
+    let (mut named, mut all) = (std::collections::hash_map::DefaultHasher::new(), std::collections::hash_map::DefaultHasher::new());
+    let (mut any_named, mut any) = (false, false);
+    for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+        let face = (p.id.0, p.in_library(), r.name.as_deref(), [r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1].map(f64::to_bits));
+        face.hash(&mut all);
+        any = true;
+        if r.name.is_some() {
+            face.hash(&mut named);
+            any_named = true;
+        }
+    }
+    (if any_named { named.finish() } else { 0 }, if any { all.finish() } else { 0 })
 }
 
 /// Whether a person page made earlier still holds: no named face changed, and either nothing else about the faces did
@@ -121,7 +161,7 @@ fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
         let (named_same, all_same) = if *r == rev {
             (true, !app.caches.person_page_stale)
         } else {
-            let (named, all) = faces_signature(&app.session.catalog);
+            let (named, all) = app.caches.faces_signature.of(&app.session.catalog);
             (named == made_named, all == made_all)
         };
         if keep_page(named_same, all_same, *i == indexed, waited) {
@@ -143,7 +183,7 @@ fn page_for(app: &mut LightcraftApp, name: &str, now: f64) -> Arc<PersonPage> {
     app.caches.person_page_gen = app.session.people_gen;
     app.caches.person_page_reorder = false;
     app.caches.person_page_stale = false;
-    app.caches.person_page_made = (faces_signature(&app.session.catalog), started.elapsed().as_secs_f64());
+    app.caches.person_page_made = (app.caches.faces_signature.of(&app.session.catalog), started.elapsed().as_secs_f64());
     // the engine's page leaves out the faces set aside for good, so those hidden at once have done their job: one
     // brought back meanwhile (by an agent, say) shows again, and a face that took a hidden one's place on its photo
     // isn't hidden in its stead
@@ -670,6 +710,57 @@ mod tests {
 
     /// #3317: a person page is made again at once when a named face changes; when the scan only finds unnamed faces or
     /// embeds some, no sooner than the wait (a page takes seconds in a large library); and never for a rating or an edit.
+    /// #3317: the library's faces are summed up photo by photo, and kept up to date from the photos changed since: the
+    /// same numbers as summed up anew, and a rating changes neither.
+    #[test]
+    fn the_faces_are_summed_up_again_only_where_they_changed() {
+        use lightcraft_catalog::{Catalog, Op, Photo, Source};
+        let face = |x: f64, name: Option<&str>| lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: x, y0: 0.2, x1: x + 0.1, y1: 0.4 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: name.map(str::to_string),
+            description: None,
+        };
+        let mut c = Catalog::new();
+        let ids: Vec<_> = (0..3)
+            .map(|i| {
+                let id = c.alloc_photo_id();
+                let mut p = Photo::new(id, Source::Demo { scene: 1 }, &format!("{i}.jpg"), "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+                p.meta.regions = vec![face(0.1, Some("Jane Doe")), face(0.5, None)];
+                c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+                id
+            })
+            .collect();
+        let mut kept = FacesSignature::default();
+        let first = kept.of(&c);
+        let set = |c: &mut Catalog, id, regions| {
+            let mut meta = c.photo(id).unwrap().meta.clone();
+            meta.regions = regions;
+            c.apply(Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        };
+        c.apply(Op::SetRating { id: ids[0], rating: 4 }).unwrap();
+        assert_eq!(kept.of(&c), first, "a rating is not a face");
+        // a face found by the scan: all of them change, not the named ones
+        set(&mut c, ids[1], vec![face(0.1, Some("Jane Doe")), face(0.5, None), face(0.8, None)]);
+        let found = kept.of(&c);
+        assert_eq!(found.0, first.0);
+        assert_ne!(found.1, first.1);
+        // a face named, then a photo removed from the library: both change; and each time the numbers are the ones a
+        // new summing up gives
+        set(&mut c, ids[2], vec![face(0.1, Some("Jane Doe")), face(0.5, Some("Ann"))]);
+        let named = kept.of(&c);
+        assert_ne!(named.0, found.0);
+        assert_eq!(named, FacesSignature::default().of(&c));
+        c.apply(Op::SetDeleted { id: ids[0], deleted: true }).unwrap();
+        assert_ne!(kept.of(&c).0, named.0);
+        assert_eq!(kept.of(&c), FacesSignature::default().of(&c));
+        // set back as it was: the numbers as they were
+        c.apply(Op::SetDeleted { id: ids[0], deleted: false }).unwrap();
+        set(&mut c, ids[2], vec![face(0.1, Some("Jane Doe")), face(0.5, None)]);
+        set(&mut c, ids[1], vec![face(0.1, Some("Jane Doe")), face(0.5, None)]);
+        assert_eq!(kept.of(&c), first);
+    }
+
     #[test]
     fn a_person_page_is_made_again_when_it_must_and_no_more() {
         // (named faces the same, all faces the same, scan the same, waited) → kept
