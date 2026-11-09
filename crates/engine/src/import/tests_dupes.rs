@@ -333,3 +333,25 @@ fn a_virtual_copy_does_not_keep_its_masters_replaced_content() {
     assert_eq!((r.imported.len(), r.duplicates.len()), (1, 0), "{r:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_fresh_import_replaces_a_trashed_photo_whose_hash_is_dup_suffixed() {
+    let dir = temp_dir("fresh-dup-suffix");
+    let data = bytes(9, 4096);
+    let incoming = write(&dir, "incoming.dng", &data);
+    let mut s = Session::new();
+    hashing_probe(&mut s);
+    let hash = lightcraft_preview::hash_bytes(&data).to_string();
+    let mut trashed =
+        Photo::new(s.catalog.alloc_photo_id(), Source::File { path: dir.join("gone.dng").to_string_lossy().into() }, "gone.dng", "DNG", 6, 4, "now");
+    trashed.content_hash = Some(format!("{hash}:dup7"));
+    trashed.file_size = data.len() as u64;
+    let old = trashed.id;
+    s.commit("trashed", lightcraft_catalog::Op::AddPhoto { photo: Box::new(trashed) }).unwrap();
+    s.commit("delete", lightcraft_catalog::Op::SetDeleted { id: old, deleted: true }).unwrap();
+    let report =
+        import_with(&mut s, &[incoming], &ImportOptions { mode: ImportMode::Add, on_deleted: OnDeleted::Fresh, ..ImportOptions::default() }).unwrap();
+    assert_eq!(report.imported.len(), 1, "{report:?}");
+    assert!(s.catalog.photo(old).is_none(), "the trashed record of the same bytes is replaced");
+    let _ = std::fs::remove_dir_all(dir);
+}

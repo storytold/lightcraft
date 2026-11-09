@@ -228,15 +228,16 @@ fn duplicate_refused(
     }
 }
 
-/// Photo ids by content hash or by path.
+/// Photo ids by path.
 type ByKey = HashMap<String, PhotoId>;
 
-/// The photos in Recently Deleted, by content hash and by path: the ones a Fresh import replaces.
-fn trashed_by_content_and_path(s: &Session) -> (ByKey, ByKey) {
-    let (mut by_hash, mut by_path) = (ByKey::new(), ByKey::new());
+/// The photos in Recently Deleted, by base content hash ([`crate::sync::base_hash`]) and by path:
+/// the ones a Fresh import replaces.
+fn trashed_by_content_and_path(s: &Session) -> (HashMap<String, Vec<PhotoId>>, ByKey) {
+    let (mut by_hash, mut by_path) = (HashMap::<String, Vec<PhotoId>>::new(), ByKey::new());
     for p in s.catalog.photos().filter(|p| p.deleted) {
         if let Some(h) = &p.content_hash {
-            by_hash.insert(h.clone(), p.id);
+            by_hash.entry(crate::sync::base_hash(h).to_string()).or_default().push(p.id);
         }
         if let Source::File { path } = &p.source {
             by_path.insert(path.clone(), p.id);
@@ -382,7 +383,14 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 if let Some(h) = &info.content_hash {
                     new_hash.insert(h.clone(), id);
                 }
-                for old in info.content_hash.as_ref().and_then(|h| trash_hash.get(h)).into_iter().chain(trash_path.get(&stored)) {
+                for old in info
+                    .content_hash
+                    .as_deref()
+                    .and_then(|h| trash_hash.get(crate::sync::base_hash(h)))
+                    .into_iter()
+                    .flatten()
+                    .chain(trash_path.get(&stored))
+                {
                     if purged.insert(*old) {
                         purge.push(*old);
                     }
