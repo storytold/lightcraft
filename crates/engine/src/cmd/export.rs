@@ -247,7 +247,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export Plan",
             [],
             None,
-            "{ids?, id?, dir?, path?, preset?, format?, longEdge?} — list the paths an app.export with these params would write, without writing anything → {files: [{path, sidecars, width?, height?}], errors?}",
+            "{ids?, id?, dir?, path?, preset?, format?, longEdge?} — list the paths an app.export with these params would write, without writing anything → {files: [{path, sidecars, width, height} | {photo, file, error} | {skipped}]}",
             always,
             plan
         ),
