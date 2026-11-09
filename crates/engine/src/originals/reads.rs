@@ -717,9 +717,14 @@ impl Originals {
         self.copy_stream(path, out, true)
     }
     fn copy_stream(&self, path: &str, out: &mut impl Write, observe: bool) -> io::Result<Fingerprint> {
+        self.copy_from(path, out, observe, || open_read(path, if observe { Open::DenyingWrites } else { Open::Plain }))
+    }
+    /// Streams the file `open` returns for `path` into `out` and fingerprints it, as
+    /// [`Originals::copy_whole`] does for the file it opens itself.
+    fn copy_from(&self, path: &str, out: &mut impl Write, observe: bool, open: impl FnOnce() -> io::Result<(File, bool)>) -> io::Result<Fingerprint> {
         let registration = self.registration();
         let watch = observe.then(|| self.watch(path)).flatten();
-        let (mut file, share_safe) = open_read(path, if observe { Open::DenyingWrites } else { Open::Plain })?;
+        let (mut file, share_safe) = open()?;
         let before = file.metadata().ok().as_ref().and_then(Stamp::of);
         let mut hash = Hasher128::new();
         let mut buf = vec![0; 1 << 20];
@@ -866,6 +871,11 @@ pub fn hash_whole(path: &str) -> io::Result<Fingerprint> {
 }
 pub fn copy_whole(path: &str, out: &mut impl Write) -> io::Result<Fingerprint> {
     current_reader()?.copy_whole(path, out)
+}
+/// [`copy_whole`] from the handle `open` returns, never from a second open of `path`: the copy is
+/// of the very file the caller checked.
+pub(crate) fn copy_opened(path: &str, open: impl FnOnce() -> io::Result<File>, out: &mut impl Write) -> io::Result<Fingerprint> {
+    current_reader()?.copy_from(path, out, true, || open().map(|file| (file, cfg!(unix))))
 }
 
 /// The in-memory buffer length for an original of `len` bytes: any length the address space can

@@ -152,11 +152,18 @@ impl MoveFs for RealFs {
         }
         let copied = (|| {
             let _binding = crate::originals::standalone_binding();
-            open_regular(a, &checked)?;
             let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&partial)?;
             let _capture = crate::originals::ReadCapture::new();
             let path = a.to_string_lossy();
-            let fp = crate::originals::copy_whole(&path, &mut f)?;
+            let checked_file = || {
+                let file = open_regular(a, &checked);
+                #[cfg(test)]
+                copy_step();
+                file
+            };
+            let fp = crate::originals::copy_opened(&path, checked_file, &mut f)?;
+            #[cfg(test)]
+            copy_step();
             let result = open_regular(a, &checked).and_then(|_| f.sync_all());
             if let Some(reader) = crate::originals::bound_reader() {
                 reader.discard_scratch(&path, &fp);
@@ -176,6 +183,15 @@ impl MoveFs for RealFs {
 
     fn stem_sibling(&self, sidecar: &Path) -> Option<String> {
         crate::import_move::sibling_photo(sidecar)
+    }
+}
+
+#[cfg(test)]
+thread_local! { static COPY_STEPS: std::cell::RefCell<std::collections::VecDeque<Box<dyn FnOnce()>>> = Default::default(); }
+#[cfg(test)]
+fn copy_step() {
+    if let Some(step) = COPY_STEPS.with(|steps| steps.borrow_mut().pop_front()) {
+        step();
     }
 }
 
@@ -277,6 +293,35 @@ mod open_regular_tests {
         std::os::unix::fs::symlink(&other, &link).unwrap();
         std::fs::rename(&link, &file).unwrap();
         assert!(open_regular(&file, &checked).is_err(), "the link's target must not be opened");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_link_swapped_in_during_the_copy_does_not_publish_its_target() {
+        use super::{COPY_STEPS, MoveFs, RealFs};
+        let dir = std::env::temp_dir().join(format!("lightcraft-copy-checked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (file, secret, held, copy) = (dir.join("a.xmp"), dir.join("secret"), dir.join("held"), dir.join("b.xmp"));
+        std::fs::write(&file, b"edits").unwrap();
+        std::fs::write(&secret, b"secret").unwrap();
+        let (f, s, h) = (file.clone(), secret.clone(), held.clone());
+        let swap: Box<dyn FnOnce()> = Box::new(move || {
+            std::fs::rename(&f, &h).unwrap();
+            std::os::unix::fs::symlink(&s, &f).unwrap();
+        });
+        let (f, h) = (file.clone(), held.clone());
+        let restore: Box<dyn FnOnce()> = Box::new(move || {
+            std::fs::remove_file(&f).unwrap();
+            std::fs::rename(&h, &f).unwrap();
+        });
+        COPY_STEPS.with(|steps| steps.borrow_mut().extend([swap, restore]));
+        let copied = RealFs.copy_no_replace(&file, &copy);
+        for step in COPY_STEPS.with(|steps| steps.borrow_mut().drain(..).collect::<Vec<_>>()) {
+            step();
+        }
+        assert!(copied.is_err() || std::fs::read(&copy).unwrap() == b"edits", "the link's target must never be published");
+        assert_eq!(std::fs::read(&file).unwrap(), b"edits");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
