@@ -28,6 +28,11 @@ fn not_found(e: &JsValue) -> bool {
     crate::files::is_not_found(Reflect::get(e, &"name".into()).ok().and_then(|n| n.as_string()).as_deref())
 }
 
+/// Did an OPFS call fail because the entry is a file, not a directory (`TypeMismatchError`)?
+fn type_mismatch(e: &JsValue) -> bool {
+    Reflect::get(e, &"name".into()).ok().and_then(|n| n.as_string()).as_deref() == Some("TypeMismatchError")
+}
+
 /// `navigator.storage` in a window or a worker.
 fn storage_manager() -> Option<web_sys::StorageManager> {
     let g = js_sys::global();
@@ -261,6 +266,37 @@ impl Backend {
                 let (tx, store) = Self::idb_store(db, true)?;
                 store.delete(&path.into()).map_err(err)?;
                 idb_done(&tx).await
+            }
+        }
+    }
+
+    /// Is there a folder at `path`? A regular file of the same name is not a folder:
+    /// OPFS says so with a type mismatch when the entry is opened as a directory, and
+    /// IndexedDB holds folders only as keys under `path/`, so a lone `path` key is a
+    /// file. A missing entry is not a folder either; any other failure is an error,
+    /// never "absent" (#1507).
+    pub async fn is_folder(&self, path: &str) -> Result<bool, String> {
+        match self {
+            Backend::Opfs(root) => {
+                let mut dir = root.clone();
+                for p in path.split('/').filter(|p| !p.is_empty()) {
+                    let opts = FileSystemGetDirectoryOptions::new();
+                    opts.set_create(false);
+                    match JsFuture::from(dir.get_directory_handle_with_options(p, &opts)).await {
+                        Ok(d) => dir = d.unchecked_into(),
+                        Err(e) if not_found(&e) || type_mismatch(&e) => return Ok(false),
+                        Err(e) => return Err(err(e)),
+                    }
+                }
+                Ok(true)
+            }
+            Backend::Idb(db) => {
+                let (_tx, store) = Self::idb_store(db, false)?;
+                let prefix = format!("{path}/");
+                let range = web_sys::IdbKeyRange::bound(&prefix.as_str().into(), &format!("{prefix}\u{ffff}").into()).map_err(err)?;
+                let keys = idb_req(&store.get_all_keys_with_key(&range).map_err(err)?).await?;
+                let arr: js_sys::Array = keys.unchecked_into();
+                Ok(arr.length() > 0)
             }
         }
     }
