@@ -1211,6 +1211,10 @@ fn a_right_click_on_a_face_tile_opens_its_photo() {
     h.settle(SETTLE);
     open(&mut h, format!("unnamed-face:{}:0", ids[1].0), "unnamed-face-menu:open");
     assert_eq!((h.app.ui.view, h.app.session.selection.active), (crate::state::ViewMode::Detail, Some(ids[1])));
+    // Escape comes back to People, to no one's page
+    h.request("ui.key", json!({"key": "escape"}), t);
+    h.step();
+    assert_eq!((h.app.ui.view, h.app.ui.person_page.as_deref()), (crate::state::ViewMode::People, None));
     // a face offered on a person's page
     h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
     h.settle(SETTLE);
@@ -1223,6 +1227,7 @@ fn a_right_click_on_a_face_tile_opens_its_photo() {
         pending: 0,
         cover: None,
         dismissed: 0,
+        like_set_aside: Default::default(),
     };
     h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page)));
     h.step();
