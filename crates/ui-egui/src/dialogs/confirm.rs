@@ -245,6 +245,23 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             crate::panels::mask_effects::save_confirm(app, name, group, fields, *amount, *brush)
         }
         Dialog::DeleteEffects { names } => app.run("mask.deleteEffect", json!({"names": names})),
+        Dialog::DeletePresets { ids, library, .. } => {
+            if *library != app.session.library_generation() {
+                return Err(crate::i18n::tr("Another library was opened since you were asked: nothing was deleted").to_string());
+            }
+            let done = app.run("preset.deleteMany", json!({"ids": ids}));
+            if done.is_ok() {
+                app.ui.preset_selection.clear();
+                app.ui.preset_anchor = None;
+            }
+            done
+        }
+        Dialog::DeletePresetGroup { name, count, library } => {
+            if *library != app.session.library_generation() {
+                return Err(crate::i18n::tr("Another library was opened since you were asked: nothing was deleted").to_string());
+            }
+            app.run("preset.deleteGroup", json!({"name": name, "expect": count}))
+        }
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::confirm(app, d),
         Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } | Dialog::ManageEffects { .. } | Dialog::ViewOptions => {

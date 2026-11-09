@@ -34,8 +34,16 @@ pub struct PresetFile {
 #[derive(Clone, Debug)]
 pub struct PresetList {
     items: Vec<Preset>,
+    /// Groups the user made by name (`preset.createGroup`): every other group exists only through
+    /// the presets naming it, so an empty one needs this list to be listed and saved.
+    created_groups: std::collections::BTreeSet<String>,
+    /// Groups starred by name (`preset.favoriteGroup`), listed before the others.
+    favorite_groups: std::collections::BTreeSet<String>,
     generation: u64,
 }
+
+/// The longest group name `preset.createGroup` and the bulk commands take (characters).
+pub const MAX_GROUP_NAME: usize = 100;
 
 static PRESET_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -45,12 +53,72 @@ fn next_generation() -> u64 {
 
 impl PresetList {
     pub fn new(items: Vec<Preset>) -> PresetList {
-        PresetList { items, generation: next_generation() }
+        PresetList { items, created_groups: Default::default(), favorite_groups: Default::default(), generation: next_generation() }
     }
 
     /// Changes whenever the list may have changed.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The groups the user made by name, which stay listed while they hold no preset.
+    pub fn created_groups(&self) -> &std::collections::BTreeSet<String> {
+        &self.created_groups
+    }
+
+    /// Keep `name` as a group. False when it was one already.
+    pub fn add_created_group(&mut self, name: String) -> bool {
+        let added = self.created_groups.insert(name);
+        if added {
+            self.generation = next_generation();
+        }
+        added
+    }
+
+    /// Stop keeping `name` as a group. False when it wasn't one.
+    pub fn remove_created_group(&mut self, name: &str) -> bool {
+        let removed = self.created_groups.remove(name);
+        if removed {
+            self.generation = next_generation();
+        }
+        removed
+    }
+
+    /// The groups starred by name, which the panel lists first.
+    pub fn favorite_groups(&self) -> &std::collections::BTreeSet<String> {
+        &self.favorite_groups
+    }
+
+    /// Star group `name`, or take its star away.
+    pub fn set_favorite_group(&mut self, name: &str, favorite: bool) {
+        let changed = if favorite { self.favorite_groups.insert(name.to_string()) } else { self.favorite_groups.remove(name) };
+        if changed {
+            self.generation = next_generation();
+        }
+    }
+
+    /// Take the star from groups that no longer exist: a later group of that name is a new group,
+    /// and shouldn't come up starred. A group made by name exists while empty.
+    pub fn prune_favorite_groups(&mut self) {
+        if self.favorite_groups.is_empty() {
+            return;
+        }
+        let held: std::collections::HashSet<&str> = self.items.iter().map(|p| p.group.as_str()).collect();
+        let keep: std::collections::BTreeSet<String> =
+            self.favorite_groups.iter().filter(|g| self.created_groups.contains(*g) || held.contains(g.as_str())).cloned().collect();
+        if keep.len() != self.favorite_groups.len() {
+            self.favorite_groups = keep;
+            self.generation = next_generation();
+        }
+    }
+
+    /// Forget the groups made by name and the stars: they belong to the library being left.
+    pub fn clear_group_names(&mut self) {
+        if !self.created_groups.is_empty() || !self.favorite_groups.is_empty() {
+            self.created_groups.clear();
+            self.favorite_groups.clear();
+            self.generation = next_generation();
+        }
     }
 }
 
