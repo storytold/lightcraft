@@ -6,6 +6,7 @@ use super::{
     StageCache,
 };
 
+/// How a job's cache key is made, so its result can also be kept under the hash its read learned.
 #[derive(Clone)]
 pub(crate) enum CacheRecipe {
     Thumbnail { settings: u64, bucket: usize, salt: u64, denoise_model: Option<String>, profile_salt: u64, lens: u64, decoder: u64 },
@@ -14,6 +15,7 @@ pub(crate) enum CacheRecipe {
 }
 
 impl CacheRecipe {
+    /// The key for `content` (a denoise model's salt follows the content it is made for).
     fn key(&self, content: &str, settings: &DevelopSettings, profile: u64) -> Hash128 {
         let denoise_salt = |salt: u64, model: &Option<String>| {
             model.as_ref().map_or(salt, |model| {
@@ -34,11 +36,14 @@ impl CacheRecipe {
         }
     }
 
+    /// Whether the key is a view cache's (else a thumbnail's).
     fn is_view(&self) -> bool {
         matches!(self, Self::View { .. })
     }
 }
 
+/// What besides content and settings makes a cached render another: denoise product, camera profile file, database
+/// lens profile and decoder (each 0 when it adds nothing).
 #[derive(Clone, Copy)]
 pub(crate) struct KeySalts {
     pub denoise: u64,
@@ -48,6 +53,7 @@ pub(crate) struct KeySalts {
 }
 
 impl KeySalts {
+    /// Add the salts that are set to `k`.
     fn add_to(self, k: &mut Hasher128) {
         if self.denoise != 0 {
             k.u64(self.denoise);
@@ -64,6 +70,7 @@ impl KeySalts {
     }
 }
 
+/// A grid thumbnail's cache key.
 pub(super) fn thumb_key(content: &str, settings_hash: u64, bucket: usize, settings: &DevelopSettings, profile: u64, salts: KeySalts) -> Hash128 {
     let mut k = Hasher128::new();
     k.str(content).u64(settings_hash).u64(bucket as u64).u64(RENDER_CACHE_VERSION);
@@ -72,6 +79,7 @@ pub(super) fn thumb_key(content: &str, settings_hash: u64, bucket: usize, settin
     k.finish()
 }
 
+/// A variant thumbnail's cache key ([`crate::Session::variant_job`]).
 pub(super) fn variant_key_for(content: &str, settings: &DevelopSettings, edge: usize, profile: u64, salts: KeySalts) -> Hash128 {
     let mut k = Hasher128::new();
     k.str(content).str("variant").u64(settings.hash64() ^ crate::files::hot_pixel_key(settings)).u64(edge as u64).u64(RENDER_CACHE_VERSION);
@@ -80,6 +88,7 @@ pub(super) fn variant_key_for(content: &str, settings: &DevelopSettings, edge: u
     k.finish()
 }
 
+/// A view preview's cache key ([`crate::Session::loupe_job`]).
 pub(super) fn view_key_for(content: &str, settings: &DevelopSettings, apply_crop: bool, profile: u64, salts: KeySalts) -> Hash128 {
     let mut k = Hasher128::new();
     k.str(content).str("view").u64(settings.hash64() ^ crate::files::hot_pixel_key(settings)).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION);

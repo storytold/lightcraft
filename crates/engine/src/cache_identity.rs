@@ -1,3 +1,8 @@
+//! Which cached work (renders, smart previews, denoise products, signatures) still belongs to a photo's file. A
+//! photo whose file is replaced or moved has its path-and-size alias retired: a marker on disk records the identity
+//! the alias may be trusted for again, so the work cached under it is not reused, in this session or after a reopen,
+//! until a read of the original confirms it.
+
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -6,6 +11,7 @@ use std::sync::{Arc, RwLock};
 use lightcraft_catalog::{Photo, Source};
 use lightcraft_preview::{Hash128, Hasher128};
 
+/// The session's record of retired cache aliases, per-source epochs and the marker store backing them.
 #[derive(Clone)]
 pub struct CacheIdentity(Arc<RwLock<State>>);
 
@@ -36,6 +42,7 @@ impl Default for CacheIdentity {
     }
 }
 
+/// A file photo's path-and-size alias: the cache key its work had before its hash was known.
 pub fn path_key(p: &Photo) -> Option<String> {
     match &p.source {
         Source::File { path } => Some(format!("file:{path}:{}", p.file_size)),
@@ -43,6 +50,7 @@ pub fn path_key(p: &Photo) -> Option<String> {
     }
 }
 
+/// The marker name of alias `key`.
 fn alias_hash(key: &str) -> Hash128 {
     Hasher128::new().str(key).finish()
 }
@@ -63,6 +71,7 @@ pub(crate) fn fail_directory_after(steps: usize) -> DirectoryFault {
     DirectoryFault(DIRECTORY_FAILURE.replace(Some(steps)))
 }
 
+/// What a retired alias may be trusted for again: the file's path, size, dimensions, content hash and preview state.
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PhysicalIdentity {
@@ -75,6 +84,7 @@ pub struct PhysicalIdentity {
 }
 
 impl PhysicalIdentity {
+    /// `p`'s identity; `None` for a photo without a file or a content hash.
     pub(crate) fn of(p: &Photo) -> Option<Self> {
         let Source::File { path } = &p.source else { return None };
         Some(Self {
@@ -90,6 +100,7 @@ impl PhysicalIdentity {
 
 const MAX_MARKER_BYTES: usize = 16 << 10;
 
+/// The identity a marker file names (`None` when it is unreadable, too long or of an unknown version) and its size.
 fn read_expected(path: &Path) -> (Option<PhysicalIdentity>, usize) {
     let read = || -> std::io::Result<Vec<u8>> {
         let meta = std::fs::symlink_metadata(path)?;
@@ -113,6 +124,7 @@ fn read_expected(path: &Path) -> (Option<PhysicalIdentity>, usize) {
 const MAX_LOADED_MARKER_BYTES: usize = 64 << 20;
 
 impl CacheIdentity {
+    /// The record kept in `dir`. A store that can't be read whole is uncertain: every alias then waits for a read.
     pub fn open(dir: &Path) -> Self {
         Self::open_reading(dir, MAX_LOADED_MARKER_BYTES)
     }
@@ -162,10 +174,13 @@ impl CacheIdentity {
         cache
     }
 
+    /// End this record (a library switch): its tickets stop publishing.
     pub fn retire(&self) {
         self.0.write().unwrap_or_else(std::sync::PoisonError::into_inner).active = false;
     }
 
+    /// `p`'s cache keys, best first. A retired or pending alias gives none of the keys it can't vouch for, only a key
+    /// of this session and source epoch that nothing was cached under before.
     pub fn keys(&self, p: &Photo) -> Vec<String> {
         let state = self.0.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut keys = crate::media::content_keys(p);
@@ -191,10 +206,14 @@ impl CacheIdentity {
         keys
     }
 
+    /// Whether `p`'s own content key is withheld until a read of its original confirms it.
     pub(crate) fn needs_validation(&self, p: &Photo) -> bool {
         !self.keys(p).contains(&crate::media::content_key(p))
     }
 
+    /// After `validate` confirms that the file read under `ticket` is `p`'s, record `p`'s identity as the one its retired
+    /// alias vouches for, so its content key is used again. `Ok(false)` when the ticket is stale or the read doesn't
+    /// confirm it.
     pub(crate) fn reconcile(&self, p: &Photo, ticket: &SourceTicket, validate: impl FnOnce() -> bool) -> std::io::Result<bool> {
         let mut state = self.0.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !Arc::ptr_eq(&self.0, &ticket.cache.0) || !state.active || state.epochs.get(&ticket.path).copied().unwrap_or(0) != ticket.epoch {
@@ -229,6 +248,7 @@ impl CacheIdentity {
         Ok(true)
     }
 
+    /// `key` tied to this session and `p`'s source epoch, for work that must not outlive a retirement of the source.
     pub fn tag(&self, p: &Photo, key: &str) -> String {
         let state = self.0.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let epoch = match &p.source {
@@ -242,6 +262,7 @@ impl CacheIdentity {
         format!("{key}:source-life:{}:source-path:{path}:source-epoch:{epoch}", state.nonce)
     }
 
+    /// A ticket for work started on `p`'s source now.
     pub fn ticket(&self, p: &Photo) -> SourceTicket {
         let path = match &p.source {
             Source::File { path } => path.clone(),
@@ -251,6 +272,7 @@ impl CacheIdentity {
         SourceTicket { cache: self.clone(), epoch: state.epochs.get(&path).copied().unwrap_or(0), path }
     }
 
+    /// The catalog took the change that retired `sources`: they are no longer pending.
     pub fn confirm(&self, sources: &[String]) {
         let mut state = self.0.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         for source in sources {
@@ -258,6 +280,8 @@ impl CacheIdentity {
         }
     }
 
+    /// Retire `p`'s alias, trusted again only for `expected`, and run `fence` before the marker is written. An error
+    /// means the marker may not be durable: the change that needed it must not be applied.
     pub fn invalidate(&self, p: &Photo, expected: Option<PhysicalIdentity>, fence: impl FnOnce()) -> std::io::Result<()> {
         self.invalidate_all(&[(p, expected)], fence)
     }
@@ -304,6 +328,7 @@ impl CacheIdentity {
     }
 }
 
+/// Write a marker durably, its folder synced too.
 fn write_marker(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     lightcraft_catalog::safe_file::write_atomic(path, bytes)?;
     match path.parent() {
@@ -349,6 +374,7 @@ fn directory_step() -> std::io::Result<()> {
     })
 }
 
+/// Work started on a source at one epoch: it may publish only while that epoch lasts.
 #[derive(Clone)]
 pub struct SourceTicket {
     cache: CacheIdentity,
@@ -357,11 +383,13 @@ pub struct SourceTicket {
 }
 
 impl SourceTicket {
+    /// Run `f` while the ticket is current (holding off a retirement meanwhile); `None` when it is not.
     pub fn publish<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
         let state = self.cache.0.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         (state.active && state.epochs.get(&self.path).copied().unwrap_or(0) == self.epoch).then(f)
     }
 
+    /// Whether the source has not been retired since the ticket was taken.
     pub fn current(&self) -> bool {
         self.publish(|| ()).is_some()
     }

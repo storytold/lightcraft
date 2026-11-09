@@ -171,6 +171,8 @@ pub fn content_key(p: &Photo) -> String {
     }
 }
 
+/// The keys `p`'s cached work may be under, best first: its content key, the hash a duplicate's suffix stands for,
+/// and its path-and-size alias from before the hash was known.
 pub fn content_keys(p: &Photo) -> Vec<String> {
     let mut keys = vec![content_key(p)];
     if let Some(hash) = &p.content_hash {

@@ -59,6 +59,7 @@ fn making() -> &'static (Mutex<HashSet<PathBuf>>, Condvar) {
 struct Slot(PathBuf);
 
 impl Slot {
+    /// The slot of `path` when no other job holds it (never waits).
     fn try_enter(path: &Path) -> Option<Slot> {
         let (set, _) = making();
         let mut set = set.lock().unwrap_or_else(PoisonError::into_inner);
@@ -83,6 +84,8 @@ impl Drop for Slot {
     }
 }
 
+/// Copy a photo's denoise product made under one of its earlier `keys` to the key of its learned `hash`, while
+/// `ticket` is current and `validate` still holds; the first copy that lands ends it.
 pub(crate) fn migrate_product(
     dir: &Path,
     model: &str,
@@ -333,6 +336,7 @@ thread_local! { static PRODUCT_CHECKS: std::cell::Cell<usize> = const { std::cel
 pub(crate) fn product_checks() -> usize {
     PRODUCT_CHECKS.get()
 }
+/// Whether the product at `path` is whole and made for `key`.
 pub(super) fn product_current(path: &Path, key: &str) -> bool {
     #[cfg(test)]
     PRODUCT_CHECKS.set(PRODUCT_CHECKS.get().saturating_add(1));

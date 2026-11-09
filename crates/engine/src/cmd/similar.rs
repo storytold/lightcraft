@@ -47,11 +47,13 @@ struct Content {
     sources: Vec<SourceRef>,
 }
 
+/// A photo's content key, and the guarded keys its signature is kept under.
 struct SignatureKeys {
     content: String,
     guarded: Vec<String>,
 }
 
+/// Photo `id`'s content key and the keys its signature may be under, each tied to its source epoch.
 fn signature_keys(s: &Session, id: PhotoId) -> Option<SignatureKeys> {
     let photo = s.cache_photo(id)?;
     let content = s.media.content_keys(&photo);
@@ -59,6 +61,7 @@ fn signature_keys(s: &Session, id: PhotoId) -> Option<SignatureKeys> {
     Some(SignatureKeys { content: content.into_iter().next()?, guarded })
 }
 
+/// The signature already known under one of `keys`.
 fn known_signature(s: &Session, keys: &SignatureKeys) -> Option<[f32; 64]> {
     keys.guarded.iter().find_map(|key| s.signatures.get(key)).copied()
 }

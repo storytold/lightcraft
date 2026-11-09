@@ -3,6 +3,7 @@ use super::render::{CacheRecipe, KeySalts, RenderJob, RenderResult, thumb_key, v
 use super::source::{PreviewLoader, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
+/// The photo whose file `id` shows: a virtual copy's master (through copies of copies), else `id` itself.
 pub(crate) fn physical_photo(catalog: &lightcraft_catalog::Catalog, id: PhotoId) -> Option<Arc<Photo>> {
     let p = catalog.photo(id)?.clone();
     if p.copy_of.is_none() {
@@ -24,14 +25,19 @@ pub(crate) fn physical_photo(catalog: &lightcraft_catalog::Catalog, id: PhotoId)
 }
 
 impl crate::Session {
+    /// [`physical_photo`] in this session's catalog.
     pub(crate) fn physical_photo(&self, id: PhotoId) -> Option<Arc<Photo>> {
         physical_photo(&self.catalog, id)
     }
 
+    /// Whether the hash recorded for `id`'s file may be trusted: its content key is not withheld until a read
+    /// ([`crate::cache_identity::CacheIdentity::needs_validation`]).
     pub(crate) fn source_hash_authorized(&self, id: PhotoId) -> bool {
         self.physical_photo(id).is_some_and(|p| !self.media.identities.needs_validation(&p))
     }
 
+    /// Photo `id` as its cached work is keyed: with the content key, size, dimensions and preview state of the file it
+    /// shows (a virtual copy's master's).
     pub fn cache_photo(&self, id: PhotoId) -> Option<Arc<Photo>> {
         let p = self.catalog.photo(id)?.clone();
         let current = self.physical_photo(id)?;
@@ -50,6 +56,7 @@ impl crate::Session {
         Some(Arc::new(resolved))
     }
 
+    /// Where `p`'s smart preview may be, best first.
     pub fn smart_preview_paths(&self, p: &Photo) -> Vec<std::path::PathBuf> {
         let Some(dir) = &self.media.smart_dir else { return Vec::new() };
         let resolved = self.cache_photo(p.id);
@@ -213,6 +220,7 @@ impl crate::Session {
         )
     }
 
+    /// A variant's cache key, its fallback keys and its recipe.
     fn variant_cache(&self, p: &Photo, settings: &DevelopSettings, edge: usize) -> (Hash128, Vec<Hash128>, CacheRecipe) {
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         let lens = super::quick::lens_key(p);
@@ -345,6 +353,7 @@ impl crate::Session {
         self.view_key_for(p, apply_crop, &content_key(p))
     }
 
+    /// The salts of `p`'s view preview key.
     fn view_salts(&self, p: &Photo) -> KeySalts {
         KeySalts {
             denoise: self.media.denoise_salt(p.id, &p.develop),
@@ -354,6 +363,7 @@ impl crate::Session {
         }
     }
 
+    /// `p`'s view preview key for `content`.
     fn view_key_for(&self, p: &Photo, apply_crop: bool, content: &str) -> Hash128 {
         view_key_for(content, &p.develop, apply_crop, crate::camera_profiles::cache_key(), self.view_salts(p))
     }

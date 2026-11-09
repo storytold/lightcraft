@@ -67,6 +67,7 @@ impl Session {
         self.originals.refresh(self);
     }
 
+    /// Point photo `id`'s ready denoise picture at the product of its learned hash once that product is there.
     pub(crate) fn denoise_rebind_learned(&mut self, id: PhotoId) {
         let Some(p) = self.catalog.photo(id) else { return };
         let Some((dir, model)) = self.denoise_products_dir().zip(self.denoise.active.as_ref().map(|a| a.fingerprint.clone())) else { return };
@@ -87,6 +88,7 @@ impl Session {
         self.denoise_spec_with_discovery(p, false)
     }
 
+    /// [`Self::denoise_spec`]; `discover`: take the first of the photo's keys whose product is already on disk.
     fn denoise_spec_with_discovery(&self, p: &Photo, discover: bool) -> Option<(DenoiseSpec, String)> {
         let (dir, active) = (self.denoise_products_dir()?, self.denoise.active.as_ref()?);
         let resolved = self.cache_photo(p.id);
@@ -265,6 +267,7 @@ impl Session {
             .collect()
     }
 
+    /// What a job making `p`'s denoise picture needs (`None` for a photo without a file, or without an active model).
     fn denoise_job_spec(&self, p: &Photo, parallel: usize, discover: bool) -> Option<JobSpec> {
         let Source::File { path } = &p.source else { return None };
         let (spec, _) = self.denoise_spec_with_discovery(p, discover)?;

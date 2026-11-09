@@ -97,6 +97,7 @@ impl MediaCache {
         self.rendered = Arc::new(PreviewCache::with_disk(rendered_budget(self.budget), dir, disk_bytes));
     }
 
+    /// Retire the rendered cache and continue with one in memory only (a library without a folder).
     pub(crate) fn detach_disk_cache(&mut self) {
         self.rendered.retire();
         self.rendered = Arc::new(PreviewCache::memory(rendered_budget(self.budget)));
@@ -466,10 +467,12 @@ impl MediaCache {
         }
     }
 
+    /// `p`'s cache keys, best first, as [`crate::cache_identity::CacheIdentity::keys`] allows them.
     pub fn content_keys(&self, p: &Photo) -> Vec<String> {
         self.identities.keys(p)
     }
 
+    /// The identity of a source decoded for `p` under content `key`, tied to its source epoch.
     pub(crate) fn source_hash(&self, p: &Photo, key: &str) -> Hash128 {
         super::quick::source_identity(p, &self.identities.tag(p, key))
     }

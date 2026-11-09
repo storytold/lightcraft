@@ -707,6 +707,7 @@ impl Session {
         Ok(())
     }
 
+    /// [`Session::invalidate_cache_sources`] for one photo: `old`'s alias, trusted again only for `expected`.
     fn invalidate_cache_source(
         &mut self,
         old: &lightcraft_catalog::Photo,
