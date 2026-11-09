@@ -293,7 +293,19 @@ impl Backend {
             Backend::Idb(db) => {
                 let (_tx, store) = Self::idb_store(db, false)?;
                 let prefix = format!("{path}/");
-                let range = web_sys::IdbKeyRange::bound(&prefix.as_str().into(), &format!("{prefix}\u{ffff}").into()).map_err(err)?;
+                // Every key under `prefix`, and no other key: the exclusive upper bound is
+                // `prefix` with its last code unit bumped (`/` -> `0`), which sorts after
+                // every key that starts with `prefix`. Bounding by `prefix` + `\u{ffff}`
+                // instead would miss a key such as `segments/\u{ffff}part`, which starts
+                // with the prefix but sorts after that bound.
+                let upper = {
+                    let mut u = prefix.clone();
+                    let last = u.pop().unwrap_or_default();
+                    u.push(char::from_u32(last as u32 + 1).unwrap_or(last));
+                    u
+                };
+                let range = web_sys::IdbKeyRange::bound_with_lower_open_and_upper_open(&prefix.as_str().into(), &upper.as_str().into(), false, true)
+                    .map_err(err)?;
                 let keys = idb_req(&store.get_all_keys_with_key_and_limit(&range, 1).map_err(err)?).await?;
                 let arr: js_sys::Array = keys.unchecked_into();
                 Ok(arr.length() > 0)
