@@ -225,6 +225,9 @@ impl Client {
                         let mut handshake = Deadline::new(&mut stream, HELLO_TIMEOUT);
                         handshake.expires = handshake.expires.min(expires);
                         if let Err(error) = say_hello(&mut handshake, token) {
+                            if Instant::now() >= expires {
+                                return Err("SAM connection deadline expired during handshake".into());
+                            }
                             last = error;
                             continue;
                         }
@@ -302,14 +305,22 @@ struct Proof {
     proof: String,
 }
 
+/// Socket timeouts indicate a spent time budget, not a failed token proof.
+fn handshake_io_error(error: io::Error) -> String {
+    match error.kind() {
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => "SAM handshake timed out: time budget exhausted".into(),
+        _ => format!("SAM handshake: {error}"),
+    }
+}
+
 /// Serialize one bounded handshake message into the framed transport.
 fn send<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<(), String> {
-    write_frame(writer, &serde_json::to_vec(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    write_frame(writer, &serde_json::to_vec(value).map_err(|e| e.to_string())?).map_err(handshake_io_error)
 }
 
 /// Decode one handshake message, rejecting oversized or malformed frames.
 fn receive<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Result<T, String> {
-    let frame = read_frame(reader, CONTROL_LIMIT).map_err(|e| format!("SAM handshake: {e}; {}", token_hint()))?;
+    let frame = read_frame(reader, CONTROL_LIMIT).map_err(handshake_io_error)?;
     serde_json::from_slice(&frame).map_err(|_| format!("unexpected SAM handshake; {}", token_hint()))
 }
 
@@ -615,6 +626,22 @@ mod tests {
         deadline.expires = Instant::now();
         assert_eq!(deadline.read(&mut byte).unwrap_err().kind(), io::ErrorKind::TimedOut);
         assert_eq!(deadline.write(b"x").unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn handshake_timeouts_do_not_recommend_changing_the_token() {
+        for kind in [io::ErrorKind::TimedOut, io::ErrorKind::WouldBlock] {
+            let error = handshake_io_error(io::Error::from(kind));
+            assert!(error.contains("time budget exhausted"), "{error}");
+            assert!(!error.contains(TOKEN_ENV), "{error}");
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let mut deadline = Deadline::new(&mut server, Duration::ZERO);
+        let error = receive::<String>(&mut deadline).unwrap_err();
+        assert!(error.contains("time budget exhausted"), "{error}");
+        assert!(!error.contains(TOKEN_ENV), "{error}");
     }
 
     #[test]
