@@ -8,9 +8,9 @@ use super::{
 
 #[derive(Clone)]
 pub(crate) enum CacheRecipe {
-    Thumbnail { settings: u64, bucket: usize, salt: u64, denoise_model: Option<String>, profile_salt: u64, lens: u64 },
-    Variant { edge: usize, profile_salt: u64, lens: u64 },
-    View { apply_crop: bool, salt: u64, denoise_model: Option<String>, profile_salt: u64, lens: u64 },
+    Thumbnail { settings: u64, bucket: usize, salt: u64, denoise_model: Option<String>, profile_salt: u64, lens: u64, decoder: u64 },
+    Variant { edge: usize, salts: KeySalts },
+    View { apply_crop: bool, salt: u64, denoise_model: Option<String>, profile_salt: u64, lens: u64, decoder: u64 },
 }
 
 impl CacheRecipe {
@@ -22,13 +22,13 @@ impl CacheRecipe {
             })
         };
         match self {
-            Self::Thumbnail { settings: settings_hash, bucket, salt, denoise_model, profile_salt, lens } => {
-                let salts = KeySalts { denoise: denoise_salt(*salt, denoise_model), profile: *profile_salt, lens: *lens };
+            Self::Thumbnail { settings: settings_hash, bucket, salt, denoise_model, profile_salt, lens, decoder } => {
+                let salts = KeySalts { denoise: denoise_salt(*salt, denoise_model), profile: *profile_salt, lens: *lens, decoder: *decoder };
                 thumb_key(content, *settings_hash, *bucket, settings, profile, salts)
             }
-            Self::Variant { edge, profile_salt, lens } => variant_key_for(content, settings, *edge, profile, *profile_salt, *lens),
-            Self::View { apply_crop, salt, denoise_model, profile_salt, lens } => {
-                let salts = KeySalts { denoise: denoise_salt(*salt, denoise_model), profile: *profile_salt, lens: *lens };
+            Self::Variant { edge, salts } => variant_key_for(content, settings, *edge, profile, *salts),
+            Self::View { apply_crop, salt, denoise_model, profile_salt, lens, decoder } => {
+                let salts = KeySalts { denoise: denoise_salt(*salt, denoise_model), profile: *profile_salt, lens: *lens, decoder: *decoder };
                 view_key_for(content, settings, *apply_crop, profile, salts)
             }
         }
@@ -40,10 +40,11 @@ impl CacheRecipe {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct KeySalts {
+pub(crate) struct KeySalts {
     pub denoise: u64,
     pub profile: u64,
     pub lens: u64,
+    pub decoder: u64,
 }
 
 impl KeySalts {
@@ -57,6 +58,9 @@ impl KeySalts {
         if self.lens != 0 {
             k.u64(self.lens);
         }
+        if self.decoder != 0 {
+            k.str("decoder").u64(self.decoder);
+        }
     }
 }
 
@@ -68,11 +72,11 @@ pub(super) fn thumb_key(content: &str, settings_hash: u64, bucket: usize, settin
     k.finish()
 }
 
-pub(super) fn variant_key_for(content: &str, settings: &DevelopSettings, edge: usize, profile: u64, profile_salt: u64, lens: u64) -> Hash128 {
+pub(super) fn variant_key_for(content: &str, settings: &DevelopSettings, edge: usize, profile: u64, salts: KeySalts) -> Hash128 {
     let mut k = Hasher128::new();
     k.str(content).str("variant").u64(settings.hash64() ^ crate::files::hot_pixel_key(settings)).u64(edge as u64).u64(RENDER_CACHE_VERSION);
     with_process(&mut k, settings).u64(profile);
-    KeySalts { denoise: 0, profile: profile_salt, lens }.add_to(&mut k);
+    salts.add_to(&mut k);
     k.finish()
 }
 

@@ -108,6 +108,7 @@ impl crate::Session {
         let content_key = content_key(&p);
         let content = Hasher128::new().str(&content_key).finish().0 as u64;
         let source_key = self.media.source_hash(&p, &content_key);
+        let decoder = super::quick::decoder_key(&p);
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash =
             if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
@@ -123,11 +124,12 @@ impl crate::Session {
             ^ content.rotate_left(17)
             ^ salt
             ^ profile_salt.rotate_left(29)
-            ^ lens.rotate_left(37);
+            ^ lens.rotate_left(37)
+            ^ decoder.rotate_left(43);
         // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
         // (likewise an imported camera profile's file: deleted or replaced, the thumbnail renders afresh)
         // (likewise a database lens profile: thumbnails of every other photo keep their keys)
-        let salts = KeySalts { denoise: salt, profile: profile_salt, lens };
+        let salts = KeySalts { denoise: salt, profile: profile_salt, lens, decoder };
         let cache_profile = crate::camera_profiles::cache_key();
         let thumb_key_of = |content: &str, bucket: usize| thumb_key(content, settings_hash, bucket, &settings, cache_profile, salts);
         let cache = thumb_bucket.map(|b| (self.media.rendered.clone(), thumb_key_of(&content_key, b)));
@@ -141,6 +143,7 @@ impl crate::Session {
             denoise_model: self.denoise.active.as_ref().filter(|_| salt != 0).map(|active| active.fingerprint.clone()),
             profile_salt,
             lens,
+            decoder,
         });
         Some(RenderJob {
             cache_recipe,
@@ -185,6 +188,7 @@ impl crate::Session {
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         // (the photo's database lens profile stays part of it: a profile looked up again renders afresh)
         let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
+        let decoder = super::quick::decoder_key(&p);
         job.key = settings.hash64()
             ^ crate::files::hot_pixel_key(settings)
             ^ ((max_w as u64) << 40)
@@ -192,24 +196,31 @@ impl crate::Session {
             ^ (apply_crop as u64)
             ^ (job.level as u64) << 60
             ^ profile_salt.rotate_left(29)
-            ^ lens.rotate_left(37);
+            ^ lens.rotate_left(37)
+            ^ decoder.rotate_left(43);
         Some(job)
     }
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     /// `profile_salt`: [`MediaCache::camera_profile_salt`] of `settings`' profile.
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64) -> Hash128 {
-        variant_key_for(&content_key(p), settings, edge, crate::camera_profiles::cache_key(), profile_salt, super::quick::lens_key(p))
+        variant_key_for(
+            &content_key(p),
+            settings,
+            edge,
+            crate::camera_profiles::cache_key(),
+            KeySalts { denoise: 0, profile: profile_salt, lens: super::quick::lens_key(p), decoder: super::quick::decoder_key(p) },
+        )
     }
 
     fn variant_cache(&self, p: &Photo, settings: &DevelopSettings, edge: usize) -> (Hash128, Vec<Hash128>, CacheRecipe) {
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         let lens = super::quick::lens_key(p);
         let profile = crate::camera_profiles::cache_key();
-        let key = variant_key_for(&content_key(p), settings, edge, profile, profile_salt, lens);
-        let fallback =
-            self.media.content_keys(p).into_iter().skip(1).map(|k| variant_key_for(&k, settings, edge, profile, profile_salt, lens)).collect();
-        (key, fallback, CacheRecipe::Variant { edge, profile_salt, lens })
+        let salts = KeySalts { denoise: 0, profile: profile_salt, lens, decoder: super::quick::decoder_key(p) };
+        let key = variant_key_for(&content_key(p), settings, edge, profile, salts);
+        let fallback = self.media.content_keys(p).into_iter().skip(1).map(|k| variant_key_for(&k, settings, edge, profile, salts)).collect();
+        (key, fallback, CacheRecipe::Variant { edge, salts })
     }
 
     /// A thumbnail of `id` rendered with `settings` instead of its own (profile and preset
@@ -339,6 +350,7 @@ impl crate::Session {
             denoise: self.media.denoise_salt(p.id, &p.develop),
             profile: self.media.camera_profile_salt(&p.develop.profile.id),
             lens: super::quick::lens_key(p),
+            decoder: super::quick::decoder_key(p),
         }
     }
 
@@ -359,6 +371,7 @@ impl crate::Session {
             denoise_model: self.denoise.active.as_ref().filter(|_| salts.denoise != 0).map(|active| active.fingerprint.clone()),
             profile_salt: salts.profile,
             lens: salts.lens,
+            decoder: salts.decoder,
         });
         Some(job)
     }
@@ -479,7 +492,7 @@ impl crate::Session {
             .u64(id.0)
             .u64(profile_salt)
             .finish();
-        let key = h.0 as u64;
+        let key = h.0 as u64 ^ super::quick::decoder_key(&p).rotate_left(43);
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
             let cache = self.media.rendered.clone();
