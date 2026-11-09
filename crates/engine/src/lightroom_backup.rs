@@ -226,6 +226,16 @@ fn sweep(root: &Path) {
     }
 }
 
+/// Refuse a known shortage; an unavailable space reading is left to normal write-error handling.
+fn check_space(root: &Path, needed: u64, available: Option<u64>) -> Result<(), String> {
+    if let Some(available) = available
+        && needed > available
+    {
+        return Err(format!("not enough free space in {} to unpack this catalog ({} bytes needed, {} available)", root.display(), needed, available));
+    }
+    Ok(())
+}
+
 /// Unpack the catalog of the backup `zip` into a new private folder under `root`, checking its
 /// size and CRC-32. Stops with an error when `cancel` is set; the folder is removed then too.
 pub fn extract(zip: &Path, root: &Path, cancel: &AtomicBool) -> Result<Extracted, String> {
@@ -236,13 +246,19 @@ pub fn extract(zip: &Path, root: &Path, cancel: &AtomicBool) -> Result<Extracted
         return Err(format!("the catalog in this backup unpacks to {} GB, more than LightCraft reads", entry.size >> 30));
     }
     std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    check_space(root, entry.size, crate::disk_space::read(root).map(|space| space.available))?;
     sweep(root);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let dir = root.join(format!("{PREFIX}{}-{stamp}", std::process::id()));
-    let mut builder = std::fs::DirBuilder::new();
     // owner-only from the start on Unix (a catalog holds the person's paths and metadata)
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    let builder = {
+        let mut builder = std::fs::DirBuilder::new();
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
     builder.create(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     // a fixed name, not the zip's: an entry named `NUL.lrcat` or `a:b.lrcat` would be a device or an
     // alternate data stream on Windows. The guard exists before the first byte is written: every
@@ -328,6 +344,13 @@ pub fn extract(zip: &Path, root: &Path, cancel: &AtomicBool) -> Result<Extracted
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn free_space_check_refuses_known_shortage() {
+        let root = std::path::Path::new("library");
+        assert!(super::check_space(root, 11, Some(10)).unwrap_err().contains("not enough free space"));
+        assert!(super::check_space(root, 10, Some(10)).is_ok());
+        assert!(super::check_space(root, 11, None).is_ok());
+    }
     use super::*;
 
     /// A zip of `files` (name, bytes), each stored or deflated; `zip64` writes ZIP64 records and

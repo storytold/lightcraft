@@ -30,7 +30,12 @@ const MODULES: &[Module] = &[
     Module {
         src: include_str!("wgsl/blur.wgsl"),
         bindings: &[("src", false, "f32"), ("dst", true, "f32")],
-        entries: &["box_h", "box_v", "median_h", "median_v"],
+        entries: &["box_h", "box_v", "minmax", "median_h", "median_v"],
+    },
+    Module {
+        src: include_str!("wgsl/gauss.wgsl"),
+        bindings: &[("src", false, "f32"), ("taps", false, "f32"), ("dst", true, "f32")],
+        entries: &["gauss_h", "gauss_v"],
     },
     Module {
         src: include_str!("wgsl/resize.wgsl"),
@@ -55,12 +60,42 @@ const MODULES: &[Module] = &[
             "xguided_pre",
             "xguided_ab",
             "xguided_apply",
+            "fringe_lab",
+            "fringe_apply",
         ],
     },
+    Module {
+        src: include_str!("wgsl/nrcj.wgsl"),
+        bindings: &[("a", false, "f32"), ("b", false, "f32"), ("dst", true, "f32")],
+        entries: &[
+            "nrcj_yuv",
+            "nrcj_uv",
+            "nrcj_samples",
+            "nrcj_speck",
+            "nrcj_pilot",
+            "nrcj_links1",
+            "nrcj_paths",
+            "nrcj_links",
+            "nrcj_dh",
+            "nrcj_dv",
+            "nrcj_recon",
+        ],
+    },
+    Module {
+        src: include_str!("wgsl/spot.wgsl"),
+        bindings: &[("img", true, "f32"), ("pts", false, "f32"), ("al", true, "f32"), ("sp", true, "f32"), ("df", true, "f32"), ("wt", true, "f32")],
+        entries: &["spot_prep", "spot_apply", "spot_score"],
+    },
+    Module { src: include_str!("wgsl/hist.wgsl"), bindings: &[("px", false, "u32"), ("bins", true, "atomic<u32>")], entries: &["histogram"] },
     Module {
         src: include_str!("wgsl/mask.wgsl"),
         bindings: &[("img", false, "f32"), ("log_l", false, "f32"), ("aux", false, "f32"), ("c", true, "f32"), ("alpha", true, "f32")],
         entries: &["shape", "combine", "finalize"],
+    },
+    Module {
+        src: include_str!("wgsl/present.wgsl"),
+        bindings: &[("px", false, "u32"), ("dst", true, "u32"), ("count", true, "atomic<u32>")],
+        entries: &["unwritten", "pad_rows"],
     },
     Module {
         src: include_str!("wgsl/geom.wgsl"),
@@ -276,7 +311,8 @@ pub(crate) struct Tracked(wgpu::Buffer);
 
 impl Tracked {
     fn new(b: wgpu::Buffer) -> Tracked {
-        ALLOCATED.fetch_add(b.size(), Ordering::Relaxed);
+        let now = ALLOCATED.fetch_add(b.size(), Ordering::Relaxed) + b.size();
+        PEAK.fetch_max(now, Ordering::Relaxed);
         Tracked(b)
     }
 }
@@ -299,6 +335,15 @@ thread_local! {
 
 /// Bytes of device buffers that exist (in use, retired or pooled).
 static ALLOCATED: AtomicU64 = AtomicU64::new(0);
+/// Most bytes allocated since [`take_peak`] (profiling).
+static PEAK: AtomicU64 = AtomicU64::new(0);
+
+/// The most bytes allocated since the last call; starts over from what is allocated now.
+pub(crate) fn take_peak() -> (u64, u64) {
+    let now = ALLOCATED.load(Ordering::Relaxed);
+    (PEAK.swap(now, Ordering::Relaxed), now)
+}
+
 /// Bytes waiting in per-thread retired lists.
 static RETIRED_BYTES: AtomicU64 = AtomicU64::new(0);
 /// The render device is lost: wgpu's `poll` panics from then on, so [`Gpu::poll`] stops calling it.
@@ -337,6 +382,13 @@ pub struct Gpu {
     free: std::sync::Mutex<Vec<Tracked>>,
     /// Largest storage buffer the device accepts (bytes).
     pub max_buffer: u64,
+    /// The crystal grain tables of the last grain pattern, resident: a render (each Amount step
+    /// of a drag) copies them on the GPU instead of uploading their 12 MB again ([`Gpu::grain_tables`]).
+    /// Shared with each render that recorded a copy from them until it submits: replacing them
+    /// while another thread's copy is unsubmitted must not hand the buffer back to the pool.
+    grain: std::sync::Mutex<Option<(std::sync::Arc<lightcraft_pipeline::crystal::CrystalTile>, std::sync::Arc<Buf>)>>,
+    /// The device is the window's (eframe's): renders can hand it textures to draw directly.
+    pub window: bool,
 }
 
 /// WGSL constants shared by every module (generated from the CPU pipeline's values).
@@ -345,7 +397,15 @@ fn constants() -> String {
     use lightcraft_pipeline::tone::{CHROMA_N, LUT_MAX_EV, LUT_MIN_EV, LUT_N};
     let mut s = String::new();
     let [to_lms, from_lms, to_lab, from_lab] = lightcraft_color::perceptual::oklab_matrices();
-    for (name, m) in [("OK_TO_LMS", to_lms), ("OK_FROM_LMS", from_lms), ("OK_TO_LAB", to_lab), ("OK_FROM_LAB", from_lab)] {
+    let (to_pro, from_pro) = lightcraft_pipeline::light_v3::prophoto_matrices();
+    for (name, m) in [
+        ("OK_TO_LMS", to_lms),
+        ("OK_FROM_LMS", from_lms),
+        ("OK_TO_LAB", to_lab),
+        ("OK_FROM_LAB", from_lab),
+        ("PRO_FROM_2020", to_pro),
+        ("PRO_TO_2020", from_pro),
+    ] {
         let rows: Vec<String> = m.iter().map(|r| format!("vec3<f32>({:?}, {:?}, {:?})", r[0], r[1], r[2])).collect();
         s += &format!("const {name} = array<vec3<f32>, 3>({});\n", rows.join(", "));
     }
@@ -360,13 +420,27 @@ fn constants() -> String {
         crate::params::CURVE_N
     );
     s += &format!("const POINT_WORDS: u32 = {}u;\n", lightcraft_pipeline::colorops::POINT_WORDS);
+    let y = lightcraft_pipeline::light_v3::PRO_Y;
+    s += &format!("const PRO_Y = vec3<f32>({:?}, {:?}, {:?});\nconst LIGHT_N: u32 = {}u;\n", y[0], y[1], y[2], lightcraft_pipeline::light_v3::LUT_N);
     s += &format!("const EYE_WORDS: u32 = {}u;\n", lightcraft_pipeline::redeye::EYE_WORDS);
     use lightcraft_pipeline::masks::{AUTO_TOL_CHROMA, AUTO_TOL_EV};
     s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
     s += &format!("const SHADOW_TINT_K: f32 = {:?};\n", lightcraft_pipeline::colorops::SHADOW_TINT);
+    s += &format!("const GAMUT_WARN: f32 = {:?};\n", lightcraft_pipeline::finish::GAMUT_WARN);
+    s += &format!("const NCAND: u32 = {}u;\n", lightcraft_pipeline::spots::candidates(1.0).len());
+    use lightcraft_pipeline::output::{PROOF_DEST_WARNING, PROOF_DISPLAY_WARNING};
+    for (name, c) in [("PROOF_DEST", PROOF_DEST_WARNING), ("PROOF_DISP", PROOF_DISPLAY_WARNING)] {
+        s += &format!("const {name}_R: f32 = {:?};\nconst {name}_G: f32 = {:?};\nconst {name}_B: f32 = {:?};\n", c[0], c[1], c[2]);
+    }
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }
+    use lightcraft_pipeline::crystal::{TILE_PER_LONG, TORI};
+    s += &format!(
+        "const CRYSTAL_T0: u32 = {}u;\nconst CRYSTAL_T1: u32 = {}u;\nconst CRYSTAL_TPL: f32 = {:?};\n",
+        TORI[0], TORI[1], TILE_PER_LONG as f32
+    );
+    s += &format!("const DEEP_WRITTEN: u32 = {}u;\n", crate::params::DEEP_WRITTEN);
     for (name, idx) in crate::params::finish_fields() {
         s += &format!("const F_{name}: u32 = {idx}u;\n");
     }
@@ -386,7 +460,8 @@ fn module_source(m: &Module, consts: &str) -> String {
 }
 
 impl Gpu {
-    /// Create a device on the best available adapter (no software fallback), or why there is none.
+    /// Create a device on the best available adapter (no software adapter unless
+    /// `LIGHTCRAFT_GPU_ALLOW_SOFTWARE`), or why there is none.
     pub fn new(backends: wgpu::Backends) -> Result<Gpu, String> {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
         // only these drivers are loaded (`crate::backend`: never Vulkan on Windows unless asked)
@@ -396,31 +471,61 @@ impl Gpu {
         // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
         desc.flags = crate::backend::instance_flags_from_env(desc.flags);
         let instance = wgpu::Instance::new(desc);
-        let adapter = pollster::block_on(
-            instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
-        )
-        .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))?;
+        // the card LIGHTCRAFT_GPU_ADAPTER names, else the high-performance one
+        let adapter = crate::backend::pick_adapter(&instance, backends)?;
         let info = adapter.get_info();
-        if info.device_type == wgpu::DeviceType::Cpu {
+        if refuse_adapter(info.device_type, software_allowed()) {
             log::info!("gpu: only a software adapter ({}), using the CPU pipeline", info.name);
             return Err(format!("software adapter ({}) skipped: the CPU pipeline is faster", info.name));
+        }
+        if info.device_type == wgpu::DeviceType::Cpu {
+            log::info!("gpu: LIGHTCRAFT_GPU_ALLOW_SOFTWARE: using the software adapter {}", info.name);
         }
         let mut limits = adapter.limits();
         if limits.max_storage_buffers_per_shader_stage < 10 {
             log::info!("gpu: {} has too few storage buffers per stage", info.name);
             return Err(format!("{} has too few storage buffers per shader stage ({} < 10)", info.name, limits.max_storage_buffers_per_shader_stage));
         }
-        if let Some((binding, buffer)) = limits_override() {
-            limits.max_storage_buffer_binding_size = limits.max_storage_buffer_binding_size.min(binding);
-            limits.max_buffer_size = limits.max_buffer_size.min(buffer);
-            log::info!("gpu: LIGHTCRAFT_GPU_LIMITS: storage bindings ≤ {} MiB, buffers ≤ {} MiB", binding >> 20, buffer >> 20);
-        }
+        limits = capped(limits, limits_override());
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("lightcraft"),
             required_limits: limits.clone(),
             ..Default::default()
         }))
         .map_err(|e| format!("{}: device creation failed ({e})", info.name))?;
+        Gpu::with_device(device, queue, info, limits, false)
+    }
+
+    /// The renderer on the window's device ([`crate::adopt_window_device`]), within its limits
+    /// lowered by `LIGHTCRAFT_GPU_LIMITS` as a device of its own would be.
+    pub fn adopt(device: wgpu::Device, queue: wgpu::Queue, info: wgpu::AdapterInfo) -> Result<Gpu, String> {
+        Gpu::adopt_capped(device, queue, info, limits_override())
+    }
+
+    /// [`Gpu::adopt`] with the limits override given (`LIGHTCRAFT_GPU_LIMITS`, parsed).
+    fn adopt_capped(device: wgpu::Device, queue: wgpu::Queue, info: wgpu::AdapterInfo, cap: Option<(u64, u64)>) -> Result<Gpu, String> {
+        let limits = capped(device.limits(), cap);
+        Gpu::with_device(device, queue, info, limits, true)
+    }
+
+    /// The renderer on an existing device: the window's (`window`, see [`crate::adopt_window_device`])
+    /// or one [`Gpu::new`] created with `limits`. Builds the kernels (~0.4–2 s: not on the UI thread).
+    pub fn with_device(device: wgpu::Device, queue: wgpu::Queue, info: wgpu::AdapterInfo, limits: wgpu::Limits, window: bool) -> Result<Gpu, String> {
+        if limits.max_storage_buffers_per_shader_stage < 10 {
+            return Err(format!("{} has too few storage buffers per shader stage ({} < 10)", info.name, limits.max_storage_buffers_per_shader_stage));
+        }
+        let started = std::time::Instant::now();
+        let kernels = match build_kernels(&device) {
+            Ok(kernels) => kernels,
+            Err(e) => {
+                log::error!("gpu: kernels failed to build on {}: {e}", info.name);
+                return Err(format!("{}: kernels failed to build ({e})", info.name));
+            }
+        };
+        let build_ms = started.elapsed().as_millis();
+        // Only a device the renderer keeps gets these: a window's device declined above keeps the
+        // window's own handler, so a later error of the window's can't stop the renderer's device
+        // (review of PR #1065).
         // Errors outside a render's error scopes (see `ErrorScopes`): log, and stop using the GPU.
         device.on_uncaptured_error(std::sync::Arc::new(|e| {
             log::error!("gpu: {e}");
@@ -433,15 +538,6 @@ impl Gpu {
             log::error!("gpu: device lost ({reason:?}): {msg}");
             crate::mark_broken(&format!("device lost ({reason:?}): {msg}"));
         });
-        let started = std::time::Instant::now();
-        let kernels = match build_kernels(&device) {
-            Ok(kernels) => kernels,
-            Err(e) => {
-                log::error!("gpu: kernels failed to build on {}: {e}", info.name);
-                return Err(format!("{}: kernels failed to build ({e})", info.name));
-            }
-        };
-        let build_ms = started.elapsed().as_millis();
         let dummy = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("dummy"),
             size: 16,
@@ -449,8 +545,15 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let max_buffer = limits.max_storage_buffer_binding_size.min(limits.max_buffer_size);
-        log::info!("gpu: {} ({:?}), {} kernels in {build_ms} ms, buffers ≤ {} MiB", info.name, info.backend, kernels.len(), max_buffer >> 20);
-        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer })
+        log::info!(
+            "gpu: {} ({:?}), {} kernels in {build_ms} ms, buffers ≤ {} MiB{}",
+            info.name,
+            info.backend,
+            kernels.len(),
+            max_buffer >> 20,
+            if window { ", the window's device" } else { "" }
+        );
+        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, window, grain: Default::default() })
     }
 
     /// A buffer of `len` 32-bit values with undefined contents (a recycled one when possible).
@@ -491,8 +594,12 @@ impl Gpu {
     }
 
     /// Submit command buffers, then make the buffers this thread dropped before reusable.
+    /// Nothing is submitted once this render has failed: the render is discarded and recomputed
+    /// on the CPU, and the failure contract says no further GPU work runs after a fatal failure.
     pub fn submit(&self, cmds: impl IntoIterator<Item = wgpu::CommandBuffer>) {
-        self.queue.submit(cmds);
+        if !failed() {
+            self.queue.submit(cmds);
+        }
         let retired = take_retired();
         self.pool(retired);
     }
@@ -538,30 +645,19 @@ impl Gpu {
     /// second panic while a failed render unwinds aborts the process. A lost device is not polled
     /// again; a poll that panics counts as one and stops the GPU.
     pub(crate) fn poll(&self, t: wgpu::PollType) -> Result<wgpu::PollStatus, String> {
-        if DEVICE_LOST.load(Ordering::Relaxed) {
-            return Err("the device is lost".into());
-        }
-        let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            #[cfg(test)]
-            if SIMULATED_LOST_POLL.with(std::cell::Cell::get) {
-                panic!("Error in Device::poll: Validation Error\n\nCaused by:\n  Parent device is lost (simulated)");
-            }
-            self.device.poll(t)
-        }));
-        match polled {
-            Ok(r) => r.map_err(|e| e.to_string()),
-            Err(_) => {
-                DEVICE_LOST.store(true, Ordering::Relaxed);
-                crate::mark_broken("device lost: Device::poll failed");
-                Err("the device is lost (Device::poll failed)".into())
-            }
-        }
+        poll_device(&self.device, t)
     }
 
     /// Upload 32-bit values.
     pub fn upload<T: bytemuck::Pod>(&self, data: &[T]) -> Buf {
         let bytes: &[u8] = bytemuck::cast_slice(data);
         let len = bytes.len() / 4;
+        // A failed render runs no further GPU work (`Gpu::submit` skips the submission and the
+        // render is redone on the CPU): staging the bytes would still queue a copy for the next
+        // submission, so the caller gets the placeholder with the requested length instead.
+        if failed() {
+            return Buf { buf: Some(Tracked::new(self.placeholder())), len };
+        }
         if bytes.is_empty() {
             return self.buffer(1);
         }
@@ -632,6 +728,44 @@ impl Gpu {
         );
     }
 
+    /// Record into `enc` a copy of `tile`'s summed-area tables (both tori, back to back) into
+    /// `dst` at value offset `at`, uploading them first unless they are the resident ones.
+    /// Returns the buffer copied from, which the caller keeps until it has submitted `enc` (another
+    /// render may replace the resident tables meanwhile). None when `dst` can't hold them (an
+    /// over-limit placeholder: the render has failed already).
+    pub fn grain_tables(
+        &self,
+        enc: &mut wgpu::CommandEncoder,
+        tile: &std::sync::Arc<lightcraft_pipeline::crystal::CrystalTile>,
+        dst: &Buf,
+        at: usize,
+    ) -> Option<std::sync::Arc<Buf>> {
+        let len: usize = tile.sats.iter().map(Vec::len).sum();
+        let (start, bytes) = ((at as u64) * 4, (len as u64) * 4);
+        if len == 0 || dst.raw().size() < start.saturating_add(bytes) {
+            return None;
+        }
+        let mut resident = self.grain.lock().unwrap_or_else(|e| e.into_inner());
+        if !resident.as_ref().is_some_and(|(t, b)| std::sync::Arc::ptr_eq(t, tile) && b.raw().size() >= bytes) {
+            // the old tables go back to the pool first (once no unsubmitted copy holds them): one
+            // pattern's tables are resident at a time
+            *resident = None;
+            let buf = self.buffer(len);
+            if buf.raw().size() < bytes {
+                return None;
+            }
+            let mut off = 0u64;
+            for sat in &tile.sats {
+                self.queue.write_buffer(buf.raw(), off, bytemuck::cast_slice(sat));
+                off += (sat.len() as u64) * 4;
+            }
+            *resident = Some((tile.clone(), std::sync::Arc::new(buf)));
+        }
+        let (_, src) = resident.as_ref()?;
+        enc.copy_buffer_to_buffer(src.raw(), 0, dst.raw(), start, bytes);
+        Some(src.clone())
+    }
+
     /// Stands in for a buffer that could not be created (the render has failed already).
     fn placeholder(&self) -> wgpu::Buffer {
         self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -667,7 +801,12 @@ impl Gpu {
             fail(FailKind::Fatal, format!("unknown kernel {name}"));
             return;
         };
-        assert_eq!(bufs.len(), k.nbuf, "{name}: binding count");
+        if bufs.len() != k.nbuf {
+            // a caller/kernel mismatch would bind the wrong buffers: fail this render over to the
+            // CPU instead of crashing
+            fail(FailKind::Fatal, format!("{name}: binding count {} != {}", bufs.len(), k.nbuf));
+            return;
+        }
         let params = self.init_buffer(bytemuck::cast_slice(if p.is_empty() { &[0u32] } else { p }), wgpu::BufferUsages::STORAGE);
         let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: params.as_entire_binding() }];
         for (i, b) in bufs.iter().enumerate() {
@@ -683,13 +822,25 @@ impl Gpu {
 
     /// Submit `enc`, then read back the first `len` 32-bit values of `src`.
     ///
-    /// A failed readback (device lost, map error, timeout) fails the render ([`FailKind::Fatal`])
-    /// and returns zeros, which the caller discards; after an earlier failure in the same render
-    /// nothing more is submitted.
+    /// A failed readback (device lost, map error, timeout) or a `len` past the buffer's end fails
+    /// the render ([`FailKind::Fatal`]) and returns zeros, which the caller discards; after an
+    /// earlier failure in the same render nothing more is submitted. `T` is always a 32-bit type
+    /// at the call sites (the copy and the readback tail are defined in 32-bit words).
     pub fn finish_and_read<T: bytemuck::Pod>(&self, mut enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
-        assert!(len <= src.len, "readback of {len} values from a buffer of {}", src.len);
         let zeros = || vec![<T as bytemuck::Zeroable>::zeroed(); len];
         if failed() {
+            return zeros();
+        }
+        // a zero-length readback would issue a `copy_buffer_to_buffer` of size 0, which wgpu
+        // rejects as an invalid copy: submit the (possibly staged) work untouched and return
+        // zeros instead
+        if len == 0 {
+            self.submit([enc.finish()]);
+            return zeros();
+        }
+        if len > src.len {
+            // a caller bug would read past the buffer: fail this render over to the CPU
+            fail(FailKind::Fatal, format!("readback of {len} values from a buffer of {}", src.len));
             return zeros();
         }
         let size = (len * 4) as u64;
@@ -747,11 +898,126 @@ impl Gpu {
 /// normally reset a hung GPU much sooner).
 const READBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Whether to turn down an adapter of `device_type`: a software rasterizer (llvmpipe / lavapipe,
+/// WARP) is slower than the CPU pipeline, so it is refused unless `allow_software`.
+fn refuse_adapter(device_type: wgpu::DeviceType, allow_software: bool) -> bool {
+    device_type == wgpu::DeviceType::Cpu && !allow_software
+}
+
+/// `LIGHTCRAFT_GPU_ALLOW_SOFTWARE=1`: accept a software adapter. For tests on machines without a
+/// GPU (Mesa lavapipe on Linux, WARP on Windows), so the CPU ↔ GPU equivalence tests run there
+/// instead of skipping; the app never sets it (software rendering is slower than the CPU pipeline).
+fn software_allowed() -> bool {
+    std::env::var("LIGHTCRAFT_GPU_ALLOW_SOFTWARE").is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+}
+
 /// `LIGHTCRAFT_GPU_LIMITS`: lower the device limits, e.g. to reproduce a smaller adapter.
 /// `webgpu` / `downlevel` = 128 MiB storage bindings and 256 MiB buffers (the WebGPU defaults),
 /// `<n>` = n MiB storage bindings and 2n MiB buffers. Returns (binding bytes, buffer bytes).
 fn limits_override() -> Option<(u64, u64)> {
     parse_limits(&std::env::var("LIGHTCRAFT_GPU_LIMITS").ok()?)
+}
+
+/// `limits` lowered to `cap` ([`limits_override`]: storage binding bytes, buffer bytes).
+fn capped(mut limits: wgpu::Limits, cap: Option<(u64, u64)>) -> wgpu::Limits {
+    if let Some((binding, buffer)) = cap {
+        limits.max_storage_buffer_binding_size = limits.max_storage_buffer_binding_size.min(binding);
+        limits.max_buffer_size = limits.max_buffer_size.min(buffer);
+        log::info!("gpu: LIGHTCRAFT_GPU_LIMITS: storage bindings ≤ {} MiB, buffers ≤ {} MiB", binding >> 20, buffer >> 20);
+    }
+    limits
+}
+
+/// `device.poll` that never panics: see [`Gpu::poll`]. [`read_texture`] uses it too: its device
+/// (the window's, when adopted) shares the device-lost flag.
+fn poll_device(device: &wgpu::Device, t: wgpu::PollType) -> Result<wgpu::PollStatus, String> {
+    if DEVICE_LOST.load(Ordering::Relaxed) {
+        return Err("the device is lost".into());
+    }
+    let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[cfg(test)]
+        if SIMULATED_LOST_POLL.with(std::cell::Cell::get) {
+            panic!("Error in Device::poll: Validation Error\n\nCaused by:\n  Parent device is lost (simulated)");
+        }
+        device.poll(t)
+    }));
+    match polled {
+        Ok(r) => r.map_err(|e| e.to_string()),
+        Err(_) => {
+            DEVICE_LOST.store(true, Ordering::Relaxed);
+            crate::mark_broken("device lost: Device::poll failed");
+            Err("the device is lost (Device::poll failed)".into())
+        }
+    }
+}
+
+/// See [`crate::read_texture`].
+pub(crate) fn read_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: usize,
+    height: usize,
+) -> Result<lightcraft_raster::Rgba8, String> {
+    if DEVICE_LOST.load(Ordering::Relaxed) {
+        return Err("the device is lost".into());
+    }
+    if width == 0 || height == 0 {
+        return Err("an empty texture".into());
+    }
+    let (Ok(w32), Ok(h32)) = (u32::try_from(width), u32::try_from(height)) else { return Err("texture too large".into()) };
+    if w32 > texture.width() || h32 > texture.height() || texture.format() != wgpu::TextureFormat::Rgba8Unorm {
+        return Err("not an 8-bit view texture of that size".into());
+    }
+    // texture copies take rows of a multiple of 256 bytes
+    let stride = width.checked_mul(4).ok_or("texture too large")?.next_multiple_of(256);
+    let size = stride.checked_mul(height).ok_or("texture too large")?;
+    let (Ok(stride32), Ok(size64)) = (u32::try_from(stride), u64::try_from(size)) else { return Err("texture too large".into()) };
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("view readback"),
+        size: size64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("view readback") });
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride32), rows_per_image: Some(h32) },
+        },
+        wgpu::Extent3d { width: w32, height: h32, depth_or_array_layers: 1 },
+    );
+    queue.submit([enc.finish()]);
+    if let Some(e) = pollster::block_on(scope.pop()) {
+        return Err(format!("texture copy failed: {e}"));
+    }
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    // (the render path's wait: queued work ahead of the copy can take that long too)
+    let wait = READBACK_TIMEOUT;
+    poll_device(device, wgpu::PollType::Wait { submission_index: None, timeout: Some(wait) })?;
+    match rx.recv_timeout(wait) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(format!("{e}")),
+        Err(e) => return Err(format!("map callback: {e}")),
+    }
+    let bytes = slice.get_mapped_range().map_err(|e| format!("{e:?}"))?;
+    let mut data = Vec::with_capacity(width * height);
+    for row in bytes.chunks(stride).take(height) {
+        let row = row.get(..width * 4).ok_or("short readback row")?;
+        data.extend(row.as_chunks::<4>().0.iter().copied());
+    }
+    drop(bytes);
+    staging.unmap();
+    if data.len() != width * height {
+        return Err("incomplete readback".into());
+    }
+    Ok(lightcraft_raster::Rgba8 { width, height, data })
 }
 
 fn parse_limits(v: &str) -> Option<(u64, u64)> {
@@ -764,8 +1030,8 @@ fn parse_limits(v: &str) -> Option<(u64, u64)> {
         }
         n => {
             let mb: u64 = n.trim_end_matches("mib").trim_end_matches("mb").trim().parse().ok()?;
-            let b = mb.max(1) << 20;
-            Some((b, 2 * b))
+            let b = mb.max(1).checked_mul(1 << 20)?;
+            Some((b, b.checked_mul(2)?))
         }
     }
 }
@@ -906,6 +1172,56 @@ mod tests {
         assert_eq!(super::parse_limits("512MiB"), Some((512 << 20, 1024 << 20)));
         assert_eq!(super::parse_limits(""), None);
         assert_eq!(super::parse_limits("lots"), None);
+        assert_eq!(super::parse_limits("9223372036854775807"), None);
+        assert_eq!(super::parse_limits("17592186044416"), None);
+    }
+
+    /// `LIGHTCRAFT_GPU_LIMITS` caps the window's device as it caps a device of its own (review of
+    /// PR #1065: adopting the window's device skipped it, so a 1024 × 1024 RGB float buffer — 12 MiB —
+    /// was taken under an 8 MiB cap).
+    #[test]
+    fn the_limits_override_caps_an_adopted_device() {
+        let big = wgpu::Limits { max_storage_buffer_binding_size: 1 << 30, max_buffer_size: 1 << 31, ..wgpu::Limits::default() };
+        let c = super::capped(big.clone(), super::parse_limits("8"));
+        assert_eq!((c.max_storage_buffer_binding_size, c.max_buffer_size), (8 << 20, 16 << 20));
+        let c = super::capped(big.clone(), None);
+        assert_eq!((c.max_storage_buffer_binding_size, c.max_buffer_size), (1 << 30, 1 << 31));
+
+        let _lock = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some((device, queue, info)) = test_device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        };
+        let full = device.limits().max_storage_buffer_binding_size.min(device.limits().max_buffer_size);
+        if full <= 12 << 20 {
+            lightcraft_testkit::skip!(Gpu, "the adapter's buffers are already ≤ 12 MiB");
+            return;
+        }
+        let g = super::Gpu::adopt_capped(device, queue, info, super::parse_limits("8")).expect("kernels build");
+        assert!(g.window);
+        assert_eq!(g.limit(), 8 << 20, "the cap applies to the adopted device");
+        assert!(1024 * 1024 * 3 * 4 > g.limit(), "a 12 MiB buffer is over it");
+    }
+
+    /// A device as eframe makes the window's (the adapter's own limits).
+    fn test_device() -> Option<(wgpu::Device, wgpu::Queue, wgpu::AdapterInfo)> {
+        let backends = crate::backend::compute_backends()?;
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = backends;
+        desc.backend_options = crate::backend::backend_options();
+        let instance = wgpu::Instance::new(desc);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        let info = adapter.get_info();
+        if info.device_type == wgpu::DeviceType::Cpu {
+            return None;
+        }
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("test window"),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .ok()?;
+        Some((device, queue, info))
     }
 
     /// Issue #2936: the kernels are built on several threads; every entry point of every module has one.
@@ -980,6 +1296,25 @@ mod tests {
         let back: Vec<[u32; 3]> = g.finish_and_read(g.encoder(), &b, data.len());
         assert!(back.len() == 1 << 20 && back.as_flattened() == data.as_slice());
     }
+    /// An upload after this render has failed keeps the failure contract (`Gpu::submit` skips the
+    /// submission, so nothing further runs on the GPU): the caller gets the placeholder with the
+    /// requested length instead of a staging buffer holding a copy of the data for a submission
+    /// that will never happen.
+    #[test]
+    fn an_upload_after_a_failure_returns_the_placeholder() {
+        let Some(g) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        super::fail(super::FailKind::Fatal, "simulated failure before an upload".into());
+        assert!(super::failed());
+        let b = g.upload(&[7u32; 1024]);
+        assert_eq!(b.buf.as_ref().map(|t| t.0.size()), Some(16), "the placeholder, not a staged 4 KiB buffer");
+        assert_eq!(b.len, 1024, "the requested length is preserved");
+        // leave this thread's failure for nobody: later tests on the thread start unfailed
+        assert_eq!(super::take_failure().map(|f| f.kind), Some(super::FailKind::Fatal));
+    }
+
     /// Issue #1858: once a Vulkan or DX12 device is lost, wgpu 30 panics in `Device::poll` instead of
     /// returning an error. A render's readback panicked; while it unwound, a buffer's way back to
     /// the pool polls again from a destructor, and that second panic aborted the app.
@@ -990,12 +1325,77 @@ mod tests {
         }
     }
 
+    /// Review of PR #1065: a view readback (headless screenshot) whose poll finds the device lost
+    /// returns an error instead of panicking, stops the GPU, and doesn't poll the device again.
+    #[test]
+    fn a_view_readback_on_a_lost_device_fails_without_a_panic() {
+        if run_child("lost_readback_child").is_none() {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+        }
+    }
+
+    #[test]
+    #[ignore = "run in its own process by a_view_readback_on_a_lost_device_fails_without_a_panic"]
+    fn lost_readback_child() {
+        let Some(g) = crate::device() else {
+            println!("CHILD: no GPU");
+            return;
+        };
+        let texture = g.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("view"),
+            size: wgpu::Extent3d { width: 8, height: 8, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        assert!(super::read_texture(&g.device, &g.queue, &texture, 8, 8).is_ok(), "a live device reads back");
+        super::SIMULATED_LOST_POLL.with(|c| c.set(true));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::read_texture(&g.device, &g.queue, &texture, 8, 8)));
+        assert!(matches!(r, Ok(Err(_))), "the lost device fails the readback without a panic");
+        assert!(!crate::available(), "the GPU is not used again");
+        super::SIMULATED_LOST_POLL.with(|c| c.set(false));
+        assert!(super::read_texture(&g.device, &g.queue, &texture, 8, 8).is_err(), "a lost device is not polled again");
+        println!("CHILD: survived");
+    }
+
     /// A Metal device really lost (its command buffers exhausted) is never polled again.
     #[test]
     fn a_really_lost_device_is_not_polled_again() {
         if run_child("really_lost_child").is_none() {
             lightcraft_testkit::skip!(Gpu, "no GPU device, or one that can't be lost on purpose here");
         }
+    }
+
+    /// Resident grain tables replaced by another pattern stay out of the pool while a render
+    /// that recorded a copy from them hasn't submitted it: reusing them then would hand that
+    /// render another tile's tables.
+    #[test]
+    fn replaced_grain_tables_stay_alive_until_their_copy_is_submitted() {
+        use lightcraft_pipeline::crystal::{CrystalLook, CrystalTile};
+        let Some(g) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        let look = CrystalLook::new(25.0, 50.0);
+        let (Some(a), Some(b)) = (CrystalTile::new(look, 0x7ab1_0001), CrystalTile::new(look, 0x7ab1_0002)) else { panic!("tiles") };
+        let (a, b) = (std::sync::Arc::new(a), std::sync::Arc::new(b));
+        let len: usize = a.sats.iter().map(Vec::len).sum();
+        let (dst_a, dst_b) = (g.buffer(len), g.buffer(len));
+        let mut first = g.encoder();
+        let held = g.grain_tables(&mut first, &a, &dst_a, 0).expect("tables copied");
+        // another render replaces the resident tables before `first` is submitted
+        let mut second = g.encoder();
+        assert!(g.grain_tables(&mut second, &b, &dst_b, 0).is_some());
+        let next = g.buffer(len);
+        assert!(next.raw() != held.raw(), "the replaced tables went back to the pool before their copy was submitted");
+        g.submit([first.finish()]);
+        // each render read its own tile's tables
+        let tables = |t: &lightcraft_pipeline::crystal::CrystalTile| t.sats.concat();
+        assert!(g.finish_and_read::<f32>(second, &dst_a, len) == tables(&a), "the first render copied other tables");
+        assert!(g.finish_and_read::<f32>(g.encoder(), &dst_b, len) == tables(&b), "the second render copied other tables");
     }
 
     /// A GPU retired by another failure (a validation error) keeps a live device: its buffers are
@@ -1149,6 +1549,17 @@ mod tests {
         assert!(e.contains("lost"), "{e}");
         drop(held);
         println!("CHILD: survived");
+    }
+
+    #[test]
+    fn software_adapters_need_the_opt_in() {
+        use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu, Other, VirtualGpu};
+        assert!(super::refuse_adapter(Cpu, false), "llvmpipe / WARP are refused by default");
+        assert!(!super::refuse_adapter(Cpu, true), "LIGHTCRAFT_GPU_ALLOW_SOFTWARE accepts them");
+        for t in [DiscreteGpu, IntegratedGpu, VirtualGpu, Other] {
+            assert!(!super::refuse_adapter(t, false), "{t:?}");
+            assert!(!super::refuse_adapter(t, true), "{t:?}");
+        }
     }
 
     #[test]

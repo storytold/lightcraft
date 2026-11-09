@@ -113,7 +113,14 @@ fields are reported. Lightroom's `ProcessVersion` is not mapped: newly imported 
 LightCraft's latest rendering process, and photos already in the library keep theirs
 ([process-versions.md](process-versions.md)). When a recovery archive is saved, it retains source settings/history/snapshots
 and original smart-collection rules. Smart collections become regular albums with current
-membership. Archived history and snapshots are source data, not native LightCraft history yet.
+membership, and so do saved prints, books, slideshows and web galleries (with the photos they hold). A LightCraft
+album nests only inside a folder (a Lightroom collection set). A collection or creation Lightroom keeps elsewhere,
+such as a print saved inside a plain collection, or one whose parent is system-only or gone from the catalog, joins the
+nearest collection set above it, or the top level, and the result names it under warnings (issues #2165, #2532).
+Quick Collection and unsaved creations are system-only and not imported; publish collections live in tables the
+importer doesn't read. A collection the catalog lists twice imports once; a different collection with the id of an
+earlier one is left out with a warning naming both, and the photos listed under that id go to the first. Archived
+history and snapshots are source data, not native LightCraft history yet.
 A Custom white balance on a raw LightCraft develops relative to its as-shot look (ARW, NEF, RW2,
 RAF, CR3, CR2, PEF, SRW; Lightroom names them all `RAW`) can't be taken as Kelvin: the catalog keeps no
 as-shot white for Custom photos, so the photo stays As Shot and `Temperature, Tint` are reported
@@ -172,7 +179,7 @@ Lightroom Catalog… take the zip directly (issue #2592, `crates/engine/src/ligh
   on disk), checked against the zip's size and CRC-32, read like any catalog, and removed after the read, on an
   error and on cancel alike. A folder left by a crash is removed by the next backup import once it is a day old.
   The zip is only read. A zip with no `.lrcat`, more than one, a damaged or cut-short entry, or a catalog over
-  16 GiB is refused with a message; a full disk is a write error, not a crash.
+  16 GiB is refused with a message. A known space shortage is refused before extraction; later write errors are reported.
 - The import's `source` is the zip. Paths the catalog records relative to itself (`relativePathFromCatalog`) are
   taken from where the catalog was: two folders above a dated backup folder, else next to the zip.
 - Open Library given `Backups/` without its catalog, or a dated folder in it, makes no library there and offers the
@@ -184,7 +191,8 @@ Lightroom Catalog… take the zip directly (issue #2592, `crates/engine/src/ligh
   still found by that key. Each key records the id it was written for, so two catalogs with different ids that sat
   at the same path keep their own albums. A catalog without `Adobe_storeProviderID` (every Lightroom Classic
   catalog checked, from Lightroom 7 to Classic 13, has one; only a damaged or foreign file lacks it) is known by its
-  path alone: it matches whatever was imported from that path, the one identity it has. Photos are matched as
+  path alone. If that path is already associated with a known catalog ID, the importer refuses the ambiguous
+  match rather than silently combining different catalogs. Unowned legacy path keys can still match. Photos are matched as
   before, by Lightroom's image id and path: a backup whose photos were at another place (an older backup from
   before a move) adds them as other records.
 

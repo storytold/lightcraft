@@ -144,7 +144,11 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         // Linux: the profile the desktop assigns in colord, read off the UI thread
         #[cfg(target_os = "linux")]
         screen_profile: Some(colord::service()),
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        // Windows: the profile it uses for the window's monitor, unless it colour-manages the
+        // desktop itself (HDR, Auto Color Management)
+        #[cfg(windows)]
+        screen_profile: win_screen_profile::service(cc),
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         screen_profile: None,
         pick_display_profile: Some(Box::new(|| {
             let mut d = file_dialog()
@@ -255,6 +259,10 @@ pub(crate) fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool) ->
         Launch::Ask => (Session::new().with_fs().with_default_denoise_models().with_system_clock(), None),
         Launch::Open { dir, remembered, .. } => open_library_session(in_memory, dir.clone(), *remembered, seed_demo),
     };
+    // lens profiles from the app's own lensfun copy, offered on the first launch (not for a throwaway session)
+    if !in_memory {
+        s = s.with_default_lens_database().with_lens_auto_download();
+    }
     s.face_models_dir = lightcraft_engine::config::default_face_models_dir();
     s.slide_templates_dir = lightcraft_engine::config::config_dir().map(|d| d.join(lightcraft_engine::slide_template::DIR_NAME));
     // Control requests are answered on the UI thread: Add to Apple Photos must not wait there
