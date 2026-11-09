@@ -309,6 +309,12 @@ struct Watch {
     observed: Option<Stamp>,
     ticket: crate::cache_identity::SourceTicket,
 }
+impl Watch {
+    /// Whether the file read with `stamp` is no longer the one this watch observed when it was made.
+    fn replaced_by(&self, stamp: &Stamp) -> bool {
+        self.observed.as_ref().is_some_and(|observed| observed != stamp)
+    }
+}
 pub(crate) struct ReadEvent {
     pub path: String,
     pub fingerprint: Fingerprint,
@@ -652,7 +658,7 @@ impl Originals {
             before
                 .filter(|b| b.len == bytes.len() as u64 && file.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(b))
                 .map(|stamp| {
-                    let replaced = watch.as_ref().is_some_and(|w| w.observed.as_ref().is_some_and(|before| before != &stamp));
+                    let replaced = watch.as_ref().is_some_and(|w| w.replaced_by(&stamp));
                     let changed_hash =
                         watch.as_ref().and_then(|w| w.known_hash.as_deref()).is_some_and(|h| crate::sync::base_hash(h) != hash.to_string());
                     let facts = (replaced || changed_hash || watch.as_ref().is_some_and(|w| w.quarantined || w.known_hash.is_none()))
@@ -736,7 +742,8 @@ impl Originals {
             .filter(|b| b.len == len && file.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(b))
             .ok_or_else(|| io::Error::other("original changed while reading"))?;
         let proof = observe.then(|| ReadProof::new(file, share_safe)).flatten();
-        let fp = Fingerprint { hash: hash.finish(), stamp, facts: None, replaced: false, proof };
+        let replaced = watch.as_ref().is_some_and(|w| w.replaced_by(&stamp));
+        let fp = Fingerprint { hash: hash.finish(), stamp, facts: None, replaced, proof };
         if !fp.observed(path) {
             return Err(io::Error::other("original changed while reading"));
         }
@@ -1724,6 +1731,28 @@ mod lifecycle_tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    fn a_streamed_read_of_a_replaced_hashless_original_saves_no_hash() {
+        for compare in [false, true] {
+            let (mut s, dir, id) = hashless(if compare { "replaced-hashless-compare" } else { "replaced-hashless-copy" });
+            let path = dir.join("original.dng");
+            let mut replacement = std::fs::read(&path).unwrap();
+            *replacement.last_mut().unwrap() ^= 1;
+            std::fs::write(&path, &replacement).unwrap();
+            if compare {
+                let twin = dir.join("twin.dng");
+                std::fs::write(&twin, &replacement).unwrap();
+                let (mut fa, mut fb) = (File::open(&path).unwrap(), File::open(&twin).unwrap());
+                assert!(s.originals.compare_open(path.to_str().unwrap(), twin.to_str().unwrap(), &mut fa, &mut fb).unwrap());
+            } else {
+                s.originals.hash_whole(path.to_str().unwrap()).unwrap();
+            }
+            s.persist().unwrap();
+            assert!(s.catalog.photo(id).unwrap().content_hash.is_none(), "compare={compare}: the replacement's hash must not join the old facts");
+            drop(s);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+    #[test]
     fn g_native_worker_read_uses_captured_session_reader() {
         let (mut s, dir, id) = hashless("g-read-worker");
         let read = s.media.file_bytes.clone().unwrap();
@@ -1819,7 +1848,8 @@ impl Originals {
                 self.hashes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if let Some(stamp) = stamp.filter(|s| s.len == len && file.metadata().ok().as_ref().and_then(Stamp::of).as_ref() == Some(s)) {
                     let proof = file.try_clone().ok().and_then(|file| ReadProof::new(file, safe));
-                    let fp = Fingerprint { hash: hash.finish(), stamp, proof, facts: None, replaced: false };
+                    let replaced = watch.as_ref().is_some_and(|w| w.replaced_by(&stamp));
+                    let fp = Fingerprint { hash: hash.finish(), stamp, proof, facts: None, replaced };
                     self.track(path, &fp.proof, &registration);
                     if equal && watch.is_none() && fp.current(path) {
                         let mut candidates = self.candidates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
