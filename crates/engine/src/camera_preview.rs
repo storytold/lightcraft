@@ -21,6 +21,7 @@ mod hue_sat;
 mod look_fit;
 mod mono;
 mod pairs;
+pub(crate) use pairs::plausible_matrix;
 mod proxy;
 mod tone;
 

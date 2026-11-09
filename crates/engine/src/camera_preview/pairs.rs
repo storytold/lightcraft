@@ -170,15 +170,15 @@ pub(super) fn fit_tone_with_shadows(
     Some(candidate)
 }
 
-/// Ridge-regularised 3×3 chromaticity matrix (luminance-normalised RGB) on the training pairs.
 /// Whether a matrix fitted to one photo's camera JPEG can be a camera's colour: in every row the
-/// channel's own input weighs at least [`MIN_OWN_TO_CROSS`] times any other channel's positive weight. A fit on a proxy with few saturated colours can pass the holdout
-/// gates with a row such as blue = 2.97·R − 4.50·G + 2.57·B (a Canon EOS 400D CR2, #3973; also
+/// channel's own input weighs at least [`MIN_OWN_TO_CROSS`] times any other channel's positive
+/// weight. A fit on a proxy with few saturated colours can pass the holdout gates with a row such as blue = 2.97·R − 4.50·G + 2.57·B (a Canon EOS 400D CR2, #3973; also
 /// #3452), which gives a saturated orange as much blue as red and turns it magenta. Such a fit is
 /// refused by [`fit_matrix`], for every fit that uses it (the full look, the partial look's matrix,
-/// a pooled camera profile), so the photo falls back as when no matrix can be fitted (the camera's
+/// a pooled camera profile), and a stored profile's matrix is held to it too
+/// (`camera_profiles`), so the photo falls back as when no matrix can be fitted (the camera's
 /// measured spectral matrices, where there are some).
-pub(super) fn plausible_matrix(m: &Mat3) -> bool {
+pub(crate) fn plausible_matrix(m: &Mat3) -> bool {
     (0..3).all(|r| (0..3).all(|c| c == r || m.0[r][c] <= 0.0 || m.0[r][r] >= MIN_OWN_TO_CROSS * m.0[r][c]))
 }
 
@@ -189,6 +189,7 @@ pub(super) fn plausible_matrix(m: &Mat3) -> bool {
 /// turquoise scene like its camera JPEG has 2.08 (`[1.86, −4.65, 3.87]`, review of #3992).
 const MIN_OWN_TO_CROSS: f64 = 1.5;
 
+/// Ridge-regularised 3×3 chromaticity matrix (luminance-normalised RGB) on the training pairs.
 pub(super) fn fit_matrix(pairs: &[([f64; 3], [f64; 3])]) -> Option<Mat3> {
     let mut gram = [[0.0; 3]; 3];
     let mut cross = [[0.0; 3]; 3];
@@ -222,7 +223,7 @@ pub(super) fn fit_matrix(pairs: &[([f64; 3], [f64; 3])]) -> Option<Mat3> {
     let matrix = Mat3(cross).mul(&Mat3(gram).inverse()?);
     let sane = matrix.0.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0);
     if sane && !plausible_matrix(&matrix) && lightcraft_pipeline::profiling() {
-        eprintln!("[profile] camera look: fitted matrix {:?} refused: a row's largest weight is another channel's", matrix.0);
+        eprintln!("[profile] camera look: fitted matrix {:?} refused: a row's own weight is under {MIN_OWN_TO_CROSS}× another channel's", matrix.0);
     }
     (sane && plausible_matrix(&matrix)).then_some(matrix)
 }
