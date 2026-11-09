@@ -99,14 +99,24 @@ LIGHTCRAFT_SAM3_WORKER_TOKEN=… LIGHTCRAFT_SAM3_REMOTE=sam3-worker:8793 lightcr
 The client and worker both reject tokens shorter than 16 Unicode characters before connecting
 or listening. Set the same token on both ends, or unset it on both for loopback-only use.
 Hostname lookup waits at most five seconds; each authentication handshake has one ten-second
-deadline, including partial reads and writes.
+deadline, including partial reads and writes. TCP connection attempts and handshakes across all
+resolved addresses share a fifteen-second budget after lookup.
 
 `LIGHTCRAFT_SAM3_REMOTE` then takes a host name or an address. A worker off loopback refuses to
 start without the token, and a client refuses to send anything off this machine without it. On
 every connection both ends prove they know the token, with an HMAC over fresh nonces, before any
-pixels move; the token itself never crosses the network. That keeps strangers off the GPU and
-photos away from an impostor, nothing more: the model input and the masks cross the network
-unencrypted, so use this only where the network itself is private or encrypted.
+pixels move; the token itself never crosses the network. This checks possession of the token at
+connection setup only. Subsequent requests and masks are neither encrypted nor authenticated by
+this protocol. An active intermediary can relay the
+handshake and then change inputs or results, including replacing a mask with plausible values.
+Direct connections require a trusted network that excludes active intermediaries and untrusted
+peers. Otherwise use an authenticated, integrity-protected tunnel such as SSH or a VPN; a private
+address alone does not provide that protection.
+
+The worker handles one connection at a time, including authentication. A silent peer can occupy
+it for ten seconds, and repeated connections can deny service. Restrict access to trusted clients
+with network access controls. Concurrent handshake admission is outside this transport's current
+scope; the token is not denial-of-service protection.
 
 No local weights are required in remote mode. An unavailable worker produces an explicit
 error, not a silent CPU fallback. Restore the tunnel and retry. Unset

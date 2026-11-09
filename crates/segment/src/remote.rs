@@ -24,6 +24,8 @@ const TOKEN_MIN: usize = 16;
 /// How long a new connection has to prove the token, so that a silent one doesn't hold the
 /// worker, which serves one client at a time.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// Total TCP and authentication budget across all resolved addresses. DNS has its own five seconds.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Serialize, Deserialize)]
 pub enum Operation {
@@ -202,16 +204,27 @@ impl Client {
 
     /// Try every resolved address, including when a reachable peer fails authentication.
     fn connect_addresses(endpoint: &str, addresses: &[SocketAddr], token: Option<&str>) -> Result<Self, String> {
+        Self::connect_until(endpoint, addresses, token, Instant::now() + CONNECT_TIMEOUT)
+    }
+
+    /// Share one deadline across TCP attempts and authentication, even with many DNS results.
+    fn connect_until(endpoint: &str, addresses: &[SocketAddr], token: Option<&str>, expires: Instant) -> Result<Self, String> {
         if token.is_none() && addresses.iter().any(|a| !a.ip().is_loopback()) {
             return Err(format!("SAM endpoint off this machine needs {TOKEN_ENV}; or use an SSH tunnel for remote access"));
         }
         let mut last = format!("SAM endpoint {endpoint} has no address");
         for address in addresses {
-            match TcpStream::connect_timeout(address, Duration::from_secs(5)) {
+            let remaining = expires.checked_duration_since(Instant::now()).filter(|budget| !budget.is_zero());
+            let Some(remaining) = remaining else {
+                return Err(format!("SAM connection deadline expired: {last}"));
+            };
+            match TcpStream::connect_timeout(address, remaining.min(Duration::from_secs(5))) {
                 Ok(mut stream) => {
                     stream.set_write_timeout(Some(Duration::from_secs(30))).map_err(|e| e.to_string())?;
                     if let Some(token) = token {
-                        if let Err(error) = say_hello(&mut Deadline::new(&mut stream, HELLO_TIMEOUT), token) {
+                        let mut handshake = Deadline::new(&mut stream, HELLO_TIMEOUT);
+                        handshake.expires = handshake.expires.min(expires);
+                        if let Err(error) = say_hello(&mut handshake, token) {
                             last = error;
                             continue;
                         }
@@ -566,6 +579,16 @@ mod tests {
         assert!(Client::connect_addresses("test", &[wrong, right], Some(TOKEN)).is_ok());
         assert!(rejected.join().unwrap().is_err());
         assert!(accepted.join().unwrap().is_ok());
+    }
+
+    #[test]
+    fn an_expired_connection_budget_stops_before_the_next_address() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let error = Client::connect_until("test", &[address, address], Some(TOKEN), Instant::now()).err().unwrap();
+        assert!(error.contains("connection deadline expired"), "{error}");
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(listener.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
     }
 
     #[test]
