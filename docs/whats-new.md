@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Film grain that looks like film (process V7)
+- Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
+  rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
+  and blown highlights stay clean, and the fit-to-window preview shows the grain you will export. Amount, Size and
+  Roughness keep their meaning and Lightroom Classic's strength and grain size. This is rendering process 7: new photos
+  (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
+  See [film grain](grain.md).
+
 ### Lightroom's AI masks come in as Lightroom made them
 - A Lightroom edit's Subject, Sky, Object or People selection is read from the sidecar, where Lightroom stores the
   selection itself, instead of being guessed: a mask that leaves the subject out now leaves out exactly what Lightroom

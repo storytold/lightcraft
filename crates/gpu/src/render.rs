@@ -136,6 +136,10 @@ pub(crate) struct Cx<'a> {
     enc: Option<wgpu::CommandEncoder>,
     /// Kernel invocations recorded since the last submit.
     pending: u64,
+    /// Buffers shared with other renders that recorded commands read from (the resident grain
+    /// tables): kept until those commands are submitted. Declared after `enc`, so an unsubmitted
+    /// encoder is dropped before them.
+    held: Vec<std::sync::Arc<Buf>>,
 }
 
 /// Kernel invocations recorded before a render submits them (under one full-size pass over a
@@ -147,7 +151,7 @@ const BAND_PIXELS: usize = 4 << 20;
 
 impl<'a> Cx<'a> {
     pub fn new(gpu: &'a Gpu) -> Cx<'a> {
-        Cx { gpu, enc: Some(gpu.encoder()), pending: 0 }
+        Cx { gpu, enc: Some(gpu.encoder()), pending: 0, held: Vec::new() }
     }
 
     /// Record kernel `name` (see [`Gpu::run`]).
@@ -161,11 +165,27 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// The finish kernel's `aux` buffer: `aux`, then the crystal grain's tables when it has them
+    /// (copied on the GPU from the resident ones, see [`Gpu::grain_tables`]).
+    pub fn finish_aux(&mut self, aux: &[f32], grain: Option<&lightcraft_pipeline::finish::GrainModel>) -> Buf {
+        let Some(lightcraft_pipeline::finish::GrainModel::Crystal(g)) = grain else { return self.gpu.upload(aux) };
+        let tables: usize = g.tile.sats.iter().map(Vec::len).sum();
+        let out = self.gpu.buffer(aux.len().saturating_add(tables));
+        if !aux.is_empty() && out.raw().size() >= (aux.len() as u64) * 4 {
+            self.gpu.queue.write_buffer(out.raw(), 0, bytemuck::cast_slice(aux));
+        }
+        let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
+        self.held.extend(self.gpu.grain_tables(enc, &g.tile, &out, aux.len()));
+        out
+    }
+
     /// Submit what is recorded and read back `len` values of `b`.
     pub fn read<T: bytemuck::Pod>(&mut self, b: &Buf, len: usize) -> Vec<T> {
         self.pending = 0;
         let enc = self.enc.take().unwrap_or_else(|| self.gpu.encoder());
-        self.gpu.finish_and_read(enc, b, len)
+        let out = self.gpu.finish_and_read(enc, b, len);
+        self.held.clear();
+        out
     }
 
     /// Submit what is recorded so far without waiting. Renders submit stage by stage and every
@@ -177,6 +197,7 @@ impl<'a> Cx<'a> {
         if let Some(enc) = self.enc.take() {
             self.gpu.submit([enc.finish()]);
         }
+        self.held.clear();
     }
 
     /// Submit what is recorded and wait for it (profiling only: stage timings).
@@ -185,6 +206,7 @@ impl<'a> Cx<'a> {
         if let Some(enc) = self.enc.take() {
             self.gpu.submit([enc.finish()]);
         }
+        self.held.clear();
         let _ = self.gpu.poll(wgpu::PollType::wait_indefinitely());
     }
 
@@ -749,6 +771,7 @@ pub fn render(
         px_per_long: plan.px_per_long,
         air_pre: prep.air,
         space: req.space,
+        draft: req.quality == lightcraft_pipeline::Quality::Draft,
     });
     // soft proofing as the CPU's `finish` sets it up (an output-device table never gets here: see `render`)
     fp.proof = req.proof.map(|pr| pr.params(req.space));
@@ -780,7 +803,7 @@ pub fn render(
     if crate::ctx::failed() {
         return None; // a malformed parameter block failed the render: the CPU fallback redoes it
     }
-    let aux = gpu.upload(&aux);
+    let aux = cx.finish_aux(&aux, fp.grain.as_ref());
     // cleared, so that work which never ran cannot pass for an image (see the check below)
     let out = cx.zeroed(if deep { 3 * n } else { n });
     if fault == Some(crate::Fault::Validation) {
