@@ -1338,8 +1338,14 @@ fn a_persons_page_is_kept_across_other_changes_and_jumps_to_its_suggestions() {
     h.request("engine.execute", json!({"command": "faces.setName", "params": {"id": ids[0].0, "index": 0, "name": "Ann"}}), t);
     h.settle(SETTLE);
     assert_ne!(asked(&h), first, "made again after a face changed");
+    // an unnamed face found by the scan waits a moment, then the page is made again even if nothing else happens; the
+    // page counts as made just now, however many frames settling took, and quickly (the wait is then a second), so the
+    // change comes within the wait and the frames below outlast it, however fast this machine is
+    if let Some(page) = h.app.caches.person_page.as_mut() {
+        page.3 = h.time;
+    }
+    h.app.caches.person_page_made.1 = 0.0;
     let first = asked(&h);
-    // an unnamed face found by the scan waits a moment, then the page is made again even if nothing else happens
     let mut meta = h.app.session.catalog.photo(ids[1]).unwrap().meta.clone();
     meta.regions.push(lightcraft_meta::Region {
         rect: lightcraft_geom::Rect { x0: 0.9, y0: 0.9, x1: 0.95, y1: 0.95 },
