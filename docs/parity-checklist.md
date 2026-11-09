@@ -802,6 +802,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | patch | LRC-LIB-PEOPLE: reviewed-rectangle validation in all ignore actions, idempotent retries, retained metadata and pagination/error details, incremental ignored-face queries, independent legacy wire payloads and Detect Faces/XMP history coverage; status and counts unchanged |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-11-05 | patch | LRC-LIB-PEOPLE: catalog format 13 for ignored faces after main's format-12 shared segmentation grids; mask/face upgrade and replay/compaction coverage, status and counts unchanged |

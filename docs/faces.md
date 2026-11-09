@@ -340,8 +340,34 @@ overlapping detection on future scans. Nothing is deleted from the original phot
 Open **Ignored faces…** from People, select faces, then **Restore selected
 faces** to include them again. Restoration preserves the original box, name and description; a
 restored crop returns to the appropriate People view. This review works without
-a recognition model installed. Controls and review counts follow the selected interface language. When there are more than 1,000 ignored faces, use **Previous page** and **Next page** to review all of them; selection is cleared when changing pages. The tiles use the same indexed detector crops as People. Open directly with `view.ignoredFaces`. Commands: `faces.ignore {faces: [{photo, index, rect?}], ignored?: true}`
-and `faces.ignored {offset?: 0, limit?: 1000}` (at most 5,000 per page; returns the library-wide `total` and page `faces`). Supplying `rect` protects against stale selections; invalid batches change nothing. Both ignore actions on a person's page send the catalog rectangle, not the detector's display crop, so a retained page cannot ignore another face that has taken the same region index.
+a recognition model installed. Controls and review counts follow the selected interface language. When there are more than 1,000 ignored faces, use **Previous page** and **Next page** to review all of them; selection is cleared when changing pages. The tiles use the same indexed detector crops as People. Open directly with `view.ignoredFaces`.
+
+### Ignore/restore command contract
+
+- `faces.ignore {faces: [{photo, index, rect}], ignored?: boolean}` defaults to `ignored: true`;
+  `false` restores. Supply 1–100,000 entries. **Every entry requires the reviewed catalog `rect`,
+  not the detector-aligned `view` crop.** All UI callers use their cached reviewed geometry.
+- Validation is atomic, including duplicate and already-desired targets: a missing photo/face,
+  changed box or invalid field rejects the whole batch, with no history step. Duplicates count
+  once; already-ignored/restored targets succeed with no change. The response is `{changed, ignored}`;
+  a wholly no-op retry does not change the revision or Undo/Redo stacks.
+- `faces.ignored {offset?: 0, limit?: 1000}` accepts `limit` 1–5,000 and returns
+  `{total, offset, limit, hasNext, revision, faces: [{photo, index, rect, view, name, description}]}`.
+  Names/descriptions are retained values or `null`. Order is photo id, then region index.
+  The derived index follows changed photos; warm pages do not scan the whole library again.
+- Offsets refer to the **current revision**, not an immutable snapshot. A region index is not a
+  stable cursor across removal/reordering. After restoring a page, refetch the **same offset**
+  (do not advance past entries shifted into it); clamp to `floor((total - 1) / limit) * limit`,
+  or zero for an empty list. Restore large libraries in page-sized batches until no entries remain.
+- Validation failures have distinct codes: `invalidInput`, `missingPhoto` (including a photo
+  outside the library), `missingFace`, and `staleSelection`. Engine callers match
+  `ErrorKind::FaceRequest`; control replies preserve the existing string `error` and add
+  `errorDetails: {code, field, target?}`. `target` is the zero-based entry in `faces` and `field`
+  is its field (or a top-level parameter when `target` is absent). MCP tools preserve these
+  details in `structuredContent`, including per-step failures in `command_batch`.
+
+These commands require a build supporting catalog format 13 (discover them through
+`engine.commands` / MCP `command_list`); they are not available in older builds.
 
 Select all in ignored-face review selects the current page only. On a person's page it selects the displayed confirmed faces (up to 5,000), not hidden results.
 
@@ -349,7 +375,7 @@ Double-clicking a confirmed face opens its photo and preserves the prior selecti
 
 Face naming, ignore/restore, and face-box edits remain catalog-only through
 Undo and Redo, even when automatic XMP writing is enabled. They do not mark photos as developed
-or add develop-history entries. The ignored-face review refreshes whenever the catalog revision changes, including direct-session commands and deletion/restoration. Unrelated changes preserve the page and selection; changed review entries clear selections so stale region indices cannot be reused. Reading XMP retains local ignored regions, even when the foreign region list omits them; matching boxes keep their original ignored data. Mixed commands and merged Undo/Redo write XMP only for photos with ordinary metadata or develop changes; photos with face-only changes keep their sidecars untouched. If both kinds of changes affect the same photo, its ordinary change still triggers the normal metadata write.
+or add develop-history entries. Manual Detect Faces uses the same catalog-only commit/history policy. The ignored-face review refreshes for metadata/membership changes (including direct-session commands and deletion/restoration) and indexed-crop changes; unrelated ratings do not refetch the page. Unrelated changes preserve the page and selection; changed review entries clear selections so stale region indices cannot be reused. Reading XMP retains local ignored regions, even when the foreign region list omits them; matching boxes keep their original ignored data. Mixed commands and merged Undo/Redo write XMP only for photos with ordinary metadata or develop changes; photos with face-only changes keep their sidecars untouched. If both kinds of changes affect the same photo, its ordinary change still triggers the normal metadata write.
 
 Ignored faces require **catalog format 13**. Opening an existing library (format 12 or earlier) upgrades its
 catalog automatically, preserving existing face assignments and boxes. Older builds then

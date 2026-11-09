@@ -14,6 +14,11 @@ const MAX_REPLY: usize = 64 * 1024 * 1024;
 pub trait Backend {
     /// Call one method. `Ok` carries the `result`, `Err` the error message.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String>;
+    /// Optional structured validation details for the last call; consumed once. Existing
+    /// backends and string-only errors keep their contract unchanged.
+    fn take_error_details(&mut self) -> Option<Value> {
+        None
+    }
     /// True when a real UI is attached (`ui.inspect`, `ui.clickWidget`, `ui.pointer` … work).
     fn has_ui(&self) -> bool;
     /// Short human description ("headless", "remote 127.0.0.1:7980").
@@ -30,19 +35,20 @@ pub struct Remote {
     addr: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
     next_id: u64,
+    error_details: Option<Value>,
 }
 
 impl Remote {
     /// Connect to `addr` (e.g. `127.0.0.1:7980`), failing fast when nothing is listening.
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1 };
+        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, error_details: None };
         r.reconnect()?;
         Ok(r)
     }
 
     /// A remote that connects on first use (the app may start after the MCP server).
     pub fn lazy(addr: &str) -> Self {
-        Self { addr: addr.to_string(), conn: None, next_id: 1 }
+        Self { addr: addr.to_string(), conn: None, next_id: 1, error_details: None }
     }
 
     pub fn addr(&self) -> &str {
@@ -150,7 +156,12 @@ fn is_idle_close(reply: &Value) -> bool {
 }
 
 impl Backend for Remote {
+    fn take_error_details(&mut self) -> Option<Value> {
+        self.error_details.take()
+    }
+
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.error_details = None;
         let id = self.next_id;
         self.next_id += 1;
         let line = json!({"id": id, "method": method, "params": params}).to_string();
@@ -191,6 +202,7 @@ impl Backend for Remote {
         if v.get("ok").and_then(Value::as_bool) == Some(true) {
             Ok(v.get("result").cloned().unwrap_or(Value::Null))
         } else {
+            self.error_details = v.get("errorDetails").filter(|v| v.is_object()).cloned();
             Err(v.get("error").and_then(Value::as_str).unwrap_or("unknown error").to_string())
         }
     }
@@ -238,6 +250,19 @@ mod tests {
         let listener = worker.join().unwrap();
         listener.set_nonblocking(true).unwrap();
         assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock, "request was resent on a new connection");
+    }
+
+    #[test]
+    fn remote_keeps_optional_face_error_details_but_preserves_the_error_string() {
+        with_reply(
+            br#"{"id":1,"ok":false,"error":"reload faces","errorDetails":{"code":"staleSelection","field":"rect","target":2}}
+"#,
+            |remote, result| {
+                assert_eq!(result, Err("reload faces".into()));
+                assert_eq!(remote.take_error_details(), Some(json!({"code":"staleSelection","field":"rect","target":2})));
+                assert!(remote.take_error_details().is_none());
+            },
+        );
     }
 
     #[test]

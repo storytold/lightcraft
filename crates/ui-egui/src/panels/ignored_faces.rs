@@ -11,15 +11,22 @@ const PAGE_SIZE: usize = 1000;
 #[derive(Clone, Debug, Default)]
 pub struct View {
     faces: Option<std::sync::Arc<Vec<Value>>>,
+    views: Vec<Option<lightcraft_geom::Rect>>,
     total: usize,
     offset: usize,
     selected: HashSet<(u64, usize)>,
     revision: Option<u64>,
+    index_stamp: Option<(u64, u64)>,
     anchor: Option<(usize, bool)>,
     error: Option<String>,
 }
 
 impl View {
+    fn set_faces(&mut self, faces: Vec<Value>) {
+        self.views = faces.iter().map(|face| serde_json::from_value(face["view"].clone()).ok()).collect();
+        self.faces = Some(std::sync::Arc::new(faces));
+    }
+
     /// Refresh after catalog/history changes and discard potentially stale selection keys.
     pub(crate) fn invalidate(&mut self) {
         *self = Self::default();
@@ -28,6 +35,7 @@ impl View {
     /// Move to another bounded page, dropping selections whose review entries are no longer shown.
     fn page(&mut self, offset: usize) {
         self.faces = None;
+        self.views.clear();
         self.selected.clear();
         self.anchor = None;
         self.error = None;
@@ -44,7 +52,17 @@ fn key(face: &Value) -> Option<(u64, usize)> {
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let Some(mut view) = app.ui.ignored_faces.take() else { return };
     let t = crate::theme::Tokens::get(ui.ctx());
-    if view.revision.is_some_and(|revision| revision != app.session.catalog.revision) {
+    let index_stamp = (app.caches.faces_epoch, app.caches.faces_indexed);
+    let regions_changed = view.revision.is_some_and(|revision| {
+        revision != app.session.catalog.revision
+            && app
+                .session
+                .catalog
+                .aspects_since(revision)
+                .is_none_or(|aspects| aspects.any_of(lightcraft_catalog::Aspects::META.with(lightcraft_catalog::Aspects::PRESENCE)))
+    });
+    let crops_changed = view.index_stamp.is_some_and(|stamp| stamp != index_stamp);
+    if regions_changed || crops_changed {
         // Refetch on catalog changes, but only discard selection when the displayed entries
         // change. Background detections elsewhere must not move the review back to page one.
         match app.session.execute("faces.ignored", &json!({"offset": view.offset, "limit": PAGE_SIZE})) {
@@ -55,7 +73,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     view.selected.clear();
                     view.anchor = None;
                 }
-                view.faces = Some(std::sync::Arc::new(faces));
+                view.set_faces(faces);
                 view.error = None;
                 if view.offset >= view.total && view.offset > 0 {
                     view.page(view.total.saturating_sub(1) / PAGE_SIZE * PAGE_SIZE);
@@ -70,6 +88,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     view.revision = Some(app.session.catalog.revision);
+    view.index_stamp = Some(index_stamp);
     let mut back = false;
     egui::Frame::NONE.inner_margin(16).show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
@@ -88,7 +107,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             match app.session.execute("faces.ignored", &json!({"offset": view.offset, "limit": PAGE_SIZE})) {
                 Ok(response) => {
                     view.total = response["total"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or_default();
-                    view.faces = Some(std::sync::Arc::new(response["faces"].as_array().cloned().unwrap_or_default()));
+                    view.set_faces(response["faces"].as_array().cloned().unwrap_or_default());
                 }
                 Err(error) => view.error = Some(error.to_string()),
             }
@@ -141,7 +160,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if restore {
             let selected: Vec<_> = faces.iter().filter(|f| key(f).is_some_and(|k| view.selected.contains(&k))).cloned().collect();
             match app.run("faces.ignore", json!({"faces": selected, "ignored": false})) {
-                Ok(_) => view.invalidate(),
+                Ok(_) => {
+                    // Keep the review's place; the next frame clamps a now-empty last page.
+                    view.page(view.offset);
+                }
                 Err(error) => view.error = Some(error),
             }
             return;
@@ -163,7 +185,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let image = Rect::from_min_size(area.min, vec2(edge, edge));
                         let response = ui.interact(image, ui.scope_id().with(("ignored-face", face_key)), Sense::click());
                         register(ui, format!("ignoredFaces:face:{index}"), image);
-                        if let Ok(rect) = serde_json::from_value(face["view"].clone())
+                        if let Some(rect) = view.views.get(index).copied().flatten()
                             && let Some(job) = app.session.face_job(
                                 lightcraft_catalog::PhotoId(face_key.0),
                                 rect,
@@ -214,6 +236,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_face_errors_include_codes_and_fields_without_changing_the_string() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        h.step();
+        let timeout = std::time::Duration::from_secs(15);
+        for method in ["engine.execute", "ui.menu.invoke", "command"] {
+            let response = h.request(method, json!({"command": "faces.ignore", "params": {"faces": []}}), timeout);
+            assert_eq!(response["ok"], false);
+            assert!(response["error"].as_str().unwrap().contains("select between"));
+            assert_eq!(response["errorDetails"], json!({"code": "invalidInput", "field": "faces"}));
+        }
+        let response = h.request("engine.execute", json!({"command": "no.such"}), timeout);
+        assert_eq!(response["ok"], false);
+        assert!(response.get("errorDetails").is_none());
+    }
 
     #[test]
     fn ignored_navigation_discards_old_destinations_but_invalid_person_preserves_review() {
@@ -336,10 +375,51 @@ mod tests {
         h.step();
         assert_eq!(h.app.ui.unnamed_selected.len(), 1);
         h.app.session.execute("photo.removeRegion", &json!({"id": id.0, "index": 0})).unwrap();
+        // Inject an in-flight stale review: prevent the usual refresh for this click. The
+        // unnamed action must send its old reviewed box, not read the replacement's box.
+        h.app.caches.unnamed.as_mut().unwrap().0 = h.app.session.catalog.revision;
+        let before = (h.app.session.catalog.revision, h.app.session.undo.len());
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "unnamed:ignore"}), timeout)["ok"], true);
+        h.step();
+        assert_eq!((h.app.session.catalog.revision, h.app.session.undo.len()), before);
+        assert_eq!(h.app.session.catalog.photo(id).unwrap().meta.regions[0].kind, RegionKind::Face);
+        h.app.caches.unnamed.as_mut().unwrap().0 = h.app.session.catalog.revision.wrapping_sub(1);
         h.step();
         assert!(h.app.ui.unnamed_selected.is_empty());
         assert_eq!(h.app.session.catalog.photo(id).unwrap().meta.regions[0].kind, RegionKind::Face);
         assert!(!h.app.widgets.iter().any(|(id, _)| id == "unnamed:ignore"));
+    }
+
+    fn check_range_clear_and_refresh(h: &mut crate::headless::Headless, timeout: std::time::Duration) {
+        for (index, shift) in [(0, false), (2, true)] {
+            assert_eq!(h.request("ui.clickWidget", json!({"id": format!("ignoredFaces:face:{index}"), "shift": shift}), timeout)["ok"], true);
+            h.step();
+        }
+        assert_eq!(h.app.ui.ignored_faces.as_ref().unwrap().selected.len(), 3);
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "ignoredFaces:clear"}), timeout)["ok"], true);
+        h.step();
+        assert!(h.app.ui.ignored_faces.as_ref().unwrap().selected.is_empty());
+        assert!(h.app.ui.ignored_faces.as_ref().unwrap().anchor.is_none());
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "ignoredFaces:face:0"}), timeout)["ok"], true);
+        h.step();
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "ignoredFaces:refresh"}), timeout)["ok"], true);
+        h.step();
+        assert!(h.app.ui.ignored_faces.as_ref().unwrap().selected.is_empty());
+    }
+
+    fn check_external_shrink(h: &mut crate::headless::Headless, id: lightcraft_catalog::PhotoId, timeout: std::time::Duration) {
+        // An external mutation (not Restore's own reset) shrinks the last page and takes
+        // the revision branch's clamp back to the final valid page.
+        h.app.session.execute("edit.undo", &json!({})).unwrap();
+        h.step();
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "ignoredFaces:next"}), timeout)["ok"], true);
+        h.step();
+        h.app.session.execute("photo.removeRegion", &json!({"id": id.0, "index": PAGE_SIZE})).unwrap();
+        h.step();
+        let view = h.app.ui.ignored_faces.as_ref().unwrap();
+        assert_eq!((view.offset, view.total), (0, PAGE_SIZE));
+        assert_eq!(view.faces.as_ref().unwrap().len(), PAGE_SIZE);
+        assert!(view.selected.is_empty());
     }
 
     /// A library over one page remains reviewable, and changing pages cannot restore stale selections.
@@ -365,6 +445,7 @@ mod tests {
         h.settle(timeout);
         assert_eq!(h.app.ui.ignored_faces.as_ref().unwrap().faces.as_ref().unwrap().len(), PAGE_SIZE);
         assert_eq!(h.app.ui.ignored_faces.as_ref().unwrap().total, PAGE_SIZE + 1);
+        check_range_clear_and_refresh(&mut h, timeout);
         assert_eq!(h.request("ui.clickWidget", json!({"id": "ignoredFaces:selectAll"}), timeout)["ok"], true);
         h.step();
         assert_eq!(h.app.ui.ignored_faces.as_ref().unwrap().selected.len(), PAGE_SIZE);
@@ -374,6 +455,12 @@ mod tests {
         assert_eq!(view.offset, PAGE_SIZE);
         assert_eq!(view.faces.as_ref().unwrap().len(), 1);
         assert!(view.selected.is_empty());
+        for (widget, offset) in [("ignoredFaces:previous", 0), ("ignoredFaces:next", PAGE_SIZE)] {
+            assert_eq!(h.request("ui.clickWidget", json!({"id": widget}), timeout)["ok"], true);
+            h.step();
+            assert_eq!(h.app.ui.ignored_faces.as_ref().unwrap().offset, offset);
+            assert!(h.app.ui.ignored_faces.as_ref().unwrap().selected.is_empty());
+        }
         assert_eq!(h.request("ui.clickWidget", json!({"id": "ignoredFaces:selectAll"}), timeout)["ok"], true);
         h.step();
         h.app.session.execute("photo.rate", &json!({"ids": [id.0], "rating": 3})).unwrap();
@@ -409,6 +496,7 @@ mod tests {
         assert_eq!(view.total, PAGE_SIZE);
         assert_eq!(view.offset, 0);
         assert_eq!(view.faces.as_ref().unwrap().len(), PAGE_SIZE);
+        check_external_shrink(&mut h, id, timeout);
     }
 
     /// Restore a retained assignment through the actual panel without any recognition model.
@@ -474,7 +562,7 @@ mod tests {
         h.app.session.execute("photo.restore", &json!({"ids": [id.0]})).unwrap();
         h.step();
         assert_eq!(h.app.ui.ignored_faces.as_ref().unwrap().faces.as_ref().unwrap().len(), 1);
-        h.app.session.execute("faces.ignore", &json!({"faces": [{"photo": id.0, "index": 0}], "ignored": false})).unwrap();
+        h.app.session.execute("faces.ignore", &json!({"faces": [{"photo": id.0, "index": 0, "rect": rect}], "ignored": false})).unwrap();
         h.step();
         assert!(h.app.ui.ignored_faces.as_ref().unwrap().faces.as_ref().unwrap().is_empty());
         h.app.session.execute("edit.undo", &json!({})).unwrap();

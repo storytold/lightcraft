@@ -290,11 +290,17 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
         }
         results.push(json!({"id": id.0, "faces": faces.iter().map(face_json).collect::<Vec<_>>()}));
     }
-    let applied = !ops.is_empty();
-    if applied {
-        s.commit_catalog_only("Detect Faces", Op::Batch { ops })?;
-    }
+    let applied = commit_detections(s, ops)?;
     Ok(json!({"detector": LABEL, "applied": applied, "photos": results, "ms": started.elapsed().as_secs_f64() * 1000.0}))
+}
+
+/// The detector and synthetic regressions share the actual commit path, including XMP policy.
+pub(crate) fn commit_detections(s: &mut Session, ops: Vec<Op>) -> Result<bool> {
+    if ops.is_empty() {
+        return Ok(false);
+    }
+    s.commit_catalog_only("Detect Faces", Op::Batch { ops })?;
+    Ok(true)
 }
 
 pub fn specs() -> Vec<CommandSpec> {

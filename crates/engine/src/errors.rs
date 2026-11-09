@@ -6,6 +6,25 @@
 
 use crate::EngineError;
 
+/// Stable failure reasons for persistent face review commands, independent of message wording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FaceErrorCode {
+    InvalidInput,
+    MissingPhoto,
+    MissingFace,
+    StaleSelection,
+}
+
+/// The parameter and, for a batch, entry that failed validation. No targets have been changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
+pub struct FaceErrorDetails {
+    pub code: FaceErrorCode,
+    pub field: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<usize>,
+}
+
 /// A model a feature needs and LightCraft downloads only when the person agrees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AiModel {
@@ -21,6 +40,7 @@ pub enum ErrorKind {
     UnknownCommand,
     Disabled,
     BadParams,
+    FaceRequest(FaceErrorDetails),
     Catalog,
     NotSaved,
     LibraryInUse,
@@ -39,6 +59,7 @@ impl EngineError {
             Self::UnknownCommand(_) => ErrorKind::UnknownCommand,
             Self::Disabled(..) => ErrorKind::Disabled,
             Self::BadParams { .. } => ErrorKind::BadParams,
+            Self::FaceRequest { details, .. } => ErrorKind::FaceRequest(*details),
             Self::Catalog(_) => ErrorKind::Catalog,
             Self::NotSaved(_) => ErrorKind::NotSaved,
             Self::LibraryInUse(_) => ErrorKind::LibraryInUse,

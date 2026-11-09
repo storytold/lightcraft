@@ -45,6 +45,7 @@ pub mod files;
 mod focus_scan;
 pub mod fonts;
 pub mod guard;
+mod ignored_faces_index;
 pub mod import;
 mod import_move;
 pub mod lens_profiles;
@@ -91,7 +92,7 @@ pub mod walk;
 use std::sync::Arc;
 
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
-pub use errors::{AiModel, ErrorKind};
+pub use errors::{AiModel, ErrorKind, FaceErrorCode, FaceErrorDetails};
 pub use fonts::{CRAFT_FONTS, CraftFont};
 use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
 use lightcraft_develop::DevelopSettings;
@@ -108,6 +109,9 @@ pub enum EngineError {
     Disabled(String, String),
     #[error("invalid parameters for `{cmd}`: {msg}")]
     BadParams { cmd: String, msg: String },
+    /// Atomic validation failure in `faces.ignore` or `faces.ignored`.
+    #[error("invalid parameters for `{cmd}`: {msg}")]
+    FaceRequest { cmd: &'static str, details: FaceErrorDetails, msg: String },
     #[error("{0}")]
     Catalog(#[from] lightcraft_catalog::CatalogError),
     /// The command's change is applied (in memory, undoable) but its journal records could not
@@ -234,6 +238,7 @@ static LIBRARY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 
 pub struct Session {
     library_generation: u64,
+    pub(crate) ignored_faces_index: ignored_faces_index::Index,
     /// Auto Sync: edits to the active photo also change the other selected photos (the settings
     /// that changed, nothing else).
     pub auto_sync: bool,
@@ -473,6 +478,7 @@ impl Session {
     pub fn new() -> Session {
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ignored_faces_index: Default::default(),
             auto_sync: false,
             catalog: Catalog::new(),
             source: LibrarySource::All,

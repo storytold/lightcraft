@@ -24,6 +24,7 @@ pub struct Selection {
     anchor: Option<(usize, bool)>,
     before_click: Option<BeforeClick>,
     confirmed: Vec<Face>,
+    page: Option<Arc<PersonPage>>,
 }
 
 #[derive(Clone, Debug)]
@@ -201,15 +202,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
     let selection = &mut app.ui.person_selection;
     // A background scan can change the catalog without changing this person's face identities.
     // Compare the confirmed list, not the global revision; changed indices/boxes still reset it.
-    if selection.confirmed != page.confirmed {
-        selection.faces.clear();
-        selection.anchor = None;
-        selection.before_click = None;
-        selection.confirmed = page.confirmed.clone();
-    }
-    if !app.ui.person_selection.faces.is_empty() {
-        let valid: std::collections::HashSet<_> = page.confirmed.iter().map(|f| (f.photo, f.index)).collect();
-        app.ui.person_selection.faces.retain(|key| valid.contains(key));
+    if !selection.page.as_ref().is_some_and(|previous| Arc::ptr_eq(previous, &page)) {
+        if selection.confirmed != page.confirmed {
+            selection.faces.clear();
+            selection.anchor = None;
+            selection.before_click = None;
+            selection.confirmed = page.confirmed.clone();
+        }
+        selection.page = Some(page.clone());
     }
     ui.add_space(8.0);
     ui.horizontal(|ui| {

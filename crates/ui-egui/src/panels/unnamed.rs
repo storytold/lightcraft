@@ -77,12 +77,18 @@ pub fn faces(app: &mut LightcraftApp, now: f64) -> Arc<Unnamed> {
         // Keep selections across unrelated edits and background detections, but never transfer
         // one to a different box that reuses its photo/index pair. Validate every refetch, since
         // recognition can also change display boxes/order without a catalog revision.
-        let before: std::collections::HashMap<_, _> = old.faces.iter().map(|f| ((f.photo, f.index), f.rect)).collect();
-        let current: std::collections::HashMap<_, _> = list.faces.iter().map(|f| ((f.photo, f.index), f.rect)).collect();
-        app.ui.unnamed_selected.retain(|key| matches!((before.get(key), current.get(key)), (Some(a), Some(b)) if a == b));
+        if !app.ui.unnamed_selected.is_empty() {
+            let before: std::collections::HashMap<_, _> =
+                old.faces.iter().filter(|f| app.ui.unnamed_selected.contains(&(f.photo, f.index))).map(|f| ((f.photo, f.index), f.rect)).collect();
+            let current: std::collections::HashMap<_, _> =
+                list.faces.iter().filter(|f| app.ui.unnamed_selected.contains(&(f.photo, f.index))).map(|f| ((f.photo, f.index), f.rect)).collect();
+            app.ui.unnamed_selected.retain(|key| matches!((before.get(key), current.get(key)), (Some(a), Some(b)) if a == b));
+        }
         // The anchor refers to a position, not a face key. Rating/suggestion changes keep it;
         // changed ordering or geometry invalidates it before another Shift-click can use it.
-        if !old.faces.iter().map(|f| (f.photo, f.index, f.rect)).eq(list.faces.iter().map(|f| (f.photo, f.index, f.rect))) {
+        if app.ui.unnamed_anchor.is_some()
+            && !old.faces.iter().map(|f| (f.photo, f.index, f.rect)).eq(list.faces.iter().map(|f| (f.photo, f.index, f.rect)))
+        {
             app.ui.unnamed_anchor = None;
         }
         if app.ui.unnamed_selected.is_empty() {
@@ -90,8 +96,10 @@ pub fn faces(app: &mut LightcraftApp, now: f64) -> Arc<Unnamed> {
         }
     }
     // what was selected and has since been named (or removed) is no longer selected
-    let present: std::collections::HashSet<(u64, usize)> = list.faces.iter().map(|f| (f.photo, f.index)).collect();
-    app.ui.unnamed_selected.retain(|k| present.contains(k));
+    if app.caches.unnamed.is_none() && !app.ui.unnamed_selected.is_empty() {
+        let present: std::collections::HashSet<_> = list.faces.iter().map(|f| (f.photo, f.index)).collect();
+        app.ui.unnamed_selected.retain(|k| present.contains(k));
+    }
     app.caches.unnamed = Some((rev, indexed, now, list.clone()));
     list
 }
@@ -194,7 +202,16 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     if ignore {
-        let faces: Vec<_> = selected.iter().map(|(photo, index)| json!({"photo": photo, "index": index})).collect();
+        // Use the reviewed catalog geometry, never re-read it from the mutable catalog.
+        let faces: Vec<_> = app
+            .caches
+            .unnamed
+            .as_ref()
+            .into_iter()
+            .flat_map(|c| c.3.faces.iter())
+            .filter(|face| app.ui.unnamed_selected.contains(&(face.photo, face.index)))
+            .map(|face| json!({"photo": face.photo, "index": face.index, "rect": face.rect}))
+            .collect();
         match app.run("faces.ignore", json!({"faces": faces})) {
             Ok(_) => {
                 app.ui.unnamed_selected.clear();

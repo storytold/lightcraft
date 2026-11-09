@@ -92,6 +92,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | patch | LRC-LIB-PEOPLE: require reviewed boxes in every ignore action, make retries no-ops, expose retained metadata/page/error details, follow changed photos in a derived ignored-face index, and cover literal legacy masks/faces plus Detect Faces catalog-only history; partial status and counts unchanged |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-11-05 | patch | LRC-LIB-PEOPLE: use catalog format 13 after shared segmentation grids took format 12 on main; upgrades preserve faces and masks, including earlier face-branch format-12 libraries; no ranked gap/count change |

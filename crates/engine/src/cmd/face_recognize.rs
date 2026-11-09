@@ -11,7 +11,11 @@ use lightcraft_catalog::Op;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, cmd};
-use crate::{Result, Session};
+use crate::{FaceErrorCode, FaceErrorDetails, Result, Session};
+
+fn face_error(cmd: &'static str, code: FaceErrorCode, field: &'static str, target: Option<usize>, msg: &str) -> crate::EngineError {
+    crate::EngineError::FaceRequest { cmd, details: FaceErrorDetails { code, field, target }, msg: msg.into() }
+}
 
 /// The `name` parameter of the naming commands: a name, or none (`null`, empty) to clear it.
 fn name_param(p: &Value, c: &str) -> Result<Option<String>> {
@@ -31,33 +35,37 @@ fn name_param(p: &Value, c: &str) -> Result<Option<String>> {
 fn ignore_faces(s: &mut Session, p: &Value) -> Result<Value> {
     use lightcraft_meta::RegionKind;
     const C: &str = "faces.ignore";
+    let invalid = |field, target, msg| face_error(C, FaceErrorCode::InvalidInput, field, target, msg);
     let ignored = match p.get("ignored") {
         None => true,
-        Some(value) => value.as_bool().ok_or_else(|| bad(C, "ignored must be true or false"))?,
+        Some(value) => value.as_bool().ok_or_else(|| invalid("ignored", None, "ignored must be true or false"))?,
     };
-    let faces = p["faces"].as_array().ok_or_else(|| bad(C, "missing faces"))?;
+    let faces = p["faces"].as_array().ok_or_else(|| invalid("faces", None, "missing faces"))?;
     if faces.is_empty() || faces.len() > 100_000 {
-        return Err(bad(C, "select between 1 and 100000 faces"));
+        return Err(invalid("faces", None, "select between 1 and 100000 faces"));
     }
     let mut edits: std::collections::BTreeMap<lightcraft_catalog::PhotoId, lightcraft_catalog::Meta> = Default::default();
     let mut seen = std::collections::HashSet::new();
-    for face in faces {
-        let id = lightcraft_catalog::PhotoId(face["photo"].as_u64().ok_or_else(|| bad(C, "missing photo"))?);
-        let index = face["index"].as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(C, "invalid face index"))?;
-        if !seen.insert((id, index)) {
+    for (target, face) in faces.iter().enumerate() {
+        let target = Some(target);
+        let id = lightcraft_catalog::PhotoId(face["photo"].as_u64().ok_or_else(|| invalid("photo", target, "missing photo"))?);
+        let index = face["index"].as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| invalid("index", target, "invalid face index"))?;
+        let rect = face.get("rect").ok_or_else(|| invalid("rect", target, "missing reviewed rectangle"))?;
+        let rect: lightcraft_geom::Rect = serde_json::from_value(rect.clone()).map_err(|_| invalid("rect", target, "invalid reviewed rectangle"))?;
+        let photo = s
+            .catalog
+            .photo(id)
+            .filter(|p| p.in_library())
+            .ok_or_else(|| face_error(C, FaceErrorCode::MissingPhoto, "photo", target, "photo is no longer in the library"))?;
+        let region =
+            photo.meta.regions.get(index).ok_or_else(|| face_error(C, FaceErrorCode::MissingFace, "index", target, "face no longer exists"))?;
+        if rect != region.rect || !matches!(region.kind, RegionKind::Face | RegionKind::IgnoredFace) {
+            return Err(face_error(C, FaceErrorCode::StaleSelection, "rect", target, "a selected face changed; reload the faces and try again"));
+        }
+        let desired = if ignored { RegionKind::IgnoredFace } else { RegionKind::Face };
+        // Validate even duplicate/no-op targets: retries must not bypass identity checks.
+        if region.kind == desired || !seen.insert((id, index)) {
             continue;
-        }
-        let photo = s.catalog.photo(id).filter(|p| p.in_library()).ok_or_else(|| bad(C, "photo is no longer in the library"))?;
-        let region = photo.meta.regions.get(index).ok_or_else(|| bad(C, "face no longer exists"))?;
-        let expected = if ignored { RegionKind::Face } else { RegionKind::IgnoredFace };
-        if region.kind != expected {
-            return Err(bad(C, "a selected face changed; reload the faces and try again"));
-        }
-        if let Some(rect) = face.get("rect") {
-            let rect: lightcraft_geom::Rect = serde_json::from_value(rect.clone()).map_err(|_| bad(C, "invalid reviewed rectangle"))?;
-            if rect != region.rect {
-                return Err(bad(C, "a selected face changed; reload the faces and try again"));
-            }
         }
         let meta = edits.entry(id).or_insert_with(|| photo.meta.clone());
         if let Some(region) = meta.regions.get_mut(index) {
@@ -65,38 +73,41 @@ fn ignore_faces(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let count = seen.len();
-    s.commit_catalog_only(
-        if ignored { "Ignore Faces" } else { "Restore Ignored Faces" },
-        Op::Batch { ops: edits.into_iter().map(|(id, meta)| Op::SetMeta { id, meta: Box::new(meta) }).collect() },
-    )?;
+    if count > 0 {
+        s.commit_catalog_only(
+            if ignored { "Ignore Faces" } else { "Restore Ignored Faces" },
+            Op::Batch { ops: edits.into_iter().map(|(id, meta)| Op::SetMeta { id, meta: Box::new(meta) }).collect() },
+        )?;
+    }
     Ok(json!({"changed": count, "ignored": ignored}))
 }
 
 /// List one bounded page of retained ignored regions in catalog order, without a recognition model.
 fn ignored_faces(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.ignored";
+    let invalid = |field, msg| face_error(C, FaceErrorCode::InvalidInput, field, None, msg);
     let offset = match p.get("offset") {
         None => 0,
-        Some(value) => value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(C, "offset must be a nonnegative index"))?,
+        Some(value) => value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| invalid("offset", "offset must be a nonnegative index"))?,
     };
     let limit = match p.get("limit") {
         None => 1000,
-        Some(value) => value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(C, "limit must be between 1 and 5000"))?,
+        Some(value) => value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| invalid("limit", "limit must be between 1 and 5000"))?,
     };
     if !(1..=5000).contains(&limit) {
-        return Err(bad(C, "limit must be between 1 and 5000"));
+        return Err(invalid("limit", "limit must be between 1 and 5000"));
     }
     let mut faces = Vec::new();
-    let mut total = 0usize;
-    for photo in s.catalog.photos().filter(|p| p.in_library()) {
-        for (index, region) in photo.meta.regions.iter().enumerate().filter(|(_, r)| r.kind == lightcraft_meta::RegionKind::IgnoredFace) {
-            if total >= offset && faces.len() < limit {
-                faces.push(json!({"photo": photo.id.0, "index": index, "rect": region.rect, "view": s.face_view(photo.id, region.rect)}));
-            }
-            total = total.saturating_add(1);
+    let generation = s.library_generation();
+    let (total, keys) = s.ignored_faces_index.page(&s.catalog, generation, offset, limit);
+    for (id, index) in keys {
+        if let Some(region) = s.catalog.photo(id).and_then(|photo| photo.meta.regions.get(index)) {
+            faces.push(json!({"photo": id.0, "index": index, "rect": region.rect, "view": s.face_view(id, region.rect), "name": region.name, "description": region.description}));
         }
     }
-    Ok(json!({"total": total, "offset": offset, "faces": faces}))
+    Ok(
+        json!({"total": total, "offset": offset, "limit": limit, "hasNext": offset.saturating_add(faces.len()) < total, "revision": s.catalog.revision, "faces": faces}),
+    )
 }
 
 /// Give a face region its name. Naming makes the face yours: a later "Detect Faces" run no longer replaces it.
@@ -1163,12 +1174,15 @@ mod imp {
             assert!(similar(&mut s, "nobody", 10).items.is_empty());
             // The positive control above produces both candidates. Ignoring a candidate excludes
             // that exact pair; ignoring Ann's only exemplar must exclude the remaining candidate.
-            s.execute("faces.ignore", &json!({"faces": [{"photo": b.0, "index": 0}]})).unwrap();
+            let reviewed = |id| json!({"faces": [{"photo": id, "index": 0, "rect": region(0.1, None).rect}]});
+            s.execute("faces.ignore", &reviewed(b.0)).unwrap();
             let pairs = |r: Similar| r.items.iter().map(|i| (i["photo"].as_u64().unwrap(), i["index"].as_u64().unwrap())).collect::<Vec<_>>();
             assert_eq!(pairs(similar(&mut s, "ann", 10)), vec![(c.0, 0)]);
-            s.execute("faces.ignore", &json!({"faces": [{"photo": a.0, "index": 0}]})).unwrap();
+            s.execute("faces.ignore", &reviewed(a.0)).unwrap();
             assert!(pairs(similar(&mut s, "ann", 10)).is_empty());
-            s.execute("faces.ignore", &json!({"faces": [{"photo": a.0, "index": 0}], "ignored": false})).unwrap();
+            let mut restore = reviewed(a.0);
+            restore["ignored"] = json!(false);
+            s.execute("faces.ignore", &restore).unwrap();
             assert_eq!(pairs(similar(&mut s, "ann", 10)), vec![(c.0, 0)], "restoring the exemplar restores its suggestion");
             let _ = std::fs::remove_dir_all(&d);
         }
@@ -1215,12 +1229,12 @@ pub fn specs() -> Vec<CommandSpec> {
             "Ignore Faces",
             [],
             None,
-            "{faces: [{photo, index, rect?}], ignored?: true} — persistently ignore blurry or false faces, or restore them; one undo step; originals are untouched",
+            "{faces: [{photo, index, rect}], ignored?: boolean (default true)} → {changed, ignored} — ignore or restore 1..100000 reviewed faces atomically; rect must equal catalog geometry, not the display crop. Duplicate identities count once; already-desired states succeed without an undo step. Stale or invalid targets reject the whole batch. Changes are one catalog-only undo step; originals and sidecars stay untouched. Requires catalog format 13; older libraries upgrade on open. Restore large libraries in page-sized batches from faces.ignored",
             super::always,
             ignore_faces
         ),
         cmd!(query "faces.ignored", "Ignored Faces", [], None,
-            "{offset?: 0, limit?: 1000} → {total, offset, faces} — review ignored faces in catalog order, including named faces excluded from matching; limit is 1..5000", super::always, ignored_faces),
+            "{offset?: 0, limit?: 1000} → {total, offset, limit, hasNext, revision, faces: [{photo, index, rect, view, name, description}]} — review ignored faces in catalog order without a model; limit is 1..5000. Offsets describe the current catalog revision, not a snapshot across edits; after a mutation refresh the page and clamp its offset to the last valid page. Restore pages with faces.ignore using ignored:false and their catalog rect", super::always, ignored_faces),
         cmd!(
             "faces.index",
             "Index Faces",

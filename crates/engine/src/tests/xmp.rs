@@ -75,6 +75,19 @@ fn only(s: &Session) -> PhotoId {
     s.catalog.photos().next().unwrap().id
 }
 
+fn assert_face_history_untouched(s: &Session, src: &std::path::Path, ids: &[PhotoId], bytes: &[u8], originals: &[Vec<u8>]) {
+    assert_eq!(std::fs::read(src.join("a.xmp")).unwrap(), bytes);
+    assert!(!src.join("b.xmp").exists());
+    for (i, id) in ids.iter().enumerate() {
+        let p = s.catalog.photo(*id).unwrap();
+        assert!(!p.is_edited());
+        assert!(p.edited.is_none());
+        assert!(p.history.is_empty());
+        assert!(p.versions.is_empty());
+        assert_eq!(std::fs::read(src.join(if i == 0 { "a.png" } else { "b.png" })).unwrap(), originals[i]);
+    }
+}
+
 /// Face metadata history preserves original bytes, sidecars and every developed-state marker.
 #[test]
 fn face_history_never_writes_sidecars_or_marks_photos_edited() {
@@ -99,7 +112,7 @@ fn face_history_never_writes_sidecars_or_marks_photos_edited() {
     let bytes = std::fs::read(&sidecar).unwrap();
     let originals: Vec<_> = ["a.png", "b.png"].iter().map(|n| std::fs::read(src.join(n)).unwrap()).collect();
     s.execute("library.xmpPreferences", &json!({"autoWrite":true})).unwrap();
-    let faces: Vec<_> = ids.iter().map(|id| json!({"photo":id.0,"index":0})).collect();
+    let faces: Vec<_> = ids.iter().map(|id| json!({"photo":id.0,"index":0,"rect":rect})).collect();
     for (command, params) in [
         ("faces.nameFaces", json!({"faces":faces,"name":"Person"})),
         ("faces.ignore", json!({"faces":faces})),
@@ -111,21 +124,34 @@ fn face_history_never_writes_sidecars_or_marks_photos_edited() {
         ("photo.removeRegion", json!({"id":ids[0].0,"index":0})),
     ] {
         s.execute(command, &params).unwrap();
+        if command == "faces.ignore" {
+            let before = (s.catalog.revision, s.undo.len(), s.redo.len());
+            assert_eq!(s.execute(command, &params).unwrap()["changed"], 0);
+            assert_eq!((s.catalog.revision, s.undo.len(), s.redo.len()), before);
+        }
         for history in [None, Some("edit.undo"), Some("edit.redo")] {
             if let Some(history) = history {
                 s.execute(history, &json!({})).unwrap();
             }
-            assert_eq!(std::fs::read(&sidecar).unwrap(), bytes, "{command} {history:?}");
-            assert!(!src.join("b.xmp").exists(), "{command} {history:?}");
-            for (i, id) in ids.iter().enumerate() {
-                let p = s.catalog.photo(*id).unwrap();
-                assert!(!p.is_edited());
-                assert!(p.edited.is_none());
-                assert!(p.history.is_empty());
-                assert!(p.versions.is_empty());
-                assert_eq!(std::fs::read(src.join(if i == 0 { "a.png" } else { "b.png" })).unwrap(), originals[i]);
-            }
+            assert_face_history_untouched(&s, &src, &ids, &bytes, &originals);
         }
+    }
+    // No detector/model dependency: synthetic results use the production detector's commit path.
+    let before_detection = s.catalog.photo(ids[0]).unwrap().meta.regions.clone();
+    let mut meta = s.catalog.photo(ids[0]).unwrap().meta.clone();
+    meta.regions.push(Region { rect, kind: RegionKind::Face, name: None, description: Some("Detected by synthetic test".into()) });
+    let after_detection = meta.regions.clone();
+    s.execute_fn("faces.detect", |s| {
+        crate::cmd::face_detect::commit_detections(s, vec![lightcraft_catalog::Op::SetMeta { id: ids[0], meta: Box::new(meta) }])?;
+        Ok(json!({}))
+    })
+    .unwrap();
+    for history in [None, Some("edit.undo"), Some("edit.redo")] {
+        if let Some(command) = history {
+            s.execute(command, &json!({})).unwrap();
+        }
+        assert_eq!(&s.catalog.photo(ids[0]).unwrap().meta.regions, if history == Some("edit.undo") { &before_detection } else { &after_detection });
+        assert_face_history_untouched(&s, &src, &ids, &bytes, &originals);
     }
     // Merging a catalog-only face step with a normal rating step must still allow XMP writes.
     s.execute("photo.rate", &json!({"ids":[ids[0].0],"rating":5})).unwrap();
@@ -165,7 +191,8 @@ fn mixed_face_commands_preserve_ordinary_sidecar_writes() {
                 description: None,
             }];
             s.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
-            let faces = json!({"faces": [{"photo": id.0, "index": 0}]});
+            let rect = s.catalog.photo(id).unwrap().meta.regions[0].rect;
+            let faces = json!({"faces": [{"photo": id.0, "index": 0, "rect": rect}]});
             if action != "faces.ignore" {
                 s.execute("faces.ignore", &faces).unwrap();
             }
@@ -201,7 +228,7 @@ fn mixed_face_commands_preserve_ordinary_sidecar_writes() {
             // leaks into a later outer command.
             s.execute_fn("only face changes", |s| {
                 for state in [!ignored, ignored] {
-                    s.execute("faces.ignore", &json!({"faces": [{"photo": id.0, "index": 0}], "ignored": state}))?;
+                    s.execute("faces.ignore", &json!({"faces": [{"photo": id.0, "index": 0, "rect": rect}], "ignored": state}))?;
                 }
                 Ok(json!({}))
             })
@@ -243,7 +270,8 @@ fn mixed_face_operations_write_only_the_ordinary_photos() {
                 description: None,
             }];
             s.commit("setup", Op::SetMeta { id: a, meta: Box::new(meta) }).unwrap();
-            let faces = json!({"faces": [{"photo": a.0, "index": 0}]});
+            let rect = s.catalog.photo(a).unwrap().meta.regions[0].rect;
+            let faces = json!({"faces": [{"photo": a.0, "index": 0, "rect": rect}]});
             if action != "faces.ignore" {
                 s.execute("faces.ignore", &faces).unwrap();
             }
@@ -298,7 +326,7 @@ fn mixed_face_operations_write_only_the_ordinary_photos() {
             std::fs::remove_file(src.join("a.xmp")).unwrap();
             let ignored = s.catalog.photo(a).unwrap().meta.regions[0].kind == RegionKind::IgnoredFace;
             s.execute_fn("mixed restore or ignore", |s| {
-                s.execute("faces.ignore", &json!({"faces": [{"photo": a.0, "index": 0}], "ignored": !ignored}))?;
+                s.execute("faces.ignore", &json!({"faces": [{"photo": a.0, "index": 0, "rect": rect}], "ignored": !ignored}))?;
                 s.commit("rating", Op::SetRating { id: b, rating: 2 })?;
                 Ok(json!({}))
             })
@@ -767,7 +795,8 @@ fn rereading_xmp_preserves_ignored_regions_and_other_metadata() {
     s.open_library(&library, true).unwrap();
     s.execute("library.import", &json!({"paths": [src.join("portrait.png").to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
-    s.execute("faces.ignore", &json!({"faces": [{"photo": id.0, "index": 0}]})).unwrap();
+    let rect = s.catalog.photo(id).unwrap().meta.regions[0].rect;
+    s.execute("faces.ignore", &json!({"faces": [{"photo": id.0, "index": 0, "rect": rect}]})).unwrap();
     let ignored = s.catalog.photo(id).unwrap().meta.regions.clone();
     let empty = MWG_REGIONS.replacen("<rdf:Bag>", "<rdf:Bag><!--", 1).replacen("</rdf:Bag>", "--></rdf:Bag>", 1);
     let absent = lightcraft_meta::write_xmp(&lightcraft_meta::Metadata::default(), None);
@@ -921,7 +950,8 @@ fn rereading_rotated_xmp_keeps_ignored_faces_upright_without_duplicates() {
         s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
         let id = only(&s);
         assert_on_the_upright_face(&s, id, "import");
-        s.execute("faces.ignore", &json!({"faces": [{"photo": id.0, "index": 0}]})).unwrap();
+        let rect = s.catalog.photo(id).unwrap().meta.regions[0].rect;
+        s.execute("faces.ignore", &json!({"faces": [{"photo": id.0, "index": 0, "rect": rect}]})).unwrap();
         let ignored = s.catalog.photo(id).unwrap().meta.regions.clone();
         assert_eq!(ignored[0].kind, lightcraft_meta::RegionKind::IgnoredFace);
         for _ in 0..3 {
