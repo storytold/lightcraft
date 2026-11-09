@@ -38,17 +38,79 @@ pub fn file_name(p: &Photo) -> String {
 /// The default sharded location of a proxy. A two-character hex prefix bounds each
 /// folder to about 1/256 of the library's smart previews.
 pub fn sharded_file_path(dir: &Path, p: &Photo) -> PathBuf {
-    let name = file_name(p);
+    shard(dir, &file_name(p))
+}
+
+fn shard(dir: &Path, name: &str) -> PathBuf {
     match name.get(..2) {
-        Some(shard) => dir.join(shard).join(&name),
-        None => dir.join(&name),
+        Some(shard) => dir.join(shard).join(name),
+        None => dir.join(name),
+    }
+}
+
+/// Proxy candidates, constructed without I/O. Compatibility checks run on the render worker,
+/// never while the UI is asking for a source on a potentially sleeping external drive.
+#[derive(Clone)]
+pub struct PreviewPath {
+    dir: PathBuf,
+    current: PathBuf,
+    previous: Option<PathBuf>,
+}
+
+impl PreviewPath {
+    pub(crate) fn new(dir: &Path, p: &Photo) -> Self {
+        let previous = (p.preview_only.is_none() && crate::media::decoder_key(p) != 0).then(|| {
+            let h = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
+            shard(dir, &format!("{:032x}.lcsp", h.0))
+        });
+        Self { dir: dir.to_path_buf(), current: sharded_file_path(dir, p), previous }
+    }
+
+    /// Both folder layouts, including the superseded content-only ORF identity when requested.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn candidates(&self, previous: bool) -> Vec<PathBuf> {
+        std::iter::once(&self.current)
+            .chain(self.previous.iter().filter(|_| previous))
+            .flat_map(|path| std::iter::once(path.clone()).chain(path.file_name().map(|name| self.dir.join(name))))
+            .collect()
+    }
+
+    pub(crate) fn resolve(&self) -> PathBuf {
+        let current = existing_file_path(&self.dir, self.current.clone());
+        if current.exists() {
+            return current;
+        }
+        // Old uncompressed ORFs already had sensor proxies. Their stored facts must prove
+        // that interpretation: a JPEG proxy or one with missing facts cannot stand in.
+        if let Some(previous) = &self.previous {
+            let previous = existing_file_path(&self.dir, previous.clone());
+            if stored_raw(&previous) == Some(true) && is_valid(&previous) {
+                return previous;
+            }
+        }
+        current
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn load(&self) -> Result<crate::media::DecodedSource, String> {
+        let path = self.resolve();
+        if !is_valid(&path) {
+            return Err(format!("{}: missing or incomplete smart preview", path.display()));
+        }
+        let source = load(&path)?;
+        // Recheck the facts that came with the pixels in case a shared old proxy was replaced
+        // between resolving its name and reading it.
+        if self.previous.is_some() && path.file_name() != self.current.file_name() && source.info.as_ref().is_none_or(|i| !i.raw) {
+            return Err("smart preview has no compatible sensor facts".into());
+        }
+        Ok(source)
     }
 }
 
 /// Read an existing proxy in either layout. New proxies use the sharded location; previews
 /// made by older releases still load and can be moved with smartPreviewsLocation.
 pub fn file_path(dir: &Path, p: &Photo) -> PathBuf {
-    existing_file_path(dir, sharded_file_path(dir, p))
+    PreviewPath::new(dir, p).resolve()
 }
 
 /// Resolve a sharded path to an older flat file when present. Call only off the UI thread:
@@ -64,6 +126,36 @@ pub fn existing_file_path(dir: &Path, sharded: PathBuf) -> PathBuf {
 
 /// The most header [`is_valid`] reads (the JSON line before the JPEG).
 const HEADER_MAX: u64 = 4096;
+
+/// Read only the bounded facts JSON, without decoding JPEG pixels or allocating matte planes.
+/// A missing/invalid tail cannot establish compatibility with the old ORF identity.
+fn stored_raw(path: &Path) -> Option<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = Vec::new();
+    (&mut f).take(HEADER_MAX).read_to_end(&mut head).ok()?;
+    let rest = head.strip_prefix(MAGIC)?;
+    let nl = rest.iter().position(|b| *b == b'\n')?;
+    let header: serde_json::Value = serde_json::from_slice(rest.get(..nl)?).ok()?;
+    let tail = header.get("tail")?.as_u64()?;
+    let start = f.metadata().ok()?.len().checked_sub(tail)?;
+    if tail < 4 || start <= (MAGIC.len() + nl + 3) as u64 {
+        return None;
+    }
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut n = [0; 4];
+    f.read_exact(&mut n).ok()?;
+    let n = u64::from(u32::from_le_bytes(n));
+    // File-derived lengths are hostile. Camera facts fit within this budget; the potentially
+    // much larger matte planes follow the JSON and are not needed for the raw flag.
+    if n > 4 * 1024 * 1024 || n > tail - 4 {
+        return None;
+    }
+    let mut json = Vec::new();
+    f.take(n).read_to_end(&mut json).ok()?;
+    let facts: SmartFacts = serde_json::from_slice(&json).ok()?;
+    Some(facts.raw)
+}
 
 /// The header field that records which version of the camera-look fit (`camera_preview::LOOK_VERSION`)
 /// wrote the proxy's pixels (colour matrix and profile are baked into them) and stored tone curve.

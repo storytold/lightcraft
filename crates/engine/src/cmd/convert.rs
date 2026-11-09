@@ -312,12 +312,12 @@ pub(crate) fn reload_ops(
         ops.append(&mut mine);
         changed.push(id);
     }
-    // virtual copies share the file
-    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        // Copies can predate newly readable camera/GPS metadata too. Only fill empty fields
-        // from the same file; a relinked copy must not inherit another source's metadata.
-        let same_file = matches!((&c.source, &ph.source), (Source::File { path: a }, Source::File { path: b }) if a == b);
-        let meta = if same_file { fill_missing_meta(c.id, c, info) } else { Vec::new() };
+    // Relinked copies have their own source: none of this file's facts may replace theirs.
+    for c in cat
+        .photos()
+        .filter(|c| c.copy_of == Some(id) && matches!((&c.source, &ph.source), (Source::File { path: a }, Source::File { path: b }) if a == b))
+    {
+        let meta = fill_missing_meta(c.id, c, info);
         let theirs: Vec<Op> =
             content_op(c.id, c, info.clone()).into_iter().chain(meta).chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
         if !theirs.is_empty() {

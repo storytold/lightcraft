@@ -136,11 +136,20 @@ hash. Build Smart Previews reads the original to regenerate their proxies; neith
 sharded JPEG proxies can supply sensor pixels while the original is offline. Preview-only ORFs
 retain their existing offline proxies, and undo restores that identity. Building after undo
 requires Reload when the decoder's raw interpretation no longer agrees with the catalog.
+Missing decoder facts also refuse a rebuild. These errors preserve an existing stale proxy,
+report the Reload instruction, and leave automatic refresh retryable rather than marking it done.
+
+Older uncompressed ORFs can still use their content-only proxies while offline, in either folder
+layout, when the stored decoder facts explicitly identify sensor pixels. JPEG-derived proxies
+and proxies without those facts cannot satisfy a sensor ORF. Discard removes both current layouts
+and the superseded identity, retaining the latter when an unselected photo may still use it.
+Reload and recheck leave every source-derived fact of a separately relinked virtual copy alone.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | patch | Preserve compatible offline sensor proxies, require decoder facts for ORF builds, report interpretation mismatches during stale refresh, clean superseded proxies on discard, and leave relinked copies' source facts alone. |
 | 2026-11-09 | patch | Validate overlapping compressed/Word16 streams, separate ORF sensor proxy identities, fill missing GPS on same-file copies, pin the E-M1 crop, preserve ORF JPEG scanning with capability reporting, and fix relative reference-executable paths. |
 | 2026-11-07 | minor | Extract #1162's decoder and 23 full sensor references; preserve current upstream guards and add a reproducible black-box reference check. General proxy/reload fixes remain separate. |
 | 2026-10-12 | minor | Original branch recorded lossless decoder derivation and 23 sensor references, including PEN E-PL7 and compressed high-resolution E-M5 Mark III. |

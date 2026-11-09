@@ -168,6 +168,7 @@ fn reload_and_recheck_fill_missing_copy_source_metadata() {
                 format: None,
             })
             .unwrap();
+        let relinked = x.s.catalog.photo(copies[2]).unwrap().clone();
         let before = x.s.catalog.photo(copies[0]).unwrap().clone();
         let meta =
             lightcraft_meta::Metadata { gps: Some(lightcraft_meta::Gps { latitude: 45.0, longitude: 7.0, altitude: None }), ..Default::default() };
@@ -184,7 +185,7 @@ fn reload_and_recheck_fill_missing_copy_source_metadata() {
         let kept = &x.s.catalog.photo(copies[1]).unwrap().meta;
         assert_eq!(kept.gps, edited.gps);
         assert_eq!(kept.caption, edited.caption);
-        assert_eq!(x.s.catalog.photo(copies[2]).unwrap().meta.gps, None);
+        assert_eq!(x.s.catalog.photo(copies[2]).unwrap(), &relinked, "{command}: every fact of a relinked copy stays its own");
     }
 }
 
@@ -285,6 +286,150 @@ fn orf_recheck_and_reload_rebuild_incompatible_smart_previews() {
             x.s.execute("edit.redo", &json!({})).unwrap();
             assert_eq!(crate::smart::sharded_file_path(&dir, x.s.catalog.photo(id).unwrap()), path);
         }
+    }
+}
+
+/// A synthetic ORF catalog entry whose current loader can read sensor data.
+fn orf_library(name: &str, sensor: bool) -> Lib {
+    let mut x = library(name);
+    decodable_now(&x);
+    if sensor {
+        x.s.execute("photo.reload", &json!({"id": x.id.0})).unwrap();
+    }
+    let mut p = (**x.s.catalog.photo(x.id).unwrap()).clone();
+    p.format = "ORF".into();
+    x.s.catalog.apply(Op::RemovePhoto { id: x.id }).unwrap();
+    x.s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    x
+}
+
+fn old_smart_path(dir: &std::path::Path, p: &lightcraft_catalog::Photo, flat: bool) -> PathBuf {
+    let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
+    let name = format!("{:032x}.lcsp", hash.0);
+    if flat { dir.join(name) } else { dir.join(&name[..2]).join(name) }
+}
+
+fn write_proxy(path: &std::path::Path, info: Option<&lightcraft_pipeline::SourceInfo>, stale: bool) -> Vec<u8> {
+    let mut bytes = crate::smart::encode(&lightcraft_raster::Rgb32f::filled(48, 32, [0.2, 0.4, 0.6]), info).unwrap();
+    if stale {
+        let start = b"LCSP1\n".len();
+        let end = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+        let mut header: serde_json::Value = serde_json::from_slice(&bytes[start..end]).unwrap();
+        header["enc"] = json!(0);
+        bytes.splice(start..end, header.to_string().bytes());
+    }
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, &bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn orf_smart_build_requires_source_facts() {
+    let mut x = orf_library("smart-missing-facts", true);
+    x.s.media.insert(x.id, crate::media::SourceLevel::Preview, std::sync::Arc::new(lightcraft_raster::Rgb32f::filled(48, 32, [0.7; 3])));
+    let r = x.s.execute("library.smartPreviews", &json!({"id": x.id.0})).unwrap();
+    assert_eq!(r["built"], 0, "unknown pixels must not be labelled sensor-derived: {r}");
+    assert!(r["failed"][0][1].as_str().unwrap().contains("Reload"), "{r}");
+    assert!(!crate::smart::file_path(x.s.media.smart_dir.as_ref().unwrap(), x.s.catalog.photo(x.id).unwrap()).exists());
+}
+
+#[test]
+fn orf_stale_interpretation_mismatch_stays_actionable() {
+    let mut x = orf_library("smart-stale-mismatch", false);
+    let dir = x.s.media.smart_dir.clone().unwrap();
+    let path = crate::smart::sharded_file_path(&dir, x.s.catalog.photo(x.id).unwrap());
+    let bytes = write_proxy(&path, Some(&Default::default()), true);
+    let r = x.s.execute("library.smartPreviews", &json!({"id": x.id.0})).unwrap();
+    assert_eq!((r["built"].clone(), r["staleKept"].clone()), (json!(0), json!(0)), "{r}");
+    assert!(r["failed"][0][1].as_str().unwrap().contains("Reload"), "{r}");
+    crate::cmd::previews::refresh_stale_smart_previews(&mut x.s).unwrap().join().unwrap();
+    assert!(!crate::smart::look_checked(&dir), "a mismatch must not complete the folder refresh");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the old proxy is retained");
+    x.s.execute("library.smartPreviews", &json!({"id": x.id.0, "background": true})).unwrap();
+    let state = x.s.preview_build.as_ref().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while state.running() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!state.running(), "the background build finished");
+    let progress = x.s.execute("library.previewProgress", &json!({})).unwrap();
+    assert_eq!(progress["failed"], 1);
+    assert!(progress["error"].as_str().unwrap().contains("Reload"), "{progress}");
+}
+
+#[test]
+fn orf_offline_legacy_sensor_proxies_remain_usable() {
+    for flat in [false, true] {
+        for raw in [None, Some(false), Some(true)] {
+            let mut x = orf_library(&format!("smart-compatible-{flat}-{raw:?}"), true);
+            let dir = x.s.media.smart_dir.clone().unwrap();
+            let p = x.s.catalog.photo(x.id).unwrap().clone();
+            let old = old_smart_path(&dir, &p, flat);
+            let info = raw.map(|raw| lightcraft_pipeline::SourceInfo { raw, relative_wb: true, ..Default::default() });
+            let bytes = write_proxy(&old, info.as_ref(), true);
+            std::fs::remove_file(&x.file).unwrap();
+            for known_offline in [false, true] {
+                // Exercise both original-load fallback and the known-offline Smart source.
+                let original = x.file.to_string_lossy().into_owned();
+                x.s.media
+                    .availability
+                    .set_probe(std::sync::Arc::new(move |path| if path == original { !known_offline } else { std::path::Path::new(path).exists() }));
+                let source = x.s.media.source_ref(&p, crate::media::SourceLevel::Preview).load_source();
+                assert_eq!(source.is_ok(), raw == Some(true), "flat={flat} raw={raw:?} offline={known_offline}");
+                if let Ok(source) = source {
+                    assert!(source.from_proxy && source.info.unwrap().raw);
+                    assert!((source.image.data[0][0] - 0.2).abs() < 0.02);
+                }
+            }
+            assert_eq!(crate::cmd::previews::has_smart_preview(&x.s, x.id), raw == Some(true));
+            let r = x.s.execute("library.smartPreviews", &json!({"id": x.id.0})).unwrap();
+            assert_eq!(r["built"], usize::from(raw == Some(true)), "{r}");
+            if raw == Some(true) {
+                assert_eq!(r["staleKept"], 1, "an offline legacy proxy must keep its old encoding stamp");
+            }
+            assert_eq!(std::fs::read(&old).unwrap(), bytes);
+            if raw == Some(true) {
+                // A hostile facts length cannot establish compatibility or size an allocation.
+                let start = b"LCSP1\n".len();
+                let end = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+                let head: serde_json::Value = serde_json::from_slice(&bytes[start..end]).unwrap();
+                let tail = bytes.len() - head["tail"].as_u64().unwrap() as usize;
+                let mut broken = bytes.clone();
+                broken[tail..tail + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+                std::fs::write(&old, broken).unwrap();
+                assert!(x.s.media.source_ref(&p, crate::media::SourceLevel::Preview).load_source().is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn orf_discard_cleans_obsolete_proxies_unless_another_photo_uses_them() {
+    for shared in [None, Some(false), Some(true)] {
+        let mut x = orf_library(&format!("smart-discard-{shared:?}"), true);
+        let dir = x.s.media.smart_dir.clone().unwrap();
+        let p = x.s.catalog.photo(x.id).unwrap().clone();
+        if let Some(preview_only) = shared {
+            let r = x.s.execute("photo.virtualCopy", &json!({"id": x.id.0})).unwrap();
+            let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+            let mut other = (**x.s.catalog.photo(copy).unwrap()).clone();
+            other.preview_only = preview_only.then(|| "not rechecked yet".into());
+            x.s.catalog.apply(Op::RemovePhoto { id: copy }).unwrap();
+            x.s.catalog.apply(Op::AddPhoto { photo: Box::new(other) }).unwrap();
+        }
+        let paths = [
+            crate::smart::sharded_file_path(&dir, &p),
+            dir.join(crate::smart::file_name(&p)),
+            old_smart_path(&dir, &p, false),
+            old_smart_path(&dir, &p, true),
+        ];
+        for path in &paths {
+            write_proxy(path, Some(&Default::default()), false);
+        }
+        x.s.execute("library.smartPreviews", &json!({"ids": [x.id.0], "discard": true})).unwrap();
+        assert!(!paths[0].exists() && !paths[1].exists(), "both current layouts must be removed");
+        assert_eq!(paths[2].exists(), shared.is_some());
+        assert_eq!(paths[3].exists(), shared.is_some());
     }
 }
 
