@@ -100,7 +100,9 @@ pub(super) fn view_key_for(content: &str, settings: &DevelopSettings, apply_crop
 /// Everything needed to render one photo, detached from the session.
 #[derive(Clone)]
 pub struct RenderJob {
+    /// How [`Self::cache`]'s key is made, to keep a result under the hash its read learned too.
     pub(crate) cache_recipe: Option<CacheRecipe>,
+    /// The camera profiles' cache key the job's keys were made with.
     pub(crate) cache_profile: u64,
     /// Assigned by a frontend to distinguish late completions, even for an identical render key.
     pub request_id: u64,
@@ -120,6 +122,8 @@ pub struct RenderJob {
     pub key: u64,
     /// Rendered-thumbnail cache and this job's key in it.
     pub cache: Option<(Arc<PreviewCache>, Hash128)>,
+    /// Other keys in [`Self::cache`] the same render may be under (the photo's keys from before its hash was known),
+    /// tried after its own.
     pub cache_fallback: Vec<Hash128>,
     /// Intermediate results of this view's previous renders (set by the frontend for the loupe):
     /// slider drags then only redo the stages the changed setting feeds.

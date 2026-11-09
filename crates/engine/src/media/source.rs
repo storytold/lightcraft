@@ -149,6 +149,7 @@ impl Twin {
 /// Pixels and the source interpretation learned while decoding; they must be cached together.
 #[derive(Clone)]
 pub struct DecodedSource {
+    /// The whole read the pixels were decoded from, when it was hashed.
     pub fingerprint: Option<crate::originals::Fingerprint>,
     pub image: Arc<Rgb32f>,
     pub info: Option<SourceInfo>,
@@ -441,7 +442,9 @@ pub struct ProbeInfo {
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
+    /// Hash (hex) of the file's first bytes, for finding duplicates without reading whole files.
     pub head_hash: Option<String>,
+    /// The reads behind this probe, for the import that adds the file to trust its facts.
     pub native_read: Option<crate::originals::ProbeEvidence>,
 }
 

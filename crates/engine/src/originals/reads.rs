@@ -102,6 +102,7 @@ impl ReadProof {
             READ_HANDLES.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
+    /// Whether the held handle still has the stamp `stamp`.
     #[cfg(unix)]
     fn matches(&self, stamp: &Stamp) -> bool {
         self.file
@@ -114,6 +115,7 @@ impl ReadProof {
             .as_ref()
             == Some(stamp)
     }
+    /// Whether the held handle and the file now at `path` are the same file, both with the stamp `stamp`.
     #[cfg(windows)]
     fn matches_path(&self, path: &str, stamp: &Stamp) -> bool {
         let held = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -150,6 +152,7 @@ struct HeaderObservation {
     proof: Arc<ReadProof>,
 }
 impl HeaderObservation {
+    /// Whether the file at `path` is still the version whose headers were read.
     fn current(&self, path: &str) -> bool {
         self.proof.current(path, &self.stamp)
     }
@@ -183,6 +186,7 @@ pub struct ProbeEvidence {
     preview: Option<String>,
 }
 impl ProbeEvidence {
+    /// Whether `info` states the size, dimensions and preview state this evidence does.
     fn same_facts(&self, info: &crate::media::ProbeInfo) -> bool {
         self.size == info.file_size && self.dimensions == (info.width, info.height) && self.preview == info.preview_only
     }
@@ -224,6 +228,7 @@ impl ProbeEvidence {
         }
         self.release_header();
     }
+    /// Closes the header read's handle.
     fn release_header(&self) {
         if let Some(header) = &self.header {
             header.proof.release();
@@ -265,6 +270,7 @@ pub(crate) fn probe_evidence(path: &str, info: &crate::media::ProbeInfo, fp: Opt
 
 /// A header probe in progress: the open file, its stamp before reading and the reader it reports to.
 pub(crate) struct HeaderRead {
+    /// The file being probed.
     pub file: File,
     path: String,
     before: Option<Stamp>,
@@ -302,6 +308,7 @@ impl HeaderRead {
 /// handle that proves the file is still that version.
 #[derive(Clone, Debug)]
 pub struct Fingerprint {
+    /// The hash of the bytes read.
     pub hash: Hash128,
     stamp: Stamp,
     proof: Option<Arc<ReadProof>>,
@@ -369,7 +376,9 @@ impl Watch {
 }
 /// A whole read of a watched path, waiting for [`crate::Session::learn_read_hashes`].
 pub(crate) struct ReadEvent {
+    /// The path read.
     pub path: String,
+    /// The read's hash and proof.
     pub fingerprint: Fingerprint,
     watch: Arc<Watch>,
 }
@@ -885,6 +894,7 @@ impl Originals {
         let reader = self.clone();
         Arc::new(move |path| reader.read_whole(path).map(|(b, _)| b).map_err(|e| format!("{path}: {e}")))
     }
+    /// How many whole reads this reader made, and how many of them it hashed.
     #[cfg(test)]
     pub(crate) fn counts(&self) -> (usize, usize) {
         use std::sync::atomic::Ordering::Relaxed;
@@ -894,6 +904,7 @@ impl Originals {
 
 /// Reads back the file just written at `path` and checks it holds exactly `data`.
 pub(crate) fn verify_generated(path: &std::path::Path, data: &[u8]) -> io::Result<Fingerprint> {
+    /// A writer that fails as soon as what it is given differs from `data`.
     struct Exact<'a> {
         data: &'a [u8],
         at: usize,
@@ -962,6 +973,7 @@ pub(crate) fn record_generated(path: &str, bytes: &[u8], mut fp: Fingerprint) ->
 pub(crate) fn bound_reader() -> Option<Originals> {
     CURRENT.with(|slot| slot.borrow().clone())
 }
+/// The reader bound on this thread; an error without one.
 fn current_reader() -> io::Result<Originals> {
     CURRENT.with(|slot| slot.borrow().clone()).ok_or_else(|| io::Error::other("original read requires a session reader binding"))
 }
@@ -1004,6 +1016,7 @@ fn buffer_len(len: u64) -> io::Result<usize> {
 }
 #[cfg(test)]
 thread_local! { static ORIGINAL_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
+/// The bytes of originals read on this thread.
 #[cfg(test)]
 pub(crate) fn read_bytes() -> u64 {
     ORIGINAL_BYTES.get()

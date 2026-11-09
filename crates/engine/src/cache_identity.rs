@@ -15,6 +15,9 @@ use lightcraft_preview::{Hash128, Hasher128};
 #[derive(Clone)]
 pub struct CacheIdentity(Arc<RwLock<State>>);
 
+/// Retired aliases with the identity each may be trusted for again, source epochs, sources whose retirement the catalog
+/// has not taken yet, the marker folder, whether its history is incomplete, whether the record is in use, and this
+/// record's nonce.
 struct State {
     invalid: HashMap<Hash128, Option<PhysicalIdentity>>,
     epochs: HashMap<String, u64>,
@@ -27,6 +30,7 @@ struct State {
 
 impl Default for CacheIdentity {
     fn default() -> Self {
+        /// Tells apart records made in the same instant.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nonce = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |t| t.as_nanos())
             ^ u128::from(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
@@ -58,6 +62,7 @@ fn alias_hash(key: &str) -> Hash128 {
 #[cfg(all(test, unix))]
 thread_local! { static DIRECTORY_FAILURE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) }; }
 
+/// Restores the previous injected directory failure when dropped.
 #[cfg(all(test, unix))]
 pub(crate) struct DirectoryFault(Option<usize>);
 #[cfg(all(test, unix))]
@@ -66,6 +71,7 @@ impl Drop for DirectoryFault {
         DIRECTORY_FAILURE.set(self.0);
     }
 }
+/// Makes the marker folder's sync fail after `steps` more steps on this thread, until the guard is dropped.
 #[cfg(all(test, unix))]
 pub(crate) fn fail_directory_after(steps: usize) -> DirectoryFault {
     DirectoryFault(DIRECTORY_FAILURE.replace(Some(steps)))
@@ -98,6 +104,7 @@ impl PhysicalIdentity {
     }
 }
 
+/// The longest marker file read.
 const MAX_MARKER_BYTES: usize = 16 << 10;
 
 /// The identity a marker file names (`None` when it is unreadable, too long or of an unknown version) and its size.
@@ -129,6 +136,7 @@ impl CacheIdentity {
         Self::open_reading(dir, MAX_LOADED_MARKER_BYTES)
     }
 
+    /// [`Self::open`], reading the contents of markers up to `budget` bytes in all.
     fn open_reading(dir: &Path, budget: usize) -> Self {
         let cache = Self::default();
         let mut state = cache.0.write().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -362,6 +370,7 @@ fn sync_directory(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// One step of the marker folder's sync: the injected failure, when its count runs out.
 #[cfg(all(test, unix))]
 fn directory_step() -> std::io::Result<()> {
     DIRECTORY_FAILURE.with(|fault| match fault.get() {
