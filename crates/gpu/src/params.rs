@@ -1,14 +1,15 @@
 //! Parameter blocks: the per-pixel stage's [`FinishParams`] packed into the 32-bit words the
 //! `finish` kernel reads (`F_*` constants, generated from [`FIELDS`]), plus its auxiliary tables.
 
+use lightcraft_color::spline::Lut1;
 use lightcraft_develop::VignetteStyle;
 use lightcraft_pipeline::colorops::POINT_WORDS;
-use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
+use lightcraft_pipeline::finish::{CURVE_LUT_N, FinishParams, MASK_TERMS, srgb_lut};
 
 use crate::ctx::{FailKind, fail};
 
 /// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
-pub const CURVE_N: u32 = 1024;
+pub const CURVE_N: u32 = CURVE_LUT_N as u32;
 
 /// Set on every word of a float render's output: the values are at least 0, so the sign bit is
 /// free, and it tells a written 0 from a word the kernel never reached.
@@ -23,6 +24,9 @@ const FIELDS: &[(&str, usize)] = &[
     ("SRGB_OFF", 1),
     ("CURVE_OFF", 1),
     ("CURVES", 1),
+    // the masks' local Curves: a slot per mask (its table set, or −1), then the table sets
+    ("LCURVE_OFF", 1),
+    ("LCURVES", 1),
     ("GAIN", 1),
     ("EV", 1),
     ("AIR", 1),
@@ -178,13 +182,21 @@ pub struct Present {
 }
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms | light operator tables) for `fp` with `masks` (their local adjustments' terms).
+/// mask terms | local-curve slots | local-curve LUTs | light operator tables | LUT profile) for `fp` with `masks`
+/// (their local adjustments' terms) and `curves` (their local Curves,
+/// [`lightcraft_pipeline::finish::local_curve_luts`], in the same order).
 ///
 /// `deep`: the kernel writes float samples, as the pipeline's `finish_deep` does.
 ///
-/// A curve whose length is not [`CURVE_N`] fails the render ([`FailKind::Fatal`]) and returns an
-/// empty parameter block with a truncated aux table, which the caller discards (CPU fallback).
-pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present, deep: bool) -> (Vec<u32>, Vec<f32>) {
+/// A curve or local-curve table whose length is not [`CURVE_N`] fails the render ([`FailKind::Fatal`]) and
+/// returns an empty parameter block with a truncated aux table, which the caller discards (CPU fallback).
+pub fn finish_block(
+    fp: &FinishParams,
+    masks: &[[f32; MASK_TERMS]],
+    curves: &[Option<[Lut1; 3]>],
+    present: &Present,
+    deep: bool,
+) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
     let srgb_off = aux.len();
@@ -209,6 +221,26 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let mask_off = aux.len();
     for m in masks {
         aux.extend_from_slice(m);
+    }
+    // one slot per mask (the kernel reads `NMASK` of them), then each local Curve's three tables
+    let lcurve_off = aux.len();
+    let mut next = 0.0f32;
+    for k in 0..masks.len() {
+        match curves.get(k) {
+            Some(Some(_)) => {
+                aux.push(next);
+                next += 1.0;
+            }
+            _ => aux.push(-1.0),
+        }
+    }
+    for l in curves.iter().take(masks.len()).flatten().flatten() {
+        if l.v.len() != CURVE_N as usize {
+            // as for the photo's curves above: a wrong-length table would shift LIGHT_OFF and LUT_OFF
+            fail(FailKind::Fatal, format!("local curve table has {} entries, expected {}", l.v.len(), CURVE_N));
+            return (Vec::new(), aux);
+        }
+        aux.extend_from_slice(&l.v);
     }
     let light_off = aux.len();
     let light = fp.light.as_ref().map_or(&[][..], |l| &l.ops[..]);
@@ -241,6 +273,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("SRGB_OFF", srgb_off as u32);
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
+    p.u("LCURVE_OFF", lcurve_off as u32);
+    p.b("LCURVES", next > 0.0);
     p.f("REFINE_SAT", fp.refine_sat);
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);

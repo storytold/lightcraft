@@ -913,6 +913,8 @@ mod tests_light;
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]
+mod tests_local_curve;
+#[cfg(test)]
 mod tests_mask_geometry;
 #[cfg(test)]
 mod tests_nr_scale;

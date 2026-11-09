@@ -10,7 +10,7 @@ use super::right::header;
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{divider, icon_button, one_line, register, slider, text_button};
+use crate::widgets::{divider, flyout_row, icon_button, one_line, register, slider, text_button};
 
 const fn spec(id: &'static str, label: &'static str, min: f64, max: f64, step: f64, decimals: u8, track: Track) -> ControlSpec {
     ControlSpec { id, label, section: Section::Light, min, max, default: 0.0, step, decimals, track }
@@ -387,6 +387,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let v = local_get(&m.adjust, s.id);
         let out = slider(ui, s, v, true, None);
         apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
+        if s.id == "blacks" {
+            // the mask's own point curves, after the tone sliders (the Tone Curve's editor)
+            let open = app.ui.flyout_open("maskCurve");
+            if flyout_row(ui, "maskCurve", "Curve", Icon::Curve, open).clicked() {
+                app.ui.toggle_flyout("maskCurve");
+            }
+            if open {
+                super::edit::curve_editor(app, ui, id, &d, super::edit::CurveTarget::Mask(m.id));
+            }
+        }
     }
     let amt = ControlSpec {
         id: "amount",

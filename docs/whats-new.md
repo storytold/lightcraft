@@ -38,6 +38,15 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### A Curve in every mask
+- Masks have a Curve of their own (issue #1932): open Curve under Blacks in a mask's adjustments. It is the Tone
+  Curve's editor with the RGB, Red, Green and Blue point curves (click to add a point, drag it, double-click to
+  remove it, double-click a channel to reset it) and the same Point Curve presets, so a curve saved from the Tone
+  Curve can be used in a mask and the other way round. It works inside the mask only, faded by its feather and
+  Amount, after the photo's Tone Curve. Local adjustment presets don't keep it yet.
+- The catalog format is now version 13 (`Mask.curve`). Once this version has opened a library, older LightCraft
+  versions refuse it ("written by a newer version") instead of dropping the masks' curves.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

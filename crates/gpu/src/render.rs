@@ -4,9 +4,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use lightcraft_color::spline::Lut1;
 use lightcraft_develop::DevelopSettings;
 use lightcraft_geom::Orientation;
-use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput, MASK_TERMS, mask_terms};
+use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput, MASK_TERMS, local_curve_luts, mask_terms};
 use lightcraft_pipeline::geometry::SampleMode;
 use lightcraft_pipeline::local::plane_at;
 use lightcraft_pipeline::nrc_joint::JointNoise;
@@ -737,7 +738,7 @@ pub fn render(
     }
 
     // 4. masks
-    let (masks, terms) = masks(&mut cx, &lin, &prep, &plan, &mut host);
+    let (masks, terms, curves) = masks(&mut cx, &lin, &prep, &plan, &mut host);
     lap("masks", &mut t, &mut cx);
 
     // 5. per-pixel stage
@@ -776,7 +777,7 @@ pub fn render(
         (Some(b), None) | (None, Some(b)) => Some(b.clone()),
         (None, None) => None,
     };
-    let (p, aux) = finish_block(&fp, &terms, &present, deep);
+    let (p, aux) = finish_block(&fp, &terms, &curves, &present, deep);
     if crate::ctx::failed() {
         return None; // a malformed parameter block failed the render: the CPU fallback redoes it
     }
@@ -1486,14 +1487,14 @@ fn guided_cross(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, sigma
 }
 
 /// Evaluate the masks (`lightcraft_pipeline::masks::evaluate`): their alpha planes (concatenated,
-/// followed by the blurred chromaticity when local Moiré / Noise need it) and their adjustment
-/// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
-fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Host) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
+/// followed by the blurred chromaticity when local Moiré / Noise need it), their adjustment
+/// terms and their local Curves. Shapes without a kernel (Sky, Subject, …) run on the CPU.
+fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Host) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>, Vec<Option<[Lut1; 3]>>) {
     use lightcraft_develop::{MaskOp, MaskShape};
     let s = &*plan.settings;
     let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
     if list.is_empty() {
-        return (None, Vec::new());
+        return (None, Vec::new(), Vec::new());
     }
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
@@ -1650,7 +1651,8 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
         );
     }
     let terms = list.iter().map(|m| mask_terms(&m.adjust)).collect();
-    (Some(alpha), terms)
+    let curves = list.iter().map(|m| local_curve_luts(&m.curve)).collect();
+    (Some(alpha), terms, curves)
 }
 
 #[cfg(test)]

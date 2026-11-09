@@ -56,9 +56,9 @@ fn srgb_linear(v: f32) -> f32 {
     return pow((v + 0.055) / 1.055, 2.4);
 }
 
-// Above SDR white (an HDR render) the curves continue with slope 1 from their end point.
-fn curve(ch: u32, x: f32) -> f32 {
-    let o = pu(F_CURVE_OFF) + ch * CURVE_N;
+// The curve table at `o` in `aux` (`Lut1::eval`). Above SDR white (an HDR render) a curve
+// continues with slope 1 from its end point.
+fn curve_at(o: u32, x: f32) -> f32 {
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
     let i = min(u32(f), CURVE_N - 2u);
     let t = f - f32(i);
@@ -67,6 +67,10 @@ fn curve(ch: u32, x: f32) -> f32 {
         return v + (x - 1.0);
     }
     return v;
+}
+
+fn curve(ch: u32, x: f32) -> f32 {
+    return curve_at(pu(F_CURVE_OFF) + ch * CURVE_N, x);
 }
 
 // Process V4's calibrated Contrast, Blacks (`lightcraft_pipeline::light_v3`): operator `k`'s
@@ -687,6 +691,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let rs = pf(F_REFINE_SAT);
         if (rs < 1.0) {
             e = refine_saturation(e0, e, rs);
+        }
+    }
+    // --- the masks' local Curves, in mask order, each weighted by its mask (`finish::local_curve_luts`)
+    if (pu(F_LCURVES) != 0u) {
+        let so = pu(F_LCURVE_OFF);
+        for (var m = 0u; m < nm; m++) {
+            let slot = aux[so + m];
+            let a = masks[m * n + i];
+            if (slot < 0.0 || a <= 0.0) {
+                continue;
+            }
+            let o = so + nm + u32(slot) * 3u * CURVE_N;
+            let c = vec3<f32>(curve_at(o, e.x), curve_at(o + CURVE_N, e.y), curve_at(o + 2u * CURVE_N, e.z));
+            e = e + (c - e) * a;
         }
     }
     if (pu(F_GRAIN) != 0u) {
