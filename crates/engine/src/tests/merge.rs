@@ -594,3 +594,75 @@ fn preview_reports_skipped_undersized_group() {
     assert!(r["previews"].is_null(), "single-job preview has no previews array: {r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `merge_selection_ready` is per-group, not total: two undersized stacks whose total reaches
+/// the minimum do not enable a merge, matching `plan_merge`/`plan_merges` which would skip or refuse them.
+#[test]
+fn merge_selection_ready_is_per_group_not_total() {
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for i in 0..4 {
+        let id = s.catalog.alloc_photo_id();
+        let name = format!("IMG_{i}.dng");
+        let p =
+            lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path: name.clone() }, &name, "DNG", 96, 64, "2026-01-01T00:00:00");
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        ids.push(id);
+    }
+    // Two stacks of two: each is enough for HDR (2) but neither is enough for HDR Panorama (4),
+    // although together they total 4.
+    let op = s.catalog.group_ops(ids[0], &ids[..2], true).unwrap();
+    s.catalog.apply(op).unwrap();
+    let op = s.catalog.group_ops(ids[2], &ids[2..], true).unwrap();
+    s.catalog.apply(op).unwrap();
+    let (pano_kind, _) = crate::merge::parse("merge.hdrPanorama", &json!({})).unwrap();
+    assert_eq!(s.expanded_merge_count(&[ids[0], ids[2]]), 4, "total reaches the HDR panorama minimum");
+    assert!(!s.merge_selection_ready(&pano_kind, &[ids[0], ids[2]]), "two undersized stacks do not enable a merge");
+    // A single stack of two does enable HDR, but two stacks do not enable the single-group dialog merge.
+    let (hdr_kind, _) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    assert!(s.merge_selection_ready(&hdr_kind, &[ids[0]]), "one stack of two enables HDR");
+    assert!(!s.merge_selection_ready(&hdr_kind, &[ids[0], ids[2]]), "two groups do not enable the single-group merge");
+    // A valid stack plus an undersized loose photo is also more than one group.
+    let loose = s.catalog.alloc_photo_id();
+    let loose_name = "LOOSE.dng".to_string();
+    let loose_photo = lightcraft_catalog::Photo::new(
+        loose,
+        lightcraft_catalog::Source::File { path: loose_name.clone() },
+        &loose_name,
+        "DNG",
+        96,
+        64,
+        "2026-01-01T00:00:00",
+    );
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(loose_photo) }).unwrap();
+    assert!(!s.merge_selection_ready(&hdr_kind, &[ids[0], loose]), "valid stack plus loose photo is more than one group");
+}
+
+/// `merge.hdrBatch` preserves the bracket set retained by `bracket_sets` when the stack
+/// contains an earlier merge result: the result itself is not merged again, only its sources.
+#[test]
+fn hdr_batch_preserves_bracket_set_when_stack_contains_merge_result() {
+    let dir = temp_dir("hdr-batch-result");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, &[-1.0, 0.0, 1.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let r = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false, "stack": true})).unwrap();
+    let result = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    // The stack now holds the merge result on top of its sources.
+    let stack = s.catalog.stack_of(result).expect("merge result stacked").clone();
+    assert!(stack.photos.contains(&result));
+    // Batch on the result merges its sources only (3 frames), not the result itself.
+    let batch = s.execute("merge.hdrBatch", &json!({"ids": [result.0], "autoSettings": false})).unwrap();
+    let merged = batch["merged"].as_array().unwrap();
+    assert_eq!(merged.len(), 1, "{batch}");
+    assert!(batch["failed"].as_array().unwrap().is_empty(), "{batch}");
+    let ev: Vec<f64> = merged[0]["ev"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert_eq!(ev.len(), 3, "only the three sources are merged: {merged:?}");
+    assert!(merged[0]["path"].as_str().unwrap().ends_with("IMG_0-HDR-2.dng"), "{merged:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

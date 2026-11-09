@@ -414,10 +414,13 @@ impl Session {
         self.merge_groups(ids).iter().flat_map(|g| g.iter()).filter(|id| seen.insert(**id)).count()
     }
 
-    /// Whether a merge selection holds enough photos for `kind` once collapsed stacks are
-    /// expanded ([`Session::expanded_merge_count`]).
+    /// Whether a merge selection holds enough photos for `kind` in a single merge group once
+    /// collapsed stacks are expanded, matching [`Session::plan_merge`]: a selection holding more
+    /// than one group is not ready even if the total across groups reaches the minimum, because
+    /// `plan_merge` refuses multi-group selections and `plan_merges` would skip undersized groups.
     pub fn merge_selection_ready(&self, kind: &MergeKind, ids: &[PhotoId]) -> bool {
-        self.expanded_merge_count(ids) >= kind.min_photos()
+        let groups = self.merge_groups(ids);
+        groups.len() == 1 && Self::fresh_group_size(&groups[0], &std::collections::HashSet::new()) >= kind.min_photos()
     }
 
     /// Plan a merge of `ids`. Loose ids keep the order given; members of a collapsed stack are in capture order.
@@ -446,9 +449,6 @@ impl Session {
                 planned.push(sources);
             }
         }
-        if planned.len() > 1 {
-            return Err(EngineError::Other("selection holds more than one merge group; plan one merge per stack with plan_merges".into()));
-        }
         let Some(sources) = planned.pop() else {
             return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
         };
@@ -475,6 +475,45 @@ impl Session {
         preview: bool,
     ) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
         let groups = self.merge_groups(ids);
+        let read = self.merge_reader();
+        let mut jobs = Vec::new();
+        let mut skipped = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for group in groups {
+            if Self::fresh_group_size(&group, &seen) < kind.min_photos() {
+                for id in &group {
+                    seen.insert(*id);
+                }
+                skipped.push(group);
+                continue;
+            }
+            let sources = self.merge_sources(&group, &mut seen)?;
+            if sources.is_empty() {
+                continue;
+            }
+            if sources.len() < kind.min_photos() {
+                skipped.push(group);
+                continue;
+            }
+            jobs.push(MergeJob { kind: kind.clone(), finish: finish.clone(), sources, preview: preview.then_some(PREVIEW_EDGE), read: read.clone() });
+        }
+        if jobs.is_empty() {
+            return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
+        }
+        Ok((jobs, skipped))
+    }
+
+    /// Plan one merge job per explicit group in `groups`, without re-expanding collapsed stacks.
+    /// Groups are the retained IDs from [`lightcraft_catalog::Catalog::bracket_sets`] (or similar
+    /// filtering): each group is merged as given (deduped, in order), so a bracket subset is not
+    /// reintroduced by stack expansion in [`Session::merge_groups`].
+    pub(crate) fn plan_merges_from_groups(
+        &self,
+        kind: MergeKind,
+        finish: MergeFinish,
+        groups: Vec<Vec<PhotoId>>,
+        preview: bool,
+    ) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
         let read = self.merge_reader();
         let mut jobs = Vec::new();
         let mut skipped = Vec::new();
@@ -626,6 +665,18 @@ impl Session {
     /// top-level fields). Consumers should read `merged` when present rather than counting both.
     pub fn merge_now(&mut self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId]) -> Result<Value> {
         let (jobs, skipped) = self.plan_merges_inner(kind, finish, ids, false)?;
+        self.run_merge_jobs(jobs, skipped)
+    }
+
+    /// Plan, run and finish merges for explicit groups (see [`Session::plan_merges_from_groups`]),
+    /// without re-expanding collapsed stacks. Used by `merge.hdrBatch` to preserve the IDs
+    /// retained by `bracket_sets`.
+    pub fn merge_now_groups(&mut self, kind: MergeKind, finish: MergeFinish, groups: Vec<Vec<PhotoId>>) -> Result<Value> {
+        let (jobs, skipped) = self.plan_merges_from_groups(kind, finish, groups, false)?;
+        self.run_merge_jobs(jobs, skipped)
+    }
+
+    fn run_merge_jobs(&mut self, jobs: Vec<MergeJob>, skipped: Vec<Vec<PhotoId>>) -> Result<Value> {
         let mut merged = Vec::new();
         let mut failed = Vec::new();
         for job in &jobs {

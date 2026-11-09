@@ -88,7 +88,7 @@ fn run_batch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (mut merged, mut failed) = (Vec::new(), Vec::new());
     for set in sets {
-        match s.merge_now(kind.clone(), finish.clone(), &set) {
+        match s.merge_now_groups(kind.clone(), finish.clone(), vec![set.clone()]) {
             Ok(v) => merged.push(v),
             Err(e) => failed.push(json!({"photos": set.iter().map(|p| p.0).collect::<Vec<_>>(), "error": e.to_string()})),
         }
