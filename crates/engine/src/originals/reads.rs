@@ -516,6 +516,25 @@ impl Originals {
         }
         Some(evidence(self, path, info, bound, hash))
     }
+    /// [`Originals::candidate_probe`] for a file found to repeat a known one by its content hash: when that
+    /// evidence holds no live proof of the hash (none could be kept while 128 were open), the file is read
+    /// again for a fresh one, so commit can still check the file did not change.
+    pub(crate) fn confirmed_probe(&self, path: &str, info: &crate::media::ProbeInfo) -> Option<ProbeEvidence> {
+        let found = self.candidate_probe(path, info)?;
+        let Some(hash) = info.content_hash.as_deref() else { return Some(found) };
+        if found.stale() || found.confirms_hash(self, path, hash) {
+            return Some(found);
+        }
+        let Ok(fp) = self.hash_whole(path) else { return Some(found) };
+        let fresh = fp.hash;
+        let reread = evidence(self, path, info, Some(fp), Some(fresh));
+        if !reread.confirms_hash(self, path, hash) {
+            reread.release();
+            return Some(found);
+        }
+        found.release();
+        Some(reread)
+    }
     /// The evidence for a file a Copy or Move placed at `path`, taking the hash from the copy's read or the
     /// source's evidence; releases the source's proofs.
     pub(crate) fn transfer_probe(
@@ -1724,6 +1743,28 @@ mod tests {
 #[cfg(test)]
 mod boundary_tests {
     use super::*;
+    #[test]
+    fn a_duplicate_whose_probe_kept_no_proof_is_read_again_for_one() {
+        let dir = crate::tests_xmp::temp_dir("unproven-duplicate");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("incoming");
+        std::fs::write(&path, b"duplicate bytes").unwrap();
+        let path = path.to_str().unwrap();
+        let reader = Originals::default();
+        let read = reader.hash_whole(path).unwrap();
+        let unproven = Fingerprint { proof: None, ..read.clone() };
+        read.release();
+        let hash = unproven.hash.to_string();
+        let mut info = crate::media::ProbeInfo { content_hash: Some(hash.clone()), file_size: unproven.len(), ..Default::default() };
+        info.native_read = Some(evidence(&reader, path, &info, Some(unproven.clone()), Some(unproven.hash)));
+        assert!(!reader.candidate_probe(path, &info).unwrap().confirms_hash(&reader, path, &hash), "no proof was kept");
+        let confirmed = reader.confirmed_probe(path, &info).unwrap();
+        assert!(confirmed.confirms_hash(&reader, path, &hash));
+        std::fs::write(path, b"replaced bytes!").unwrap();
+        assert!(confirmed.stale() && !confirmed.confirms_hash(&reader, path, &hash), "the fresh proof still sees a change");
+        confirmed.release();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn g_retirement_revokes_new_proofs_after_released_fingerprints_fill_the_registry() {
         let dir = crate::tests_xmp::temp_dir("g-released-proof-registry");

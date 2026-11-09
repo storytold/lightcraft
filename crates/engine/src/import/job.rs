@@ -371,7 +371,7 @@ impl ImportJob {
                 info.native_read = self.originals.candidate_probe(&path, &info);
             }
             let duplicate_of = found.map(|existing| {
-                let evidence = self.originals.candidate_probe(&path, &info).map(Box::new);
+                let evidence = self.originals.confirmed_probe(&path, &info).map(Box::new);
                 (info.content_hash.clone(), existing, evidence)
             });
             // (a cancel while comparing it with photos without a hash leaves the file out, unchecked)
