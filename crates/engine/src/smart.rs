@@ -17,6 +17,9 @@ use lightcraft_pipeline::masks::{MatteKind, Mattes};
 use lightcraft_pipeline::tone::CameraTone;
 use lightcraft_raster::{Image, Rgb32f, Rgba8};
 
+mod availability;
+pub use availability::Availability;
+
 const MAGIC: &[u8] = b"LCSP1\n";
 
 /// The proxy's file name by content and ORF sensor interpretation, so matching copies share one.
@@ -41,6 +44,7 @@ pub fn sharded_file_path(dir: &Path, p: &Photo) -> PathBuf {
     shard(dir, &file_name(p))
 }
 
+/// Place a proxy below its two-character hash prefix, retaining a fallback for a short name.
 fn shard(dir: &Path, name: &str) -> PathBuf {
     match name.get(..2) {
         Some(shard) => dir.join(shard).join(name),
@@ -58,6 +62,7 @@ pub struct PreviewPath {
 }
 
 impl PreviewPath {
+    /// Derive current and compatible legacy proxy identities without touching the file system.
     pub(crate) fn new(dir: &Path, p: &Photo) -> Self {
         let previous = (p.preview_only.is_none() && crate::media::decoder_key(p) != 0).then(|| {
             let h = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
@@ -74,43 +79,54 @@ impl PreviewPath {
             .collect()
     }
 
-    /// A preview-only ORF's current name is itself content-only. Preserve that file too when
-    /// an unselected photo may still need it, even if that photo now develops sensor data.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn discard_candidates(&self, keep_content: bool) -> Vec<PathBuf> {
-        if keep_content && self.previous.is_none() { Vec::new() } else { self.candidates(!keep_content) }
-    }
-
+    /// Whether this candidate uses the superseded content-only identity of a sensor ORF.
     fn is_previous(&self, path: &Path) -> bool {
         self.previous.is_some() && path.file_name() != self.current.file_name()
     }
 
+    /// Check framing and legacy sensor facts without decoding the JPEG pixels.
     fn compatible(&self, path: &Path) -> bool {
         // Old uncompressed ORFs already had sensor proxies. Their complete stored facts must
         // prove that interpretation: a JPEG proxy or one with missing facts cannot stand in.
         is_valid(path) && (!self.is_previous(path) || stored_raw(path) == Some(true))
     }
 
+    /// Choose a structurally compatible candidate, or the current location to repair when none passes.
     pub(crate) fn resolve(&self) -> PathBuf {
         self.candidates(true).into_iter().find(|path| self.compatible(path)).unwrap_or_else(|| existing_file_path(&self.dir, self.current.clone()))
     }
 
+    /// Decode the first usable current or legacy candidate, preserving its source facts.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn load(&self) -> Result<crate::media::DecodedSource, String> {
+        self.load_with_path().map(|(_, source)| source)
+    }
+
+    /// Find a candidate that actually decodes. Build uses the same selection as offline loading,
+    /// so a corrupt JPEG with intact markers cannot count as a reusable or retained stale proxy.
+    pub(crate) fn load_with_path(&self) -> Result<(PathBuf, crate::media::DecodedSource), String> {
         let mut error = format!("{}: missing or incomplete smart preview", self.current.display());
-        for path in self.candidates(true).into_iter().filter(|path| self.compatible(path)) {
-            match load(&path) {
-                // Recheck the facts read with the pixels in case the proxy was replaced since
-                // validation. A damaged candidate must not hide a usable file in another layout.
-                Ok(source) if self.is_previous(&path) && source.info.as_ref().is_none_or(|i| !i.raw) => {
-                    error = "smart preview has no compatible sensor facts".into();
-                }
-                Ok(source) => return Ok(source),
+        for path in self.candidates(true) {
+            match load_compatible(&path, self.is_previous(&path)) {
+                Ok(source) => return Ok((path, source)),
                 Err(e) => error = e,
             }
         }
         Err(error)
     }
+}
+
+/// Validate the pixels and their interpretation together, also used by background status checks.
+fn load_compatible(path: &Path, require_sensor: bool) -> Result<crate::media::DecodedSource, String> {
+    if !is_valid(path) {
+        return Err(format!("{}: missing or incomplete smart preview", path.display()));
+    }
+    let source = load(path)?;
+    // Read the facts with the pixels: a file may have changed since the cheap framing check.
+    if require_sensor && source.info.as_ref().is_none_or(|info| !info.raw) {
+        return Err("smart preview has no compatible sensor facts".into());
+    }
+    Ok(source)
 }
 
 /// Read an existing proxy in either layout. New proxies use the sharded location; previews
@@ -133,8 +149,10 @@ pub fn existing_file_path(dir: &Path, sharded: PathBuf) -> PathBuf {
 /// The most header [`is_valid`] reads (the JSON line before the JPEG).
 const HEADER_MAX: u64 = 4096;
 
-/// Camera facts are bounded separately from the potentially much larger matte planes.
-const FACTS_MAX: usize = 4 * 1024 * 1024;
+/// Bound JSON independently of matte planes without dropping supported DNG tables. At 24 JSON
+/// bytes per float, two 2^22-gain maps plus three 2^20-entry RGB profile tables need 408 MiB;
+/// 512 MiB leaves room for their structure and the other facts. Keep encode and reads in agreement.
+const FACTS_MAX: usize = 512 * 1024 * 1024;
 
 /// Read only the bounded facts JSON, without decoding JPEG pixels or allocating matte planes.
 /// A missing/invalid tail cannot establish compatibility with the old ORF identity.
@@ -327,6 +345,9 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
             mattes: matte_list,
         };
         let facts = serde_json::to_vec(&facts).map_err(|e| e.to_string())?;
+        if facts.len() > FACTS_MAX {
+            return Err("smart preview facts too large".into());
+        }
         let n = u32::try_from(facts.len()).map_err(|_| "smart preview facts too large")?;
         tail.extend_from_slice(&n.to_le_bytes());
         tail.extend_from_slice(&facts);

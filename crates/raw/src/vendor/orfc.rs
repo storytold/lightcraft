@@ -183,6 +183,7 @@ mod tests {
     }
 
     proptest! {
+        /// Arbitrary payloads and small hostile dimensions return a result without panicking.
         #[test]
         fn arbitrary_compressed_payload_never_panics(payload in prop::collection::vec(any::<u8>(), 0..512), w in 0usize..40, h in 0usize..12) {
             let src = [HEADER, &payload].concat();

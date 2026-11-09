@@ -49,6 +49,7 @@ impl DenoiseIndex {
 }
 
 impl Default for MediaCache {
+    /// Create an empty media cache with memory budgets and synchronous availability probes.
     fn default() -> Self {
         let budget = crate::memory::cache_share(crate::memory::budget());
         MediaCache {
@@ -67,6 +68,7 @@ impl Default for MediaCache {
             file_bytes: None,
             smart_dir: None,
             availability: Default::default(),
+            smart_availability: Default::default(),
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
             denoise: DenoiseIndex::default(),
@@ -333,6 +335,7 @@ impl MediaCache {
         matches!(&p.source, Source::File { path } if self.availability.is_offline(path))
     }
 
+    /// Choose cached pixels, an original, or a proxy while preserving source level and camera-profile identity.
     fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
         let outliers = p.develop.removes_hot_pixels();
         // (a source developed with another camera profile, or none, doesn't stand in; a smart preview

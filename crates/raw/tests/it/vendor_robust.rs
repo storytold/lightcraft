@@ -292,6 +292,7 @@ fn compressed_orf() -> Vec<u8> {
     bytes
 }
 
+/// Collect synthetic raw containers for the shared truncation and corruption checks.
 fn samples() -> Vec<Vec<u8>> {
     vec![
         crw(),

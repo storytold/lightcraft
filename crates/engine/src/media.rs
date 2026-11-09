@@ -79,6 +79,8 @@ pub struct MediaCache {
     /// Whether originals (and smart previews) are on disk: cached and checked off the UI thread
     /// in the app (see [`crate::availability`]).
     pub availability: crate::availability::Availability,
+    /// Compatible, decodable smart previews: background-checked for UI status in the app.
+    pub smart_availability: crate::smart::Availability,
     scenes: Vec<lightcraft_scenes::Scene>,
     /// Rendered thumbnails (memory, plus disk once a library is attached).
     pub rendered: Arc<PreviewCache>,

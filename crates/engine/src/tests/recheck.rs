@@ -144,6 +144,7 @@ fn virtual_copies_follow_their_photo() {
     assert!(x.s.catalog.photo(copy).unwrap().develops_raw());
 }
 
+/// A copy rechecks its own file when no matching parent probe will update it, preserving edits and history.
 #[test]
 fn copies_without_a_matching_parent_recheck_are_probed_independently() {
     for (relinked, all) in [(true, false), (true, true), (false, false)] {
@@ -345,12 +346,14 @@ fn orf_library(name: &str, sensor: bool) -> Lib {
     x
 }
 
+/// Compute the pre-decoder-generation proxy identity in either folder layout.
 fn old_smart_path(dir: &std::path::Path, p: &lightcraft_catalog::Photo, flat: bool) -> PathBuf {
     let hash = lightcraft_preview::Hasher128::new().str(&crate::media::content_key(p)).finish();
     let name = format!("{:032x}.lcsp", hash.0);
     if flat { dir.join(name) } else { dir.join(&name[..2]).join(name) }
 }
 
+/// Write a synthetic proxy with optional decoder facts and an optional old encoding stamp.
 fn write_proxy(path: &std::path::Path, info: Option<&lightcraft_pipeline::SourceInfo>, stale: bool) -> Vec<u8> {
     let mut bytes = crate::smart::encode(&lightcraft_raster::Rgb32f::filled(48, 32, [0.2, 0.4, 0.6]), info).unwrap();
     if stale {
@@ -365,6 +368,7 @@ fn write_proxy(path: &std::path::Path, info: Option<&lightcraft_pipeline::Source
     bytes
 }
 
+/// Unclassified cached pixels must not be stored under a sensor-specific ORF identity.
 #[test]
 fn orf_smart_build_requires_source_facts() {
     let mut x = orf_library("smart-missing-facts", true);
@@ -375,6 +379,7 @@ fn orf_smart_build_requires_source_facts() {
     assert!(!crate::smart::file_path(x.s.media.smart_dir.as_ref().unwrap(), x.s.catalog.photo(x.id).unwrap()).exists());
 }
 
+/// A stale proxy with a changed source interpretation reports failure and leaves the refresh incomplete.
 #[test]
 fn orf_stale_interpretation_mismatch_stays_actionable() {
     let mut x = orf_library("smart-stale-mismatch", false);
@@ -399,6 +404,7 @@ fn orf_stale_interpretation_mismatch_stays_actionable() {
     assert!(progress["error"].as_str().unwrap().contains("Reload"), "{progress}");
 }
 
+/// Only legacy proxies with complete sensor facts can stand in for an offline sensor ORF.
 #[test]
 fn orf_offline_legacy_sensor_proxies_remain_usable() {
     for flat in [false, true] {
@@ -424,6 +430,7 @@ fn orf_offline_legacy_sensor_proxies_remain_usable() {
                 }
             }
             assert_eq!(crate::cmd::previews::has_smart_preview(&x.s, x.id), raw == Some(true));
+            assert_eq!(x.s.media.smart_availability.exists(&dir, &p), raw == Some(true));
             let r = x.s.execute("library.smartPreviews", &json!({"id": x.id.0})).unwrap();
             assert_eq!(r["built"], usize::from(raw == Some(true)), "{r}");
             if raw == Some(true) {
@@ -445,6 +452,7 @@ fn orf_offline_legacy_sensor_proxies_remain_usable() {
     }
 }
 
+/// Discard removes unused identities in both layouts while preserving every unselected consumer.
 #[test]
 fn orf_discard_cleans_obsolete_proxies_unless_another_photo_uses_them() {
     for shared in [None, Some(false), Some(true)] {
@@ -469,12 +477,79 @@ fn orf_discard_cleans_obsolete_proxies_unless_another_photo_uses_them() {
             write_proxy(path, Some(&Default::default()), false);
         }
         x.s.execute("library.smartPreviews", &json!({"ids": [x.id.0], "discard": true})).unwrap();
-        assert!(!paths[0].exists() && !paths[1].exists(), "both current layouts must be removed");
+        assert_eq!(paths[0].exists(), shared == Some(false), "an unselected sensor copy needs the current identity");
+        assert_eq!(paths[1].exists(), shared == Some(false));
         assert_eq!(paths[2].exists(), shared.is_some());
         assert_eq!(paths[3].exists(), shared.is_some());
     }
 }
 
+/// An unselected offline copy retains its shared current proxy even without a legacy fallback.
+#[test]
+fn discard_keeps_shared_current_proxies_without_an_offline_fallback() {
+    for flat in [false, true] {
+        let mut x = orf_library(&format!("smart-shared-current-{flat}"), true);
+        let r = x.s.execute("photo.virtualCopy", &json!({"id": x.id.0})).unwrap();
+        let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+        let dir = x.s.media.smart_dir.clone().unwrap();
+        let p = x.s.catalog.photo(copy).unwrap().clone();
+        let path = if flat { dir.join(crate::smart::file_name(&p)) } else { crate::smart::sharded_file_path(&dir, &p) };
+        let bytes = write_proxy(&path, Some(&lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() }), false);
+        std::fs::remove_file(&x.file).unwrap();
+        x.s.execute("library.smartPreviews", &json!({"id": x.id.0, "discard": true})).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        x.s.media.forget(copy);
+        let source = x.s.media.source_ref(&p, crate::media::SourceLevel::Preview).load_source().unwrap();
+        assert!(source.from_proxy && source.info.unwrap().raw);
+        x.s.execute("library.smartPreviews", &json!({"ids": [x.id.0, copy.0], "discard": true})).unwrap();
+        assert!(!path.exists());
+    }
+}
+
+/// Build repairs, falls back, or fails according to actual decoding and original availability.
+#[test]
+fn smart_build_never_counts_an_undecodable_proxy_as_successful() {
+    for offline in [false, true] {
+        for stale in [false, true] {
+            for fallback in [false, true] {
+                let mut x = orf_library(&format!("smart-build-corrupt-{offline}-{stale}-{fallback}"), true);
+                let p = x.s.catalog.photo(x.id).unwrap().clone();
+                let dir = x.s.media.smart_dir.clone().unwrap();
+                let path = crate::smart::sharded_file_path(&dir, &p);
+                let info = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
+                let mut bytes = write_proxy(&path, Some(&info), stale);
+                let start = b"LCSP1\n".len();
+                let end = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+                let header: serde_json::Value = serde_json::from_slice(&bytes[start..end]).unwrap();
+                let tail = bytes.len() - header["tail"].as_u64().unwrap() as usize;
+                bytes[end + 3..tail - 2].fill(0);
+                std::fs::write(&path, bytes).unwrap();
+                assert!(crate::smart::is_valid(&path));
+                assert!(crate::smart::load(&path).is_err());
+                if fallback {
+                    write_proxy(&old_smart_path(&dir, &p, true), Some(&info), stale);
+                }
+                if offline {
+                    std::fs::remove_file(&x.file).unwrap();
+                }
+                let r = x.s.execute("library.smartPreviews", &json!({"id": x.id.0})).unwrap();
+                let usable = !offline || fallback;
+                assert_eq!(r["built"], usize::from(usable), "{offline}/{stale}/{fallback}: {r}");
+                assert_eq!(r["failed"].as_array().unwrap().is_empty(), usable, "{r}");
+                assert_eq!(crate::cmd::previews::has_smart_preview(&x.s, x.id), usable);
+                assert_eq!(x.s.media.smart_availability.exists(&dir, &p), usable);
+                assert_eq!(r["staleKept"], usize::from(offline && stale && fallback), "{r}");
+                if !offline && !fallback {
+                    assert_eq!(r["repaired"].as_u64().unwrap() + r["refreshed"].as_u64().unwrap(), 1, "{r}");
+                    assert!(crate::smart::load(&path).is_ok(), "an online original repairs the damaged proxy");
+                }
+                assert_eq!(x.s.media.source_ref(&p, crate::media::SourceLevel::Preview).load_source().is_ok(), usable);
+            }
+        }
+    }
+}
+
+/// Discarding a preview-only copy preserves the content-only proxy an offline sensor photo still needs.
 #[test]
 fn orf_discard_preview_only_copy_keeps_an_offline_sensor_photos_proxy() {
     for flat in [false, true] {
@@ -498,6 +573,7 @@ fn orf_discard_preview_only_copy_keeps_an_offline_sensor_photos_proxy() {
     }
 }
 
+/// Framing and JPEG decode failures both fall through to compatible candidates in either layout.
 #[test]
 fn orf_damaged_proxies_do_not_hide_compatible_fallbacks() {
     for decode_failure in [false, true] {
@@ -527,6 +603,7 @@ fn orf_damaged_proxies_do_not_hide_compatible_fallbacks() {
                 assert_eq!(crate::smart::file_path(dir, p), paths[good_at]);
                 assert!(crate::cmd::previews::has_smart_preview(&x.s, x.id));
             }
+            assert!(x.s.media.smart_availability.exists(dir, p));
             let source = x.s.media.source_ref(p, crate::media::SourceLevel::Preview).load_source().unwrap();
             assert!(source.from_proxy && source.info.unwrap().raw);
             assert!((source.image.data[0][0] - 0.2).abs() < 0.02);
@@ -534,6 +611,7 @@ fn orf_damaged_proxies_do_not_hide_compatible_fallbacks() {
     }
 }
 
+/// Status, Build, and loading reject malformed legacy matte tails consistently.
 #[test]
 fn orf_legacy_proxy_compatibility_validates_the_entire_matte_tail() {
     let cases = [
@@ -568,6 +646,7 @@ fn orf_legacy_proxy_compatibility_validates_the_entire_matte_tail() {
         assert!(crate::smart::is_valid(&path), "cheap JPEG framing alone cannot validate the tail");
         std::fs::remove_file(&x.file).unwrap();
         assert!(!crate::cmd::previews::has_smart_preview(&x.s, x.id), "malformed tail {i}");
+        assert!(!x.s.media.smart_availability.exists(&dir, &p), "malformed tail {i}");
         assert!(x.s.media.source_ref(&p, crate::media::SourceLevel::Preview).load_source().is_err());
         assert_eq!(x.s.execute("library.smartPreviews", &json!({"id": x.id.0})).unwrap()["built"], 0);
     }

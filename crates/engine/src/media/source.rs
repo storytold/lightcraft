@@ -287,6 +287,7 @@ impl SourceRef {
         self.load_source().map(|s| s.image)
     }
 
+    /// Resolve this reference to pixels and decoder facts, trying a compatible proxy when its original cannot be read.
     pub fn load_source(&self) -> Result<DecodedSource, String> {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),

@@ -174,6 +174,53 @@ fn offline_originals_never_block_a_frame() {
     assert_eq!(calls.on(ui_thread), 0, "the slow probe never ran on the UI thread");
 }
 
+/// Info recognizes offline sensor proxies in both legacy layouts through background validation.
+#[test]
+fn info_panel_reports_compatible_legacy_orf_previews() {
+    for flat in [false, true] {
+        let dir = std::env::temp_dir().join(format!("lc-info-legacy-orf-{}-{flat}", std::process::id()));
+        let mut s = Session::new();
+        let p = Photo::new(
+            PhotoId(1),
+            Source::File { path: dir.join("offline.orf").to_string_lossy().into_owned() },
+            "offline.orf",
+            "ORF",
+            48,
+            32,
+            "2026-01-01T00:00:00",
+        );
+        let mut old = p.clone();
+        old.preview_only = Some("previous interpretation".into());
+        let name = lightcraft_engine::smart::file_name(&old);
+        let path = if flat { dir.join(&name) } else { dir.join(&name[..2]).join(&name) };
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let bytes = lightcraft_engine::smart::encode(
+            &lightcraft_raster::Rgb32f::filled(48, 32, [0.2; 3]),
+            Some(&lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() }),
+        )
+        .unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        s.media.smart_dir = Some(dir.clone());
+        s.execute("library.select", &json!({"ids": [1]})).unwrap();
+        let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+        let mut h = Headless::new(app, [1200.0, 2400.0], 1.0);
+        h.app.ui.right = RightPanel::Info;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            h.step();
+            assert!(h.app.session.media.smart_availability.is_background(), "proxy validation stays off the UI thread");
+            if h.painted_text().iter().any(|text| text.contains("Original offline · editing the smart preview")) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "flat={flat}: {:?}", h.painted_text());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(h);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 /// An import whose files take long to read (probe: decoding headers and hashing on a slow drive)
 /// runs on a worker thread: frames go on while the drive holds every read, the probe never runs
 /// on the UI thread, and Cancel stops it with what was read so far added.

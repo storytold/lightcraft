@@ -263,6 +263,7 @@ fn smallest_covering<'a>(found: &[&'a [u8]], largest: &[u8], min_edge: u32) -> O
         .map(|(s, _)| s)
 }
 
+/// Extract a usable embedded JPEG, preferring one that covers the requested edge when the container permits it.
 fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
     if bytes.starts_with(b"FUJIFILMCCD-RAW") {
         let j = crate::vendor::raf::header(bytes).ok()?.jpeg?;

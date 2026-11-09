@@ -578,8 +578,8 @@ struct SmartJob {
     source: Option<crate::media::SourceRef>,
     look: bool,
     raw: Option<bool>,
-    /// The old content-only proxy may still be used by an unselected photo.
-    keep_content: bool,
+    /// Only identities that no unselected photo uses, in either folder layout.
+    discard_paths: Vec<std::path::PathBuf>,
 }
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
@@ -652,7 +652,7 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for SmartJob { id, path, source, look, raw, keep_content } in jobs {
+    for SmartJob { id, path, source, look, raw, discard_paths } in jobs {
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
@@ -660,20 +660,22 @@ fn smart_run(
         // Read either the new shard or a pre-upgrade flat file, without making new work
         // depend on having the original online.
         if discard {
-            for path in path.discard_candidates(keep_content) {
+            for path in discard_paths {
                 if std::fs::remove_file(&path).is_ok() {
                     n.removed += 1;
                 }
             }
         } else {
-            let path = path.resolve();
+            let reusable = path.load_with_path().ok().map(|(path, _)| path);
+            let valid = reusable.is_some();
+            let path = reusable.unwrap_or_else(|| path.resolve());
             // a complete, current proxy is kept; a missing or damaged one (cut short by a crash or a
             // full drive) is (re)built, and so is one written by an older encoding or camera-look
             // fit (see `smart::ENCODE_VERSION` and `camera_preview::LOOK_VERSION`) when its
             // original can be read
             let damaged = path.exists();
             let stale = damaged && crate::smart::is_stale_for(&path, look);
-            if damaged && !stale && crate::smart::is_valid(&path) {
+            if valid && !stale {
                 n.built += 1;
             } else {
                 // a stale proxy is rebuilt from the original only: never from itself (the file
@@ -718,7 +720,7 @@ fn smart_run(
                             }
                         }
                     }
-                    Err(e) if stale && !loaded => {
+                    Err(e) if valid && stale && !loaded => {
                         // offline (or unreadable) original: the proxy is all there is, keep its look
                         log::info!("smart preview {} keeps its older look: {e}", path.display());
                         n.built += 1;
@@ -766,7 +768,11 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
     let mut jobs: Vec<SmartJob> = Vec::new();
     let selected: std::collections::HashSet<_> = ids.iter().copied().collect();
     let retained: std::collections::HashSet<_> = if discard {
-        s.catalog.photos().filter(|p| !selected.contains(&p.id)).map(|p| crate::media::content_key(p)).collect()
+        s.catalog
+            .photos()
+            .filter(|p| !selected.contains(&p.id) && matches!(p.source, lightcraft_catalog::Source::File { .. }))
+            .flat_map(|p| crate::smart::PreviewPath::new(&dir, p).candidates(true))
+            .collect()
     } else {
         Default::default()
     };
@@ -776,6 +782,9 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let path = crate::smart::PreviewPath::new(&dir, &ph);
+        // Copies can share the current decoder identity as well as the content-only legacy
+        // identity. Deleting either would strand an unselected photo whose original is offline.
+        let discard_paths = if discard { path.candidates(true).into_iter().filter(|p| !retained.contains(p)).collect() } else { Vec::new() };
         // (a smart preview keeps the file's own colour: never built with the photo's imported camera profile, nor
         // from a cached source developed with it)
         let source = (!discard).then(|| s.media.source_ref_without_profile(&ph, crate::media::SourceLevel::Preview));
@@ -785,7 +794,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             source,
             look: preview_fitted_look(&ph),
             raw: ph.format.eq_ignore_ascii_case("ORF").then(|| ph.develops_raw()),
-            keep_content: ph.format.eq_ignore_ascii_case("ORF") && retained.contains(&crate::media::content_key(&ph)),
+            discard_paths,
         });
     }
     let custom = s.smart_previews_dir.is_some();
@@ -853,7 +862,7 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
             source: Some(s.media.origin_ref(&p.source, max_edge)),
             look: preview_fitted_look(p),
             raw: p.format.eq_ignore_ascii_case("ORF").then(|| p.develops_raw()),
-            keep_content: false,
+            discard_paths: Vec::new(),
         })
         .collect();
     std::thread::Builder::new()
@@ -950,10 +959,10 @@ fn smart_location(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
-/// Whether photo `id` has a smart preview.
+/// Whether photo `id` has a compatible, decodable smart preview (blocking command-side check).
 pub fn has_smart_preview(s: &Session, id: lightcraft_catalog::PhotoId) -> bool {
     match (&s.media.smart_dir, s.catalog.photo(id)) {
-        (Some(dir), Some(p)) => crate::smart::is_valid(&crate::smart::file_path(dir, p)),
+        (Some(dir), Some(p)) => crate::smart::PreviewPath::new(dir, p).load_with_path().is_ok(),
         _ => false,
     }
 }
