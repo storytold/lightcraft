@@ -413,6 +413,34 @@ mod tests {
         assert!(!files2.is_dirty(), "nothing was written");
     }
 
+    /// The other way a folder shows up in browser storage: a file key under it
+    /// (`segments/…`) without an explicit folder entry. `has_folder` sees the key,
+    /// and the open is refused the same way.
+    #[test]
+    fn segments_file_key_in_browser_storage_is_refused_untouched() {
+        let mut disk = BTreeMap::new();
+        let files = Files::default();
+        let mut s = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+        s.open_library_in(stores, true).unwrap();
+        flush(&files, &mut disk);
+        let snap_before = disk.get("catalog.snap").cloned().unwrap();
+
+        let files2 = Files::default();
+        for (k, v) in &disk {
+            files2.preload(k, v.clone());
+        }
+        files2.preload("segments/0001.seg", b"segment".to_vec());
+        let mut store = files2.store();
+        assert!(store.has_folder("segments").unwrap());
+        let mut s2 = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files2.store()), files: Box::new(files2.store()), on_disk: false };
+        let Err(e) = s2.open_library_in(stores, true) else { panic!("refused") };
+        assert!(e.to_string().contains("segments"), "{e}");
+        assert_eq!(files2.get("catalog.snap").as_deref(), Some(&snap_before[..]), "snapshot untouched");
+        assert!(!files2.is_dirty(), "nothing was written");
+    }
+
     #[test]
     fn only_not_found_errors_mean_absent() {
         assert!(is_not_found(Some("NotFoundError")));
