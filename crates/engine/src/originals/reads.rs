@@ -636,11 +636,8 @@ impl Originals {
         };
         let (mut file, share_safe) = open_read(path, open)?;
         let before = file.metadata().ok().as_ref().and_then(Stamp::of);
-        if before.as_ref().is_some_and(|stamp| stamp.len > MAX_ORIGINAL_BYTES as u64) {
-            return Err(io::Error::other("original exceeds supported 4 GiB buffer size"));
-        }
-        let reserve = before.as_ref().and_then(|stamp| usize::try_from(stamp.len).ok()).unwrap_or(0);
-        let bytes = read_bounded(&mut file, MAX_ORIGINAL_BYTES, reserve)?;
+        let reserve = before.as_ref().map_or(Ok(0), |stamp| buffer_len(stamp.len))?;
+        let bytes = read_bounded(&mut file, usize::MAX, reserve)?;
         #[cfg(test)]
         self.reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let hash = if watch.is_some() || force {
@@ -863,7 +860,11 @@ pub fn copy_whole(path: &str, out: &mut impl Write) -> io::Result<Fingerprint> {
     current_reader()?.copy_whole(path, out)
 }
 
-const MAX_ORIGINAL_BYTES: usize = u32::MAX as usize;
+/// The in-memory buffer length for an original of `len` bytes: any length the address space can
+/// hold, so a BigTIFF or large raw over 4 GiB reads as it did through `std::fs::read`.
+fn buffer_len(len: u64) -> io::Result<usize> {
+    usize::try_from(len).map_err(|_| io::Error::other("original is too large to read into memory"))
+}
 #[cfg(test)]
 thread_local! { static ORIGINAL_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
 #[cfg(test)]
@@ -1608,6 +1609,16 @@ mod boundary_tests {
         assert!(read_bounded(&mut InterruptedOnce(false), 8, usize::MAX).unwrap_err().to_string().contains("buffer size"));
         assert_eq!(read_bounded(&mut &b"small"[..], 5, usize::MAX).unwrap(), b"small");
         assert_eq!(read_bounded(&mut &b""[..], 0, usize::MAX).unwrap(), b"");
+    }
+
+    #[test]
+    fn an_original_over_4_gib_is_not_refused_by_the_read_buffer() {
+        let over_4_gib = u64::from(u32::MAX) + 1;
+        if cfg!(target_pointer_width = "64") {
+            assert_eq!(buffer_len(over_4_gib).unwrap() as u64, over_4_gib);
+        } else {
+            assert!(buffer_len(over_4_gib).is_err());
+        }
     }
 
     #[test]
