@@ -14,6 +14,10 @@ use crate::{Result, Session, SourceLevel};
 
 /// Long edge of an exported matte, unless the caller names one.
 const MATTE_EDGE: f64 = 2048.0;
+/// Bound output-sized RGB work planes, mask alpha, RGBA and PNG buffers: at 64 bytes
+/// per pixel, 3072² budgets 576 MiB, rather than 16 GiB at 16384².
+/// Source decoding and retained masks have their own budgets.
+const MATTE_MAX_EDGE: f64 = 3072.0;
 /// A pixel this bright counts as selected when measuring a matte: the mask's own 50 % contour.
 const MATTE_SELECTED: u8 = 128;
 
@@ -31,10 +35,41 @@ fn measure_matte(grey: &[u8], w: usize, h: usize) -> (f64, Option<[f64; 4]>) {
     (coverage, bounds.map(|b| [b[0] as f64 / fw, b[1] as f64 / fh, (b[2] + 1) as f64 / fw, (b[3] + 1) as f64 / fh]))
 }
 
+/// Resample the rendered selection onto the oriented photo before lens / perspective and
+/// crop flips. The pipeline's inverse mapping also handles legacy masks in corrected space.
+/// Photo pixels outside the corrected render have no visible selection and stay black.
+fn photo_matte(image: &lightcraft_raster::Rgba8, frame: &lightcraft_pipeline::geometry::Frame) -> Vec<u8> {
+    let (w, h) = (image.width, image.height);
+    let map = frame.for_mask(true).mask_to_out(w, h);
+    let mut grey = Vec::with_capacity(image.data.len());
+    for y in 0..h {
+        for x in 0..w {
+            let p = Point::new((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+            let value = map(p)
+                .filter(|p| p.x.is_finite() && p.y.is_finite() && p.x >= 0.0 && p.y >= 0.0 && p.x < w as f64 && p.y < h as f64)
+                .and_then(|p| image.data.get((p.y.floor() as usize).saturating_mul(w).saturating_add(p.x.floor() as usize)))
+                .map_or(0, |px| px[0]);
+            grey.push(value);
+        }
+    }
+    grey
+}
+
 /// `mask.export`: the mask as the render evaluates it, edges included, over the whole photo.
 fn export_matte(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.export";
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing path"))?.to_string();
+    s.check_write_target(&path).map_err(|e| bad(C, e))?;
+    if std::fs::symlink_metadata(&path).is_ok() {
+        return Err(bad(C, "destination already exists; choose a new file name"));
+    }
+    let edge = match p.get("longEdge") {
+        None => MATTE_EDGE,
+        Some(v) => v
+            .as_f64()
+            .filter(|n| n.is_finite() && n.fract() == 0.0 && (16.0..=MATTE_MAX_EDGE).contains(n))
+            .ok_or_else(|| bad(C, "longEdge must be an integer from 16 to 3072"))?,
+    } as usize;
     let mid = mask_id(p, s.active_mask, C)?;
     let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
     let d = (*s.develop_of(id).unwrap_or_default()).clone();
@@ -43,7 +78,6 @@ fn export_matte(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "the mask has no components"));
     }
     let overlay_id = u16::try_from(mid).map_err(|_| bad(C, "mask id out of range"))?;
-    let edge = f64_or(p, "longEdge", MATTE_EDGE).clamp(16.0, 16384.0) as usize;
     let level = if edge > SourceLevel::Preview.max_edge() { SourceLevel::Full } else { SourceLevel::Preview };
     let src = s.source_now(id, level).map_err(|e| bad(C, e))?;
     let info = s.source_info(id);
@@ -51,11 +85,13 @@ fn export_matte(s: &mut Session, p: &Value) -> Result<Value> {
     req.apply_crop = false;
     req.overlay = Overlay::Mask { id: overlay_id, view: MaskView::WhiteOnBlack, color: [255; 3], opacity: 100 };
     let image = lightcraft_pipeline::render(&src, &info, &d, &req).image;
-    let grey: Vec<u8> = image.data.iter().map(|px| px[0]).collect();
+    let grey = photo_matte(&image, &lightcraft_pipeline::plan(&src, &info, &d.effective(), &req).frame);
     let (coverage, bounds) = measure_matte(&grey, image.width, image.height);
     let encoded = EncodeImage { width: image.width as u32, height: image.height as u32, channels: 1, samples: Samples::U8(&grey) };
     let png = encode_png(&encoded, &EncodeMeta::default()).map_err(|e| bad(C, e.to_string()))?;
-    crate::export::write_file(&path, &png).map_err(|e| bad(C, e))?;
+    s.check_write_target(&path).map_err(|e| bad(C, e))?;
+    crate::export::write_file_new(&path, &png).map_err(|e| bad(C, e))?;
+    let path = std::fs::canonicalize(&path).map_err(|e| bad(C, e.to_string()))?;
     Ok(json!({"path": path, "width": image.width, "height": image.height, "coverage": coverage, "bounds": bounds}))
 }
 
@@ -676,11 +712,13 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| Ok(json!({"cancelled": s.segmenter.cancel_download()}))
         ),
         cmd!(
+            // File output must not be replayed from the edit journal. `query` means
+            // journal=false here, not a promise that a command has no filesystem effects.
             query "mask.export",
             "Export Mask Matte",
             [],
             None,
-            "{id?, path, longEdge?: px (2048)} — the mask as an 8-bit greyscale PNG over the whole uncropped photo, white where it selects; needs no model → {path, width, height, coverage: 0..1, bounds: [x0, y0, x1, y1] normalized | null}",
+            "{id?, path, longEdge?: integer px 16..3072 (2048); destination must not exist} — the mask as an 8-bit greyscale PNG over the whole uncropped photo, white where it selects; needs no model → {path, width, height, coverage: 0..1, bounds: [x0, y0, x1, y1] normalized | null}",
             has_active,
             |s, p| export_matte(s, p)
         ),
