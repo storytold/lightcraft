@@ -228,7 +228,9 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
     let t = Tokens::get(ui.ctx());
     let key = (f.photo, f.index);
     let selected = app.ui.unnamed_selected.contains(&key);
-    let resp = ui.interact(r, egui::Id::unique(("unnamed-face", f.photo, f.index)), Sense::click());
+    let resp = ui
+        .interact(r, egui::Id::unique(("unnamed-face", f.photo, f.index)), Sense::click())
+        .on_hover_text(crate::i18n::tr("Click to select (Shift-click for a range), then type a name; double-click or right-click to open the photo"));
     crate::widgets::announce_selected(&resp, crate::i18n::tr("Unnamed face"), selected);
     register(ui, format!("unnamed-face:{}:{}", f.photo, f.index), r);
     // a suggested name along the bottom: a click accepts it for this face (added after the tile, so it wins there)
