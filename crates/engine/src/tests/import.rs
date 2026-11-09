@@ -1961,7 +1961,7 @@ fn assisted_culling_measures_a_small_subject_on_a_preview_it_does_not_keep() {
     use lightcraft_catalog::{MediaKind, Op, Photo, Source};
     let mut s = Session::new();
     let scene = lightcraft_scenes::demo_library().swap_remove(0);
-    s.media.file_loader = Some(std::sync::Arc::new(move |_: &str, max_edge: usize| {
+    s.media.file_loader = Some(std::sync::Arc::new(move |_: &str, max_edge: usize, _| {
         let preview = max_edge > SourceLevel::Thumb.max_edge();
         let (w, h) = if preview { (1200, 800) } else { (480, 320) };
         let info = lightcraft_pipeline::SourceInfo { raw: preview, as_shot_temp: 4986.0, as_shot_tint: -2.0, ..Default::default() };
