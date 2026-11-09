@@ -109,21 +109,40 @@ fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
     h.settle(SETTLE);
 }
 
-/// The Density slider caps what a stroke covers, as in Lightroom: a full-flow dab at Density 40
-/// paints 40 %, and the stroke carries the density it was painted with.
+/// The densities of the brush strokes of mask `mask`, in painting order.
+fn stroke_densities(h: &Headless, mask: usize) -> Vec<f64> {
+    develop(h).masks[mask]
+        .components
+        .iter()
+        .flat_map(|c| match &c.shape {
+            MaskShape::Brush { strokes } => strokes.iter().map(|s| s.density).collect(),
+            _ => vec![],
+        })
+        .collect()
+}
+
+/// The Density slider caps what a stroke covers, as in Lightroom: a full-flow stroke at Density
+/// 40 paints 40 %, however many of its dabs overlap, and keeps the density it was painted with
+/// when the slider changes later.
 #[test]
 fn brush_density_caps_the_stroke() {
     let mut h = detail("panel.masking");
     click(&mut h, "maskNew:brush");
     let r = h.request("ui.set", json!({"brushSize": 0.15, "brushFeather": 0.0, "brushFlow": 100.0, "brushDensity": 40.0}), T);
     assert_eq!(r["ok"], true, "{r}");
-    brush_at(&mut h, 0.5, 0.5);
-    let d = develop(&h);
-    let stroke = d.masks[0].components.iter().find_map(|c| match &c.shape {
-        MaskShape::Brush { strokes } => strokes.first().cloned(),
-        _ => None,
-    });
-    assert_eq!(stroke.map(|s| s.density), Some(40.0));
+    // a short drag: dozens of overlapping dabs over the centre
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": 0.4, "y": 0.5}, {"kind": "drag", "x": 0.5, "y": 0.5}, {"kind": "drag", "x": 0.6, "y": 0.5}, {"kind": "up", "x": 0.6, "y": 0.5}]),
+    );
+    assert_eq!(stroke_densities(&h, 0), [40.0]);
+    let cover = mask_coverage(&h, 0, 50, 50);
+    assert!((cover - 0.4).abs() < 0.01, "{cover}");
+    // a later stroke at another density leaves the first one as it was
+    let r = h.request("ui.set", json!({"brushDensity": 80.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    brush_at(&mut h, 0.15, 0.15);
+    assert_eq!(stroke_densities(&h, 0), [40.0, 80.0]);
     let cover = mask_coverage(&h, 0, 50, 50);
     assert!((cover - 0.4).abs() < 0.01, "{cover}");
     h.settle(SETTLE);
@@ -142,6 +161,17 @@ fn brush_density_resets_to_full_and_never_paints_at_zero() {
     let r = h.request("ui.clickWidget", json!({"id": "sliderLabel:ui.brushDensity", "count": 2, "fx": 0.1}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.ui.brush_density, 100.0);
+    // the other brush sliders still reset to their minimum
+    (h.app.ui.brush_size, h.app.ui.brush_feather, h.app.ui.brush_flow) = (0.1, 40.0, 60.0);
+    for id in ["ui.brushSize", "ui.brushFeather", "ui.brushFlow"] {
+        // (half a second apart, so egui counts a new double-click rather than a third click)
+        for _ in 0..40 {
+            h.step();
+        }
+        let r = h.request("ui.clickWidget", json!({"id": format!("sliderLabel:{id}"), "count": 2, "fx": 0.1}), T);
+        assert_eq!(r["ok"], true, "{id}: {r}");
+    }
+    assert_eq!((h.app.ui.brush_size, h.app.ui.brush_feather, h.app.ui.brush_flow), (1.0 / 400.0, 0.0, 1.0));
     let r = h.request("ui.set", json!({"brushDensity": 0.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     brush_at(&mut h, 0.5, 0.5);
@@ -161,6 +191,9 @@ fn restored_brush_density_is_kept_in_range() {
     for (saved, want) in [(0.0, 1.0), (55.0, 55.0), (1e9, 100.0)] {
         let s = serde_json::from_value::<crate::UiState>(json!({"brushDensity": saved})).expect("settings").sanitized();
         assert_eq!(s.brush_density, want);
+    }
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(crate::UiState { brush_density: bad, ..Default::default() }.sanitized().brush_density, 100.0, "{bad}");
     }
 }
 

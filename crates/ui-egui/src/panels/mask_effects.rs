@@ -744,5 +744,7 @@ mod tests {
         assert_eq!(app.ui.brush_density, 35.0);
         take_brush(&mut app, &json!({"density": 0.0}));
         assert_eq!(app.ui.brush_density, 1.0);
+        take_brush(&mut app, &json!({"density": 150.0}));
+        assert_eq!(app.ui.brush_density, 100.0);
     }
 }
