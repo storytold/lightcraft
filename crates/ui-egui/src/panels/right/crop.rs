@@ -80,7 +80,9 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.label(crate::i18n::tr("Aspect Ratio"));
             let cur = aspect_label(app.crop_tool_aspect(), original);
             let t = Tokens::get(ui.ctx());
-            let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.font(12.5), t.text);
+            // as wide as the longest preset; a custom ratio (`1.37 : 1`) is shorter than that
+            let choices = ASPECT_PRESETS.map(|(label, _)| crate::i18n::tr(label));
+            let r = crate::widgets::dropdown_fitting(ui, "cropAspect", crate::i18n::tr(&cur), &choices, t.font(12.5), t.text);
 
             egui::Popup::menu(&r).show(|ui| {
                 for (label, a) in ASPECT_PRESETS {
@@ -184,27 +186,25 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
     });
     padded(ui, |ui| {
+        use crate::state::CropOverlay as O;
+        let opts = [
+            (O::Thirds, "Thirds", "thirds"),
+            (O::Grid, "Grid", "grid"),
+            (O::Golden, "Golden Ratio", "golden"),
+            (O::Diagonal, "Diagonal", "diagonal"),
+            (O::Triangle, "Triangle", "triangle"),
+            (O::Spiral, "Spiral", "spiral"),
+            (O::None, "None", "none"),
+        ];
+        let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
+        let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
+        if let Some(i) = crate::widgets::labeled_dropdown(ui, "cropOverlay", "Overlay", &items, active) {
+            app.ui.crop_overlay = opts[i].0;
+        }
+        if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
+            && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
         {
-            use crate::state::CropOverlay as O;
-            let opts = [
-                (O::Thirds, "Thirds", "thirds"),
-                (O::Grid, "Grid", "grid"),
-                (O::Golden, "Golden Ratio", "golden"),
-                (O::Diagonal, "Diagonal", "diagonal"),
-                (O::Triangle, "Triangle", "triangle"),
-                (O::Spiral, "Spiral", "spiral"),
-                (O::None, "None", "none"),
-            ];
-            let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
-            let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-            if let Some(i) = crate::widgets::labeled_dropdown(ui, "cropOverlay", "Overlay", &items, active) {
-                app.ui.crop_overlay = opts[i].0;
-            }
-            if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
-                && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
-            {
-                let _ = app.run("view.cropOverlayOrientation", json!({}));
-            }
+            let _ = app.run("view.cropOverlayOrientation", json!({}));
         }
     });
     divider(ui);
@@ -274,11 +274,12 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Remove");
     padded(ui, |ui| {
-        // painting with no mode chosen adds a Remove spot (`retouch.rs`), so the dropdown names it then
-        let modes = [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")];
+        // None, the first item, is what shows while no brush is chosen: the photo then takes no new
+        // spots (`retouch.rs`), and existing ones can still be selected and moved
+        let modes = [("None", "none"), ("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")];
         let active = modes.iter().position(|(_, tool)| app.ui.tool == *tool);
-        if let Some(i) = crate::widgets::labeled_dropdown(ui, "removeMode", "Mode", &modes, active) {
-            app.ui.tool = modes[i].1.into();
+        if let Some(&(_, tool)) = crate::widgets::labeled_dropdown(ui, "removeMode", "Mode", &modes, active).and_then(|i| modes.get(i)) {
+            app.ui.tool = if tool == "none" { String::new() } else { tool.into() };
         }
         ui.add_space(8.0);
         ui.label(crate::i18n::tr_format!("{} spot(s) on this photo", d.spots.len()));
@@ -401,7 +402,8 @@ pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Tool Overlay")).color(t.text_dim));
         let current = app.ui.tool_overlay;
-        let r = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
+        let choices = ToolOverlay::ALL.map(|m| crate::i18n::tr(m.label()));
+        let r = crate::widgets::dropdown_fitting(ui, "toolOverlay", crate::i18n::tr(current.label()), &choices, t.font(12.5), t.text_label)
             .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
         egui::Popup::menu(&r).show(|ui| {
             for m in ToolOverlay::ALL {

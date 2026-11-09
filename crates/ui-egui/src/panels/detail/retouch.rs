@@ -63,10 +63,12 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             .copied()
     };
     let hover = resp.hover_pos().and_then(hit);
+    // with no brush chosen (the Remove panel's Mode is None) the photo takes no new spots
+    let brush = matches!(app.ui.tool.as_str(), "remove" | "fill" | "heal" | "clone");
     if let Some(h) = resp.hover_pos() {
         if hover.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-        } else {
+        } else if brush {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
             p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));
             p.circle_stroke(h, r * (1.0 - app.ui.remove_feather / 100.0).max(0.05), Stroke::new(1.0, Color32::from_white_alpha(110)));
@@ -104,7 +106,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         let _ = app.run("spot.select", json!({"index": spot}));
         return;
     }
-    if let Some(q) = resp.interact_pointer_pos()
+    if brush
+        && let Some(q) = resp.interact_pointer_pos()
         && (resp.drag_started() || resp.dragged() || resp.clicked())
     {
         let n = map.norm(q);

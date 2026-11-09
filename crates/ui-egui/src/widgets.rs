@@ -1051,10 +1051,17 @@ pub fn dropdown(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Co
 /// [`dropdown`] at most `max` wide, chevron included: a longer `text` is cut short with …, and
 /// shown in full on hover.
 pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32, max: f32) -> Response {
+    dropdown_sized(ui, id, text, font, color, 0.0, max)
+}
+
+/// [`dropdown_within`] at least `min` wide for its text, so a dropdown sized for its longest
+/// choice keeps one width whichever is chosen.
+fn dropdown_sized(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, color: Color32, min: f32, max: f32) -> Response {
     let t = Tokens::get(ui.ctx());
     let galley = one_line(ui.painter(), text, font, color, max - 20.0);
     let elided = galley.elided;
-    let size = vec2(galley.size().x + 20.0, galley.size().y.max(20.0));
+    let text_w = galley.size().x.max(min).min((max - 20.0).max(0.0));
+    let size = vec2(text_w + 20.0, galley.size().y.max(20.0));
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, text));
     register(ui, format!("dropdown:{id}"), r);
@@ -1064,18 +1071,37 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
     if elided { resp.on_hover_text(text) } else { resp }
 }
 
+/// A [`dropdown`] showing `text`, as wide as the longest of `choices` (the labels its menu offers,
+/// as shown), so choosing another does not change its width or move what follows it. A `text`
+/// longer than every choice widens it, and nothing is ever wider than the space left in the row.
+pub fn dropdown_fitting(ui: &mut Ui, id: &str, text: &str, choices: &[&str], font: egui::FontId, color: Color32) -> Response {
+    let widest = choices.iter().map(|c| one_line(ui.painter(), c, font.clone(), color, f32::INFINITY).size().x).fold(0.0, f32::max);
+    dropdown_sized(ui, id, text, font, color, widest, ui.available_width())
+}
+
 /// A row of `label` and a [`dropdown`] beside it, as White Balance has, choosing one of `items`
 /// (menu label, key): the panel way to pick one of several modes, where a row of buttons for
 /// each would take more room than the choice is worth. The closed dropdown names the `active`
-/// item, or the first when none is. The dropdown registers as `dropdown:{id}` and each menu item
-/// as `{id}:{key}`. Returns the index of the item chosen this frame.
+/// item; an `active` that names none (out of range, or `None`) means the first item, in the
+/// closed dropdown and the menu's check alike, so callers pass `None` only where the first item is
+/// what happens with nothing chosen. It keeps the width of its longest item, so choosing another
+/// does not move what follows it. Screen readers hear `label` as its name and the chosen item as
+/// its value. The dropdown registers as `dropdown:{id}` and each menu item as `{id}:{key}`.
+/// Returns the index of the item chosen this frame.
 pub fn labeled_dropdown(ui: &mut Ui, id: &str, label: &str, items: &[(&str, &str)], active: Option<usize>) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
+    let active = active.filter(|&i| i < items.len()).or((!items.is_empty()).then_some(0));
     let mut chosen = None;
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr(label)).color(t.text_dim));
-        let current = active.and_then(|i| items.get(i)).or(items.first()).map_or("", |(l, _)| *l);
-        let r = dropdown(ui, id, crate::i18n::tr(current), t.font(12.5), t.text_label);
+        let name = crate::i18n::tr(label);
+        ui.label(egui::RichText::new(name).color(t.text_dim));
+        let current = active.and_then(|i| items.get(i)).map_or("", |(l, _)| crate::i18n::tr(l));
+        let choices: Vec<&str> = items.iter().map(|(l, _)| crate::i18n::tr(l)).collect();
+        let r = dropdown_fitting(ui, id, current, &choices, t.font(12.5), t.text_label);
+        ui.ctx().accesskit_node_builder(r.id, |node| {
+            node.set_label(name.to_string());
+            node.set_value(current.to_string());
+        });
         egui::Popup::menu(&r).show(|ui| {
             for (i, (l, key)) in items.iter().enumerate() {
                 let item = ui.selectable_label(active == Some(i), crate::i18n::tr(l));
