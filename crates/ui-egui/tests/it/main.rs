@@ -8,5 +8,6 @@ mod grid_names;
 mod landmarks;
 mod local_places;
 mod photo_name;
+mod sidebar_branch;
 mod sidebar_names;
 mod thumb_size_slider;
