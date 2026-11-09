@@ -229,3 +229,20 @@ fn export_plan_lists_paths_without_writing_files() {
     let plan = registry.iter().find(|c| c.id == "export.plan");
     assert!(plan.is_some(), "no dry-run plan command registered: registry lacks `export.plan` to list export paths without writing files");
 }
+
+#[cfg(test)]
+mod export_plan_id_tests {
+    #[test]
+    fn export_plan_honors_explicit_id_over_selection() {
+        let mut session = crate::Session::with_demo();
+        let ids: Vec<u64> = session.visible_cloned().iter().take(3).map(|photo| photo.0).collect();
+        assert!(ids.len() >= 3, "demo library needs at least three photos");
+        let explicit = ids[2];
+        session
+            .execute("library.select", &serde_json::json!({"ids": [ids[0], ids[1]], "active": ids[0]}))
+            .unwrap();
+        let result = session.execute("export.plan", &serde_json::json!({"id": explicit, "dir": "out"})).unwrap();
+        let files = result["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1, "explicit id should plan one photo, got {result}");
+    }
+}
