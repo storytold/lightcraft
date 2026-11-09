@@ -14,6 +14,33 @@ const MAX_TEXT_CHUNK: usize = 4 << 20;
 /// Deflate's largest expansion: a 258-byte match coded in two bits, 1032 bytes per input byte.
 const MAX_DEFLATE_RATIO: u64 = 1032;
 
+/// The zero-filled output buffer. Its size is capped by `max_pixels` (at most 8 bytes a pixel), and a file can
+/// honestly ask for all of it: a failed allocation is the file being too large for this machine, not an abort.
+fn output_buffer(size: usize, w: u32, h: u32) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(size).map_err(|_| Error::TooLarge(u64::from(w), u64::from(h)))?;
+    buf.resize(size, 0);
+    Ok(buf)
+}
+
+/// The bytes the first run of IDAT chunks holds in this file, as much of a chunk as the file has. Later runs are not
+/// the image: the decoder refuses an IDAT after other chunks.
+fn idat_bytes(b: &[u8]) -> u64 {
+    let (mut p, mut total, mut in_run) = (8usize, 0u64, false);
+    while let (Some(len), Some(kind)) = (b.get(p..p.saturating_add(4)), b.get(p.saturating_add(4)..p.saturating_add(8))) {
+        let len = u32::from_be_bytes([len[0], len[1], len[2], len[3]]) as usize;
+        let data = p + 8;
+        if kind == b"IDAT" {
+            in_run = true;
+            total += len.min(b.len() - data) as u64;
+        } else if in_run {
+            break;
+        }
+        p = data.saturating_add(len).saturating_add(4);
+    }
+    total
+}
+
 fn err(e: impl std::fmt::Display) -> Error {
     Error::Malformed(F, e.to_string())
 }
@@ -35,14 +62,15 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     };
     check_size(F, w as u64, h as u64, opts)?;
     // The pixel bytes are inflated from the file's IDAT data, and Deflate expands at most 1032:1 (a 258-byte match
-    // per two bits): an IHDR claiming more pixel bytes than the whole file can inflate to is refused before the
+    // per two bits): an IHDR claiming more pixel bytes than its IDAT data can inflate to is refused before the
     // output buffer is made (a few-hundred-byte file could otherwise ask for max_pixels × 8 bytes).
     let pixel_bytes = (w as u64).saturating_mul(h as u64).saturating_mul(bits) / 8;
-    if pixel_bytes > (bytes.len() as u64).saturating_mul(MAX_DEFLATE_RATIO) {
-        return Err(err(format!("{w}×{h} image data cannot come from {} bytes", bytes.len())));
+    let idat = idat_bytes(bytes);
+    if pixel_bytes > idat.saturating_mul(MAX_DEFLATE_RATIO) {
+        return Err(err(format!("{w}×{h} image data cannot come from {idat} bytes of IDAT")));
     }
     let size = reader.output_buffer_size().ok_or_else(|| err("buffer size overflow"))?;
-    let mut buf = vec![0u8; size];
+    let mut buf = output_buffer(size, w, h)?;
     let out = reader.next_frame(&mut buf).map_err(err)?;
     // Text chunks after IDAT land in `info` once the stream is finished; ignore trailing errors.
     let _ = reader.finish();
@@ -200,6 +228,26 @@ fn rgb_to_xyz_d50_checked(space: &RgbSpace) -> Option<Mat3> {
 mod tests {
     use crate::DecodeOptions;
 
+    fn crc(data: &[u8]) -> u32 {
+        let mut c = !0u32;
+        for &b in data {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
+    }
+
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend((data.len() as u32).to_be_bytes());
+        let start = out.len();
+        out.extend(kind);
+        out.extend(data);
+        let c = crc(&out[start..]);
+        out.extend(c.to_be_bytes());
+    }
+
     /// A compressed text chunk is expanded by `png` through our own cap: an XMP document
     /// bigger than it is dropped, not inflated. Compressing an 8 MiB string is a few
     /// kilobytes — the reverse of what the unbounded `get_text()` path allowed.
@@ -215,24 +263,6 @@ mod tests {
     /// as malformed before the output buffer is made, even under a cap that allows its pixel count.
     #[test]
     fn ihdr_larger_than_its_data_can_inflate_is_refused() {
-        fn crc(data: &[u8]) -> u32 {
-            let mut c = !0u32;
-            for &b in data {
-                c ^= u32::from(b);
-                for _ in 0..8 {
-                    c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
-                }
-            }
-            !c
-        }
-        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
-            out.extend((data.len() as u32).to_be_bytes());
-            let start = out.len();
-            out.extend(kind);
-            out.extend(data);
-            let c = crc(&out[start..]);
-            out.extend(c.to_be_bytes());
-        }
         let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
         let mut ihdr = Vec::new();
         ihdr.extend(20000u32.to_be_bytes());
@@ -246,6 +276,70 @@ mod tests {
         let opts = DecodeOptions { max_size: None, max_pixels: 1 << 30 };
         // refused by the inflate bound itself, not later by the empty IDAT once the 3.2 GB buffer is made
         assert!(matches!(crate::decode(&png, opts), Err(crate::Error::Malformed(_, m)) if m.contains("cannot come from")));
+    }
+
+    /// The pixels come from the IDAT chunks only: bytes elsewhere in the file don't lift the inflate bound. A 20000×20000
+    /// 1-bit indexed image with tRNS (1.6 GB expanded) in a file big enough for the bound, but with an empty IDAT.
+    #[test]
+    fn ancillary_bytes_do_not_lift_the_inflate_bound() {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::new();
+        ihdr.extend(20000u32.to_be_bytes());
+        ihdr.extend(20000u32.to_be_bytes());
+        ihdr.extend([1, 3, 0, 0, 0]);
+        chunk(&mut png, b"IHDR", &ihdr);
+        chunk(&mut png, b"PLTE", &[0, 0, 0, 255, 255, 255]);
+        chunk(&mut png, b"tRNS", &[0, 255]);
+        chunk(&mut png, b"teXt", &[b'x'; 60_000]);
+        chunk(&mut png, b"IDAT", &[0x78, 0x01, 0x01, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x01]);
+        chunk(&mut png, b"IEND", &[]);
+        let opts = DecodeOptions { max_size: None, max_pixels: 1 << 30 };
+        assert!(matches!(crate::decode(&png, opts), Err(crate::Error::Malformed(_, m)) if m.contains("cannot come from")));
+    }
+
+    /// An image split over several IDAT chunks counts them all: any one of them alone is too little for the bound.
+    #[test]
+    fn inflate_bound_counts_every_idat_chunk() {
+        let (w, h) = (2000u32, 2000u32);
+        let mut whole = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut whole, w, h);
+            enc.set_color(png::ColorType::Grayscale);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.set_compression(png::Compression::High);
+            let mut wr = enc.write_header().unwrap();
+            wr.write_image_data(&vec![0u8; (w * h) as usize]).unwrap();
+        }
+        // the encoder's stream, gathered from its IDAT chunks
+        let (mut p, mut idat) = (8, Vec::new());
+        while p + 8 <= whole.len() {
+            let len = u32::from_be_bytes([whole[p], whole[p + 1], whole[p + 2], whole[p + 3]]) as usize;
+            if &whole[p + 4..p + 8] == b"IDAT" {
+                idat.extend_from_slice(&whole[p + 8..p + 8 + len]);
+            }
+            p += len + 12;
+        }
+        const PIECE: usize = 64;
+        assert!(PIECE as u64 * super::MAX_DEFLATE_RATIO < u64::from(w * h), "one chunk must fall short of the bound");
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::new();
+        ihdr.extend(w.to_be_bytes());
+        ihdr.extend(h.to_be_bytes());
+        ihdr.extend([8, 0, 0, 0, 0]);
+        chunk(&mut png, b"IHDR", &ihdr);
+        for piece in idat.chunks(PIECE) {
+            chunk(&mut png, b"IDAT", piece);
+        }
+        chunk(&mut png, b"IEND", &[]);
+        let d = crate::decode(&png, DecodeOptions::default()).unwrap();
+        assert_eq!((d.width, d.height), (w, h));
+    }
+
+    /// An output buffer the allocator can't give is an error, not an abort.
+    #[test]
+    fn an_output_buffer_too_big_to_allocate_is_an_error() {
+        assert!(matches!(super::output_buffer(1 << 62, 1 << 31, 1 << 31), Err(crate::Error::TooLarge(..))));
+        assert_eq!(super::output_buffer(16, 2, 2).unwrap(), [0u8; 16]);
     }
 
     /// XMP within the cap is still read, compressed or not.
