@@ -144,7 +144,11 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         // Linux: the profile the desktop assigns in colord, read off the UI thread
         #[cfg(target_os = "linux")]
         screen_profile: Some(colord::service()),
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        // Windows: the profile it uses for the window's monitor, unless it colour-manages the
+        // desktop itself (HDR, Auto Color Management)
+        #[cfg(windows)]
+        screen_profile: win_screen_profile::service(cc),
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         screen_profile: None,
         pick_display_profile: Some(Box::new(|| {
             let mut d = file_dialog()

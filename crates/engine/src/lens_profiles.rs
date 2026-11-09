@@ -90,7 +90,13 @@ pub fn database() -> Option<Arc<LensDb>> {
     }
     let generation = generation();
     // the app's own folder without its marker is a download that never finished: not read (the start fetches it)
-    let db = if downloaded && !crate::lensfun_download::complete(&dir) { None } else { load(&dir) };
+    let db = if downloaded && !crate::lensfun_download::complete(&dir) {
+        // info, not a warning: before the first download this is every user's state (logged once per reload)
+        log::info!("lens database: no finished download in {} yet; lens profiles are not applied", dir.display());
+        None
+    } else {
+        load(&dir, downloaded)
+    };
     let mut loaded = LOADED.write().unwrap_or_else(PoisonError::into_inner);
     // a reload while the files were read: they may be the old ones, so they aren't kept (the next call reads again)
     if GENERATION.load(Ordering::Relaxed) == generation {
@@ -99,21 +105,45 @@ pub fn database() -> Option<Arc<LensDb>> {
     db
 }
 
-fn load(dir: &Path) -> Option<Arc<LensDb>> {
+fn load(dir: &Path, downloaded: bool) -> Option<Arc<LensDb>> {
+    let whose = if downloaded { "downloaded" } else { ENV };
     if !dir.is_dir() {
+        log::warn!("lens database: {} ({whose}) is missing or not a folder", dir.display());
         return None;
     }
     match LensDb::load_dir(dir) {
         Ok((db, errors)) => {
+            let n_files = std::fs::read_dir(dir)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("xml"))).count()
+                })
+                .unwrap_or(0);
+            log::info!("lens database: {files} files, {profiles} profiles", files = n_files, profiles = db.lenses.len());
             for (file, e) in errors {
                 log::warn!("lens database: skipped {file}: {e}");
             }
+            let (level, line) = summary(dir, whose, &db);
+            log::log!(level, "{line}");
             (!db.lenses.is_empty()).then(|| Arc::new(db))
         }
         Err(e) => {
             log::warn!("{e}");
             None
         }
+    }
+}
+
+/// The log line for a database read from `dir`: where it is and how many lenses and cameras it has, so a user
+/// setting up `LIGHTCRAFT_LENSFUN_DIR` can see whether it was found; a folder without lenses is a warning.
+fn summary(dir: &Path, whose: &str, db: &LensDb) -> (log::Level, String) {
+    let (lenses, cameras) = (db.lenses.len(), db.cameras.len());
+    if lenses == 0 {
+        (
+            log::Level::Warn,
+            format!("lens database: no lenses in {} ({whose}): lenses 0, cameras {cameras}; lens profiles are not applied", dir.display()),
+        )
+    } else {
+        (log::Level::Info, format!("lens database: read {} ({whose}): lenses {lenses}, cameras {cameras}", dir.display()))
     }
 }
 
@@ -191,6 +221,18 @@ mod tests {
             f_number: Some(3.5),
             ..Default::default()
         }
+    }
+
+    /// The log says where the database was read from and what it holds, and warns when it holds no lenses (#2511).
+    #[test]
+    fn the_log_names_the_folder_and_what_it_holds() {
+        let dir = Path::new("/lensfun/db");
+        let (level, line) = summary(dir, ENV, &LensDb::parse(DB).unwrap());
+        assert_eq!(level, log::Level::Info);
+        assert!(line.contains("lenses 1, cameras 1") && line.contains("/lensfun/db") && line.contains(ENV), "{line}");
+        let (level, line) = summary(dir, "downloaded", &LensDb::parse("<lensdatabase></lensdatabase>").unwrap());
+        assert_eq!(level, log::Level::Warn);
+        assert!(line.contains("no lenses") && line.contains("downloaded") && line.contains("lenses 0, cameras"), "{line}");
     }
 
     #[test]
@@ -297,6 +339,44 @@ mod tests {
                 .unwrap();
             assert_eq!(lookup(&db, &meta(), 6000.0, 4000.0, Orientation::Normal).unwrap(), fallback, "no equivalent: {crop}");
         }
+    }
+
+    /// The database that was found is reported: how many files it holds and how many profiles they carry, so a
+    /// directory that was pointed at but holds nothing (or holds profiles that never match a photo) is visible in
+    /// the log instead of passing unnoticed. The database is read from the environment and kept for the process,
+    /// so the check runs in a child process of this test binary.
+    #[test]
+    fn lens_database_summary_reports_files_and_profiles() {
+        let dir = std::env::temp_dir().join(format!("lc-lens-summary-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("one.xml"), DB).unwrap();
+        std::fs::write(dir.join("two.xml"), DB.replace("Testcam 18-55mm f/3.5-5.6", "Testcam 24-70mm f/2.8")).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new(exe)
+            .args(["--exact", "lens_profiles::tests::lens_database_summary_child", "--ignored", "--test-threads=1", "--nocapture"])
+            .env(ENV, &dir)
+            .env("LIGHTCRAFT_LOG", "trace")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_lowercase();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(out.status.success(), "the child process failed: {stderr}");
+        let logged: Vec<&str> = stderr.lines().filter(|l| l.starts_with("lightcraft: ")).collect();
+        assert!(!logged.is_empty(), "the database was read without a word in the log: {stderr}");
+        let summary = logged.iter().find(|l| l.contains("lens database:")).expect("the lens database summary line was not logged");
+        let mut counts = summary.split_whitespace().filter_map(|t| t.trim_end_matches(',').parse::<usize>().ok());
+        assert_eq!(counts.next(), Some(2), "expected 2 files in the lens database summary: {summary}");
+        assert_eq!(counts.next(), Some(2), "expected 2 profiles in the lens database summary: {summary}");
+    }
+
+    /// Run by [`lens_database_summary_reports_files_and_profiles`] in a child process: read the database the
+    /// environment points at, so its summary reaches the log the parent reads.
+    #[test]
+    #[ignore = "helper process for lens_database_summary_reports_files_and_profiles"]
+    fn lens_database_summary_child() {
+        crate::logging::install("lightcraft");
+        let _ = database();
     }
 
     /// A synthetic grid recorded through the profile's barrel distortion comes out of the pipeline's geometry
