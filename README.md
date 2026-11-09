@@ -166,6 +166,12 @@ Desktop **Object** and **Describe** masks use SAM 3 for click-based and text-pro
 installed model; see [model setup and terms](docs/ai-masks.md). Subject, Sky and Background selections still use
 classical heuristics. Existing model-generated masks render and export without the model installed.
 
+With your own [ComfyUI](docs/comfyui.md) server, **Generate with ComfyUI** (desktop, opt-in, nothing is sent until you
+press it) works on the selected mask. **Replace** fills it with what a prompt describes. **Remove** takes it out of the
+scene. A first pass sees the mask with wide context to rebuild what was behind it, and when the photo is large,
+full-resolution detail tiles restore its sharpness. Results are previews until you accept them as a new image stacked
+with the original; pixels outside the mask never change.
+
 <p align="center">
   <img src="docs/images/masking.jpg" alt="Masking panel with a linear Sky mask and a radial Sun glow mask; the radial gradient is drawn as a red overlay around the sun on a lake scene" width="100%">
   <br>
@@ -372,7 +378,7 @@ LightCraft is young and moving fast: **alpha**. **Where we honestly stand** (det
 | Native macOS menu bar (generated from the command registry), control channel + every widget addressable, headless UI snapshots | ✅ |
 | RAW: DNG, CR2, CR3 (lossless CRX Bayer and version 0x100/0x200 C-RAW), ARW, NEF (uncompressed + lossless/lossy compressed, incl. lossy after split), Fujifilm RAF (uncompressed + lossless/lossy compressed, Bayer + X-Trans), Panasonic RW2 / Leica RWL / Panasonic RAW (every raw format, DMC-LX1 to DC-S1RM2), Pentax PEF, Olympus ORF (uncompressed, 12.8 bpp), Samsung SRW (uncompressed); embedded previews for every format incl. CR3 | 🚧 · other CR3 variants, compressed ORF / SRW and Nikon HE NEF decode ⬜ ([raw parity](docs/raw-parity.md)) |
 | Detail: sharpening, luminance + colour noise reduction | ✅ · AI Denoise 🚧 (Bayer, user-installed weights; [setup](docs/denoise.md)), Super Resolution ⬜ |
-| Remove / Heal / Clone spots (auto source), non-generative Fill, editable spot pins, Visualize Spots, Red Eye and Pet Eye | ✅ · Fill uses PatchMatch; no generative fill |
+| Remove / Heal / Clone spots (auto source), non-generative Fill, editable spot pins, Visualize Spots, Red Eye and Pet Eye | ✅ · Fill uses PatchMatch; generative Replace / Remove of a mask only through your own ComfyUI server ([setup](docs/comfyui.md)) |
 | Export: JPEG / PNG / TIFF / flat PSD / WebP / AVIF / JPEG XL / raw or rendered DNG / original, sizing, file-size limit, output sharpening, naming templates, batch, metadata policy, text or image watermark | ✅ |
 | HDR: HDR editing with a headroom limit, SDR rendition, Visualize HDR; gain map JPEG, PQ/HLG AVIF, PQ PNG/JPEG XL and float TIFF export | ✅ · HDR display ⬜ |
 | Library persistence (crash-safe op log + snapshots, background compaction, failed saves reported), disk thumbnail cache | ✅ |
