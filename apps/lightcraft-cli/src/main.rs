@@ -322,7 +322,16 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     for p in pools {
         pool.merge(p);
     }
-    if let Some(path) = &pairs_out {
+    calibrate_outputs(&pool, pairs_out.as_deref(), dir)
+}
+
+/// What `calibrate` writes from its pooled photos: the pairs file, if asked for, then the profiles, if a folder is set.
+fn calibrate_outputs(
+    pool: &lightcraft_engine::camera_profiles::Pool,
+    pairs_out: Option<&Path>,
+    dir: Option<std::path::PathBuf>,
+) -> Result<(), String> {
+    if let Some(path) = pairs_out {
         let bytes = pool.pairs_file()?;
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
@@ -332,7 +341,8 @@ fn calibrate(args: &[String]) -> Result<(), String> {
         std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
         let photos = pool.shareable_photos().len();
         println!("{photos} photos, {} bytes of colour pairs → {}", bytes.len(), path.display());
-        if photos == 0 {
+        // photos only a pairs file can't hold still fit, when there is a folder to fit into
+        if photos == 0 && (dir.is_none() || pool.photos().is_empty()) {
             return Err("no photo contributed colour pairs".into());
         }
     }
@@ -1183,6 +1193,50 @@ mod raw_files_tests {
 
 #[cfg(test)]
 mod tests {
+    /// Photos no pairs file can hold (a camera model it refuses) leave the export empty but still fit; with nothing to
+    /// fit, or no folder to fit into, an empty export is the error it was.
+    #[test]
+    fn calibrate_fits_photos_a_pairs_file_cannot_hold() {
+        use lightcraft_engine::camera_profiles::{PhotoPairs, Pool};
+        let mut state = 12345u32;
+        let mut next = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            f64::from(state >> 8) / f64::from(1u32 << 24)
+        };
+        let photos: Vec<PhotoPairs> = (0..6)
+            .map(|k| PhotoPairs {
+                model: "M".repeat(65),
+                id: format!("{:032x}", k + 1),
+                dro: None,
+                pairs: (0..400)
+                    .map(|_| {
+                        let c = [next() * 0.8 + 0.02, next() * 0.8 + 0.02, next() * 0.8 + 0.02];
+                        let y = [c[0] * 1.4 - c[1] * 0.2, c[1] * 1.3 - c[2] * 0.1, c[2] * 1.2 + 0.05 * c[0]].map(|v: f64| v.clamp(0.001, 1.0));
+                        (c, y)
+                    })
+                    .collect(),
+            })
+            .collect();
+        let mut pool = Pool::default();
+        pool.add_photos(photos);
+        assert!(pool.shareable_photos().is_empty());
+        let base = std::env::temp_dir().join(format!("lc-calibrate-outputs-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let (pairs, profiles) = (base.join("out.pairs"), base.join("profiles"));
+        let refused = "no photo contributed colour pairs";
+
+        let both = super::calibrate_outputs(&pool, Some(&pairs), Some(profiles.clone()));
+        let written = std::fs::read_dir(&profiles).map_or(0, |d| d.count());
+        let pairs_only = super::calibrate_outputs(&pool, Some(&pairs), None);
+        let empty = super::calibrate_outputs(&Pool::default(), Some(&pairs), Some(profiles.clone()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert_eq!(both, Ok(()));
+        assert_eq!(written, 1, "the fit ran");
+        assert_eq!(pairs_only, Err(refused.to_string()));
+        assert_eq!(empty, Err(refused.to_string()));
+    }
+
     /// `render` and `merge` read the lens database the desktop app downloaded, as the desktop does (the same raw
     /// gets the same profile everywhere), but never fetch it.
     #[test]
