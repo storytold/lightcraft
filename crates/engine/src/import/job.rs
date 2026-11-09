@@ -41,6 +41,7 @@ pub struct ImportJob {
     pub(super) library: Option<(lightcraft_catalog::Catalog, bool)>,
     /// path → (photo, a Local browse record?)
     pub(super) by_path: HashMap<String, (PhotoId, bool)>,
+    /// The library's and this import's contents, to find duplicates by.
     pub(super) dups: super::dupes::Duplicates,
     pub(super) probe: Option<crate::media::FileProbe>,
     file_bytes: Option<crate::merge::ByteReader>,
@@ -66,11 +67,13 @@ pub struct ImportJob {
 /// The outcome of [`ImportJob::prepare`] for one batch, in file order.
 #[derive(Debug, Default)]
 pub struct Prepared {
+    /// The original reader the batch was prepared with: a commit to another library refuses it.
     pub(super) origin: Option<crate::originals::ReaderOrigin>,
     pub scanned: usize,
     pub(super) items: Vec<PreparedItem>,
     /// Content hashes computed on demand for photos already in the library, saved with the batch.
     pub(super) hashes: Vec<(PhotoId, String)>,
+    /// Hashes taken of files this import added, to compare them: path → hash.
     pub(super) learned_paths: HashMap<String, String>,
 }
 

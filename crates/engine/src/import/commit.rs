@@ -228,10 +228,10 @@ fn duplicate_refused(
     }
 }
 
-/// The catalog half of an import: add the photos [`ImportJob::prepare`] readied (one undoable op;
-/// a Move's sources are removed once it is saved). On a failed commit a Move's placed files are
+/// Photo ids by content hash or by path.
 type ByKey = HashMap<String, PhotoId>;
 
+/// The photos in Recently Deleted, by content hash and by path: the ones a Fresh import replaces.
 fn trashed_by_content_and_path(s: &Session) -> (ByKey, ByKey) {
     let (mut by_hash, mut by_path) = (ByKey::new(), ByKey::new());
     for p in s.catalog.photos().filter(|p| p.deleted) {
@@ -245,6 +245,8 @@ fn trashed_by_content_and_path(s: &Session) -> (ByKey, ByKey) {
     (by_hash, by_path)
 }
 
+/// Whether the photo a duplicate was matched with by `hash` no longer has that content, or its
+/// hash is no longer trusted for its file.
 fn existing_no_longer_matches(s: &Session, existing: Option<PhotoId>, hash: Option<&str>) -> bool {
     let (Some(id), Some(hash)) = (existing, hash) else { return false };
     s.catalog.photo(id).is_some_and(|p| {
@@ -252,12 +254,15 @@ fn existing_no_longer_matches(s: &Session, existing: Option<PhotoId>, hash: Opti
     })
 }
 
+/// Whether the file's read proof shows it changed since it was probed (the proof is released then).
 fn native_read_expired(info: &crate::media::ProbeInfo) -> bool {
     let Some(proof) = info.native_read.as_ref().filter(|proof| proof.stale()) else { return false };
     proof.release();
     true
 }
 
+/// The photos that hold the hashes the batch learned while comparing (by id, then by path), by hash:
+/// a duplicate later in the batch names them.
 fn learned_identities(s: &Session, hashes: &[(PhotoId, String)], learned_paths: &HashMap<String, String>) -> HashMap<String, PhotoId> {
     let holds = |p: &lightcraft_catalog::Photo, hash: &str| {
         p.content_hash.as_deref().is_some_and(|known| crate::sync::base_hash(known) == crate::sync::base_hash(hash)) && s.source_hash_authorized(p.id)
@@ -282,6 +287,8 @@ fn learned_identities(s: &Session, hashes: &[(PhotoId, String)], learned_paths: 
     out
 }
 
+/// Whether a duplicate's read proof shows its file changed, or no longer confirms the hash it was
+/// matched by content with. Releases the proof.
 fn duplicate_proof_expired(s: &Session, path: &str, reason: &str, hash: Option<&str>, proof: Option<&crate::originals::ProbeEvidence>) -> bool {
     let Some(proof) = proof else { return false };
     let expired = proof.stale() || (reason == "content" && !hash.is_some_and(|hash| proof.confirms_hash(&s.originals, path, hash)));
@@ -289,6 +296,8 @@ fn duplicate_proof_expired(s: &Session, path: &str, reason: &str, hash: Option<&
     expired
 }
 
+/// The catalog half of an import: add the photos [`ImportJob::prepare`](crate::import::ImportJob::prepare) readied (one undoable op;
+/// a Move's sources are removed once it is saved). On a failed commit a Move's placed files are
 /// taken back.
 pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepared: Prepared) -> crate::Result<ImportReport> {
     if prepared.origin.as_ref().is_some_and(|origin| !s.originals.accepts_origin(origin)) {

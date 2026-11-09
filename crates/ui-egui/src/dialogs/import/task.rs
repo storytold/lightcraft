@@ -48,10 +48,13 @@ pub struct ImportTask {
     run: Option<ImportRun>,
     /// The import's row in the activity stack (its ✕ and `activity.cancel` set the run's cancel flag).
     guard: Option<lightcraft_engine::activity::TaskGuard>,
+    /// The run id of the import review this import followed, for its timing record.
     pub(super) scan_id: Option<u64>,
     completion: std::sync::Arc<std::sync::Mutex<ImportCompletion>>,
 }
 
+/// How a desktop import ended, shared with its worker thread: its one timing record is logged
+/// when both the task and the worker are done (or the task was dropped).
 #[derive(Debug, Default)]
 struct ImportCompletion {
     id: u64,
@@ -67,13 +70,16 @@ struct ImportCompletion {
     counts: Value,
 }
 impl ImportCompletion {
+    /// Log the import's start record.
     fn new(mode: &str) -> Self {
         let (id, started) = lightcraft_engine::import::begin_import_log("desktop", mode);
         Self { id, started: Some(started), worker_done: true, persist: "not_applicable", ..Default::default() }
     }
+    /// Take the task's counts for the terminal record.
     fn snapshot(&mut self, task: &ImportTask) {
         self.counts = json!({"done":task.done,"total":task.total,"scanned":task.done,"imported":task.imported,"restored":task.restored,"duplicates":task.duplicates,"failed":task.failed,"moved":task.moved,"kept":task.kept,"scanId":task.scan_id.unwrap_or(0),"ownerDetached":self.owner_detached});
     }
+    /// Log the terminal record, once.
     fn emit(&mut self, status: &'static str, cause: &'static str, persist: &'static str) {
         if self.emitted {
             return;
@@ -83,6 +89,7 @@ impl ImportCompletion {
             lightcraft_engine::import::finish_import_log(self.id, started, status, cause, persist, &self.counts);
         }
     }
+    /// Log a dropped import's terminal once its worker is done too.
     fn detached_terminal(&mut self) {
         if self.owner_detached && self.worker_done {
             self.emit("cancelled", "owner_detached", "unknown");

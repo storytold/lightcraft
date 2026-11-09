@@ -257,6 +257,9 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
 }
 
+/// A Local folder browse on its worker thread: resolve the folder `given` (sent on `resolved_tx`),
+/// list its files (with `subfolders`), put the ones to import in `sort` order and send the
+/// listing, or how it stopped, on `tx`. Nothing is probed here.
 fn browse_worker(
     given: &str,
     input: &mut ScanInput,

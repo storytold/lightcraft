@@ -31,6 +31,7 @@ pub(crate) struct Placed {
     pub src: PathBuf,
     pub dst: PathBuf,
     pub sidecars: Vec<PlacedSidecar>,
+    /// The content hash taken while copying; `None` for a hard link (no bytes read).
     pub hash: Option<lightcraft_preview::Hash128>,
 }
 
@@ -88,6 +89,7 @@ impl Drop for GrowthWriter {
 pub(crate) fn grow_using(file: File) -> GrowthWriter {
     GrowthWriter(GROW_WRITER.with(|writer| writer.replace(Some(file))))
 }
+/// Append to `src` while it is copied ([`Fault::Grow`]): the test writer when one is set.
 fn grow_source(src: &Path) -> io::Result<()> {
     #[cfg(test)]
     if let Some(result) = GROW_WRITER.with(|writer| writer.borrow_mut().as_mut().map(|file| file.write_all(b"more"))) {
@@ -365,8 +367,12 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, expect: Option<lightcraft_pr
     })
 }
 
+/// Why a copy that doesn't match the hash taken when the source was read is refused.
 const CHANGED_SINCE_READ: &str = "the copy differs from the original as it was read for the import (a bad copy, or the file changed meanwhile)";
 
+/// Copy into a new file, hashing the source as it is read, and verify the copy by reading it back
+/// against that hash (and against `expect`, the probe's hash, when given). On any failure the
+/// partial copy is removed.
 pub(crate) fn copy_hashed(src: &Path, dst: &Path, expect: Option<lightcraft_preview::Hash128>) -> io::Result<lightcraft_preview::Hash128> {
     copy_checked(src, dst, |copied| {
         if expect.is_some_and(|h| h != copied) {
@@ -379,6 +385,9 @@ pub(crate) fn copy_hashed(src: &Path, dst: &Path, expect: Option<lightcraft_prev
     })
 }
 
+/// Copy `src` into the new file `dst` and sync it, refusing a source that changed meanwhile, then
+/// `verify` the copy given the hash read while copying. On any failure `dst` is removed and the
+/// read's candidate proofs are discarded.
 fn copy_checked(
     src: &Path,
     dst: &Path,
@@ -430,6 +439,7 @@ fn copy_checked(
     r
 }
 
+/// Stream `src` into `out` through the original reader: the content hash and the length copied.
 fn stream_copy(out: &mut File, src: &Path) -> io::Result<(lightcraft_preview::Hash128, u64)> {
     struct CopyWriter<'a> {
         out: &'a mut File,
@@ -470,6 +480,7 @@ pub(crate) fn same_bytes(a: &Path, b: &Path) -> io::Result<bool> {
     same_open_bytes(a, b, &mut fa, &mut fb)
 }
 
+/// Whether `path` still names the file `held` was opened on, unchanged since `before`.
 fn current_name_matches(path: &Path, held: &File, before: &fs::Metadata) -> bool {
     if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && same_file_state(before, &m)) {
         return false;
@@ -486,6 +497,7 @@ fn current_name_matches(path: &Path, held: &File, before: &fs::Metadata) -> bool
     }
 }
 
+/// Whether two metadata describe the same file (device and inode; never on other platforms).
 fn same_handle_identity(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -498,6 +510,8 @@ fn same_handle_identity(a: &fs::Metadata, b: &fs::Metadata) -> bool {
         false
     }
 }
+/// Whether two metadata describe the same unchanged regular file: length and modification time,
+/// and on Unix the same inode and change time.
 fn same_file_state(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     let same = a.is_file() && b.is_file() && a.len() == b.len() && a.modified().ok().zip(b.modified().ok()).is_some_and(|(a, b)| a == b);
     #[cfg(unix)]
@@ -510,6 +524,7 @@ fn same_file_state(a: &fs::Metadata, b: &fs::Metadata) -> bool {
         same
     }
 }
+/// Whether the open files `fa` (at `a`) and `fb` (at `b`) hold the same bytes.
 fn same_open_bytes(a: &Path, b: &Path, fa: &mut File, fb: &mut File) -> io::Result<bool> {
     let a = a.to_str().ok_or_else(|| io::Error::other("original path is not UTF-8"))?;
     let b = b.to_str().ok_or_else(|| io::Error::other("original path is not UTF-8"))?;

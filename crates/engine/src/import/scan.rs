@@ -46,8 +46,11 @@ pub(super) fn library_files(library: &lightcraft_catalog::Catalog, files: &[Stri
     by_path
 }
 
+/// The next `run_id` of a scan or import timing record.
 static IMPORT_RUN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// Log an import's `event=start` record (`source`: who runs it; `mode`: add, copy or move) and
+/// return its run id and start time, for [`finish_import_log`].
 pub fn begin_import_log(source: &'static str, mode: &str) -> (u64, web_time::Instant) {
     let id = IMPORT_RUN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let started = web_time::Instant::now();
@@ -61,6 +64,8 @@ pub fn begin_import_log(source: &'static str, mode: &str) -> (u64, web_time::Ins
     (id, started)
 }
 
+/// The `persist` field of an import's terminal record: `failed` when the session has unsaved
+/// changes, `ok` in a library on disk, else `memory_only`.
 pub fn import_persist_outcome(s: &Session) -> &'static str {
     if s.unsaved().is_some() {
         "failed"
@@ -71,6 +76,8 @@ pub fn import_persist_outcome(s: &Session) -> &'static str {
     }
 }
 
+/// Log an import's `event=terminal` record with the counts in `counts` (an import report, or the
+/// desktop import's tallies). No paths or messages are logged.
 pub fn finish_import_log(
     id: u64,
     started: web_time::Instant,
@@ -84,6 +91,8 @@ pub fn finish_import_log(
         started.elapsed().as_millis(), count("scanned"), count("done"), count("total"), count("imported"), count("restored"), count("duplicates"), count("failed"), count("moved"), count("kept"), count("scanId"), counts.get("ownerDetached").and_then(serde_json::Value::as_bool).unwrap_or(false));
 }
 
+/// The terminal record of a `library.import` command, from its `result` (or the counts it
+/// `observed` when it has them).
 pub(crate) fn command_import_terminal(
     id: u64,
     started: web_time::Instant,
@@ -114,6 +123,7 @@ pub(crate) fn command_import_terminal(
     finish_import_log(id, started, status, cause, persist, counts);
 }
 
+/// The counts of an import report, as [`finish_import_log`] takes them.
 pub(crate) fn import_report_counts(value: &serde_json::Value) -> serde_json::Value {
     let count = |key: &str| value.get(key).and_then(|v| v.as_u64().or_else(|| v.as_array().map(|a| a.len() as u64))).unwrap_or(0);
     serde_json::json!({"scanned":count("scanned"),"done":count("scanned"),"total":count("scanned"),"imported":count("imported"),"restored":count("restored"),"duplicates":count("duplicates"),"failed":count("failed"),"moved":count("moved"),"kept":count("kept")})
@@ -124,17 +134,24 @@ pub(crate) fn import_report_counts(value: &serde_json::Value) -> serde_json::Val
 pub struct ScanProgress {
     /// Files to probe, set once the folders are expanded.
     pub total: std::sync::atomic::AtomicUsize,
+    /// Files probed so far.
     pub done: std::sync::atomic::AtomicUsize,
     /// Shared with the scan's row in the activity stack (its ✕ sets it).
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Run id and start time, once [`ScanProgress::begin`] logged the start.
     started: std::sync::OnceLock<(u64, web_time::Instant)>,
+    /// The terminal record was logged.
     terminal: std::sync::atomic::AtomicBool,
+    /// Files the walks found.
     found: std::sync::atomic::AtomicUsize,
+    /// The terminal waits for [`ScanProgress::delivered`].
     delivery_tracked: std::sync::atomic::AtomicBool,
+    /// Candidates, probe failures, unlistable folders and duplicates, once computed.
     summary: std::sync::OnceLock<(usize, usize, usize, usize)>,
 }
 
 impl ScanProgress {
+    /// Log the scan's start record, once.
     pub fn begin(&self) {
         self.started.get_or_init(|| {
             let id = IMPORT_RUN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -143,21 +160,26 @@ impl ScanProgress {
             (id, started)
         });
     }
+    /// The scan's run id, once it began.
     pub fn run_id(&self) -> Option<u64> {
         self.started.get().map(|s| s.0)
     }
+    /// Hold the terminal record until the result is handed over ([`ScanProgress::delivered`]).
     pub fn track_delivery(&self) {
         self.delivery_tracked.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    /// The result was handed over (`accepted`) or its receiver was gone (a cancel): log the terminal.
     pub fn delivered(&self, accepted: bool) {
         if !accepted {
             self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         self.terminal(false);
     }
+    /// The scan's worker failed: log the terminal as an error, unless it is logged already.
     pub fn worker_error(&self) {
         self.terminal(true);
     }
+    /// Note what the scan found; log the terminal unless delivery is tracked.
     fn computed(&self, output: &ScanOutput) {
         let _ = self.summary.set((
             output.candidates.len(),
@@ -169,6 +191,7 @@ impl ScanProgress {
             self.terminal(false);
         }
     }
+    /// Log the scan's terminal record, once.
     fn terminal(&self, worker_failed: bool) {
         let Some((id, started)) = self.started.get() else { return };
         if self.terminal.swap(true, std::sync::atomic::Ordering::AcqRel) {
@@ -226,11 +249,13 @@ impl ScanInput {
         Self::with_probe(s, paths, probe)
     }
 
+    /// [`ScanInput::new`] probing as a folder import does: raws from their headers where it can.
     pub fn for_import(s: &mut Session, paths: &[String]) -> (Self, Vec<String>) {
         let probe = s.media.header_probe.clone().or_else(|| s.media.file_probe.clone());
         Self::with_probe(s, paths, probe)
     }
 
+    /// Snapshot what a scan of `paths` needs, probing with `probe`; the paths come back.
     fn with_probe(s: &mut Session, paths: &[String], probe: Option<crate::media::FileProbe>) -> (Self, Vec<String>) {
         let skip = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
         // (no table of the library here: this is the session's thread, and the library may hold
