@@ -700,10 +700,13 @@ mod tests {
     /// when J only drew a frame) opens with them off; the other saved view settings still load.
     #[test]
     fn clipping_warnings_are_not_restored_from_settings() {
-        let saved = json!({"showClipping": true, "histogram": true});
-        let ui = serde_json::from_value::<UiState>(saved).expect("deserialize").sanitized();
-        assert!(!ui.show_clipping, "a saved showClipping must not turn the warnings on");
-        assert!(ui.histogram, "the other saved view settings still load");
+        // both values: one of them is the default, which would pass without reading the setting
+        for histogram in [true, false] {
+            let saved = json!({"showClipping": true, "histogram": histogram});
+            let ui = serde_json::from_value::<UiState>(saved).expect("deserialize").sanitized();
+            assert!(!ui.show_clipping, "a saved showClipping must not turn the warnings on");
+            assert_eq!(ui.histogram, histogram, "the other saved view settings still load");
+        }
     }
 
     /// The control channel goes through the same serde as the settings file: `ui.inspect` shows
