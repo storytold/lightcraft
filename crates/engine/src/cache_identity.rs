@@ -251,14 +251,27 @@ impl CacheIdentity {
     }
 
     pub fn invalidate(&self, p: &Photo, expected: Option<PhysicalIdentity>, fence: impl FnOnce()) -> std::io::Result<()> {
-        let Some(alias) = path_key(p) else { return Ok(()) };
+        self.invalidate_all(&[(p, expected)], fence)
+    }
+
+    /// [`Self::invalidate`] for many photos at once (a folder move): one fence, and the markers' folder synced once
+    /// after all of them are written. A marker whose contents a crash loses reads as unknown and keeps its alias closed.
+    pub fn invalidate_all(&self, items: &[(&Photo, Option<PhysicalIdentity>)], fence: impl FnOnce()) -> std::io::Result<()> {
         let mut state = self.0.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let hash = alias_hash(&alias);
-        state.invalid.insert(hash, expected.clone());
-        if let Source::File { path } = &p.source {
-            state.pending.insert(path.clone());
-            let epoch = state.epochs.entry(path.clone()).or_default();
-            *epoch = epoch.wrapping_add(1);
+        let mut markers = Vec::with_capacity(items.len());
+        for (p, expected) in items {
+            let Some(alias) = path_key(p) else { continue };
+            let hash = alias_hash(&alias);
+            state.invalid.insert(hash, expected.clone());
+            if let Source::File { path } = &p.source {
+                state.pending.insert(path.clone());
+                let epoch = state.epochs.entry(path.clone()).or_default();
+                *epoch = epoch.wrapping_add(1);
+            }
+            markers.push((hash, expected));
+        }
+        if markers.is_empty() {
+            return Ok(());
         }
         fence();
         if let Some(dir) = &state.dir {
@@ -266,12 +279,15 @@ impl CacheIdentity {
             if state.uncertain {
                 write_marker(&dir.join("uncertain"), b"source invalidation history unavailable\n")?;
             }
-            let mut body = b"LCI1\n".to_vec();
-            body.extend(serde_json::to_vec(&expected).map_err(std::io::Error::other)?);
-            if body.len() > MAX_MARKER_BYTES {
-                return Err(std::io::Error::other("source cache identity is too long"));
+            for (hash, expected) in markers {
+                let mut body = b"LCI1\n".to_vec();
+                body.extend(serde_json::to_vec(expected).map_err(std::io::Error::other)?);
+                if body.len() > MAX_MARKER_BYTES {
+                    return Err(std::io::Error::other("source cache identity is too long"));
+                }
+                write_unsynced_marker(&dir.join(format!("{hash}.invalid")), &body)?;
             }
-            write_marker(&dir.join(format!("{hash}.invalid")), &body)?;
+            sync_directory(dir)?;
             if let Some(parent) = dir.parent() {
                 write_marker(&parent.join("source-invalidations-enabled"), b"1\n")?;
             }
@@ -282,15 +298,34 @@ impl CacheIdentity {
 
 fn write_marker(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     lightcraft_catalog::safe_file::write_atomic(path, bytes)?;
+    match path.parent() {
+        Some(parent) => sync_directory(parent),
+        None => Ok(()),
+    }
+}
+
+/// A marker whose folder [`sync_directory`] makes durable afterwards (synced on its own where that can't be done).
+fn write_unsynced_marker(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if cfg!(unix) {
+        lightcraft_catalog::safe_file::write_atomic_nosync(path, bytes)
+    } else {
+        lightcraft_catalog::safe_file::write_atomic(path, bytes)
+    }
+}
+
+/// Make the names written in `dir` durable (an error when that can't be confirmed; nothing to do off Unix).
+fn sync_directory(dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
-    if let Some(parent) = path.parent() {
+    {
         #[cfg(test)]
         directory_step()?;
-        let dir = std::fs::File::open(parent)?;
+        let dir = std::fs::File::open(dir)?;
         #[cfg(test)]
         directory_step()?;
         dir.sync_all()?;
     }
+    #[cfg(not(unix))]
+    let _ = dir;
     Ok(())
 }
 

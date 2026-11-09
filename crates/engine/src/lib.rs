@@ -687,8 +687,13 @@ impl Session {
     /// itself is refused here, whichever command, task or caller asked ([`Catalog::apply_new`]);
     /// undo, redo and opening a library bring back what was and are not held to that.
     pub fn commit(&mut self, label: &str, op: Op) -> Result<()> {
+        self.commit_moved(label, op, false)
+    }
+
+    /// [`Session::commit`]; `folder_moved`: the op's relinks follow a folder LightCraft itself just renamed on disk.
+    fn commit_moved(&mut self, label: &str, op: Op, folder_moved: bool) -> Result<()> {
         let fwd = op.clone();
-        let inv = self.apply_through(op, Catalog::apply_new)?;
+        let inv = self.apply_through(op, Catalog::apply_new, folder_moved)?;
         self.pending_log.push(fwd);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
         self.commits = self.commits.wrapping_add(1);
@@ -708,10 +713,38 @@ impl Session {
         expected: Option<crate::cache_identity::PhysicalIdentity>,
         replace_faces: bool,
     ) -> Result<()> {
+        self.invalidate_cache_sources(&[(old.clone(), expected, replace_faces)], None)
+    }
+
+    /// Fence the render caches of every retired `(photo, expected identity, replace faces)` at once, before the catalog
+    /// changes: one catalog pass ([`photos_by_source`] when the caller has it), one marker write and one refresh of
+    /// the original reads, however many photos a folder move retires.
+    fn invalidate_cache_sources(
+        &mut self,
+        retirements: &[(lightcraft_catalog::Photo, Option<crate::cache_identity::PhysicalIdentity>, bool)],
+        by_source: Option<&std::collections::HashMap<lightcraft_catalog::Source, Vec<PhotoId>>>,
+    ) -> Result<()> {
+        if retirements.is_empty() {
+            return Ok(());
+        }
+        let owned;
+        let by_source = match by_source {
+            Some(index) => index,
+            None => {
+                owned = photos_by_source(&self.catalog);
+                &owned
+            }
+        };
+        let mut forget: Vec<(PhotoId, bool)> = Vec::new();
+        for (old, _, faces) in retirements {
+            for id in by_source.get(&old.source).into_iter().flatten().copied().chain(std::iter::once(old.id)) {
+                forget.push((id, *faces));
+            }
+        }
+        let items: Vec<_> = retirements.iter().map(|(old, expected, _)| (old, expected.clone())).collect();
         let identities = self.media.identities.clone();
-        let ids: Vec<_> = self.catalog.photos().filter(|p| p.source == old.source || p.id == old.id).map(|p| p.id).collect();
-        let invalidation = identities.invalidate(old, expected, || {
-            for id in ids {
+        let invalidation = identities.invalidate_all(&items, || {
+            for (id, replace_faces) in forget {
                 self.media.forget(id);
                 self.media.denoise.remove(id);
                 #[cfg(not(target_arch = "wasm32"))]
@@ -722,15 +755,16 @@ impl Session {
                 let _ = replace_faces;
             }
         });
-        if let Some(alias) = crate::cache_identity::path_key(old) {
-            if let Some(dir) = &self.media.smart_dir {
-                for path in crate::smart::paths_for_keys(dir, std::slice::from_ref(&alias)) {
-                    let _ = std::fs::remove_file(path);
-                }
+        let aliases: Vec<String> = retirements.iter().filter_map(|(old, _, _)| crate::cache_identity::path_key(old)).collect();
+        if let Some(dir) = &self.media.smart_dir {
+            for path in crate::smart::paths_for_keys(dir, &aliases) {
+                let _ = std::fs::remove_file(path);
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            if let (Some(dir), Some(active)) = (self.denoise_products_dir(), self.denoise.active.as_ref()) {
-                let key = crate::denoise::product_key_for(&active.fingerprint, &alias);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let (Some(dir), Some(active)) = (self.denoise_products_dir(), self.denoise.active.as_ref()) {
+            for alias in &aliases {
+                let key = crate::denoise::product_key_for(&active.fingerprint, alias);
                 let _ = std::fs::remove_file(crate::denoise::product_path(&dir, &key));
             }
         }
@@ -740,12 +774,18 @@ impl Session {
 
     /// [`Catalog::apply`] for what brings back what was (an undo or a redo).
     fn apply_catalog(&mut self, op: Op) -> Result<Op> {
-        self.apply_through(op, Catalog::apply)
+        self.apply_through(op, Catalog::apply, false)
     }
 
     /// Apply `op` with `apply` (the catalog's way in for a new edit or for bringing back what
-    /// was), then forget what the session cached of the photos it replaced.
-    fn apply_through(&mut self, op: Op, apply: fn(&mut Catalog, Op) -> std::result::Result<Op, lightcraft_catalog::CatalogError>) -> Result<Op> {
+    /// was), then forget what the session cached of the photos it replaced. `folder_moved`: the op's relinks follow a
+    /// folder LightCraft itself renamed on disk, so each file is the one its photo had and keeps its cached work.
+    fn apply_through(
+        &mut self,
+        op: Op,
+        apply: fn(&mut Catalog, Op) -> std::result::Result<Op, lightcraft_catalog::CatalogError>,
+        folder_moved: bool,
+    ) -> Result<Op> {
         // Retain only cache IDs while the catalog consumes the operation. Cloning an import
         // batch here also cloned every photo, although commit already keeps the journal copy.
         let mut invalidated = Vec::new();
@@ -767,6 +807,7 @@ impl Session {
             }
         };
         let mut retired_sources = Vec::new();
+        let mut by_source = None;
         let mut pending = vec![&op];
         while let Some(op) = pending.pop() {
             match op {
@@ -797,9 +838,11 @@ impl Session {
                             for photo in [&old, &destination] {
                                 retire(photo, expected.clone(), true);
                             }
-                            for photo in self.catalog.photos().filter(|p| p.source == *source) {
-                                invalidated.push(photo.id);
-                                replaced.push(photo.id);
+                            let index = by_source.get_or_insert_with(|| photos_by_source(&self.catalog));
+                            for same in index.get(source).into_iter().flatten().filter_map(|id| self.catalog.photo(*id)) {
+                                retire(same, expected.clone(), true);
+                                invalidated.push(same.id);
+                                replaced.push(same.id);
                             }
                             invalidated.push(*id);
                             replaced.push(*id);
@@ -827,12 +870,12 @@ impl Session {
                             old.preview_only = state.4.clone();
                             let mut destination = old.clone();
                             destination.source = source.clone();
-                            let relink = matches!(op, Op::Relink { .. });
+                            let relink = matches!(op, Op::Relink { .. }) && !folder_moved;
                             let expected = (!relink).then(|| crate::cache_identity::PhysicalIdentity::of(&destination)).flatten();
                             for photo in [&old, &destination] {
                                 retire(photo, expected.clone(), relink);
                             }
-                            if matches!(op, Op::Relink { .. }) {
+                            if relink {
                                 replaced.push(*id);
                             }
                         }
@@ -861,12 +904,12 @@ impl Session {
                 _ => {}
             }
         }
-        for (photo, expected, faces) in retirements {
+        for (photo, _, _) in &retirements {
             if let lightcraft_catalog::Source::File { path } = &photo.source {
                 retired_sources.push(path.clone());
             }
-            self.invalidate_cache_source(&photo, expected, faces)?;
         }
+        self.invalidate_cache_sources(&retirements, by_source.as_ref())?;
         let inv = apply(&mut self.catalog, op)?;
         self.media.identities.confirm(&retired_sources);
         self.originals.drop_membership(&invalidated);
@@ -888,7 +931,7 @@ impl Session {
     /// [`Session::commit`] for an op that goes with a folder already renamed on disk; the undo
     /// step renames it back (`folder` is the undo direction: current place → old place).
     pub(crate) fn commit_with_folder(&mut self, label: &str, op: Op, folder: FolderMove) -> Result<()> {
-        self.commit(label, op)?;
+        self.commit_moved(label, op, true)?;
         if let Some(e) = self.undo.last_mut() {
             e.folder = Some(folder);
         }
@@ -1092,7 +1135,7 @@ impl Session {
             self.originals.refresh(self);
             return Err(EngineError::Other(format!("can't move the files back: {message}")));
         }
-        match self.apply_catalog(op.clone()) {
+        match self.apply_through(op.clone(), Catalog::apply, folder.is_some()) {
             Ok(inv) => {
                 if let Some(f) = folder {
                     cmd::browse::follow_folder(self, &f.from, &f.to);
@@ -1642,6 +1685,15 @@ impl Session {
 
 /// Automatic versions kept per photo.
 pub const AUTO_VERSIONS: usize = 20;
+
+/// The catalog's photos by their source, built once for an op that retires many sources.
+fn photos_by_source(catalog: &Catalog) -> std::collections::HashMap<lightcraft_catalog::Source, Vec<PhotoId>> {
+    let mut by_source: std::collections::HashMap<lightcraft_catalog::Source, Vec<PhotoId>> = std::collections::HashMap::new();
+    for p in catalog.photos() {
+        by_source.entry(p.source.clone()).or_default().push(p.id);
+    }
+    by_source
+}
 
 /// The parts of `new` that differ from `old` (objects recurse; anything else is taken whole).
 pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {

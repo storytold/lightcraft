@@ -990,3 +990,64 @@ fn a_camera_jpeg_decoded_across_a_cache_clear_is_not_kept() {
         assert!(cache.get_memory(key).is_some(), "on disk {on_disk}: kept when made after the clear");
     }
 }
+
+#[test]
+fn a_folder_the_app_moves_keeps_its_photos_cached_work_both_ways() {
+    let dir = crate::tests_xmp::temp_dir("folder-move-keeps-caches");
+    let trip = dir.join("trip");
+    std::fs::create_dir_all(&trip).unwrap();
+    let mut s = crate::Session::new();
+    s.media.attach_disk_cache(&dir.join("library/thumbs"), 1 << 20);
+    for i in 0..40u64 {
+        let path = trip.join(format!("{i}.jpg")).to_string_lossy().to_string();
+        let mut p = Photo::new(PhotoId(100 + i), Source::File { path }, &format!("{i}.jpg"), "JPEG", 60, 40, "2026-01-01");
+        p.content_hash = Some(format!("hash{i}"));
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    s.faces.scanned.insert(100);
+    let syncs = lightcraft_catalog::safe_file::syncs_on_this_thread();
+    s.execute("folder.rename", &serde_json::json!({"path": trip, "name": "holiday"})).unwrap();
+    assert!(lightcraft_catalog::safe_file::syncs_on_this_thread() - syncs < 10, "one fence write for the whole folder");
+    assert!(s.catalog.photos().all(|p| !s.media.identities.needs_validation(p)), "moved photos keep their cache keys");
+    assert!(s.faces.scanned.contains(100));
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert!(s.catalog.photos().all(|p| p.source == Source::File { path: trip.join(p.file_name.as_str()).to_string_lossy().to_string() }));
+    assert!(s.catalog.photos().all(|p| !s.media.identities.needs_validation(p)), "and keep them when undo moves the folder back");
+    assert!(s.faces.scanned.contains(100));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_replacement_retires_every_record_of_the_same_file() {
+    let mut s = session();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id: p.id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: Some("old".into()),
+        preview_only: None,
+        preview_checked: String::new(),
+    })
+    .unwrap();
+    let mut other = (**s.catalog.photo(p.id).unwrap()).clone();
+    other.id = PhotoId(2);
+    other.file_size = p.file_size + 7;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(other) }).unwrap();
+    assert!(s.media.content_keys(s.catalog.photo(PhotoId(2)).unwrap()).contains(&"old".to_string()));
+    s.commit(
+        "Reload",
+        Op::SetContent {
+            id: p.id,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: Some("new".into()),
+            preview_only: None,
+            preview_checked: String::new(),
+        },
+    )
+    .unwrap();
+    assert!(!s.media.content_keys(s.catalog.photo(PhotoId(2)).unwrap()).contains(&"old".to_string()));
+}
