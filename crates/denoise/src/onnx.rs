@@ -205,6 +205,9 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 if joins.contains_key(a) || joins.contains_key(b) {
                     return unsupported("Add reading a Concat output");
                 }
+                if initialisers.contains_key(a.as_str()) || initialisers.contains_key(b.as_str()) {
+                    return unsupported("Add with an initializer operand");
+                }
                 let src = lookup(a)?;
                 let src2 = lookup(b)?;
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("Add without an output".into()))?;
@@ -653,5 +656,47 @@ mod tests {
         assert!(net.is_ok(), "a LeakyRelu residual model was rejected: {:?}", net.err());
         let net = net.unwrap();
         assert_eq!((net.in_channels, net.out_channels()), (4, 3));
+    }
+
+    #[test]
+    fn add_with_initializer_operand_is_unsupported() {
+        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
+
+        fn node(op: &str, inputs: &[&str], output: &str) -> Vec<u8> {
+            let mut n = Vec::new();
+            for i in inputs {
+                len_field(1, i.as_bytes(), &mut n);
+            }
+            len_field(2, output.as_bytes(), &mut n);
+            len_field(4, op.as_bytes(), &mut n);
+            n
+        }
+
+        fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
+            let mut t = Vec::new();
+            for d in dims {
+                varint_field(1, *d, &mut t);
+            }
+            varint_field(2, 1, &mut t);
+            len_field(8, name.as_bytes(), &mut t);
+            let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            len_field(9, &raw, &mut t);
+            t
+        }
+
+        let mut graph = Vec::new();
+        len_field(1, &node("Add", &["data", "w1"], "a1"), &mut graph);
+        len_field(5, &tensor("w1", &[4], &[0.1; 4]), &mut graph);
+        len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
+        len_field(12, &value_info_bytes("a1", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
+        let mut ops = Vec::new();
+        len_field(1, b"", &mut ops);
+        varint_field(2, 13, &mut ops);
+        let mut model = Vec::new();
+        varint_field(1, 8, &mut model);
+        len_field(7, &graph, &mut model);
+        len_field(8, &ops, &mut model);
+
+        assert!(matches!(read_bytes(&model), Err(NetError::Unsupported(_))));
     }
 }
