@@ -294,7 +294,7 @@ impl Backend {
                 let (_tx, store) = Self::idb_store(db, false)?;
                 let prefix = format!("{path}/");
                 let range = web_sys::IdbKeyRange::bound(&prefix.as_str().into(), &format!("{prefix}\u{ffff}").into()).map_err(err)?;
-                let keys = idb_req(&store.get_all_keys_with_key(&range).map_err(err)?).await?;
+                let keys = idb_req(&store.get_all_keys_with_key_and_limit(&range, 1).map_err(err)?).await?;
                 let arr: js_sys::Array = keys.unchecked_into();
                 Ok(arr.length() > 0)
             }
