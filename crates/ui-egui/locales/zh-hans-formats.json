@@ -96,6 +96,8 @@
   "{name} On": "已开启 {name}",
   "{name} — double-click to reset it": "{name} — 双击可重置",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "{n} 项更改已保存在内存中，但尚未写入磁盘：{e}\nLightCraft 会自动重试；现在退出将丢失这些更改。{0:.0}{1:.0}",
+  "{n} file{} skipped (not a supported photo type)": "已跳过的文件（不是支持的照片类型）：{n} 个{:.0}",
+  "{n} folder{} could not be read": "无法读取的文件夹：{n} 个{:.0}",
   "{n} found · {sel} selected": "找到 {n} 张 · 已选 {sel} 张",
   "{n} photos": "{n} 张照片",
   "{n} photos in {} are hidden by the filters above": "{0} 中的 {n} 张照片被上方的过滤器隐藏",
@@ -157,6 +159,7 @@
   "; {outside} outside its time range": "；{outside} 张不在其时间范围内",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}：{} 个 PR，{} 次提交，+{} / −{} 行（Δ {}），+{} / −{} 个二进制资源，{} – {}",
   "Added {what} to {name}": "已将{what}添加到 {name}",
+  "Adjustments: {n}": "调整：{n}",
   "Auto Import: added {} photo{}": "自动导入：已添加 {0} 张照片{1:.0}",
   "Building previews for {} photos…": "正在为 {0} 张照片生成预览…",
   "Couldn't open the editor: {e}": "无法打开编辑器：{e}",
@@ -313,9 +316,15 @@
   "Added {n} photo{}": "已添加 {n} 张照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目录“{catalog}”要导入到哪里？",
   "Merge into the open library “{library}” ({count} photo{})": "合并到当前打开的图库“{library}”（{count} 张照片）{:.0}",
+  "Profile: {} (lens database)": "配置文件：{}（镜头数据库）",
+  "No lens profile found for {}.": "未找到 {} 的镜头配置文件。",
+  "{n} photos got their lens profile": "{n} 张照片获得了镜头配置文件",
   "Photo: {name}": "照片：{name}",
   "Panel layout could not be restored: {error}": "无法恢复面板布局：{error}",
   "Panel move was not applied: {error}": "面板移动未应用：{error}",
   "{name} is installed": "{name} 已安装",
-  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启"
+  "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
+  "Bring photos in with File › Import Photos… ({keys}).": "通过 文件 › 导入照片… ({keys}) 导入照片。",
+  "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
+  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。"
 }

@@ -117,6 +117,8 @@
   "{name} On": "開啟{name}",
   "{name} — double-click to reset it": "{name} — 按兩下可重設",
   "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.": "{n} 項變更{:.0}已保留在記憶體，但尚未寫入磁碟：{e}\nLightCraft 會自動重試；現在結束程式會遺失{}。",
+  "{n} file{} skipped (not a supported photo type)": "已略過的檔案（不是支援的照片類型）：{n} 個{:.0}",
+  "{n} folder{} could not be read": "無法讀取的資料夾：{n} 個{:.0}",
   "{n} found · {sel} selected": "找到 {n} 張 · 已選取 {sel} 張",
   "{n} photos": "{n} 張照片",
   "{n} photos in {} are hidden by the filters above": "{}中的 {n} 張照片被上方篩選條件隱藏",
@@ -157,6 +159,7 @@
   "; {outside} outside its time range": "；{outside} 張不在其時間範圍內",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}：{} 個 PR，{} 次提交，+{} / −{} 行（Δ {}），+{} / −{} 個二進位資產，{} – {}",
   "Added {what} to {name}": "已將{what}加入 {name}",
+  "Adjustments: {n}": "調整：{n}",
   "Auto Import: added {} photo{}": "自動匯入：已新增 {} 張照片{:.0}",
   "Building previews for {} photos…": "正在為 {} 張照片建立預覽…",
   "Couldn't open the editor: {e}": "無法開啟編輯器：{e}",
@@ -313,9 +316,15 @@
   "Added {n} photo{}": "已加入 {n} 張照片{:.0}",
   "Where should the Lightroom catalog “{catalog}” go?": "Lightroom 目錄「{catalog}」要匯入到哪裡？",
   "Merge into the open library “{library}” ({count} photo{})": "合併到目前開啟的照片庫「{library}」（{count} 張照片）{:.0}",
+  "Profile: {} (lens database)": "設定檔：{}（鏡頭資料庫）",
+  "No lens profile found for {}.": "找不到 {} 的鏡頭設定檔。",
+  "{n} photos got their lens profile": "{n} 張照片取得了鏡頭設定檔",
   "Photo: {name}": "照片：{name}",
   "Panel layout could not be restored: {error}": "無法還原面板配置：{error}",
   "Panel move was not applied: {error}": "面板移動未套用：{error}",
   "{name} is installed": "{name} 已安裝",
-  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟"
+  "{name} is installed and in use: face recognition is on": "{name} 已安裝並在使用中：臉部辨識已開啟",
+  "Bring photos in with File › Import Photos… ({keys}).": "透過 檔案 › 匯入照片… ({keys}) 匯入照片。",
+  "View › Detail View ({keys}).": "檢視 › 詳細檢視 ({keys})。",
+  "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。"
 }

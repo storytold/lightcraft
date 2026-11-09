@@ -1,4 +1,5 @@
 use super::options::{Conflict, DestinationMode, ExportFormat, HdrCurve, MetadataPolicy, Resize, ResizeMode, SharpenAmount, SharpenFor};
+use super::place::clean_subfolder;
 use super::prepare::DngCompression;
 use super::watermark::{Anchor, Watermark};
 use super::{ExportOptions, JxlColour, JxlEffort, JxlOptions, OutputDepth, OutputSpace, TiffCompression};
@@ -429,7 +430,7 @@ impl ExportOptions {
             naming: s("naming").map_or(d.naming, str::to_string),
             start_number: u("startNumber").map_or(d.start_number, |v| v.min(999_999) as u32),
             destination_mode: s("destinationMode").and_then(DestinationMode::parse).unwrap_or(d.destination_mode),
-            subfolder: s("subfolder").map_or(d.subfolder, |v| v.trim().replace(['\\', ':', '\0'], "_")),
+            subfolder: s("subfolder").map_or(d.subfolder, clean_subfolder),
             conflict: s("conflict").and_then(Conflict::parse).unwrap_or(d.conflict),
             tiff_compression: match s("tiffCompression").map(str::to_ascii_lowercase).as_deref() {
                 Some("none") => TiffCompression::None,

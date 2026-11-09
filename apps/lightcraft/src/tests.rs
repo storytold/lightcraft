@@ -5,6 +5,7 @@ fn desktop_clear_color_stays_opaque_with_a_modal_open() {
     let mut app = App(
         LightcraftApp::new(Session::new(), Services::default()),
         PrefsWriter::default(),
+        None,
         #[cfg(target_os = "macos")]
         None,
     );
@@ -220,6 +221,42 @@ fn memory_session_leaves_a_damaged_ui_json_alone() {
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1);
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A settings file from before the startup dialog existed (no `seenVersion`) belongs to an
+/// installation that has been run: its first launch after the update shows What's New, never
+/// the first-run tour. A file this version saved before the dialog was presented carries an
+/// explicit `null` and is not migrated; only a missing file stays a first run as well.
+#[test]
+fn legacy_ui_json_shows_whats_new_not_the_first_run_tour() {
+    let d = dir("legacy-startup");
+    let path = d.join("ui.json");
+    std::fs::write(&path, br#"{"language":"en","settings":{"startupView":"detail"}}"#).unwrap();
+    let (ui, warning, keep) = load_prefs_at(&path, true);
+    assert!(warning.is_none() && !keep);
+    let ui = ui.unwrap();
+    assert_eq!(ui.seen_version.as_deref(), Some(lightcraft_ui_egui::startup::LEGACY_SEEN_VERSION));
+    assert_eq!(
+        lightcraft_ui_egui::startup::startup_dialog(ui.seen_version.as_deref(), env!("CARGO_PKG_VERSION")),
+        Some(lightcraft_ui_egui::startup::StartupDialog::WhatsNew)
+    );
+    // a file that already records the running version is migrated nowhere
+    std::fs::write(&path, format!(r#"{{"seenVersion":"{}"}}"#, env!("CARGO_PKG_VERSION"))).unwrap();
+    let (ui, warning, _) = load_prefs_at(&path, true);
+    assert!(warning.is_none());
+    assert_eq!(ui.unwrap().seen_version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+    // an explicit `null` is this version's "not presented yet" (the launch chooser saves while
+    // the tour still waits): it stays a first run, not a pre-feature file
+    std::fs::write(&path, br#"{"language":"en","seenVersion":null}"#).unwrap();
+    let (ui, warning, _) = load_prefs_at(&path, true);
+    assert!(warning.is_none());
+    let ui = ui.unwrap();
+    assert_eq!(ui.seen_version, None);
+    assert_eq!(
+        lightcraft_ui_egui::startup::startup_dialog(ui.seen_version.as_deref(), env!("CARGO_PKG_VERSION")),
+        Some(lightcraft_ui_egui::startup::StartupDialog::FirstRun)
+    );
+    std::fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
@@ -566,6 +603,7 @@ fn on_exit_ends_the_process_on_macos() {
         let mut app = App(
             app,
             PrefsWriter::default(),
+            None,
             #[cfg(target_os = "macos")]
             None,
         );
@@ -598,6 +636,7 @@ fn on_exit_removes_the_lock_owner_note() {
         let mut app = App(
             LightcraftApp::new(session, Services::default()),
             PrefsWriter::default(),
+            None,
             #[cfg(target_os = "macos")]
             None,
         );
