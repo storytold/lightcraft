@@ -56,12 +56,16 @@ pub(crate) fn ifd0_orientation(bytes: &[u8]) -> Option<Orientation> {
 }
 
 fn extended_iso(exif: Option<&Ifd>) -> Option<u64> {
-    exif.and_then(|e| e.u64(t::RECOMMENDED_EXPOSURE_INDEX).or_else(|| e.u64(t::ISO_SPEED_RATINGS_EXT))).filter(|&v| v > 0)
+    let e = exif?;
+    let stated = |tag| e.u64(tag).filter(|&v| v > 0);
+    stated(t::RECOMMENDED_EXPOSURE_INDEX).or_else(|| stated(t::ISO_SPEED_RATINGS_EXT))
 }
 
 fn without_iso_overflow(iso: Option<u32>, tiff: &Tiff) -> Option<u32> {
-    // 65535 is an overflow marker only in the short field; an extended measurement may equal it.
-    iso.filter(|&v| v != u32::from(u16::MAX) || extended_iso(tiff.exif()).is_some())
+    // 65535 is an overflow marker only in the short field; a LONG or an extended measurement may equal it.
+    let entry = tiff.exif().and_then(|e| e.get(t::ISO_SPEED)).or_else(|| tiff.ifds.first().and_then(|i| i.get(t::ISO_SPEED)));
+    let short = entry.is_some_and(|e| e.field_type() == FieldType::Short);
+    iso.filter(|&v| v != u32::from(u16::MAX) || !short || extended_iso(tiff.exif()).is_some())
 }
 
 /// Build [`Metadata`] from a parsed TIFF stream (IFD0 + Exif + GPS; DNG tags as fallbacks).
@@ -197,9 +201,14 @@ const PANASONIC_LENS_TYPE: u16 = 0x0051;
 const PANASONIC_JPG_FROM_RAW: u16 = 0x002E;
 
 /// The lens name in the Panasonic maker note (tag `0x0051`) of this Exif or RW2 stream (`data` starts at its
-/// TIFF header): the note of its own Exif IFD, else, for a raw, the note in its JpgFromRaw's Exif.
+/// TIFF header): the note of its own Exif IFD, else, for a RW2, the note in its JpgFromRaw's Exif.
 pub(crate) fn panasonic_maker_note_lens(data: &[u8], tiff: &Tiff) -> Option<String> {
-    panasonic_lens(data, tiff).or_else(|| panasonic_jpg_from_raw_lens(tiff, &ParseOptions::default()))
+    panasonic_lens(data, tiff).or_else(|| is_panasonic_raw(data).then(|| panasonic_jpg_from_raw_lens(tiff, &ParseOptions::default())).flatten())
+}
+
+/// A RW2/RWL stream: its private IFD0 tags, the JpgFromRaw too, mean nothing in any other TIFF.
+fn is_panasonic_raw(data: &[u8]) -> bool {
+    data.starts_with(b"IIU\0")
 }
 
 /// The lens name in a `Panasonic\0` maker note of this Exif stream (`data` starts at its TIFF header).
@@ -222,8 +231,7 @@ const PANASONIC_ISO_32: u16 = 0x0037;
 /// more). The full Exif is in the APP1 of its JpgFromRaw: fill what the raw stream lacks from there, then fall
 /// back to the ISO in the Panasonic raw IFD0. The raw's own dimensions stay; the preview's would be smaller.
 fn fill_from_panasonic_raw(m: &mut Metadata, data: &[u8], tiff: &Tiff, opts: &ParseOptions) {
-    // Private IFD0 tags are meaningful only in the RW2 container, including JpgFromRaw.
-    if !data.starts_with(b"IIU\0") {
+    if !is_panasonic_raw(data) {
         return;
     }
     let Some(ifd0) = tiff.ifds.first() else { return };
@@ -562,6 +570,42 @@ pub(crate) mod tests {
             fill_from_panasonic_raw(&mut m, &bytes, &tiff, &ParseOptions::default());
             assert_eq!(m.iso, Some(65535));
         }
+    }
+
+    /// An extended ISO tag holding 0 states nothing: the next one still answers, for the 65535 marker too.
+    #[test]
+    fn rw2_zero_recommended_exposure_index_does_not_hide_the_extended_iso() {
+        let inner = |ext: Option<u32>| {
+            let mut e = IfdBuilder::new();
+            e.set(t::ISO_SPEED, Value::Short(vec![u16::MAX]));
+            e.set(t::RECOMMENDED_EXPOSURE_INDEX, Value::Long(vec![0]));
+            if let Some(v) = ext {
+                e.set(t::ISO_SPEED_RATINGS_EXT, Value::Long(vec![v]));
+            }
+            e
+        };
+        assert_eq!(read_exif(&rw2_with_options(Some(inner(Some(102400))), Some(200), None, true, None)).iso, Some(102400));
+        assert_eq!(read_exif(&rw2_with_options(Some(inner(Some(65535))), Some(200), None, true, None)).iso, Some(65535));
+        // nothing else states one: 65535 is still the short field's overflow marker
+        assert_eq!(read_exif(&rw2_with_options(Some(inner(None)), Some(200), None, true, None)).iso, Some(200));
+    }
+
+    /// 65535 marks an overflow only in the SHORT form of ISOSpeedRatings: a LONG can hold the value itself.
+    #[test]
+    fn rw2_long_iso_65535_is_a_measurement_not_an_overflow_marker() {
+        let mut inner = IfdBuilder::new();
+        inner.set(t::ISO_SPEED, Value::Long(vec![65535]));
+        assert_eq!(read_exif(&rw2_with_options(Some(inner), Some(200), None, true, None)).iso, Some(65535));
+        // the raw's own Exif IFD
+        let bytes = rw2_with_options(None, Some(200), None, false, Some(u16::MAX));
+        let mut tiff = Tiff::parse(&bytes).unwrap();
+        let exif = tiff.ifds[0].exif.as_mut().unwrap();
+        exif.entries.iter_mut().find(|e| e.tag == t::ISO_SPEED).unwrap().value = Value::Long(vec![65535]);
+        let mut m = from_tiff(&tiff);
+        fill_from_panasonic_raw(&mut m, &bytes, &tiff, &ParseOptions::default());
+        assert_eq!(m.iso, Some(65535));
+        // the same short value is still the marker
+        assert_eq!(read_exif(&rw2_with_options(None, Some(200), None, false, Some(u16::MAX))).iso, Some(200));
     }
 
     #[test]
