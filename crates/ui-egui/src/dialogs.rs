@@ -482,6 +482,8 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::ManageEffects { .. } => "Manage Effect Presets",
         Dialog::DeleteEffects { names } if names.len() == 1 => "Delete Effect Preset",
         Dialog::DeleteEffects { .. } => "Delete Effect Presets",
+        Dialog::DeletePresets { .. } => "Delete Presets",
+        Dialog::DeletePresetGroup { .. } => "Delete Preset Group",
         Dialog::RemoveFolder { disk: true, .. } => "Remove Disk from Library",
         Dialog::RemoveFolder { .. } => "Remove Folder from Library",
         Dialog::SynchronizeFolder { .. } => "Synchronize Folder",
@@ -578,7 +580,11 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::DenoiseModel { .. } if !informational => "Install",
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
-        Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::ConfirmDelete { .. }
+        | Dialog::DeleteKeyword { .. }
+        | Dialog::DeleteEffects { .. }
+        | Dialog::DeletePresets { .. }
+        | Dialog::DeletePresetGroup { .. } => "Delete",
         Dialog::SaveEffect { .. }
         | Dialog::NewAlbum { .. }
         | Dialog::NewSmartAlbum { .. }
@@ -796,9 +802,10 @@ const BACKDROP_SHOWN: &str = "dialog-backdrop-shown";
 /// listed (one opened by automation) has no verb to name and keeps "OK".
 fn prompt_verb(command: &str) -> &'static str {
     match command {
-        "album.rename" | "folder.rename" | "version.rename" | "preset.rename" | "mask.renameEffect" => "Rename",
-        "folder.create" | "mask.setEffectGroup" | "app.newLibrary" => "Create",
-        "preset.move" => "Move",
+        "album.rename" | "folder.rename" | "version.rename" | "preset.rename" | "preset.renameGroup" | "mask.renameEffect" => "Rename",
+        "folder.create" | "mask.setEffectGroup" | "app.newLibrary" | "preset.createGroup" => "Create",
+        "preset.move" | "preset.moveMany" => "Move",
+        "preset.copy" => "Copy",
         "keyword.saveSet" | "filter.savePreset" | "curve.savePreset" | "metadata.savePreset" => "Save",
         "photo.tagFromTracklog" => "Add Locations",
         _ => "OK",
@@ -1978,6 +1985,34 @@ fn delete_effects_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     ui.label(egui::RichText::new(crate::i18n::tr("Masks keep their sliders. Export presets first to keep a copy.")).color(t.text_dim));
 }
 
+/// The body of the DeletePresets and DeletePresetGroup dialogs. Presets have no undo.
+fn delete_presets_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
+    match dlg {
+        Dialog::DeletePresets { ids, builtin, .. } => {
+            let n = ids.len().saturating_sub(*builtin);
+            ui.label(if n == 1 {
+                crate::i18n::tr("Delete this preset?").to_string()
+            } else {
+                crate::i18n::tr_format!("Delete these {n} presets?", n = n)
+            });
+            if *builtin == 1 {
+                ui.label(crate::i18n::tr("1 built-in preset stays: it can't be deleted."));
+            } else if *builtin > 1 {
+                ui.label(crate::i18n::tr_format!("{kept} built-in presets stay: they can't be deleted.", kept = *builtin));
+            }
+        }
+        Dialog::DeletePresetGroup { name, count, .. } => {
+            ui.label(if *count == 1 {
+                crate::i18n::tr_format!("Delete the group “{name}” and its only preset?", name = name)
+            } else {
+                crate::i18n::tr_format!("Delete the group “{name}” and its {n} presets?", name = name, n = *count)
+            });
+        }
+        _ => return,
+    }
+    ui.label(egui::RichText::new(crate::i18n::tr("This can't be undone. Export presets first to keep a copy.")).color(t.text_dim));
+}
+
 /// The body of the MovePhotos dialog.
 fn move_photos_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::MovePhotos { ids, name, dont_ask, .. } = dlg else { return };
@@ -2141,6 +2176,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             crate::panels::mask_effects::manage_body(app, ui, search, selected, rename, confirm_delete, new_group)
         }
         Dialog::DeleteEffects { .. } => delete_effects_body(ui, t, dlg),
+        Dialog::DeletePresets { .. } | Dialog::DeletePresetGroup { .. } => delete_presets_body(ui, t, dlg),
         Dialog::ConfirmDelete { count } => {
             let what =
                 if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };

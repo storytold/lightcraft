@@ -58,6 +58,15 @@ pub struct UiState {
     pub presets: bool,
     /// Presets column: show a live thumbnail of the photo with each preset.
     pub preset_thumbs: bool,
+    /// Presets column: a click selects a preset and a double-click applies it, instead of a click
+    /// applying it.
+    pub preset_double_click: bool,
+    /// Presets column: the ids of the presets selected for a bulk action.
+    #[serde(skip)]
+    pub preset_selection: std::collections::BTreeSet<String>,
+    /// Presets column: the preset a Shift+click extends the selection from.
+    #[serde(skip)]
+    pub preset_anchor: Option<String>,
     pub filmstrip: bool,
     pub zoom: Zoom,
     /// Pan offset of the loupe when zoomed (image-normalized centre).
@@ -403,6 +412,9 @@ impl Default for UiState {
             right_hidden: RightPanel::None,
             presets: false,
             preset_thumbs: false,
+            preset_double_click: false,
+            preset_selection: Default::default(),
+            preset_anchor: None,
             filmstrip: true,
             zoom: Zoom::Fit,
             pan: (0.5, 0.5),
