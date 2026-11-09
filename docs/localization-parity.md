@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-24 · **Change:** minor (German: interface strings and formats messages reviewed, terms fixed in localization-de.md; German form of address: *du*; Indonesian and Finnish interface catalogs added; Italian: every interface string translated, native-speaker corrections; Vietnamese shipped; previously minor: de, es, fr, ja, uk catalogs filled; re-measured; Italian and Georgian interface catalogs added) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-13 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 · **Changes:** [revision history](#revision-history)
 
 How far each interface language is from `full`. How to add or maintain a language is in
 [localization.md](localization.md); per-language notes are in `localization-<code>.md`
