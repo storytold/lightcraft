@@ -212,6 +212,11 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .filter(|face| app.ui.unnamed_selected.contains(&(face.photo, face.index)))
             .map(|face| json!({"photo": face.photo, "index": face.index, "rect": face.rect}))
             .collect();
+        // A partial cache must never turn the person's whole selection into a partial commit.
+        if faces.len() != app.ui.unnamed_selected.len() {
+            app.toast(ui.ctx(), crate::i18n::tr("Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again."));
+            return;
+        }
         match app.run("faces.ignore", json!({"faces": faces})) {
             Ok(_) => {
                 app.ui.unnamed_selected.clear();
@@ -331,6 +336,56 @@ pub fn tile(app: &mut LightcraftApp, ui: &mut egui::Ui, list: &Unnamed, i: usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A partial cached selection must not become a successful partial Ignore batch.
+    #[test]
+    fn ignoring_an_incomplete_cached_selection_changes_nothing_and_keeps_the_selection() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        let id = app.session.catalog.photos().next().unwrap().id;
+        let mut meta = app.session.catalog.photo(id).unwrap().meta.clone();
+        meta.regions = vec![lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: None,
+            description: None,
+        }];
+        app.session.commit("setup", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        let timeout = std::time::Duration::from_secs(15);
+        h.step();
+        h.app.run("view.people", json!({})).unwrap();
+        h.settle(timeout);
+        // Inject an inconsistent selection after the normal refresh/pruning has run.
+        h.app.ui.unnamed_selected.extend([(id.0, 0), (id.0, 99)]);
+        h.app.ui.unnamed_anchor = Some(0);
+        h.step();
+        let before = (h.app.session.catalog.revision, h.app.session.undo.len(), h.app.ui.unnamed_selected.clone());
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "unnamed:ignore"}), timeout)["ok"], true);
+        h.step();
+        assert_eq!((h.app.session.catalog.revision, h.app.session.undo.len(), h.app.ui.unnamed_selected.clone()), before);
+        assert_eq!(h.app.ui.unnamed_anchor, Some(0));
+        assert_eq!(h.app.session.catalog.photo(id).unwrap().meta.regions[0].kind, lightcraft_meta::RegionKind::Face);
+        assert_eq!(
+            h.app.ui.toast.as_ref().unwrap().0,
+            crate::i18n::tr("Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again.")
+        );
+        capture_incomplete_selection_if_requested(&mut h, timeout);
+    }
+
+    /// Capture the synthetic app through the same snapshot path as the other face-panel tests.
+    fn capture_incomplete_selection_if_requested(h: &mut crate::headless::Headless, timeout: std::time::Duration) {
+        let Some(path) = std::env::var_os("LIGHTCRAFT_INCOMPLETE_FACE_SELECTION_SCREENSHOT") else { return };
+        let shot = h.snapshot(timeout);
+        let image = lightcraft_raster::Rgba8::from_fn(shot.size[0], shot.size[1], |x, y| shot.pixels[y * shot.size[0] + x].to_array());
+        let png = lightcraft_engine::export::encode_image(
+            &image,
+            &lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() },
+        )
+        .unwrap();
+        std::fs::write(path, png).unwrap();
+        let inspected = h.request("ui.inspect", json!({}), timeout);
+        println!("Incomplete face-selection perf: {}", inspected["result"]["perf"]);
+    }
 
     #[test]
     fn selected_unnamed_faces_survive_unrelated_changes_but_not_index_reuse() {

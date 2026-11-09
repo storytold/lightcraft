@@ -2446,5 +2446,6 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "アプリを --control 7980 (または LIGHTCRAFT_CONTROL_PORT) で起動してから、lightcraft-cli mcp --connect でエージェントを接続できます。",
   "Welcome": "ようこそ",
   "Next": "次へ",
-  "Get Started": "始める"
+  "Get Started": "始める",
+  "Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again.": "選択した顔の一部を利用できません。どの顔も無視されていません。選択を解除して、もう一度お試しください。"
 }

@@ -610,6 +610,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     result
 }
 
+/// Dispatch a tool; the outer wrapper attaches the backend's optional error details.
 fn call_tool_inner(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     let args = if args.is_null() { &json!({}) } else { args };
     if !args.is_object() {

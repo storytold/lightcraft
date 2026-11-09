@@ -51,6 +51,7 @@ fn errors() {
     assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("unknown command"));
 }
 
+/// Generated/alias tools and batches retain validation details, but later errors inherit none.
 #[test]
 fn face_review_errors_keep_details_for_tools_and_batches_without_leaking() {
     let mut b = Headless::new(lightcraft_engine::Session::with_demo());

@@ -13,6 +13,7 @@ pub(crate) struct Index {
 }
 
 impl Index {
+    /// Replace one photo's derived keys/count, including removal from the library.
     fn update(&mut self, catalog: &Catalog, id: PhotoId) {
         #[cfg(test)]
         {
@@ -36,6 +37,8 @@ impl Index {
         }
     }
 
+    /// Follow catalog changes, then return a page in photo/region order. The command validates
+    /// `limit` (1..=5000) before calling. A cold/unknown-history rebuild is synchronous.
     pub fn page(&mut self, catalog: &Catalog, generation: u64, offset: usize, limit: usize) -> (usize, Vec<(PhotoId, usize)>) {
         let stamp = (generation, catalog.revision);
         if self.stamp != Some(stamp) {

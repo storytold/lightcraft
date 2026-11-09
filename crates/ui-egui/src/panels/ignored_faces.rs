@@ -22,6 +22,7 @@ pub struct View {
 }
 
 impl View {
+    /// Parse display geometry once, while retaining the reviewed command payload unchanged.
     fn set_faces(&mut self, faces: Vec<Value>) {
         self.views = faces.iter().map(|face| serde_json::from_value(face["view"].clone()).ok()).collect();
         self.faces = Some(std::sync::Arc::new(faces));
@@ -237,6 +238,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
 
+    /// Control aliases expose typed face failures without altering other command errors.
     #[test]
     fn control_face_errors_include_codes_and_fields_without_changing_the_string() {
         let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
@@ -390,6 +392,7 @@ mod tests {
         assert!(!h.app.widgets.iter().any(|(id, _)| id == "unnamed:ignore"));
     }
 
+    /// Exercise range selection and both explicit ways to discard that selection.
     fn check_range_clear_and_refresh(h: &mut crate::headless::Headless, timeout: std::time::Duration) {
         for (index, shift) in [(0, false), (2, true)] {
             assert_eq!(h.request("ui.clickWidget", json!({"id": format!("ignoredFaces:face:{index}"), "shift": shift}), timeout)["ok"], true);
@@ -407,6 +410,7 @@ mod tests {
         assert!(h.app.ui.ignored_faces.as_ref().unwrap().selected.is_empty());
     }
 
+    /// Removing the final page externally must clamp to the final valid page, not stay empty.
     fn check_external_shrink(h: &mut crate::headless::Headless, id: lightcraft_catalog::PhotoId, timeout: std::time::Duration) {
         // An external mutation (not Restore's own reset) shrinks the last page and takes
         // the revision branch's clamp back to the final valid page.

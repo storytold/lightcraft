@@ -2402,5 +2402,6 @@
   "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Valitse kasvot tai poista valinta napsauttamalla. Vaihto-napsautus laajentaa toiminnon alueelle. Kaksoisnapsautus avaa kuvan.",
   "Ignore Faces": "Ohita kasvot",
   "Restore Ignored Faces": "Palauta ohitetut kasvot",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again.": "Jotkin valitut kasvot eivät ole käytettävissä. Mitään ei ohitettu. Tyhjennä valinta ja yritä uudelleen."
 }

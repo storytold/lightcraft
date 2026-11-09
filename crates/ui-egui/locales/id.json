@@ -2418,5 +2418,6 @@
   "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Klik wajah untuk memilih atau membatalkan pilihan. Shift-klik memperluas tindakan ke suatu rentang. Klik dua kali membuka foto.",
   "Ignore Faces": "Abaikan Wajah",
   "Restore Ignored Faces": "Pulihkan Wajah yang Diabaikan",
-  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again.": "Beberapa wajah yang dipilih tidak tersedia. Tidak ada yang diabaikan. Hapus pilihan dan coba lagi."
 }

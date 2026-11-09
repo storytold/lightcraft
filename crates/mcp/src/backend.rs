@@ -252,6 +252,7 @@ mod tests {
         assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock, "request was resent on a new connection");
     }
 
+    /// Remote clients retain optional details without changing string-only error handling.
     #[test]
     fn remote_keeps_optional_face_error_details_but_preserves_the_error_string() {
         with_reply(

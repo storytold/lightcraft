@@ -553,6 +553,7 @@ fn ignore_requires_reviewed_geometry_and_retries_are_noops() {
     assert_eq!(s.undo.len(), before + 1);
 }
 
+/// Every validation category carries its parameter location and leaves the whole catalog intact.
 #[test]
 fn face_review_errors_have_stable_codes_fields_and_atomic_targets() {
     use crate::{ErrorKind, FaceErrorCode as Code, FaceErrorDetails};
@@ -583,6 +584,7 @@ fn face_review_errors_have_stable_codes_fields_and_atomic_targets() {
     }
 }
 
+/// Mixed batches edit only transitions, while a no-op retry keeps a pending Redo intact.
 #[test]
 fn ignore_mixed_noops_and_changes_counts_only_transitions_and_preserves_redo() {
     let mut s = Session::with_demo();
@@ -674,6 +676,7 @@ fn ignored_faces_pages_beyond_100000_and_uses_indexed_views() {
     }
 }
 
+/// Derived keys follow edits/history/membership and cannot leak across library generations.
 #[test]
 fn ignored_index_follows_direct_edits_history_and_membership() {
     let mut s = Session::with_demo();

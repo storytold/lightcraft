@@ -2370,5 +2370,6 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again.": "Niektóre zaznaczone twarze są niedostępne. Żadna twarz nie została zignorowana. Wyczyść zaznaczenie i spróbuj ponownie."
 }

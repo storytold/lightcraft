@@ -75,6 +75,7 @@ fn only(s: &Session) -> PhotoId {
     s.catalog.photos().next().unwrap().id
 }
 
+/// Face-only commits/history must preserve both files and every develop-state marker.
 fn assert_face_history_untouched(s: &Session, src: &std::path::Path, ids: &[PhotoId], bytes: &[u8], originals: &[Vec<u8>]) {
     assert_eq!(std::fs::read(src.join("a.xmp")).unwrap(), bytes);
     assert!(!src.join("b.xmp").exists());

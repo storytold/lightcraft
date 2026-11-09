@@ -2608,5 +2608,6 @@
   "Welcome": "Benvenuto",
   "Next": "Avanti",
   "Get Started": "Inizia",
-  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto"
+  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto",
+  "Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again.": "Alcuni volti selezionati non sono disponibili. Nessun volto è stato ignorato. Cancella la selezione e riprova."
 }

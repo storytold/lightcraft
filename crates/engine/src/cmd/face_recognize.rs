@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use super::{CommandSpec, bad, cmd};
 use crate::{FaceErrorCode, FaceErrorDetails, Result, Session};
 
+/// Keep validation reasons/locations stable while the message remains free to change.
 fn face_error(cmd: &'static str, code: FaceErrorCode, field: &'static str, target: Option<usize>, msg: &str) -> crate::EngineError {
     crate::EngineError::FaceRequest { cmd, details: FaceErrorDetails { code, field, target }, msg: msg.into() }
 }

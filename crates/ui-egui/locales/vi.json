@@ -2729,5 +2729,6 @@
   "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "Nhấp vào khuôn mặt để chọn hoặc bỏ chọn. Giữ Shift và nhấp để mở rộng thao tác cho một dải. Nhấp đúp để mở ảnh.",
   "Ignore Faces": "Bỏ qua khuôn mặt",
   "Restore Ignored Faces": "Khôi phục khuôn mặt đã bỏ qua",
-  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again.": "Một số khuôn mặt đã chọn không khả dụng. Chưa có khuôn mặt nào bị bỏ qua. Hãy xóa lựa chọn rồi thử lại."
 }

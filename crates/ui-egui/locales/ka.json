@@ -3710,5 +3710,6 @@
   "Click faces to select or deselect. Shift-click extends that action to a range. Double-click opens a photo.": "დააწკაპუნეთ სახის მოსანიშნად ან მონიშვნის გასაუქმებლად. Shift-დაწკაპუნება მოქმედებას დიაპაზონზე ავრცელებს. ორმაგი დაწკაპუნება ფოტოს ხსნის.",
   "Ignore Faces": "სახეების უგულებელყოფა",
   "Restore Ignored Faces": "უგულებელყოფილი სახეების აღდგენა",
-  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის"
+  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again.": "ზოგიერთი არჩეული სახე მიუწვდომელია. არცერთი სახე არ იგნორირებულა. გააუქმეთ მონიშვნა და სცადეთ ხელახლა."
 }

@@ -351,6 +351,8 @@ a recognition model installed. Controls and review counts follow the selected in
   changed box or invalid field rejects the whole batch, with no history step. Duplicates count
   once; already-ignored/restored targets succeed with no change. The response is `{changed, ignored}`;
   a wholly no-op retry does not change the revision or Undo/Redo stacks.
+  If Unnamed faces cannot find every selected key in its reviewed cache, it refuses the entire
+  action, keeps the selection and asks you to clear/reselect; it never silently ignores a subset.
 - `faces.ignored {offset?: 0, limit?: 1000}` accepts `limit` 1–5,000 and returns
   `{total, offset, limit, hasNext, revision, faces: [{photo, index, rect, view, name, description}]}`.
   Names/descriptions are retained values or `null`. Order is photo id, then region index.

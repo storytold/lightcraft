@@ -2490,5 +2490,6 @@
   "Welcome": "Vítejte",
   "Next": "Další",
   "Get Started": "Začít",
-  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "Some selected faces are unavailable. Nothing was ignored. Clear the selection and try again.": "Některé vybrané tváře nejsou dostupné. Žádná tvář nebyla ignorována. Zrušte výběr a zkuste to znovu."
 }
