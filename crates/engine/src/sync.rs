@@ -195,7 +195,9 @@ impl SyncInput {
         if !disk && (lightcraft_catalog::folders::is_disk_root(path) || crate::cmd::library::covers_other_disks(s, path, &ids)) {
             return Err(invalid(format!("{path} is a whole disk or holds disks: pass `disk: true` to synchronize it")));
         }
+        // (a folder's synchronization matches moved files by content, so its scan hashes every file it finds)
         let (scan, _) = ScanInput::new(s, &[path.to_string()]);
+        let scan = scan.reading_whole();
         let labels = scan.library();
         Ok(SyncInput { folder: path.to_string(), scan, ids, naming: s.xmp.naming, labels })
     }

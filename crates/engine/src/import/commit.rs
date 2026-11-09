@@ -3,6 +3,7 @@ use super::files::copy_into;
 use super::job::{Prepared, PreparedItem, ReadyFile};
 use super::types::{Duplicate, ImportOptions, ImportReport, Kept, Moved, OnDeleted};
 use super::{HashMap, Op, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
+use crate::import_move::Check;
 
 /// A batch's items in file order while its transfers are pending ([`ImportJob::run_plan`]).
 #[derive(Default)]
@@ -150,10 +151,24 @@ fn run_transfer(t: Transfer, file_bytes: Option<&crate::merge::ByteReader>) -> P
             }
             Err(e) => return PreparedItem::Failed(path, e),
         },
-        How::Copy { name } => match copy_into(&dir, &path, name.as_deref(), info.content_hash.as_deref()) {
-            Ok(p) => p,
-            Err(e) => return PreparedItem::Failed(path, e),
-        },
+        How::Copy { name } => {
+            // verified against the hash the probe read (a file read in full), else against what the copy reads from the
+            // source itself: a file the scan read the header of is read once, by this copy
+            let check = match info.content_hash.as_deref().and_then(lightcraft_preview::Hash128::parse) {
+                Some(h) => Check::Hash(h),
+                None if info.file_size > 0 => Check::Read { len: info.file_size },
+                None => Check::Bytes,
+            };
+            match copy_into(&dir, &path, name.as_deref(), check) {
+                Ok((p, hash)) => {
+                    if let Some(h) = hash {
+                        info.content_hash = Some(h.to_string());
+                    }
+                    p
+                }
+                Err(e) => return PreparedItem::Failed(path, e),
+            }
+        }
     };
     if dng {
         // decoding the raw twice and encoding it takes several times the file's size in memory

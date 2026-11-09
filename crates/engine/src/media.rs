@@ -70,6 +70,11 @@ pub struct MediaCache {
     /// What grid thumbnails load files with (see [`ReducedLoader`]); `None`: [`Self::file_loader`].
     pub reduced_loader: Option<ReducedLoader>,
     pub file_probe: Option<FileProbe>,
+    /// The import scan's probe and the [`Self::file_probe`] it belongs to: it describes a raw from the parts of it its
+    /// headers are in and leaves [`ProbeInfo::content_hash`] unset (see [`crate::files::fs_header_probe`]). It stands
+    /// only beside that probe: a session that installs another [`Self::file_probe`] (a test's, an app's) has none
+    /// ([`Self::header_probe`]).
+    pub file_probe_headers: Option<(FileProbe, FileProbe)>,
     pub preview_loader: Option<PreviewLoader>,
     /// Reads a photo file's bytes (Photo Merge); `None` = the local file system.
     pub file_bytes: Option<crate::merge::ByteReader>,

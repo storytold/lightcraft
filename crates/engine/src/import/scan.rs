@@ -6,6 +6,11 @@ use super::{HashMap, Path, PathBuf, PhotoId, ProbeInfo, Session, Source};
 /// share can take minutes to read).
 pub struct ScanInput {
     probe: Option<crate::media::FileProbe>,
+    /// What probes files the scan reads ([`crate::media::MediaCache::file_probe_headers`]): a raw is described from the
+    /// parts of it its headers are in, without a content hash.
+    header_probe: Option<crate::media::FileProbe>,
+    /// Read every file in full (`probe`), as [`crate::sync`] needs: it matches moved files by content.
+    whole: bool,
     skip: Option<PathBuf>,
     /// The library as it is now (photos are shared with the session, not copied): looked up for
     /// the files the scan finds ([`library_files`]) and the contents it probes
@@ -63,6 +68,22 @@ pub(super) fn library_hashes<'a>(library: &lightcraft_catalog::Catalog, hashes: 
     by_hash
 }
 
+/// Of `sizes`, the ones a photo of the library has recorded as its file's size, and whether a photo has none recorded
+/// (a size of 0: no file can be ruled out against it). A photo with no content hash recorded is not a duplicate of
+/// anything by content (the rule looks up hashes), so it counts for neither. One pass over the library.
+pub(super) fn library_sizes(library: &lightcraft_catalog::Catalog, sizes: &std::collections::HashSet<u64>) -> (std::collections::HashSet<u64>, bool) {
+    let mut found = std::collections::HashSet::new();
+    let mut unsized_photo = false;
+    for p in library.photos().filter(|p| p.content_hash.is_some()) {
+        if p.file_size == 0 {
+            unsized_photo = true;
+        } else if sizes.contains(&p.file_size) {
+            found.insert(p.file_size);
+        }
+    }
+    (found, unsized_photo)
+}
+
 /// Progress and cancellation of a running [`scan_with`].
 #[derive(Default)]
 pub struct ScanProgress {
@@ -91,8 +112,22 @@ impl ScanInput {
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)
         let library = std::sync::Arc::new(s.catalog.clone());
-        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes) };
+        let input = ScanInput {
+            probe: s.media.file_probe.clone(),
+            header_probe: s.media.header_probe(),
+            whole: false,
+            skip,
+            library,
+            cache: std::mem::take(&mut s.import_probes),
+        };
         (input, paths.to_vec())
+    }
+
+    /// This scan reads every file in full and hashes it (what [`crate::sync`] matches moved files by), not only the
+    /// files the review needs the hash of.
+    pub(crate) fn reading_whole(mut self) -> Self {
+        self.whole = true;
+        self
     }
 
     /// The folder a scan never enters (the library's own).
@@ -330,11 +365,13 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     });
     let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
     progress.done.store(todo.len() - missing.len(), Relaxed);
-    let mut fresh = probe_all(input.probe.as_ref(), &missing, &progress.done, &progress.cancel).into_iter();
+    let fresh_probe = input.header_probe.as_ref().filter(|_| !input.whole).or(input.probe.as_ref());
+    let mut fresh = probe_all(fresh_probe, &missing, &progress.done, &progress.cancel).into_iter();
     let probed: Vec<Result<ProbeInfo, String>> =
         cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
     crate::memory::release();
     let mut probes: HashMap<String, Result<ProbeInfo, String>> = todo.into_iter().zip(probed).collect();
+    read_candidates(&input, &mut probes, progress);
     // (who in the library has a content that was probed: asked once the probes are in)
     let probed_hashes = probes.values().filter_map(|r| r.as_ref().ok()).filter_map(|info| info.content_hash.as_deref());
     let mut seen_hash: HashMap<String, Option<u64>> =
@@ -377,4 +414,49 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
     }
     // (the walks' diagnostics are [`scan_with`]'s: these files were found already)
     ScanOutput { candidates: out, probes: kept, truncated: false, unreadable: 0, unsupported: 0 }
+}
+
+/// The files of `probes` that were described without a content hash ([`ScanInput::header_probe`]) and might have the
+/// content of another, read in full now: the review's "In library" verdict compares contents.
+///
+/// A file can only be a duplicate of a library photo with the same size in bytes, which the catalog records for each
+/// photo, or of another file of this scan with the same size and the same description in its headers ([`twin_key`]:
+/// two files with one content are described alike). A library photo that has no size recorded rules nothing out, so
+/// with one every file is read. The rest keep their description: the import hashes them as it reads them.
+fn read_candidates(input: &ScanInput, probes: &mut HashMap<String, Result<ProbeInfo, String>>, progress: &ScanProgress) {
+    use std::collections::HashSet;
+    // (no header probe: every file was probed whole, whatever its probe made of a hash)
+    let (Some(full), Some(_)) = (input.probe.as_ref(), input.header_probe.as_ref()) else { return };
+    let unhashed: Vec<(String, u64)> =
+        probes.iter().filter_map(|(f, r)| r.as_ref().ok().filter(|i| i.content_hash.is_none()).map(|i| (f.clone(), i.file_size))).collect();
+    if unhashed.is_empty() {
+        return;
+    }
+    let candidates: Vec<String> = if input.whole {
+        unhashed.into_iter().map(|(f, _)| f).collect()
+    } else {
+        let mut count: HashMap<TwinKey, usize> = HashMap::new();
+        for info in probes.values().filter_map(|r| r.as_ref().ok()) {
+            *count.entry(twin_key(info)).or_default() += 1;
+        }
+        let sizes: HashSet<u64> = unhashed.iter().map(|&(_, size)| size).collect();
+        let (in_library, no_size_recorded) = library_sizes(&input.library, &sizes);
+        let twinned = |f: &str| probes.get(f).and_then(|r| r.as_ref().ok()).is_some_and(|i| count.get(&twin_key(i)).is_some_and(|n| *n > 1));
+        unhashed.into_iter().filter(|(f, size)| no_size_recorded || in_library.contains(size) || twinned(f)).map(|(f, _)| f).collect()
+    };
+    // (counted again: the progress shows these reads, which are what is slow now)
+    progress.total.fetch_add(candidates.len(), std::sync::atomic::Ordering::Relaxed);
+    let read = probe_all(Some(full), &candidates, &progress.done, &progress.cancel);
+    for (path, r) in candidates.into_iter().zip(read) {
+        probes.insert(path, r);
+    }
+    crate::memory::release();
+}
+
+/// What two files with one content have in common in their headers: the size in bytes, the capture time the file
+/// states, and the size of the picture. A file that has none of its own states is alike with every file of its size.
+pub(super) type TwinKey = (u64, Option<String>, u32, u32);
+
+pub(super) fn twin_key(info: &ProbeInfo) -> TwinKey {
+    (info.file_size, info.captured.clone(), info.width, info.height)
 }

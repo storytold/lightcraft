@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### The import review no longer reads every raw in full
+- Choosing a folder or card to import used to read every file whole, so 2,000 CR2s from an SD card took about an hour
+  before the review listed anything (issue #3786). The review now reads only the parts of most raws (CR2, CR3 and DNG
+  among them; NEF, ORF, PEF and JPEG files are still read whole) its headers are in, a few percent of the file, and
+  reads a file in full only when a photo in your library, or another file in the same review, has exactly its size in
+  bytes. "In library" is as exact as before. Import → Copy works out each file's content hash as it copies it, so the
+  card is read once; a photo added where it is is read in full when it is added. Folder synchronization still reads
+  every file.
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
