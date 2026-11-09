@@ -382,6 +382,11 @@ pub struct Gpu {
     free: std::sync::Mutex<Vec<Tracked>>,
     /// Largest storage buffer the device accepts (bytes).
     pub max_buffer: u64,
+    /// The crystal grain tables of the last grain pattern, resident: a render (each Amount step
+    /// of a drag) copies them on the GPU instead of uploading their 12 MB again ([`Gpu::grain_tables`]).
+    /// Shared with each render that recorded a copy from them until it submits: replacing them
+    /// while another thread's copy is unsubmitted must not hand the buffer back to the pool.
+    grain: std::sync::Mutex<Option<(std::sync::Arc<lightcraft_pipeline::crystal::CrystalTile>, std::sync::Arc<Buf>)>>,
     /// The device is the window's (eframe's): renders can hand it textures to draw directly.
     pub window: bool,
 }
@@ -430,6 +435,11 @@ fn constants() -> String {
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }
+    use lightcraft_pipeline::crystal::{TILE_PER_LONG, TORI};
+    s += &format!(
+        "const CRYSTAL_T0: u32 = {}u;\nconst CRYSTAL_T1: u32 = {}u;\nconst CRYSTAL_TPL: f32 = {:?};\n",
+        TORI[0], TORI[1], TILE_PER_LONG as f32
+    );
     s += &format!("const DEEP_WRITTEN: u32 = {}u;\n", crate::params::DEEP_WRITTEN);
     for (name, idx) in crate::params::finish_fields() {
         s += &format!("const F_{name}: u32 = {idx}u;\n");
@@ -543,7 +553,7 @@ impl Gpu {
             max_buffer >> 20,
             if window { ", the window's device" } else { "" }
         );
-        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, window })
+        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, window, grain: Default::default() })
     }
 
     /// A buffer of `len` 32-bit values with undefined contents (a recycled one when possible).
@@ -716,6 +726,44 @@ impl Gpu {
             FailKind::Limit,
             format!("a {} MiB buffer exceeds the device's {} MiB storage-buffer limit", size.div_ceil(1 << 20), self.limit() >> 20),
         );
+    }
+
+    /// Record into `enc` a copy of `tile`'s summed-area tables (both tori, back to back) into
+    /// `dst` at value offset `at`, uploading them first unless they are the resident ones.
+    /// Returns the buffer copied from, which the caller keeps until it has submitted `enc` (another
+    /// render may replace the resident tables meanwhile). None when `dst` can't hold them (an
+    /// over-limit placeholder: the render has failed already).
+    pub fn grain_tables(
+        &self,
+        enc: &mut wgpu::CommandEncoder,
+        tile: &std::sync::Arc<lightcraft_pipeline::crystal::CrystalTile>,
+        dst: &Buf,
+        at: usize,
+    ) -> Option<std::sync::Arc<Buf>> {
+        let len: usize = tile.sats.iter().map(Vec::len).sum();
+        let (start, bytes) = ((at as u64) * 4, (len as u64) * 4);
+        if len == 0 || dst.raw().size() < start.saturating_add(bytes) {
+            return None;
+        }
+        let mut resident = self.grain.lock().unwrap_or_else(|e| e.into_inner());
+        if !resident.as_ref().is_some_and(|(t, b)| std::sync::Arc::ptr_eq(t, tile) && b.raw().size() >= bytes) {
+            // the old tables go back to the pool first (once no unsubmitted copy holds them): one
+            // pattern's tables are resident at a time
+            *resident = None;
+            let buf = self.buffer(len);
+            if buf.raw().size() < bytes {
+                return None;
+            }
+            let mut off = 0u64;
+            for sat in &tile.sats {
+                self.queue.write_buffer(buf.raw(), off, bytemuck::cast_slice(sat));
+                off += (sat.len() as u64) * 4;
+            }
+            *resident = Some((tile.clone(), std::sync::Arc::new(buf)));
+        }
+        let (_, src) = resident.as_ref()?;
+        enc.copy_buffer_to_buffer(src.raw(), 0, dst.raw(), start, bytes);
+        Some(src.clone())
     }
 
     /// Stands in for a buffer that could not be created (the render has failed already).
@@ -1319,6 +1367,35 @@ mod tests {
         if run_child("really_lost_child").is_none() {
             lightcraft_testkit::skip!(Gpu, "no GPU device, or one that can't be lost on purpose here");
         }
+    }
+
+    /// Resident grain tables replaced by another pattern stay out of the pool while a render
+    /// that recorded a copy from them hasn't submitted it: reusing them then would hand that
+    /// render another tile's tables.
+    #[test]
+    fn replaced_grain_tables_stay_alive_until_their_copy_is_submitted() {
+        use lightcraft_pipeline::crystal::{CrystalLook, CrystalTile};
+        let Some(g) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        let look = CrystalLook::new(25.0, 50.0);
+        let (Some(a), Some(b)) = (CrystalTile::new(look, 0x7ab1_0001), CrystalTile::new(look, 0x7ab1_0002)) else { panic!("tiles") };
+        let (a, b) = (std::sync::Arc::new(a), std::sync::Arc::new(b));
+        let len: usize = a.sats.iter().map(Vec::len).sum();
+        let (dst_a, dst_b) = (g.buffer(len), g.buffer(len));
+        let mut first = g.encoder();
+        let held = g.grain_tables(&mut first, &a, &dst_a, 0).expect("tables copied");
+        // another render replaces the resident tables before `first` is submitted
+        let mut second = g.encoder();
+        assert!(g.grain_tables(&mut second, &b, &dst_b, 0).is_some());
+        let next = g.buffer(len);
+        assert!(next.raw() != held.raw(), "the replaced tables went back to the pool before their copy was submitted");
+        g.submit([first.finish()]);
+        // each render read its own tile's tables
+        let tables = |t: &lightcraft_pipeline::crystal::CrystalTile| t.sats.concat();
+        assert!(g.finish_and_read::<f32>(second, &dst_a, len) == tables(&a), "the first render copied other tables");
+        assert!(g.finish_and_read::<f32>(g.encoder(), &dst_b, len) == tables(&b), "the second render copied other tables");
     }
 
     /// A GPU retired by another failure (a validation error) keeps a live device: its buffers are
