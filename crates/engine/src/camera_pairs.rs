@@ -68,7 +68,13 @@ fn validate_model(model: &str) -> Result<&str, &'static str> {
     Ok(model)
 }
 
-/// The pairs file for `photos`, each photo's pairs in value order ([`canonical_order`]).
+/// A pairs file can hold this camera model ([`read`] refuses any other).
+pub fn shareable_model(model: &str) -> bool {
+    validate_model(model).is_ok()
+}
+
+/// The pairs file for `photos`, each photo's pairs in value order ([`canonical_order`]). It holds only what
+/// [`read`] takes back: too many photos, too many pairs in one or an unusable model is an error.
 pub fn write(photos: &[&PhotoPairs]) -> Result<Vec<u8>, String> {
     if photos.len() > MAX_PHOTOS {
         return Err(format!("{} photos is more than a pairs file may hold ({MAX_PHOTOS})", photos.len()));
@@ -78,6 +84,9 @@ pub fn write(photos: &[&PhotoPairs]) -> Result<Vec<u8>, String> {
         .enumerate()
         .map(|(n, p)| {
             let model = validate_model(&p.model).map_err(|why| format!("photo {}: {why}", n + 1))?;
+            if p.pairs.len() > PAIRS_PER_FILE {
+                return Err(format!("photo {}: too many colour pairs", n + 1));
+            }
             let mut pairs = p.pairs.clone();
             canonical_order(&mut pairs);
             Ok(Photo { model: model.to_owned(), id: p.id.clone(), dro: p.dro, pairs: pairs.len(), data: base64(&pack(&pairs)) })
@@ -251,6 +260,15 @@ mod tests {
         photos.push(&photo);
         let error = write(&photos).unwrap_err();
         assert!(error.contains("photos is more than a pairs file may hold"), "{error}");
+    }
+
+    #[test]
+    fn write_enforces_the_pair_limit_read_enforces() {
+        let bytes = write(&[&photo("ILCE-7M4", ID, PAIRS_PER_FILE)]).unwrap();
+        assert_eq!(read(&bytes, "at limit").unwrap()[0].pairs.len(), PAIRS_PER_FILE);
+        let good = photo("ILCE-7M4", ID, 1);
+        let error = write(&[&good, &photo("ILCE-7M4", ID, PAIRS_PER_FILE + 1)]).unwrap_err();
+        assert_eq!(error, "photo 2: too many colour pairs");
     }
 
     #[test]

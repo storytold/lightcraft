@@ -13,6 +13,7 @@
 use lightcraft_color::Mat3;
 use lightcraft_raw::profile::HsvTable;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -232,8 +233,23 @@ fn single(pair: Pair) -> Pair {
 /// pool, from a raw file or a pairs file, so either route gives the same fit (the fits hold out every third pair by
 /// position, so they follow the order).
 pub fn canonical_order(pairs: &mut [Pair]) {
+    pairs.sort_by(pair_order);
+}
+
+fn pair_order(a: &Pair, b: &Pair) -> Ordering {
     let key = |p: &Pair| -> [f64; 6] { [p.0[0], p.0[1], p.0[2], p.1[0], p.1[1], p.1[2]] };
-    pairs.sort_by(|a, b| key(a).iter().zip(&key(b)).map(|(x, y)| x.total_cmp(y)).find(|o| o.is_ne()).unwrap_or(std::cmp::Ordering::Equal));
+    key(a).iter().zip(&key(b)).map(|(x, y)| x.total_cmp(y)).find(|o| o.is_ne()).unwrap_or(Ordering::Equal)
+}
+
+/// The pool's order: model, then id. Records of one photo can differ (pairs files of different builds, say), so they
+/// are ordered too and the first is the one used, whatever order they arrived in: most pairs, then the lowest values
+/// (each record's pairs in [`canonical_order`]), then its DRO flag.
+fn photo_order(a: &PhotoPairs, b: &PhotoPairs) -> Ordering {
+    (&a.model, &a.id)
+        .cmp(&(&b.model, &b.id))
+        .then_with(|| b.pairs.len().cmp(&a.pairs.len()))
+        .then_with(|| a.pairs.iter().zip(&b.pairs).map(|(x, y)| pair_order(x, y)).find(|o| o.is_ne()).unwrap_or(Ordering::Equal))
+        .then_with(|| a.dro.cmp(&b.dro))
 }
 
 impl Pool {
@@ -269,31 +285,42 @@ impl Pool {
         self.photos.extend(photos);
     }
 
-    /// The pairs file ([`crate::camera_pairs`]) of every photo in the pool.
-    pub fn pairs_file(&self) -> Result<Vec<u8>, String> {
-        crate::camera_pairs::write(&self.photos())
+    /// The photos a pairs file can hold: all of [`Pool::photos`] but those with a camera model it refuses (too long,
+    /// control characters). Those still count in [`Pool::fit`]; one such raw must not cost the rest of the pool its export.
+    pub fn shareable_photos(&self) -> Vec<&PhotoPairs> {
+        let mut photos = self.photos();
+        photos.retain(|p| crate::camera_pairs::shareable_model(&p.model));
+        photos
     }
 
-    /// Add the photos of a pairs file; returns how many it held. A photo already in the pool (same model and id) is
-    /// skipped, so importing a file again changes nothing. Refuse an import that would leave more than
+    /// The pairs file ([`crate::camera_pairs`]) of the pool's [`Pool::shareable_photos`].
+    pub fn pairs_file(&self) -> Result<Vec<u8>, String> {
+        crate::camera_pairs::write(&self.shareable_photos())
+    }
+
+    /// Add the photos of a pairs file; returns how many it held. The pool keeps one record of a photo (same model and
+    /// id), the first in [`photo_order`], so importing a file again changes nothing and files that disagree about a
+    /// photo give the same result in any order. Refuse an import that would leave more than
     /// [`crate::camera_pairs::MAX_PHOTOS`] distinct photos; each holds at most [`PAIRS_PER_FILE`] pairs.
     pub fn add_pairs_file(&mut self, bytes: &[u8], origin: &str) -> Result<usize, String> {
         let photos = crate::camera_pairs::read(bytes, origin)?;
         let n = photos.len();
-        let mut seen: HashSet<(String, String)> = self.photos.iter().map(|p| (p.model.clone(), p.id.clone())).collect();
-        let new: Vec<PhotoPairs> = photos.into_iter().filter(|p| seen.insert((p.model.clone(), p.id.clone()))).collect();
+        let seen: HashSet<(&str, &str)> = self.photos.iter().chain(&photos).map(|p| (p.model.as_str(), p.id.as_str())).collect();
         if seen.len() > crate::camera_pairs::MAX_PHOTOS {
             return Err(format!("{origin}: {} photos is more than a pairs pool may hold ({})", seen.len(), crate::camera_pairs::MAX_PHOTOS));
         }
-        self.add_photos(new);
+        self.add_photos(photos);
+        self.photos.sort_by(photo_order);
+        self.photos.dedup_by(|a, b| a.model == b.model && a.id == b.id);
         Ok(n)
     }
 
-    /// The photos in a fixed order (model, then id) with each id once, so the same photos give the same fit
-    /// however they arrived (raw files in any thread order, pairs files, both).
+    /// The photos that have pairs, in a fixed order (model, then id) with each id once, so the same photos give the
+    /// same fit however they arrived (raw files in any thread order, pairs files, both). A photo without pairs (a
+    /// pairs file may list one) is no photo here: it adds nothing to a fit and must not count towards its minimum.
     pub fn photos(&self) -> Vec<&PhotoPairs> {
-        let mut photos: Vec<&PhotoPairs> = self.photos.iter().collect();
-        photos.sort_by(|a, b| (&a.model, &a.id).cmp(&(&b.model, &b.id)));
+        let mut photos: Vec<&PhotoPairs> = self.photos.iter().filter(|p| !p.pairs.is_empty()).collect();
+        photos.sort_by(|a, b| photo_order(a, b));
         photos.dedup_by(|a, b| a.model == b.model && a.id == b.id);
         photos
     }
@@ -574,6 +601,86 @@ mod tests {
         let mut shuffled = Pool::default();
         shuffled.add_photos(reversed);
         assert_eq!(shuffled.fit(5).remove(0).unwrap(), fitted);
+    }
+
+    #[test]
+    fn photos_without_pairs_do_not_count() {
+        let mut pool = Pool::default();
+        let empty = |k: usize| PhotoPairs { model: "ILCE-7M4".into(), id: format!("{:032x}", k + 100), dro: None, pairs: Vec::new() };
+        pool.add_photos(synthetic("ILCE-7M4", 1, 3));
+        pool.add_photos((0..4).map(empty).collect());
+        assert!(pool.fit(5).is_empty(), "one photo's pairs must not pass for five photos");
+        assert_eq!(pool.files(), vec![("ILCE-7M4".to_owned(), 1)]);
+        pool.add_photos(synthetic("ILCE-7M4", 5, 3));
+        let profile = pool.fit(5).remove(0).unwrap();
+        assert_eq!((profile.files, profile.samples), (5, 1500));
+        assert_eq!(crate::camera_pairs::read(&pool.pairs_file().unwrap(), "t").unwrap().len(), 5);
+    }
+
+    /// Two records of one photo (files written by different builds, say) must not make the fit depend on the input order.
+    #[test]
+    fn conflicting_records_of_a_photo_resolve_the_same_in_any_order() {
+        let mut full = synthetic("ILCE-7M4", 6, 11);
+        for photo in &mut full {
+            canonical_order(&mut photo.pairs);
+        }
+        let mut fewer = full[0].clone();
+        fewer.pairs.truncate(200);
+        let mut other_values = full[0].clone();
+        other_values.pairs[0].0[0] = f64::from((other_values.pairs[0].0[0] + 0.25) as f32);
+        canonical_order(&mut other_values.pairs);
+        let mut other_flag = full[0].clone();
+        other_flag.dro = None;
+        let mut empty = full[0].clone();
+        empty.pairs.clear();
+        for (variant, expected) in [
+            (&fewer, &full[0]),
+            (&other_values, if full[0].pairs < other_values.pairs { &full[0] } else { &other_values }),
+            (&other_flag, if full[0].dro < other_flag.dro { &full[0] } else { &other_flag }),
+            (&empty, &full[0]),
+        ] {
+            let write = |p: &[&PhotoPairs]| crate::camera_pairs::write(p).unwrap();
+            let rest: Vec<&PhotoPairs> = full[1..].iter().collect();
+            let (a, b, rest) = (write(&[&full[0]]), write(&[variant]), write(&rest));
+            let pooled = |files: [&[u8]; 3]| {
+                let mut pool = Pool::default();
+                for file in files {
+                    pool.add_pairs_file(file, "t").unwrap();
+                }
+                pool
+            };
+            let (first, second) = (pooled([&a, &b, &rest]), pooled([&b, &a, &rest]));
+            assert_eq!(first.photos.len(), 6, "each photo is held once");
+            assert_eq!(first.photos()[0], expected);
+            assert_eq!(second.photos()[0], expected);
+            assert_eq!(first.fit(5), second.fit(5));
+            assert_eq!(first.pairs_file().unwrap(), second.pairs_file().unwrap());
+            // through add_photos (the raw route) and merge too, however the threads finished
+            let (mut third, mut other) = (Pool::default(), Pool::default());
+            third.add_photos(vec![variant.clone()]);
+            other.add_photos(vec![full[0].clone()]);
+            third.merge(other);
+            assert_eq!(third.photos()[0], expected);
+        }
+    }
+
+    /// A model a pairs file can't hold stays in the fit and only leaves the export, so one such raw can't fail `--pairs`.
+    #[test]
+    fn unshareable_models_stay_in_the_fit_and_leave_the_export() {
+        let long = "a".repeat(65);
+        let mut pool = Pool::default();
+        pool.add_photos(synthetic("ILCE-7M4", 5, 3));
+        pool.add_photos(synthetic(&long, 5, 5));
+        pool.add_photos(synthetic(
+            "a
+b", 5, 7,
+        ));
+        assert_eq!(pool.fit(5).iter().filter(|r| r.is_ok()).count(), 3);
+        assert_eq!(pool.files().len(), 3);
+        assert_eq!(pool.shareable_photos().len(), 5);
+        let shared = crate::camera_pairs::read(&pool.pairs_file().unwrap(), "t").unwrap();
+        assert_eq!(shared.len(), 5);
+        assert!(shared.iter().all(|p| p.model == "ILCE-7M4"));
     }
 
     #[test]
