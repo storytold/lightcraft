@@ -437,6 +437,9 @@ fn failed_alias_invalidation_refuses_replacement_and_blocks_the_old_source() {
         preview_checked: String::new(),
     })
     .unwrap();
+    s.media.insert(p.id, SourceLevel::Preview, Arc::new(Rgb32f::new(8, 8)));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    assert!(s.thumb_job(p.id, 256).unwrap().run().rendered.is_ok());
     let result = s.commit(
         "Replace",
         Op::SetContent {
@@ -450,7 +453,12 @@ fn failed_alias_invalidation_refuses_replacement_and_blocks_the_old_source() {
         },
     );
     assert!(result.is_err());
-    assert_eq!(s.catalog.photo(p.id).unwrap().content_hash.as_deref(), Some("before"));
+    let kept = s.catalog.photo(p.id).unwrap().clone();
+    assert_eq!(kept.content_hash.as_deref(), Some("before"));
+    assert!(!s.media.has_source(p.id, SourceLevel::Preview), "the old decoded source is dropped");
+    assert!(!s.media.content_keys(&kept).contains(&"before".to_string()), "the old content's cached work is fenced");
+    s.media.file_loader = Some(Arc::new(|_, _, _| Err("must not reuse the old thumbnail".into())));
+    assert!(s.thumb_job(p.id, 256).unwrap().run().rendered.is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
 #[test]
