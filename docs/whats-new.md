@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Brush Density
+- The brush has a Density slider beside Size, Feather and Flow, as in Lightroom: the most a stroke covers, however
+  many times you paint over it (issue #4005). Effect presets carry it with the other brush settings.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth

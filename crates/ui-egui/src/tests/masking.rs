@@ -109,6 +109,37 @@ fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
     h.settle(SETTLE);
 }
 
+/// The Density slider caps what a stroke covers, as in Lightroom: a full-flow dab at Density 40
+/// paints 40 %, and the stroke carries the density it was painted with.
+#[test]
+fn brush_density_caps_the_stroke() {
+    let mut h = detail("panel.masking");
+    click(&mut h, "maskNew:brush");
+    let r = h.request("ui.set", json!({"brushSize": 0.15, "brushFeather": 0.0, "brushFlow": 100.0, "brushDensity": 40.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    brush_at(&mut h, 0.5, 0.5);
+    let d = develop(&h);
+    let stroke = d.masks[0].components.iter().find_map(|c| match &c.shape {
+        MaskShape::Brush { strokes } => strokes.first().cloned(),
+        _ => None,
+    });
+    assert_eq!(stroke.map(|s| s.density), Some(40.0));
+    let cover = mask_coverage(&h, 0, 50, 50);
+    assert!((cover - 0.4).abs() < 0.01, "{cover}");
+    h.settle(SETTLE);
+}
+
+/// A settings file from before Density paints at full density; one out of range is clamped.
+#[test]
+fn restored_brush_density_is_kept_in_range() {
+    let old = serde_json::from_str::<crate::UiState>(r#"{"brushFlow": 30}"#).expect("settings").sanitized();
+    assert_eq!((old.brush_flow, old.brush_density), (30.0, 100.0));
+    for (saved, want) in [(0.0, 1.0), (55.0, 55.0), (1e9, 100.0)] {
+        let s = serde_json::from_value::<crate::UiState>(json!({"brushDensity": saved})).expect("settings").sanitized();
+        assert_eq!(s.brush_density, want);
+    }
+}
+
 #[test]
 fn new_brush_starts_a_separate_mask_in_paint_mode() {
     let mut h = detail("panel.masking");

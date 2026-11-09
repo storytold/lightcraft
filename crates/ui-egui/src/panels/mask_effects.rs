@@ -86,6 +86,9 @@ fn take_brush(app: &mut LightcraftApp, b: &Value) {
     if let Some(v) = f("flow") {
         app.ui.brush_flow = (v as f32).clamp(1.0, 100.0);
     }
+    if let Some(v) = f("density") {
+        app.ui.brush_density = (v as f32).clamp(1.0, 100.0);
+    }
     if let Some(v) = b.get("auto_mask").and_then(Value::as_bool) {
         app.ui.brush_auto_mask = v;
     }
@@ -93,7 +96,7 @@ fn take_brush(app: &mut LightcraftApp, b: &Value) {
 
 /// The brush settings in use, as an effect carries them.
 fn brush_now(app: &LightcraftApp) -> Value {
-    json!({"size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow, "auto_mask": app.ui.brush_auto_mask})
+    json!({"size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow, "density": app.ui.brush_density, "auto_mask": app.ui.brush_auto_mask})
 }
 
 /// Open the New Effect Preset dialog for the selected mask.
@@ -717,4 +720,25 @@ fn in_groups_message(groups: usize) -> String {
 
 fn not_applied_message(settings: &[&str]) -> String {
     crate::i18n::tr_format!(" — kept but not applied: {}", settings.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An effect preset carries the brush's Density with its size, feather and flow, and applying
+    /// one restores it (clamped to the slider's range).
+    #[test]
+    fn an_effect_carries_the_brush_density() {
+        let services = crate::Services { png: None, ..Default::default() };
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        app.ui.brush_density = 35.0;
+        let saved = brush_now(&app);
+        assert_eq!(saved["density"], json!(35.0));
+        app.ui.brush_density = 100.0;
+        take_brush(&mut app, &saved);
+        assert_eq!(app.ui.brush_density, 35.0);
+        take_brush(&mut app, &json!({"density": 0.0}));
+        assert_eq!(app.ui.brush_density, 1.0);
+    }
 }
