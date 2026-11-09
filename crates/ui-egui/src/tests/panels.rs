@@ -299,7 +299,7 @@ fn sidebar_menu_items(h: &Headless) -> Vec<(String, Option<bool>)> {
     let children = view
         .iter()
         .find_map(|n| match n {
-            MenuNode::Submenu { label, children } if label == "Sidebar Sections" => Some(children.clone()),
+            MenuNode::Submenu { label, children, .. } if label == "Sidebar Sections" => Some(children.clone()),
             _ => None,
         })
         .expect("View ▸ Sidebar Sections");
@@ -2479,6 +2479,31 @@ fn recognise_faces_stays_off_until_a_model_is_chosen() {
 }
 
 /// Issue #684: albums hold library photos. For a browsed (Local) photo the grid's right-click
+/// Right-clicking a Local photo explains the restriction and cannot dispatch any album action.
+fn check_local_album_context_menu(h: &mut Headless, local: lightcraft_catalog::PhotoId, album_id: lightcraft_catalog::AlbumId, thumb: egui::Rect) {
+    // right-click: Add to Album is there but off, so hovering opens no album entries
+    let r = h.request("ui.click", json!({"x": thumb.center().x, "y": thumb.center().y, "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(h.app.session.selection.contains(local));
+    let r = h.request("ui.hoverWidget", json!({"id": "button:contextAddToAlbum"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("button:contextAlbum:")), "the submenu must not open for a Local photo");
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "button:contextNewAlbum"));
+    let hint = crate::i18n::tr("Albums hold library photos: Add to My Photos first");
+    assert!(h.step_until(T, |h| h.painted_text().iter().any(|text| text == hint)), "the Local-only context menu explains how to add the photo");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:contextAddToAlbum"}), T)["ok"], true);
+    h.step();
+    assert!(h.app.ui.dialog.is_none());
+    assert!(h.app.session.catalog.album(album_id).unwrap().photos.is_empty(), "a disabled menu must never add the Local photo");
+    let r = h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+}
+
 /// Add to Album is off, Photo ▸ Add to Album says to Add to My Photos first with its entries off,
 /// and a drop onto an album row is refused with that hint; once the photo is in My Photos all
 /// three work.
@@ -2502,20 +2527,7 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
     assert!(h.app.session.catalog.photo(local).unwrap().local);
     let thumb = widget(&h, &format!("thumb:{}", local.0));
 
-    // right-click: Add to Album is there but off, so hovering opens no album entries
-    let r = h.request("ui.click", json!({"x": thumb.center().x, "y": thumb.center().y, "button": "right"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    h.step();
-    assert!(h.app.session.selection.contains(local));
-    let r = h.request("ui.hoverWidget", json!({"id": "button:contextAddToAlbum"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    h.step();
-    assert!(!h.app.widgets.iter().any(|(w, _)| w.starts_with("button:contextAlbum:")), "the submenu must not open for a Local photo");
-    let r = h.request("ui.key", json!({"key": "Escape"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
+    check_local_album_context_menu(&mut h, local, album_id, thumb);
 
     // Photo ▸ Add to Album: the hint item first (off), the album and New Album… off
     let add_to_album = |app: &LightcraftApp| -> Vec<crate::menubar::MenuNode> {
@@ -2524,7 +2536,7 @@ fn local_photos_cannot_be_added_to_albums_until_they_join_my_photos() {
         photo
             .iter()
             .find_map(|n| match n {
-                crate::menubar::MenuNode::Submenu { label, children } if label == "Add to Album" => Some(children.clone()),
+                crate::menubar::MenuNode::Submenu { label, children, .. } if label == "Add to Album" => Some(children.clone()),
                 _ => None,
             })
             .expect("Add to Album submenu")
