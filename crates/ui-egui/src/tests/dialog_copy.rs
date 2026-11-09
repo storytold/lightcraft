@@ -98,6 +98,8 @@ fn one_field_prompts_name_what_they_do() {
         ("mask.renameEffect", "Rename"),
         ("mask.setEffectGroup", "Create"),
         ("preset.move", "Move"),
+        ("preset.createGroup", "Create"),
+        ("preset.renameGroup", "Rename"),
         ("app.newLibrary", "Create"),
         ("keyword.saveSet", "Save"),
         ("filter.savePreset", "Save"),

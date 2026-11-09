@@ -45,6 +45,8 @@
   "Decoder: {reason}": "Décodeur : {reason}",
   "Delete \"{label}\"": "Supprimer « {label} »",
   "Delete \"{label}\" (and the mask)": "Supprimer « {label} » (et le masque)",
+  "Delete the group “{name}” and its {n} presets?": "Supprimer le groupe « {name} » et ses {n} préréglages ?",
+  "Delete the group “{name}” and its only preset?": "Supprimer le groupe « {name} » et son unique préréglage ?",
   "Delete {n} Photos": "Supprimer {n} photos",
   "Delete “{current}”": "Supprimer « {current} »",
   "Discard Smart Previews ({scope})": "Supprimer les aperçus dynamiques ({scope})",
