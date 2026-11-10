@@ -110,9 +110,14 @@ fn normalized_model(model: &str) -> String {
     model.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase()
 }
 
+/// EXIF spellings that differ by more than case and spacing, as `(spelling, bundled model)`.
+const ALIASES: &[(&str, &str)] = &[("NIKON Z8", "NIKON Z 8")];
+
 /// The built-in profile for `model`, if any.
 fn bundled(model: &str) -> Option<CameraProfile> {
     let needle = normalized_model(model);
+    let needle =
+        ALIASES.iter().find(|(spelling, _)| normalized_model(spelling) == needle).map_or(needle, |(_, canonical)| normalized_model(canonical));
     let (_, json) = BUNDLED.iter().find(|(m, _)| normalized_model(m) == needle)?;
     parse(json.as_bytes(), &format!("built-in profile {model}")).inspect_err(|e| eprintln!("lightcraft: ignoring camera profile {e}")).ok()
 }
@@ -317,7 +322,10 @@ mod tests {
             ("Nikon  Z  6_2", "NIKON Z 6_2"),
             ("Nikon Z 8", "NIKON Z 8"),
             ("Nikon  Z  8", "NIKON Z 8"),
+            ("Nikon Z8", "NIKON Z 8"),
+            ("NIKON Z8", "NIKON Z 8"),
         ] {
+            assert!(bundled(canonical).is_some(), "the bundled {canonical:?} profile must load");
             assert_eq!(bundled(variant), bundled(canonical), "NEF spelling {variant:?} must find the bundled {canonical:?} profile");
         }
     }
