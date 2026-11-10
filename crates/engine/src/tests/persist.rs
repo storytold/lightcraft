@@ -216,3 +216,124 @@ fn a_preset_that_cannot_be_written_counts_as_unsaved_until_it_is() {
     assert!(s.unsaved().is_none(), "written once the disk works again");
     assert!(String::from_utf8_lossy(&stored(&files)).contains("Mine"));
 }
+
+/// Given a library saved by an earlier version, when it is opened, then the person is told once
+/// that it was upgraded and where the library as it was is kept (the files are theirs to
+/// delete), and `library.info` lists it; a library that was not upgraded says nothing.
+#[test]
+fn an_upgraded_library_says_where_what_it_was_is_kept() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-kept-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("catalog.snap"), include_str!("../../../catalog/src/fixtures/v6-catalog.snap.json")).unwrap();
+    std::fs::write(dir.join("catalog.log"), include_str!("../../../catalog/src/fixtures/v6-catalog.log.jsonl")).unwrap();
+    let mut s = Session::new();
+    s.open_library(&dir, false).unwrap();
+    let told = s.take_library_warnings();
+    assert!(told.iter().any(|w| w.contains("catalog.snap.v6-8") && w.contains("catalog.log.v6-8") && w.contains("delete")), "{told:?}");
+    assert!(dir.join("catalog.snap.v6-8").exists() && dir.join("catalog.log.v6-8").exists());
+    let info = s.execute("library.info", &serde_json::json!({})).unwrap();
+    assert!(info["settingsWarnings"].to_string().contains("catalog.snap.v6-8"), "{info}");
+    s.close_library().unwrap();
+    s.open_library(&dir, false).unwrap();
+    assert!(!s.take_library_warnings().iter().any(|w| w.contains("upgraded")));
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The v6 fixture's log with its second record replaced by garbage (a record after it is still good, so it is damage, not a torn tail).
+fn damaged_v6_log() -> String {
+    let log = include_str!("../../../catalog/src/fixtures/v6-catalog.log.jsonl");
+    log.lines().enumerate().map(|(i, l)| if i == 1 { "not a record" } else { l }).collect::<Vec<_>>().join("\n") + "\n"
+}
+
+/// Given a library from an earlier version that has only a damaged log, when it is opened and upgraded, then the person is told
+/// where the damaged log is kept (there is no kept snapshot to name it beside).
+#[test]
+fn an_upgraded_library_with_only_a_damaged_log_says_where_the_log_is_kept() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-kept-dmg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("catalog.log"), damaged_v6_log()).unwrap();
+    let mut s = Session::new();
+    s.open_library(&dir, false).unwrap();
+    let told = s.take_library_warnings();
+    assert!(told.iter().any(|w| w.contains("upgraded") && w.contains("catalog.log.damaged-")), "{told:?}");
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A library already in this version's format whose log was damaged was not upgraded: it is not told it was.
+#[test]
+fn a_current_library_with_a_damaged_log_is_not_told_it_was_upgraded() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-cur-dmg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = Session::new();
+    s.open_library(&dir, true).unwrap();
+    s.execute("photo.rate", &serde_json::json!({"rating": 3})).unwrap();
+    s.execute("photo.rate", &serde_json::json!({"rating": 4})).unwrap();
+    s.execute("photo.rate", &serde_json::json!({"rating": 5})).unwrap();
+    drop(s);
+    let log = std::fs::read_to_string(dir.join("catalog.log")).unwrap();
+    let broken: Vec<&str> = log.lines().enumerate().map(|(i, l)| if i == 1 { "not a record" } else { l }).collect();
+    std::fs::write(dir.join("catalog.log"), broken.join("\n") + "\n").unwrap();
+    let mut s = Session::new();
+    let damaged = s.open_library(&dir, false).unwrap().damaged.clone();
+    assert!(damaged.is_some_and(|name| dir.join(name).exists()), "the log was found damaged and kept");
+    let told = s.take_library_warnings();
+    assert!(!told.iter().any(|w| w.contains("upgraded")), "{told:?}");
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The browser's storage: it keeps no copy of a library an upgrade replaces.
+struct KeepsNothing(MemStore);
+
+impl Store for KeepsNothing {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        self.0.read(name)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.0.write_atomic(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.0.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        self.0.truncate(name, len)
+    }
+    fn keeps_replaced_formats(&self) -> bool {
+        false
+    }
+    fn describe(&self) -> String {
+        "keeps nothing".into()
+    }
+}
+
+/// Given a store that keeps no replaced files (the browser's) and an older library with a damaged log, when it is opened and
+/// upgraded, then the damaged log set aside is not presented as "the library as it was": there is no snapshot to go with it.
+#[test]
+fn a_store_that_keeps_no_files_does_not_tell_of_a_kept_damaged_log() {
+    let m = MemStore::new();
+    m.set("catalog.snap", include_bytes!("../../../catalog/src/fixtures/v6-catalog.snap.json").to_vec());
+    m.set("catalog.log", damaged_v6_log().into_bytes());
+    let mut s = Session::new();
+    let stores =
+        LibraryStores { dir: "browser".into(), catalog: Box::new(KeepsNothing(m.clone())), files: Box::new(MemStore::new()), on_disk: false };
+    let report = s.open_library_in(stores, false).unwrap();
+    assert!(report.damaged.is_some() && report.upgraded_from == Some(6), "the log was found damaged and the library upgraded: {report:?}");
+    let told = s.take_library_warnings();
+    assert!(!told.iter().any(|w| w.contains("upgraded") || w.contains("catalog.log.damaged-")), "{told:?}");
+}
+
+/// The same library on a store that does keep files, with no snapshot (only the damaged log): the person is told where the log is kept.
+#[test]
+fn a_store_that_keeps_files_tells_of_a_kept_damaged_log() {
+    let m = MemStore::new();
+    m.set("catalog.log", damaged_v6_log().into_bytes());
+    let mut s = Session::new();
+    let stores = LibraryStores { dir: "kept".into(), catalog: Box::new(m.clone()), files: Box::new(MemStore::new()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    let told = s.take_library_warnings();
+    assert!(told.iter().any(|w| w.contains("upgraded") && w.contains("catalog.log.damaged-")), "{told:?}");
+}

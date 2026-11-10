@@ -364,6 +364,15 @@
 
 ## 2026-10-24
 
+### Large libraries
+- The catalog on disk is several times smaller: a photo's record states only what was set (no empty fields, no default
+  develop settings), about 0.2 kB for a photo with no metadata where it was 3.2 kB (a photo with camera metadata also
+  stores that, as before). Edits, history steps and versions are stored as what differs from the defaults.
+- Libraries are upgraded when first opened (catalog format 14) and can't be opened by earlier versions afterwards.
+  A library from before format 14 whose upgrade can't be written (a full disk, a folder that can't be written to) or
+  whose files can't be kept is not opened: LightCraft says why and leaves its catalog as it was, and it opens once
+  there is room. A new library that can't be created is refused in the same way.
+
 ### AI Denoise follows the photo's real noise
 - The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
   about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel
@@ -381,6 +390,12 @@
   it runs there: on an RTX 4080 SUPER a photo's tiles go about 6 to 10 times faster, with the same picture (Settings ▸ AI
   Denoise ▸ Run on chooses; Automatic times both). Photos
   denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
+
+### A library keeps a copy of itself before it is upgraded
+- Opening a library saved in an older catalog format upgrades it, and versions that don't know the new format can't
+  open it afterward. In the desktop app, the library as it was is now kept beside it (`catalog.snap.v<format>-<seq>`,
+  `catalog.log.v<format>-<seq>`), and LightCraft says where once: to go back, see `docs/catalog-persistence.md`. The
+  browser build keeps no copy (it always runs the newest version).
 
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
