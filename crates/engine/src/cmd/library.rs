@@ -30,7 +30,7 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
         return ok();
     }
     let is_unrated = |id: &PhotoId| s.catalog.photo(*id).is_some_and(|p| p.rating == 0);
-    if !vis.iter().any(|id| is_unrated(id)) {
+    if !vis.iter().any(&is_unrated) {
         return Ok(json!({"allRated": true}));
     }
     let active = s.active();
