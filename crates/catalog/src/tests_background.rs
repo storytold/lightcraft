@@ -269,9 +269,10 @@ fn fs_store_background_snapshot() {
     }
     // a previous crash mid-snapshot left a partial temp file
     std::fs::write(dir.join(format!("{SNAPSHOT}.tmp")), b"{\"format\":\"lightcraft-catal").unwrap();
+    // (closed first: its log thread writes what was handed over)
+    drop(j);
     let (mut j2, c2, r) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
     assert_eq!((c2.to_snapshot(), r.snapshot_seq), (live.to_snapshot(), 0));
-    drop(j);
     let n = j2.seq();
     j2.snapshot_in_background(&live).unwrap();
     for k in 200..260 {

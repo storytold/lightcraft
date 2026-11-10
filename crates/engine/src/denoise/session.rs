@@ -1,3 +1,5 @@
+#[cfg(feature = "denoise")]
+use super::builtin::{builtin_card, builtin_marker};
 #[cfg(doc)]
 use super::model::Model;
 use super::model::STACK;
@@ -19,6 +21,11 @@ impl Session {
             .find_map(|a| a.model.lock().unwrap_or_else(PoisonError::into_inner).clone());
         match loaded {
             Some(m) => m.device(self.denoise.settings.run_on()),
+            #[cfg(feature = "denoise")]
+            None if self.denoise.active.as_ref().is_some_and(|a| a.id == lightcraft_denoise::builtin::ID) => {
+                let onnx = self.denoise.active.as_ref().map(|a| a.onnx.clone()).unwrap_or_default();
+                builtin_card(&builtin_marker(&onnx)).device(self.denoise.settings.run_on())
+            }
             None => json!({"kind": "none"}),
         }
     }
@@ -41,36 +48,44 @@ impl Session {
         // each slot takes the installed model its setting names, and only one made for its kind of photo
         let pick = |id: Option<&String>, domain: Domain| {
             let id = id?;
-            installed.iter().find(|i| &i.manifest.id == id && i.manifest.domain == domain).map(|i| (i.fingerprint(), i.clone()))
+            installed.iter().find(|i| &i.manifest.id == id && i.manifest.domain == domain).cloned()
         };
-        let raw = pick(self.denoise.settings.model.as_ref(), Domain::BayerToRgb);
-        let rgb = pick(self.denoise.settings.rgb_model.as_ref(), Domain::RgbToRgb);
-        let same = |a: &Option<Active>, f: &Option<(String, super::settings::Installed)>| match (a, f) {
+        let activate = |i: super::settings::Installed| Active {
+            id: i.manifest.id.clone(),
+            fingerprint: i.fingerprint(),
+            manifest: i.manifest,
+            onnx: i.onnx,
+            model: Arc::new(Mutex::new(None)),
+        };
+        // raw photos: no model chosen (or the one chosen is gone) means the built-in denoiser
+        let raw = Some(match pick(self.denoise.settings.model.as_ref(), Domain::BayerToRgb) {
+            Some(i) => activate(i),
+            None => {
+                let manifest = lightcraft_denoise::builtin::manifest();
+                let onnx = self.denoise.models_dir.as_deref().map(|d| d.join(lightcraft_denoise::builtin::ID)).unwrap_or_default();
+                let fingerprint = format!("{}@{}", manifest.id, manifest.version);
+                Active { id: manifest.id.clone(), manifest, onnx, fingerprint, model: Arc::new(Mutex::new(None)) }
+            }
+        });
+        // finished pictures have no built-in denoiser: only an installed model made for them
+        let rgb = pick(self.denoise.settings.rgb_model.as_ref(), Domain::RgbToRgb).map(activate);
+        let same = |a: &Option<Active>, b: &Option<Active>| match (a, b) {
             (None, None) => true,
-            (Some(a), Some((fp, _))) => a.fingerprint == *fp,
+            (Some(a), Some(b)) => a.fingerprint == b.fingerprint,
             _ => false,
         };
         if same(&self.denoise.active, &raw) && same(&self.denoise.active_rgb, &rgb) {
             return;
         }
-        let activate = |f: Option<(String, super::settings::Installed)>| {
-            f.map(|(fingerprint, i)| Active {
-                id: i.manifest.id.clone(),
-                manifest: i.manifest,
-                onnx: i.onnx,
-                fingerprint,
-                model: Arc::new(Mutex::new(None)),
-            })
-        };
         // another model: what was made with the old one is not this one's, and what failed may work now; the photos of
         // the other kind keep their job and their place in the queue
         let mut changed: Vec<Domain> = Vec::new();
         if !same(&self.denoise.active, &raw) {
-            self.denoise.active = activate(raw);
+            self.denoise.active = raw;
             changed.push(Domain::BayerToRgb);
         }
         if !same(&self.denoise.active_rgb, &rgb) {
-            self.denoise.active_rgb = activate(rgb);
+            self.denoise.active_rgb = rgb;
             changed.push(Domain::RgbToRgb);
         }
         let affected =
@@ -348,8 +363,12 @@ impl Session {
     /// Keep the cache within its limit: the pictures nobody asks for go first, the oldest first; `keep` (the one just
     /// made) never goes. The index forgets what was deleted.
     pub(crate) fn denoise_evict(&mut self, keep: Option<&Path>) {
-        let Some(models) = self.denoise.models_dir.clone() else { return };
-        self.denoise_evict_to(read_settings(&models).cache_bytes(), keep);
+        self.denoise_evict_to(self.denoise_cache_limit(), keep);
+    }
+
+    /// The cache's size limit in bytes (the default without a models folder).
+    pub(crate) fn denoise_cache_limit(&self) -> u64 {
+        self.denoise.models_dir.as_deref().map(read_settings).unwrap_or_default().cache_bytes()
     }
 
     /// [`Self::denoise_evict`] for a limit of `limit` bytes.

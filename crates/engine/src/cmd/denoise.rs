@@ -121,6 +121,9 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
         && let Some(bytes) = read_capped(&sibling, MAX_MANIFEST_BYTES)
     {
         let m = manifest::parse(&bytes).map_err(|e| bad(c, format!("{}: {e}", sibling.display())))?;
+        if m.id == lightcraft_denoise::builtin::ID {
+            return Err(bad(c, "the id `builtin` is LightCraft's own denoiser: give the model another id in its denoise-model.json"));
+        }
         return Ok(Source { manifest: m, entry: None, file_name });
     }
     Err(bad(
@@ -685,15 +688,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "denoise.models.downloads", "Denoise Model Downloads", [], None, "{} → {running, downloads: [{id, state: running | done | installed | failed | cancelled, bytes, total, error, from}]} — also installs any download that has arrived", always, downloads),
         cmd!(query "denoise.models.downloadCancel", "Cancel Denoise Model Download", [], None, "{id} → {discarded} — stop a download, or delete a finished one that was not installed", always, download_cancel),
         cmd!(query "denoise.models.test", "Test Denoise Model", [], None, "{id} → {ok, result} — load an installed model and check it gives sensible pictures; needs the denoise runtime", always, test),
-        cmd!(query "denoise.models.remove", "Remove Denoise Model", [], None, "{id} → {removed, model, rgbModel} — delete an installed model (its cached pictures stay until they are evicted); the kind of photo it was chosen for takes another installed model of that kind, if there is one", always, remove),
-        cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null, kind?: raw | rgb} → {model, rgbModel} — choose the model for the kind of photo it is made for (raw photos or finished pictures); null switches denoise off for `kind` (raw when omitted)", always, select),
+        cmd!(query "denoise.models.remove", "Remove Denoise Model", [], None, "{id} → {removed, model, rgbModel} — delete an installed model (its cached pictures stay until they are evicted); the kind of photo it was chosen for takes another installed model of that kind, if there is one (raw photos otherwise use the built-in denoiser)", always, remove),
+        cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null, kind?: raw | rgb} → {model, rgbModel} — choose the model for the kind of photo it is made for (raw photos or finished pictures); null switches denoise off for finished pictures (`kind: rgb`) or makes raw photos use the built-in denoiser (`kind: raw`, the default)", always, select),
         cmd!(query "denoise.settings", "Denoise Settings", [], None, "{auto?: bool, cacheGb?: 1..10000, threads?: 1..64 | null, runOn?: auto | gpu | cpu} → the settings — `auto`: make the picture of the photos being looked at that have a Denoise amount; `cacheGb`: how much the cached pictures may take; `threads`: most tiles run at once; `runOn`: where the model runs — `auto` (the default) the graphics card where it is faster than the processor (both timed on this computer when the card is set up), `gpu` the card whenever it can run the model, `cpu` the processor. Setting `runOn` also lets the card be tried again after a set-up that failed or closed LightCraft", always, settings),
         cmd!(
             "denoise.toggle",
             "AI Denoise",
             [],
             None,
-            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo or finished picture (JPEG, PNG, TIFF …), independent of selection and Auto Sync; needs a chosen model for that kind of photo to turn on",
+            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo or finished picture (JPEG, PNG, TIFF …), independent of selection and Auto Sync; raw photos use the built-in denoiser when no model is chosen; finished pictures need a chosen model to turn on",
             always,
             toggle
         ),

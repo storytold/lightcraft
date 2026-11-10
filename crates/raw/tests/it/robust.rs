@@ -5,6 +5,13 @@ use lightcraft_raw::{
 };
 use proptest::prelude::*;
 
+/// The header probe can't see what only the samples tell: a full CR3 decode adds the white headroom
+/// it found to `baseline_exposure`. Everything else must match.
+fn without_baseline(mut info: lightcraft_raw::RawInfo) -> lightcraft_raw::RawInfo {
+    info.color.baseline_exposure = 0.0;
+    info
+}
+
 fn sample(comp: DngCompression) -> Vec<u8> {
     let (w, h) = (24usize, 16usize);
     let data: Vec<u16> = (0..w * h).map(|i| (i * 97 % 4000) as u16).collect();
@@ -289,7 +296,7 @@ fn cr3_fixtures_decode() {
     let craw = lightcraft_raw::decode(&cr3::craw_file()).unwrap();
     assert_eq!((craw.width, craw.height, craw.bits), (16, 16, 14));
     assert_eq!(craw.data.get(0), 8192.0);
-    assert_eq!(lightcraft_raw::probe_info(&cr3::craw_file()).unwrap(), craw.info());
+    assert_eq!(without_baseline(lightcraft_raw::probe_info(&cr3::craw_file()).unwrap()), without_baseline(craw.info()));
 }
 
 proptest! {
