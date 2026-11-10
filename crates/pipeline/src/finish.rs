@@ -7,7 +7,7 @@ use lightcraft_develop::{DevelopSettings, LocalAdjustments, Process, ToneCurve, 
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgba8;
 
-use crate::colorops::ColorOps;
+use crate::colorops::{ColorOps, PointK};
 use crate::geometry::Frame;
 use crate::local::log_lum;
 use crate::output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc};
@@ -77,6 +77,25 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
             base.clone()
         }
     }))
+}
+
+/// `d` (linear Rec.2020) with each mask's Point Color samples (`points`, by mask) applied `alpha` of the way at pixel
+/// `i`, in mask order (mixed in OkLab, which has no hue seam; an alpha above 1 extrapolates, as the slider terms do).
+#[inline]
+fn apply_masks_points(d: [f32; 3], masks: &[crate::masks::Evaluated], points: &[&[PointK]], i: usize) -> [f32; 3] {
+    use lightcraft_color::perceptual::{lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
+    let mut d = d;
+    for (m, points) in masks.iter().zip(points) {
+        let alpha = m.alpha.data[i];
+        if points.is_empty() || alpha <= 0.0 {
+            continue;
+        }
+        let lab = oklab_from_2020(d);
+        let lch = points.iter().fold(lab_to_lch(lab), |lch, k| k.apply(lch));
+        let to = lch_to_lab(lch);
+        d = oklab_to_2020(std::array::from_fn(|c| lab[c] + alpha * (to[c] - lab[c])));
+    }
+    d
 }
 
 /// Vignette (post-crop) parameters.
@@ -257,6 +276,10 @@ pub struct FinishParams {
     pub curves: Option<[Lut1; 3]>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
+    /// The visible masks' own Point Color samples that change something, by [`crate::masks::Evaluated::id`]; empty
+    /// for a photo without any (and for a black & white one, which has no Point Color), which then renders exactly
+    /// as before.
+    pub mask_points: Vec<(u32, Vec<PointK>)>,
     pub vig: Option<Vig>,
     /// Linear Rec.2020 → linear output RGB, the output's luminance weights (gamut mapping) and its
     /// encoding curve (see [`crate::output`]).
@@ -358,6 +381,26 @@ impl FinishParams {
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
+            mask_points: if crate::is_bw(s) {
+                Vec::new()
+            } else {
+                s.masks
+                    .iter()
+                    .filter(|m| m.visible && !m.components.is_empty())
+                    .map(|m| {
+                        (
+                            m.id,
+                            m.point_colors
+                                .iter()
+                                .take(lightcraft_develop::MAX_POINT_COLORS)
+                                .filter(|p| !p.is_neutral())
+                                .map(PointK::new)
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .filter(|(_, k)| !k.is_empty())
+                    .collect()
+            },
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
             out_luma: space.luma(),
@@ -525,6 +568,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let p_lut = fp.lut.clone();
     let FinishParams { light, curves, vig, to_out, out_luma, grain, grain_local, grain_base, .. } = fp;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
+    // each evaluated mask's own Point Color samples (empty slice: none), in mask order; no list at all for a photo
+    // without any, which then costs the per-pixel stage nothing
+    let mut mask_points: Vec<&[PointK]> =
+        p.masks.iter().map(|m| fp.mask_points.iter().find(|(id, _)| *id == m.id).map_or(&[][..], |(_, k)| k.as_slice())).collect();
+    if mask_points.iter().all(|k| k.is_empty()) {
+        mask_points.clear();
+    }
     let [vx, vy, vw, vh] = fp.view;
     let (vx_u, vy_u) = (vx.round() as usize, vy.round() as usize);
     // the vignette belongs to the whole output frame, not to the window being drawn
@@ -585,6 +635,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let lab = lightcraft_color::perceptual::oklab_from_2020(d);
                 d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);
             }
+
+            // the masks' own Point Color, in mask order, each weighted by its alpha
+            d = apply_masks_points(d, &p.masks, &mask_points, i);
 
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {

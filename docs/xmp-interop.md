@@ -238,6 +238,7 @@ mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive correct
 | `LocalContrast2012`, `LocalHighlights2012`, `LocalShadows2012`, `LocalWhites2012`, `LocalBlacks2012`, `LocalClarity2012`, `LocalTexture`, `LocalDehaze`, `LocalTemperature`, `LocalTint`, `LocalSaturation`, `LocalHue`, `LocalSharpness`, `LocalLuminanceNoise`, `LocalMoire`, `LocalDefringe`, `LocalToningSaturation` | the matching `adjust.*` | stored −1..1, ×100 |
 | `LocalGrain` | `adjust.grain` | stored 0..1, ×100 (a negative value is read as 0) |
 | `LocalToningHue` | `adjust.color_hue` | degrees |
+| `LocalPointColors`, `LocalColorVariance` (child `rdf:Seq` of the correction: 19 comma-separated numbers per Point Color sample, and the variance) | — | the mask's `point_colors` exist (`mask.pointColor.*`) but the numbers aren't mapped: the photo's own `crs:PointColors` isn't imported either and there is no verified layout to follow. Reported as `Mask: LocalPointColors` / `Mask: LocalColorVariance` when a sample is set (slots of -1 and a variance of 0 are what Lightroom writes for none) |
 | other `Local*` sliders (`LocalBrightness`…) | — | no counterpart in our masks: reported as `Mask: LocalBrightness` when set (`LocalCurveRefineSaturation` 100 is neutral) |
 | `Mask/Gradient` (`FullX/Y`, `ZeroX/Y`) | linear gradient | full effect at the Full point |
 | `Mask/CircularGradient` (`Top/Left/Bottom/Right`, `Angle`, `Feather`, `Flipped`) | radial gradient | box fractions → long-edge radii (presets assume 3:2; sidecars use the photo's shape). `Flipped="true"` means effect inside: in `MaskGroupBasedCorrections` with `Version` 2 (what Lightroom writes for an ordinary radial) and in the legacy `CircularGradientBasedCorrections` Radial Filter, whose default (no `Flipped`) is outside. A `MaskGroupBasedCorrections` radial without `Version` is inside whatever `Flipped` says, and its `Feather` is halved (Lightroom rescales it that way when it upgrades one). Inverting is `MaskInverted` |
@@ -271,9 +272,9 @@ Enhancers*); presets without a number keep their folder's group. An earlier impo
 Same-named effects are replaced (a star is kept).
 
 Settings with no local slider here are listed per preset in `unmapped` (and the toast) and **kept** with the effect in
-`extra` (an `.lceffect` export carries them), but not applied: `grain` (Grain; LightCraft has no local grain),
+`extra` (an `.lceffect` export carries them), but not applied:
 `pointColors` (Point Color: `SrcHue/Sat/Lum`, `HueShift`, `SatScale`, `LumScale`, `RangeAmount`, `Hue/Sat/LumRange`
-`{LowerNone, LowerFull, UpperFull, UpperNone}`; there is global Point Color only), `toningLuminance`. Zero values aren't
+`{LowerNone, LowerFull, UpperFull, UpperNone}`; the photo's own Point Color isn't imported from Lightroom either), `toningLuminance`. Zero values aren't
 listed (`refineSaturation = 0` in most files). Lightroom keeps brush size, feather, flow and density per brush, not in
 presets, so there is nothing to import for them; an effect saved here can carry them (`brush`).
 

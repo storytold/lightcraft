@@ -178,3 +178,27 @@ fn local_grain_is_skipped_at_zero_and_old_masks_keep_their_json() {
     assert_eq!(back.masks[0].adjust.grain, 30.0);
     assert_eq!(back.to_json()["masks"][0]["adjust"]["grain"], 30.0);
 }
+
+#[test]
+fn mask_point_colors_are_skipped_while_empty_and_old_masks_keep_their_json() {
+    // masks saved before the mask Point Color load with none and save again without the key: files and the
+    // preview-cache key (`hash64`) of an existing photo with masks are unchanged
+    let v = legacy();
+    let s = DevelopSettings::from_json(&v).unwrap();
+    assert!(s.masks[0].point_colors.is_empty() && s.masks[0].point_colors_are_neutral());
+    assert!(s.to_json()["masks"][0].get("point_colors").is_none());
+    let mut with = s.clone();
+    with.masks[0].point_colors.push(PointColor { hue_shift: 30.0, ..Default::default() });
+    assert!(!with.masks[0].point_colors_are_neutral());
+    assert_ne!(with.hash64(), s.hash64());
+    let back = DevelopSettings::from_json(&with.to_json()).unwrap();
+    assert_eq!(back.masks[0].point_colors, with.masks[0].point_colors);
+    // the section eye: off = none in the effective copy, the stored samples stay
+    with.masks[0].set_section_enabled("pointColor", false);
+    assert!(with.effective().masks[0].point_colors.is_empty());
+    assert_eq!(with.masks[0].point_colors.len(), 1);
+    // a sample that shifts nothing is neutral
+    let mut flat = s.masks[0].clone();
+    flat.point_colors.push(PointColor::default());
+    assert!(flat.point_colors_are_neutral());
+}

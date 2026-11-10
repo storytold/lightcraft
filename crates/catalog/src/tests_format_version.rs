@@ -238,7 +238,7 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v13: `LocalAdjustments.grain`, `Mask.disabled_sections` (v12: `Catalog.grids` and `SegMask.grid`, shared by a snapshot's
+    /// v13: `LocalAdjustments.grain`, `Mask.disabled_sections`, `Mask.point_colors` (v12: `Catalog.grids` and `SegMask.grid`, shared by a snapshot's
     /// masks (#2154); v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9: `Photo.preview_checked` and
     /// `Op::SetContent.preview_checked`).
     const NEWEST_FIELDS: u32 = 13;

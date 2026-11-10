@@ -364,3 +364,89 @@ fn zips_and_camera_raw_xmp_presets_import() {
     assert!(s.execute("mask.importEffects", &json!({})).is_err());
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+fn mask_points(s: &Session, id: u32) -> Vec<lightcraft_develop::PointColor> {
+    s.develop_of(s.active().unwrap()).unwrap().masks.iter().find(|m| m.id == id).unwrap().point_colors.clone()
+}
+
+#[test]
+fn mask_point_color_commands_pick_set_delete_clear_and_undo() {
+    let mut s = Session::with_demo();
+    // the colour the photo's own picker reads there
+    let global = s.execute("pointColor.pick", &json!({"x": 0.5, "y": 0.08})).unwrap();
+    s.execute("pointColor.delete", &json!({"index": 0})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    let mid = s.active_mask.unwrap();
+    let r = s.execute("mask.pointColor.pick", &json!({"x": 0.5, "y": 0.08})).unwrap();
+    assert_eq!(r["index"], 0);
+    let picked = mask_points(&s, mid);
+    assert_eq!(picked.len(), 1);
+    assert!(picked[0].chroma > 0.01, "the sky has colour: {r}");
+    // with nothing in between, it is the same colour as the photo's picker
+    for k in ["lum", "chroma", "hue"] {
+        assert!((r[k].as_f64().unwrap() - global[k].as_f64().unwrap()).abs() < 1e-3, "{k}: {r} vs {global}");
+    }
+    assert!(s.develop_of(s.active().unwrap()).unwrap().point_colors.is_empty(), "the photo's own samples are untouched");
+    // a mask sample sees the colour tools that come before it (the photo's picker neutralizes them)
+    s.execute("develop.set", &json!({"control": "color.saturation", "value": 60})).unwrap();
+    let boosted = s.execute("mask.pointColor.pick", &json!({"id": mid, "x": 0.5, "y": 0.08})).unwrap();
+    assert!(boosted["chroma"].as_f64().unwrap() > r["chroma"].as_f64().unwrap() + 0.005, "{boosted} vs {r}");
+    assert_eq!(boosted["index"], 1);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(mask_points(&s, mid).len(), 1, "one undo step per pick");
+    // set: the given fields only, clamped to the photo's control ranges, one step
+    s.execute("mask.pointColor.set", &json!({"index": 0, "hueShift": 250, "range": -10, "variance": -40})).unwrap();
+    let p = &mask_points(&s, mid)[0];
+    assert_eq!((p.hue_shift, p.range, p.variance, p.sat_shift, p.hue_range), (100.0, 0.0, -40.0, 0.0, 50.0));
+    assert_eq!((p.lum, p.chroma, p.hue), (picked[0].lum, picked[0].chroma, picked[0].hue), "the sampled colour is kept");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(mask_points(&s, mid)[0].hue_shift, 0.0);
+    s.execute("edit.redo", &json!({})).unwrap();
+    // the cap is 8 per mask
+    for _ in 0..7 {
+        s.execute("mask.pointColor.pick", &json!({"x": 0.3, "y": 0.5})).unwrap();
+    }
+    assert_eq!(mask_points(&s, mid).len(), 8);
+    assert!(s.execute("mask.pointColor.pick", &json!({"x": 0.3, "y": 0.5})).is_err());
+    // delete one, then undo it
+    s.execute("mask.pointColor.delete", &json!({"index": 0})).unwrap();
+    assert_eq!(mask_points(&s, mid).len(), 7);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(mask_points(&s, mid).len(), 8);
+    // clear: all of them, one step
+    s.execute("mask.pointColor.clear", &json!({})).unwrap();
+    assert!(mask_points(&s, mid).is_empty());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(mask_points(&s, mid).len(), 8);
+    // survives the settings JSON
+    let d = (*s.develop_of(s.active().unwrap()).unwrap()).clone();
+    assert_eq!(lightcraft_develop::DevelopSettings::from_json(&d.to_json()).unwrap(), d);
+}
+
+#[test]
+fn mask_point_color_commands_reject_bad_input_and_change_nothing() {
+    let mut s = Session::with_demo();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    let mid = s.active_mask.unwrap();
+    s.execute("mask.pointColor.pick", &json!({"x": 0.5, "y": 0.08})).unwrap();
+    let before = mask_points(&s, mid);
+    for (cmd, args) in [
+        ("mask.pointColor.pick", json!({"y": 0.5})),
+        ("mask.pointColor.pick", json!({"id": 999, "x": 0.5, "y": 0.5})),
+        ("mask.pointColor.set", json!({"hueShift": 10})),
+        ("mask.pointColor.set", json!({"index": 0})),
+        ("mask.pointColor.set", json!({"index": 3, "hueShift": 10})),
+        ("mask.pointColor.set", json!({"index": 0, "hueShift": "a lot"})),
+        ("mask.pointColor.set", json!({"id": 999, "index": 0, "hueShift": 10})),
+        ("mask.pointColor.delete", json!({"index": 1})),
+        ("mask.pointColor.delete", json!({})),
+        ("mask.pointColor.clear", json!({"id": 999})),
+    ] {
+        assert!(s.execute(cmd, &args).is_err(), "{cmd} {args}");
+    }
+    assert_eq!(mask_points(&s, mid), before);
+    // no mask selected and none given
+    s.execute("mask.select", &json!({"id": null})).unwrap();
+    assert!(s.execute("mask.pointColor.pick", &json!({"x": 0.5, "y": 0.5})).is_err());
+    assert!(s.execute("mask.pointColor.clear", &json!({})).is_err());
+}

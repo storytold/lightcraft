@@ -1116,11 +1116,16 @@ pub struct Mask {
     #[serde(default, skip_serializing_if = "is_false")]
     pub on_photo: bool,
     /// Sections of this mask whose eye is off (Lightroom Classic's per-section eye): their adjustments are kept
-    /// but render as neutral, see [`Mask::effective`]. Names in [`Mask::SECTIONS`]. `pointColor` is
-    /// accepted and stored already; its handling in [`Mask::effective`] lands with the per-mask point colour.
-    /// Skipped from JSON when empty, so older settings and render caches are unchanged.
+    /// but render as neutral, see [`Mask::effective`]. Names in [`Mask::SECTIONS`]. Skipped from JSON when empty,
+    /// so older settings and render caches are unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_sections: Vec<String>,
+    /// This mask's own Point Color samples (Lightroom Classic's mask "Point Color" section), the same samples as the
+    /// photo's [`DevelopSettings::point_colors`] (at most [`MAX_POINT_COLORS`]): applied inside the mask, weighted by
+    /// its alpha, after the colour tools. Skipped from JSON while empty, so older settings and render caches are
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub point_colors: Vec<PointColor>,
 }
 
 impl Mask {
@@ -1143,7 +1148,8 @@ impl Mask {
     /// This mask as rendered: the fields of every section whose eye is off are neutral (the stored values stay).
     /// Sections of the sliders in [`LocalAdjustments`]: tone = exposure, contrast, highlights, shadows, whites,
     /// blacks; color = temp, tint, hue, saturation, color_hue, color_sat; effects = texture, clarity, dehaze,
-    /// grain; detail = sharpness, noise, moire, defringe. `amount` (the mask's strength) belongs to no section.
+    /// grain; detail = sharpness, noise, moire, defringe; pointColor = `point_colors`. `amount` (the
+    /// mask's strength) belongs to no section.
     pub fn effective(&self) -> std::borrow::Cow<'_, Mask> {
         if self.disabled_sections.is_empty() {
             return std::borrow::Cow::Borrowed(self);
@@ -1164,6 +1170,9 @@ impl Mask {
         if !self.section_enabled("detail") {
             (a.sharpness, a.noise, a.moire, a.defringe) = (d.sharpness, d.noise, d.moire, d.defringe);
         }
+        if !self.section_enabled("pointColor") {
+            m.point_colors.clear();
+        }
         std::borrow::Cow::Owned(m)
     }
 }
@@ -1174,6 +1183,14 @@ fn is_zero(v: &f64) -> bool {
 
 fn is_false(v: &bool) -> bool {
     !*v
+}
+
+impl Mask {
+    /// True when none of the mask's Point Color samples changes anything (a sample with no shift and no variance is
+    /// neutral): the cheap test that keeps photos without a mask point colour on the old path.
+    pub fn point_colors_are_neutral(&self) -> bool {
+        self.point_colors.iter().all(PointColor::is_neutral)
+    }
 }
 
 impl Default for Mask {
@@ -1188,6 +1205,7 @@ impl Default for Mask {
             refine: 0.0,
             on_photo: true,
             disabled_sections: Vec::new(),
+            point_colors: Vec::new(),
         }
     }
 }

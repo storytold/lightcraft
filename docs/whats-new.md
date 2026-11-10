@@ -55,6 +55,15 @@
 - `mask.sectionEnabled` switches off a mask's Tone, Color, Effects or Detail adjustments without resetting them, and
   back on. There is no on-screen eye yet.
 
+### Point Color inside a mask (control protocol)
+- Each mask can carry its own Point Color samples (up to 8, the same Hue, Saturation, Luminance, Variance and Range as
+  the photo's), added with `mask.pointColor.pick`, changed with `mask.pointColor.set` and removed with
+  `mask.pointColor.delete` or `mask.pointColor.clear`. They apply inside the mask, fading with its edges and Amount, like
+  Lightroom Classic's mask Point Color, and the mask's Point Color eye (`mask.sectionEnabled`) switches them. They are
+  rendered on the CPU for now, so dragging a slider on a photo that has one previews at a smaller size. Lightroom's
+  `LocalPointColors` is reported when a sidecar has it, not imported. There are no controls in the Masking panel yet;
+  photos without mask Point Color render as before.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

@@ -516,6 +516,21 @@ pub fn handles(depth: lightcraft_pipeline::OutputDepth, device_proof: bool, over
         && overlay != lightcraft_pipeline::Overlay::HdrRange
 }
 
+/// Whether the GPU has a kernel for everything in `s` that its render would draw: false when a visible mask carries
+/// its own Point Color samples, which only the CPU applies for now. [`try_render`] refuses
+/// such settings ([`Fallback::NotTried`], the CPU renders them) and the loupe sizes its slider-drag drafts by it
+/// together with [`handles`], so the two can't drift apart.
+pub fn draws(s: &DevelopSettings) -> bool {
+    !s.masks.iter().any(|m| {
+        m.visible
+            // (a black & white photo has no Point Color, in masks either)
+            && !m.components.is_empty()
+            && !lightcraft_pipeline::is_bw(s)
+            && m.section_enabled("pointColor")
+            && !m.point_colors_are_neutral()
+    })
+}
+
 /// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU
 /// was not used (callers can ask [`unavailable_reason`]), [`Fallback::Failed`] with the reason
 /// when the GPU render failed and the CPU must render it. The reason belongs to this call, unlike
@@ -645,6 +660,10 @@ fn run(
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
+        // a mask's own Point Color has no GPU kernel yet: the CPU renders the photo
+        if !draws(s) {
+            return Err(Fallback::NotTried);
+        }
         // content-aware Fill spots (`spots::fill_box`) have no GPU kernel: the CPU renders the photo
         if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill) {
             return Err(Fallback::NotTried);

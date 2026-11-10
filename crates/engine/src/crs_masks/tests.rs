@@ -335,3 +335,37 @@ fn spots_render() {
         |d: &DevelopSettings| lightcraft_pipeline::render(&img, &Default::default(), d, &lightcraft_pipeline::RenderRequest::fit(96, 64)).image.data;
     assert_ne!(render(&DevelopSettings { light: s.light, ..Default::default() }), render(&s), "the spots change the picture");
 }
+
+#[test]
+fn a_correction_point_color_is_reported_not_imported() {
+    // written for this test, in the shape Lightroom Classic writes a mask's Point Color: child sequences of 19
+    // comma-separated numbers per sample; there is no verified mapping to ours yet, so it is reported by name
+    let x = |points: &str, variance: &str| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+ <crs:MaskGroupBasedCorrections><rdf:Seq>
+  <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1">
+   <crs:CorrectionMasks><rdf:Seq>
+    <rdf:li crs:What="Mask/RangeMask"><crs:CorrectionRangeMask crs:Type="2" crs:LumRange="0.6 0.85 1 1"/></rdf:li>
+   </rdf:Seq></crs:CorrectionMasks>
+   <crs:LocalPointColors><rdf:Seq><rdf:li>{points}</rdf:li></rdf:Seq></crs:LocalPointColors>
+   <crs:LocalColorVariance><rdf:Seq><rdf:li>{variance}</rdf:li></rdf:Seq></crs:LocalColorVariance>
+  </rdf:Description></rdf:li>
+ </rdf:Seq></crs:MaskGroupBasedCorrections>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    let report = |xml: String| {
+        let d = lightcraft_meta::parse_xmp(&xml).unwrap();
+        let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), crate::crs::Target::Any, 1.5);
+        let s = DevelopSettings::default().merged(&partial).expect("valid settings");
+        assert!(s.masks[0].point_colors.is_empty(), "nothing is invented");
+        unmapped
+    };
+    let used = report(x("0.5, 0.2, 0.1, 10, 0, 0, 0, 0, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0", "0.250000"));
+    assert_eq!(used, ["Mask: LocalColorVariance", "Mask: LocalPointColors"], "each reported once");
+    // empty slots (-1) and a variance of 0 are what Lightroom writes when there is nothing: not reported
+    let empty = report(x("-1.000000, -1.000000, -1.000000, -1.000000", "0.000000"));
+    assert!(empty.is_empty(), "{empty:?}");
+}

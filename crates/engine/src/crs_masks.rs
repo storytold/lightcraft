@@ -102,18 +102,32 @@ fn adjust(c: &XmpValue) -> Value {
 }
 
 /// The correction's local sliders we have no counterpart for (e.g. `LocalBrightness`), when set:
-/// reported, never dropped silently.
+/// reported, never dropped silently. `LocalPointColors` / `LocalColorVariance` (the mask's Point Color: child
+/// sequences, 19 comma-separated numbers per sample) are reported when they hold a sample: the global
+/// `crs:PointColors` isn't imported either, so there is no verified mapping of those numbers to ours yet.
 fn unmapped_local(c: &XmpValue) -> Vec<String> {
     let XmpValue::Struct(m) = c else { return Vec::new() };
-    m.keys()
+    let mut out: Vec<String> = m
+        .keys()
         .filter_map(|k| {
             let field = k.strip_prefix("crs:").filter(|f| f.starts_with("Local"))?;
             // 100 = "curve saturation unchanged", written with every correction
             let neutral = if field == "LocalCurveRefineSaturation" { 100.0 } else { 0.0 };
             let set = num(c, k).is_some_and(|v| v != neutral);
-            (set && !LOCAL.iter().any(|(crs, ..)| *crs == field)).then(|| field.to_string())
+            (set && !matches!(field, "LocalPointColors" | "LocalColorVariance") && !LOCAL.iter().any(|(crs, ..)| *crs == field))
+                .then(|| field.to_string())
         })
-        .collect()
+        .collect();
+    // a Point Color slot of -1s is an empty one; a variance of 0 is neutral
+    for (field, empty) in [("LocalPointColors", -1.0), ("LocalColorVariance", 0.0)] {
+        let used = c.field(&format!("crs:{field}")).is_some_and(|v| {
+            v.items().iter().filter_map(|i| i.text()).flat_map(|t| t.split(',')).filter_map(|n| n.trim().parse::<f64>().ok()).any(|n| n != empty)
+        });
+        if used {
+            out.push(field.to_string());
+        }
+    }
+    out
 }
 
 /// Perceptual lightness 0..1 (how range masks store luminance) → our range scale: log

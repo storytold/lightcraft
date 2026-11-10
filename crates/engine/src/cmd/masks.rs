@@ -1,12 +1,13 @@
 //! Masking and Remove (spot) commands on the active photo.
 
 use lightcraft_develop::{
-    BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode,
+    BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_POINT_COLORS, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, PointColor,
+    RedEye, Spot, SpotMode,
 };
 use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
-use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
+use super::{CommandSpec, bad, bool_or, cmd, f64_or, f64_req, has_active, index_req, ok, point, str_param};
 use crate::segment::{Click, MAX_CLICKS};
 use crate::{Result, Session};
 
@@ -660,6 +661,118 @@ pub fn specs() -> Vec<CommandSpec> {
                     let i = find(masks, mid, "mask.sectionEnabled")?;
                     let on = bool_or(p, "enabled", !masks[i].section_enabled(&section));
                     masks[i].set_section_enabled(&section, on);
+                    Ok(())
+                })
+            }
+        ),
+        cmd!(
+            "mask.pointColor.pick",
+            "Add Mask Point Color Sample",
+            [],
+            None,
+            "{id?, x, y} normalized image coords — samples the colour there (as the mask's Point Color stage sees it; max 8 per mask) and adds it to the mask's own Point Color; returns {index, lum, chroma, hue}",
+            has_active,
+            |s, p| {
+                const C: &str = "mask.pointColor.pick";
+                let (x, y) = (f64_req(p, "x", C)?, f64_req(p, "y", C)?);
+                let mid = mask_id(p, s.active_mask, C)?;
+                let photo = s.active().ok_or_else(|| bad(C, "no active photo"))?;
+                let held = s.develop_of(photo).unwrap_or_default().masks.iter().find(|m| m.id == mid).map(|m| m.point_colors.len());
+                match held {
+                    None => return Err(bad(C, format!("no mask {mid}"))),
+                    Some(n) if n >= MAX_POINT_COLORS => return Err(bad(C, format!("at most {MAX_POINT_COLORS} point colours per mask"))),
+                    Some(_) => {}
+                }
+                let [l, ch, h] = super::color::encoded_to_oklch(super::color::probe(s, C, x, y, |d| super::color::before_mask_point_color(d, mid))?);
+                let sample = PointColor { lum: l as f64, chroma: ch as f64, hue: (h as f64).to_degrees().rem_euclid(360.0), ..Default::default() };
+                let mut index = 0;
+                masks_edit(s, C, "Mask Point Color", |masks, _| {
+                    let i = find(masks, mid, C)?;
+                    masks[i].point_colors.push(sample);
+                    index = masks[i].point_colors.len() - 1;
+                    Ok(())
+                })?;
+                Ok(json!({"index": index, "lum": sample.lum, "chroma": sample.chroma, "hue": sample.hue}))
+            }
+        ),
+        cmd!(
+            "mask.pointColor.set",
+            "Set Mask Point Color Sample",
+            [],
+            None,
+            "{id?, index, hueShift?, satShift?, lumShift?, variance? (each -100..100), range?, hueRange?, satRange?, lumRange? (each 0..100)} — changes the given fields of one of the mask's Point Color samples (the same fields as pointColor.<i>.<field> on the photo)",
+            has_active,
+            |s, p| {
+                const C: &str = "mask.pointColor.set";
+                const FIELDS: [&str; 8] = ["hueShift", "satShift", "lumShift", "variance", "range", "hueRange", "satRange", "lumRange"];
+                let index = index_req(p, "index", C)?;
+                let mut changes = Vec::new();
+                for k in FIELDS {
+                    let Some(v) = p.get(k).filter(|v| !v.is_null()) else { continue };
+                    let v = v.as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad(C, format!("`{k}` must be a number")))?;
+                    // the clamp is the photo's own control range for that field
+                    let id = format!("pointColor.{k}");
+                    let spec =
+                        lightcraft_develop::controls::INDEXED.iter().find(|c| c.id == id).ok_or_else(|| bad(C, format!("no control for `{k}`")))?;
+                    changes.push((k, v.clamp(spec.min, spec.max)));
+                }
+                if changes.is_empty() {
+                    return Err(bad(C, format!("give at least one of {}", FIELDS.join(", "))));
+                }
+                let mid = mask_id(p, s.active_mask, C)?;
+                masks_edit(s, C, "Mask Point Color", |masks, _| {
+                    let i = find(masks, mid, C)?;
+                    let sample = masks[i].point_colors.get_mut(index).ok_or_else(|| bad(C, "no such sample"))?;
+                    for (k, v) in changes {
+                        match k {
+                            "hueShift" => sample.hue_shift = v,
+                            "satShift" => sample.sat_shift = v,
+                            "lumShift" => sample.lum_shift = v,
+                            "variance" => sample.variance = v,
+                            "range" => sample.range = v,
+                            "hueRange" => sample.hue_range = v,
+                            "satRange" => sample.sat_range = v,
+                            _ => sample.lum_range = v,
+                        }
+                    }
+                    Ok(())
+                })
+            }
+        ),
+        cmd!(
+            "mask.pointColor.delete",
+            "Delete Mask Point Color Sample",
+            [],
+            None,
+            "{id?, index} — removes one of the mask's Point Color samples",
+            has_active,
+            |s, p| {
+                const C: &str = "mask.pointColor.delete";
+                let index = index_req(p, "index", C)?;
+                let mid = mask_id(p, s.active_mask, C)?;
+                masks_edit(s, C, "Delete Mask Point Color", |masks, _| {
+                    let i = find(masks, mid, C)?;
+                    if index >= masks[i].point_colors.len() {
+                        return Err(bad(C, "no such sample"));
+                    }
+                    masks[i].point_colors.remove(index);
+                    Ok(())
+                })
+            }
+        ),
+        cmd!(
+            "mask.pointColor.clear",
+            "Clear Mask Point Color",
+            [],
+            None,
+            "{id?} — removes all of the mask's Point Color samples",
+            has_active,
+            |s, p| {
+                const C: &str = "mask.pointColor.clear";
+                let mid = mask_id(p, s.active_mask, C)?;
+                masks_edit(s, C, "Clear Mask Point Color", |masks, _| {
+                    let i = find(masks, mid, C)?;
+                    masks[i].point_colors.clear();
                     Ok(())
                 })
             }

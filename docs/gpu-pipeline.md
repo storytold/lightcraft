@@ -194,8 +194,10 @@ walks the drive.
   three linear floats per pixel into `out` (within 1 step of 8 on the sRGB curve of the CPU's float
   render, 0.02 on average: `hdr_float_render_matches`). These render on the CPU: 16-bit and linear float exports,
   Visualize HDR (it draws the float render over the 8-bit one), soft proofs to an output device's
-  profile (a printer or paper profile), and photos with a content-aware Fill spot (no GPU kernel
-  for it).
+  profile (a printer or paper profile), photos with a content-aware Fill spot (no GPU kernel
+  for it), and photos where a visible mask carries its own Point Color samples (the mask Point Color section) that
+  change something (the CPU applies them for now: `lightcraft_gpu::draws` says so, `try_render` returns `NotTried`, and
+  a slider drag drafts at the CPU's smaller size).
 - Anything the GPU path cannot do returns `None` and the CPU renders instead: no adapter (CI
   machines, software-only adapters), `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` (whole
   process; see [Backends](#backends-environment-variables-and-troubleshooting-issue-136)), the `app.gpu {enabled}`

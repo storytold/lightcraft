@@ -450,10 +450,13 @@ mod tests {
             assert_eq!(m.effective().adjust.amount, 80.0);
             assert_eq!(m.effective().adjust.exposure, 1.0, "{section} leaves tone");
         }
-        // pointColor is stored but changes nothing yet
+        // pointColor clears the mask's own samples, no slider
         let mut m = Mask { adjust, ..Default::default() };
+        m.point_colors.push(PointColor { hue_shift: 40.0, ..Default::default() });
         m.set_section_enabled("pointColor", false);
         assert_eq!(m.effective().adjust, adjust);
+        assert!(m.effective().point_colors.is_empty());
+        assert_eq!(m.point_colors.len(), 1, "the stored samples stay");
         // back on: same JSON and hash as before
         s.masks[0].set_section_enabled("tone", true);
         assert_eq!(s.hash64(), on_hash);
