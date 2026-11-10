@@ -459,6 +459,20 @@ fn windows_links_open_in_the_browser() {
     assert_eq!(args, ["url.dll,FileProtocolHandler", url]);
 }
 
+/// A link opener is started and left to run: `open_url` returns while it still runs (an `xdg-open` that stays
+/// attached to the browser froze the window; review of #3694), and one that can't start is still an error.
+#[test]
+#[cfg(unix)]
+fn a_link_opener_is_not_waited_for() {
+    let started = std::time::Instant::now();
+    let mut c = std::process::Command::new("sleep");
+    c.arg("3");
+    assert_eq!(launch(c), Ok(()));
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "returned at once ({:?})", started.elapsed());
+    let missing = launch(std::process::Command::new("lc-no-such-opener"));
+    assert!(missing.as_ref().is_err_and(|e| e.starts_with("lc-no-such-opener: ")), "{missing:?}");
+}
+
 /// Issue #272: Explorer gets the file to select quoted after `/select,`, with backslashes and
 /// without the verbatim prefix, even when the path has spaces (else it opens Documents).
 #[test]
