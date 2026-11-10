@@ -75,9 +75,15 @@ fn the_report_file_and_the_issue_hold_what_was_chosen() {
     );
     assert!(!url.contains("birthday"), "{url}");
 
-    // the previous run's log too, names shown when asked
+    // the previous run's log too, names shown when asked; a second report in the same second gets a
+    // name of its own and leaves the first one as it was
+    h.app.session.clock = Box::new(|| "2026-11-10T09:00:00".to_string());
+    let first = h.request("engine.execute", json!({"command": "app.reportBug", "params": {"create": true, "what": "First"}}), T);
     let r = h.request("engine.execute", json!({"command": "app.reportBug", "params": {"create": true, "previousLogs": true, "private": false}}), T);
-    let text = std::fs::read_to_string(r["result"]["path"].as_str().unwrap()).unwrap();
+    let (a, b) = (first["result"]["path"].as_str().unwrap(), r["result"]["path"].as_str().unwrap());
+    assert!(a.ends_with("lightcraft-report-20261110090000.txt") && b.ends_with("lightcraft-report-20261110090000-2.txt"), "{a} {b}");
+    assert!(std::fs::read_to_string(a).unwrap().contains("First"), "the first report is kept");
+    let text = std::fs::read_to_string(b).unwrap();
     assert!(text.contains("== lightcraft.1.log ==") && text.contains("the run before") && text.contains("Ann birthday.CR2"), "{text}");
     assert_eq!(r["result"]["logs"], json!(["lightcraft.log", "lightcraft.1.log"]));
     let _ = std::fs::remove_dir_all(&dir);
@@ -130,9 +136,7 @@ fn without_a_log_the_issue_holds_the_system_info_only() {
 /// A report that can't be written keeps the dialog, and what was typed, open with the error, through
 /// the control channel as through its button (#1128 review).
 #[test]
-#[cfg(unix)]
 fn a_report_that_cant_be_written_keeps_the_dialog() {
-    use std::os::unix::fs::PermissionsExt;
     let (dir, log) = log_dir("unwritable");
     let (mut h, _, opened) = app(Some(log));
     let r = h.request("ui.menu.invoke", json!({"id": "app.reportBug"}), T);
@@ -140,9 +144,11 @@ fn a_report_that_cant_be_written_keeps_the_dialog() {
     if let Some(crate::state::Dialog::ReportBug { opts, .. }) = h.app.ui.dialog.as_mut() {
         opts.what = "Export hangs".into();
     }
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // the report goes next to the log: under a plain file it can't be written, for any user (root too)
+    let blocker = dir.join("not-a-folder");
+    std::fs::write(&blocker, "").unwrap();
+    h.app.services.log_file = Some(blocker.join("lightcraft.log").to_string_lossy().to_string());
     let r = h.request("ui.dialog.confirm", json!({}), T);
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(r["ok"], false, "the report file can't be written: {r}");
     match &h.app.ui.dialog {
         Some(crate::state::Dialog::ReportBug { opts, .. }) => assert_eq!(opts.what, "Export hangs", "what was typed is kept"),

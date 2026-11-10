@@ -364,10 +364,8 @@ pub fn create(app: &mut LightcraftApp, opts: &ReportOptions, rows: &[(String, St
     let logs = chosen(logs, opts);
     let when = (app.session.clock)();
     // a report file only when there are logs to put in it: what the dialog's preview says
-    let file = app.services.log_file.as_deref().filter(|_| !logs.is_empty()).map(std::path::Path::new).and_then(|log| {
-        let stamp: String = when.chars().filter(|c| c.is_ascii_digit()).take(14).collect();
-        Some(log.parent()?.join(format!("lightcraft-report-{stamp}.txt")))
-    });
+    let stamp: String = when.chars().filter(|c| c.is_ascii_digit()).take(14).collect();
+    let file = app.services.log_file.as_deref().filter(|_| !logs.is_empty()).map(std::path::Path::new).and_then(|log| log.parent());
     let mut path = None;
     if let Some(file) = &file {
         // the text read when the dialog opened (what its preview described); read now only for a report made
@@ -386,8 +384,7 @@ pub fn create(app: &mut LightcraftApp, opts: &ReportOptions, rows: &[(String, St
             })
             .collect();
         let text = file_text(rows, opts, &full, &when);
-        let p = file.to_string_lossy().to_string();
-        lightcraft_engine::export::write_file(&p, text.as_bytes())?;
+        let p = write_new_report(file, &stamp, text.as_bytes())?;
         if let Some(reveal) = app.services.reveal.as_mut() {
             reveal(&p)?;
         }
@@ -398,6 +395,22 @@ pub fn create(app: &mut LightcraftApp, opts: &ReportOptions, rows: &[(String, St
         open(&issue.url)?;
     }
     Ok(json!({"path": path, "url": issue.url, "title": issue.title, "logs": logs.iter().map(|l| &l.name).collect::<Vec<_>>()}))
+}
+
+/// Write a report into `dir` under a name no file has: `lightcraft-report-<stamp>.txt`, else with
+/// `-2`, `-3`… (two reports in one second). Never replaces a file, even one that appears meanwhile.
+fn write_new_report(dir: &std::path::Path, stamp: &str, bytes: &[u8]) -> Result<String, String> {
+    for n in 1..=99 {
+        let name = if n == 1 { format!("lightcraft-report-{stamp}.txt") } else { format!("lightcraft-report-{stamp}-{n}.txt") };
+        let path = dir.join(name);
+        let p = path.to_string_lossy().to_string();
+        match lightcraft_engine::export::write_file_new(&p, bytes) {
+            Ok(()) => return Ok(p),
+            Err(_) if path.exists() => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(format!("{}: no free name for the report file", dir.display()))
 }
 
 /// The Report a Bug dialog's body: what happened, the two choices, and a preview of the issue and the
