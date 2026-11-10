@@ -732,7 +732,7 @@ fn a_raws_decoder_orientation_turns_stored_frame_regions_on_import_and_reread() 
 }
 
 /// A raw LightCraft can't decode: a TIFF whose first IFD holds Exif orientation 6, a 40 × 30 JPEG and `packet`.
-fn turned_preview_only_raw(packet: &str) -> Vec<u8> {
+pub(crate) fn turned_preview_only_raw(packet: &str) -> Vec<u8> {
     let img = lightcraft_raster::Rgba8::from_fn(40, 30, |x, y| [(x * 6) as u8, (y * 8) as u8, 90, 255]);
     let jpeg = lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &Default::default()).unwrap();
     let data = 8 + 2 + 4 * 12 + 4;

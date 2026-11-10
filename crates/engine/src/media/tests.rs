@@ -93,6 +93,7 @@ fn decoder_info_survives_render_jobs_cache_and_eviction() {
         camera_profile: None,
         outliers: false,
         reduced: None,
+        converted: None,
     };
     job.info = SourceInfo::default(); // Header facts cannot override decoder facts.
     job.settings = Arc::new(DevelopSettings::default());
@@ -151,6 +152,7 @@ fn old_relative_white_balance_on_a_kelvin_camera_keeps_its_look_and_learns_the_a
         camera_profile: None,
         outliers: false,
         reduced: None,
+        converted: None,
     };
     let undo_before = s.undo.len();
     let request = job.request;
@@ -659,4 +661,31 @@ fn a_thumbnail_is_cut_from_the_decoded_full_source() {
     s.accept(&r);
     let cached = s.media.get(p.id, SourceLevel::Thumb).unwrap();
     assert_eq!((cached.width, cached.height), (512, 341), "a thumbnail-sized source is kept, not the full source");
+}
+
+/// Issue #3921: a Nikon High Efficiency NEF developed from its converted DNG renders from other pixels than the same
+/// file shown from its embedded JPEG, so its decoder key (in every render, thumbnail and preview key) differs; back on
+/// the embedded JPEG it is the plain NEF's again, and a NEF that was never converted keeps its key.
+#[test]
+fn a_converted_nef_gets_its_own_render_keys() {
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "/photos/DSC_0001.NEF".into() }, "DSC_0001.NEF", "NEF", 8256, 5504, "");
+    p.kind = lightcraft_catalog::MediaKind::Raw;
+    p.content_hash = Some("0123456789abcdef0123456789abcdef".into());
+    p.set_preview_only(Some("Nikon High Efficiency NEF (test)".into()));
+    let preview_only = super::quick::decoder_key(&p);
+    assert_eq!(preview_only, 0, "a NEF's keys are unchanged");
+    p.preview_only = None;
+    p.preview_checked = lightcraft_catalog::CONVERTED_DNG_STAMP.into();
+    assert!(p.converted_dng() && !p.fitted_look() && !p.relative_wb(), "develops from the DNG's own colour");
+    let converted = super::quick::decoder_key(&p);
+    assert_ne!(converted, preview_only);
+    assert_ne!(super::quick::source_identity(&p), {
+        let mut q = p.clone();
+        q.preview_checked = String::new();
+        super::quick::source_identity(&q)
+    });
+    assert!(crate::dng_converter::photo_dng(&p).is_some_and(|d| d.to_string_lossy().ends_with(".dng")));
+    p.set_preview_only(Some("Nikon High Efficiency NEF (test)".into()));
+    assert_eq!(super::quick::decoder_key(&p), 0, "back on the embedded JPEG");
+    assert_eq!(crate::dng_converter::photo_dng(&p), None);
 }

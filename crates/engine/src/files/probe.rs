@@ -185,6 +185,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             xmp: lightcraft_meta::embedded(bytes).xmp,
             orientation: Some(raw.orientation),
             preview_only: None,
+            converted_dng: false,
         });
     }
     let fmt = lightcraft_codecs::sniff(bytes).ok_or("unrecognized file format")?;
@@ -231,6 +232,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         xmp: None,
         orientation: m.orientation,
         preview_only: None,
+        converted_dng: false,
     })
 }
 

@@ -136,6 +136,14 @@ pub(super) fn embedded_thumb_key(k: Hash128) -> Hash128 {
 /// pixels after Reload. Other formats keep their existing keys. This is deliberately not
 /// part of `content_key`: smart previews and denoise products identify the original file.
 pub(super) fn decoder_key(p: &Photo) -> u64 {
+    // A Nikon High Efficiency NEF developed from the DNG Adobe DNG Converter made of it (issue #3921) renders from
+    // other pixels than the same file shown from its embedded JPEG: its renders, thumbnails and previews must not be
+    // the ones cached before it was converted. Back on the embedded JPEG (DNG deleted, reload undone) it is 0 again,
+    // and the renders cached then are valid again.
+    if p.converted_dng() {
+        let h = Hasher128::new().str("dng-converter-v1").finish();
+        return ((h.0 as u64) ^ ((h.0 >> 64) as u64)) | 1;
+    }
     if !p.format.eq_ignore_ascii_case("ORF") {
         return 0;
     }

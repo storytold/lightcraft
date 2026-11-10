@@ -81,12 +81,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         reset_clicked = clicks.reset;
     });
     if let Some(why) = &preview_only {
-        let reload = egui::Frame::NONE
+        // opened in Edit: converted now when the user turned that on (Settings ▸ Performance)
+        crate::dng_convert::auto_convert(app, ui.ctx(), id);
+        let dng = crate::dng_convert::status(app, id);
+        let clicks = egui::Frame::NONE
             .inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 12 })
-            .show(ui, |ui| crate::widgets::preview_only_notice(ui, "edit", why))
+            .show(ui, |ui| crate::widgets::preview_only_notice(ui, "edit", why, dng.as_ref()))
             .inner;
-        if reload {
+        if clicks.reload {
             reload_preview_only(app, ui.ctx(), id);
+        }
+        if clicks.convert {
+            crate::dng_convert::convert(app, ui.ctx(), id);
         }
     }
     let n = app.session.selection.ids.len();

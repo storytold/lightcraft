@@ -367,6 +367,13 @@ pub fn relative_wb_camera(format: &str, camera: &str) -> bool {
 /// workspace crate shares one version, so it is the app's.
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The [`Photo::preview_checked`] stamp of a raw developed from a DNG that a converter the user installed made of its
+/// file (Nikon High Efficiency NEF through Adobe DNG Converter, issue #3921): the file itself is preview-only, and
+/// the engine reads the cached DNG in its place ([`Photo::converted_dng`]). A string the field already holds, so no
+/// catalog format change: an older build reads it as a stamp that matches no version, on a photo that isn't
+/// preview-only and isn't an ORF, which it never rechecks.
+pub const CONVERTED_DNG_STAMP: &str = "dng-converter";
+
 /// The [`Photo::preview_checked`] stamp for a `preview_only` decided by this build: its version
 /// when the photo is preview-only, empty otherwise.
 pub fn preview_stamp(preview_only: &Option<String>) -> String {
@@ -447,17 +454,23 @@ impl Photo {
     pub fn develops_raw(&self) -> bool {
         self.kind == MediaKind::Raw && self.preview_only.is_none()
     }
+    /// A raw developed from the DNG a converter made of its file ([`CONVERTED_DNG_STAMP`], issue #3921): its file
+    /// stays the photo's original and source of metadata, its pixels and colour come from the DNG.
+    pub fn converted_dng(&self) -> bool {
+        self.develops_raw() && self.preview_checked == CONVERTED_DNG_STAMP
+    }
     /// A raw developed from a look fitted to its own JPEG (ARW, NEF, RW2, RAF, CR3, CR2, PEF, SRW, ORF: vendor
     /// WB multipliers, no colour matrices in the file; RWL and RAW are Leica's and the oldest Panasonic bodies'
     /// names for RW2 files). The engine's `camera_preview::file_local_look` covers the same formats.
     pub fn fitted_look(&self) -> bool {
-        self.develops_raw() && relative_wb_format(&self.format)
+        // (a converted raw develops from a DNG: its own matrices, no fitted look)
+        self.develops_raw() && relative_wb_format(&self.format) && !self.converted_dng()
     }
     /// White balance relative to the camera's as-shot look, as for rendered photographs: a
     /// [`Photo::fitted_look`] raw whose camera has no colour matrices measured either
     /// ([`relative_wb_camera`]). Other raws edit white balance in Kelvin.
     pub fn relative_wb(&self) -> bool {
-        self.develops_raw() && relative_wb_camera(&self.format, &self.meta.camera)
+        self.develops_raw() && relative_wb_camera(&self.format, &self.meta.camera) && !self.converted_dng()
     }
     /// Every settings holder of this photo that can carry segmentation grids: the develop
     /// settings, the versions', the history steps' and the import look. A snapshot's shared grid

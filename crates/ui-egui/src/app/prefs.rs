@@ -54,6 +54,11 @@ impl LightcraftApp {
             // (a value the engine refuses, from a hand-edited file, leaves its limit as it was)
             let _ = self.session.execute("app.hotPixelLimit", &serde_json::json!({"percent": limit}));
         }
+        let dng = (self.ui.settings.dng_converter_auto, self.ui.settings.dng_converter_path.trim().to_string());
+        if self.dng_converter_applied.as_ref() != Some(&dng) {
+            let _ = self.session.execute("app.dngConverter", &serde_json::json!({"auto": dng.0, "path": dng.1}));
+            self.dng_converter_applied = Some(dng);
+        }
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();

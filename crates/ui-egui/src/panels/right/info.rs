@@ -8,8 +8,14 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         camera_card(ui, &p);
         ui.add_space(6.0);
         if let Some(why) = &p.preview_only {
-            if crate::widgets::preview_only_notice(ui, "info", why) {
+            // (no automatic conversion here: a photo merely selected in the grid isn't converted)
+            let dng = crate::dng_convert::status(app, id);
+            let clicks = crate::widgets::preview_only_notice(ui, "info", why, dng.as_ref());
+            if clicks.reload {
                 crate::panels::edit::reload_preview_only(app, ui.ctx(), id);
+            }
+            if clicks.convert {
+                crate::dng_convert::convert(app, ui.ctx(), id);
             }
             ui.add_space(6.0);
         }

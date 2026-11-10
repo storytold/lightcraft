@@ -1075,10 +1075,21 @@ mod tests {
             let Err(RawError::Unsupported(why)) = result else { panic!("expected unsupported") };
             assert_eq!(why, HIGH_EFFICIENCY);
             assert!(why.starts_with("Nikon High Efficiency NEF ("), "{why}");
+            assert!(crate::is_nef_high_efficiency(&why), "{why}");
         }
         // a strip too short to hold the markers is still the missing-table case, not a panic
         let short = nef(34713, 14, vec![vec![0xff, 0x10]], 1, 1, 1);
         assert!(matches!(crate::decode(&short), Err(RawError::Unsupported(w)) if w.contains("linearization table")));
+    }
+
+    /// Issue #3921: only the High Efficiency reason is offered to a DNG converter, matched on its name.
+    #[test]
+    fn high_efficiency_reason_is_recognised_by_name() {
+        assert!(crate::is_nef_high_efficiency("Nikon High Efficiency NEF"));
+        assert!(crate::is_nef_high_efficiency("Nikon High Efficiency NEF (an older wording)"));
+        assert!(!crate::is_nef_high_efficiency("Nikon High Efficiency NEFX"));
+        assert!(!crate::is_nef_high_efficiency("Nikon compressed NEF with 16-bit samples"));
+        assert!(!crate::is_nef_high_efficiency(""));
     }
 
     fn samples(n: usize, bits: u32) -> Vec<u16> {

@@ -583,7 +583,7 @@ type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::
 #[cfg(not(target_arch = "wasm32"))]
 fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
     photo.fitted_look()
-        || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
+        || (photo.develops_raw() && (photo.format.eq_ignore_ascii_case("DNG") || photo.converted_dng()))
         || (photo.kind == lightcraft_catalog::MediaKind::Raw && photo.preview_only.is_some())
 }
 
@@ -619,8 +619,8 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
     use crate::media::SourceRef;
     match source {
         // (a smart preview keeps the file's own colour: an imported camera profile is applied when the original is read)
-        SourceRef::File { path, max_edge, loader, denoise, outliers, .. } => {
-            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, outliers, reduced: None })
+        SourceRef::File { path, max_edge, loader, denoise, outliers, converted, .. } => {
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, outliers, reduced: None, converted })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
         _ => None,
@@ -1044,6 +1044,7 @@ mod tests {
             camera_profile: None,
             outliers: false,
             reduced: None,
+            converted: None,
         };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
     }

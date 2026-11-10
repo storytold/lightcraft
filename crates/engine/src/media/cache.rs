@@ -377,17 +377,20 @@ impl MediaCache {
                 return SourceRef::Smart { path: sp };
             }
             let mut r = self.origin_ref(&p.source, max_edge);
-            if let SourceRef::File { fallback, camera_profile, outliers: o, .. } = &mut r {
+            if let SourceRef::File { fallback, camera_profile, outliers: o, converted, .. } = &mut r {
                 *fallback = Some(sp);
                 *camera_profile = wanted;
                 *o = outliers;
+                *converted = crate::dng_converter::photo_dng(p).map(Arc::from);
             }
             return r;
         }
         let mut r = self.origin_ref(&p.source, max_edge);
-        if let SourceRef::File { camera_profile, outliers: o, .. } = &mut r {
+        if let SourceRef::File { camera_profile, outliers: o, converted, .. } = &mut r {
             *camera_profile = wanted;
             *o = outliers;
+            // (a Nikon High Efficiency NEF converted by Adobe DNG Converter develops from its DNG, issue #3921)
+            *converted = crate::dng_converter::photo_dng(p).map(Arc::from);
         }
         r
     }
@@ -430,6 +433,7 @@ impl MediaCache {
                         camera_profile: None,
                         outliers: false,
                         reduced: None,
+                        converted: None,
                     },
                 }
             }
@@ -442,6 +446,7 @@ impl MediaCache {
                 camera_profile: None,
                 outliers: false,
                 reduced: None,
+                converted: None,
             },
         }
     }

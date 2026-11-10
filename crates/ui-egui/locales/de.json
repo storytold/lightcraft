@@ -3507,5 +3507,18 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Starten Sie die App mit --control 7980 (oder LIGHTCRAFT_CONTROL_PORT), dann verbindet lightcraft-cli mcp --connect einen Agenten mit ihr.",
   "Welcome": "Willkommen",
   "Next": "Weiter",
-  "Get Started": "Loslegen"
+  "Get Started": "Loslegen",
+  "Nikon High Efficiency NEF": "Nikon-NEF „Hohe Effizienz“",
+  "Convert with Adobe DNG Converter when opened": "Beim Öffnen mit Adobe DNG Converter konvertieren",
+  "Adobe DNG Converter": "Adobe DNG Converter",
+  "Not found. Adobe DNG Converter is a free download from Adobe.": "Nicht gefunden. Adobe DNG Converter ist ein kostenloser Download von Adobe.",
+  "High Efficiency (HE / HE★) NEFs use a licensed codec that LightCraft can't decode, so they open from the camera's embedded JPEG. With Adobe DNG Converter installed, LightCraft can run it to make a DNG in its cache and develop that from the raw data. The NEF stays your file and is never changed. Each DNG takes about 1.7 times the NEF's space. Edits made on the embedded JPEG may look different on the raw data.": "NEFs im Format „Hohe Effizienz“ (HE / HE★) nutzen einen lizenzierten Codec, den LightCraft nicht dekodieren kann, deshalb öffnen sie mit dem eingebetteten JPEG der Kamera. Ist Adobe DNG Converter installiert, kann LightCraft damit ein DNG in seinem Cache erstellen und dieses aus den Rohdaten entwickeln. Die NEF-Datei bleibt Ihre Datei und wird nie verändert. Jedes DNG belegt etwa das 1,7-Fache des Platzes der NEF-Datei. Am eingebetteten JPEG vorgenommene Bearbeitungen können auf den Rohdaten anders aussehen.",
+  "Converted DNGs": "Konvertierte DNGs",
+  "Converting with Adobe DNG Converter": "Konvertierung mit Adobe DNG Converter",
+  "Converting with Adobe DNG Converter…": "Wird mit Adobe DNG Converter konvertiert…",
+  "Waiting for Adobe DNG Converter…": "Wartet auf Adobe DNG Converter…",
+  "Install the free Adobe DNG Converter to develop these files from their raw data (Settings › Performance).": "Installieren Sie den kostenlosen Adobe DNG Converter, um diese Dateien aus ihren Rohdaten zu entwickeln (Einstellungen › Leistung).",
+  "Adobe DNG Converter is installed: convert this file to develop it from its raw data. Edits made on the embedded JPEG may look different on the raw data.": "Adobe DNG Converter ist installiert: Konvertieren Sie diese Datei, um sie aus ihren Rohdaten zu entwickeln. Am eingebetteten JPEG vorgenommene Bearbeitungen können auf den Rohdaten anders aussehen.",
+  "Convert with Adobe DNG Converter": "Mit Adobe DNG Converter konvertieren",
+  "Adobe DNG Converter could not convert this raw: it still shows its embedded preview": "Adobe DNG Converter konnte dieses RAW nicht konvertieren: Es zeigt weiterhin seine eingebettete Vorschau"
 }
