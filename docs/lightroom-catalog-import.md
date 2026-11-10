@@ -103,7 +103,11 @@ importing: metadata checks detect ordinary concurrent changes, but are not SQLit
 The in-tree, read-only Rust SQLite B-tree reader follows SQLite's public file-format
 specification; it introduces no dependency or C runtime.
 Optional history, keyword and collection tables that exceed limits are skipped with warnings;
-required photo tables still report errors. Unrelated unsupported schemas are ignored. A needed
+required photo tables still report errors. A develop settings, metadata, keyword, history, snapshot or
+collection member record whose `image` is not a whole number (missing, NULL, text or a fraction)
+belongs to no photo: it is left out, with one warning per table; a collection member stays in the
+recovery archive but joins no album. A record whose `image` is a whole number naming no photo in
+the catalog is still dropped without a warning. Unrelated unsupported schemas are ignored. A needed
 WITHOUT ROWID or virtual table produces an explicit error, handled as a warning when optional.
 
 Develop settings reuse the existing XMP/preset mapper. Supported sliders, curves and supported
