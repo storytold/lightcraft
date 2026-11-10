@@ -63,9 +63,10 @@ pub(crate) fn fix_selection(s: &mut Session) {
         s.catalog.stack_of(id).and_then(|st| st.photos.iter().copied().find(|p| vis.contains(p))).unwrap_or(id)
     };
     let mut ids: Vec<PhotoId> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for id in s.selection.ids.clone() {
         let id = shown(s, id);
-        if !ids.contains(&id) {
+        if seen.insert(id) {
             ids.push(id);
         }
     }
