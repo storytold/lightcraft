@@ -977,6 +977,7 @@ impl Session {
     /// even when people.json can't take it now.
     fn undo_people(&mut self, m: PeopleMove) -> PeopleMove {
         let (now_to, now_from) = (self.person_choices(&m.to), self.person_choices(&m.from));
+        let was = (now_to.clone(), now_from.clone());
         let [before_to, before_from] = m.before.clone();
         let (to, from) = if m.merged {
             // only the changes made since the merge, on top of what they had before it
@@ -993,18 +994,23 @@ impl Session {
         };
         self.set_person_choices(to);
         self.set_person_choices(from);
-        self.people_gen = self.people_gen.wrapping_add(1);
-        self.save_people_or_keep_unsaved();
+        // a move that changes nothing (no choices on either side) writes nothing, as a choice that changes nothing
+        if (self.person_choices(&m.to), self.person_choices(&m.from)) != was {
+            self.people_gen = self.people_gen.wrapping_add(1);
+            self.save_people_or_keep_unsaved();
+        }
         m
     }
 
     /// Redo `m`'s move of people's choices from where they are now, and note what it moved for the next undo.
     fn redo_people(&mut self, m: PeopleMove) -> PeopleMove {
         let before = [self.person_choices(&m.to), self.person_choices(&m.from)];
-        self.carry_person_choices(&m.from, &m.to, m.merged);
+        let changed = self.carry_person_choices(&m.from, &m.to, m.merged);
         let after = self.person_choices(&m.to);
-        self.people_gen = self.people_gen.wrapping_add(1);
-        self.save_people_or_keep_unsaved();
+        if changed {
+            self.people_gen = self.people_gen.wrapping_add(1);
+            self.save_people_or_keep_unsaved();
+        }
         PeopleMove { before, after, ..m }
     }
 
