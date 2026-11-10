@@ -101,9 +101,18 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
     let mut problems = Vec::new();
     let chosen = if cfg!(windows) {
         pick_probed(files, &order, &mut problems, compose_window)
-    } else if forced == Some(WindowRenderer::Glow) || (forced.is_none() && failed.is_some_and(|f| f != WindowRenderer::Glow)) {
-        // elsewhere eframe's own wgpu set-up stays the default; glow after a failed start
+    } else if forced == Some(WindowRenderer::Glow)
+        || (forced.is_none() && failed.is_some_and(|f| f != WindowRenderer::Glow && (os != "linux" || f != WindowRenderer::Wgpu(wgpu::Backends::GL))))
+    {
+        // elsewhere eframe's own wgpu set-up stays the default; glow after a failed start (on Linux a
+        // failed GL start falls back to Vulkan, the next renderer in the order)
         Some((WindowRenderer::Glow, None))
+    } else if os == "linux" {
+        // Linux follows the order: GL first, Vulkan after a failed GL start, glow last
+        match order.first() {
+            Some(WindowRenderer::Wgpu(b)) => Some((WindowRenderer::Wgpu(*b), None)),
+            _ => Some((WindowRenderer::Glow, None)),
+        }
     } else {
         Some((WindowRenderer::Wgpu(backend::window_backends()), None))
     };
