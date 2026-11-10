@@ -593,3 +593,23 @@ fn grid_up_and_down_still_move_to_one_photo() {
     assert_eq!(h.app.session.selection.active.map(|p| p.0), Some(vis[0]), "↑ comes back");
     assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid);
 }
+
+/// With the pointer over a slider, ↑ / ↓ nudge the slider in Survey and Compare too, and don't step to another
+/// photo first: the nudge would then edit a photo the user didn't pick (review of #3648).
+#[test]
+fn up_and_down_over_a_slider_stay_on_the_photo_in_survey() {
+    let mut h = demo();
+    let [_, b, _] = survey_of_three(&mut h);
+    let active = |h: &Headless| h.app.session.selection.active.map(|p| p.0);
+    assert_eq!(active(&h), Some(b));
+    let slider = h.app.widgets.iter().find(|(id, _)| id.starts_with("slider:")).map(|(id, r)| (id.clone(), r.center()));
+    let Some((id, at)) = slider else { panic!("a slider in Survey: {:?}", h.app.widgets.iter().map(|(w, _)| w).collect::<Vec<_>>()) };
+    h.app.synthetic.push(egui::Event::PointerMoved(at));
+    h.settle(SETTLE);
+    for key in ["down", "up"] {
+        let r = h.request("ui.key", json!({"key": key}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert_eq!(active(&h), Some(b), "{key} over {id} stays on the photo");
+    }
+}

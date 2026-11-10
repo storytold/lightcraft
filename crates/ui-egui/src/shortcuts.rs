@@ -575,7 +575,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         let _ = app.run(if f == "library.next" { "slideshow.next" } else { "slideshow.previous" }, json!({}));
         return;
     }
-    if fire_rating_key(app, ctx, f) || fire_grid_key(app, f) || fire_flag_key(app, ctx, f) {
+    if fire_rating_key(app, ctx, f) || fire_grid_key(app, ctx, f) || fire_flag_key(app, ctx, f) {
         return;
     }
     // in the full-screen preview (no panels) I cycles the info overlay instead
@@ -628,7 +628,7 @@ fn fire_rating_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> boo
 }
 
 /// The keys of a grid or of Compare / Survey that move the active photo or the selection; whether `f` was one.
-fn fire_grid_key(app: &mut LightcraftApp, f: &str) -> bool {
+fn fire_grid_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> bool {
     use crate::panels::compare;
     if f == "panel.presets" && library_grid(app) {
         // Classic's Shift+P picks and advances in Library; keep the Presets binding elsewhere.
@@ -645,7 +645,9 @@ fn fire_grid_key(app: &mut LightcraftApp, f: &str) -> bool {
         }
     } else if let Some(step) = f.strip_prefix("grid:extend:") {
         extend_selection(app, step.parse::<i64>().unwrap_or(0));
-    } else if compare::culling(app) && matches!(f, "library.next" | "library.previous" | "library.down" | "library.up") {
+    } else if compare::culling(app)
+        && (matches!(f, "library.next" | "library.previous") || (matches!(f, "library.down" | "library.up") && !over_slider(app, ctx)))
+    {
         // ↑ / ↓ step like → / ←: run as the grid's Photo Below / Above, they would leave one photo
         // of the survey (or the pair) selected (issue #3640)
         let d = if matches!(f, "library.next" | "library.down") { 1 } else { -1 };
@@ -803,11 +805,15 @@ fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> 
     }
 }
 
+/// Whether the pointer is over a slider: there the arrows nudge it (`widgets::slider` takes the key), in
+/// the grids and in Survey and Compare alike.
+fn over_slider(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    ctx.pointer_hover_pos().is_some_and(|p| app.widgets.iter().any(|(id, r)| id.starts_with("slider:") && r.contains(p)))
+}
+
 /// Up / Down in the grids go to the cell above / below (the filmstrip steps one photo).
 fn up_down_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) {
-    // over a slider the arrows nudge it (widgets::slider takes the key)
-    let over_slider = ctx.pointer_hover_pos().is_some_and(|p| app.widgets.iter().any(|(id, r)| id.starts_with("slider:") && r.contains(p)));
-    if over_slider {
+    if over_slider(app, ctx) {
         return;
     }
     match crate::panels::grid::row_distance(app, f == "library.down") {
