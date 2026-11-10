@@ -114,13 +114,11 @@ pub struct ExportOptions {
     pub hdr_transfer: HdrCurve,
 }
 
-/// Planned paths for an export of `ids` under `o` to `to`, in batch order: each entry has a
-/// `path`, the `sidecars` written next to it, and the photo's `width` and `height`. An entry whose
-/// write a real export would refuse (a photo with no folder of its own or whose folder is gone, or
-/// a path that is a catalogued original or its sidecar) instead carries an `error`. Nothing is
-/// rendered or written: the paths are the ones [`export_batch`] would write through its writer,
-/// computed over the prepared batch (the same folder, subfolder and conflict-policy resolution)
-/// without any bytes being produced.
+/// Planned paths for an export of `ids` under `o` to `to`, in batch order: each entry is the file
+/// [`run_batch`] would write (`{path, sidecars, width, height, bytes}`), a skipped name (`{skipped}`),
+/// or a photo whose write would fail (`{photo, file, error}`). It runs the real batch through a
+/// writer that writes nothing, so the placement, conflict policy and original guard are the ones
+/// an export uses; photos are still rendered, which is what sizes and sidecars depend on.
 pub fn export_plan(
     session: &mut crate::Session,
     ids: &[lightcraft_catalog::PhotoId],
@@ -128,177 +126,10 @@ pub fn export_plan(
     to: &Destination,
     exists: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<serde_json::Value>, String> {
-    use serde_json::json;
     let items = prepare_batch(session, ids, o)?;
-    let mut taken: std::collections::HashSet<String> = Default::default();
-    let single = items.len() == 1;
-    let mut out = Vec::new();
-    for item in items {
-        let (photo, name, guard, source_dir) = (item.photo, item.file_name.clone(), item.guard.clone(), item.source_dir.clone());
-        let (w, h) = session
-            .catalog
-            .photo(photo)
-            .map(|p| {
-                if o.format == ExportFormat::Original {
-                    (p.width as usize, p.height as usize)
-                } else {
-                    output_size(p, o)
-                }
-            })
-            .unwrap_or((0, 0));
-        let dir = if to.exact.is_some() && single { Ok(String::new()) } else { folder_for(o, to, exists, &name, source_dir.as_deref()) };
-        let dir = match dir {
-            Ok(d) => d,
-            Err(e) => {
-                out.push(json!({"photo": photo.0, "file": name, "error": e}));
-                continue;
-            }
-        };
-        let sidecar_exts: Vec<&'static str> = if o.format == ExportFormat::Original { vec!["xmp"] } else { Vec::new() };
-        let group = |main: &str| std::iter::once(main.to_string()).chain(sidecar_exts.iter().map(|x| sidecar_path(main, x))).collect::<Vec<_>>();
-        let path = if let Some(p) = to.exact.as_deref().filter(|_| single) {
-            Ok(p.to_string())
-        } else {
-            let path = join_path(&dir, &name);
-            let busy = |main: &str| group(main).iter().any(|p| taken.contains(&p.to_lowercase()) || exists(p));
-            if !busy(&path) {
-                Ok(path)
-            } else {
-                match o.conflict {
-                    Conflict::Overwrite => Ok(path),
-                    Conflict::Skip => {
-                        out.push(json!({"skipped": path}));
-                        continue;
-                    }
-                    Conflict::Unique => {
-                        let (stem, ext) = name.rsplit_once('.').map_or((name.as_str(), None), |(a, b)| (a, Some(b)));
-                        let unique = |n: usize| join_path(&dir, &ext.map_or(format!("{stem}-{n}"), |x| format!("{stem}-{n}.{x}")));
-                        (2..1_000_000).map(unique).find(|p| !busy(p)).ok_or_else(|| format!("{path}: no free file name"))
-                    }
-                }
-            }
-        };
-        match path {
-            Ok(path) => {
-                let mut blocked = None;
-                for f in group(&path) {
-                    if let Err(e) = guard.check(std::path::Path::new(&f)) {
-                        blocked = Some(e);
-                        break;
-                    }
-                }
-                if let Some(e) = blocked {
-                    out.push(json!({"photo": photo.0, "file": name, "error": e}));
-                    continue;
-                }
-                taken.extend(group(&path).into_iter().map(|p| p.to_lowercase()));
-                out.push(json!({"path": path, "sidecars": sidecar_exts.iter().map(|x| sidecar_path(&path, x)).collect::<Vec<_>>(), "width": w, "height": h}));
-            }
-            Err(e) => out.push(json!({"photo": photo.0, "file": name, "error": e})),
-        }
-    }
-    Ok(out)
-}
-
-fn folder_for(o: &ExportOptions, to: &Destination, exists: &dyn Fn(&str) -> bool, name: &str, source_dir: Option<&str>) -> Result<String, String> {
-    let base = match o.destination_mode {
-        DestinationMode::SpecificFolder => to.dir.clone(),
-        DestinationMode::SameAsOriginal => {
-            let Some(d) = source_dir else {
-                return Err(format!(
-                    "{name}: the photo has no folder on disk (a demo photo or one in the browser's storage), so it can't be exported to the same folder as its original; choose a specific folder"
-                ));
-            };
-            if !exists(d) {
-                return Err(format!("{name}: the original's folder is missing ({d}); reconnect it or choose a specific folder"));
-            }
-            d.to_string()
-        }
-    };
-    let sub = place::clean_subfolder(&o.subfolder);
-    Ok(if sub.is_empty() { base } else { join_path(&base, &sub) })
-}
-
-fn join_path(a: &str, b: &str) -> String {
-    if a.is_empty() { b.to_string() } else { format!("{}/{b}", a.trim_end_matches('/')) }
-}
-
-fn sidecar_path(main: &str, ext: &str) -> String {
-    std::path::Path::new(main).with_extension(ext).to_string_lossy().to_string()
+    let mut discard = |_: &str, _: &[u8]| Ok::<(), String>(());
+    run_batch(items, o, to, &mut discard, exists, false, &mut |_, _| true)
 }
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-#[test]
-fn export_plan_lists_paths_without_writing_files() {
-    // A dry-run plan must list the exact paths a real export would write
-    // (`export_batch` through its writer), without invoking any writer.
-    let registry = crate::cmd::command_specs();
-    let plan = registry.iter().find(|c| c.id == "export.plan");
-    assert!(plan.is_some(), "no dry-run plan command registered: registry lacks `export.plan` to list export paths without writing files");
-}
-
-#[cfg(test)]
-mod export_plan_id_tests {
-    #[test]
-    fn export_plan_honors_explicit_id_over_selection() {
-        let mut session = crate::Session::with_demo();
-        let ids: Vec<u64> = session.visible_cloned().iter().take(3).map(|photo| photo.0).collect();
-        assert!(ids.len() >= 3, "demo library needs at least three photos");
-        let explicit = ids[2];
-        session
-            .execute("library.select", &serde_json::json!({"ids": [ids[0], ids[1]], "active": ids[0]}))
-            .unwrap();
-        let result = session.execute("export.plan", &serde_json::json!({"id": explicit, "dir": "out"})).unwrap();
-        let files = result["files"].as_array().unwrap();
-        assert_eq!(files.len(), 1, "explicit id should plan one photo, got {result}");
-    }
-
-    #[test]
-    fn export_plan_reports_original_dimensions_for_original_format() {
-        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
-        let mut session = crate::Session::with_demo();
-        let photo = Photo::new(
-            PhotoId(9001),
-            Source::File { path: "IMG_1.NEF".into() },
-            "IMG_1.NEF",
-            "NEF",
-            6000,
-            4000,
-            "2026-01-01T00:00:00",
-        );
-        session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
-        let o = ExportOptions::from_json(&serde_json::json!({"format": "original", "longEdge": 100}));
-        let to = Destination { dir: "out".into(), exact: None };
-        let files = export_plan(&mut session, &[PhotoId(9001)], &o, &to, &|_| false).unwrap();
-        assert_eq!(files.len(), 1, "{files:?}");
-        assert_eq!(files[0]["width"], 6000, "{files:?}");
-        assert_eq!(files[0]["height"], 4000, "{files:?}");
-    }
-
-    #[test]
-    fn export_plan_treats_case_only_names_as_colliding() {
-        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
-        let mut session = crate::Session::with_demo();
-        for (id, name) in [(9001, "Photo.jpg"), (9002, "photo.jpg")] {
-            let photo = Photo::new(
-                PhotoId(id),
-                Source::File { path: name.into() },
-                name,
-                "jpeg",
-                6000,
-                4000,
-                "2026-01-01T00:00:00",
-            );
-            session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
-        }
-        let o = ExportOptions::from_json(&serde_json::json!({"format": "png", "conflict": "unique"}));
-        let to = Destination { dir: "out".into(), exact: None };
-        let files = export_plan(&mut session, &[PhotoId(9001), PhotoId(9002)], &o, &to, &|_| false).unwrap();
-        assert_eq!(files.len(), 2, "{files:?}");
-        assert_eq!(files[0]["path"], "out/Photo.png", "{files:?}");
-        assert_eq!(files[1]["path"], "out/photo-2.png", "{files:?}");
-    }
-}
