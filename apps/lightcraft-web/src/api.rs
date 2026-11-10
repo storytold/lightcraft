@@ -88,7 +88,9 @@ mod web {
                     if let Some(reply) = pending.poll() {
                         return reply;
                     }
-                    sleep(POLL_MS).await;
+                    if !sleep(POLL_MS).await {
+                        return json!({"ok": false, "error": "this page has no timer to wait for the app with"});
+                    }
                 }
             })
         });
@@ -99,13 +101,19 @@ mod web {
         requests
     }
 
-    async fn sleep(ms: i32) {
+    async fn sleep(ms: i32) -> bool {
+        // `false` when this page has no timer to wait with (no window, or the timer is refused): the caller ends the
+        // call with an error instead of going round again at once.
+        let timer = std::cell::Cell::new(false);
         let promise = js_sys::Promise::new(&mut |resolve, _| {
-            if let Some(window) = web_sys::window() {
-                let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+            let set = web_sys::window().is_some_and(|w| w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms).is_ok());
+            timer.set(set);
+            if !set {
+                let _ = resolve.call0(&wasm_bindgen::JsValue::UNDEFINED);
             }
         });
         let _ = JsFuture::from(promise).await;
+        timer.get()
     }
 }
 
