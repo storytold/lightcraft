@@ -10,8 +10,12 @@
   infrared workflow, click the section's eyedropper and then click foliage — the photo turns neutral there — and press
   Swap Red and Blue beside it for the classic false-colour look. The spot you click keeps the brightness it has with no
   mix, whatever mix you start from, and the eyedropper never changes Exposure: when a mix has to be scaled down to fit
-  the sliders, it tells you how much darker the photo came out instead. Lightroom has no
+  the sliders, it tells you how much darker the photo came out instead. A spot it can't use (too dark or too
+  saturated) leaves the eyedropper on, so you can click another one straight away. Lightroom has no
   channel mixer, so these settings travel only with LightCraft.
+- Channel Mixer is its own entry in Copy Settings, Sync Settings and Create Preset, separate from Color Mixer: copying
+  the Color Mixer onto an infrared photo leaves its swap alone. With Auto Sync on, the other selected photos get the
+  whole mixer, never a part of it.
 
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
