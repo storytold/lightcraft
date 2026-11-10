@@ -231,8 +231,10 @@ fn several_files_convert_in_parallel_and_each_gets_its_own_result() {
     let mut jobs = Vec::new();
     for i in 0..dc::PARALLEL + 2 {
         let p = x.dir.join(format!("DSC_{i:04}.NEF"));
-        std::fs::write(&p, format!("file {i}")).unwrap();
-        jobs.push(dc::Job { path: p, content_hash: format!("hash{i}") });
+        let bytes = format!("file {i}");
+        std::fs::write(&p, &bytes).unwrap();
+        // the content hash import computes (the conversion checks the file still has it)
+        jobs.push(dc::Job { path: p, content_hash: lightcraft_preview::hash_bytes(bytes.as_bytes()).to_string() });
     }
     jobs.push(dc::Job { path: x.dir.join("x.jpg"), content_hash: "h".into() });
     let done = std::sync::atomic::AtomicUsize::new(0);
