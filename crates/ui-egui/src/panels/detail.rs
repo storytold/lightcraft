@@ -960,7 +960,9 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
     if let Some(mut job) = app.session.loupe_job(id, rw.max(8), rh.max(8), a.with_crop) {
         // editing: the photo is rendered from its source, which stays decoded for the first slider
         // draft (a cached view render would show at once but leave the source unread until then)
-        if prep_mode(app) == lightcraft_engine::prep::Mode::Develop {
+        // an explicit Preview size asks for that source edge: a kept view of a smaller render would
+        // be taken for it, since the display fit accepts any view that covers the drawn size
+        if prep_mode(app) == lightcraft_engine::prep::Mode::Develop || app.ui.settings.preview_limit != 0 {
             job.view_cache = None;
         }
         let job = if interacting { job.draft() } else { job };
