@@ -1876,3 +1876,14 @@ fn v5_extends_a_dng_tone_curve_past_white_in_stops() {
     let (white, beyond) = (at(Process::V5, 0.0), at(Process::V5, 1.0));
     assert!(beyond < 254.0 && beyond - white >= 3.0, "{white} then {beyond} a stop past the sensor's white");
 }
+
+/// `std::time::Instant::now()` panics on wasm32-unknown-unknown ("time not implemented on this platform"), and the
+/// web build develops every raw through these loaders: the hot-pixel timer in `load.rs` (on for newly imported raws)
+/// made raws fail there with `RuntimeError: unreachable`, after showing the camera preview. No CI job runs tests on
+/// wasm32, so this reads the sources instead.
+#[test]
+fn raw_loaders_read_the_clock_through_web_time() {
+    for (file, src) in [("load.rs", include_str!("load.rs")), ("preview.rs", include_str!("preview.rs"))] {
+        assert!(!src.contains("std::time::Instant"), "{file}: use web_time::Instant, std's panics on wasm32");
+    }
+}
