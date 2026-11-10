@@ -68,6 +68,9 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.data_mut(|d| d.insert_temp(key, (w, h)));
 }
 
+/// The Crop and Geometry panels for photo `id`: the aspect ratio and its lock, the angle, the
+/// Overlay dropdown (with Flip Overlay for Triangle and Spiral) and the Upright dropdown, where
+/// Guided starts drawing guides on the photo and any other mode stops it.
 pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Crop");
@@ -268,6 +271,9 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
 }
 
+/// The Remove panel for photo `id`: the Mode dropdown, where None (shown while no brush is chosen)
+/// lets spots be selected and moved without painting new ones, Find Dust Spots, the brush settings
+/// (which edit the selected spot too) and the Tool Overlay choice.
 pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Remove");
