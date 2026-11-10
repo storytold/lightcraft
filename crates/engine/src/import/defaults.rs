@@ -41,6 +41,10 @@ pub struct ImportDefaults {
     pub auto_album: Option<String>,
     /// Open the import review when a camera or memory card is connected.
     pub show_on_card: bool,
+    /// Treat a JPEG (or HEIF) next to a raw of the same name as one photo on import (Settings →
+    /// Import; the default of `library.import`'s `pairRawJpeg`). Off by default, so nothing
+    /// changes for a library until its owner turns it on.
+    pub pair_raw_jpeg: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

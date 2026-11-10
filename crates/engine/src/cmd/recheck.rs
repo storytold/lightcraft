@@ -99,6 +99,11 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
     }
     if !ops.is_empty() {
         s.apply_system(Op::Batch { ops })?;
+        // a RAW+JPEG pair whose raw decodes now (or no longer) shows the right photo on top
+        let retop = s.catalog.raw_jpeg_retop_ops(&out.updated);
+        if !retop.is_empty() {
+            s.apply_system(Op::Batch { ops: retop })?;
+        }
     }
     for id in &out.updated {
         s.media.forget(*id);

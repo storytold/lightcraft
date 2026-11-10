@@ -27,6 +27,7 @@ pub mod lock;
 mod log_writer;
 pub mod model;
 pub mod query;
+pub mod raw_jpeg;
 pub mod rules;
 pub mod safe_file;
 pub mod stacks;
@@ -1542,6 +1543,8 @@ mod tests_local;
 mod tests_lock;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests_log_thread;
+#[cfg(test)]
+mod tests_raw_jpeg;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]

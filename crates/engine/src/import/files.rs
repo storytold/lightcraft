@@ -16,7 +16,8 @@ pub const EXTENSIONS: &[&str] = &[
     "srw", "psd", "psb", "jxl", "gif", "bmp",
     // Decoded when built with the codecs' `heif` feature; otherwise the import reports them as
     // failed with the reason ("HEIC/HEIF support isn't included in this build").
-    "heic", "heif", "avif", // no AV1 decoder yet: reported as failed, like a HEIC without the feature
+    // `.hif` is the name Nikon (Z 8, Z 9) and Canon give the HEIF they write next to a raw.
+    "heic", "heif", "hif", "avif", // no AV1 decoder yet: reported as failed, like a HEIC without the feature
     "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff", "mef",
 ];
 
@@ -47,7 +48,7 @@ pub fn accept_list() -> String {
         // Skip extensions a web user could pick but this build could not import.
         let pickable = match ext {
             "avif" => false,
-            "heic" | "heif" => heif_decodable,
+            "heic" | "heif" | "hif" => heif_decodable,
             _ => true,
         };
         if !pickable {
@@ -545,7 +546,7 @@ mod prepared_tests {
             .copied()
             .filter(|ext| match *ext {
                 "avif" => false,
-                "heic" | "heif" => heif_decodable,
+                "heic" | "heif" | "hif" => heif_decodable,
                 _ => true,
             })
             .collect()
@@ -576,7 +577,7 @@ mod prepared_tests {
     fn accept_list_offers_heic_heif_only_when_decodable() {
         let list = accept_list();
         let listed = lightcraft_codecs::Format::Heif.can_decode();
-        for ext in ["heic", "heif"] {
+        for ext in ["heic", "heif", "hif"] {
             assert_eq!(list.contains(&format!(".{ext}")), listed, "lowercase .{ext}");
             assert_eq!(list.contains(&format!(".{}", ext.to_uppercase())), listed, "uppercase .{ext}");
         }

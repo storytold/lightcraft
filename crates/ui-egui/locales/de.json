@@ -3507,5 +3507,9 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Starten Sie die App mit --control 7980 (oder LIGHTCRAFT_CONTROL_PORT), dann verbindet lightcraft-cli mcp --connect einen Agenten mit ihr.",
   "Welcome": "Willkommen",
   "Next": "Weiter",
-  "Get Started": "Loslegen"
+  "Get Started": "Loslegen",
+  "Raw + JPEG": "Raw + JPEG",
+  "Treat JPEG files next to raw files as one photo": "JPEG-Dateien neben Raw-Dateien als ein Foto behandeln",
+  "A JPEG or HEIF with the same name as a raw in the same folder is stacked under it on import. Photo › Stack › Stack RAW+JPEG Pairs does the same for photos already in the library.": "Ein JPEG oder HEIF mit demselben Namen wie eine Raw-Datei im selben Ordner wird beim Import mit ihr gestapelt. Foto › Stapel › RAW+JPEG-Paare stapeln macht dasselbe für Fotos, die schon in der Bibliothek sind.",
+  "Stack RAW+JPEG Pairs": "RAW+JPEG-Paare stapeln"
 }

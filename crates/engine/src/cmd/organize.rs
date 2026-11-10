@@ -281,5 +281,31 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"stacks": groups.len(), "photos": photos}))
             }
         ),
+        cmd!(
+            "stack.rawJpegPairs",
+            "Stack RAW+JPEG Pairs",
+            ["Photo", "Stack"],
+            None,
+            "{ids?, all?: bool (every photo in the library), preview?: bool} → {stacks, photos} — a JPEG or HEIF next to a raw of the same name (same folder, name without the extension, letter case ignored; exactly one raw and one JPEG/HEIF with that name) is stacked with it, collapsed, so the pair shows as one photo: the raw on top, or the JPEG when the raw can only be shown from its embedded preview. Photos already in a stack, in Recently Deleted and virtual copies are left alone. Default: the selection if several photos, else the current view. One undo step; Unstack takes a pair apart. library.import's pairRawJpeg does the same on import",
+            always,
+            |s, p| {
+                let pool: Vec<PhotoId> = if bool_or(p, "all", false) {
+                    s.catalog.photos().filter(|ph| !ph.local).map(|ph| ph.id).collect()
+                } else if p.get("ids").is_some() || s.selection.ids.len() > 1 {
+                    s.targets(p)?
+                } else {
+                    s.visible_cloned()
+                };
+                let pairs = s.catalog.raw_jpeg_pairs(&pool);
+                let out = json!({"stacks": pairs.len(), "photos": pairs.len() * 2});
+                if bool_or(p, "preview", false) {
+                    return Ok(out);
+                }
+                let ops = s.catalog.raw_jpeg_stack_ops(&pairs);
+                commit_ops(s, crate::import::RAW_JPEG_UNDO, ops)?;
+                fix_active(s);
+                Ok(out)
+            }
+        ),
     ]
 }

@@ -21,6 +21,8 @@ pub struct ImportTask {
     /// Brought back from Recently Deleted (`onDeleted: restore`).
     pub restored: usize,
     pub duplicates: usize,
+    /// RAW+JPEG pairs stacked as one photo (`pairRawJpeg`).
+    pub paired: usize,
     /// The library photos the skipped duplicates match (shown when nothing new was added).
     existing: Vec<u64>,
     pub failed: usize,
@@ -355,6 +357,7 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
             let len = |k: &str| v[k].as_array().map_or(0, Vec::len);
             task.imported += len("imported");
             task.restored += len("restored");
+            task.paired += v["paired"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(usize::MAX));
             task.duplicates += len("duplicates");
             task.existing.extend(v["duplicates"].as_array().into_iter().flatten().filter_map(|d| d["existing"].as_u64()));
             task.failed += len("failed");
@@ -514,6 +517,9 @@ fn import_summary(app: &LightcraftApp, task: &ImportTask) -> String {
         if deleted > 0 {
             msg.push_str(&crate::i18n::tr_format!(" ({} in Recently Deleted)", deleted));
         }
+    }
+    if task.paired > 0 {
+        msg.push_str(&crate::i18n::tr_format!(" · {} RAW+JPEG pair{} shown as one photo", task.paired, crate::i18n::plural_s(task.paired)));
     }
     if task.failed > 0 {
         msg.push_str(&crate::i18n::tr_format!(" · {} not readable", task.failed));

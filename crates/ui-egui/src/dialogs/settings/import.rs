@@ -117,6 +117,16 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
+    heading(ui, t, crate::i18n::tr("Raw + JPEG"));
+    let mut pair = d.pair_raw_jpeg;
+    if check(ui, "settings.importPairRawJpeg", &mut pair, "Treat JPEG files next to raw files as one photo") {
+        let _ = app.run("library.preferences", json!({"import": {"pairRawJpeg": pair}}));
+    }
+    hint(
+        ui,
+        t,
+        "A JPEG or HEIF with the same name as a raw in the same folder is stacked under it on import. Photo › Stack › Stack RAW+JPEG Pairs does the same for photos already in the library.",
+    );
     heading(ui, t, crate::i18n::tr("XMP sidecars"));
     let mut xmp = app.session.xmp;
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
