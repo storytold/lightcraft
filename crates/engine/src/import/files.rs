@@ -176,8 +176,7 @@ pub enum LaunchPath {
 /// ([`crate::library::is_library`]), so a `CATALOG.SNAP` the opener would not read (a case-sensitive file system)
 /// never opens its folder as a new, empty library.
 pub fn library_dir_of(path: &Path) -> Option<PathBuf> {
-    let snapshot = lightcraft_catalog::journal::SNAPSHOT;
-    let named = path.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(snapshot));
+    let named = path.file_name().is_some_and(|n| crate::library::is_own_file(&n.to_string_lossy()));
     if named && path.is_file() {
         return path.parent().filter(|dir| crate::library::is_library(dir)).map(Path::to_path_buf);
     }
@@ -505,6 +504,25 @@ mod prepared_tests {
         for d in [dir, journal, photos] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    /// A library's settings file given at launch opens its library folder, as its catalog files do, in any letter case.
+    #[test]
+    fn a_launch_argument_naming_a_library_settings_file_opens_its_library() {
+        let dir = temp_dir("settings-launch");
+        std::fs::write(dir.join(lightcraft_catalog::journal::LOG), b"x").unwrap();
+        let none = |_: &Path| None;
+        for name in ["presets.json", "view.json", "prefs.json", "PREFS.JSON"] {
+            let file = dir.join(name);
+            std::fs::write(&file, b"{}").unwrap();
+            let arg = file.to_string_lossy().to_string();
+            assert_eq!(
+                launch_path_until(&arg, None, None, none, launch_deadline()),
+                Some(LaunchPath::Library(dir.to_string_lossy().to_string())),
+                "{name}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The library check runs before the window opens; one that blocks (a dead network mount) gives up after the

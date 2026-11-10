@@ -36,26 +36,30 @@ use crate::{EngineError, LibrarySource, Result, Selection, Session};
 /// Library directory name inside the user's Pictures folder.
 pub const DEFAULT_NAME: &str = "LightCraft Library";
 
+/// Whether `name` is one of a library folder's own files (`catalog.snap`, `catalog.log`, `catalog.lock`,
+/// `presets.json`, `view.json`, `prefs.json`), in any letter case.
+pub fn is_own_file(name: &str) -> bool {
+    [
+        lightcraft_catalog::journal::SNAPSHOT,
+        lightcraft_catalog::journal::LOG,
+        lightcraft_catalog::lock::LOCK,
+        "presets.json",
+        "view.json",
+        "prefs.json",
+    ]
+    .iter()
+    .any(|own| name.eq_ignore_ascii_case(own))
+}
+
 /// The library folder `path` names. A library is a folder; naming one of its own files
-/// (`catalog.snap`, `catalog.log`, `catalog.lock`, `presets.json`, `view.json`, `prefs.json`)
-/// means the folder that holds it. Any other
+/// ([`is_own_file`]) means the folder that holds it. Any other
 /// existing file is an error that says so, instead of the OS's "File exists" from creating the
 /// folder.
 pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
     if !path.is_file() {
         return Ok(path.to_path_buf());
     }
-    let own = path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-        [
-            lightcraft_catalog::journal::SNAPSHOT,
-            lightcraft_catalog::journal::LOG,
-            lightcraft_catalog::lock::LOCK,
-            "presets.json",
-            "view.json",
-            "prefs.json",
-        ]
-        .contains(&n)
-    });
+    let own = path.file_name().and_then(|n| n.to_str()).is_some_and(is_own_file);
     if !own {
         return Err(EngineError::Other(format!("{} is a file; a library is a folder", path.display())));
     }
@@ -1077,7 +1081,7 @@ mod resolve_tests {
         let dir = std::env::temp_dir().join(format!("lc-resolve-settings-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for name in ["presets.json", "view.json", "prefs.json"] {
+        for name in ["presets.json", "view.json", "prefs.json", "PREFS.JSON"] {
             let file = dir.join(name);
             std::fs::write(&file, b"{}").unwrap();
             assert_eq!(resolve_dir(&file).ok(), Some(dir.clone()), "{name}");
