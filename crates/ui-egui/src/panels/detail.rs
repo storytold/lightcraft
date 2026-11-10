@@ -940,11 +940,17 @@ fn camera_jpeg_shown(app: &LightcraftApp, photo: &lightcraft_catalog::Photo, sho
 
 /// Rejects a cached view that does not cover the job's requested edge: the display-fit
 /// shortcut must not let a small cached image satisfy a large request.
+/// Uses the engine's 1% reuse tolerance so a cached edge slightly below the request
+/// is still accepted, avoiding an unnecessary render.
 fn reject_undersized_cached_view(job: &mut lightcraft_engine::media::RenderJob) {
-    if let Some(cached) = job.cached_view()
-        && cached.width.max(cached.height) < job.request.max_w.max(job.request.max_h)
-    {
-        job.view_cache = None;
+    if let Some(cached) = job.cached_view() {
+        let cached_long = cached.width.max(cached.height);
+        let requested_long = job.request.max_w.max(job.request.max_h);
+        // Apply the same 1% tolerance that `fit_cached` uses for reuse decisions.
+        // This avoids rejecting a cached view that the engine would accept.
+        if cached_long < requested_long && (requested_long as f32 / cached_long as f32 - 1.0) > 0.01 {
+            job.view_cache = None;
+        }
     }
 }
 
@@ -963,7 +969,13 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         // sampling (the render is up to a 64 px step larger, or the preview level)
         let mut job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
         if !interacting {
-            reject_undersized_cached_view(&mut job);
+            // Only reject undersized cached views when an explicit preview limit is set.
+            // In Automatic mode (preview_limit == 0), the display-fit shortcut should still
+            // allow a smaller cached view to satisfy the request, as the engine's fit_cached
+            // will upscale it with the 1% tolerance.
+            if app.ui.settings.preview_limit != 0 {
+                reject_undersized_cached_view(&mut job);
+            }
         }
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
@@ -1555,9 +1567,7 @@ mod tests {
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
         app.ui.settings.preview_limit = 3840;
         let id = app.session.active().unwrap();
-        app.session
-            .execute("library.buildPreviews", &serde_json::json!({"ids": [id.0], "edge": 2560, "wait": true}))
-            .unwrap();
+        app.session.execute("library.buildPreviews", &serde_json::json!({"ids": [id.0], "edge": 2560, "wait": true})).unwrap();
         let mut job = app.session.loupe_job(id, 3840, 3840, true).unwrap().with_display_fit(256, 256);
         assert!(job.cached_view().is_some(), "the 2560 cached view is present before the check");
         reject_undersized_cached_view(&mut job);
