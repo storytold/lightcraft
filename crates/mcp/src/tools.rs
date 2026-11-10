@@ -158,7 +158,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
             "Query photos",
             "List photos (id, file name, size, rating, flag, edited…). Without filter/sort: the current library view.",
             json!({
-                "filter": {"type": "object", "description": "Catalog Filter JSON (e.g. {\"minRating\": 3})", "additionalProperties": true},
+                "filter": {"type": "object", "description": "Catalog Filter JSON (e.g. {\"rating\": 3})", "additionalProperties": true},
                 "sort": {"type": "object", "additionalProperties": true},
                 "offset": {"type": "integer"},
                 "limit": {"type": "integer", "description": "Default 200"}

@@ -197,4 +197,133 @@ fn filter_flags_any_of_and_the_old_single_flag() {
     let written = serde_json::to_value(&saved).unwrap();
     assert_eq!(written.get("flag"), Some(&serde_json::json!("reject")));
     assert!(written.get("flags").is_none(), "{written}");
+    let round: Filter =
+        serde_json::from_value(serde_json::to_value(Filter { flags: vec![Flag::Pick, Flag::None], ..Default::default() }).unwrap()).unwrap();
+    assert_eq!(round.flags, vec![Flag::Pick, Flag::None]);
+}
+
+/// A search word with a colon whose left part is not a known field ("10:30", "Re:") is plain
+/// text, not a fielded token that matches nothing.
+#[test]
+fn free_text_with_a_colon_searches_the_text_fields() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "meeting.jpg", "2026-05-01T10:00:00");
+    let _b = photo(&mut c, "other.jpg", "2026-04-01T10:00:00");
+    let mut m = c.photo(a).unwrap().meta.clone();
+    m.caption = "Meeting at 10:30 with Re: notes".into();
+    m.iso = Some(1600);
+    c.apply(Op::SetMeta { id: a, meta: Box::new(m) }).unwrap();
+    let q = |text: &str| c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+    assert_eq!(q("meeting"), vec![a]);
+    assert_eq!(q("10:30"), vec![a], "a free-text token with a colon");
+    assert_eq!(q("re:"), vec![a]);
+    assert_eq!(q("RE: notes"), vec![a], "case-insensitive, one token per word");
+    assert_eq!(q("iso:>800"), vec![a], "known fields stay fielded");
+    assert_eq!(q("iso:>2000"), Vec::<PhotoId>::new());
+    assert_eq!(q("11:45"), Vec::<PhotoId>::new(), "an unknown field matching no text finds nothing");
+}
+
+/// `f:`/`aperture:` and `focal:` are stored as `f32`; a typed value that isn't exact in binary
+/// (2.8, 5.6) must still match, and `<`/`>` must not count the photo's own value.
+#[test]
+fn search_tokens_match_f32_aperture_and_focal() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-05-01T10:00:00");
+    let mut m = c.photo(a).unwrap().meta.clone();
+    m.aperture = Some(2.8);
+    m.focal_mm = Some(5.6);
+    c.apply(Op::SetMeta { id: a, meta: Box::new(m) }).unwrap();
+    let q = |t: &str| c.query(&Filter { text: t.into(), ..Default::default() }, &Sort::default());
+    assert_eq!(q("f:2.8"), vec![a], "f:2.8");
+    assert_eq!(q("aperture:=2.8"), vec![a], "aperture:=2.8");
+    assert_eq!(q("focal:5.6"), vec![a], "focal:5.6");
+    assert!(q("f:2.9").is_empty(), "f:2.9");
+    assert!(q("f:<2.8").is_empty(), "f:<2.8");
+    assert!(q("f:>2.8").is_empty(), "f:>2.8");
+    assert!(q("focal:<5.6").is_empty(), "focal:<5.6");
+    assert_eq!(q("f:>2.7"), vec![a], "f:>2.7");
+    assert_eq!(q("f:>=2.8"), vec![a], "f:>=2.8 counts the photo's own value");
+    assert_eq!(q("focal:<=5.6"), vec![a], "focal:<=5.6");
+    assert!(q("f:>=2.9").is_empty(), "f:>=2.9");
+    assert!(q("focal:<=5.5").is_empty(), "focal:<=5.5");
+}
+
+/// `>=` and `<=` in a fielded token are the inclusive comparisons. They used to read the `=` as
+/// part of the number, so `rating:>=3` or `iso:<=400` silently matched no photo at all.
+#[test]
+fn search_tokens_compare_inclusively() {
+    let mut c = Catalog::new();
+    let (two, three, four) = (
+        photo(&mut c, "two.jpg", "2026-05-01T10:00:00"),
+        photo(&mut c, "three.jpg", "2026-05-02T10:00:00"),
+        photo(&mut c, "four.jpg", "2026-05-03T10:00:00"),
+    );
+    for (id, rating, iso) in [(two, 2, 200), (three, 3, 400), (four, 4, 800)] {
+        c.apply(Op::SetRating { id, rating }).unwrap();
+        let mut m = c.photo(id).unwrap().meta.clone();
+        m.iso = Some(iso);
+        c.apply(Op::SetMeta { id, meta: Box::new(m) }).unwrap();
+    }
+    let q = |t: &str| {
+        let mut ids = c.query(&Filter { text: t.into(), ..Default::default() }, &Sort::default());
+        ids.sort();
+        ids
+    };
+    assert_eq!(q("rating:>=3"), vec![three, four]);
+    assert_eq!(q("stars:<=3"), vec![two, three]);
+    assert_eq!(q("iso:>=400"), vec![three, four]);
+    assert_eq!(q("iso:<=400"), vec![two, three]);
+    assert_eq!(q("rating:>3"), vec![four], "strict comparisons are unchanged");
+    assert_eq!(q("rating:=3"), vec![three]);
+    assert_eq!(q("rating:3"), vec![three]);
+    assert!(q("rating:>=").is_empty(), "an operator without a number matches nothing");
+    assert!(q("rating:=>3").is_empty(), "not an operator");
+}
+
+/// A `captured` string that is not ASCII (the Lightroom importer copies `captureTime` into an
+/// `AddPhoto` op verbatim, and a JSON snapshot is valid UTF-8 whatever it holds) must not be
+/// sliced on a byte index in `date_groups`: grouping counts the well-formed dates and ignores
+/// the rest instead of panicking on a char boundary.
+#[test]
+fn date_groups_ignores_a_non_ascii_captured() {
+    let mut c = Catalog::new();
+    let ok = photo(&mut c, "ok.jpg", "2026-05-01T10:00:00");
+    // `AddPhoto` takes the field as it is, like `library.importLightroom` building the op
+    let bad = photo(&mut c, "bad.jpg", "日本語日本語");
+    assert_ne!(ok, bad);
+    let g = c.date_groups();
+    assert_eq!(g.len(), 1, "the one well-formed date still groups");
+    assert_eq!((g[0].year.as_str(), g[0].count), ("2026", 1));
+    assert_eq!(g[0].days.iter().map(|d| d.1).sum::<usize>(), 1);
+}
+
+#[test]
+fn snapshot_and_log_replay() {
+    let mut c = Catalog::new();
+    let snap0 = c.to_snapshot();
+    let mut log = String::new();
+    let a = c.alloc_photo_id();
+    let ops = vec![
+        Op::AddPhoto { photo: Box::new(Photo::new(a, Source::File { path: "/x/a.jpg".into() }, "a.jpg", "JPEG", 10, 10, "t")) },
+        Op::SetRating { id: a, rating: 3 },
+        Op::SetFlag { id: a, flag: Flag::Pick },
+    ];
+    for op in ops {
+        log.push_str(&Catalog::op_to_log_line(&op));
+        c.apply(op).unwrap();
+    }
+    let mut r = Catalog::from_snapshot(&snap0).unwrap();
+    // torn last line is tolerated
+    let torn = format!("{log}{{\"op\":\"setRat");
+    assert_eq!(r.replay(&torn).unwrap(), 3);
+    assert_eq!(r.to_snapshot(), c.to_snapshot());
+    assert!(Catalog::from_snapshot("{nope").is_err());
+}
+
+proptest::proptest! {
+    #[test]
+    fn sort_key_name_is_stable(key: SortKey) {
+        let name = format!("{key:?}");
+        assert!(!name.contains("__"), "SortKey {key:?} leaked discriminant into name");
+    }
 }
