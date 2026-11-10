@@ -1303,10 +1303,11 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         // ---- import
         cmd!(query "library.lightroomNetworkSources", "Review Lightroom Network Sources", [], None,
-        "{path: .lrcat} → {networkSources: [UNC share]}; reads catalog root folders only, without contacting photo sources",
-        always, |_, p| {
+        "{path: .lrcat or Lightroom backup .zip} → {networkSources: [UNC share]}; reads catalog root folders only, without contacting photo sources",
+        always, |s, p| {
             let path = str_param(p, "path").ok_or_else(|| bad("library.lightroomNetworkSources", "missing path"))?;
-            let shares = crate::lightroom_catalog::network_sources(std::path::Path::new(path))
+            let temp = crate::lightroom_catalog::backup_temp_root(s);
+            let shares = crate::lightroom_catalog::network_sources_from_source(std::path::Path::new(path), temp.as_deref(), &Default::default())
                 .map_err(|e| bad("library.lightroomNetworkSources", e))?;
             Ok(json!({"networkSources": shares}))
         }),

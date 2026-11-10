@@ -272,7 +272,8 @@ with Always merge. An explicit empty `networkShares: []` refuses all UNC origina
 catalog's own share; omitting the option retains the default document-share policy. Invalid options
 are refused before a library is created or a worker starts. The read-only engine command
 `library.lightroomNetworkSources {path}` returns `{networkSources: [UNC share]}` without probing
-originals. See [catalog import](lightroom-catalog-import.md).
+originals. Its `path` accepts a `.lrcat` or Lightroom backup `.zip`; backup discovery uses a temporary
+extraction and removes it before returning. See [catalog import](lightroom-catalog-import.md).
 
 ## External controllers
 

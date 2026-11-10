@@ -455,13 +455,14 @@ pub fn start_sources(app: &mut LightcraftApp, path: &str, request: &crate::light
         let progress = LightroomProgress::default();
         let (tx, rx) = mpsc::channel();
         let worker_path = path.clone();
+        let temp = lightcraft_engine::lightroom_catalog::backup_temp_root(&app.session);
         let worker_cancel = cancel.clone();
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         std::thread::Builder::new()
             .name("lc-lightroom-sources".into())
             .spawn(move || {
                 let result = lightcraft_engine::guard::catch("Lightroom network sources", || {
-                    lightcraft_engine::lightroom_catalog::network_sources_with_cancel(&worker_path, &worker_cancel)
+                    lightcraft_engine::lightroom_catalog::network_sources_from_source(&worker_path, temp.as_deref(), &worker_cancel)
                 })
                 .and_then(|r| r);
                 let _ = tx.send(Message::Sources { result, request, generation });

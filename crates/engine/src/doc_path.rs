@@ -139,7 +139,12 @@ impl std::error::Error for NotFollowed {}
 /// or why it is not followed. A relative `document` is taken from the working directory, where it
 /// was opened from.
 pub fn resolve(stored: &str, document: Option<&Path>) -> Result<PathBuf, NotFollowed> {
-    let document = document.map(|d| if d.is_relative() { std::path::absolute(d).unwrap_or_else(|_| d.to_path_buf()) } else { d.to_path_buf() });
+    let document = document.map(|d| {
+        // A Windows UNC document is relative to Unix's native Path parser, but anchoring it
+        // to the working directory would erase its server/share identity before authorization.
+        let network = d.to_str().is_some_and(|s| craft_docpath::classify(s) == craft_docpath::PathKind::Network);
+        if d.is_relative() && !network { std::path::absolute(d).unwrap_or_else(|_| d.to_path_buf()) } else { d.to_path_buf() }
+    });
     match craft_docpath::resolve_absolute(stored, document.as_deref()) {
         Ok(path) => Ok(path),
         // A usable path that is not absolute here: a Windows path on macOS or Linux, or a
@@ -261,6 +266,19 @@ mod tests {
         assert_eq!(empty.resolve(r"\\nas\photos\a.jpg", Some(document)), Err(NotFollowed::Refused(Refused::Network)));
         assert_eq!(empty.resolve("a.jpg", Some(document)), Err(NotFollowed::Refused(Refused::Network)));
         assert_eq!(NetworkShares::default().resolve(r"\\nas\photos\a.jpg", Some(document)), resolve(r"\\nas\photos\a.jpg", Some(document)));
+    }
+
+    #[test]
+    /// Native Unix relativity must not turn a UNC document into a local working-directory path.
+    fn network_document_identity_survives_native_path_normalization() {
+        let document = Path::new(r"\\nas\photos\Catalog\source.lrcat");
+        let expected = if cfg!(windows) { Ok(PathBuf::from(r"\\nas\photos\Catalog\a.jpg")) } else { Err(NotFollowed::NotHere) };
+        assert_eq!(resolve("a.jpg", Some(document)), expected);
+        let selected = NetworkShares::new(vec![r"\\nas\photos".into()]).unwrap();
+        assert_eq!(selected.resolve("a.jpg", Some(document)), expected);
+        let unchecked = NetworkShares::new(Vec::new()).unwrap();
+        assert_eq!(unchecked.resolve("a.jpg", Some(document)), Err(NotFollowed::Refused(Refused::Network)));
+        assert_eq!(resolve(r"\\other\photos\a.jpg", Some(document)), Err(NotFollowed::Refused(Refused::Network)));
     }
 
     #[test]
