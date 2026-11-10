@@ -24,7 +24,6 @@ pub const LANGUAGE_COMMANDS: &[UiCommand] = &[
     ("app.language.japanese", crate::i18n::Locale::Ja.name(), None, "Edit>Language"),
     ("app.language.simplifiedChinese", crate::i18n::Locale::ZhHans.name(), None, "Edit>Language"),
     ("app.language.traditionalChinese", crate::i18n::Locale::ZhHant.name(), None, "Edit>Language"),
-    
 ];
 
 /// Every UI command: the languages, then everything else. `xtask parity` reads both tables from
