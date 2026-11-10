@@ -34,8 +34,9 @@ finish-args:
   # A host whose default theme is a symlink out of /usr/share/icons (Ubuntu's /etc/alternatives)
   # still needs a theme named: flatpak override --user --env=XCURSOR_THEME=Adwaita ai.storyteller.lightcraft
   # ~/.icons stays first, as in the default search path: a theme there is found once that folder is
-  # granted (flatpak override --user --filesystem=~/.icons:ro ai.storyteller.lightcraft).
-  - --env=XCURSOR_PATH=~/.icons:/run/host/user-share/icons:/run/host/share/icons
+  # granted (flatpak override --user --filesystem=~/.icons:ro ai.storyteller.lightcraft). The
+  # sandbox's own folders (the app's, the runtime's, an Icontheme extension's) stay searched last.
+  - --env=XCURSOR_PATH=~/.icons:/run/host/user-share/icons:/run/host/share/icons:/app/share/icons:/usr/share/icons:/usr/share/runtime/share/icons
   # X11 shared memory (MIT-SHM). Without it the X11 fallback is slow or fails.
   - --share=ipc
   # GPU access for the wgpu renderer (Vulkan, or GL as a fallback).
