@@ -1819,6 +1819,42 @@ fn auto_sync_resets_the_channel_mixer_when_it_returns_to_identity() {
     assert!(!s.develop_of(PhotoId(ids[1])).unwrap().channel_mixer.is_identity());
 }
 
+/// Issue #2158 review: Auto Sync carries the channel mixer whole. The delta between the active
+/// photo's settings is leaf-wise, so only the coefficients that changed there used to go over: on a
+/// photo whose mixer was already different (here a red/blue swap) the rest stayed, and it ended up
+/// with a matrix neither photo had. An edit elsewhere still leaves each photo's own mixer alone.
+#[test]
+fn auto_sync_carries_the_whole_channel_mixer() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    let (a, b) = (PhotoId(ids[0]), PhotoId(ids[1]));
+    // the other photo alone gets a red/blue swap
+    s.execute("library.select", &json!({"ids": [b.0], "active": b.0})).unwrap();
+    s.execute("develop.mixerSwapRB", &json!({})).unwrap();
+    let swapped = s.develop_of(b).unwrap().channel_mixer;
+    assert!(!swapped.is_identity());
+    s.execute("library.select", &json!({"ids": [a.0, b.0], "active": a.0})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+
+    // an edit outside the mixer leaves each photo its own
+    s.execute("develop.set", &json!({"control": "light.contrast", "value": 20.0})).unwrap();
+    assert_eq!(s.develop_of(b).unwrap().light.contrast, 20.0, "sanity: Auto Sync is carrying edits over");
+    assert_eq!(s.develop_of(b).unwrap().channel_mixer, swapped, "an edit elsewhere leaves the other photo's mixer alone");
+
+    // one coefficient changes on the active photo: the other photo gets the active photo's mixer,
+    // not its own swap with that one coefficient replaced
+    s.execute("develop.set", &json!({"control": "channelMixer.green.green", "value": 80.0})).unwrap();
+    let active = s.develop_of(a).unwrap().channel_mixer;
+    assert_eq!((active.red.red, active.green.green, active.blue.blue), (100.0, 80.0, 100.0));
+    assert_eq!(s.develop_of(b).unwrap().channel_mixer, active, "the other photo has the active photo's mixer");
+
+    // and a swap on the active photo, which changes four coefficients at once, lands the same
+    s.execute("develop.mixerSwapRB", &json!({})).unwrap();
+    let active = s.develop_of(a).unwrap().channel_mixer;
+    assert_eq!(s.develop_of(b).unwrap().channel_mixer, active);
+}
+
 #[test]
 fn auto_sync_camera_local_tone_changes_only_when_edited() {
     use lightcraft_catalog::PhotoId;

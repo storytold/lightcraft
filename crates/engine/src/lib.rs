@@ -1035,6 +1035,12 @@ impl Session {
             for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
             }
+            // The channel mixer is one matrix, so it goes over whole. The delta is leaf-wise: a pick or
+            // a swap on the active photo would send only the coefficients that changed there, and a
+            // photo whose mixer was different would keep its others, a matrix neither photo had.
+            if o.contains_key("channel_mixer") {
+                o.insert("channel_mixer".into(), new_json["channel_mixer"].clone());
+            }
             if o.is_empty() {
                 return Vec::new();
             }
