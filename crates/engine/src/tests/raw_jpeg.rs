@@ -358,3 +358,22 @@ fn a_reload_that_only_changes_the_file_keeps_the_top_the_user_chose() {
     assert_eq!(s.catalog.stack_of(raw).unwrap().photos, vec![jpg, raw]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn stacking_a_selected_pair_leaves_only_the_visible_photo_selected() {
+    let dir = temp_dir("pair-selection");
+    write_raw(&dir.join("DSC_0001.DNG"));
+    write_jpeg(&dir.join("DSC_0001.JPG"), 11);
+    write_jpeg(&dir.join("DSC_0002.JPG"), 12);
+    let mut s = Session::new().with_fs();
+    import(&mut s, &dir, json!({}));
+    let raw = id_named(&s, &dir, "DSC_0001.DNG");
+    let jpg = id_named(&s, &dir, "DSC_0001.JPG");
+    let other = id_named(&s, &dir, "DSC_0002.JPG");
+    s.selection = crate::Selection { ids: vec![jpg, raw, other], active: Some(jpg) };
+    assert_eq!(s.execute("stack.rawJpegPairs", &json!({})).unwrap()["stacks"], 1);
+    // the JPEG is hidden under the raw now: an edit with Auto Sync must not reach it
+    assert_eq!(s.selection.ids, vec![raw, other]);
+    assert_eq!(s.selection.active, Some(raw));
+    let _ = std::fs::remove_dir_all(&dir);
+}

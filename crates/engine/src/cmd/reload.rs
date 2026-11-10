@@ -110,7 +110,7 @@ pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result
         if !retop.is_empty() {
             s.commit("Reload Changed Files", Op::Batch { ops: retop })?;
             s.merge_undo(2, "Reload Changed Files");
-            super::organize::fix_active(s);
+            super::organize::fix_selection(s);
         }
     }
     Ok(reloaded)

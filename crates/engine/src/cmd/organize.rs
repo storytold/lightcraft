@@ -38,9 +38,8 @@ fn commit_ops(s: &mut Session, label: &str, ops: Vec<Op>) -> Result<usize> {
     Ok(n)
 }
 
-/// After collapsing (or putting another photo on top of a collapsed stack), keep the active photo
-/// visible (move it to its stack's top).
-pub(crate) fn fix_active(s: &mut Session) {
+/// After collapsing, keep the active photo visible (move it to its stack's top).
+fn fix_active(s: &mut Session) {
     let vis = s.visible_cloned();
     if let Some(a) = s.selection.active
         && !vis.contains(&a)
@@ -49,6 +48,30 @@ pub(crate) fn fix_active(s: &mut Session) {
         let top = vis.iter().copied().find(|p| st.photos.contains(p)).unwrap_or(st.top());
         s.selection = Selection::single(top);
     }
+}
+
+/// After stacking RAW+JPEG pairs or putting another photo on top of one: each selected photo now
+/// hidden in a collapsed stack is replaced by the stack's visible photo (once), the active one
+/// too, so an edit (or Auto Sync) never reaches a photo the grid doesn't show. A photo hidden for
+/// another reason (a filter) is left as it is.
+pub(crate) fn fix_selection(s: &mut Session) {
+    let vis: std::collections::HashSet<PhotoId> = s.visible_cloned().into_iter().collect();
+    let shown = |s: &Session, id: PhotoId| -> PhotoId {
+        if vis.contains(&id) {
+            return id;
+        }
+        s.catalog.stack_of(id).and_then(|st| st.photos.iter().copied().find(|p| vis.contains(p))).unwrap_or(id)
+    };
+    let mut ids: Vec<PhotoId> = Vec::new();
+    for id in s.selection.ids.clone() {
+        let id = shown(s, id);
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    let active = s.selection.active.map(|a| shown(s, a));
+    s.selection.ids = ids;
+    s.selection.active = active;
 }
 
 fn set_collapsed(s: &mut Session, stacks: Vec<StackId>, collapsed: bool, label: &str) -> Result<Value> {
@@ -304,7 +327,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let ops = s.catalog.raw_jpeg_stack_ops(&pairs);
                 commit_ops(s, crate::import::RAW_JPEG_UNDO, ops)?;
-                fix_active(s);
+                fix_selection(s);
                 Ok(out)
             }
         ),

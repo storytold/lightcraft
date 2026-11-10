@@ -104,7 +104,7 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
         let retop = retop_ops(&s.catalog, &before);
         if !retop.is_empty() {
             s.apply_system(Op::Batch { ops: retop })?;
-            super::organize::fix_active(s);
+            super::organize::fix_selection(s);
         }
     }
     for id in &out.updated {
