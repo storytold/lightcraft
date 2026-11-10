@@ -148,8 +148,8 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
-            Process::V7 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
-            Process::V7 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
         }
     }
 }
@@ -248,6 +248,8 @@ pub struct FinishParams {
     pub shadow_tint: f32,
     /// Tone curves (parametric ∘ point, per channel) on encoded values, 1024 entries each.
     pub curves: Option<[Lut1; 3]>,
+    /// Process V8's Whites and tone curves (they replace `curves`, which stays `None` from V8 on).
+    pub curve_stage: Option<crate::curve_stage::CurveStage>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
     pub vig: Option<Vig>,
@@ -335,7 +337,8 @@ impl FinishParams {
             light: crate::light_v3::LightOps::new(s, info),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
-            curves: curve_luts(&s.curve),
+            curves: if s.process.process() < Process::V8 { curve_luts(&s.curve) } else { None },
+            curve_stage: crate::curve_stage::CurveStage::new(s),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
@@ -411,6 +414,13 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
             Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
             None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
+        },
+        // V7, with Whites moved out of the tone map: the curve stage applies Whites as measured against
+        // Lightroom (`crate::curve_stage`)
+        Process::V8 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+            Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, 0.0, 0.0, peak),
+            None if info.raw => ToneMap::rolloff_hdr(l.contrast, 0.0, l.blacks, peak),
+            None => ToneMap::display_hdr(l.contrast, 0.0, l.blacks, peak),
         },
     }
 }
@@ -557,6 +567,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- process V4: calibrated Contrast, Blacks (ProPhoto with the sRGB transfer)
             d = apply_light(d, light.as_ref(), preview_light.as_ref(), exact, srgb);
+
+            // --- process V8: Whites and the tone curves, as Lightroom applies them
+            d = fp.curve_stage.as_ref().map_or(d, |stage| stage.apply(d));
 
             // --- colour
             d = fp.ops.apply(d, l_sat, l_hue);

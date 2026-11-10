@@ -1,4 +1,4 @@
-use lightcraft_develop::{DevelopSettings, controls};
+use lightcraft_develop::{DevelopSettings, Process, controls};
 use lightcraft_raster::Rgb32f;
 
 use crate::{RenderRequest, SourceInfo, render};
@@ -453,13 +453,23 @@ fn refine_saturation_tames_a_contrast_curve() {
         lightcraft_geom::Point::new(0.7, 0.85),
         lightcraft_geom::Point::new(1.0, 1.0),
     ];
-    let full = render(&src, &info, &s, &req).image.data[0];
+    let curved = s.clone();
     s.curve.refine_saturation = 0.0;
-    let refined = render(&src, &info, &s, &req).image.data[0];
-    assert!(sat(full) > sat(refined), "{flat:?} {full:?} {refined:?}");
-    // the curve's tone change stays
-    let y = |p: [u8; 4]| 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32;
-    assert!((y(full) - y(refined)).abs() < 2.0);
+    let y = |p: [u8; 4], lin: bool| {
+        let c = |v: u8| if lin { lightcraft_color::transfer::srgb_to_linear(v as f32 / 255.0) } else { v as f32 };
+        0.2126 * c(p[0]) + 0.7152 * c(p[1]) + 0.0722 * c(p[2])
+    };
+    for process in [Process::V7, Process::V8] {
+        let on = |s: &DevelopSettings| render(&src, &info, &DevelopSettings { process: process.version(), ..s.clone() }, &req).image.data[0];
+        let (full, refined) = (on(&curved), on(&s));
+        assert!(sat(full) > sat(refined), "{process:?}: {flat:?} {full:?} {refined:?}");
+        // the curve's tone change stays: up to V7 the encoded luma, from V8 the luminance
+        if process < Process::V8 {
+            assert!((y(full, false) - y(refined, false)).abs() < 2.0, "{process:?}: {full:?} {refined:?}");
+        } else {
+            assert!((y(full, true) / y(refined, true) - 1.0).abs() < 0.03, "{process:?}: {full:?} {refined:?}");
+        }
+    }
 }
 
 #[test]

@@ -99,12 +99,16 @@ pub enum Process {
     /// V6, with film grain from a stack of crystal layers (after Aurélien Pierre's model): resolution
     /// independent, fading out at black and white; V1 to V6 keep their value noise.
     V7,
+    /// V7, with Whites and the parametric curve measured against Lightroom, and the tone curves applied as
+    /// Lightroom does: Whites, the parametric and point curve hue-preserving in linear ProPhoto RGB, then the
+    /// red, green and blue curves per channel, before the colour stage (`lightcraft_pipeline::curve_stage`).
+    V8,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 7] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7];
-    pub const LATEST: Process = Process::V7;
+    pub const ALL: [Process; 8] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8];
+    pub const LATEST: Process = Process::V8;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -115,6 +119,7 @@ impl Process {
             Process::V5 => ProcessVersion(5),
             Process::V6 => ProcessVersion(6),
             Process::V7 => ProcessVersion(7),
+            Process::V8 => ProcessVersion(8),
         }
     }
 }

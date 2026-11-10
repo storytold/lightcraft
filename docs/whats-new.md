@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Whites and the tone curves behave as in Lightroom (process V8)
+- Whites now reaches into the upper midtones as Lightroom's does, and the Highlights, Lights, Darks and Shadows
+  regions of the parametric curve are as broad as Lightroom's and add up the same way: both follow Lightroom's
+  measured response. A contrast curve no longer turns orange towards red: the point curve keeps colours' hue, and
+  the red, green and blue curves act on their channel after it. This is rendering process 8: new photos (and Reset)
+  get it, photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [Whites and the tone curves](curve-stage.md).
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
