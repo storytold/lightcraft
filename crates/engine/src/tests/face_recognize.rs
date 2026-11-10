@@ -921,6 +921,17 @@ fn people_json_in_the_way(s: &mut Session, lib: &std::path::Path, a: PhotoId, b:
     assert_eq!(file["covers"]["ada"]["photo"], b.0, "{file}");
     s.execute("faces.setCover", &json!({"name": "Ada", "photo": null})).unwrap();
     s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Ann"})).unwrap();
+    // review of #3315 and #3317: a rename of someone with no choices, undone and redone while people.json cannot be
+    // written, has nothing to write, so nothing is left unsaved and the People view is not told
+    std::fs::remove_file(lib.join("people.json")).unwrap();
+    std::fs::create_dir_all(lib.join("people.json").join("in-the-way")).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Bea", "to": "Cleo"})).unwrap();
+    let generation = s.people_gen;
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.redo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((s.people_gen, s.unsaved()), (generation, None));
+    std::fs::remove_dir_all(lib.join("people.json")).unwrap();
 }
 
 /// A person's picture in People can be one of their faces chosen by the user instead of their largest (#3246). It is
