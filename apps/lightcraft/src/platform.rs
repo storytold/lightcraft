@@ -1,3 +1,27 @@
+/// The desktop `open_url` service: an `https://` link goes to the default browser through
+/// [`open_url_command`], started by [`launch`] and not waited for.
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("only https links are opened".into());
+    }
+    launch(open_url_command(url))
+}
+
+/// The command that opens `url` in the default browser on this system.
+pub(crate) fn open_url_command(url: &str) -> std::process::Command {
+    if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    } else if cfg!(target_os = "windows") {
+        windows_open_url_command(url)
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    }
+}
+
 /// Start `cmd` (a link opener: `open`, `xdg-open`, `rundll32`) and return without waiting for it.
 /// One that can't start is an error, as before; its exit is waited for on a thread of its own, so
 /// it is reaped, and a failure is logged. Waiting on the UI thread froze LightCraft for as long as

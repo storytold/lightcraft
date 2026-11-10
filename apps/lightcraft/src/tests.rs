@@ -464,6 +464,7 @@ fn windows_links_open_in_the_browser() {
 #[test]
 #[cfg(unix)]
 fn a_link_opener_is_not_waited_for() {
+    use crate::platform::launch;
     let started = std::time::Instant::now();
     let mut c = std::process::Command::new("sleep");
     c.arg("3");
@@ -471,6 +472,26 @@ fn a_link_opener_is_not_waited_for() {
     assert!(started.elapsed() < std::time::Duration::from_secs(2), "returned at once ({:?})", started.elapsed());
     let missing = launch(std::process::Command::new("lc-no-such-opener"));
     assert!(missing.as_ref().is_err_and(|e| e.starts_with("lc-no-such-opener: ")), "{missing:?}");
+}
+
+/// The desktop `open_url` service is the system's browser command started by `launch`: an `https://` link only,
+/// and on each system the command that hands it to the browser.
+#[test]
+fn open_url_hands_https_links_to_the_browser_command() {
+    assert!(crate::platform::open_url("http://example.com").is_err(), "only https links");
+    assert!(crate::platform::open_url("file:///etc/passwd").is_err());
+    let url = "https://github.com/storytold/lightcraft";
+    let c = crate::platform::open_url_command(url);
+    let program = c.get_program().to_string_lossy().to_string();
+    let want = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "rundll32"
+    } else {
+        "xdg-open"
+    };
+    assert_eq!(program, want);
+    assert_eq!(c.get_args().last().map(|a| a.to_string_lossy().to_string()), Some(url.to_string()));
 }
 
 /// Issue #272: Explorer gets the file to select quoted after `/select,`, with backslashes and

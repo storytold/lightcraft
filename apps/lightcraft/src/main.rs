@@ -64,7 +64,7 @@ use launch::{
     stopped_while_running,
 };
 #[cfg(test)]
-use platform::{explorer_select_arg, explorer_select_command, launch, windows_open_url_command};
+use platform::{explorer_select_arg, explorer_select_command, windows_open_url_command};
 use prefs::{PrefsWriter, as_remembered, load_prefs, prefs_path};
 #[cfg(test)]
 use prefs::{load_prefs_at, write_atomic};

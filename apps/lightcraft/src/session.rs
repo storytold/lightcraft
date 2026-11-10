@@ -1,6 +1,6 @@
 #[cfg(any(target_os = "freebsd", target_os = "linux"))]
 use super::platform::DIALOG_PARENT;
-use super::platform::{explorer_select_command, file_dialog, launch, windows_open_url_command};
+use super::platform::{explorer_select_command, file_dialog};
 use super::prefs::display_profile_dir;
 use super::*;
 
@@ -67,22 +67,7 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         open_with: Some(Box::new(editors::open_with)),
         open_all_with: Some(Box::new(editors::open_all_with)),
         check_editor: Some(Box::new(editors::check)),
-        open_url: Some(Box::new(|url: &str| {
-            if !url.starts_with("https://") {
-                return Err("only https links are opened".into());
-            }
-            launch(if cfg!(target_os = "macos") {
-                let mut c = std::process::Command::new("open");
-                c.arg(url);
-                c
-            } else if cfg!(target_os = "windows") {
-                windows_open_url_command(url)
-            } else {
-                let mut c = std::process::Command::new("xdg-open");
-                c.arg(url);
-                c
-            })
-        })),
+        open_url: Some(Box::new(|url: &str| super::platform::open_url(url))),
         reveal: Some(Box::new(|path: &str| {
             let status = if cfg!(target_os = "macos") {
                 std::process::Command::new("open").args(["-R", path]).status()
