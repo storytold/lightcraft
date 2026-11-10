@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use lightcraft_develop::DevelopSettings;
+use proptest::prelude::*;
 use serde_json::json;
 
 use super::*;
@@ -318,6 +319,82 @@ fn snapshot_and_log_replay() {
     assert_eq!(r.replay(&torn).unwrap(), 3);
     assert_eq!(r.to_snapshot(), c.to_snapshot());
     assert!(Catalog::from_snapshot("{nope").is_err());
+}
+
+/// Every `SortKey` variant has a stable Debug name without the discriminant.
+#[test]
+fn sort_key_name_is_stable() {
+    let all = [SortKey::CaptureDate, SortKey::ImportDate, SortKey::EditDate, SortKey::FileName, SortKey::Rating, SortKey::FileSize, SortKey::Random];
+    for key in all {
+        let name = format!("{key:?}");
+        assert!(!name.contains("__"), "SortKey {key:?} leaked discriminant into name");
+    }
+}
+
+/// Random rating and flag edits across multiple photos undo to the starting snapshot.
+proptest! {
+    #[test]
+    fn random_ops_undo_to_start(ratings in proptest::collection::vec((0usize..3, 0u8..6, 0u8..3), 1..40)) {
+        let mut c = Catalog::new();
+        let ids: Vec<PhotoId> = (0..3).map(|i| photo(&mut c, &format!("p{i}.jpg"), "2026-01-01")).collect();
+        let start = c.to_snapshot();
+        let mut invs = Vec::new();
+        for (i, r, f) in ratings {
+            let op = if f == 0 { Op::SetRating { id: ids[i], rating: r } } else { Op::SetFlag { id: ids[i], flag: [Flag::None, Flag::Pick, Flag::Reject][f as usize] } };
+            if let Ok(inv) = c.apply(op) { invs.push(inv); }
+        }
+        for inv in invs.into_iter().rev() { c.apply(inv).unwrap(); }
+        proptest::prop_assert_eq!(c.to_snapshot(), start);
+    }
+}
+
+/// Smart albums update live: membership follows rating/deleted/rules changes; undo and snapshot restore work.
+#[test]
+fn smart_albums_update_live() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
+    let b = photo(&mut c, "b.jpg", "2026-05-02T10:00:00");
+    let z = photo(&mut c, "z.jpg", "2025-12-31T10:00:00");
+    let id = c.alloc_album_id();
+    let rules = Filter { rating: 3, date_from: Some("2026-01-01".into()), date_to: Some("2026-04".into()), ..Default::default() };
+    c.apply(Op::AddAlbum { album: Album { smart: Some(Box::new(rules)), ..Album::new(id, "Good spring") } }).unwrap();
+    assert!(c.album_photos(id).is_empty());
+    for p in [a, b, z] {
+        c.apply(Op::SetRating { id: p, rating: 4 }).unwrap();
+    }
+    // b is after the range, z before it
+    assert_eq!(c.album_photos(id), vec![a]);
+    assert_eq!(c.album_count(id), 1);
+    assert_eq!(c.albums_of(a), vec![id]);
+    // via the album filter (what the grid uses)
+    assert_eq!(c.query(&Filter { album: Some(id), ..Default::default() }, &Sort::default()), vec![a]);
+    // deleted photos drop out
+    c.apply(Op::SetDeleted { id: a, deleted: true }).unwrap();
+    assert!(c.album_photos(id).is_empty());
+    c.apply(Op::SetDeleted { id: a, deleted: false }).unwrap();
+    // change the rules; inverse restores
+    let inv = c.apply(Op::SetAlbumRules { id, rules: Box::new(Filter { rating: 4, rating_op: RatingOp::Exactly, ..Default::default() }) }).unwrap();
+    assert_eq!(c.album_photos(id), vec![a, b, z]);
+    c.apply(inv).unwrap();
+    assert_eq!(c.album_photos(id), vec![a]);
+    // smart albums hold no photos and can't nest smart rules
+    assert!(c.apply(Op::SetAlbumPhotos { id, photos: vec![b] }).is_err());
+    let id2 = c.alloc_album_id();
+    let bad = Filter { album: Some(id), ..Default::default() };
+    assert!(c.apply(Op::AddAlbum { album: Album { smart: Some(Box::new(bad)), ..Album::new(id2, "x") } }).is_err());
+    assert!(c.apply(Op::SetAlbumRules { id, rules: Box::new(Filter { deleted: true, ..Default::default() }) }).is_err());
+    // rules on a manual album are rejected
+    let manual = c.alloc_album_id();
+    c.apply(Op::AddAlbum { album: Album::new(manual, "m") }).unwrap();
+    assert!(c.apply(Op::SetAlbumRules { id: manual, rules: Box::new(Filter::default()) }).is_err());
+    // a smart album may narrow a manual album
+    c.apply(Op::SetAlbumPhotos { id: manual, photos: vec![b, z] }).unwrap();
+    c.apply(Op::SetAlbumRules { id, rules: Box::new(Filter { album: Some(manual), lens: Some(String::new()), ..Default::default() }) }).unwrap();
+    assert_eq!(c.album_photos(id), vec![b, z]);
+    // persisted in snapshots
+    let back = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
+    assert_eq!(back.album_photos(id), vec![b, z]);
+    assert!(Filter { rating: 3, keyword: Some("sea".into()), ..Default::default() }.describe().contains("rating ≥ 3, keyword sea"));
 }
 
 proptest::proptest! {
