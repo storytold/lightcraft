@@ -4,7 +4,8 @@
 //! The runner has a device of its own, so a denoise job and the interactive renders are separate contexts that the
 //! driver time-slices, and a failure of one never takes the other down. It respects the same switches as GPU rendering
 //! (`LIGHTCRAFT_GPU`, `LIGHTCRAFT_GPU_BACKEND`, the GPU preference) and the same crash sentinel around device creation.
-//! `LIGHTCRAFT_GPU_ADAPTER` picks an adapter by (part of) its name, e.g. to try another card.
+//! `LIGHTCRAFT_GPU_ADAPTER` picks an adapter by (part of) its name, e.g. to try another card (`backend::pick_adapter`,
+//! shared with the render device).
 //!
 //! Every failure is an `Err` (never a panic), and a device that errs or is lost stops being used: callers then run the
 //! CPU runner. The kernels (`wgsl/nn_conv.wgsl`, `wgsl/nn_pool.wgsl`) are tested against the plain-loop reference
@@ -21,7 +22,7 @@ use lightcraft_denoise::run::{Error, TileRunner};
 use wgpu::util::DeviceExt;
 
 /// Longest wait for one tile's GPU work before the device is given up on.
-const TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(60);
 /// The largest tile side (in input cells) the dispatch sizes and 32-bit indexing are checked for.
 const MAX_TILE: usize = 1024;
 /// The largest single buffer used: indices in the kernels are 32-bit element offsets.
@@ -32,18 +33,18 @@ const WORKSPACES: usize = 2;
 // ---------------------------------------------------------------------------------------------------------------------
 // the device
 
-struct Dev {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    info: wgpu::AdapterInfo,
-    limits: wgpu::Limits,
+pub(crate) struct Dev {
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
+    pub(crate) info: wgpu::AdapterInfo,
+    pub(crate) limits: wgpu::Limits,
 }
 
 static DEV: OnceLock<Result<Dev, String>> = OnceLock::new();
 static BROKEN: AtomicBool = AtomicBool::new(false);
 static BROKEN_WHY: Mutex<Option<String>> = Mutex::new(None);
 
-fn mark_broken(why: &str) {
+pub(crate) fn mark_broken(why: &str) {
     let mut w = BROKEN_WHY.lock().unwrap_or_else(|e| e.into_inner());
     if w.is_none() {
         *w = Some(why.to_string());
@@ -56,7 +57,7 @@ pub fn broken_reason() -> Option<String> {
     BROKEN.load(Ordering::Relaxed).then(|| BROKEN_WHY.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| "device error".into()))
 }
 
-fn dev() -> Result<&'static Dev, String> {
+pub(crate) fn dev() -> Result<&'static Dev, String> {
     if let Some(why) = broken_reason() {
         return Err(format!("stopped after a GPU failure: {why}"));
     }
@@ -72,7 +73,7 @@ fn dev() -> Result<&'static Dev, String> {
 }
 
 /// Why nothing runs on the GPU once [`crate::begin_shutdown`] was called.
-const CLOSING: &str = "LightCraft is closing";
+pub(crate) const CLOSING: &str = "LightCraft is closing";
 
 fn create_device() -> Result<Dev, String> {
     let Some(backends) = crate::backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
@@ -89,23 +90,7 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
     // no indirect-call validation pipeline: Intel Metal fails to compile it (#250)
     desc.flags = crate::backend::instance_flags_from_env(desc.flags);
     let instance = wgpu::Instance::new(desc);
-    let wanted = std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
-    let adapter = match &wanted {
-        Some(w) => {
-            let all = pollster::block_on(instance.enumerate_adapters(backends));
-            let names: Vec<String> = all.iter().map(|a| a.get_info().name).collect();
-            all.into_iter()
-                .find(|a| {
-                    let i = a.get_info();
-                    i.device_type != wgpu::DeviceType::Cpu && i.name.to_lowercase().contains(w.as_str())
-                })
-                .ok_or_else(|| format!("no GPU adapter named like `{w}` (found: {})", names.join(", ")))?
-        }
-        None => pollster::block_on(
-            instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
-        )
-        .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))?,
-    };
+    let adapter = crate::backend::pick_adapter(&instance, backends)?;
     let info = adapter.get_info();
     if info.device_type == wgpu::DeviceType::Cpu {
         return Err(format!("software adapter ({}) skipped: the CPU is faster", info.name));
@@ -366,18 +351,30 @@ fn conv_bias(bias: &[f32], npad: usize, slope: Option<&[f32]>) -> Vec<f32> {
     out
 }
 
+/// The most bytes one tensor of a planned network may take (the sizes the plan works out are 32-bit).
+const MAX_TENSOR_BYTES: usize = u32::MAX as usize;
+
 /// Work out the steps, the buffers and the arranged weights for `net` on `tile × tile` input cells.
 fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>), String> {
     let ops = net.ops();
     let tail = validate_plan(net, tile, ops)?;
     let in_pad = round_up(net.in_channels, 4);
-    let side = |t: usize| -> usize {
+    // a tensor's side: the tile halved for every level down, doubled for every level up (an upsampling layer)
+    let side_of = |t: usize| -> Option<usize> {
         let level = net.shape(t).map_or(0, |s| s.level);
-        if level >= 0 { tile >> level } else { tile << (-level) }
+        let shift = level.unsigned_abs();
+        if level >= 0 { tile.checked_shr(shift) } else { 1usize.checked_shl(shift).and_then(|f| tile.checked_mul(f)) }
     };
     // the input tensor is padded to a multiple of 4 planes
     let chan = |t: usize| net.shape(t).map_or(0, |s| if t == 0 { in_pad } else { s.channels });
     let n_ops = ops.len();
+    // every tensor's bytes fit in 32 bits, so the sizes below cannot overflow (a network that upsamples many times
+    // would)
+    let bytes = |t: usize| side_of(t)?.checked_mul(side_of(t)?)?.checked_mul(chan(t).max(1))?.checked_mul(4).filter(|&b| b <= MAX_TENSOR_BYTES);
+    if (0..=n_ops).any(|t| bytes(t).is_none()) {
+        return unsupported("a network whose layers are too large for the graphics card at this tile size");
+    }
+    let side = |t: usize| side_of(t).unwrap_or(0);
     // the last layer that reads each tensor
     let mut last_use = vec![0usize; n_ops + 1];
     for (i, op) in ops.iter().enumerate() {
@@ -649,7 +646,7 @@ struct Pipelines {
     built: Vec<(String, f64)>,
 }
 
-fn entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntry {
+pub(crate) fn entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::COMPUTE,
@@ -658,7 +655,7 @@ fn entry(binding: u32, ty: wgpu::BufferBindingType) -> wgpu::BindGroupLayoutEntr
     }
 }
 
-fn pipeline(d: &Dev, label: &str, src: &str, layout: &wgpu::BindGroupLayout) -> wgpu::ComputePipeline {
+pub(crate) fn pipeline(d: &Dev, label: &str, src: &str, layout: &wgpu::BindGroupLayout) -> wgpu::ComputePipeline {
     let module = d.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(src.into()) });
     let pl = d.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(layout)], immediate_size: 0 });
     d.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -743,7 +740,7 @@ struct Shared {
     dummy: wgpu::Buffer,
 }
 
-fn storage(d: &Dev, label: &str, bytes: u64, extra: wgpu::BufferUsages) -> wgpu::Buffer {
+pub(crate) fn storage(d: &Dev, label: &str, bytes: u64, extra: wgpu::BufferUsages) -> wgpu::Buffer {
     d.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size: bytes.max(16),
@@ -1122,6 +1119,9 @@ mod tests {
 
     /// The runner, or `None` (with a note) on a machine with no usable GPU.
     fn gpu(net: &Net, tile: usize) -> Option<NetRunner> {
+        // creating the device and building the kernels arms the crash sentinel: take turns with
+        // the tests that set its path (`backend::tests`)
+        let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         match runner(net, tile) {
             Ok(r) => Some(r),
             Err(e) => {
@@ -1401,7 +1401,10 @@ mod tests {
         let net = onnx::read(std::path::Path::new(&model)).unwrap();
         let tile = 512usize;
         let started = Instant::now();
-        let g = runner(&net, tile).unwrap();
+        let g = {
+            let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            runner(&net, tile).unwrap()
+        };
         println!("{}: set up in {:.2} s, {:.0} MB per tile in flight", g.adapter(), started.elapsed().as_secs_f64(), g.bytes_per_tile() as f64 / 1e6);
         println!("kernels: {}", g.build_report());
         let manifest = DenoiserManifest {

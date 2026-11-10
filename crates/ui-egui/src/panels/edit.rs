@@ -19,6 +19,7 @@ use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register,
 
 mod curve;
 mod grading;
+mod hdr_flow;
 mod histogram;
 mod mixer;
 mod sliders;
@@ -152,7 +153,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
 
     section(app, ui, &d, "light", "Light", |app, ui, d| {
-        hdr_row(app, ui, d);
+        hdr_row(app, ui, d, id);
         for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
             control(app, ui, d, c, true);
         }
@@ -306,6 +307,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         for c in ["detail.nrLuminance", "detail.nrDetail", "detail.nrContrast", "detail.nrColor", "detail.nrColorDetail", "detail.nrColorSmoothness"]
         {
             control(app, ui, d, c, true);
+        }
+        // single outlier photosites, replaced in the raw mosaic (#1345): raws only
+        if app.session.catalog.photo(id).is_some_and(|p| p.develops_raw()) {
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 0 }).show(ui, |ui| {
+                let mut on = d.detail.nr_outliers;
+                if crate::dialogs::settings::check(ui, "detail.nrOutliers", &mut on, "Remove Hot Pixels") {
+                    let _ = app.run("develop.merge", json!({"settings": {"detail": {"nr_outliers": on}}, "label": "Remove Hot Pixels"}));
+                }
+            });
         }
         ui.add_space(8.0);
     });

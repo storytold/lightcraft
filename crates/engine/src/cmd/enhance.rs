@@ -38,7 +38,11 @@ fn super_resolution(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn ai_sharpen(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = target(s, "enhance.aiSharpen", p)?;
+    const C: &str = "enhance.aiSharpen";
+    if p.get("scale").is_some_and(|v| !v.is_null()) {
+        return Err(bad(C, "AI Sharpen keeps the photo's size: `scale` is for `enhance.superResolution`"));
+    }
+    let id = target(s, C, p)?;
     s.enhance_now(id, 1)
 }
 
@@ -51,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "Super Resolution",
                 [],
                 None,
-                "{id?, scale=2|4}: the photo with its import defaults (none of its edits), enlarged `scale` times across by the installed upscaler (`denoise.models.select {kind: \"upscale\"}`), written as a 16-bit TIFF `<name>-Enhanced-SR.tif` next to it, imported, stacked with it on top and selected → {id, path, bytes, width, height, factor}",
+                "{id?, scale=2|4}: the photo with its import defaults (none of its edits), enlarged `scale` times across by the installed upscaler (`denoise.models.select {kind: \"upscale\"}`), written as a 16-bit TIFF `<name>-Enhanced-SR.tif` next to it, imported, stacked with the original with the new photo on top, and selected → {id, path, bytes, width, height, factor}",
                 can_enhance,
                 super_resolution
             )
@@ -63,7 +67,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "AI Sharpen",
                 [],
                 None,
-                "{id?}: like `enhance.superResolution`, but the upscaler's answer is averaged back down to the photo's own size: finer detail at the same pixel dimensions → {id, path, bytes, width, height, factor: 1}",
+                "{id?} (no `scale`): like `enhance.superResolution`, but the upscaler's answer is averaged back down to the photo's own size: finer detail at the same pixel dimensions → {id, path, bytes, width, height, factor: 1}",
                 can_enhance,
                 ai_sharpen
             )

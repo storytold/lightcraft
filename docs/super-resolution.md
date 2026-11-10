@@ -57,15 +57,18 @@ picture to 2400 × 1800 takes 11.5 s with 322 MB at its peak, so a 24 MP photo t
 | Command | Parameters | Result |
 |---|---|---|
 | `enhance.superResolution` | `{id?, scale=2\|4}` | `{id, path, bytes, width, height, factor}` |
-| `enhance.aiSharpen` | `{id?}` | the same, `factor: 1` |
+| `enhance.aiSharpen` | `{id?}` (no `scale`) | the same, `factor: 1` |
 
 Both act on one photo (`id`, else the selection) and run to the end before they answer (CLI, MCP, control channel).
 In the desktop app, Photo ▸ Enhance runs them in the background (`enhance.superResolutionStart`,
 `enhance.aiSharpenStart`).
 
+`LIGHTCRAFT_DENOISE_MODELS` names the folder AI models are installed into (the desktop app's own by default, see
+[denoise.md](denoise.md)); here a new folder `models` next to a new library `library`, with the downloaded
+`realesr-general-x4v3.onnx` and a `photo.jpg` in the current folder:
+
 ```sh
-LIGHTCRAFT_DENOISE_MODELS=<models> lightcraft-cli run --library <dir> --import photo.jpg \
-  denoise.models.install '{"path": "realesr-general-x4v3.onnx", "acknowledged": true}' enhance.superResolution
+LIGHTCRAFT_DENOISE_MODELS=models lightcraft-cli run --library library --import photo.jpg denoise.models.install '{"path": "realesr-general-x4v3.onnx", "acknowledged": true}' enhance.superResolution
 ```
 
 Tests with the real model: `LC_SR_MODEL=<realesr-general-x4v3.onnx> cargo test --release -p lightcraft-denoise

@@ -323,5 +323,10 @@
   "{name} is installed and in use: face recognition is on": "{name} è installato e in uso: il riconoscimento dei volti è attivo",
   "{what} added: {w} × {h}": "{what} aggiunta: {w} × {h}",
   "{what} cancelled": "{what} annullata",
-  "{what} failed: {e}": "{what} non riuscita: {e}"
+  "{what} failed: {e}": "{what} non riuscita: {e}",
+  "Bring photos in with File › Import Photos… ({keys}).": "Importa le foto con File › Importa foto… ({keys}).",
+  "View › Detail View ({keys}).": "Visualizza › Vista dettaglio ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
+  "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
 }

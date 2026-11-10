@@ -253,7 +253,7 @@
   "{pct} %": "{pct} %",
   "{photos} catalog records processed; {collections} collections.": "{photos} katalogposter bearbetade; {collections} samlingar.",
   "{pid} (missing)": "{pid} (saknas)",
-  "{sel_n} selected · {counted}": "{sel_n} markerade · {counted}",
+  "{sel_n} selected · {counted}": "Markerade: {sel_n} · {counted}",
   "{size} GB": "{size} GB",
   "{stage}… {:.0}%": "{stage}… {:.0} %",
   "{s} s of AV1 video": "{s} s AV1-video",
@@ -323,5 +323,10 @@
   "{n} photo{} in view · {slides} slide{} · {time}": "Foton i vyn: {n} · bilder: {slides} · {time}{:.0}{:.0}",
   "{what} added: {w} × {h}": "{what} tillagd: {w} × {h}",
   "{what} cancelled": "{what} avbröts",
-  "{what} failed: {e}": "{what} misslyckades: {e}"
+  "{what} failed: {e}": "{what} misslyckades: {e}",
+  "Bring photos in with File › Import Photos… ({keys}).": "Importera foton via Fil › Importera foton… ({keys}).",
+  "View › Detail View ({keys}).": "Visa › Detaljvy ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Fil › Exportera… · Fil › Skriv ut… ({keys}).",
+  "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}"
 }

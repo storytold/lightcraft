@@ -54,7 +54,8 @@ impl Pace {
 pub enum PhotoState {
     /// Not a photo denoise applies to (not a raw, offline, a demo).
     NotApplicable,
-    /// No model is chosen: nothing can be made.
+    /// A finished picture with no model chosen for its kind: nothing can be made (raw photos always have the built-in
+    /// denoiser).
     NoModel,
     /// Its picture is made: the Amount slider works.
     Ready,

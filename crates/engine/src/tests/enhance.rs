@@ -130,6 +130,25 @@ fn ai_sharpen_keeps_the_photos_size_and_bad_requests_are_errors() {
     assert_eq!((r["width"].clone(), r["height"].clone(), r["factor"].clone()), (json!(150), json!(100), json!(1)), "{r}");
     assert_eq!((decoded(r["path"].as_str().unwrap()).image.width, s.catalog.photos().count()), (150, 2));
 
+    // a result in Recently Deleted comes back as the result of the same request, and no copy is left beside it
+    let (result, path) = (r["id"].as_u64().unwrap(), r["path"].as_str().unwrap().to_string());
+    s.execute("photo.delete", &json!({"ids": [result]})).unwrap();
+    let again = s.execute("enhance.aiSharpen", &json!({"id": original.0})).unwrap();
+    assert_eq!((again["id"].clone(), again["path"].as_str()), (json!(result), Some(path.as_str())), "{again}");
+    assert!(!s.catalog.photo(lightcraft_catalog::PhotoId(result)).unwrap().deleted);
+    assert!(!Path::new(&path.replace("ramp-Enhanced-SR.tif", "ramp-Enhanced-SR-2.tif")).exists());
+
+    // a photo named by `id` needs no selection; one in Recently Deleted is not enhanced
+    s.execute("library.select", &json!({"ids": []})).unwrap();
+    assert_eq!(s.execute("enhance.aiSharpen", &json!({"id": original.0})).unwrap()["id"], json!(result));
+    s.execute("photo.delete", &json!({"ids": [original.0]})).unwrap();
+    let e = s.execute("enhance.aiSharpen", &json!({"id": original.0})).unwrap_err().to_string();
+    assert!(e.contains("Recently Deleted"), "{e}");
+    s.execute("photo.restore", &json!({"ids": [original.0]})).unwrap();
+    s.execute("library.select", &json!({"ids": [original.0]})).unwrap();
+    let e = s.execute("enhance.aiSharpen", &json!({"scale": 2})).unwrap_err().to_string();
+    assert!(e.contains("`scale`"), "{e}");
+
     for scale in [json!(3), json!(1), json!("2")] {
         let e = s.execute("enhance.superResolution", &json!({"id": original.0, "scale": scale})).unwrap_err().to_string();
         assert!(e.contains("`scale` must be 2 or 4"), "{e}");

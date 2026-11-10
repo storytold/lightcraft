@@ -27,6 +27,10 @@ pub(crate) fn line_x(img: &Rgba8, y: usize, x0: f64, win: f64) -> f64 {
     let (a, b) = ((x0 - win).max(0.0) as usize, ((x0 + win) as usize).min(img.width - 1));
     let row: Vec<f64> = (a..=b).map(|x| img.get(x, y)[1] as f64).collect();
     let max = row.iter().cloned().fold(0.0, f64::max);
+    let min = row.iter().cloned().fold(f64::MAX, f64::min);
+    if max - min <= 1.0 {
+        return (a as f64 + b as f64) / 2.0 + 0.5;
+    }
     let (mut s, mut sw) = (0.0, 0.0);
     for (i, v) in row.iter().enumerate() {
         let wgt = (max - v).max(0.0).powi(2);
@@ -41,6 +45,10 @@ pub(crate) fn line_y(img: &Rgba8, x: usize, y0: f64, win: f64) -> f64 {
     let (a, b) = ((y0 - win).max(0.0) as usize, ((y0 + win) as usize).min(img.height - 1));
     let col: Vec<f64> = (a..=b).map(|y| img.get(x, y)[1] as f64).collect();
     let max = col.iter().cloned().fold(0.0, f64::max);
+    let min = col.iter().cloned().fold(f64::MAX, f64::min);
+    if max - min <= 1.0 {
+        return (a as f64 + b as f64) / 2.0 + 0.5;
+    }
     let (mut s, mut sw) = (0.0, 0.0);
     for (i, v) in col.iter().enumerate() {
         let wgt = (max - v).max(0.0).powi(2);
@@ -52,6 +60,20 @@ pub(crate) fn line_y(img: &Rgba8, x: usize, y0: f64, win: f64) -> f64 {
 
 fn spread(v: &[f64]) -> f64 {
     v.iter().cloned().fold(f64::MIN, f64::max) - v.iter().cloned().fold(f64::MAX, f64::min)
+}
+
+/// Asserts that a vertical edge with contrast > 1 LSB exists in row `y` around `x0 ± win`.
+fn assert_vertical_edge(img: &Rgba8, y: usize, x0: f64, win: f64) {
+    let (a, b) = ((x0 - win).max(0.0) as usize, ((x0 + win) as usize).min(img.width - 1));
+    let values: Vec<f64> = (a..=b).map(|x| img.get(x, y)[1] as f64).collect();
+    assert!(spread(&values) > 1.0, "no vertical edge near x={x0} on row {y}");
+}
+
+/// Asserts that a horizontal edge with contrast > 1 LSB exists in column `x` around `y0 ± win`.
+fn assert_horizontal_edge(img: &Rgba8, x: usize, y0: f64, win: f64) {
+    let (a, b) = ((y0 - win).max(0.0) as usize, ((y0 + win) as usize).min(img.height - 1));
+    let values: Vec<f64> = (a..=b).map(|y| img.get(x, y)[1] as f64).collect();
+    assert!(spread(&values) > 1.0, "no horizontal edge near y={y0} on column {x}");
 }
 
 /// Barrel distortion with coefficient `k` (< 0): distorted radius = r·(1 + k·r²), r in half-diagonal units.
@@ -213,6 +235,7 @@ fn manual_vertical_keystone_widens_the_top() {
     assert!(lb.y - lt.y > rb.y - rt.y, "left side enlarged");
 }
 
+/// Verifies manual geometry corrections straighten a keystoned grid test fixture.
 #[test]
 fn manual_transforms_straighten_known_keystone() {
     let (w, h) = (480usize, 320usize);
@@ -226,6 +249,12 @@ fn manual_transforms_straighten_known_keystone() {
         let src = keystoned_grid(w, h, fwd, 40.0);
         let s = DevelopSettings { geometry: g.clone(), ..Default::default() };
         let img = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).image;
+        for &y in &[60usize, 150, 260] {
+            assert_vertical_edge(&img, y, 200.0, 15.0);
+        }
+        for &x in &[60usize, 220, 420] {
+            assert_horizontal_edge(&img, x, 200.0, 15.0);
+        }
         let xs: Vec<f64> = [60usize, 150, 260].iter().map(|&y| line_x(&img, y, 200.0, 15.0)).collect();
         let ys: Vec<f64> = [60usize, 220, 420].iter().map(|&x| line_y(&img, x, 200.0, 15.0)).collect();
         assert!(spread(&xs) < 1.0 && (xs[0] - 200.0).abs() < 1.0, "{g:?}: vertical line at {xs:?}");

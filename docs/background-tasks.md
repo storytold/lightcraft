@@ -61,6 +61,7 @@ guard.detail(&file_name);
 | Face scan, AI Denoise | `crates/engine/src/cmd/face_recognize.rs`, `crates/engine/src/denoise.rs` | a continuous job with no ✕, kept in session state |
 | Find Missing Photos | `crates/ui-egui/src/tasks.rs` | a generic background task with a row (`kind: Some(..)`) |
 | Reload from Disk | `crates/ui-egui/src/reload.rs`, `crates/engine/src/cmd/reload.rs` | a command split into plan / probe / apply so the app reads the files on a worker thread (`tasks::spawn_tracked`: progress and `Cancel::Flag`); the result is committed through `Session::execute_fn` (undo step, save, XMP auto-write), and dropped for a photo a later-started reload has already updated; `wait: true` runs it in place |
+| Find Similar Photos | `crates/ui-egui/src/find_similar.rs`, `crates/engine/src/cmd/similar.rs` | a command split into plan / measure / apply, whose reads are kept when it is stopped; a control request is answered when it ends (`Outcome::Later`) |
 | Super Resolution, AI Sharpen | `crates/ui-egui/src/enhance.rs`, `crates/engine/src/enhance.rs` | an engine job split into plan / run / finish like Photo Merge: the app runs it on a worker thread, adopts its flag, and finishes it in a per-frame `poll` |
 | Reading focus points | `crates/engine/src/focus_scan.rs` | a worker paced by the UI's per-frame pump (`focus.pump {pace}`); `Cancel::Flag`; commits in batches without undo steps |
 

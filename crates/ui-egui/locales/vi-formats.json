@@ -320,5 +320,10 @@
   "{name} is installed and in use: face recognition is on": "{name} đã được cài đặt và đang dùng: nhận diện khuôn mặt đã bật",
   "{what} added: {w} × {h}": "Đã thêm {what}: {w} × {h}",
   "{what} cancelled": "Đã hủy {what}",
-  "{what} failed: {e}": "{what} thất bại: {e}"
+  "{what} failed: {e}": "{what} thất bại: {e}",
+  "Bring photos in with File › Import Photos… ({keys}).": "Đưa ảnh vào bằng Tệp › Nhập ảnh… ({keys}).",
+  "View › Detail View ({keys}).": "Xem › Chế độ xem chi tiết ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Tệp › Xuất… · Tệp › In… ({keys}).",
+  "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}"
 }

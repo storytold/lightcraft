@@ -46,7 +46,7 @@ fn super_resolution_shows_a_row_runs_once_and_cancels() {
     let (mut h, dir) = setup("row", Some(b"a stand-in"));
     let before = h.app.session.catalog.len();
     crate::enhance::start(&mut h.app, 2).unwrap();
-    h.step();
+    // the row is up before the first frame: a job that ends at once is finished (and its row removed) only by a frame
     let rows = h.app.session.activity.list();
     assert_eq!(rows.len(), 1);
     assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].unit), ("enhance", "Super resolution", Unit::Percent));

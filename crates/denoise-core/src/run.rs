@@ -289,23 +289,24 @@ fn read_tile(image: &Rgb32f, x0: usize, y0: usize, t: usize, guard: usize) -> Re
 }
 
 /// Three `side × side` planes averaged down by `k` in each direction (`k` divides `side`; 1 leaves them as they are).
-fn shrink(planes: Vec<f32>, side: usize, k: usize) -> Vec<f32> {
+fn shrink(planes: Vec<f32>, side: usize, k: usize) -> Result<Vec<f32>, Error> {
     if k <= 1 {
-        return planes;
+        return Ok(planes);
     }
     let small = side / k;
     let norm = 1.0 / (k * k) as f32;
-    let mut out = vec![0f32; 3 * small * small];
-    for (c, plane) in planes.chunks_exact(side * side).enumerate() {
-        for (y, row) in plane.chunks_exact(side).enumerate() {
-            for (x, &v) in row.iter().enumerate() {
-                if let Some(o) = out.get_mut(c * small * small + (y / k) * small + x / k) {
-                    *o += v * norm;
+    let mut out = allocate(3 * small * small, 0f32)?;
+    for (plane, to) in planes.chunks_exact(side * side).zip(out.chunks_exact_mut(small * small)) {
+        // each `k` rows of the plane make one row of the result, each `k` columns of those one pixel
+        for (rows, row_to) in plane.chunks_exact(k * side).zip(to.chunks_exact_mut(small)) {
+            for row in rows.chunks_exact(side) {
+                for (block, o) in row.chunks_exact(k).zip(row_to.iter_mut()) {
+                    *o += block.iter().sum::<f32>() * norm;
                 }
             }
         }
     }
-    out
+    Ok(out)
 }
 
 fn tiled_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, ctl: &Control<'_>, scales: Scales) -> Result<Rgb32f, Error> {
@@ -369,7 +370,7 @@ fn tiled_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, ctl: &Control<
                 if out.iter().any(|v| !v.is_finite()) {
                     return Err(Error::Model("numbers that are not finite".into()));
                 }
-                Ok(shrink(out, model_side, scales.model / o))
+                shrink(out, model_side, scales.model / o)
             })
             .collect()
     };
@@ -1027,6 +1028,19 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn averaging_down_takes_the_mean_of_every_block() {
+        // three 4 × 4 planes of distinct numbers, by 2: each 2 × 2 block's mean, not one of its pixels
+        let planes: Vec<f32> = (0..48).map(|v| v as f32).collect();
+        let out = shrink(planes.clone(), 4, 2).unwrap();
+        assert_eq!(out.len(), 12);
+        assert_eq!(&out[..4], &[2.5, 4.5, 10.5, 12.5]);
+        assert_eq!(&out[4..8], &[18.5, 20.5, 26.5, 28.5]);
+        // by 4 the whole plane's mean; by 1 the planes as they were
+        assert_eq!(shrink(planes.clone(), 4, 4).unwrap(), vec![7.5, 23.5, 39.5]);
+        assert_eq!(shrink(planes.clone(), 4, 1).unwrap(), planes);
     }
 
     #[test]

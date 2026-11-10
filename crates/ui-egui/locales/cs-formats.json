@@ -323,5 +323,10 @@
   "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto",
   "{what} added: {w} × {h}": "{what} přidáno: {w} × {h}",
   "{what} cancelled": "{what} zrušeno",
-  "{what} failed: {e}": "{what} selhalo: {e}"
+  "{what} failed: {e}": "{what} selhalo: {e}",
+  "Bring photos in with File › Import Photos… ({keys}).": "Fotografie importujete přes Soubor › Importovat fotografie… ({keys}).",
+  "View › Detail View ({keys}).": "Zobrazení › Zobrazení detailu ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Soubor › Exportovat… · Soubor › Tisk… ({keys}).",
+  "{n} folder{} could not be read": "Složky, které se nepodařilo přečíst: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}"
 }

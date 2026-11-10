@@ -122,6 +122,9 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
         && let Some(bytes) = read_capped(&sibling, MAX_MANIFEST_BYTES)
     {
         let m = manifest::parse(&bytes).map_err(|e| bad(c, format!("{}: {e}", sibling.display())))?;
+        if m.id == lightcraft_denoise::builtin::ID {
+            return Err(bad(c, "the id `builtin` is LightCraft's own denoiser: give the model another id in its denoise-model.json"));
+        }
         return Ok(Source { manifest: m, entry: None, file_name });
     }
     Err(bad(
@@ -684,20 +687,20 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "denoise.models.list", "Denoise Models", [], None, "{} → {dir, productsDir, model, rgbModel, upscaleModel, runtime, auto, cacheGb, threads, runOn, models: [{id, name, version, licence{name, commercial, url, notice}, provenance, source, sizeBytes, sha256, domain: bayerToRgb | rgbToRgb | rgbToRgb4x, tile, known, downloadHost, installed, selected, accepted}]}", always, list),
         cmd!(query "denoise.models.inspect", "Inspect Denoise Model", [], None, "{path} → model terms from an adjacent manifest; never executes the file", always, inspect),
-        cmd!(query "denoise.models.install", "Install Denoise Model", [], None, "{path, acknowledged: true, activate?: true, background?: false} → {installed, model} or {started} — install a denoise model from a file: an .onnx with a denoise-model.json beside it, or an archive LightCraft knows (the darktable `.dtmodel`). `acknowledged` must be true: the user has been shown the model's licence and accepted it. Unless `activate` is false it becomes the model in use", always, install),
+        cmd!(query "denoise.models.install", "Install Denoise Model", [], None, "{path, acknowledged: true, activate?: true, background?: false} → {installed, model, rgbModel, upscaleModel} or {started} — install a denoise model from a file: an .onnx with a denoise-model.json beside it, or an archive LightCraft knows (the darktable `.dtmodel`). `acknowledged` must be true: the user has been shown the model's licence and accepted it. Unless `activate` is false it becomes the model in use", always, install),
         cmd!(query "denoise.models.download", "Download Denoise Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a model LightCraft has a pinned address for (see `downloadHost` in the list) in the background over HTTPS with lightcraft-fetch. `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, installed and chosen by itself; `denoise.models.downloads` shows how far it is", always, download),
         cmd!(query "denoise.models.downloads", "Denoise Model Downloads", [], None, "{} → {running, downloads: [{id, state: running | done | installed | failed | cancelled, bytes, total, error, from}]} — also installs any download that has arrived", always, downloads),
         cmd!(query "denoise.models.downloadCancel", "Cancel Denoise Model Download", [], None, "{id} → {discarded} — stop a download, or delete a finished one that was not installed", always, download_cancel),
         cmd!(query "denoise.models.test", "Test Denoise Model", [], None, "{id} → {ok, result} — load an installed model and check it gives sensible pictures; needs the denoise runtime", always, test),
         cmd!(query "denoise.models.remove", "Remove Denoise Model", [], None, "{id} → {removed, model, rgbModel, upscaleModel} — delete an installed model (its cached pictures stay until they are evicted); the kind of photo it was chosen for (or Super Resolution, for an upscaler) takes another installed model of that kind, if there is one", always, remove),
-        cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null, kind?: raw | rgb | upscale} → {model, rgbModel, upscaleModel} — choose the model for the kind of photo it is made for (raw photos or finished pictures), or the upscaler Super Resolution uses; null switches `kind` off (raw when omitted)", always, select),
+        cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null, kind?: raw | rgb | upscale} → {model, rgbModel, upscaleModel} — choose the model for the kind of photo it is made for (raw photos or finished pictures), or the upscaler Super Resolution uses; null switches `kind` off (raw when omitted), and raw photos fall back on the built-in denoiser", always, select),
         cmd!(query "denoise.settings", "Denoise Settings", [], None, "{auto?: bool, cacheGb?: 1..10000, threads?: 1..64 | null, runOn?: auto | gpu | cpu} → the settings — `auto`: make the picture of the photos being looked at that have a Denoise amount; `cacheGb`: how much the cached pictures may take; `threads`: most tiles run at once; `runOn`: where the model runs — `auto` (the default) the graphics card where it is faster than the processor (both timed on this computer when the card is set up), `gpu` the card whenever it can run the model, `cpu` the processor. Setting `runOn` also lets the card be tried again after a set-up that failed or closed LightCraft", always, settings),
         cmd!(
             "denoise.toggle",
             "AI Denoise",
             [],
             None,
-            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo or finished picture (JPEG, PNG, TIFF …), independent of selection and Auto Sync; needs a chosen model for that kind of photo to turn on",
+            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo or finished picture (JPEG, PNG, TIFF …), independent of selection and Auto Sync; raw photos use the built-in denoiser when no model is chosen; a finished picture needs a chosen model of its kind",
             always,
             toggle
         ),

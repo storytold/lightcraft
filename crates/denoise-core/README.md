@@ -5,7 +5,7 @@ No weights or inference backend. See [the user workflow](../../docs/denoise.md).
 `lightcraft-denoise` re-exports these types for CPU/GPU users; the engine uses this
 crate directly when inference is disabled. The default download catalog is empty.
 Run `cargo test -p lightcraft-denoise-core`; optional catalog checks use `--features rawnind-model,realesrgan-model`.
-`run::upscale_rgb` tiles an upscaler (`Domain::RgbToRgb4x`) for Super Resolution (`docs/super-resolution.md`).
+`run::upscale_rgb` tiles an upscaler (`Domain::RgbToRgb4x`) for Super Resolution ([docs/super-resolution.md](../../docs/super-resolution.md)).
 
 The Bayer runner rejects non-finite source samples before inference and non-finite
 results after gain matching, highlight protection and tile blending. Finite negative

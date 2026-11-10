@@ -32,6 +32,23 @@ pub const FACTORS: [usize; 3] = [1, 2, 4];
 /// The largest 16-bit sample.
 const U16_MAX: f32 = 65535.0;
 
+/// Bytes a result pixel takes while it is made and written: the blended result and its weights (16), its 16-bit
+/// samples (6) and the TIFF (6); plus the rendered photo's own pixels (12 a pixel of the photo).
+const RESULT_BYTES_PER_PIXEL: usize = 28;
+const PHOTO_BYTES_PER_PIXEL: usize = 12;
+
+/// Bytes the decode of a file takes for each byte of it, and the render for each pixel decoded (its 16-bit copy and the
+/// gamma-encoded floats), as the memory gate counts them.
+const DECODE_BYTES_PER_FILE_BYTE: usize = 16;
+const RENDER_BYTES_PER_PIXEL: usize = 18;
+
+/// Bytes a tile in flight takes beyond the model's own working memory, for each pixel of the tile: its input planes
+/// (12) and the 4× answer (12 × 16).
+const TILE_BYTES_PER_PIXEL: usize = 204;
+
+/// At most this many tiles run at once (as for finished-picture denoise).
+const MAX_PARALLEL_TILES: usize = 4;
+
 /// Where the progress of a job's stages starts and ends (render, upscale, write).
 const UPSCALE_FROM: f32 = 0.05;
 const UPSCALE_TO: f32 = 0.95;
@@ -76,6 +93,12 @@ impl EnhanceJob {
             return Err("cancelled".into());
         }
         let image = self.render()?;
+        // the result and its file are counted without waiting: waiting here, holding nothing, could only let the grid's
+        // thumbnails go first, and the result is refused over `MAX_PIXELS` before the render
+        let result_pixels = image.data.len().saturating_mul(self.factor.saturating_mul(self.factor));
+        let _result = crate::memory::work_gate().acquire_urgent(
+            result_pixels.saturating_mul(RESULT_BYTES_PER_PIXEL).saturating_add(image.data.len().saturating_mul(PHOTO_BYTES_PER_PIXEL)),
+        );
         let big = self.upscale(&image, progress)?;
         if !progress(UPSCALE_TO, "Writing") {
             return Err("cancelled".into());
@@ -86,9 +109,14 @@ impl EnhanceJob {
 
     /// The photo with its import defaults, uncropped and full size, as gamma-encoded sRGB in 0 to 1.
     fn render(&self) -> std::result::Result<Rgb32f, String> {
-        let (src, info) = crate::files::load_vec((self.read)(&self.path)?, usize::MAX)?;
+        let bytes = (self.read)(&self.path)?;
+        // the decode waits its turn at the memory gate, as finished-picture denoise does
+        let _held = crate::memory::work_gate().acquire(bytes.len().saturating_mul(DECODE_BYTES_PER_FILE_BYTE));
+        let decode = crate::media::RawDecode { dcp: None, outliers: self.settings.detail.nr_outliers };
+        let (src, info) = crate::files::load_vec(bytes, usize::MAX, decode)?;
         let (w, h) = lightcraft_pipeline::native_output_size(src.width, src.height, &self.settings);
         check_result_size(w, h, self.factor)?;
+        let _pixels = crate::memory::work_gate().acquire_urgent(src.data.len().saturating_mul(RENDER_BYTES_PER_PIXEL));
         let req = RenderRequest {
             quality: Quality::Full,
             apply_crop: false,
@@ -109,14 +137,13 @@ impl EnhanceJob {
         let u = &self.upscaler;
         let model = (u.loader)(&u.onnx, &u.manifest)?;
         let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-        let (runner, parallel) = model.runner(u.run_on, cores);
-        let params = Params {
-            tile: u.manifest.tile as usize,
-            overlap: u.manifest.overlap as usize,
-            gain: u.manifest.gain,
-            clip: None,
-            parallel: parallel.max(1),
-        };
+        let tile = u.manifest.tile as usize;
+        let scratch = model.bytes_per_tile().saturating_add(TILE_BYTES_PER_PIXEL.saturating_mul(tile).saturating_mul(tile));
+        let (_, budget) = crate::memory::work_gate().usage();
+        let parallel = cores.clamp(1, MAX_PARALLEL_TILES).min((budget / scratch.max(1)).max(1));
+        let _tiles = crate::memory::work_gate().acquire_urgent(scratch.saturating_mul(parallel));
+        let (runner, parallel) = model.runner(u.run_on, parallel);
+        let params = Params { tile, overlap: u.manifest.overlap as usize, gain: u.manifest.gain, clip: None, parallel: parallel.max(1) };
         let cancel = AtomicBool::new(false);
         let report = |done: usize, total: usize| {
             let f = UPSCALE_FROM + (UPSCALE_TO - UPSCALE_FROM) * done as f32 / total.max(1) as f32;
@@ -170,6 +197,9 @@ impl Session {
             return Err(fail(format!("the result can be 1, 2 or 4 times the photo's size, not {factor}")));
         }
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        if p.deleted {
+            return Err(fail(format!("{} is in Recently Deleted: restore it first", p.file_name)));
+        }
         let Source::File { path } = &p.source else {
             return Err(fail(format!("{} is a demo photo; Super Resolution needs a photo file", p.file_name)));
         };
@@ -217,11 +247,21 @@ impl Session {
                 };
                 (existing, existing_path)
             }
-            _ => {
-                // a photo restored from Recently Deleted may have been relinked to the file: then it stays
-                if report.restored.is_empty() {
-                    let _ = std::fs::remove_file(&path);
+            // an earlier result in Recently Deleted came back: it is the result, on the file just written if it was
+            // relinked to it (its own was gone), else on its own file, and the copy goes
+            (None, None) if let Some(&restored) = report.restored.first() => {
+                let restored = PhotoId(restored);
+                let restored_path = match self.catalog.photo(restored).map(|p| &p.source) {
+                    Some(Source::File { path }) => path.clone(),
+                    _ => path.clone(),
+                };
+                if restored_path != path {
+                    std::fs::remove_file(&path).map_err(|e| fail(format!("could not remove the repeated result {path}: {e}")))?;
                 }
+                (restored, restored_path)
+            }
+            _ => {
+                let _ = std::fs::remove_file(&path);
                 return Err(fail(format!("the enhanced file {path} could not be imported: {:?}", report.failed)));
             }
         };

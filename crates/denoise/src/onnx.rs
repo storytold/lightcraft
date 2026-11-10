@@ -240,7 +240,7 @@ pub(crate) fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 ops.push(Op::PRelu { src, slope: slope.1 });
             }
             "Resize" => {
-                let factor = resize_factor(node, &initialisers)?;
+                let factor = resize_factor(node, &initialisers, &mut weights_total)?;
                 let src = lookup(node.input.first().map_or("", String::as_str))?;
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("Resize without an output".into()))?;
                 ids.insert(out.clone(), this);
@@ -255,8 +255,9 @@ pub(crate) fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
             }
             "Clip" => {
                 let [src, min, max] = node.input.as_slice() else { return unsupported("a Clip without both bounds") };
-                let bound = |name: &str| -> Result<f32, NetError> {
-                    match stored(name, &initialisers, &mut 0)?.1.as_slice() {
+                // the bounds count into the network's numbers like every other stored value
+                let mut bound = |name: &str| -> Result<f32, NetError> {
+                    match stored(name, &initialisers, &mut weights_total)?.1.as_slice() {
                         [v] => Ok(*v),
                         _ => invalid("a Clip bound that is not one number"),
                     }
@@ -310,7 +311,7 @@ fn stored(name: &str, initialisers: &HashMap<&str, &TensorProto>, total: &mut us
 
 /// The factor of a `Resize` that repeats every pixel: nearest, `asymmetric` with `floor`, the same factor from
 /// [`SCALES`] on both sides and none on the batch and channels, and no region of interest.
-fn resize_factor(node: &NodeProto, initialisers: &HashMap<&str, &TensorProto>) -> Result<usize, NetError> {
+fn resize_factor(node: &NodeProto, initialisers: &HashMap<&str, &TensorProto>, total: &mut usize) -> Result<usize, NetError> {
     let text = |name: &str| attr(node, name).map(|a| a.s.as_slice());
     if text("mode") != Some(b"nearest") || text("coordinate_transformation_mode") != Some(b"asymmetric") || text("nearest_mode") != Some(b"floor") {
         return unsupported("a Resize other than nearest, asymmetric and floor");
@@ -323,7 +324,7 @@ fn resize_factor(node: &NodeProto, initialisers: &HashMap<&str, &TensorProto>) -
         [_, roi, scales] if roi.is_empty() => scales,
         _ => return unsupported("a Resize by a region of interest or to sizes"),
     };
-    let (dims, values) = stored(scales, initialisers, &mut 0)?;
+    let (dims, values) = stored(scales, initialisers, total)?;
     match (dims.as_slice(), values.as_slice()) {
         ([4], [n, c, h, w]) if *n == 1.0 && *c == 1.0 && h == w && SCALES.iter().any(|&s| s as f32 == *h) => Ok(*h as usize),
         _ => unsupported("a Resize by other than 2 or 4 on both sides"),
@@ -458,6 +459,25 @@ mod tests {
     }
 
     #[test]
+    fn a_resize_scale_counts_into_the_networks_numbers() {
+        let scales = TensorProto { dims: vec![4], data_type: 1, float_data: vec![1.0, 1.0, 2.0, 2.0], ..Default::default() };
+        let initialisers = HashMap::from([("scales", &scales)]);
+        let text = |name: &str, s: &[u8]| AttributeProto { name: name.into(), s: s.to_vec(), ..Default::default() };
+        let node = NodeProto {
+            input: vec!["x".into(), "scales".into()],
+            op_type: "Resize".into(),
+            attribute: vec![text("mode", b"nearest"), text("coordinate_transformation_mode", b"asymmetric"), text("nearest_mode", b"floor")],
+            ..Default::default()
+        };
+        let mut total = 0;
+        assert_eq!(resize_factor(&node, &initialisers, &mut total).unwrap(), 2);
+        assert_eq!(total, 4);
+        // a network already at its limit takes no more numbers, not even a Resize's
+        let mut total = MAX_WEIGHTS - 3;
+        assert!(matches!(resize_factor(&node, &initialisers, &mut total), Err(NetError::Invalid(_))));
+    }
+
+    #[test]
     fn an_upscaler_is_read_from_constant_nodes() {
         use crate::net::Op;
         let net = read_bytes(&crate::synthetic::upscaler_onnx(8, 2, 4, 5)).unwrap();
@@ -496,7 +516,7 @@ mod tests {
         };
         let (by4, by2, by3, uneven, channels) =
             (scales(&[1., 1., 4., 4.]), scales(&[1., 1., 2., 2.]), scales(&[1., 1., 3., 3.]), scales(&[1., 1., 2., 4.]), scales(&[1., 2., 2., 2.]));
-        let factor = |node: &NodeProto, t: &TensorProto| resize_factor(node, &HashMap::from([("s", t), ("roi", t)]));
+        let factor = |node: &NodeProto, t: &TensorProto| resize_factor(node, &HashMap::from([("s", t), ("roi", t)]), &mut 0);
         let good = resize("nearest", "asymmetric", &["x", "", "s"]);
         assert_eq!(factor(&good, &by4), Ok(4));
         assert_eq!(factor(&good, &by2), Ok(2));

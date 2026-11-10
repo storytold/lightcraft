@@ -1,3 +1,5 @@
+#[cfg(feature = "denoise")]
+use super::builtin::{builtin_card, builtin_marker};
 #[cfg(doc)]
 use super::model::Model;
 use super::model::STACK;
@@ -19,6 +21,11 @@ impl Session {
             .find_map(|a| a.model.lock().unwrap_or_else(PoisonError::into_inner).clone());
         match loaded {
             Some(m) => m.device(self.denoise.settings.run_on()),
+            #[cfg(feature = "denoise")]
+            None if self.denoise.active.as_ref().is_some_and(|a| a.id == lightcraft_denoise::builtin::ID) => {
+                let onnx = self.denoise.active.as_ref().map(|a| a.onnx.clone()).unwrap_or_default();
+                builtin_card(&builtin_marker(&onnx)).device(self.denoise.settings.run_on())
+            }
             None => json!({"kind": "none"}),
         }
     }
@@ -43,7 +50,13 @@ impl Session {
             let id = id?;
             installed.iter().find(|i| &i.manifest.id == id && i.manifest.domain == domain).map(|i| (i.fingerprint(), i.clone()))
         };
-        let raw = pick(self.denoise.settings.model.as_ref(), Domain::BayerToRgb);
+        // no raw model chosen (or the one chosen is gone): the built-in denoiser
+        let raw = pick(self.denoise.settings.model.as_ref(), Domain::BayerToRgb).or_else(|| {
+            let manifest = lightcraft_denoise::builtin::manifest();
+            let onnx = self.denoise.models_dir.as_deref().map(|d| d.join(lightcraft_denoise::builtin::ID)).unwrap_or_default();
+            let fingerprint = format!("{}@{}", manifest.id, manifest.version);
+            Some((fingerprint, super::settings::Installed { manifest, onnx, accepted: Value::Null }))
+        });
         let rgb = pick(self.denoise.settings.rgb_model.as_ref(), Domain::RgbToRgb);
         let same = |a: &Option<Active>, f: &Option<(String, super::settings::Installed)>| match (a, f) {
             (None, None) => true,
@@ -350,8 +363,12 @@ impl Session {
     /// Keep the cache within its limit: the pictures nobody asks for go first, the oldest first; `keep` (the one just
     /// made) never goes. The index forgets what was deleted.
     pub(crate) fn denoise_evict(&mut self, keep: Option<&Path>) {
-        let Some(models) = self.denoise.models_dir.clone() else { return };
-        self.denoise_evict_to(read_settings(&models).cache_bytes(), keep);
+        self.denoise_evict_to(self.denoise_cache_limit(), keep);
+    }
+
+    /// The cache's size limit in bytes (the default without a models folder).
+    pub(crate) fn denoise_cache_limit(&self) -> u64 {
+        self.denoise.models_dir.as_deref().map(read_settings).unwrap_or_default().cache_bytes()
     }
 
     /// [`Self::denoise_evict`] for a limit of `limit` bytes.
