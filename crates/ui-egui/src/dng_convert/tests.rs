@@ -109,9 +109,32 @@ fn automatic_conversion_is_opt_in_and_runs_once() {
     let path = dc::settings().path;
     app.ui.settings.dng_converter_auto = true;
     dc::set_settings(dc::Settings { auto: true, path, ..Default::default() });
+    // selected in the grid with the Edit panel open: not converted
+    for view in [crate::state::ViewMode::PhotoGrid, crate::state::ViewMode::SquareGrid] {
+        app.ui.view = view;
+        super::auto_convert(&mut app, &ctx, a);
+        assert!(app.tasks.is_empty(), "not converted from the grid ({view:?})");
+    }
+    app.ui.view = crate::state::ViewMode::Detail;
     super::auto_convert(&mut app, &ctx, a);
     assert!(app.session.activity.list().iter().any(|r| r.kind == "dngConvert"));
     assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(20)));
     super::auto_convert(&mut app, &ctx, a);
     assert!(app.tasks.is_empty(), "a failed automatic conversion isn't retried on every frame");
+}
+
+/// `photo.convertHighEfficiency` for photos that already convert in the background answers at once: they are not
+/// handed to the engine, which would convert them again on the UI thread.
+#[test]
+fn a_command_for_photos_already_converting_is_answered_in_the_background() {
+    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = Dir(std::env::temp_dir().join(format!("lc-ui-dngconv-running-{}", std::process::id())));
+    let (mut app, a, _) = app_with_he_photos(&dir.0);
+    let ctx = egui::Context::default();
+    super::convert(&mut app, &ctx, a);
+    assert_eq!(super::status(&app, a), Some(Status::Converting));
+    let r = super::command(&mut app, &json!({"ids": [a.0]}));
+    assert_eq!(r, Some(Ok(json!({"background": true, "count": 0}))));
+    assert_eq!(app.session.activity.list().iter().filter(|r| r.kind == "dngConvert").count(), 1, "no second conversion");
+    assert!(crate::tasks::wait(&mut app, &ctx, Duration::from_secs(20)));
 }

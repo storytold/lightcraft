@@ -354,7 +354,16 @@ fn dng_converter(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let shown = dir.display().to_string();
         ui.add(egui::Label::new(RichText::new(&shown).size(11.0).color(t.text_dim)).truncate()).on_hover_text(&shown);
     }
-    let (files, bytes) = lightcraft_engine::dng_converter::cache_usage();
+    // listing the cache every frame would be slow: refresh every 2 s and after a Delete
+    let now = ui.input(|i| i.time);
+    let (files, bytes) = match ui.data(|d| d.get_temp::<(f64, (usize, u64))>(crate::dng_convert::usage_id())) {
+        Some((at, v)) if now - at < crate::dng_convert::LOOKUP_TTL.as_secs_f64() => v,
+        _ => {
+            let v = lightcraft_engine::dng_converter::cache_usage();
+            ui.data_mut(|d| d.insert_temp(crate::dng_convert::usage_id(), (now, v)));
+            v
+        }
+    };
     row(ui, t, crate::i18n::tr("Converted DNGs"), |ui| {
         ui.label(RichText::new(format!("{files} · {:.1} MB", bytes as f64 / 1048576.0)).color(t.text));
         let r = ui.add_enabled(files > 0, egui::Button::new(crate::i18n::tr("Delete")));

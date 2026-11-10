@@ -169,7 +169,7 @@ fn clear_cache(s: &mut Session, p: &Value) -> Result<Value> {
     // the photos developed from a cached DNG go back to their embedded preview: read again once it's gone (the app
     // passes `reload: false` and reloads them in the background itself)
     let ids = converted_photos(s);
-    let (files, bytes) = dc::clear_cache();
+    let (files, bytes, failed) = dc::clear_cache();
     let mut reloaded: Vec<PhotoId> = Vec::new();
     if !ids.is_empty() && p.get("reload").and_then(Value::as_bool) != Some(false) {
         let items = reload::plan(s, &json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>()}))?;
@@ -183,6 +183,7 @@ fn clear_cache(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({
         "deletedFiles": files,
         "freedBytes": bytes,
+        "failedFiles": failed,
         "converted": ids.iter().map(|i| i.0).collect::<Vec<_>>(),
         "reloaded": reloaded.iter().map(|i| i.0).collect::<Vec<_>>(),
     }))
@@ -213,7 +214,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Converted DNGs",
             [],
             None,
-            "{reload?: bool} — delete the DNGs Adobe DNG Converter made for Nikon High Efficiency NEFs (the cache is shared by every library on this computer); this library's photos that developed from them are read again (unless `reload: false`) and show their embedded preview until converted again → {deletedFiles, freedBytes, converted: [ids that developed from a DNG], reloaded: [ids]}",
+            "{reload?: bool} — delete the DNGs Adobe DNG Converter made for Nikon High Efficiency NEFs (the cache is shared by every library on this computer); this library's photos that developed from them are read again (unless `reload: false`) and show their embedded preview until converted again → {deletedFiles, freedBytes, failedFiles (DNGs that could not be deleted), converted: [ids that developed from a DNG], reloaded: [ids]}; with `reload: false` the catalog still marks those photos as converted until the caller reloads them (`photo.reload`)",
             always,
             clear_cache
         ),

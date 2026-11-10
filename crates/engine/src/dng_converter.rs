@@ -7,7 +7,7 @@
 //! LightCraft starts the program the user installed, with its documented command-line options, and reads the DNG.
 //!
 //! - The NEF stays the photo's file and the source of its metadata and XMP. The DNG is a cache entry, never written
-//!   next to the original: `<cache>/<name>-<key>.dng`, where the key is the photo's content hash (the hash of the
+//!   next to the original: `<cache>/<key>.dng`, where the key is a hash of the photo's content hash (the hash of the
 //!   whole NEF the probe already computes), so a moved or renamed file keeps its DNG, a changed one is converted
 //!   again, and no NEF is read to find its DNG. [`cache_dir`] is the operating system's cache folder.
 //! - The converter writes into a temporary folder in the cache. The DNG moves into the cache only after it decodes,
@@ -156,24 +156,16 @@ pub fn is_nef_path(path: &Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("nef"))
 }
 
-/// The cache file name for the NEF named `path` whose content hash is `content_hash`: the file's stem (letters,
-/// digits, `-`, `_`; never starting with `-`, which the converter would read as an option) and a hash of the content
-/// hash. The path's folder doesn't count, so a moved or renamed file keeps its DNG.
-pub fn cache_name(path: &Path, content_hash: &str) -> String {
-    let hash = lightcraft_preview::hash_bytes(content_hash.as_bytes()).to_string();
-    let mut stem: String = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().chars().take(64).map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect())
-        .unwrap_or_default();
-    if stem.starts_with('-') {
-        stem.insert(0, '_');
-    }
-    format!("{stem}-{}.dng", hash.get(..16).unwrap_or(&hash))
+/// The cache file name for the NEF whose content hash is `content_hash`: a hash of the content hash (hex digits, so it
+/// never starts with `-`, which the converter would read as an option). Neither the path's folder nor its file name
+/// counts, so a moved or renamed file keeps its DNG.
+pub fn cache_name(content_hash: &str) -> String {
+    format!("{}.dng", lightcraft_preview::hash_bytes(content_hash.as_bytes()))
 }
 
 /// Where the DNG of the NEF at `path` with content hash `content_hash` is (or would be) cached. No file-system call.
 pub fn dng_path(path: &Path, content_hash: &str) -> Option<PathBuf> {
-    (is_nef_path(path) && !content_hash.is_empty()).then(|| Some(cache_dir()?.join(cache_name(path, content_hash)))).flatten()
+    (is_nef_path(path) && !content_hash.is_empty()).then(|| Some(cache_dir()?.join(cache_name(content_hash)))).flatten()
 }
 
 /// The DNG photo `p` develops from: a photo marked converted ([`lightcraft_catalog::Photo::converted_dng`]) with a
@@ -409,24 +401,38 @@ pub fn cache_usage() -> (usize, u64) {
         .fold((0, 0), |(n, b), m| (n + 1, b.saturating_add(m.len())))
 }
 
-/// Delete every cached DNG and every temporary folder no running conversion uses → (DNGs deleted, bytes freed).
-/// The cache is shared by every library on this machine.
-pub fn clear_cache() -> (usize, u64) {
-    let Some(dir) = cache_dir() else { return (0, 0) };
-    let Ok(entries) = std::fs::read_dir(&dir) else { return (0, 0) };
-    let (mut n, mut bytes) = (0, 0u64);
+/// Delete every cached DNG and every temporary folder no running conversion uses → (DNGs deleted, bytes freed, DNGs
+/// that could not be deleted). The cache is shared by every library on this machine.
+pub fn clear_cache() -> (usize, u64, usize) {
+    let Some(dir) = cache_dir() else { return (0, 0, 0) };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        // (no cache folder yet: nothing to delete)
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (0, 0, 0),
+        Err(e) => {
+            log::warn!("DNG cache {}: {e}", dir.display());
+            return (0, 0, 1);
+        }
+    };
+    let (mut n, mut bytes, mut failed) = (0, 0u64, 0);
     for e in entries.flatten() {
         let path = e.path();
         if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("dng")) {
             let len = e.metadata().map(|m| m.len()).unwrap_or(0);
-            if std::fs::remove_file(&path).is_ok() {
-                n += 1;
-                bytes = bytes.saturating_add(len);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    n += 1;
+                    bytes = bytes.saturating_add(len);
+                }
+                Err(e) => {
+                    log::warn!("DNG cache: {} could not be deleted: {e}", path.display());
+                    failed += 1;
+                }
             }
         }
     }
     sweep_tmp(&dir);
-    (n, bytes)
+    (n, bytes, failed)
 }
 
 #[cfg(test)]
@@ -463,18 +469,17 @@ mod tests {
 
     #[test]
     fn the_cache_name_follows_the_content_not_the_place() {
-        let p = Path::new("/photos/DSC 0001.NEF");
-        let a = cache_name(p, "0123abcd");
-        assert!(a.starts_with("DSC_0001-") && a.ends_with(".dng") && a.len() == "DSC_0001-".len() + 16 + 4, "{a}");
-        assert_eq!(a, cache_name(p, "0123abcd"));
-        assert_ne!(a, cache_name(p, "0123abce"), "a changed file gets a new DNG");
-        assert_eq!(a, cache_name(Path::new("/elsewhere/DSC 0001.NEF"), "0123abcd"), "a moved file keeps its DNG");
-    }
-
-    #[test]
-    fn a_name_never_starts_like_an_option() {
-        let a = cache_name(Path::new("/photos/-o.NEF"), "h");
-        assert!(a.starts_with("_-o-"), "{a}");
+        let _serial = TEST_SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+        set_cache_dir(Some(PathBuf::from("/cache")));
+        let at = |p: &str, h: &str| dng_path(Path::new(p), h);
+        let a = at("/photos/DSC 0001.NEF", "0123abcd");
+        let name = a.as_ref().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        assert!(name.ends_with(".dng") && name.len() == 32 + 4 && !name.starts_with('-'), "{name}");
+        assert_eq!(a, at("/photos/DSC 0001.NEF", "0123abcd"));
+        assert_ne!(a, at("/photos/DSC 0001.NEF", "0123abce"), "a changed file gets a new DNG");
+        assert_eq!(a, at("/elsewhere/DSC 0001.NEF", "0123abcd"), "a moved file keeps its DNG");
+        assert_eq!(a, at("/photos/Renamed-2024.nef", "0123abcd"), "a renamed file keeps its DNG");
+        set_cache_dir(None);
     }
 
     #[test]

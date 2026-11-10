@@ -30,7 +30,21 @@ pub struct DngState {
     /// Photos converted automatically once already (opened in Edit with Settings ▸ Performance ▸ Convert … when opened):
     /// a failure isn't retried on every frame.
     pub tried: BTreeSet<PhotoId>,
+    /// The last converter lookup ([`converter`]): the notices and Settings ask on every frame, the file system is
+    /// asked again only when the setting changes or after [`LOOKUP_TTL`].
+    found: std::sync::Mutex<Option<Found>>,
 }
+
+/// A converter lookup: for which setting, when, and what it found.
+#[derive(Debug)]
+struct Found {
+    setting: String,
+    at: web_time::Instant,
+    path: Option<std::path::PathBuf>,
+}
+
+/// How long a converter lookup or the cache usage shown in Settings is reused (an install is noticed this late).
+pub const LOOKUP_TTL: web_time::Duration = web_time::Duration::from_secs(2);
 
 /// What the Preview only notice shows for a High Efficiency NEF.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,7 +67,21 @@ pub enum Status {
 pub fn converter(app: &LightcraftApp) -> Option<std::path::PathBuf> {
     use lightcraft_engine::dng_converter as dc;
     let set = app.ui.settings.dng_converter_path.trim();
-    dc::resolve((!set.is_empty()).then(|| std::path::Path::new(set)), &dc::default_locations(), std::path::Path::is_file)
+    let mut found = app.dng.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(f) = found.as_ref()
+        && f.setting == set
+        && f.at.elapsed() < LOOKUP_TTL
+    {
+        return f.path.clone();
+    }
+    let path = dc::resolve((!set.is_empty()).then(|| std::path::Path::new(set)), &dc::default_locations(), std::path::Path::is_file);
+    *found = Some(Found { setting: set.to_string(), at: web_time::Instant::now(), path: path.clone() });
+    path
+}
+
+/// Where Settings ▸ Performance keeps the cache usage it shows ([`LOOKUP_TTL`]; dropped after a Delete).
+pub fn usage_id() -> egui::Id {
+    egui::Id::unique("dng-cache-usage")
 }
 
 /// The notice's status for photo `id`; `None` when it isn't a High Efficiency NEF shown from its preview.
@@ -76,9 +104,13 @@ pub fn status(app: &LightcraftApp, id: PhotoId) -> Option<Status> {
 }
 
 /// Start converting photo `id`, open in Edit, when the user turned automatic conversion on (once a session; a
-/// photo merely selected in the grid isn't converted).
+/// photo merely selected in the grid isn't converted, also not with the Edit panel open beside the grid).
 pub fn auto_convert(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
     if !app.ui.settings.dng_converter_auto || app.dng.tried.contains(&id) {
+        return;
+    }
+    // (the Edit panel can be open beside the grid: a photo selected there isn't opened)
+    if matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
         return;
     }
     if !matches!(status(app, id), Some(Status::Ready)) {
@@ -134,9 +166,14 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
         }
         Err(e) => return Some(Err(e.to_string())),
     };
-    let planned: Vec<_> = planned.into_iter().filter(|p| !app.dng.running.contains(&p.item.id)).collect();
     if planned.is_empty() {
         return None;
+    }
+    // (photos already converting in the background are not handed to the engine, which would convert them again on
+    // this thread or report them as failed)
+    let planned: Vec<_> = planned.into_iter().filter(|p| !app.dng.running.contains(&p.item.id)).collect();
+    if planned.is_empty() {
+        return Some(Ok(json!({"background": true, "count": 0})));
     }
     let converter = match converter(app) {
         Some(c) => c,
@@ -206,9 +243,15 @@ pub fn command(app: &mut LightcraftApp, p: &Value) -> Option<Result<Value, Strin
 /// Settings ▸ Performance ▸ Converted DNGs ▸ Delete: the converted DNGs are deleted, and this library's photos that developed from them are
 /// read again in the background (Reload from Disk), so they show their embedded preview.
 pub fn clear_cache(app: &mut LightcraftApp, ctx: &egui::Context) {
-    match app.run("library.clearDngCache", json!({"reload": false})) {
+    let r = app.run("library.clearDngCache", json!({"reload": false}));
+    ctx.data_mut(|d| d.remove::<(f64, (usize, u64))>(usage_id()));
+    match r {
         Err(e) => app.toast_error(ctx, e),
         Ok(r) => {
+            let failed = r["failedFiles"].as_u64().unwrap_or(0);
+            if failed > 0 {
+                app.toast_error(ctx, crate::i18n::tr_format!("{n} converted DNGs could not be deleted (see the log)", n = failed));
+            }
             let ids = r["converted"].clone();
             if ids.as_array().is_some_and(|a| !a.is_empty())
                 && let Err(e) = app.run("photo.reload", json!({"ids": ids}))

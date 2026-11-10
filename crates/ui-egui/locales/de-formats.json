@@ -329,5 +329,6 @@
   "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys}).",
   "Found: {path}": "Gefunden: {path}",
   "Adobe DNG Converter failed: {why}": "Adobe DNG Converter ist fehlgeschlagen: {why}",
-  "{n} raws converted, {f} failed": "{n} RAWs konvertiert, {f} fehlgeschlagen"
+  "{n} raws converted, {f} failed": "{n} RAWs konvertiert, {f} fehlgeschlagen",
+  "{n} converted DNGs could not be deleted (see the log)": "{n} konvertierte DNGs konnten nicht gelöscht werden (siehe Protokoll)"
 }

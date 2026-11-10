@@ -11,10 +11,13 @@ converter. It only starts the program the user installed, with Adobe's documente
 ## How it works
 
 - A photo qualifies when it is a NEF whose preview-only reason is the High Efficiency one
-  (`lightcraft_raw::is_nef_high_efficiency`) and the catalog has its content hash.
+  (`lightcraft_raw::is_nef_high_efficiency`) and the catalog has its content hash. A virtual copy is not converted
+  and shows no Convert button: select its original photo.
 - LightCraft runs `<converter> -c -p0 -d <temp folder> -o <name>.dng <file.nef>`: a lossless compressed DNG with no
-  embedded preview, written into a temporary folder inside the cache. Up to four files convert at once; a second
-  request in the app waits until the first batch is done. A conversion that runs longer than the timeout (120 s by
+  embedded preview, written into a temporary folder inside the cache. One batch converts up to four files at once.
+  In the app, a Convert click in the Preview only notice waits until the batch that runs is done; a
+  `photo.convertHighEfficiency` request starts its own batch for the photos that are not converting already. A
+  conversion that runs longer than the timeout (120 s by
   default) is stopped.
 - The DNG must be a DNG that LightCraft decodes (at most 256 MB) before it moves into the cache. A failed, stopped
   or timed-out conversion leaves nothing behind, and the photo keeps its embedded preview. Temporary folders left by a
@@ -45,7 +48,7 @@ converter. It only starts the program the user installed, with Adobe's documente
 | Preview only notice (Edit, Info) | **Convert with Adobe DNG Converter** when the converter is installed; "Converting with Adobe DNG Converter…" or "Waiting for Adobe DNG Converter…" while it runs; the reason when it failed; a hint to install it when it is missing |
 | `app.dngConverter` | `{auto?, path?, timeoutSeconds?}` → the settings, `found` (the program that will run), `defaultPaths`, `cacheDir`, `cachedFiles`, `cachedBytes` |
 | `photo.convertHighEfficiency` | `{ids?, wait?}`: converts the targeted HE NEFs and reads them again. In the app it runs in the background (activity row `dngConvert`, cancellable) unless `wait: true` |
-| `library.clearDngCache` | `{reload?}`: deletes the converted DNGs and reads this library's converted photos again (the app does that in the background) |
+| `library.clearDngCache` | `{reload?}`: deletes the converted DNGs and reads this library's converted photos again → `deletedFiles`, `freedBytes`, `failedFiles` (DNGs that could not be deleted), `converted`, `reloaded`. With `reload: false` nothing is read again: the catalog still marks those photos as converted until the caller runs `photo.reload` on the `converted` ids (the app does that in the background) |
 
 The settings belong to one process. The app applies its saved settings at start. A headless `lightcraft-cli`
 command or MCP server starts with the defaults (automatic conversion off, the converter looked for in its default

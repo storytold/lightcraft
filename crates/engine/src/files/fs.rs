@@ -127,10 +127,13 @@ fn fs_load<T>(path: &str, max_edge: usize, dng: Option<&std::path::Path>, load: 
 /// issue #3921). A DNG that is gone or can't be read falls back to the file, which shows its embedded preview. No
 /// other file is read: a photo the catalog doesn't mark as converted never looks for a DNG.
 fn read_source(path: &str, dng: Option<&std::path::Path>) -> Result<Vec<u8>, String> {
-    if let Some(dng) = dng
-        && let Ok(bytes) = std::fs::read(dng)
-    {
-        return Ok(bytes);
+    if let Some(dng) = dng {
+        match std::fs::read(dng) {
+            Ok(bytes) => return Ok(bytes),
+            // (a cleared or purged cache: the photo shows its embedded preview until it is converted again)
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => log::warn!("converted DNG {} can't be read, developing {path} instead: {e}", dng.display()),
+        }
     }
     std::fs::read(path).map_err(|e| format!("{path}: {e}"))
 }
