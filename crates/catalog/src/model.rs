@@ -171,11 +171,26 @@ pub fn parse_shutter_seconds(s: &str) -> Option<f64> {
 #[serde(default)]
 pub struct Meta {
     pub camera: String,
+    /// The camera's maker, from Exif `Make` (`camera` is maker and model together).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub make: String,
     pub lens: String,
+    /// The lens's maker, from Exif `LensMake`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub lens_make: String,
     pub focal_mm: Option<f32>,
     pub aperture: Option<f32>,
     pub shutter: String,
     pub iso: Option<u32>,
+    /// Whether the flash fired, from Exif `Flash`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flash: Option<bool>,
+    /// Exposure compensation in EV, from Exif `ExposureBiasValue`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_bias: Option<f32>,
+    /// The camera body's serial number.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub serial_number: String,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
     pub city: String,
@@ -301,10 +316,10 @@ pub struct Photo {
     /// picture style baked in — so it is treated as a rendered (non-raw) source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_only: Option<String>,
-    /// The app version (`CARGO_PKG_VERSION`) whose decoder set [`Photo::preview_only`]; empty when
-    /// it isn't set, and in catalogs from before format v9. A preview-only photo whose stamp
-    /// differs from the running version is rechecked when its library opens (issue #662): newer
-    /// builds may decode the file, older ones may decode less.
+    /// The app version (`CARGO_PKG_VERSION`) whose decoder checked [`Photo::preview_only`].
+    /// Also set for supported ORF files: compressed ORF support was withdrawn after #3775, so
+    /// old sensor-decodable records need rechecking too. Empty for other supported formats and
+    /// legacy records. A stale stamp is rechecked when the library opens (issue #662).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub preview_checked: String,
     /// A Local record: the fingerprint of its state when the browse catalogued it, to tell
@@ -414,13 +429,18 @@ impl Photo {
     }
     /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.
     pub fn set_preview_only(&mut self, preview_only: Option<String>) {
-        self.preview_checked = preview_stamp(&preview_only);
+        self.preview_checked = self.preview_stamp(&preview_only);
         self.preview_only = preview_only;
     }
-    /// A preview-only photo whose flag was set by another app version (or before stamps existed),
-    /// so this build should probe its file again (issue #662).
+    /// The stamp for a fresh probe. Supported ORFs keep it too, so the support-withdrawal
+    /// recheck runs once, without repeatedly probing uncompressed ORFs on every library open.
+    pub fn preview_stamp(&self, preview_only: &Option<String>) -> String {
+        if self.format.eq_ignore_ascii_case("orf") { APP_VERSION.to_string() } else { preview_stamp(preview_only) }
+    }
+    /// A preview-only photo or ORF whose support was checked by another app version (or before
+    /// stamps existed), so this build should probe its file again (issues #662 and #3775).
     pub fn preview_only_stale(&self) -> bool {
-        self.preview_only.is_some() && self.preview_checked != APP_VERSION
+        (self.preview_only.is_some() || self.format.eq_ignore_ascii_case("orf")) && self.preview_checked != APP_VERSION
     }
     /// A raw file developed from its sensor data: not a rendered image, and not a raw shown from
     /// its embedded preview ([`Photo::preview_only`]).
