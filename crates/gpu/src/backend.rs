@@ -842,9 +842,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir(&dir).unwrap();
         let active = Mutex::new(0);
+        let observed = Mutex::new(0);
         with_marker_on(Some(m.clone()), &active, "device creation", || {
-            let r = std::panic::catch_unwind(|| with_marker_on(Some(m.clone()), &active, "kernel compilation", || panic!("compile")));
+            let r = std::panic::catch_unwind(|| {
+                with_marker_on(Some(m.clone()), &active, "kernel compilation", || {
+                    *observed.lock().unwrap() = *active.lock().unwrap();
+                    panic!("compile");
+                })
+            });
             assert!(r.is_err());
+            assert_eq!(*observed.lock().unwrap(), 2);
             assert!(m.exists(), "other driver work is still active after the inner panic");
             assert_eq!(*active.lock().unwrap(), 1);
         });
