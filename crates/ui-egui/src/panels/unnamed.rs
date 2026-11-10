@@ -130,7 +130,12 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.add_space(super::people::PAD - 4.0);
         let n = selected.len();
-        ui.label(RichText::new(if n == 1 { "1 face selected".to_string() } else { format!("{n} faces selected") }).color(t.text));
+        let count_label = if n == 1 {
+            crate::i18n::tr("1 face selected").to_string()
+        } else {
+            crate::i18n::tr_format!("{n} faces selected", n = n)
+        };
+        ui.label(RichText::new(count_label).color(t.text));
         let hint = suggested.clone().unwrap_or_else(|| "Name…".to_string());
         let field = crate::text_field::TextField::singleline("field:unnamedName", &mut app.ui.unnamed_name).hint(hint).width(240.0).show(ui);
         let edit = &field.response;
@@ -142,7 +147,11 @@ pub fn naming_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if field.ending == Some(crate::text_field::Ending::Return) && !chosen.is_empty() {
             submit = Some(chosen.clone());
         }
-        let label = if n == 1 { "Name face".to_string() } else { format!("Name {n} faces") };
+        let label = if n == 1 {
+            crate::i18n::tr("Name face").to_string()
+        } else {
+            crate::i18n::tr_format!("Name {n} faces", n = n)
+        };
         let b = ui.add_enabled(!chosen.is_empty(), egui::Button::new(label));
         register(ui, "unnamed:name", b.rect);
         if b.clicked() {

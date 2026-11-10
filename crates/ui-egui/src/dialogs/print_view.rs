@@ -140,7 +140,7 @@ fn paper_label(name: &str) -> String {
         "letter" => "Letter".into(),
         "legal" => "Legal".into(),
         "tabloid" => "Tabloid".into(),
-        "custom" => "Custom".into(),
+        "custom" => crate::i18n::tr("Custom").into(),
         // Japanese photo and postcard papers: the customary name and its metric size.
         "l" => "L判 (89 × 127 mm)".into(),
         "2l" => "2L判 (127 × 178 mm)".into(),
@@ -317,7 +317,10 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     let l = &st.layout;
     let unit = st.guides.units;
     ui.spacing_mut().item_spacing.y = 5.0;
-    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
+    let photo_suffix = if crate::i18n::language() == crate::i18n::Locale::Et {
+        if photos == 1 { "" } else { "t" }
+    } else if photos == 1 { "" } else { "s" };
+    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", photo_suffix, n = photos)).color(t.text_dim));
 
     templates_section(app, ui, t, pu);
 
