@@ -114,7 +114,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 ## Progress log
 
-- 2026-11-08: The catalog loader refuses a library with an unknown layout before anything is written (#3962): an unrecognized top-level key in `catalog.snap` (named in the error) or a `segments/` folder beside it now gets the "written by a newer version" refusal, at the current format and the previous one, instead of opening as an empty catalog and being overwritten on save.
+- 2026-11-08: The catalog loader refuses a library with an unknown layout before anything is written (#3962): an unrecognized top-level key in `catalog.snap` (named in the error) or a `segments/` folder beside it now gets the "written by a newer version" refusal, at the current format and the previous one, instead of opening as an empty catalog and being overwritten on save. The `segments/` folder is refused with no `catalog.snap` present too, where a new empty snapshot would otherwise be written beside it, and a store that can't tell whether the folder is there stops the open with that error.
 
 - 2026-11-07: Compressed ORF support withdrawn pending provenance review; uncompressed support remains. Regenerated camera coverage: 557 verified, 665 unverified, 187 preview-only and 37 unsupported; 94% use-weighted coverage. See [ORF status](docs/orf-compression.md).
 

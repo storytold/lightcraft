@@ -25,12 +25,18 @@ fn err(e: JsValue) -> String {
 /// Did an OPFS call fail because the entry doesn't exist (`NotFoundError`)? Any other failure
 /// (security, type mismatch, an unreadable or evicted store) is an error, never "absent" (#1507).
 fn not_found(e: &JsValue) -> bool {
-    crate::files::is_not_found(Reflect::get(e, &"name".into()).ok().and_then(|n| n.as_string()).as_deref())
+    crate::files::is_not_found(dom_exception_name(e).as_deref())
 }
 
-/// Did an OPFS call fail because the entry is a file, not a directory (`TypeMismatchError`)?
-fn type_mismatch(e: &JsValue) -> bool {
-    Reflect::get(e, &"name".into()).ok().and_then(|n| n.as_string()).as_deref() == Some("TypeMismatchError")
+/// Did opening an OPFS entry as a directory fail because there is no folder there: nothing at the
+/// path, or a regular file of that name (`TypeMismatchError`)? See [`crate::files::means_no_folder`].
+fn no_folder(e: &JsValue) -> bool {
+    crate::files::means_no_folder(dom_exception_name(e).as_deref())
+}
+
+/// The `name` of a `DOMException` (`NotFoundError`, `TypeMismatchError`…), if `e` has one.
+fn dom_exception_name(e: &JsValue) -> Option<String> {
+    Reflect::get(e, &"name".into()).ok().and_then(|n| n.as_string())
 }
 
 /// `navigator.storage` in a window or a worker.
@@ -284,7 +290,7 @@ impl Backend {
                     opts.set_create(false);
                     match JsFuture::from(dir.get_directory_handle_with_options(p, &opts)).await {
                         Ok(d) => dir = d.unchecked_into(),
-                        Err(e) if not_found(&e) || type_mismatch(&e) => return Ok(false),
+                        Err(e) if no_folder(&e) => return Ok(false),
                         Err(e) => return Err(err(e)),
                     }
                 }
@@ -293,17 +299,8 @@ impl Backend {
             Backend::Idb(db) => {
                 let (_tx, store) = Self::idb_store(db, false)?;
                 let prefix = format!("{path}/");
-                // Every key under `prefix`, and no other key: the exclusive upper bound is
-                // `prefix` with its last code unit bumped (`/` -> `0`), which sorts after
-                // every key that starts with `prefix`. Bounding by `prefix` + `\u{ffff}`
-                // instead would miss a key such as `segments/\u{ffff}part`, which starts
-                // with the prefix but sorts after that bound.
-                let upper = {
-                    let mut u = prefix.clone();
-                    let last = u.pop().unwrap_or_default();
-                    u.push(char::from_u32(last as u32 + 1).unwrap_or(last));
-                    u
-                };
+                // every key under `prefix`, and no other key (see `key_range_end` and its test)
+                let upper = crate::files::key_range_end(&prefix);
                 let range = web_sys::IdbKeyRange::bound_with_lower_open_and_upper_open(&prefix.as_str().into(), &upper.as_str().into(), false, true)
                     .map_err(err)?;
                 let keys = idb_req(&store.get_all_keys_with_key_and_limit(&range, 1).map_err(err)?).await?;

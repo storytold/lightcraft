@@ -193,9 +193,87 @@ fn segments_folder_is_refused_untouched() {
         let e = Journal::open(Box::new(m)).err().unwrap().to_string();
         assert!(e.contains("\"segments\" folder") && e.contains("layout isn't one this version reads"), "v{version}: {e}");
     }
-    let m = MemStore::new();
-    m.set("segments/0001.seg", b"photos live here".to_vec());
+    // no snapshot, with and without a log: refused for the folder, and no catalog.snap or
+    // catalog.log appears beside it
+    for log in [None, Some(log)] {
+        let m = MemStore::new();
+        m.set("segments/0001.seg", b"photos live here".to_vec());
+        if let Some(log) = &log {
+            m.set(LOG, log.clone().into_bytes());
+        }
+        assert_refused_untouched(&m);
+        let e = Journal::open(Box::new(m.clone())).err().unwrap().to_string();
+        assert!(e.contains("\"segments\" folder") && e.contains("layout isn't one this version reads"), "log {}: {e}", log.is_some());
+        assert_eq!(m.get(SNAPSHOT), None, "no snapshot written beside the folder");
+        assert_eq!(m.get(LOG).is_some(), log.is_some(), "no log created");
+    }
+}
+
+/// A store that can't tell whether a `segments` folder is there fails the open with that error,
+/// before anything is written: guessing "no folder" would let the upgrade or a new snapshot save
+/// over a library it couldn't see (#3962). With a snapshot and without one.
+#[test]
+fn a_folder_check_that_fails_stops_the_open_untouched() {
+    let (base, log, _) = legacy_parts();
+    for snap in [Some(snap_at(VERSION - 1, &base, "")), None] {
+        let t = crate::tests_torn_append::Torn::default();
+        if let Some(snap) = &snap {
+            t.files.set(SNAPSHOT, snap.clone());
+        }
+        t.files.set(LOG, log.clone().into_bytes());
+        t.folder_fails.store(true, std::sync::atomic::Ordering::SeqCst);
+        let before = t.files.files.lock().unwrap().clone();
+        let e = Journal::open(Box::new(t.clone())).err().expect("the open fails");
+        assert!(matches!(&e, CatalogError::Io(m) if m.contains("folder listing refused")), "snapshot {}: {e:?}", snap.is_some());
+        assert_eq!(*t.files.files.lock().unwrap(), before, "nothing written, nothing renamed");
+        // the same store once it can answer: the library opens
+        t.folder_fails.store(false, std::sync::atomic::Ordering::SeqCst);
+        Journal::open(Box::new(t)).unwrap();
+    }
+}
+
+/// A snapshot whose top level isn't an object is corrupt, not newer and not a catalog, and keeps
+/// its bytes (#3962): an array, a string, a number or `null`, and an array that reads as the
+/// stamp (`[format, version]`, which the header check takes) and so reaches the key check.
+#[test]
+fn non_object_snapshot_is_corrupt_and_untouched() {
+    let stamp_array = format!("[\"lightcraft-catalog\",{VERSION}]\n");
+    for top in ["[]", "\"lightcraft-catalog\"", "7", "null", stamp_array.as_str()] {
+        let m = MemStore::new();
+        m.set(SNAPSHOT, top.as_bytes().to_vec());
+        let e = Journal::open(Box::new(m.clone())).err().expect("refused");
+        assert!(matches!(&e, CatalogError::Corrupt(msg) if msg.starts_with(SNAPSHOT)), "{top:.20}: {e:?}");
+        assert_eq!(m.get(SNAPSHOT).as_deref(), Some(top.as_bytes()), "{top:.20}: snapshot untouched");
+        assert_eq!(m.get(LOG), None, "{top:.20}: no log created");
+    }
+}
+
+/// The checks behind the one-pass read keep their order (#3989): a snapshot whose keys come in
+/// another order than this build writes them, or whose catalog doesn't parse, still gets the
+/// answer of stamp, then layout, then catalog — not the first problem the pass ran into.
+#[test]
+fn snapshot_checks_keep_their_order_off_the_one_pass_read() {
+    let (base, log, full) = legacy_parts();
+    let cat = base.to_snapshot();
+    let open = |snap: String| {
+        let m = MemStore::new();
+        m.set(SNAPSHOT, snap.into_bytes());
+        m.set(LOG, log.clone().into_bytes());
+        (Journal::open(Box::new(m.clone())), m)
+    };
+    // the catalog first, the stamp last: still a readable library
+    let (r, _) = open(format!("{{\"catalog\":{cat},\"seq\":2,\"version\":{VERSION},\"format\":\"lightcraft-catalog\"}}"));
+    assert_eq!(r.unwrap().1.to_snapshot(), full.to_snapshot());
+    // an unknown key after a catalog that doesn't parse: refused for the key, not corrupt
+    let (r, m) = open(format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{\"photos\":7}},\"segments\":[]}}"));
+    assert!(matches!(r.err(), Some(CatalogError::Newer(e)) if e.contains("\"segments\"")));
     assert_refused_untouched(&m);
+    // a newer stamp after the catalog: refused for the version
+    let (r, _) = open(format!("{{\"format\":\"lightcraft-catalog\",\"catalog\":{cat},\"seq\":2,\"version\":{}}}", VERSION + 1));
+    assert!(matches!(r.err(), Some(CatalogError::Newer(e)) if e.contains(&format!("v{}", VERSION + 1))));
+    // a key twice: corrupt, as the header check finds it
+    let (r, _) = open(format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"version\":{VERSION},\"seq\":2,\"catalog\":{cat}}}"));
+    assert!(matches!(r.err(), Some(CatalogError::Corrupt(e)) if e.contains("duplicate field")));
 }
 
 /// The same refusal through the native store, where the folder is a real directory: the snapshot
@@ -211,11 +289,6 @@ fn segments_folder_on_disk_is_refused_untouched() {
         let snap = snap_at(version, &base, "");
         std::fs::write(dir.join(SNAPSHOT), &snap).unwrap();
         std::fs::write(dir.join(LOG), log.as_bytes()).unwrap();
-        let names = |d: &std::path::Path| {
-            let mut v: Vec<_> = std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name()).collect();
-            v.sort();
-            v
-        };
         let before = names(&dir);
         let e = Journal::open(Box::new(FsStore::open(&dir).unwrap())).err().expect("refused");
         assert!(matches!(e, CatalogError::Newer(_)), "{e:?}");
@@ -224,6 +297,65 @@ fn segments_folder_on_disk_is_refused_untouched() {
         assert_eq!(names(&dir), before, "no file added or renamed");
         std::fs::remove_dir_all(&dir).unwrap();
     }
+}
+
+/// The entries of `dir`, sorted (what an open may not add to or rename).
+fn names(dir: &std::path::Path) -> Vec<std::ffi::OsString> {
+    let mut v: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+    v.sort();
+    v
+}
+
+/// The native store's `has_folder` on disk (#3962): a regular file named `segments` is no folder
+/// (the library opens), a `segments` folder with no snapshot beside it is refused and no
+/// `catalog.snap` or `catalog.log` is created, and a link to a folder counts as the folder.
+#[test]
+fn segments_entries_on_disk() {
+    let (base, log, full) = legacy_parts();
+    let dir = std::env::temp_dir().join(format!("lc-layout-entries-{}", std::process::id()));
+
+    // a file called `segments`: no folder, the library opens
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("segments"), b"not a folder").unwrap();
+    std::fs::write(dir.join(SNAPSHOT), snap_at(VERSION, &base, "")).unwrap();
+    std::fs::write(dir.join(LOG), log.as_bytes()).unwrap();
+    let mut store = FsStore::open(&dir).unwrap();
+    assert!(!store.has_folder("segments").unwrap());
+    let (_, c, _) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!(c.to_snapshot(), full.to_snapshot());
+    assert_eq!(std::fs::read(dir.join("segments")).unwrap(), b"not a folder");
+
+    // a `segments` folder and nothing else: refused, nothing created beside it
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("segments")).unwrap();
+    std::fs::write(dir.join("segments").join("0001.seg"), b"photos live here").unwrap();
+    let before = names(&dir);
+    let e = Journal::open(Box::new(FsStore::open(&dir).unwrap())).err().expect("refused");
+    assert!(matches!(&e, CatalogError::Newer(m) if m.contains("\"segments\" folder")), "{e:?}");
+    assert_eq!(names(&dir), before, "no catalog.snap or catalog.log created");
+
+    // a link to a folder elsewhere: what another build would read, so refused too
+    #[cfg(unix)]
+    {
+        let elsewhere = std::env::temp_dir().join(format!("lc-layout-elsewhere-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&elsewhere);
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, dir.join("segments")).unwrap();
+        let snap = snap_at(VERSION, &base, "");
+        std::fs::write(dir.join(SNAPSHOT), &snap).unwrap();
+        let before = names(&dir);
+        assert!(FsStore::open(&dir).unwrap().has_folder("segments").unwrap());
+        let e = Journal::open(Box::new(FsStore::open(&dir).unwrap())).err().expect("refused");
+        assert!(matches!(e, CatalogError::Newer(_)), "{e:?}");
+        assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), snap);
+        assert_eq!(names(&dir), before, "no file added or renamed");
+        assert_eq!(names(&elsewhere), Vec::<std::ffi::OsString>::new(), "nothing written through the link");
+        std::fs::remove_dir_all(&elsewhere).unwrap();
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Controls for #3962: an ordinary library at a readable stamp still opens with its photos (a

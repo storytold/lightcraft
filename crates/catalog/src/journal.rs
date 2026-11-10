@@ -83,6 +83,9 @@
 //!   top-level key other than `format`, `version`, `seq` and `catalog`, or a `segments` folder
 //!   next to it, fails [`Journal::open`] with [`CatalogError::Newer`] the same way — the photos may
 //!   live where this version doesn't look, and the upgrade rewrite would save an empty catalog.
+//!   The `segments` folder is refused with no `catalog.snap` at all too (with or without a log):
+//!   a new, empty snapshot would otherwise be written beside it. A store that can't tell whether
+//!   the folder is there fails the open with that error instead of guessing.
 
 use crate::store::Store;
 use crate::{Catalog, CatalogError, Op, Result};
@@ -430,22 +433,32 @@ const SNAP_KEYS: [&str; 4] = ["format", "version", "seq", "catalog"];
 /// photos there). Its presence means the snapshot alone isn't the library (#3962).
 const SEGMENTS: &str = "segments";
 
+/// The reason every unknown-layout refusal ends with (#3962).
+const LAYOUT: &str = "this library's layout isn't one this version reads";
+
 /// Refuse a library whose layout this version doesn't read, before anything reads it into the
 /// catalog or writes to it: a top-level key in `catalog.snap` outside [`SNAP_KEYS`] (`snap`), or a
-/// [`SEGMENTS`] folder next to it. Without this guard such a library loads as an empty catalog and
-/// the first snapshot overwrites it (#3962).
+/// [`SEGMENTS`] folder next to it — also when there is no `catalog.snap` (`snap` is `None`), where
+/// a new empty one would otherwise be written beside the folder. Without this guard such a library
+/// loads as an empty catalog and the first snapshot overwrites it (#3962). A store that can't tell
+/// whether the folder is there fails the open with its error: guessing "no" would let it write.
 fn refuse_unknown_layout(store: &mut dyn Store, snap: Option<&[u8]>) -> Result<()> {
-    let layout = "this library's layout isn't one this version reads";
     if let Some(bytes) = snap {
-        // (values are skipped, not built: the catalog itself is parsed once, by `Journal::open`)
+        // (values are skipped, not built; only reached when the one-pass read in `read_snapshot`
+        // didn't finish, to give the same answer the checks give in order)
         type Keys = std::collections::BTreeMap<String, serde::de::IgnoredAny>;
         let keys: Keys = serde_json::from_slice(bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
         if let Some(key) = keys.keys().find(|k| !SNAP_KEYS.contains(&k.as_str())) {
-            return Err(newer(format!("{SNAPSHOT} has a top-level {key:?} this version doesn't know: {layout}")));
+            return Err(newer(format!("{SNAPSHOT} has a top-level {key:?} this version doesn't know: {LAYOUT}")));
         }
     }
+    refuse_segments_folder(store)
+}
+
+/// The [`SEGMENTS`] half of [`refuse_unknown_layout`].
+fn refuse_segments_folder(store: &mut dyn Store) -> Result<()> {
     if store.has_folder(SEGMENTS).map_err(io)? {
-        return Err(newer(format!("the library has a {SEGMENTS:?} folder next to {SNAPSHOT}: {layout}")));
+        return Err(newer(format!("the library has a {SEGMENTS:?} folder next to {SNAPSHOT}: {LAYOUT}")));
     }
     Ok(())
 }
@@ -455,6 +468,83 @@ fn refuse_unknown_layout(store: &mut dyn Store, snap: Option<&[u8]>) -> Result<(
 struct SnapFile {
     seq: u64,
     catalog: Catalog,
+}
+
+/// `catalog.snap` read in one pass, when it is the snapshot this build writes: an object whose
+/// `format` and `version` come before `catalog`, are this format and a readable version, and with
+/// no key outside [`SNAP_KEYS`] and none twice. Then the catalog is built straight from the bytes,
+/// with no pass beforehand to check the stamp and the keys (#3989: a large catalog was parsed
+/// twice on every open). Anything else stops the pass at once ([`OnePass::deserialize`] errs), and
+/// [`read_snapshot`] runs the checks one by one instead, so every outcome and its message stay what
+/// the checks in order give.
+struct OnePass {
+    version: u32,
+    file: SnapFile,
+}
+
+impl<'de> serde::Deserialize<'de> for OnePass {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        d.deserialize_map(OnePassVisitor)
+    }
+}
+
+struct OnePassVisitor;
+
+impl<'de> serde::de::Visitor<'de> for OnePassVisitor {
+    type Value = OnePass;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a catalog snapshot laid out as this version writes it")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> std::result::Result<OnePass, A::Error> {
+        use serde::de::Error;
+        // (the messages are never shown: any error here sends `read_snapshot` to the checks)
+        let stop = || A::Error::custom("not this build's snapshot layout");
+        let (mut format, mut version, mut seq, mut catalog) = (None::<String>, None::<u32>, None::<u64>, None::<Catalog>);
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "format" if format.is_none() => format = Some(map.next_value()?),
+                "version" if version.is_none() => version = Some(map.next_value()?),
+                "seq" if seq.is_none() => seq = Some(map.next_value()?),
+                // the catalog only once the stamp says this version can read it
+                "catalog" if catalog.is_none() && format.as_deref() == Some(FORMAT) && version.is_some_and(|v| v <= VERSION) => {
+                    catalog = Some(map.next_value()?)
+                }
+                // an unknown or repeated key, or the catalog before a readable stamp
+                _ => return Err(stop()),
+            }
+        }
+        match (version, seq, catalog) {
+            (Some(version), Some(seq), Some(catalog)) => Ok(OnePass { version, file: SnapFile { seq, catalog } }),
+            _ => Err(stop()),
+        }
+    }
+}
+
+/// Read `catalog.snap` and check it, in order: the stamp ([`SnapHeader`]: a snapshot of another
+/// format is corrupt, a newer version is refused), then the layout ([`refuse_unknown_layout`]: an
+/// unknown top-level key or a [`SEGMENTS`] folder is refused), then the catalog itself. One parse
+/// when the file is laid out as this build writes it ([`OnePass`]); otherwise each check parses
+/// the bytes it needs, as before. Nothing is written either way.
+fn read_snapshot(store: &mut dyn Store, bytes: &[u8]) -> Result<(SnapFile, u32)> {
+    if let Ok(one) = serde_json::from_slice::<OnePass>(bytes) {
+        // format, version and keys were checked during the pass; the folder is all that's left
+        refuse_segments_folder(store)?;
+        return Ok((one.file, one.version));
+    }
+    // the header first: a newer snapshot may not parse as this version's catalog
+    let h: SnapHeader = serde_json::from_slice(bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
+    if h.format != FORMAT {
+        return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: not a LightCraft catalog (format {:?})", h.format)));
+    }
+    if h.version > VERSION {
+        return Err(newer(format!("{SNAPSHOT} is catalog format v{}", h.version)));
+    }
+    // a readable stamp, but a layout this version doesn't read: refused untouched (#3962)
+    refuse_unknown_layout(store, Some(bytes))?;
+    let s: SnapFile = serde_json::from_slice(bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
+    Ok((s, h.version))
 }
 
 impl Journal {
@@ -467,17 +557,8 @@ impl Journal {
         report.created = snap.is_none() && log.is_none();
         let (mut catalog, snapshot_seq, snapshot_version) = match snap {
             Some(bytes) => {
-                // the header first: a newer snapshot may not parse as this version's catalog
-                let h: SnapHeader = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
-                if h.format != FORMAT {
-                    return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: not a LightCraft catalog (format {:?})", h.format)));
-                }
-                if h.version > VERSION {
-                    return Err(newer(format!("{SNAPSHOT} is catalog format v{}", h.version)));
-                }
-                // a readable stamp, but a layout this version doesn't read: refused untouched (#3962)
-                refuse_unknown_layout(store.as_mut(), Some(bytes.as_slice()))?;
-                let s: SnapFile = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
+                // stamp, then layout (#3962), then catalog: refused untouched at any of them
+                let (s, version) = read_snapshot(store.as_mut(), &bytes)?;
                 // a seq this high can't come from real use; the next record's seq would wrap
                 if s.seq > MAX_SEQ {
                     return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: seq {} is out of range", s.seq)));
@@ -487,10 +568,10 @@ impl Journal {
                 for r in &report.repaired {
                     log::warn!("{SNAPSHOT}: {r}");
                 }
-                (catalog, s.seq, Some(h.version))
+                (catalog, s.seq, Some(version))
             }
             None => {
-                // no snapshot: a fresh one would otherwise be written beside the segments
+                // no snapshot: refused all the same, or a fresh one would be written beside the segments
                 refuse_unknown_layout(store.as_mut(), None)?;
                 (Catalog::new(), 0, None)
             }

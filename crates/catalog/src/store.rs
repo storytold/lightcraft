@@ -58,7 +58,18 @@ pub trait Store: Send {
     }
     /// Is there a folder called `name` among the files? The journal refuses a library laid out
     /// with a folder this version doesn't read (#3962) rather than load part of it and overwrite
-    /// the rest. The default: a flat store (no folders), so `false`.
+    /// the rest, so the answer decides whether [`crate::Journal::open`] may write. The rules:
+    /// - **Can't tell → an error**, never `false`: an unreadable directory, a permission or I/O
+    ///   failure, a storage backend that won't answer. The open fails with it and writes nothing;
+    ///   `false` would let it go on and save over a library it couldn't see.
+    /// - **A regular file called `name` is not a folder** (`Ok(false)`): only something that holds
+    ///   other entries counts. A link to a folder does count ([`FsStore`] follows it: what it
+    ///   points at is what another build would read).
+    /// - **A store that can hold folders must override this** — a filesystem directory
+    ///   ([`FsStore`]), keys with `/` in them ([`MemStore`]: `name/…`), browser storage, a
+    ///   network share. The default (`Ok(false)`) is right only for a store that is flat by
+    ///   construction, where no folder can exist; for any other store it silently disables the
+    ///   refusal.
     fn has_folder(&mut self, name: &str) -> io::Result<bool> {
         let _ = name;
         Ok(false)
