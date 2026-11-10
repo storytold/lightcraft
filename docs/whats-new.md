@@ -52,8 +52,11 @@
   carry it, and Lightroom's `LocalGrain` is imported. Photos without local grain render as before.
 
 ### Mask section eyes (control protocol)
-- `mask.sectionEnabled` switches off a mask's Tone, Color, Effects or Detail adjustments without resetting them, and
-  back on. There is no on-screen eye yet.
+- `mask.sectionEnabled` switches off a mask's Tone, Color, Point Color, Effects or Detail adjustments without resetting
+  them, and back on. In the Masking panel the selected mask's sliders sit under Light, Color, Effects and Detail
+  headers, and the Point Color block has a header too, each with an eye like the Edit panel's; a section that is off
+  keeps its sliders and values. The Point Color eyedropper now works in the full-screen preview and switches off when
+  its block closes or no mask is selected.
 
 ### Point Color inside a mask (control protocol)
 - Each mask can carry its own Point Color samples (up to 8, the same Hue, Saturation, Luminance, Variance and Range as

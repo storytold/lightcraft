@@ -40,7 +40,7 @@ fn mask_open() -> Headless {
     exec(&mut h, "panel.masking", json!({}));
     exec(&mut h, "mask.add", json!({"kind": "radial"}));
     h.step();
-    click(&mut h, "flyout:maskPointColor");
+    click(&mut h, "section:mask:pointColor");
     h.step();
     h
 }
@@ -151,4 +151,37 @@ fn the_edit_panels_point_color_still_edits_the_photo() {
     assert!(develop(&h).masks.iter().all(|m| m.point_colors.is_empty()));
     click(&mut h, "button:pointColorDelete");
     assert!(develop(&h).point_colors.is_empty());
+}
+
+#[test]
+fn the_masks_eyedropper_samples_in_the_full_screen_preview_instead_of_zooming() {
+    let mut h = mask_open();
+    h.app.run("view.fullScreenPreview", json!({})).unwrap();
+    assert!(h.app.ui.fullscreen);
+    h.app.ui.tool = "maskPointColor".into();
+    h.step();
+    h.step();
+    click_photo(&mut h, 0.3, 0.5);
+    assert_eq!(mask_samples(&h).len(), 1, "the click sampled into the mask");
+    assert!(h.app.ui.tool.is_empty(), "picking ends with the click");
+    assert!(matches!(h.app.ui.zoom, crate::state::Zoom::Fit), "the click did not zoom the photo");
+}
+
+#[test]
+fn the_masks_eyedropper_is_disarmed_when_its_block_closes_or_no_mask_is_selected() {
+    let mut h = mask_open();
+    click(&mut h, "icon:maskPointColorPicker");
+    assert_eq!(h.app.ui.tool, "maskPointColor");
+    // closing the block disarms it
+    click(&mut h, "section:mask:pointColor");
+    h.step();
+    assert!(h.app.ui.tool.is_empty(), "closing the Point Color block disarms the eyedropper");
+    // armed with the block open, deselecting every mask disarms it too
+    click(&mut h, "section:mask:pointColor");
+    click(&mut h, "icon:maskPointColorPicker");
+    assert_eq!(h.app.ui.tool, "maskPointColor");
+    h.app.session.active_mask = None;
+    h.step();
+    h.step();
+    assert!(h.app.ui.tool.is_empty(), "no selected mask, no eyedropper");
 }

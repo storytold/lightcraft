@@ -359,7 +359,7 @@ pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &eg
 
 /// The Masking panel's Point Color eyedropper: a click adds the colour there to the selected mask's samples
 /// (`mask.pointColor.pick`) and ends picking, as the photo's own picker does; a refusal (8 samples, no mask) is toasted.
-fn mask_point_color_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap) {
+pub(super) fn mask_point_color_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap) {
     if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
     {

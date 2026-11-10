@@ -39,6 +39,32 @@ pub const LOCAL: &[ControlSpec] = &[
     spec("grain", "Grain", 0.0, 100.0, 1.0, 0, Track::Plain),
 ];
 
+/// The engine sections ([`lightcraft_develop::Mask::SECTIONS`]) the [`LOCAL`] sliders sit under, in panel order, with
+/// the heading shown (the Edit panel's names: Tone is its Light section). Point Color is the flyout below.
+const LOCAL_SECTIONS: [(&str, &str); 4] = [("tone", "Light"), ("color", "Color"), ("effects", "Effects"), ("detail", "Detail")];
+
+/// The engine section of a [`LOCAL`] slider, as `Mask::effective` zeroes it (`None`: it belongs to no section).
+pub fn local_section(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "exposure" | "contrast" | "highlights" | "shadows" | "whites" | "blacks" => "tone",
+        "temp" | "tint" | "hue" | "saturation" => "color",
+        "texture" | "clarity" | "dehaze" | "grain" => "effects",
+        "sharpness" | "noise" | "moire" | "defringe" => "detail",
+        _ => return None,
+    })
+}
+
+/// A section header with the mask's eye for `section` (`mask.sectionEnabled`, one undo step). Returns true when the
+/// header itself was clicked (not the eye). A section that is off keeps its sliders and values, as in the Edit panel.
+fn section_head(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &lightcraft_develop::Mask, section: &str, title: &str, open: bool) -> bool {
+    let (resp, toggled) = crate::widgets::section_header(ui, &format!("mask:{section}"), title, open, Some(m.section_enabled(section)));
+    if let Some(on) = toggled {
+        let _ = app.run("mask.sectionEnabled", json!({"id": m.id, "section": section, "enabled": on}));
+        return false;
+    }
+    resp.clicked()
+}
+
 pub fn local_get(a: &LocalAdjustments, key: &str) -> f64 {
     serde_json::to_value(a).ok().and_then(|v| v.get(key).and_then(|x| x.as_f64())).unwrap_or(0.0)
 }
@@ -304,8 +330,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             overlay_options(app, ui);
         }
     });
-    let Some(mid) = app.session.active_mask else { return };
-    let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
+    let selected = app.session.active_mask.and_then(|mid| d.masks.iter().find(|m| m.id == mid).cloned());
+    let Some(m) = selected else {
+        // the Point Color eyedropper samples into the selected mask: with none, it has nothing to do
+        if app.ui.tool == "maskPointColor" {
+            app.ui.tool.clear();
+        }
+        return;
+    };
     divider(ui);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 8 }).show(ui, |ui| {
         for (i, c) in m.components.iter().enumerate() {
@@ -385,14 +417,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     divider(ui);
     super::mask_effects::effect_row(app, ui, &m);
-    for s in LOCAL {
-        let v = local_get(&m.adjust, s.id);
-        let out = slider(ui, s, v, true, None);
-        apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
+    // the sliders under the eye of their engine section (`Mask::SECTIONS`), then the flyout with its own
+    for (section, title) in LOCAL_SECTIONS {
+        // (the sliders are always shown: a click on the header folds nothing)
+        section_head(app, ui, &m, section, title, true);
+        for s in LOCAL.iter().filter(|s| local_section(s.id) == Some(section)) {
+            let v = local_get(&m.adjust, s.id);
+            let out = slider(ui, s, v, true, None);
+            apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
+        }
     }
     let open = app.ui.flyout_open("maskPointColor");
-    if crate::widgets::flyout_row(ui, "maskPointColor", "Point Color", Icon::Picker, open).clicked() {
+    if section_head(app, ui, &m, "pointColor", "Point Color", open) {
         app.ui.toggle_flyout("maskPointColor");
+    }
+    // the eyedropper only lives while its block is shown
+    if !open && app.ui.tool == "maskPointColor" {
+        app.ui.tool.clear();
     }
     if open {
         super::edit::mask_point_color(app, ui, m.id, &m.point_colors);

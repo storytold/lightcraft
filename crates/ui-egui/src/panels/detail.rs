@@ -1266,6 +1266,11 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         }
         return;
     }
+    if app.ui.tool == "maskPointColor" {
+        // (full-screen preview: the Masking panel is shut, but the armed eyedropper still samples into the selected mask)
+        masks::mask_point_color_pick(app, ui, resp, map);
+        return;
+    }
     click_zoom_and_pan(app, resp, img, canvas);
     let _ = (native, aspect);
 }
