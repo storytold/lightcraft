@@ -189,9 +189,9 @@ mod tests {
     }
 
     #[test]
-    fn d750_finds_measured_colour_matrices() {
-        // without a row, D750 raws fall back to the muted neutral camera-RGB approximation
-        // instead of measured matrices
+    fn d750_finds_approximate_colour_matrices() {
+        // without a row, D750 raws fall back to the muted neutral camera-RGB approximation;
+        // the row is approximate (the D850's matrices), see chart_table.rs
         let found = find(Some("NIKON CORPORATION"), "NIKON D750");
         assert_eq!(found.map(|c| (c.make, c.model)), Some(("NIKON CORPORATION", "D750")));
         assert_eq!(find_camera("NIKON CORPORATION NIKON D750"), found);

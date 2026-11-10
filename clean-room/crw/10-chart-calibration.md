@@ -95,3 +95,7 @@ pair (spectral rows: A and D65).
   ~150 K for the sun).
 - The D60's look is still the per-file JPEG fit and the pooled profile; these matrices give the
   white-balance scale and the fallback colour only.
+
+## Nikon D750 (approximate, not fitted)
+
+The D750 row in `crates/raw/src/chart_table.rs` has no chart captures of its own. Its matrices are the D850 rows from `spectral_table.rs`, used as an approximation for D750 raws in place of the neutral fallback. Real D750 ColorChecker captures, fitted and checked like the D60 rows above, would replace them.

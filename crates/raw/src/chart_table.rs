@@ -1,7 +1,9 @@
 // Camera colour matrices fitted to our own photographs of a ColorChecker Classic (post-November-2014 formulation),
-// for cameras with no published spectral sensitivities. Kept by hand: each row's capture, fit and checks are in
+// for cameras with no published spectral sensitivities. Kept by hand: each fitted row's capture, fit and checks are in
 // clean-room/crw/10-chart-calibration.md (scripts local-only). Reference colours: X-Rite's published L*a*b* (D50) for
 // the chart, as packaged by colour-science (BSD-3-Clause). No number comes from Adobe or from a GPL raw decoder.
+// The Nikon D750 row is the exception: it is not fitted to a D750 chart, it reuses the D850's matrices as an
+// approximation (see its entry), so it does not meet the fitted-row contract above.
 use super::Camera;
 use lightcraft_color::Mat3;
 
@@ -18,8 +20,9 @@ pub(super) const CAMERAS: &[Camera] = &[
         color_matrix: [Mat3([[0.950961, -0.345297, 0.112165], [-0.545579, 1.400621, 0.558365], [-0.123107, 0.222004, 1.026236]]), Mat3([[0.609694, -0.127035, -0.045387], [-0.461201, 1.16644, 0.337283], [-0.115992, 0.229363, 0.791647]])],
         forward_matrix: [Mat3([[0.763921, 0.183562, 0.016813], [0.268545, 0.944022, -0.212567], [0.100742, -0.431647, 1.15601]]), Mat3([[0.757277, 0.190573, 0.016446], [0.291782, 1.009128, -0.300909], [0.026419, -0.264451, 1.063137]])],
     },
-    // Nikon D750 has no spectral row of its own; borrows the D850's measured matrices,
-    // the nearest full-frame Nikon body in the spectral table, rather than the neutral fallback.
+    // Nikon D750, APPROXIMATE: these are the D850's matrices (the nearest full-frame Nikon body in the spectral
+    // table), not a fit to a D750 ColorChecker. They replace the neutral camera-RGB fallback for D750 raws.
+    // Real D750 chart captures would replace them with a fitted row.
     Camera {
         make: "NIKON CORPORATION",
         model: "D750",
