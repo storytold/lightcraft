@@ -581,6 +581,9 @@ pub fn initial_window_renderer(
     {
         return Some(WindowRenderer::Glow);
     }
+    // Without a marker a remembered Vulkan renderer is not tried first on Linux either: there is
+    // no retry, so it is left out and the GL-first order decides
+    let remembered = if !marker_available && os == "linux" && remembered_vulkan { None } else { remembered };
     window_renderer_order(forced, remembered, failed, os, compiled, glow).first().copied()
 }
 
