@@ -929,7 +929,8 @@ mod tests {
         assert_eq!(initial_window_renderer(None, Some(gl), None, false, "linux", all, true), Some(gl));
         // a remembered renderer that is also the failed one is not retried
         // first without a marker, even when it is not Vulkan
-        assert_eq!(initial_window_renderer(None, Some(gl), Some(gl), false, "linux", all, true), Some(WindowRenderer::Glow));
+        // GL is not retried first: the next renderer in the Linux order (Vulkan) starts
+        assert_eq!(initial_window_renderer(None, Some(gl), Some(gl), false, "linux", all, true), Some(vk));
         assert_eq!(initial_window_renderer(None, Some(WindowRenderer::Glow), Some(WindowRenderer::Glow), false, "linux", all, true), Some(gl));
         // a remembered Vulkan renderer is not kept without a marker: it would be
         // tried first with no retry possible, so Linux starts with glow instead
