@@ -167,6 +167,9 @@ fn the_panel_commands_work_without_the_keys() {
     let e = h.request("ui.menu.invoke", json!({"id": "view.allPanels", "params": {"hide": "yes"}}), T);
     assert_eq!(e["ok"], false, "a `hide` that isn't true or false is refused: {e}");
     assert_eq!(shown(&h), (false, RightPanel::None, false, false), "and changes nothing");
+    let e = h.request("ui.menu.invoke", json!({"id": "view.allPanels", "params": []}), T);
+    assert_eq!(e["ok"], false, "parameters that aren't an object are refused, not taken as none: {e}");
+    assert_eq!(shown(&h), (false, RightPanel::None, false, false), "and change nothing");
     let r = run(&mut h, "view.allPanels", json!({}));
     assert_eq!(r["result"]["hidden"], false, "{r}");
     assert_eq!(shown(&h), (true, RightPanel::Keywords, false, true));

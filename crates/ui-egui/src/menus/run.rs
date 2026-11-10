@@ -616,6 +616,9 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             // Classic's Shift+Tab: hide the side panels, the Presets column and the filmstrip,
             // remembering what was shown; again, bring back exactly that. With nothing shown and
             // nothing remembered it shows the usual panels. {hide?: bool} forces the direction.
+            if !(p.is_object() || p.is_null()) {
+                return Some(Err(format!("view.allPanels: parameters must be an object such as {{\"hide\": true}}, not {p}")));
+            }
             let forced = match p.get("hide") {
                 None | Some(Value::Null) => None,
                 Some(Value::Bool(b)) => Some(*b),
