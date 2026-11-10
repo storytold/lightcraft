@@ -136,7 +136,8 @@ pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<C
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
     // (a merge frame arrives without its lens warp: `lightcraft_merge` removes it before calling)
-    let (_, t, look) = starting_colour(raw, bytes, None, None);
+    // the wrapper in the parent module, so the DNG carries the same fitted white and transform as the raw loader
+    let (_, t, look) = super::starting_colour(raw, bytes, None, None);
     dng_colour(&raw.color, &white, &t, look.as_ref())
 }
 

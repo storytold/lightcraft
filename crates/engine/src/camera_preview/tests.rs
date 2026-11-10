@@ -783,7 +783,8 @@ fn an_accepted_jpeg_fit_comes_before_the_spectral_matrices() {
         assert_eq!(look.map(|l| l.matrix), Some(fitted.matrix), "{model}");
         assert_eq!(raw.color, lightcraft_raw::ColorData::default(), "{model}: spectral matrices left out");
         assert!(t.matrix_is_fallback, "{model}");
-        assert_eq!(xy, lightcraft_raw::color::as_shot_white_xy(&raw));
+        assert_eq!(t.white_xy, xy, "{model}: the transform is at the white it was computed for");
+        assert_ne!(xy, lightcraft_raw::color::as_shot_white_xy(&raw), "{model}: the fitted matrix moves the as-shot white");
     }
 }
 
