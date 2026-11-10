@@ -1352,55 +1352,54 @@ mod tests {
     }
 
     /// Panasonic RW2 white-balance preset tags, as named in ExifTool's PanasonicRaw tables:
-    /// `ColorTempKelvin` is the absolute colour temperature of the shot; `WBType1`..`WBType7`
-    /// name the seven in-camera white-balance presets and `WB_RGBLevels1`..`WB_RGBLevels7`
-    /// give each preset's R/G/B levels. An RW2 carries no colour matrices, so these presets
-    /// are the file's only Kelvin scale ([`crate::kelvin_presets::KelvinPresets`]). The
-    /// decoder reads none of it: `wb_multipliers` comes from tags `0x0024`–`0x0026` only and
-    /// `color.kelvin_presets` stays `None`.
-    #[test]
-    fn rw2_reads_absolute_colour_temperature_and_wb_presets() {
-        const COLOR_TEMP_KELVIN: u16 = 0x0027;
-        const WB_TYPE: [u16; 7] = [0x0028, 0x0029, 0x002a, 0x002b, 0x002c, 0x0033, 0x0034];
-        const WB_LEVELS: [u16; 7] = [0x0035, 0x0036, 0x0038, 0x0042, 0x0049, 0x004a, 0x004b];
+        /// `ColorTempKelvin` is the absolute colour temperature of the shot; `WBType1`..`WBType7`
+        /// name the seven in-camera white-balance presets and `WB_RGBLevels1`..`WB_RGBLevels7`
+        /// give each preset's R/G/B levels. An RW2 carries no colour matrices, so these presets
+        /// are the file's only Kelvin scale ([`crate::kelvin_presets::KelvinPresets`]). The
+        /// decoder reads them into `color.kelvin_presets`; `wb_multipliers` comes from tags
+        /// `0x0024`–`0x0026`.
+        #[test]
+            fn rw2_reads_absolute_colour_temperature_and_wb_presets() {
+                const COLOR_TEMP_KELVIN: u16 = 0x0027;
+                const WB_TYPE: [u16; 7] = [0x0028, 0x0029, 0x002a, 0x002b, 0x002c, 0x0033, 0x0034];
+                const WB_LEVELS: [u16; 7] = [0x0035, 0x0036, 0x0038, 0x0042, 0x0049, 0x004a, 0x004b];
 
-        // Presets in kelvin order: red rising and blue falling, as `KelvinPresets::new`
-        // requires. The shot sits on the daylight preset (index 4): its levels are the
-        // as-shot `WB_RGB` tags and `5600` K is the recorded `ColorTempKelvin`.
-        const KELVIN: [u16; 7] = [2850, 3200, 4000, 5000, 5600, 6500, 7500];
-        const LEVELS: [[u16; 3]; 7] = [
-            [1200, 1024, 2600],
-            [1400, 1024, 2200],
-            [1700, 1024, 1800],
-            [2000, 1024, 1500],
-            [2300, 1024, 1300],
-            [2600, 1024, 1100],
-            [2900, 1024, 950],
-        ];
-        const SHOT: usize = 4;
+                // Presets in kelvin order: red rising and blue falling, as `KelvinPresets::new`
+                // requires. The shot sits on the daylight preset (index 4): its levels are the
+                // as-shot `WB_RGB` tags and `5600` K is the recorded `ColorTempKelvin`.
+                const KELVIN: [u16; 7] = [2850, 3200, 4000, 5000, 5600, 6500, 7500];
+                const LEVELS: [[u16; 3]; 7] = [
+                    [1200, 1024, 2600],
+                    [1400, 1024, 2200],
+                    [1700, 1024, 1800],
+                    [2000, 1024, 1500],
+                    [2300, 1024, 1300],
+                    [2600, 1024, 1100],
+                    [2900, 1024, 950],
+                ];
+                const SHOT: usize = 4;
 
-        let (w, h) = (90usize, 60usize);
-        let px: Vec<u16> = (0..w * h).map(|i| (i % 4000) as u16 + 1).collect();
-        let mut tags = vec![short(CFA_PATTERN, 1), short(BITS, 12), short(RAW_FORMAT, 5)];
-        tags.extend(BLACK_RGB.iter().enumerate().map(|(i, &tag)| short(tag, 128 + i as u16)));
-        tags.extend(WB_RGB.iter().zip(LEVELS[SHOT]).map(|(&tag, v)| short(tag, v)));
-        tags.push((COLOR_TEMP_KELVIN, Value::Short(vec![KELVIN[SHOT]])));
-        for (&tag, name) in WB_TYPE.iter().zip(["Tungsten", "Warm White", "White Fluorescent", "Daylight", "Sunlight", "Cloudy", "Shade"]) {
-            tags.push((tag, Value::Ascii(name.into())));
-        }
-        for (&tag, &levels) in WB_LEVELS.iter().zip(&LEVELS) {
-            tags.push((tag, Value::Short(levels.to_vec())));
-        }
-        let bytes = file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
-        let r = crate::decode(&bytes).unwrap();
-        assert_eq!(r.wb_multipliers, Some([2300.0 / 1024.0, 1.0, 1300.0 / 1024.0]));
+                let (w, h) = (90usize, 60usize);
+                let px: Vec<u16> = (0..w * h).map(|i| (i % 4000) as u16 + 1).collect();
+                let mut tags = vec![short(CFA_PATTERN, 1), short(BITS, 12), short(RAW_FORMAT, 5)];
+                tags.extend(BLACK_RGB.iter().enumerate().map(|(i, &tag)| short(tag, 128 + i as u16)));
+                tags.extend(WB_RGB.iter().zip(LEVELS[SHOT]).map(|(&tag, v)| short(tag, v)));
+                tags.push((COLOR_TEMP_KELVIN, Value::Short(vec![KELVIN[SHOT]])));
+                for (&tag, name) in WB_TYPE.iter().zip(["Tungsten", "Warm White", "White Fluorescent", "Daylight", "Sunlight", "Cloudy", "Shade"]) {
+                    tags.push((tag, Value::Ascii(name.into())));
+                }
+                for (&tag, &levels) in WB_LEVELS.iter().zip(&LEVELS) {
+                    tags.push((tag, Value::Short(levels.to_vec())));
+                }
+                let bytes = file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
+                let r = crate::decode(&bytes).unwrap();
+                assert_eq!(r.wb_multipliers, Some([2300.0 / 1024.0, 1.0, 1300.0 / 1024.0]));
 
-        // The kelvin scale from the seven presets is never built, and no kelvin value is
-        // stored anywhere the WB panel or settings could read.
-        let presets = r.color.kelvin_presets.as_ref();
-        assert!(presets.is_some(), "kelvin_presets is None: RW2 decode reads WB_RGB but never ColorTempKelvin or WBType1-7 / WB_RGBLevels1-7");
-        let (t, tint) = presets.unwrap().temp_tint(r.wb_multipliers.unwrap()).unwrap();
-        assert!((t - 5600.0).abs() < 1.0, "as-shot white reads {t} K, want 5600 K");
-        assert!(tint.abs() < 1.0, "tint {tint}");
-    }
+                // The kelvin scale from the seven presets is built and the as-shot white reads correctly.
+                let presets = r.color.kelvin_presets.as_ref();
+                assert!(presets.is_some(), "kelvin_presets is None: RW2 decode reads WB_RGB but never ColorTempKelvin or WBType1-7 / WB_RGBLevels1-7");
+                let (t, tint) = presets.unwrap().temp_tint(r.wb_multipliers.unwrap()).unwrap();
+                assert!((t - 5600.0).abs() < 1.0, "as-shot white reads {t} K, want 5600 K");
+                assert!(tint.abs() < 1.0, "tint {tint}");
+            }
 }
