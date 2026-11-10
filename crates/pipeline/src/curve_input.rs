@@ -96,6 +96,7 @@ pub(crate) fn finish(
         px_per_long: p.px_per_long,
         air_pre: p.air,
         space: request.space,
+        draft: request.quality == crate::Quality::Draft,
     });
     fp.proof = request.proof.map(|proof| proof.params(request.space));
     if let Some(display) = &request.display {
