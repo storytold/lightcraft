@@ -396,3 +396,19 @@ fn a_raw_synchronized_next_to_the_active_jpeg_takes_its_place_in_the_selection()
     assert_eq!((s.selection.ids.clone(), s.selection.active), (vec![raw], Some(raw)));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_import_that_lists_the_jpeg_first_selects_the_raw_on_top() {
+    let dir = temp_dir("jpeg-first");
+    write_jpeg(&dir.join("DSC_0001.JPG"), 14);
+    write_raw(&dir.join("DSC_0001.DNG"));
+    let mut s = Session::new().with_fs();
+    let paths = [dir.join("DSC_0001.JPG"), dir.join("DSC_0001.DNG")].map(|p| p.to_string_lossy().to_string());
+    let r = s.execute("library.import", &json!({"paths": paths, "pairRawJpeg": true})).unwrap();
+    assert_eq!(r["paired"], 1, "{r}");
+    let raw = id_named(&s, &dir, "DSC_0001.DNG");
+    let jpg = id_named(&s, &dir, "DSC_0001.JPG");
+    assert_eq!(s.catalog.stack_of(raw).unwrap().photos, vec![raw, jpg]);
+    assert_eq!((s.selection.ids.clone(), s.selection.active), (vec![raw], Some(raw)));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1368,6 +1368,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let imported = if imported.is_empty() { restored } else { imported };
                 if let Some(f) = imported.first() {
                     s.selection = Selection::single(PhotoId(*f));
+                    // a JPEG imported first and stacked under its raw gives way to the raw
+                    crate::cmd::fix_selection(s);
                 }
                 Ok(report)
             }
