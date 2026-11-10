@@ -96,8 +96,9 @@ search embeddings; generative remove runs in Adobe's cloud.
 | People (faces, body, hair, skin…) and Landscape masks | — | ⬜ |
 | Object / Describe masks | SAM 3 in pure Rust (Metal / CPU); opt-in 3.4 GB download, no mirror configured | 🟡 |
 | Depth range mask, Lens Blur | — | ⬜ |
-| AI Denoise | Bayer only, built-in classical denoiser out of the box, optional user-installed weights, pure-Rust CPU / GPU | 🟡 |
-| Raw Details, Super Resolution | — | ⬜ |
+| AI Denoise | Bayer RAW and finished pictures, built-in classical denoiser out of the box for raws, optional user-installed weights, pure-Rust CPU / GPU | 🟡 |
+| Super Resolution, AI Sharpen | opt-in upscaler (Real-ESRGAN General v3, BSD-3), pure-Rust CPU / GPU; a rendered 16-bit TIFF, so a raw's edits don't carry over ([super-resolution.md](super-resolution.md)) | 🟡 |
+| Raw Details | — | ⬜ |
 | Generative remove, distractions, reflections | — (generative is out of scope: cloud) | ⬜ |
 | Dust detection | ✅ | ✅ |
 | Faces / People | YuNet detection, SFace / AuraFace recognition (opt-in downloads), People view | ✅ (MVP, [faces.md](faces.md)) |
@@ -299,6 +300,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | AI: Super Resolution and AI Sharpen 🟡 with an opt-in upscaler, as a rendered TIFF (#3493); AI Denoise also takes finished pictures; Raw Details still missing |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |
@@ -324,3 +326,4 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-10 | major | Created as progress docs: full re-measure (checklist recount, installed Lightroom 9.6 bundle listing, code counts, catalogs, CI), feature areas with weights, dimensions, AI, stage, calibration; merged ROADMAP's *Where we stand* and *Parity estimate* |
 | 2026-10-14 | minor | RAW: 82% of Adobe's models decode, 36% verified (integration batch 36) |
 | 2026-10-26 | minor | Canon CRW decoder moved to craft-libs as `craft-crw` (shared with the other Craft apps); LightCraft keeps the adapter, the EOS D60 colour work and its records; numbers unchanged |
+| 2026-11-04 | minor | AI table: Super Resolution and AI Sharpen 🟡 (opt-in upscaler, a rendered 16-bit TIFF stacked with the photo); Raw Details stays ⬜; numbers unchanged |

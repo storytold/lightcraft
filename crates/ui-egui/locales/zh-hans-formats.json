@@ -324,6 +324,9 @@
   "Panel move was not applied: {error}": "面板移动未应用：{error}",
   "{name} is installed": "{name} 已安装",
   "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
+  "{what} added: {w} × {h}": "已添加{what}：{w} × {h}",
+  "{what} cancelled": "已取消{what}",
+  "{what} failed: {e}": "{what}失败：{e}",
   "Bring photos in with File › Import Photos… ({keys}).": "通过 文件 › 导入照片… ({keys}) 导入照片。",
   "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。"

@@ -32,6 +32,7 @@ pub mod devices;
 pub mod disk_space;
 pub mod display;
 pub mod doc_path;
+pub mod enhance;
 mod errors;
 pub mod export;
 pub mod face_download;

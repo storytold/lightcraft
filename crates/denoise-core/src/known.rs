@@ -1,13 +1,13 @@
-//! The denoise models LightCraft knows about: what each one is, who may use it, and where to fetch it.
+//! The denoise and upscaling models LightCraft knows about: what each one is, who may use it, and where to fetch it.
 //!
 //! None is part of LightCraft. A model with an address here can be downloaded when the user asks and has accepted
 //! its terms; anything else is brought by the user as an `.onnx` file with a `denoise-model.json` beside it.
 
-#[cfg(any(feature = "rawnind-model", test))]
+#[cfg(any(feature = "rawnind-model", feature = "realesrgan-model", test))]
 use crate::licence::{Commercial, Licence};
 
 use crate::manifest::DenoiserManifest;
-#[cfg(any(feature = "rawnind-model", test))]
+#[cfg(any(feature = "rawnind-model", feature = "realesrgan-model", test))]
 use crate::manifest::{Domain, Gain};
 
 /// A known model, and how to get it.
@@ -57,16 +57,107 @@ fn rawnind_bayer() -> Known {
     Known { manifest, download: Some(download), entry: Some("model_bayer.onnx") }
 }
 
-/// Every model LightCraft knows.
+/// NIND's U-Net for finished pictures (JPEG, PNG, TIFF …), as published for darktable (`denoise-nind.dtmodel`). It takes
+/// and gives gamma-encoded sRGB, so it is the model for photos that have no sensor data left. Its weights are GPL-3.0;
+/// the training pictures are CC BY 4.0 and CC0.
+#[cfg(any(feature = "rawnind-model", test))]
+fn nind_rgb() -> Known {
+    let manifest = DenoiserManifest {
+        id: "nind-rgb".into(),
+        name: "NIND U-Net (finished pictures)".into(),
+        version: "1.0".into(),
+        licence: Licence {
+            name: "GPL-3.0".into(),
+            commercial: Commercial::Yes,
+            url: Some("https://www.gnu.org/licenses/gpl-3.0.html".into()),
+            notice: "The weights are published under the GNU General Public License v3. LightCraft does not include them: they \
+                     are downloaded to your computer at your request and used by it only. If you pass the model file on, the \
+                     GPL applies to that copy. Commercial use is subject to the GPL terms, including applicable source, licence and notice obligations on redistribution."
+                .into(),
+        },
+        source: Some("https://github.com/darktable-org/darktable-ai/tree/master/models/denoise-nind".into()),
+        sha256: Some("5d615c5026a3c579455b9082f72b91e109adb54f4125b5b5cde45983bd6776b2".into()),
+        size_bytes: Some(59_138_823),
+        provenance: "Trained on NIND, real photographs of the same scenes taken noisy and clean (images CC BY 4.0 and CC0, \
+                     published on Wikimedia Commons). Paper: arXiv 1906.00270."
+            .into(),
+        domain: Domain::RgbToRgb,
+        tile: 768,
+        overlap: 64,
+        // its pictures come out a little brighter and cooler than they went in: the means are matched again
+        gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.1 },
+    };
+    let download = Download {
+        id: manifest.id.clone(),
+        url: "https://github.com/darktable-org/darktable-ai/releases/download/release-5.6.0/denoise-nind.dtmodel".into(),
+        file_name: "denoise-nind.dtmodel".into(),
+        size_bytes: 55_008_210,
+        sha256: "825b3657cbb5193a67432a2f0b44ab86531cc7337f89e8e6c17d93db9665708a".into(),
+    };
+    Known { manifest, download: Some(download), entry: Some("model.onnx") }
+}
+
+/// Real-ESRGAN's compact general-purpose 4× upscaler (`realesr-general-x4v3`, SRVGGNetCompact), as an ONNX export
+/// re-hosted on Hugging Face (pinned to a revision). Code and weights are BSD-3-Clause.
+#[cfg(any(feature = "realesrgan-model", test))]
+fn realesr_general_x4v3() -> Known {
+    let manifest = DenoiserManifest {
+        id: "realesr-general-x4v3".into(),
+        name: "Real-ESRGAN General v3 (4× upscaler)".into(),
+        version: "3".into(),
+        licence: Licence {
+            name: "BSD-3-Clause".into(),
+            commercial: Commercial::Yes,
+            url: Some("https://github.com/xinntao/Real-ESRGAN/blob/master/LICENSE".into()),
+            notice: "Copyright (c) 2021, Xintao Wang. The weights are published under the BSD 3-Clause licence. LightCraft does \
+                     not include them: they are downloaded to your computer at your request and used by it only. If you pass the \
+                     model file on, keep its copyright notice and licence with it."
+                .into(),
+        },
+        source: Some("https://github.com/xinntao/Real-ESRGAN".into()),
+        sha256: Some("09b757accd747d7e423c1d352b3e8f23e77cc5742d04bae958d4eb8082b76fa4".into()),
+        size_bytes: Some(4_871_181),
+        provenance: "Trained by Xintao Wang et al. (Tencent ARC Lab) on the DF2K (DIV2K and Flickr2K) and OST picture sets, \
+                     made blurry, noisy and compressed on purpose (synthetic degradations); those sets are published for \
+                     research. Paper: arXiv 2107.10833."
+            .into(),
+        domain: Domain::RgbToRgb4x,
+        tile: 256,
+        // its 18 convolutions see 18 pixels far: the quarter of the overlap that counts for nothing (20) covers that
+        overlap: 80,
+        gain: Gain::None,
+    };
+    let download = Download {
+        id: manifest.id.clone(),
+        url: "https://huggingface.co/Heliosoph/realesrgan-onnx/resolve/488e5dda07333179f229a6205d92135eea4c25e9/realesr-general-x4v3.onnx".into(),
+        file_name: "realesr-general-x4v3.onnx".into(),
+        size_bytes: 4_871_181,
+        sha256: "09b757accd747d7e423c1d352b3e8f23e77cc5742d04bae958d4eb8082b76fa4".into(),
+    };
+    Known { manifest, download: Some(download), entry: None }
+}
+
+/// Every model LightCraft knows: each product-policy feature adds its own.
 pub fn all() -> Vec<Known> {
-    #[cfg(feature = "rawnind-model")]
-    {
-        vec![rawnind_bayer()]
-    }
-    #[cfg(not(feature = "rawnind-model"))]
-    {
-        Vec::new()
-    }
+    rawnind().into_iter().chain(realesrgan()).collect()
+}
+
+#[cfg(feature = "rawnind-model")]
+fn rawnind() -> Vec<Known> {
+    vec![rawnind_bayer(), nind_rgb()]
+}
+#[cfg(not(feature = "rawnind-model"))]
+fn rawnind() -> Vec<Known> {
+    Vec::new()
+}
+
+#[cfg(feature = "realesrgan-model")]
+fn realesrgan() -> Vec<Known> {
+    vec![realesr_general_x4v3()]
+}
+#[cfg(not(feature = "realesrgan-model"))]
+fn realesrgan() -> Vec<Known> {
+    Vec::new()
 }
 
 /// The known model with this id.
@@ -87,8 +178,13 @@ mod tests {
     #[test]
     fn known_models_are_valid_unique_and_downloaded_over_https() {
         let all = all();
-        assert_eq!(all.is_empty(), !cfg!(feature = "rawnind-model"));
+        assert_eq!(all.is_empty(), !cfg!(any(feature = "rawnind-model", feature = "realesrgan-model")));
         validate(&rawnind_bayer().manifest).unwrap();
+        validate(&nind_rgb().manifest).unwrap();
+        validate(&realesr_general_x4v3().manifest).unwrap();
+        assert_eq!(nind_rgb().manifest.domain, Domain::RgbToRgb);
+        assert_eq!(realesr_general_x4v3().manifest.domain, Domain::RgbToRgb4x);
+        assert_eq!(find("realesr-general-x4v3").is_some(), cfg!(feature = "realesrgan-model"));
         for (i, k) in all.iter().enumerate() {
             validate(&k.manifest).unwrap();
             assert!(all.iter().skip(i + 1).all(|o| o.manifest.id != k.manifest.id), "unique ids");

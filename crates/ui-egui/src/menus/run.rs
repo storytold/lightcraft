@@ -1270,6 +1270,8 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             app.ui.dialog = Some(Dialog::Export { opts, full_size, resize, preset_name: String::new(), limit_kb: u("limitKb", 0) as u32, dir });
             Ok(Value::Null)
         }
+        "enhance.superResolutionStart" => crate::enhance::start(app, 2),
+        "enhance.aiSharpenStart" => crate::enhance::start(app, 1),
         "merge.hdrLast" => crate::merge::start_last(app, "merge.hdr"),
         "merge.hdrBatch" => crate::merge::start_batch(app, p),
         "merge.panoramaLast" => crate::merge::start_last(app, "merge.panorama"),

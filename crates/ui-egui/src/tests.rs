@@ -29,6 +29,7 @@ mod docking_acceptance;
 mod drop_import;
 mod edit_layout;
 mod empty_library;
+mod enhance;
 mod error_kinds;
 mod filmstrip;
 mod filmstrip_drag;

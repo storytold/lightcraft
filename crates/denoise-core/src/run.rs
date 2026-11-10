@@ -15,6 +15,9 @@ use crate::tiles::{starts, weight};
 
 /// Most pixels one picture may have (guards the allocations that follow from its size).
 pub const MAX_PIXELS: usize = 110_000_000;
+/// Pixels over which a finished-picture model's colour and brightness are brought back to the input's (see
+/// [`denoise_rgb`]): wide enough that the input's noise averages away, narrow enough to follow the picture.
+pub const RESTORE_SIGMA: f32 = 8.0;
 /// A tile whose mean signal is below this (white = 1) is too dark to measure its scale from.
 const MIN_SIGNAL: f32 = 0.003;
 
@@ -41,8 +44,11 @@ fn allocate<T: Clone>(n: usize, value: T) -> Result<Vec<T>, Error> {
 
 /// Something that runs the model on one tile.
 pub trait TileRunner: Sync {
-    /// `input` is the tile as four planes `[R, G1, G2, B]` of `tile × tile` cells (NCHW, batch 1); the answer is
-    /// camera RGB, three planes of `2·tile × 2·tile` pixels (CHW), in the model's own scale.
+    /// `input` is one tile, NCHW with batch 1; the answer is three planes (CHW), in the model's own scale. For a raw
+    /// model ([`denoise_bayer`]) the tile is four planes `[R, G1, G2, B]` of `tile × tile` cells and the answer camera
+    /// RGB of `2·tile × 2·tile` pixels; for a finished-picture model ([`denoise_rgb`]) three planes of `tile × tile`
+    /// pixels in and out; for an upscaler ([`upscale_rgb`]) three planes of `tile × tile` pixels in and of
+    /// `scale·tile × scale·tile` pixels out ([`Scales::model`]).
     fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error>;
 }
 
@@ -225,6 +231,214 @@ pub fn denoise_bayer(
         );
     }
     Ok(Rgb32f { width, height, data: acc })
+}
+
+/// Denoise a finished picture (`Domain::RgbToRgb`): `image` is gamma-encoded sRGB in 0 to 1, cut into overlapping
+/// `tile × tile` tiles (mirrored at the picture's edges when it is smaller than one), each run through the model and
+/// blended back. Gives the same encoding at the same size. With `Gain::None` the model's answer is kept as it is; with
+/// `Gain::MatchMean` the picture's coarse colour and brightness are brought back to the input's (see below), which can
+/// leave values a little outside 0 to 1.
+pub fn denoise_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, ctl: &Control<'_>) -> Result<Rgb32f, Error> {
+    tiled_rgb(image, runner, p, ctl, Scales { model: 1, out: 1 })
+}
+
+/// How much larger than its input a finished-picture model's answer is, and the result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scales {
+    /// The model's factor: a `tile × tile` input gives `model·tile` pixels across.
+    pub model: usize,
+    /// The result's factor over the picture; it divides `model`, and each tile's answer is averaged down by
+    /// `model / out` before it is blended in (1 sharpens at the picture's own size).
+    pub out: usize,
+}
+
+/// Enlarge a finished picture with an upscaling model (`Domain::RgbToRgb4x`): like [`denoise_rgb`], but the model
+/// gives `scales.model` times the pixels across, and the result has `scales.out` times the picture's.
+pub fn upscale_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, ctl: &Control<'_>, scales: Scales) -> Result<Rgb32f, Error> {
+    if scales.out == 0 || scales.model == 0 || !scales.model.is_multiple_of(scales.out) {
+        return Err(Error::Input(format!("a result {}× the picture's size cannot come from a {}× model", scales.out, scales.model)));
+    }
+    tiled_rgb(image, runner, p, ctl, scales)
+}
+
+/// The tile at `(x0, y0)` of the canvas (the picture mirrored out by `guard` on every side) as three `t × t` planes,
+/// clamped to 0 to 1.
+fn read_tile(image: &Rgb32f, x0: usize, y0: usize, t: usize, guard: usize) -> Result<Vec<f32>, Error> {
+    // canvas position → picture index, mirrored at the picture's edges (n ≥ 1)
+    let mirror = |v: usize, n: usize| -> usize {
+        let i = v as isize - guard as isize;
+        let n = n.max(1) as isize;
+        let period = 2 * n;
+        let m = i.rem_euclid(period);
+        (if m < n { m } else { period - 1 - m }) as usize
+    };
+    let mut input = allocate(3 * t * t, 0f32)?;
+    for j in 0..t {
+        let y = mirror(y0 + j, image.height);
+        for i in 0..t {
+            let x = mirror(x0 + i, image.width);
+            let px = image.data.get(y * image.width + x).copied().unwrap_or([0.0; 3]);
+            for (c, v) in px.iter().enumerate() {
+                if let Some(s) = input.get_mut(c * t * t + j * t + i) {
+                    *s = v.clamp(0.0, 1.0);
+                }
+            }
+        }
+    }
+    Ok(input)
+}
+
+/// Three `side × side` planes averaged down by `k` in each direction (`k` divides `side`; 1 leaves them as they are).
+fn shrink(planes: Vec<f32>, side: usize, k: usize) -> Result<Vec<f32>, Error> {
+    if k <= 1 {
+        return Ok(planes);
+    }
+    let small = side / k;
+    let norm = 1.0 / (k * k) as f32;
+    let mut out = allocate(3 * small * small, 0f32)?;
+    for (plane, to) in planes.chunks_exact(side * side).zip(out.chunks_exact_mut(small * small)) {
+        // each `k` rows of the plane make one row of the result, each `k` columns of those one pixel
+        for (rows, row_to) in plane.chunks_exact(k * side).zip(to.chunks_exact_mut(small)) {
+            for row in rows.chunks_exact(side) {
+                for (block, o) in row.chunks_exact(k).zip(row_to.iter_mut()) {
+                    *o += block.iter().sum::<f32>() * norm;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn tiled_rgb(image: &Rgb32f, runner: &dyn TileRunner, p: &Params, ctl: &Control<'_>, scales: Scales) -> Result<Rgb32f, Error> {
+    let (width, height) = (image.width, image.height);
+    width
+        .checked_mul(height)
+        .filter(|&n| n > 0 && n <= MAX_PIXELS && n == image.data.len())
+        .ok_or_else(|| Error::Input("the picture has no size, is too large or does not hold width × height pixels".into()))?;
+    if image.data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(Error::Input("the picture has samples that are not finite".into()));
+    }
+    if !(16..=2048).contains(&p.tile) || p.overlap >= p.tile.div_ceil(2) {
+        return Err(Error::Input("the tile size and overlap do not fit".into()));
+    }
+    let (t, o) = (p.tile, scales.out);
+    let (Some(ow), Some(oh)) = (width.checked_mul(o), height.checked_mul(o)) else {
+        return Err(Error::Input("the result would be too large".into()));
+    };
+    let out_pixels = ow
+        .checked_mul(oh)
+        .filter(|&n| n <= MAX_PIXELS)
+        .ok_or_else(|| Error::Input(format!("the result would have {} × {} pixels, more than the {MAX_PIXELS} a picture may have", ow, oh)))?;
+    let model_side = t.checked_mul(scales.model).ok_or_else(|| Error::Input("the model's tile is too large".into()))?;
+    // A model gets the outermost pixels of its tile wrong (it pads them with nothing). So every tile's outer `guard`
+    // pixels count for nothing, and the picture is mirrored out by `guard` on every side so that its own edges never
+    // fall there; neighbouring tiles blend across what is left of the overlap.
+    let guard = p.overlap / 4;
+    let (cw, ch) = (width + 2 * guard, height + 2 * guard);
+    let (sx, sy) = (starts(cw, t, p.overlap), starts(ch, t, p.overlap));
+    let (cols, rows) = (sx.len(), sy.len());
+    if cols == 0 || rows == 0 {
+        return Err(Error::Input("the picture needs too many tiles".into()));
+    }
+    type Tile = (usize, usize, bool, bool, bool, bool);
+    let tiles: Vec<Tile> = sy
+        .iter()
+        .enumerate()
+        .flat_map(|(j, &y0)| sx.iter().enumerate().map(move |(i, &x0)| (x0, y0, i > 0, i + 1 < cols, j > 0, j + 1 < rows)))
+        .collect();
+    let total = tiles.len();
+    let mut acc = allocate(out_pixels, [0f32; 3])?;
+    let mut wsum = allocate(out_pixels, 0f32)?;
+    // the blend, in the result's pixels: a tile of `ot` across, nothing in the guard band, then the usual ease across
+    // the rest of the overlap
+    let (ot, og) = (t * o, guard * o);
+    let fade = p.overlap.saturating_sub(2 * guard).max(1) * o;
+    let axis = |q: usize, before: bool, after: bool| -> f32 {
+        if q < og || q + og >= ot {
+            return 0.0;
+        }
+        weight(q - og, ot - 2 * og, fade, before, after)
+    };
+    let compute = |chunk: &[Tile]| -> Vec<Result<Vec<f32>, Error>> {
+        chunk
+            .par_iter()
+            .map(|&(x0, y0, ..)| {
+                let out = runner.run(&read_tile(image, x0, y0, t, guard)?)?;
+                if out.len() != 3 * model_side * model_side {
+                    return Err(Error::Model(format!("{} numbers for a tile, not the {} expected", out.len(), 3 * model_side * model_side)));
+                }
+                if out.iter().any(|v| !v.is_finite()) {
+                    return Err(Error::Model("numbers that are not finite".into()));
+                }
+                shrink(out, model_side, scales.model / o)
+            })
+            .collect()
+    };
+    let group = p.parallel.clamp(1, 4);
+    let mut done = 0;
+    for chunk in tiles.chunks(group) {
+        if ctl.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
+        }
+        for (&(x0, y0, bx, ax, by, ay), out) in chunk.iter().zip(compute(chunk)) {
+            let out = out?;
+            let wx: Vec<f32> = (0..ot).map(|i| axis(i, bx, ax)).collect();
+            let wy: Vec<f32> = (0..ot).map(|j| axis(j, by, ay)).collect();
+            for (j, &b) in wy.iter().enumerate() {
+                // canvas row → result row; the mirrored margin belongs to no pixel
+                let Some(y) = (y0 * o + j).checked_sub(og).filter(|&y| y < oh) else { continue };
+                if b <= 0.0 {
+                    continue;
+                }
+                for (i, &a) in wx.iter().enumerate() {
+                    let Some(x) = (x0 * o + i).checked_sub(og).filter(|&x| x < ow) else { continue };
+                    let w = a * b;
+                    if w <= 0.0 {
+                        continue;
+                    }
+                    let k = y * ow + x;
+                    let (Some(px), Some(s)) = (acc.get_mut(k), wsum.get_mut(k)) else { continue };
+                    *s += w;
+                    for (c, v) in px.iter_mut().enumerate() {
+                        *v += w * out.get(c * ot * ot + j * ot + i).copied().unwrap_or(0.0);
+                    }
+                }
+            }
+            done += 1;
+            if let Some(f) = ctl.progress {
+                f(done, total);
+            }
+        }
+    }
+    acc.par_iter_mut().zip(wsum.par_iter()).for_each(|(px, &w)| {
+        if w > 0.0 {
+            *px = px.map(|v| v / w);
+        }
+    });
+    // A model with a cast of its own (`Gain::MatchMean`): its colours and brightness drift a little, from place to place.
+    // Noise is fine detail, so only the fine detail is taken from the model: the picture's coarse colour and brightness
+    // (blurred over `RESTORE_SIGMA` pixels, which averages the noise away) come from the input again, by at most
+    // `maxDeviation` (on the 0 to 1 scale) either way. A model that does not drift is left as it is.
+    if let Gain::MatchMean { max_deviation, .. } = p.gain
+        && o == 1
+        && max_deviation.is_finite()
+        && max_deviation > 0.0
+    {
+        let out = Rgb32f { width, height, data: acc };
+        let (low_in, low_out) =
+            rayon::join(|| lightcraft_raster::blur::gaussian(image, RESTORE_SIGMA), || lightcraft_raster::blur::gaussian(&out, RESTORE_SIGMA));
+        let mut data = out.data;
+        data.par_iter_mut().zip(low_in.data.par_iter().zip(low_out.data.par_iter())).for_each(|(px, (li, lo))| {
+            for c in 0..3 {
+                px[c] += (li[c] - lo[c]).clamp(-max_deviation, max_deviation);
+            }
+        });
+        acc = data;
+    }
+    if acc.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(Error::Model("numbers that are not finite after tile blending".into()));
+    }
+    Ok(Rgb32f { width: ow, height: oh, data: acc })
 }
 
 /// Bring a tile's output to the input's scale and keep clipped highlights as they were (in place).
@@ -661,5 +875,189 @@ mod tests {
             denoise_bayer(&[], MAX_PIXELS + 1, 1, layout, &model, &p, &Control::default()),
             Err(Error::Input(message)) if message == "the picture has no size, or is too large"
         ));
+    }
+
+    /// A stand-in finished-picture model that gives its tile back.
+    struct Same(usize);
+    impl TileRunner for Same {
+        fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+            assert_eq!(input.len(), 3 * self.0 * self.0);
+            Ok(input.to_vec())
+        }
+    }
+
+    fn ramp(w: usize, h: usize) -> Rgb32f {
+        let data = (0..w * h).map(|k| [(k % w) as f32 / w as f32, (k / w) as f32 / h as f32, ((k * 7) % 13) as f32 / 13.0]).collect();
+        Rgb32f { width: w, height: h, data }
+    }
+
+    #[test]
+    fn a_finished_picture_comes_back_as_the_model_gives_it_across_tiles_and_edges() {
+        // larger than a tile (several tiles, overlaps), smaller than a tile (mirrored), and one pixel
+        for (w, h) in [(70, 45), (10, 7), (1, 1)] {
+            let img = ramp(w, h);
+            let out = denoise_rgb(&img, &Same(32), &params(32, 8, Gain::None), &Control::default()).unwrap();
+            assert_eq!((out.width, out.height), (w, h));
+            for (a, b) in out.data.iter().zip(&img.data) {
+                for c in 0..3 {
+                    assert!((a[c] - b[c]).abs() < 1e-5, "{w}×{h}: {a:?} vs {b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn what_a_model_gets_wrong_at_its_tile_edges_never_reaches_the_picture() {
+        // a model that gives its tile back but blackens the outer quarter of the overlap, as a real one smears it
+        struct Frayed(usize, usize);
+        impl TileRunner for Frayed {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                let (t, g) = (self.0, self.1);
+                let mut out = input.to_vec();
+                for c in 0..3 {
+                    for y in 0..t {
+                        for x in 0..t {
+                            if x < g || y < g || x + g >= t || y + g >= t {
+                                out[c * t * t + y * t + x] = 0.0;
+                            }
+                        }
+                    }
+                }
+                Ok(out)
+            }
+        }
+        // several tiles, a picture smaller than a tile, and one exactly a tile's size
+        for (w, h) in [(130, 75), (20, 13), (48, 48)] {
+            let img = ramp(w, h);
+            let out = denoise_rgb(&img, &Frayed(48, 4), &params(48, 16, Gain::None), &Control::default()).unwrap();
+            for (k, (a, b)) in out.data.iter().zip(&img.data).enumerate() {
+                for c in 0..3 {
+                    assert!((a[c] - b[c]).abs() < 1e-5, "{w}×{h} at {}, {}: {a:?} vs {b:?}", k % w, k / w);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_finished_picture_models_colour_cast_is_taken_out_within_its_limit() {
+        struct Warm;
+        impl TileRunner for Warm {
+            fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+                let plane = input.len() / 3;
+                Ok(input
+                    .iter()
+                    .enumerate()
+                    .map(|(k, v)| {
+                        v * if k < plane {
+                            1.06
+                        } else if k >= 2 * plane {
+                            0.9
+                        } else {
+                            1.0
+                        }
+                    })
+                    .collect())
+            }
+        }
+        let img = ramp(90, 61);
+        let mean = |d: &[[f32; 3]], c: usize| d.iter().map(|p| f64::from(p[c])).sum::<f64>() / d.len() as f64;
+        let matched = Gain::MatchMean { nominal: 1.0, max_deviation: 0.08 };
+        let out = denoise_rgb(&img, &Warm, &params(48, 16, matched), &Control::default()).unwrap();
+        for c in 0..2 {
+            assert!((mean(&out.data, c) - mean(&img.data, c)).abs() < 1e-3, "channel {c}");
+        }
+        // blue (up to 0.09 off, 0.08 allowed) is taken out nearly whole; without a gain, nothing is
+        let blue = mean(&out.data, 2) / mean(&img.data, 2);
+        assert!((blue - 1.0).abs() < 0.01, "{blue}");
+        // the correction is local: every pixel of a model that only tints is about its input's again (the fine detail
+        // keeps the model's own scale, a few thousandths here)
+        for (a, b) in out.data.iter().zip(&img.data) {
+            for c in 0..2 {
+                assert!((a[c] - b[c]).abs() < 6e-3, "{a:?} vs {b:?}");
+            }
+        }
+        let raw = denoise_rgb(&img, &Warm, &params(48, 16, Gain::None), &Control::default()).unwrap();
+        assert!((mean(&raw.data, 0) / mean(&img.data, 0) - 1.06).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_finished_picture_model_of_the_wrong_size_or_a_cancel_stops_it() {
+        struct Short;
+        impl TileRunner for Short {
+            fn run(&self, _: &[f32]) -> Result<Vec<f32>, Error> {
+                Ok(vec![0.5; 7])
+            }
+        }
+        let img = ramp(40, 40);
+        assert!(matches!(denoise_rgb(&img, &Short, &params(32, 8, Gain::None), &Control::default()), Err(Error::Model(_))));
+        let stop = AtomicBool::new(true);
+        let ctl = Control { cancel: Some(&stop), progress: None };
+        assert!(matches!(denoise_rgb(&img, &Same(32), &params(32, 8, Gain::None), &ctl), Err(Error::Cancelled)));
+        let bad = Rgb32f { width: 2, height: 1, data: vec![[f32::NAN; 3]; 2] };
+        assert!(matches!(denoise_rgb(&bad, &Same(32), &params(32, 8, Gain::None), &Control::default()), Err(Error::Input(_))));
+    }
+
+    /// A stand-in upscaler: every pixel of its `t × t` tile becomes a `4 × 4` block.
+    struct Repeat4(usize);
+    impl TileRunner for Repeat4 {
+        fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error> {
+            let (t, big) = (self.0, 4 * self.0);
+            assert_eq!(input.len(), 3 * t * t);
+            Ok((0..3 * big * big)
+                .map(|k| (k / (big * big), (k % (big * big)) / big, k % big))
+                .map(|(c, y, x)| input[c * t * t + y / 4 * t + x / 4])
+                .collect())
+        }
+    }
+
+    #[test]
+    fn an_upscaled_picture_lines_up_across_tiles_and_edges_at_every_size() {
+        // several tiles, a picture smaller than a tile, and one pixel; 4×, 2× (averaged down) and the picture's own size
+        for (w, h) in [(70, 45), (10, 7), (1, 1)] {
+            let img = ramp(w, h);
+            for out_scale in [4, 2, 1] {
+                let scales = Scales { model: 4, out: out_scale };
+                let out = upscale_rgb(&img, &Repeat4(32), &params(32, 8, Gain::None), &Control::default(), scales).unwrap();
+                assert_eq!((out.width, out.height), (w * out_scale, h * out_scale));
+                for (k, a) in out.data.iter().enumerate() {
+                    let (x, y) = (k % out.width / out_scale, k / out.width / out_scale);
+                    let b = img.data[y * w + x];
+                    for c in 0..3 {
+                        assert!((a[c] - b[c]).abs() < 1e-5, "{w}×{h} at {out_scale}×, {x}, {y}: {a:?} vs {b:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn averaging_down_takes_the_mean_of_every_block() {
+        // three 4 × 4 planes of distinct numbers, by 2: each 2 × 2 block's mean, not one of its pixels
+        let planes: Vec<f32> = (0..48).map(|v| v as f32).collect();
+        let out = shrink(planes.clone(), 4, 2).unwrap();
+        assert_eq!(out.len(), 12);
+        assert_eq!(&out[..4], &[2.5, 4.5, 10.5, 12.5]);
+        assert_eq!(&out[4..8], &[18.5, 20.5, 26.5, 28.5]);
+        // by 4 the whole plane's mean; by 1 the planes as they were
+        assert_eq!(shrink(planes.clone(), 4, 4).unwrap(), vec![7.5, 23.5, 39.5]);
+        assert_eq!(shrink(planes.clone(), 4, 1).unwrap(), planes);
+    }
+
+    #[test]
+    fn an_upscale_that_cannot_be_made_is_an_error() {
+        let img = ramp(40, 30);
+        let p = params(32, 8, Gain::None);
+        let up = |img: &Rgb32f, model: &dyn TileRunner, model_scale: usize, out: usize| {
+            upscale_rgb(img, model, &p, &Control::default(), Scales { model: model_scale, out })
+        };
+        // a result size the model's cannot be averaged down to
+        for (model_scale, out) in [(4, 3), (4, 0), (0, 0), (2, 4)] {
+            assert!(matches!(up(&img, &Repeat4(32), model_scale, out), Err(Error::Input(_))), "{model_scale}, {out}");
+        }
+        // a model that gives the picture's size where four times was promised
+        assert!(matches!(up(&img, &Same(32), 4, 4), Err(Error::Model(_))));
+        // a result larger than a picture may be
+        let wide = Rgb32f { width: MAX_PIXELS / 8, height: 1, data: vec![[0.5; 3]; MAX_PIXELS / 8] };
+        assert!(matches!(up(&wide, &Repeat4(32), 4, 4), Err(Error::Input(_))));
     }
 }

@@ -110,6 +110,7 @@ impl LightcraftApp {
             compare_hold_until: f64::NEG_INFINITY,
             survey_motion: Default::default(),
             merge: merge::MergeState::default(),
+            enhance: Default::default(),
             import: None,
             scan: None,
             scans_stopping: Default::default(),

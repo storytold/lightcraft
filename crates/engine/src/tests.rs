@@ -15,6 +15,7 @@ mod crop_aspect;
 mod dcp;
 mod dcp_corpus;
 mod denoise;
+mod enhance;
 mod export;
 mod face_models;
 #[cfg(not(target_arch = "wasm32"))]

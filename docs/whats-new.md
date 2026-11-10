@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Super Resolution and AI Sharpen
+- Photo ▸ Enhance ▸ Super Resolution makes a copy of the selected photo with twice its pixels across, filled in by a
+  neural upscaler; AI Sharpen runs the same upscaler and brings the result back to the photo's size, for finer detail
+  and slightly sharper edges. Both write a new 16-bit TIFF next to the photo (`-Enhanced-SR.tif`), stacked with it, in
+  the background with a row in the activity stack. The photo is rendered without its edits first, so a raw's edits do
+  not carry over. No upscaler is bundled: install one in Settings ▸ AI Denoise (see docs/super-resolution.md). The
+  commands are `enhance.superResolution` (also 4×) and `enhance.aiSharpen`.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth

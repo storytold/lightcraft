@@ -163,6 +163,9 @@ RGGB planes `[1, 4, tile, tile]` produce camera RGB `[1, 3, 2*tile, 2*tile]`.
 RawNIND uses a 512-cell tile, 64-cell overlap and a mean-matched nominal gain of 1e6.
 See `DenoiserManifest` for the validated JSON schema.
 
+The same folder keeps upscalers for Super Resolution (`domain: "rgbToRgb4x"`, the `upscaleModel` slot, and the
+`realesrgan-model` feature for a download): see [super-resolution.md](super-resolution.md).
+
 ## Photos, previews and exports
 
 Original RAW files stay untouched. A cleaned picture is cached under
@@ -185,6 +188,29 @@ An export with a nonzero effective Amount creates a missing product synchronousl
 It returns a clear error if it cannot produce the denoised result; it never silently
 exports the plain image instead. Unsupported sensor layouts retain manual noise
 reduction and report their limitation.
+
+## Finished pictures (JPEG, PNG, TIFF …)
+
+A photo that has no sensor data left (a JPEG, PNG, TIFF or other finished picture) takes a model of its own kind:
+`domain: "rgbToRgb"` in the manifest, three planes of gamma-encoded sRGB in 0 to 1, given back at the same size.
+Raw photos and finished pictures each have their model in use (`model` and `rgbModel` in `settings.json`): installing
+or choosing a model fills the slot of its kind, so the two never replace each other, and each photo is denoised by the
+model of its kind. `denoise.models.select {id: null, kind: "rgb"}` switches finished pictures off and leaves raw
+photos as they are. Turning AI Denoise on for a finished picture without such a model opens Settings ▸ AI Denoise
+the same way as for a raw photo.
+
+The picture is decoded at full size and unrotated, converted from its own colour space to sRGB (wider colours are
+clipped to sRGB), denoised tile by tile and cached like a raw photo's product. A render reads it back to the size of
+the plain decode, converts it to the working space as the plain picture is, and the Amount mixes the two.
+
+The picture is cut into overlapping tiles over a margin mirrored out from its edges, and each tile's outer quarter of
+the overlap counts for nothing: models get the edge of their tile wrong, and those pixels never reach the picture.
+A model whose manifest has `gain: matchMean` drifts in colour or brightness: its fine detail is kept and the
+picture's coarse colour and brightness (blurred over 8 pixels, `RESTORE_SIGMA`) come from the input again, by at
+most `maxDeviation` on the 0 to 1 scale.
+
+The `rawnind-model` build knows darktable's NIND U-Net (`denoise-nind.dtmodel`, GPL-3.0 weights, `nind-rgb`):
+768-cell tiles, ReLU layers and a final sigmoid, which the pure-Rust runners execute on the CPU and the graphics card.
 
 ## Pure-Rust CPU and GPU execution
 

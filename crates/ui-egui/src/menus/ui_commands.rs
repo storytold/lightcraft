@@ -224,6 +224,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("merge.hdrLast", "HDR with Last Settings", Some("Ctrl+Shift+H"), "Photo>Photo Merge"),
     ("merge.panoramaLast", "Panorama with Last Settings", Some("Ctrl+Shift+M"), "Photo>Photo Merge"),
     ("merge.hdrPanoramaLast", "HDR Panorama with Last Settings", None, "Photo>Photo Merge"),
+    // the selected photo with its import defaults, enlarged 2× (or sharpened at its size) by the installed upscaler,
+    // as a new TIFF stacked with it, in the background (the engine's `enhance.*` run on the spot)
+    ("enhance.superResolutionStart", "Super Resolution", None, "Photo>Enhance"),
+    ("enhance.aiSharpenStart", "AI Sharpen", None, "Photo>Enhance"),
     ("file.addPhotos", "Import Photos…", Some("Cmd+Shift+I"), "File"),
     ("file.addFolder", "Import from Folder…", None, "File"),
     // {path?, into?: open | new, name?, location?}: asks where the catalog goes unless `into` (or

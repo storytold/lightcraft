@@ -267,6 +267,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "photo.virtualCopy",
             "@Stack",
             "@Photo Merge",
+            "@Enhance",
             "---",
             "develop.auto",
             "develop.treatment",
@@ -359,12 +360,13 @@ pub(crate) fn selection_deleted(app: &LightcraftApp) -> bool {
     s.selection.ids.iter().copied().chain(s.selection.active).any(|id| s.catalog.photo(id).is_some_and(|p| p.deleted))
 }
 
-/// Items only some hosts have are left out of the others' menus (the web build's library backup);
-/// Restore and Delete Permanently replace Delete for photos in Recently Deleted.
+/// Items only some hosts have are left out of the others' menus (the web build's library backup, Enhance where no
+/// AI models are kept); Restore and Delete Permanently replace Delete for photos in Recently Deleted.
 fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "file.backupLibrary" => app.services.backup_library.is_some(),
         "file.restoreLibrary" => app.services.restore_library.is_some(),
+        "enhance.superResolutionStart" | "enhance.aiSharpenStart" => app.session.has_denoise_models_dir(),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
         "photo.delete" => !selection_deleted(app),
         // only in an album that holds its photos (not a smart one)

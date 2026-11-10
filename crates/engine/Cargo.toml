@@ -59,6 +59,8 @@ fs4 = { workspace = true }
 sam = ["dep:lightcraft-segment"]
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
+# Product-policy switch, like `rawnind-model`: offers the pinned Real-ESRGAN upscaler download for Super Resolution.
+realesrgan-model = ["denoise", "lightcraft-denoise/realesrgan-model", "lightcraft-denoise-core/realesrgan-model"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)

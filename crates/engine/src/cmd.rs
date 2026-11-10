@@ -15,6 +15,7 @@ pub mod dcp_profiles;
 pub(crate) mod denoise;
 mod develop;
 mod edit;
+mod enhance;
 mod export;
 pub(crate) mod face_detect;
 mod face_models;
@@ -160,6 +161,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(cull::specs());
         v.extend(convert::specs());
         v.extend(convert::edit_specs());
+        v.extend(enhance::specs());
         v.extend(merge::specs());
         v.extend(query::specs());
         v.extend(xmp::specs());

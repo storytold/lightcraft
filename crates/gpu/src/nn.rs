@@ -17,7 +17,7 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use bytemuck::{Pod, Zeroable};
-use lightcraft_denoise::net::{Net, Op};
+use lightcraft_denoise::net::{Activation, Net, Op};
 use lightcraft_denoise::run::{Error, TileRunner};
 use wgpu::util::DeviceExt;
 
@@ -144,10 +144,20 @@ struct ConvParams {
     k: u32,
     mode: u32,
     cout: u32,
-    leaky: u32,
+    /// 0 none, 1 leaky ReLU with slope `alpha`, 2 sigmoid, 3 a slope per channel after the bias (a fused `PRelu`).
+    act: u32,
     alpha: f32,
     /// Always 0: the kernel steps its output stores by `1 + zero`, so FXC cannot merge them (`nn_conv.wgsl`).
     zero: u32,
+    /// Mode 2: the depth-to-space block size.
+    block: u32,
+    /// Mode 2: the input's channel count / 4 when the input (upsampled by `block`) is added on the way out, else 0.
+    skip_c4: u32,
+    /// Mode 2: 1 when the output is clamped into `[lo, hi]`.
+    clip: u32,
+    lo: f32,
+    hi: f32,
+    _pad: [u32; 3],
 }
 
 #[repr(C)]
@@ -188,12 +198,28 @@ struct Layout {
     steps: Vec<Step>,
     /// Bytes of each activation buffer.
     slots: Vec<u64>,
+    /// Input channels on the GPU: the network's, rounded up to a multiple of 4 (the extra plane is zero).
+    in_pad: usize,
+    /// Floats the GPU buffer takes (`in_pad` planes).
     in_floats: usize,
+    /// Floats of the output: its channels × side².
     out_floats: usize,
 }
 
+/// How a network ends: the convolution whose stores write the planar output with depth-to-space, and what else its
+/// stores do (the denoisers: nothing; the compact upscaler: add the input upsampled by the block size, and clip).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Tail {
+    conv: usize,
+    /// The depth-to-space block size; 1 for an RGB-to-RGB network, whose last convolution is stored planar at the
+    /// input's size (mode 3).
+    block: usize,
+    skip: bool,
+    clip: Option<(f32, f32)>,
+}
+
 /// Weights arranged for the kernel: `[k][npad]` rows with `k = tap · cin + ci` (columns are output channels, zero past
-/// `n`), and the bias padded the same.
+/// `n`), and the bias padded the same (followed by the slopes, padded likewise, for a fused `PRelu`).
 struct Layer {
     weight: Vec<f32>,
     bias: Vec<f32>,
@@ -220,42 +246,145 @@ fn round_up(v: usize, to: usize) -> usize {
     v.div_ceil(to) * to
 }
 
-fn validate_plan(net: &Net, tile: usize, ops: &[Op]) -> Result<(), String> {
-    if !net.fits_tile(tile) {
+/// How the activation goes to the kernel: its mode and the leaky slope.
+fn encode(a: Activation) -> (u32, f32) {
+    match a {
+        Activation::None => (0, 0.0),
+        Activation::Leaky(alpha) => (1, alpha),
+        Activation::Sigmoid => (2, 0.0),
+    }
+}
+
+/// The kernel's activation mode for a convolution whose stores run a fused `PRelu` (slopes after the bias).
+const ACT_PRELU: u32 = 3;
+
+/// The layers the kernels run on their own; the rest are only run as part of a convolution (`Tail`, fused `PRelu`).
+fn runs_alone(op: &Op) -> bool {
+    matches!(op, Op::Conv(_) | Op::ConvT2(_) | Op::MaxPool2 { .. } | Op::PRelu { .. })
+}
+
+/// How `ops` ends, if the kernels can write it: for an RGB-to-RGB network (`rgb`) a convolution to 3 channels at the
+/// input's size; else a convolution without activation to `3 · block²` channels and depth-to-space (the denoisers),
+/// optionally followed by the input upsampled by the block size added on and a clip (the compact upscaler).
+fn tail_of(ops: &[Op], rgb: bool) -> Option<Tail> {
+    let n = ops.len();
+    if rgb {
+        let at = n.checked_sub(1)?;
+        return matches!(ops.get(at), Some(Op::Conv(c)) if c.cout == 3).then_some(Tail { conv: at, block: 1, skip: false, clip: None });
+    }
+    let ends_conv = |at: usize, block: usize| matches!(ops.get(at), Some(Op::Conv(c)) if c.src2.is_none() && c.activation == Activation::None && c.cout == 3 * block * block);
+    if let (Some(Op::DepthToSpace { src, block }), Some(at)) = (ops.last(), n.checked_sub(2))
+        && *src == at + 1
+        && ends_conv(at, *block)
+    {
+        return Some(Tail { conv: at, block: *block, skip: false, clip: None });
+    }
+    let at = n.checked_sub(5)?;
+    match ops.get(at + 1..)? {
+        [Op::DepthToSpace { src, block }, Op::Upsample { src: 0, factor }, Op::Add { a, b }, Op::Clip { src: clipped, min, max }]
+            if *src == at + 1
+                && factor == block
+                && ((*a, *b) == (at + 2, at + 3) || (*a, *b) == (at + 3, at + 2))
+                && *clipped == at + 4
+                && ends_conv(at, *block) =>
+        {
+            Some(Tail { conv: at, block: *block, skip: true, clip: Some((*min, *max)) })
+        }
+        _ => None,
+    }
+}
+
+/// Is the network one the kernels run, and how does it end ([`Tail`])?
+fn validate_plan(net: &Net, tile: usize, ops: &[Op]) -> Result<Tail, String> {
+    if !net.pools_evenly(tile) {
         return unsupported("the tile does not fit the network");
     }
     if tile > MAX_TILE {
         return unsupported("the tile is larger than the kernels' dispatches reach");
     }
-    if !net.in_channels.is_multiple_of(4) {
-        return unsupported("the input channel count is not a multiple of 4");
+    let Some(tail) = tail_of(ops, net.fits_tile_at(tile, 0)) else {
+        return unsupported(
+            "the network ends neither in a convolution to 3 channels at the input's size nor in one to 3 · block² channels and depth-to-space",
+        );
+    };
+    if ops.get(..tail.conv).is_some_and(|before| !before.iter().all(runs_alone)) {
+        return unsupported("depth-to-space, upsampling, a sum or a clip before the network's end");
     }
-    let count = ops.len();
-    let ends_right = matches!(
-        (count.checked_sub(2).and_then(|i| ops.get(i)), ops.last()),
-        (Some(Op::Conv(conv)), Some(Op::DepthToSpace2 { src }))
-            if conv.k == 1 && conv.src2.is_none() && *src == count - 1 && conv.cout == 12 && conv.leaky.is_none()
-    );
-    if ends_right { Ok(()) } else { unsupported("the network does not end in a 1 × 1 convolution to 12 channels and depth-to-space") }
+    Ok(tail)
 }
+
+/// A convolution's weights arranged for the kernel: row `(tap · cin + ci)`, column `co`, with `cin` the channels the
+/// kernel reads (more than the layer's when the input is padded; the extra rows stay zero).
+fn arrange_conv(c: &lightcraft_denoise::net::Conv, cin: usize, npad: usize) -> Vec<f32> {
+    let mut weight = vec![0f32; c.k * c.k * cin * npad];
+    for co in 0..c.cout {
+        for ci in 0..c.cin {
+            for ky in 0..c.k {
+                for kx in 0..c.k {
+                    let v = c.weight.get(((co * c.cin + ci) * c.k + ky) * c.k + kx).copied().unwrap_or(0.0);
+                    if let Some(w) = weight.get_mut(((ky * c.k + kx) * cin + ci) * npad + co) {
+                        *w = v;
+                    }
+                }
+            }
+        }
+    }
+    weight
+}
+
+/// The slopes of a `PRelu` that is the only reader of convolution `i` (tensor `i + 1`), so it runs in its stores.
+fn fusable_prelu<'a>(ops: &'a [Op], i: usize, c: &lightcraft_denoise::net::Conv, last_use: &[usize]) -> Option<&'a [f32]> {
+    match ops.get(i + 1) {
+        Some(Op::PRelu { src, slope }) if *src == i + 1 && c.activation == Activation::None && last_use.get(i + 1) == Some(&(i + 1)) => Some(slope),
+        _ => None,
+    }
+}
+
+/// The bias padded to `npad`, followed by a fused `PRelu`'s slopes padded likewise.
+fn conv_bias(bias: &[f32], npad: usize, slope: Option<&[f32]>) -> Vec<f32> {
+    let mut out = vec![0f32; if slope.is_some() { 2 * npad } else { npad }];
+    for (values, at) in std::iter::once((bias, 0)).chain(slope.map(|s| (s, npad))) {
+        if let Some(to) = out.get_mut(at..at + values.len()) {
+            to.copy_from_slice(values);
+        }
+    }
+    out
+}
+
+/// The most bytes one tensor of a planned network may take (the sizes the plan works out are 32-bit).
+const MAX_TENSOR_BYTES: usize = u32::MAX as usize;
 
 /// Work out the steps, the buffers and the arranged weights for `net` on `tile × tile` input cells.
 fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>), String> {
     let ops = net.ops();
-    validate_plan(net, tile, ops)?;
-    let side = |t: usize| -> usize {
+    let tail = validate_plan(net, tile, ops)?;
+    let in_pad = round_up(net.in_channels, 4);
+    // a tensor's side: the tile halved for every level down, doubled for every level up (an upsampling layer)
+    let side_of = |t: usize| -> Option<usize> {
         let level = net.shape(t).map_or(0, |s| s.level);
-        if level >= 0 { tile >> level } else { tile << (-level) }
+        let shift = level.unsigned_abs();
+        if level >= 0 { tile.checked_shr(shift) } else { 1usize.checked_shl(shift).and_then(|f| tile.checked_mul(f)) }
     };
-    let chan = |t: usize| net.shape(t).map_or(0, |s| s.channels);
+    // the input tensor is padded to a multiple of 4 planes
+    let chan = |t: usize| net.shape(t).map_or(0, |s| if t == 0 { in_pad } else { s.channels });
     let n_ops = ops.len();
+    // every tensor's bytes fit in 32 bits, so the sizes below cannot overflow (a network that upsamples many times
+    // would)
+    let bytes = |t: usize| side_of(t)?.checked_mul(side_of(t)?)?.checked_mul(chan(t).max(1))?.checked_mul(4).filter(|&b| b <= MAX_TENSOR_BYTES);
+    if (0..=n_ops).any(|t| bytes(t).is_none()) {
+        return unsupported("a network whose layers are too large for the graphics card at this tile size");
+    }
+    let side = |t: usize| side_of(t).unwrap_or(0);
     // the last layer that reads each tensor
     let mut last_use = vec![0usize; n_ops + 1];
     for (i, op) in ops.iter().enumerate() {
         let reads: Vec<usize> = match op {
             Op::Conv(c) => std::iter::once(c.src).chain(c.src2).collect(),
             Op::ConvT2(c) => vec![c.src],
-            Op::MaxPool2 { src } | Op::DepthToSpace2 { src } => vec![*src],
+            Op::MaxPool2 { src } | Op::DepthToSpace { src, .. } | Op::PRelu { src, .. } | Op::Upsample { src, .. } | Op::Clip { src, .. } => {
+                vec![*src]
+            }
+            Op::Add { a, b } => vec![*a, *b],
         };
         for t in reads {
             if let Some(l) = last_use.get_mut(t) {
@@ -293,39 +422,51 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
         }
     }
     let get = |place: &[Option<Place>], t: usize| place.get(t).copied().flatten().ok_or_else(|| format!("tensor {t} has no buffer"));
+    // the tensor a PRelu makes when the convolution before it runs it in its stores
+    let mut fused_prelu: Option<usize> = None;
 
     for (i, op) in ops.iter().enumerate() {
         let out_t = i + 1;
         match op {
             Op::Conv(c) => {
-                if !c.cin.is_multiple_of(4) || !c.cout.is_multiple_of(4) {
+                let last = i == tail.conv;
+                // the input's zero padding plane sits in the middle of a join: not supported
+                if (c.src == 0 || c.src2 == Some(0)) && in_pad != net.in_channels && c.src2.is_some() {
+                    return unsupported("a join with a network input whose channel count is not a multiple of 4");
+                }
+                let cin = chan(c.src) + c.src2.map_or(0, chan);
+                // block 1: the last layer of an RGB-to-RGB network, stored planar without its padding columns
+                let last_rgb = last && tail.block == 1;
+                if !cin.is_multiple_of(4) || !(c.cout.is_multiple_of(4) || last_rgb) {
                     return unsupported("a convolution whose channel counts are not multiples of 4");
                 }
                 let s = side(c.src);
-                let last = i + 2 == n_ops;
-                let (n, mode) = (c.cout, if last { 2u32 } else { 0u32 });
-                let (bm, bn, bk) = blocks(n, c.cin);
+                let (n, mode) = (
+                    if last_rgb { round_up(c.cout, 4) } else { c.cout },
+                    if last_rgb {
+                        3u32
+                    } else if last {
+                        2
+                    } else {
+                        0
+                    },
+                );
+                let (bm, bn, bk) = blocks(n, cin);
                 let npad = round_up(n, bn as usize);
-                // arranged weights: row (tap · cin + ci), column co
-                let taps = c.k * c.k;
-                let mut weight = vec![0f32; taps * c.cin * npad];
-                for co in 0..c.cout {
-                    for ci in 0..c.cin {
-                        for ky in 0..c.k {
-                            for kx in 0..c.k {
-                                let v = c.weight.get(((co * c.cin + ci) * c.k + ky) * c.k + kx).copied().unwrap_or(0.0);
-                                if let Some(w) = weight.get_mut(((ky * c.k + kx) * c.cin + ci) * npad + co) {
-                                    *w = v;
-                                }
-                            }
-                        }
+                let weight = arrange_conv(c, cin, npad);
+                // a PRelu that is the only reader of this layer runs in its stores: its slopes follow the bias
+                let prelu = fusable_prelu(ops, i, c, &last_use);
+                let bias = conv_bias(&c.bias, npad, prelu);
+                fused_prelu = prelu.map(|_| out_t + 1);
+                if prelu.is_some() {
+                    // the result lives until the PRelu's readers are done
+                    let readers = last_use.get(out_t + 1).copied().unwrap_or(i + 1);
+                    if let Some(l) = last_use.get_mut(out_t) {
+                        *l = readers;
                     }
                 }
-                let mut bias = vec![0f32; npad];
-                if let Some(b) = bias.get_mut(..c.cout) {
-                    b.copy_from_slice(&c.bias);
-                }
                 let m = s * s;
+                let (act, alpha) = encode(c.activation);
                 let params = ConvParams {
                     h: s as u32,
                     w: s as u32,
@@ -336,12 +477,19 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
                     k: c.k as u32,
                     mode,
                     cout: c.cout as u32,
-                    leaky: u32::from(c.leaky.is_some()),
-                    alpha: c.leaky.unwrap_or(0.0),
+                    act: if prelu.is_some() { ACT_PRELU } else { act },
+                    alpha,
                     zero: 0,
+                    block: tail.block as u32,
+                    skip_c4: if last && tail.skip { (in_pad / 4) as u32 } else { 0 },
+                    clip: u32::from(last && tail.clip.is_some()),
+                    lo: tail.clip.map_or(0.0, |c| c.0),
+                    hi: tail.clip.map_or(0.0, |c| c.1),
+                    _pad: [0; 3],
                 };
                 let src = get(&place, c.src)?;
-                let src2 = c.src2.map(|t| get(&place, t)).transpose()?;
+                // the skip's input is read through the second source, which a convolution to the output never has
+                let src2 = if last && tail.skip { Some(Input) } else { c.src2.map(|t| get(&place, t)).transpose()? };
                 let dst = if last {
                     Output
                 } else {
@@ -393,6 +541,7 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
                     }
                 }
                 let m = s * s;
+                let (act, alpha) = encode(c.activation);
                 let params = ConvParams {
                     h: s as u32,
                     w: s as u32,
@@ -403,9 +552,15 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
                     k: 1,
                     mode: 1,
                     cout: c.cout as u32,
-                    leaky: u32::from(c.leaky.is_some()),
-                    alpha: c.leaky.unwrap_or(0.0),
+                    act,
+                    alpha,
                     zero: 0,
+                    block: 0,
+                    skip_c4: 0,
+                    clip: 0,
+                    lo: 0.0,
+                    hi: 0.0,
+                    _pad: [0; 3],
                 };
                 let src = get(&place, c.src)?;
                 let slot = alloc((4 * m * c.cout * 4) as u64, &mut slots, &mut free);
@@ -425,7 +580,7 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
             }
             Op::MaxPool2 { src } => {
                 let (s, c) = (side(*src), chan(*src));
-                if !c.is_multiple_of(4) {
+                if !c.is_multiple_of(4) || net.shape(*src).is_none_or(|sh| !sh.channels.is_multiple_of(4)) {
                     return unsupported("a max-pool over a channel count that is not a multiple of 4");
                 }
                 let total = (s / 2) * (s / 2) * (c / 4);
@@ -446,8 +601,17 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
                     params: bytemuck::bytes_of(&params).to_vec(),
                 });
             }
-            // run as part of the 1 × 1 convolution before it
-            Op::DepthToSpace2 { .. } => {}
+            // run in the stores of the convolution before it, which wrote its result where this layer's goes
+            Op::PRelu { src, .. } => {
+                let Some(conv_place) = place.get(*src).copied().flatten().filter(|_| fused_prelu == Some(out_t)) else {
+                    return unsupported("a PRelu that does not follow a convolution only it reads");
+                };
+                if let Some(p) = place.get_mut(out_t) {
+                    *p = Some(conv_place);
+                }
+            }
+            // run in the stores of the network's last convolution (`Tail`)
+            Op::DepthToSpace { .. } | Op::Upsample { .. } | Op::Add { .. } | Op::Clip { .. } => {}
         }
         // buffers whose last reader was this layer are free for the next layer's result
         for t in 0..=i {
@@ -465,7 +629,9 @@ fn plan(net: &Net, tile: usize, max_binding: u64) -> Result<(Layout, Vec<Layer>)
     if layers.iter().any(|l| (l.weight.len() as u64).saturating_mul(4) > max_binding) {
         return unsupported("a weight buffer is larger than this GPU allows");
     }
-    Ok((Layout { steps, slots, in_floats: net.in_channels * tile * tile, out_floats: 3 * (2 * tile) * (2 * tile) }, layers))
+    let out_side = net.out_side(tile).ok_or("the output has no size")?;
+    let out_floats = net.out_channels().saturating_mul(out_side).saturating_mul(out_side);
+    Ok((Layout { steps, slots, in_pad, in_floats: in_pad * tile * tile, out_floats }, layers))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -801,9 +967,9 @@ impl NetRunner {
 
     fn execute(&self, w: &Workspace, input: &[f32]) -> Result<Vec<f32>, Error> {
         let d = self.shared.dev;
-        let (t, c) = (self.tile, self.in_channels);
-        // planar → channels innermost
-        let mut nhwc = vec![0f32; input.len()];
+        let (t, c) = (self.tile, self.shared.layout.in_pad);
+        // planar → channels innermost (a padding plane stays zero)
+        let mut nhwc = vec![0f32; self.shared.layout.in_floats];
         for (ch, plane) in input.chunks_exact(t * t).enumerate() {
             for (i, v) in plane.iter().enumerate() {
                 if let Some(o) = nhwc.get_mut(i * c + ch) {
@@ -878,7 +1044,7 @@ impl TileRunner for NetRunner {
         if let Some(why) = broken_reason() {
             return Err(Error::Runtime(format!("the GPU is not used any more: {why}")));
         }
-        if input.len() != self.shared.layout.in_floats {
+        if input.len() != self.in_channels * self.tile * self.tile {
             return Err(Error::Input("the tile is not the size the model wants".into()));
         }
         // one tile is one piece of GPU work: a photo's worth would outlast any wait at exit
@@ -978,14 +1144,14 @@ mod tests {
         for co in 0..cout {
             weight[co * 4 + co % 4] = 1.0;
         }
-        Op::Conv(lightcraft_denoise::net::Conv { src, src2: None, cin: 4, cout, k: 1, weight, bias: vec![0.0; cout], leaky: None })
+        Op::Conv(lightcraft_denoise::net::Conv { src, src2: None, cin: 4, cout, k: 1, weight, bias: vec![0.0; cout], activation: Activation::None })
     }
 
     /// Two 1 × 1 layers that only copy channels, so the right answer is exact: the first layer's stores (mode 0) went
     /// wrong on DX12 with FXC on an NVIDIA GTX 1070, where every second pixel came out with its channels shifted.
     #[test]
     fn a_layer_stores_every_pixels_channels_where_the_next_reads_them() {
-        let n = Net::new(4, vec![copy(0, 4), copy(1, 12), Op::DepthToSpace2 { src: 2 }]).unwrap();
+        let n = Net::new(4, vec![copy(0, 4), copy(1, 12), Op::DepthToSpace { src: 2, block: 2 }]).unwrap();
         let Some(g) = gpu(&n, 3) else { return };
         let x: Vec<f32> = (1..=36).map(|i| i as f32).collect();
         assert_eq!(g.run(&x).unwrap(), reference::run(&n, 3, &x).unwrap());
@@ -1003,8 +1169,8 @@ mod tests {
                 weight[(c * 4 + c) * 4 + q] = 1.0;
             }
         }
-        let up = Op::ConvT2(ConvT2 { src: 1, cin: 4, cout: 4, weight, bias: vec![0.0; 4], leaky: None });
-        let n = Net::new(4, vec![Op::MaxPool2 { src: 0 }, up, copy(2, 12), Op::DepthToSpace2 { src: 3 }]).unwrap();
+        let up = Op::ConvT2(ConvT2 { src: 1, cin: 4, cout: 4, weight, bias: vec![0.0; 4], activation: Activation::None });
+        let n = Net::new(4, vec![Op::MaxPool2 { src: 0 }, up, copy(2, 12), Op::DepthToSpace { src: 3, block: 2 }]).unwrap();
         let Some(g) = gpu(&n, 6) else { return };
         let x: Vec<f32> = (1..=144).map(|i| i as f32).collect();
         assert_eq!(g.run(&x).unwrap(), reference::run(&n, 6, &x).unwrap());
@@ -1027,6 +1193,78 @@ mod tests {
             eprintln!("{}: tile {tile}, {ch} channels, depth {depth}: off by {e:e} of the output's size", g.adapter());
             assert!(e < 2e-4, "tile {tile}, {ch} channels, depth {depth}: the GPU is off by {e:e} of the output's size");
         }
+    }
+
+    /// A compact upscaler shaped like `realesr-general-x4v3`, read from its ONNX bytes.
+    fn upscaler(ch: u64, convs: usize, scale: u64, seed: u64) -> Net {
+        let path = std::env::temp_dir().join(format!("lc-nn-sr-{}-{ch}-{convs}-{scale}-{seed}.onnx", std::process::id()));
+        std::fs::write(&path, synthetic::upscaler_onnx(ch, convs, scale, seed)).unwrap();
+        let n = onnx::read(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        n
+    }
+
+    /// Three input channels padded to four, a slope per channel in the convolutions' stores, and the last
+    /// convolution's stores doing depth-to-space by 2 or 4, adding the input and clipping.
+    #[test]
+    fn upscalers_on_the_gpu_give_what_the_reference_gives() {
+        for scale in [2u64, 4] {
+            let n = upscaler(8, 2, scale, 17 + scale);
+            for tile in [1usize, 3, 8, 20] {
+                // only a missing card skips: a card that is there must take the upscaler
+                if let Err(e) = dev() {
+                    lightcraft_testkit::skip!(Gpu, "no GPU here ({e})");
+                    return;
+                }
+                let g = runner(&n, tile).expect("the planner takes this upscaler");
+                // values around [0, 1], so the clip and both sides of every slope are exercised
+                let x: Vec<f32> = picture(3 * tile * tile, tile as u64).iter().map(|v| v + 0.5).collect();
+                let want = reference::run(&n, tile, &x).unwrap();
+                let got = g.run(&x).unwrap();
+                let cpu = lightcraft_denoise::cpu::NetRunner::for_tile(&n, tile).unwrap().run(&x).unwrap();
+                assert!(worst(&got, &cpu) < 1e-3, "GPU and pure-Rust CPU differ");
+                let e = worst(&got, &want);
+                assert!(e < 2e-4, "scale {scale}, tile {tile}: the GPU is off by {e:e} of the output's size");
+            }
+        }
+    }
+
+    #[test]
+    fn upscaler_tails_the_stores_cannot_write_are_refused() {
+        let n = upscaler(8, 1, 4, 3);
+        let mut ops = n.ops().to_vec();
+        // the clip reads the upsampled input instead of the sum
+        let last = ops.len() - 1;
+        ops[last] = Op::Clip { src: last - 1, min: 0.0, max: 1.0 };
+        assert!(plan(&Net::new(3, ops).unwrap(), 8, u64::MAX).is_err());
+        // a PRelu that does not follow the convolution it reads
+        let mut ops = n.ops().to_vec();
+        ops[3] = Op::PRelu { src: 1, slope: vec![0.1; 8] };
+        assert!(plan(&Net::new(3, ops).unwrap(), 8, u64::MAX).is_err());
+        assert!(plan(&n, 8, u64::MAX).is_ok());
+    }
+
+    /// The real `realesr-general-x4v3.onnx` export at `LC_SR_MODEL` on the GPU against the CPU runner.
+    #[test]
+    #[ignore = "needs LC_SR_MODEL: the realesr-general-x4v3 ONNX export"]
+    fn real_upscaler_on_the_gpu_matches_cpu() {
+        use std::time::Instant;
+        let Some(model) = std::env::var_os("LC_SR_MODEL") else { return };
+        let net = onnx::read(std::path::Path::new(&model)).unwrap();
+        let tile = 256usize;
+        let g = runner(&net, tile).unwrap();
+        let x: Vec<f32> = picture(3 * tile * tile, 7).iter().map(|v| (v + 0.5).clamp(0.0, 1.0)).collect();
+        let cpu_runner = lightcraft_denoise::cpu::NetRunner::for_tile(&net, tile).unwrap();
+        let started = Instant::now();
+        let cpu = cpu_runner.run(&x).unwrap();
+        let cpu_s = started.elapsed().as_secs_f64();
+        g.run(&x).unwrap();
+        let started = Instant::now();
+        let got = g.run(&x).unwrap();
+        let gpu_s = started.elapsed().as_secs_f64();
+        let e = worst(&got, &cpu);
+        println!("{}: {tile}² tile → {}², CPU {cpu_s:.2} s, GPU {gpu_s:.3} s, off by {e:e}", g.adapter(), 4 * tile);
+        assert!(e < 1e-3);
     }
 
     // Issue #479: several pixels loaded by different invocations shared a vec4,
@@ -1061,6 +1299,94 @@ mod tests {
                 });
             }
         });
+    }
+
+    fn rgb_net(tile: u64, ch: u64, depth: usize, seed: u64) -> Net {
+        let path = std::env::temp_dir().join(format!("lc-nn-rgb-{}-{tile}-{ch}-{depth}-{seed}.onnx", std::process::id()));
+        std::fs::write(&path, synthetic::unet_rgb_onnx(tile, ch, depth, seed)).unwrap();
+        let n = onnx::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        n
+    }
+
+    /// RGB to RGB: three planes in (padded to four on the GPU), three planes out at the same size, Relu and a final
+    /// sigmoid; the Bayer output is covered by the tests above.
+    #[test]
+    fn the_gpu_gives_the_cpu_answer_for_an_rgb_network() {
+        for (tile, ch, depth, seed) in [(2u64, 4u64, 0usize, 1u64), (5, 4, 0, 2), (8, 4, 1, 3), (20, 8, 2, 4), (32, 12, 2, 5), (48, 8, 3, 6)] {
+            let n = rgb_net(tile, ch, depth, seed);
+            let Some(g) = gpu(&n, tile as usize) else { return };
+            let x = picture(3 * (tile * tile) as usize, seed);
+            let want = reference::run(&n, tile as usize, &x).unwrap();
+            let got = g.run(&x).unwrap();
+            assert_eq!(got.len(), 3 * (tile * tile) as usize);
+            assert!(got.iter().all(|v| (0.0..=1.0).contains(v)), "a sigmoid keeps the picture in 0..1");
+            let cpu = lightcraft_denoise::cpu::NetRunner::new(&n, tile as usize).unwrap().run(&x).unwrap();
+            assert!(worst(&got, &cpu) < 1e-3, "tile {tile}: GPU and pure-Rust CPU differ");
+            let e = worst(&got, &want);
+            assert!(e < 2e-4, "tile {tile}, {ch} channels, depth {depth}: the GPU is off by {e:e}");
+            // the wrong number of planes (the Bayer contract's four) is an input error
+            assert!(g.run(&picture(4 * (tile * tile) as usize, seed)).is_err());
+        }
+    }
+
+    /// A darktable-NIND-shaped RGB model on the CPU and the GPU, with timings per tile. Run with
+    /// `LC_DENOISE_RGB_MODEL=<model.onnx>` (and optionally `LC_DENOISE_RGB_TILE`, default 768):
+    /// `cargo test --release -p lightcraft-gpu --lib real_rgb_model -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs a real RGB-to-RGB model: see the doc comment"]
+    fn real_rgb_model_on_the_cpu_and_gpu_agree() {
+        use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
+        use lightcraft_denoise::runtime::{CpuRunner, test_tile_for};
+        use std::time::Instant;
+        let Some(model) = std::env::var_os("LC_DENOISE_RGB_MODEL") else { return };
+        let tile: usize = std::env::var("LC_DENOISE_RGB_TILE").ok().and_then(|v| v.parse().ok()).unwrap_or(768);
+        let manifest = DenoiserManifest {
+            id: "rgb-test".into(),
+            name: "RGB test".into(),
+            version: "1".into(),
+            licence: Default::default(),
+            source: None,
+            sha256: None,
+            size_bytes: None,
+            provenance: String::new(),
+            domain: Domain::RgbToRgb,
+            tile: tile as u32,
+            overlap: 32,
+            gain: Gain::None,
+        };
+        let cpu = CpuRunner::load(std::path::Path::new(&model), &manifest).unwrap();
+        assert_eq!(cpu.out_side(), tile);
+        let started = Instant::now();
+        let Some(g) = gpu(cpu.net(), tile) else { return };
+        println!("{}: set up in {:.2} s, {:.0} MB per tile in flight", g.adapter(), started.elapsed().as_secs_f64(), g.bytes_per_tile() as f64 / 1e6);
+        let (input, _) = test_tile_for(Domain::RgbToRgb, tile);
+        let t = Instant::now();
+        let want = cpu.run(&input).unwrap();
+        println!("CPU: {:.0} ms for one {tile} tile (first call, one core)", t.elapsed().as_secs_f64() * 1000.0);
+        let t = Instant::now();
+        let got = g.run(&input).unwrap();
+        println!("GPU, first tile: {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+        for (name, out) in [("CPU", &want), ("GPU", &got)] {
+            assert_eq!(out.len(), 3 * tile * tile);
+            assert!(out.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{name}: not finite or outside 0..1");
+        }
+        let e = worst(&got, &want);
+        println!("worst difference {e:e} of the output's size");
+        assert!(e < 1e-3, "the GPU does not give the CPU answer ({e:e})");
+        let median = |f: &dyn Fn()| {
+            let mut times: Vec<f64> = (0..5)
+                .map(|_| {
+                    let t = Instant::now();
+                    f();
+                    t.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect();
+            times.sort_by(|a, b| a.total_cmp(b));
+            times[times.len() / 2]
+        };
+        println!("CPU: median {:.0} ms per tile", median(&|| drop(cpu.run(&input).unwrap())));
+        println!("GPU: median {:.0} ms per tile", median(&|| drop(g.run(&input).unwrap())));
     }
 
     /// The real model on the GPU against the pure-Rust CPU runner, with timings (the numbers in docs/denoise.md come from here):
@@ -1167,6 +1493,9 @@ mod tests {
         assert!(plan(&n, 15, u64::MAX).is_err());
         // a buffer limit smaller than the activations
         assert!(plan(&n, 16, 64).is_err());
+        // a layer of the upscalers, though the network ends as a denoiser does
+        let prelu = Net::new(4, vec![Op::PRelu { src: 0, slope: vec![0.1; 4] }, copy(1, 12), Op::DepthToSpace { src: 2, block: 2 }]).unwrap();
+        assert!(plan(&prelu, 16, u64::MAX).is_err());
     }
 
     /// Issue #2577: a tile failing between a caller finding every workspace in use and that caller waiting still wakes

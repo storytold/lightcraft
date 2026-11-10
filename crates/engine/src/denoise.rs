@@ -53,12 +53,14 @@ pub use model::RunOn;
 pub(crate) use model::default_loader;
 #[cfg(all(feature = "denoise", test))]
 use model::{GpuSide, Network, RemoteSide, network, worth_retrying};
-pub(crate) use model::{Loader, Model};
+pub(crate) use model::{Loader, Model, STACK};
 #[cfg(feature = "denoise")]
 pub use model::{Serving, serving};
-pub(crate) use products::eligible;
+#[cfg(test)]
+pub(crate) use products::srgb_encoded;
 #[cfg(test)]
 pub(crate) use products::{JobSpec, MakeError, Progress, make_product};
+pub(crate) use products::{domain_of, eligible};
 pub use settings::{DEFAULT_CACHE_GB, DIR, EXT};
 pub(crate) use settings::{Settings, forget_gpu_set_ups, installed_models, read_capped, read_settings, write_atomic, write_settings};
 pub(crate) use state::State;
