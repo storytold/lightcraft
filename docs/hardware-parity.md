@@ -21,7 +21,7 @@ What Lightroom does with the machine's hardware, per platform, and what LightCra
 | Printers | ✅ Print module, printer colour management | ⬜ (PDF contact sheets only) | ⬜ | ⬜ | — | ⬜ |
 | Control surfaces (MIDI / Loupedeck via plug-ins) | via SDK plug-ins | control channel and MCP can drive every command | same | same | — | 🟡 different mechanism; no MIDI mapping |
 | Multi-core CPU | ✅ | ✅ worker pools, parallel JPEG decode, parallel import copy | ✅ | ✅ | single thread | ✅ |
-| Memory pressure | managed | ✅ memory budget, `crates/sysmem` returns allocator pages on macOS | ✅ budget | ✅ budget | — | ✅ |
+| Memory pressure | managed | ✅ memory budget, `crates/sysmem` returns allocator pages on macOS and glibc Linux | ✅ budget | ✅ budget | — | ✅ |
 
 ## Score
 
