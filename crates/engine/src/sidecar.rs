@@ -434,6 +434,12 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
 }
 
 impl SidecarData {
+    /// Whether the packet says nothing about the photo. The stored frame is the photo's, not the
+    /// packet's: the import gives every sidecar one, an empty `.xmp` beside a turned photo too.
+    pub fn says_nothing(&self) -> bool {
+        *self == SidecarData { frame: self.frame, ..SidecarData::default() }
+    }
+
     /// The photo's stored image (`None`: not known). With it, [`merge_into`] puts the packet's crop
     /// into LightCraft's frame (as the Lightroom catalog import does) and keeps Lightroom's saved
     /// Upright correction, so the `uprightGeometry` warning is dropped. Without it, or for a

@@ -635,6 +635,37 @@ fn regions_drawn_on_the_photo_as_stored_land_on_the_upright_photo() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Review of #1386: the import gives every sidecar the photo's stored frame, so an empty `.xmp` beside a turned
+/// photo looked like one that said something. It isn't counted, and the photo is upright as it is without one.
+#[test]
+fn an_empty_sidecar_beside_a_turned_photo_says_nothing() {
+    let src = temp_dir("empty-sidecar-turned");
+    let bare = src.join("bare.jpg");
+    write_turned_jpeg(&bare, None);
+    let beside = src.join("beside.jpg");
+    write_turned_jpeg(&beside, None);
+    std::fs::write(
+        src.join("beside.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let import = |file: &Path| {
+        let mut s = Session::new().with_fs();
+        let r = s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        assert_eq!(r["imported"].as_array().map(Vec::len), Some(1), "{r}");
+        let p = s.catalog.photo(only(&s)).unwrap().clone();
+        (r, p)
+    };
+    let (r, p) = import(&beside);
+    assert_eq!(r["sidecars"], 0, "an empty sidecar isn't counted: {r}");
+    assert!(r["warnings"].as_array().is_none_or(Vec::is_empty), "{r}");
+    assert_eq!((p.width, p.height), (24, 32), "the photo is upright");
+    let (_, without) = import(&bare);
+    assert_eq!((p.width, p.height), (without.width, without.height));
+    assert_eq!(p.develop, without.develop, "the same settings as without a sidecar");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Review of #2857: a photo whose Exif states no orientation, but whose XMP says `tiff:Orientation=6`, is shown as
 /// stored (LightCraft turns by the Exif alone), so boxes drawn on its stored frame are right as written: at import
 /// and when the file's metadata is read again, which must agree.
