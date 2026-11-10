@@ -12,6 +12,37 @@ fn photo(c: &mut Catalog, name: &str, date: &str) -> PhotoId {
     id
 }
 
+/// ORF probes record both supported and preview-only outcomes, without changing other formats.
+#[test]
+fn orf_support_checks_keep_a_stamp_even_when_sensor_data_decodes() {
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "a.orf".into() }, "a.orf", "ORF", 4, 3, "2026-01-01");
+    p.kind = MediaKind::Raw;
+    assert!(p.preview_only_stale(), "legacy supported ORF needs the withdrawal recheck");
+    p.set_preview_only(None);
+    assert_eq!(p.preview_checked, APP_VERSION);
+    assert!(!p.preview_only_stale());
+    assert!(p.develops_raw(), "supported uncompressed ORF remains sensor-decodable");
+    p.set_preview_only(Some("Olympus compressed ORF".into()));
+    assert_eq!(p.preview_checked, APP_VERSION);
+    assert!(!p.preview_only_stale());
+    assert!(!p.develops_raw());
+    p.format = "DNG".into();
+    p.set_preview_only(None);
+    assert!(p.preview_checked.is_empty(), "other supported formats keep their existing semantics");
+    assert!(!p.preview_only_stale());
+}
+
+#[test]
+fn date_token_matches_time_part_case_insensitively() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-05-01T10:00:00");
+    let q = |c: &Catalog, text: &str| c.query(&Filter { text: text.into(), ..Default::default() }, &Sort::default());
+    assert_eq!(q(&c, "date:2026-05-01T10"), vec![a]);
+    assert_eq!(q(&c, "date:2026-05-01t10"), vec![a]);
+    assert_eq!(q(&c, "date:2026-05"), vec![a]);
+    assert!(q(&c, "date:2026-05-01T11").is_empty());
+}
+
 #[test]
 fn apply_and_inverse_roundtrip() {
     let mut c = Catalog::new();
@@ -125,6 +156,31 @@ fn filter_search_sort() {
 
 /// A search word with a colon whose left part is not a known field ("10:30", "Re:") is plain
 /// text, not a fielded token that matches nothing.
+/// `flags` (#2588) matches any of its flags; a filter saved before it, with the single `flag`, reads
+/// and filters as it did, and a filter without `flags` is written without the key.
+#[test]
+fn filter_flags_any_of_and_the_old_single_flag() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-01-01T10:00:00");
+    let b = photo(&mut c, "b.jpg", "2026-01-02T10:00:00");
+    let d = photo(&mut c, "d.jpg", "2026-01-03T10:00:00");
+    c.apply(Op::SetFlag { id: a, flag: Flag::Pick }).unwrap();
+    c.apply(Op::SetFlag { id: d, flag: Flag::Reject }).unwrap();
+    let f = Filter { flags: vec![Flag::Pick, Flag::None], ..Default::default() };
+    assert_eq!(c.query(&f, &Sort::default()), vec![b, a]);
+    let f = Filter { flags: vec![Flag::Reject, Flag::None], ..Default::default() };
+    assert_eq!(c.query(&f, &Sort::default()), vec![d, b]);
+    let saved: Filter = serde_json::from_value(serde_json::json!({"text": "", "rating": 0, "flag": "reject", "label": null})).unwrap();
+    assert!(saved.flags.is_empty());
+    assert_eq!(c.query(&saved, &Sort::default()), vec![d]);
+    let written = serde_json::to_value(&saved).unwrap();
+    assert_eq!(written.get("flag"), Some(&serde_json::json!("reject")));
+    assert!(written.get("flags").is_none(), "{written}");
+    let round: Filter =
+        serde_json::from_value(serde_json::to_value(Filter { flags: vec![Flag::Pick, Flag::None], ..Default::default() }).unwrap()).unwrap();
+    assert_eq!(round.flags, vec![Flag::Pick, Flag::None]);
+}
+
 #[test]
 fn free_text_with_a_colon_searches_the_text_fields() {
     let mut c = Catalog::new();
@@ -163,6 +219,42 @@ fn search_tokens_match_f32_aperture_and_focal() {
     assert!(q("f:>2.8").is_empty(), "f:>2.8");
     assert!(q("focal:<5.6").is_empty(), "focal:<5.6");
     assert_eq!(q("f:>2.7"), vec![a], "f:>2.7");
+    assert_eq!(q("f:>=2.8"), vec![a], "f:>=2.8 counts the photo's own value");
+    assert_eq!(q("focal:<=5.6"), vec![a], "focal:<=5.6");
+    assert!(q("f:>=2.9").is_empty(), "f:>=2.9");
+    assert!(q("focal:<=5.5").is_empty(), "focal:<=5.5");
+}
+
+/// `>=` and `<=` in a fielded token are the inclusive comparisons. They used to read the `=` as
+/// part of the number, so `rating:>=3` or `iso:<=400` silently matched no photo at all.
+#[test]
+fn search_tokens_compare_inclusively() {
+    let mut c = Catalog::new();
+    let (two, three, four) = (
+        photo(&mut c, "two.jpg", "2026-05-01T10:00:00"),
+        photo(&mut c, "three.jpg", "2026-05-02T10:00:00"),
+        photo(&mut c, "four.jpg", "2026-05-03T10:00:00"),
+    );
+    for (id, rating, iso) in [(two, 2, 200), (three, 3, 400), (four, 4, 800)] {
+        c.apply(Op::SetRating { id, rating }).unwrap();
+        let mut m = c.photo(id).unwrap().meta.clone();
+        m.iso = Some(iso);
+        c.apply(Op::SetMeta { id, meta: Box::new(m) }).unwrap();
+    }
+    let q = |t: &str| {
+        let mut ids = c.query(&Filter { text: t.into(), ..Default::default() }, &Sort::default());
+        ids.sort();
+        ids
+    };
+    assert_eq!(q("rating:>=3"), vec![three, four]);
+    assert_eq!(q("stars:<=3"), vec![two, three]);
+    assert_eq!(q("iso:>=400"), vec![three, four]);
+    assert_eq!(q("iso:<=400"), vec![two, three]);
+    assert_eq!(q("rating:>3"), vec![four], "strict comparisons are unchanged");
+    assert_eq!(q("rating:=3"), vec![three]);
+    assert_eq!(q("rating:3"), vec![three]);
+    assert!(q("rating:>=").is_empty(), "an operator without a number matches nothing");
+    assert!(q("rating:=>3").is_empty(), "not an operator");
 }
 
 /// A `captured` string that is not ASCII (the Lightroom importer copies `captureTime` into an
@@ -564,7 +656,8 @@ fn set_embedded_lens_is_undoable_and_journaled() {
         photo: Box::new(Photo::new(a, Source::File { path: "/x.rw2".into() }, "x.rw2", "RW2", 4000, 3000, "2026-10-06T00:00:00")),
     })
     .unwrap();
-    let lens = lightcraft_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None, stages: Default::default() };
+    let lens =
+        lightcraft_develop::EmbeddedLens { warp: Some(Default::default()), vignette: None, stages: Default::default(), source: Default::default() };
     let op = Op::SetEmbeddedLens { id: a, lens: Some(Box::new(lens)) };
     let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
     let inv = c.apply(op).unwrap();

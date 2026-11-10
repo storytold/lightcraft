@@ -247,8 +247,8 @@ mod tests {
             return;
         };
         assert_eq!(lightcraft_raw::fujifilm_dynamic_range(&bytes), Some(100));
-        let (plain, plain_info) = crate::files::load_vec(bytes.clone(), 400).unwrap();
-        let (for_look, look_info) = crate::files::load_vec_for_look(bytes, 400).unwrap();
+        let (plain, plain_info) = crate::files::load_vec(bytes.clone(), 400, Default::default()).unwrap();
+        let (for_look, look_info) = crate::files::load_vec_for_look(bytes, 400, Default::default()).unwrap();
         let (a, b) = (plain_info.camera_rgb.clone().unwrap(), look_info.camera_rgb.clone().unwrap());
         assert_eq!((a.model.as_str(), a.exposure, b.exposure), ("X-T4", 1.0, 1.0));
         assert!(a.hue_sat.is_some() && !a.deferred && b.deferred, "the bundled X-T4 profile's table");

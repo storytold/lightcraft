@@ -24,6 +24,8 @@ fn sample() -> CatalogImport {
     photo.image.insert("captureTime".into(), json!("2024-01-16T12:34:56"));
     CatalogImport {
         source: "test.lrcat".into(),
+        catalog_id: None,
+        catalog_path: None,
         photos: vec![copy, photo],
         collections: vec![
             row(json!({"id_local":9,"name":"Travel","creationId":"collection.group"})),
@@ -157,6 +159,503 @@ fn imports_copies_collections_ratings_and_mapped_edits_in_one_undo_step() {
     assert!(s.catalog.albums().next().is_none());
     assert!(data.photos[1].settings.contains("CameraProfile")); // unmapped source stays intact
 }
+/// A library photo at `path`, already committed.
+fn library_photo(s: &mut crate::Session, path: &str, edit: impl FnOnce(&mut Photo)) -> PhotoId {
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: path.into() }, "a.ARW", "ARW", 20, 10, "before");
+    p.content_hash = Some("same-bytes".into());
+    edit(&mut p);
+    s.commit("Add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    id
+}
+/// A catalog photo whose file has the same bytes as a library photo in Recently Deleted (or a
+/// virtual copy) is a new record of its own: it was counted as imported but landed in Recently
+/// Deleted (or became a "copy" of nothing it was copied from), so a large import into a library
+/// with a trash went missing photo by photo (#2589).
+#[test]
+fn a_content_duplicate_of_a_trashed_photo_or_virtual_copy_is_a_new_live_photo() {
+    let trashed: fn(&mut Photo) = |p| p.deleted = true;
+    let virtual_copy: fn(&mut Photo) = |p| {
+        p.copy_of = Some(PhotoId(999));
+        p.copy_name = Some("Copy 1".into());
+    };
+    for (case, edit) in [("trashed", trashed), ("virtual copy", virtual_copy)] {
+        let mut s = crate::Session::new();
+        let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| {
+            edit(p);
+            // the other photo's own state, which the new record must not inherit
+            let mut d = (*p.develop).clone();
+            d.light.shadows = 77.0;
+            p.develop = std::sync::Arc::new(d);
+            p.edited = Some("earlier".into());
+            p.history.push(lightcraft_catalog::HistoryStep { label: "Other photo's edit".into(), settings: p.develop.clone() });
+            p.versions.push(lightcraft_catalog::Version {
+                name: "Other photo's version".into(),
+                created: "before".into(),
+                settings: p.develop.clone(),
+                auto: false,
+            });
+            p.meta.title = "Other photo's title".into();
+            p.meta.keywords = vec!["other-photo".into()];
+            p.local_baseline = Some(7);
+            // what the bytes determine is shared
+            p.meta.camera = "Same Camera".into();
+            p.file_size = 4096;
+        });
+        let mut data = sample();
+        data.photos.retain(|p| number(&p.image, "masterImage") == 0);
+        let files = crate::import::ImportReport {
+            duplicates: vec![crate::import::Duplicate {
+                path: "/missing/test.ARW".into(),
+                existing: Some(other.0),
+                reason: "content",
+                existing_deleted: case == "trashed",
+                // what the file itself carries
+                file: Some(Box::new(crate::import::FileFacts {
+                    meta: lightcraft_catalog::Meta { camera: "Same Camera".into(), ..Default::default() },
+                    captured: None,
+                })),
+            }],
+            ..Default::default()
+        };
+        let undo0 = s.undo.len();
+        let r = apply_prepared(
+            &mut s,
+            data,
+            ApplyPrepared {
+                update_existing: false,
+                files,
+                index: &mut ImportIndex::default(),
+                archive_path: None,
+                missing_sources: &HashSet::new(),
+                undo0,
+            },
+        )
+        .unwrap()
+        .report;
+        assert_eq!(r["imported"], 1, "{case}: {r}");
+        assert_eq!(r["inRecentlyDeleted"], 0, "{case}: {r}");
+        let new = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
+        assert_ne!(new.id, other, "{case}");
+        assert!(!new.deleted, "{case}: the new record must not be in Recently Deleted");
+        assert_eq!((new.copy_of, new.copy_name.as_deref()), (None, None), "{case}: the new record is no virtual copy");
+        assert_ne!(new.imported, "before", "{case}: imported now, not when the other photo was");
+        assert_eq!(new.rating, 5, "{case}: the catalog's own metadata applies");
+        assert_ne!(new.develop.light.shadows, 77.0, "{case}: no edits from the other photo");
+        assert!(new.history.iter().all(|h| h.label != "Other photo's edit"), "{case}: no history from the other photo");
+        assert!(new.versions.is_empty(), "{case}: no versions from the other photo");
+        assert_ne!(new.meta.title, "Other photo's title", "{case}");
+        assert!(!new.meta.keywords.iter().any(|k| k == "other-photo"), "{case}");
+        assert_eq!(new.local_baseline, None, "{case}");
+        assert_eq!((new.meta.camera.as_str(), new.file_size), ("Same Camera", 4096), "{case}: what the bytes determine is kept");
+        assert_eq!(new.content_hash.as_deref(), Some("same-bytes"), "{case}");
+        assert_eq!(s.catalog.photo(other).unwrap().deleted, case == "trashed", "{case}: the other photo is left as it was");
+    }
+}
+/// A content duplicate starts from the settings a file import gives a raw (its as-shot white
+/// balance and embedded lens corrections), as its file would on its own, before the catalog's
+/// settings go on top; not from the generic defaults (#2589).
+#[test]
+fn a_content_duplicate_raw_starts_from_its_camera_defaults() {
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.DNG", |p| {
+        p.deleted = true;
+        p.format = "DNG".into();
+        p.kind = lightcraft_catalog::MediaKind::Raw;
+        p.as_shot_wb = Some((5200.0, 4.0));
+        p.embedded_lens = Some(lightcraft_develop::EmbeddedLens::default());
+    });
+    let mut data = sample();
+    data.photos.retain(|p| number(&p.image, "masterImage") == 0);
+    // a catalog row with no develop settings of its own
+    data.photos[0].settings.clear();
+    let files = crate::import::ImportReport {
+        duplicates: vec![crate::import::Duplicate {
+            path: "/missing/test.ARW".into(),
+            existing: Some(other.0),
+            reason: "content",
+            existing_deleted: true,
+            file: None,
+        }],
+        ..Default::default()
+    };
+    let undo0 = s.undo.len();
+    let r = apply_prepared(
+        &mut s,
+        data,
+        ApplyPrepared {
+            update_existing: false,
+            files,
+            index: &mut ImportIndex::default(),
+            archive_path: None,
+            missing_sources: &HashSet::new(),
+            undo0,
+        },
+    )
+    .unwrap()
+    .report;
+    let new = s.catalog.photo(PhotoId(r["mapping"]["1"].as_u64().unwrap())).unwrap();
+    assert_eq!(*new.develop, new.camera_defaults(), "{r}");
+    assert_eq!((new.develop.wb.temp, new.develop.wb.tint), (5200.0, 4.0), "the file's as-shot white balance");
+    assert!(new.develop.optics.lens_profile, "the file's embedded lens corrections are on");
+}
+/// A content duplicate keeps the metadata its file carries (copyright, rights, creator) and the
+/// capture time its file gives it, as a file import of it would, when the catalog doesn't restate
+/// them; it reads the file's, not the other photo's, which a person may have edited (#2589).
+#[test]
+fn a_content_duplicate_keeps_the_rights_metadata_and_capture_time_in_its_file() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-rights-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| {
+        p.deleted = true;
+        // edited on the other record after its import
+        p.meta.copyright = "Other photo's notice".into();
+        p.meta.creator = "Other photo's creator".into();
+        p.meta.gps = Some((1.0, 2.0));
+        p.captured = Some("1999-12-31T23:00:00".into());
+    });
+    let file_meta = lightcraft_catalog::Meta {
+        camera: "Same Camera".into(),
+        copyright: "© Jo Example".into(),
+        copyright_status: lightcraft_catalog::CopyrightStatus::Copyrighted,
+        usage_terms: "No reuse".into(),
+        creator: "Jo Example".into(),
+        ..Default::default()
+    };
+    let probed = file_meta.clone();
+    s.media.file_probe = Some(Arc::new(move |_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 20,
+            height: 10,
+            content_hash: Some("same-bytes".into()),
+            meta: probed.clone(),
+            captured: Some("2024-05-06T07:08:09".into()),
+            ..Default::default()
+        })
+    }));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!(new.content_hash.as_deref(), Some("same-bytes"), "{r}");
+    assert_eq!(new.rating, 5, "the catalog's own metadata applies: {r}");
+    let m = &new.meta;
+    assert_eq!(
+        (m.copyright.as_str(), m.copyright_status, m.usage_terms.as_str(), m.creator.as_str(), m.camera.as_str()),
+        ("© Jo Example", file_meta.copyright_status, "No reuse", "Jo Example", "Same Camera"),
+        "the file's own metadata: {r}"
+    );
+    assert_eq!(m.gps, None, "nothing from the other photo's record");
+    // the catalog row has no capture time: the file's, not the other photo's edited one
+    assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// A catalog photo matched (by path) to a library photo in Recently Deleted leaves it there, as
+/// the import was set up to do (a Lightroom import doesn't restore, see `OnDeleted`), and the report
+/// counts it so the photos don't go missing unexplained (#2589). A new virtual copy of it is
+/// imported, not trashed with its master.
+#[test]
+fn a_catalog_photo_matching_a_trashed_record_stays_there_and_is_counted() {
+    let mut s = crate::Session::new();
+    let trashed = library_photo(&mut s, "/missing/test.ARW", |p| p.deleted = true);
+    let r = apply(&mut s, sample(), false).unwrap();
+    assert_eq!(r["mapping"]["1"], trashed.0, "{r}");
+    assert!(s.catalog.photo(trashed).unwrap().deleted, "the photo stays in Recently Deleted");
+    assert_eq!(r["inRecentlyDeleted"], 1, "{r}");
+    let copy = s.catalog.photos().find(|p| p.copy_of == Some(trashed)).unwrap();
+    assert!(!copy.deleted, "the new virtual copy is imported, not trashed");
+    assert_eq!(r["imported"], 1, "only the copy was added: {r}");
+}
+/// Importing the catalog again after its master and virtual copy were both moved to Recently
+/// Deleted matches each through the import index: each is counted once, and neither is restored.
+#[test]
+fn a_reimport_counts_each_trashed_match_once() {
+    let mut s = crate::Session::new();
+    // one import index across both imports, as a library on disk keeps in Interop/
+    let mut index = ImportIndex::default();
+    let mut import = |s: &mut crate::Session| {
+        let undo0 = s.undo.len();
+        apply_prepared(
+            s,
+            sample(),
+            ApplyPrepared {
+                update_existing: false,
+                files: Default::default(),
+                index: &mut index,
+                archive_path: None,
+                missing_sources: &HashSet::new(),
+                undo0,
+            },
+        )
+        .unwrap()
+        .report
+    };
+    let first = import(&mut s);
+    let ids: Vec<PhotoId> = ["1", "2"].iter().map(|k| PhotoId(first["mapping"][k].as_u64().unwrap())).collect();
+    for id in &ids {
+        s.commit("Delete", Op::SetDeleted { id: *id, deleted: true }).unwrap();
+    }
+    let r = import(&mut s);
+    assert_eq!(r["mapping"], first["mapping"], "{r}");
+    assert_eq!(r["inRecentlyDeleted"], 2, "{r}");
+    assert_eq!(r["imported"], 0, "{r}");
+    assert!(ids.iter().all(|id| s.catalog.photo(*id).unwrap().deleted));
+}
+/// The import report's warnings about `album`.
+fn warnings_naming(r: &Value, album: &str) -> Vec<String> {
+    r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|w| w.starts_with(&format!("{album}:"))).map(String::from).collect()
+}
+fn album_named<'a>(s: &'a crate::Session, name: &str) -> &'a lightcraft_catalog::Album {
+    s.catalog.albums().find(|a| a.name == name).unwrap_or_else(|| panic!("no album {name}"))
+}
+/// A LightCraft album nests only in a folder. A collection Lightroom keeps inside a plain collection used to fail the
+/// whole batch with "parent must be an existing folder", taking every album with it (#2165, #2532).
+#[test]
+fn a_collection_inside_a_plain_collection_joins_the_set_above_it() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":11,"parent":10,"name":"Picks","creationId":"com.adobe.ag.library.collection"})));
+    data.members.push(row(json!({"collection":11,"image":1,"positionInCollection":"a"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 3);
+    assert_eq!(s.catalog.photos().count(), 2);
+    let travel = album_named(&s, "Travel").id;
+    assert_eq!(album_named(&s, "Keepers").parent, Some(travel));
+    assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+    assert_eq!(album_named(&s, "Picks").parent, Some(travel));
+    assert_eq!(album_named(&s, "Picks").photos.len(), 1);
+    let w = warnings_naming(&r, "Picks");
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("Keepers") && w[0].contains("into “Travel”"), "{w:?}");
+    assert!(warnings_naming(&r, "Keepers").is_empty());
+}
+/// Lightroom Classic saves a print, book, slideshow or web gallery inside a collection; with no set above it, the
+/// creation lands at the top level.
+#[test]
+fn a_creation_saved_inside_a_top_level_collection_lands_at_the_top_level() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":12,"name":"Loose","creationId":"com.adobe.ag.library.collection"})));
+    data.collections.push(row(json!({"id_local":13,"parent":12,"name":"Poster","creationId":"com.adobe.ag.print"})));
+    data.collections.push(row(json!({"id_local":14,"parent":10,"name":"Album Book","creationId":"com.adobe.ag.layout.book"})));
+    data.members.push(row(json!({"collection":13,"image":1,"positionInCollection":"a"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 5);
+    let poster = album_named(&s, "Poster");
+    assert_eq!((poster.parent, poster.folder, poster.photos.len()), (None, false, 1));
+    assert_eq!(album_named(&s, "Album Book").parent, Some(album_named(&s, "Travel").id));
+    let w = warnings_naming(&r, "Poster");
+    assert!(w.len() == 1 && w[0].contains("Loose") && w[0].contains("at the top level"), "{w:?}");
+    assert_eq!(warnings_naming(&r, "Album Book").len(), 1);
+    assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+}
+/// A parent that's gone from the catalog or system-only (Quick Collection, an unsaved print…) isn't imported; the
+/// album lands at the top level, and the report says why it isn't where Lightroom had it.
+#[test]
+fn a_collection_whose_parent_is_missing_or_system_only_lands_at_the_top_level_with_a_warning() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":11,"parent":99,"name":"Orphan","creationId":"com.adobe.ag.library.collection"})));
+    data.collections.push(row(json!({"id_local":5,"name":"quick collection","creationId":"com.adobe.ag.library.collection","systemOnly":1})));
+    data.collections.push(row(json!({"id_local":12,"parent":5,"name":"Stray","creationId":"com.adobe.ag.print"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 4);
+    assert_eq!(album_named(&s, "Orphan").parent, None);
+    assert_eq!(album_named(&s, "Stray").parent, None);
+    assert!(s.catalog.albums().all(|a| a.name != "quick collection"));
+    let w = warnings_naming(&r, "Orphan");
+    assert!(w.len() == 1 && w[0].contains("isn't in the catalog"), "{w:?}");
+    let w = warnings_naming(&r, "Stray");
+    assert!(w.len() == 1 && w[0].contains("quick collection") && w[0].contains("at the top level"), "{w:?}");
+    assert_eq!(album_named(&s, "Keepers").parent, Some(album_named(&s, "Travel").id));
+}
+/// Imports `data` keeping `index` between imports, as a library on disk does.
+fn import_indexed(s: &mut crate::Session, data: CatalogImport, index: &mut ImportIndex) -> crate::Result<Value> {
+    let undo0 = s.undo.len();
+    let missing_sources = HashSet::new();
+    let context =
+        ApplyPrepared { update_existing: false, files: Default::default(), index, archive_path: None, missing_sources: &missing_sources, undo0 };
+    apply_prepared(s, data, context).map(|applied| applied.report)
+}
+/// The sample with “Picks”, a collection Lightroom keeps inside the plain collection “Keepers”.
+fn with_picks() -> CatalogImport {
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":11,"parent":10,"name":"Picks","creationId":"com.adobe.ag.library.collection"})));
+    data.members.push(row(json!({"collection":11,"image":1,"positionInCollection":"a"})));
+    data
+}
+/// Importing the catalog again finds the moved album where the first import put it, adds nothing twice and doesn't
+/// warn again: the album is already in the library.
+#[test]
+fn a_relocated_collection_keeps_its_place_on_reimport_without_duplicates_or_a_second_warning() {
+    let mut s = crate::Session::new();
+    let mut index = ImportIndex::default();
+    let first = import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    assert_eq!(warnings_naming(&first, "Picks").len(), 1);
+    let second = import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    assert_eq!(second["collections"], 3);
+    assert_eq!(s.catalog.albums().count(), 3);
+    assert_eq!(album_named(&s, "Picks").parent, Some(album_named(&s, "Travel").id));
+    assert_eq!(album_named(&s, "Picks").photos.len(), 1);
+    assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+    assert!(warnings_naming(&second, "Picks").is_empty(), "{second}");
+}
+/// Albums the user moved after an import stay where the user put them when the catalog is imported again.
+#[test]
+fn an_album_the_user_moved_keeps_its_place_on_reimport() {
+    let mut s = crate::Session::new();
+    let mut index = ImportIndex::default();
+    import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    for name in ["Picks", "Keepers"] {
+        let id = album_named(&s, name).id;
+        s.commit("Move Album", Op::MoveAlbum { id, parent: None }).unwrap();
+    }
+    let r = import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    assert_eq!(s.catalog.albums().count(), 3);
+    assert_eq!(album_named(&s, "Picks").parent, None);
+    assert_eq!(album_named(&s, "Keepers").parent, None);
+    assert!(warnings_naming(&r, "Picks").is_empty() && warnings_naming(&r, "Keepers").is_empty(), "{r}");
+}
+/// A collection new since the last import goes into the set's album, and the warning names that album as the
+/// library calls it now, not by its Lightroom name.
+#[test]
+fn a_relocation_warning_names_the_set_as_the_user_renamed_it() {
+    let mut s = crate::Session::new();
+    let mut index = ImportIndex::default();
+    import_indexed(&mut s, sample(), &mut index).unwrap();
+    let travel = album_named(&s, "Travel").id;
+    s.commit("Rename Album", Op::RenameAlbum { id: travel, name: "Trips".into() }).unwrap();
+    let r = import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    assert_eq!(album_named(&s, "Picks").parent, Some(travel));
+    let w = warnings_naming(&r, "Picks");
+    assert!(w.len() == 1 && w[0].contains("inside “Keepers”") && w[0].ends_with("imported into “Trips” (Lightroom collection 11)"), "{w:?}");
+}
+/// The album an earlier import made for a Lightroom set may no longer be a folder (here: an index that names a plain
+/// album). A collection in that set lands at the top level, and the warning says why without calling the set
+/// something it isn't.
+#[test]
+fn a_set_whose_album_is_not_a_folder_puts_its_collections_at_the_top_level() {
+    let mut s = crate::Session::new();
+    let plain = s.catalog.alloc_album_id();
+    s.commit("New Album", Op::AddAlbum { album: Album::new(plain, "Travel picks") }).unwrap();
+    let mut index = ImportIndex::default();
+    index.collections.insert(format!("{}:9", key("test.lrcat")), plain.0);
+    let r = import_indexed(&mut s, sample(), &mut index).unwrap();
+    assert_eq!(s.catalog.albums().count(), 2);
+    assert!(!s.catalog.album(plain).unwrap().folder);
+    let keepers = album_named(&s, "Keepers");
+    assert_eq!((keepers.parent, keepers.photos.len()), (None, 2));
+    let w = warnings_naming(&r, "Keepers");
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("“Travel” is the album “Travel picks”") && w[0].contains("isn't a folder"), "{w:?}");
+    assert!(!w[0].contains("isn't a collection set") && w[0].ends_with("at the top level (Lightroom collection 10)"), "{w:?}");
+}
+/// Only the outermost set inside a plain collection moves; the sets and creations inside it keep their places.
+#[test]
+fn sets_nested_under_a_plain_collection_keep_their_own_nesting() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":12,"name":"Loose","creationId":"com.adobe.ag.library.collection"})));
+    data.collections.push(row(json!({"id_local":13,"parent":12,"name":"Outer","creationId":"com.adobe.ag.library.group"})));
+    data.collections.push(row(json!({"id_local":14,"parent":13,"name":"Inner","creationId":"com.adobe.ag.library.group"})));
+    data.collections.push(row(json!({"id_local":15,"parent":14,"name":"Poster","creationId":"com.adobe.ag.print"})));
+    data.members.push(row(json!({"collection":15,"image":1,"positionInCollection":"a"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 6);
+    let outer = album_named(&s, "Outer");
+    assert_eq!((outer.parent, outer.folder), (None, true));
+    let inner = album_named(&s, "Inner");
+    assert_eq!((inner.parent, inner.folder), (Some(outer.id), true));
+    assert_eq!(album_named(&s, "Poster").parent, Some(inner.id));
+    assert_eq!(album_named(&s, "Poster").photos.len(), 1);
+    let w = warnings_naming(&r, "Outer");
+    assert!(w.len() == 1 && w[0].contains("inside “Loose”") && w[0].ends_with("at the top level (Lightroom collection 13)"), "{w:?}");
+    assert!(warnings_naming(&r, "Inner").is_empty() && warnings_naming(&r, "Poster").is_empty(), "{r}");
+}
+/// The album counter saturates: one at its end hands every collection the same id. The second collection used to be
+/// dropped without a word while the report counted it; the import now stops and names it.
+#[test]
+fn an_exhausted_album_counter_stops_the_import_naming_the_collection() {
+    let mut s = crate::Session::new();
+    s.commit("New Album", Op::AddAlbum { album: Album::new(lightcraft_catalog::AlbumId(u64::MAX - 1), "Last") }).unwrap();
+    let err = apply(&mut s, sample(), false).unwrap_err().to_string();
+    assert!(err.contains("“Keepers”") && err.contains("no unused album id"), "{err}");
+    assert_eq!(s.catalog.albums().count(), 1);
+    assert!(s.catalog.is_empty());
+}
+/// A collection listed twice imports once. A different collection under the same Lightroom id used to stop the import;
+/// like any bad record it now costs only itself (#1588): it is left out with a warning naming both, and its photos go
+/// to the first.
+#[test]
+fn a_collection_listed_twice_imports_once_and_a_conflicting_one_is_skipped_with_a_warning() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(data.collections[1].clone());
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["collections"], 2);
+    assert_eq!(s.catalog.albums().filter(|a| a.name == "Keepers").count(), 1);
+    assert_eq!(album_named(&s, "Keepers").photos.len(), 2);
+    assert_eq!(r["warnings"], json!([]), "an exact repeat drops quietly");
+
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    // shallower than the first, so a depth-ordered pass would meet it first
+    data.collections.push(row(json!({"id_local":10,"parent":0,"name":"Rejects","creationId":"collection"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!(r["photos"], 2, "{r}");
+    assert_eq!(r["collections"], 2, "{r}");
+    assert!(s.catalog.albums().all(|a| a.name != "Rejects"));
+    let keepers = album_named(&s, "Keepers");
+    assert_eq!(keepers.photos.len(), 2);
+    assert!(keepers.parent.is_some(), "the first row's place is kept");
+    assert_eq!(
+        r["warnings"],
+        json!(["collection “Rejects”: not imported, it has the id of collection “Keepers”; the photos listed under that id go to “Keepers”"])
+    );
+    assert_eq!(s.undo.len(), 1);
+}
+/// The search for the nearest set ends on a parent loop that got past `validate` (A in B in A, a collection in
+/// itself) and on a chain of plain collections deeper than 64: the album goes to the top level, flagged as moved.
+#[test]
+fn the_nearest_set_search_ends_on_a_parent_loop_or_a_deep_chain() {
+    let plain = |id: i64, parent: i64| row(json!({"id_local":id,"parent":parent,"name":format!("C{id}"),"creationId":"collection"}));
+    let (a, b, own) = (plain(1, 2), plain(2, 1), plain(3, 3));
+    let child = plain(4, 1);
+    let collections: HashMap<i64, &Row> = [(1, &a), (2, &b), (3, &own), (4, &child)].into_iter().collect();
+    let no_sets = HashSet::new();
+    for c in [&a, &b, &own, &child] {
+        assert_eq!(collection_parent(c, &collections, &no_sets), (None, true), "{c:?}");
+    }
+    // a set in the loop is still found
+    assert_eq!(collection_parent(&child, &collections, &HashSet::from([2])), (Some(2), true));
+    let chain: Vec<Row> = (100..200).map(|id| plain(id, if id == 100 { 0 } else { id - 1 })).collect();
+    let collections: HashMap<i64, &Row> = chain.iter().map(|r| (number(r, "id_local"), r)).collect();
+    assert_eq!(collection_parent(&chain[99], &collections, &no_sets), (None, true));
+}
+/// A damaged index that names one existing album for two collections gives the second an album of its own rather
+/// than merging its photos into the first's.
+#[test]
+fn an_index_naming_one_album_for_two_collections_gives_the_second_its_own() {
+    let mut s = crate::Session::new();
+    let old = s.catalog.alloc_album_id();
+    s.commit("New Album", Op::AddAlbum { album: Album::new(old, "Old") }).unwrap();
+    let mut index = ImportIndex::default();
+    for lr in [10, 11] {
+        index.collections.insert(format!("{}:{lr}", key("test.lrcat")), old.0);
+    }
+    let r = import_indexed(&mut s, with_picks(), &mut index).unwrap();
+    assert_eq!(r["collections"], 3);
+    assert_eq!(s.catalog.album(old).unwrap().photos.len(), 2, "Keepers merges into the album the index names");
+    let picks = album_named(&s, "Picks");
+    assert_ne!(picks.id, old);
+    assert_eq!(picks.photos.len(), 1);
+}
 #[test]
 fn preserves_existing_edits_and_rejects_invalid_structure_before_mutation() {
     let mut s = crate::Session::new();
@@ -173,8 +672,15 @@ fn preserves_existing_edits_and_rejects_invalid_structure_before_mutation() {
     assert!(apply(&mut s, cyclic, false).is_err());
     assert_eq!(s.catalog.to_snapshot(), before);
     assert!(
-        mapped_settings(&format!("{}0{}", "{".repeat(1000), "}".repeat(1000)), crate::crs::Target::RawAbsolute, 1.0, Orientation::Normal, 1.5)
-            .is_err()
+        mapped_settings(
+            &format!("{}0{}", "{".repeat(1000), "}".repeat(1000)),
+            crate::crs::Target::RawAbsolute,
+            1.0,
+            Orientation::Normal,
+            1.5,
+            Orientation::Normal
+        )
+        .is_err()
     );
 }
 #[test]
@@ -191,6 +697,7 @@ fn compressed_xmp_is_bounded_and_settings_are_data_only() {
         1.5,
         Orientation::Normal,
         1.5,
+        Orientation::Normal,
     )
     .unwrap();
     assert_eq!(partial["light"]["exposure"], 0.75);
@@ -202,11 +709,11 @@ fn custom_white_balance_on_relative_wb_raws_is_not_read_as_kelvin() {
     // relative to its as-shot look the edit stays As Shot and is reported; a DNG keeps the Kelvin
     let settings =
         "s = { WhiteBalance = \"Custom\", Temperature = 3578, Tint = -5, CustomTemperature = 3578.95, CustomTint = -5, Exposure2012 = 0.5 }";
-    let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawRelative, 1.5, Orientation::Normal, 1.5).unwrap();
+    let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawRelative, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
     assert_eq!(partial["wb"], json!({"mode": "asShot"}), "{partial}");
     assert_eq!(partial["light"]["exposure"], 0.5);
     assert!(unknown.iter().any(|k| k.starts_with("Temperature, Tint")), "{unknown:?}");
-    let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5).unwrap();
+    let (partial, unknown) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
     assert_eq!(
         (partial["wb"]["mode"].as_str(), partial["wb"]["temp"].as_f64(), partial["wb"]["tint"].as_f64()),
         (Some("custom"), Some(3578.0), Some(-5.0))
@@ -223,6 +730,7 @@ fn catalog_crops_without_has_crop_are_imported() {
         1.5,
         Orientation::Normal,
         1.5,
+        Orientation::Normal,
     )
     .unwrap();
     let crop = &partial["crop"]["geometry"];
@@ -233,11 +741,13 @@ fn catalog_crops_without_has_crop_are_imported() {
     assert_eq!(crop["angle"], 0.0);
     assert!(!unknown.iter().any(|k| k.starts_with("CropLeft")), "{unknown:?}");
     // an angle alone still means a crop (Lightroom's angle turns the other way to LightCraft's)
-    let (partial, unknown) = mapped_settings("s = { CropAngle = -1.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5).unwrap();
+    let (partial, unknown) =
+        mapped_settings("s = { CropAngle = -1.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
     assert_eq!(partial["crop"]["geometry"]["angle"], 1.5);
     assert!(!unknown.iter().any(|k| k.starts_with("CropAngle")), "{unknown:?}");
     // no crop fields: the crop stays untouched
-    let (partial, _) = mapped_settings("s = { Exposure2012 = 0.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5).unwrap();
+    let (partial, _) =
+        mapped_settings("s = { Exposure2012 = 0.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
     assert!(partial.get("crop").is_none());
 }
 
@@ -261,7 +771,7 @@ fn lightroom_orientation_codes() {
 fn catalog_crops_follow_the_photo_orientation() {
     let crop = |o: Orientation| {
         let settings = "s = { CropLeft = 0.1, CropRight = 0.6, CropTop = 0.2, CropBottom = 0.9 }";
-        let (partial, _) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, o, 1.5).unwrap();
+        let (partial, _) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, o, 1.5, Orientation::Normal).unwrap();
         let g = &partial["crop"]["geometry"];
         let r = &g["rect"];
         [r["x0"].as_f64(), r["y0"].as_f64(), r["x1"].as_f64(), r["y1"].as_f64(), g["angle"].as_f64()].map(|v| (v.unwrap() * 1e9).round() / 1e9)
@@ -274,14 +784,88 @@ fn catalog_crops_follow_the_photo_orientation() {
     assert_eq!(crop(Orientation::FlipH), [0.4, 0.2, 0.9, 0.9, 0.0]);
     // a mirror turns the straighten the other way
     let angle = |o: Orientation| {
-        let (partial, _) = mapped_settings("s = { CropAngle = 2 }", crate::crs::Target::RawAbsolute, 1.5, o, 1.5).unwrap();
+        let (partial, _) = mapped_settings("s = { CropAngle = 2 }", crate::crs::Target::RawAbsolute, 1.5, o, 1.5, Orientation::Normal).unwrap();
         partial["crop"]["geometry"]["angle"].as_f64().unwrap()
     };
     assert_eq!(angle(Orientation::Rotate90), -2.0);
     assert_eq!(angle(Orientation::FlipH), 2.0);
     // no crop: nothing to orient
-    let (partial, _) = mapped_settings("s = { Exposure2012 = 0.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Rotate90, 1.5).unwrap();
+    let (partial, _) =
+        mapped_settings("s = { Exposure2012 = 0.5 }", crate::crs::Target::RawAbsolute, 1.5, Orientation::Rotate90, 1.5, Orientation::Normal).unwrap();
     assert!(partial.get("crop").is_none());
+}
+
+#[test]
+fn catalog_masks_follow_the_photo_orientation() {
+    // #1806, EMY_9996 (EXIF 8, shown a quarter turn counter-clockwise): a horizon gradient along
+    // the stored image's x axis runs along the shown photo's y axis
+    let s = r#"s = { MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = -0.1, CorrectionMasks = {
+        { What = "Mask/Gradient", MaskValue = 1, ZeroX = 0.362544, ZeroY = 0.481093, FullX = 0.451639, FullY = 0.480645 } } } } }"#;
+    let (partial, _) = mapped_settings(s, crate::crs::Target::RawAbsolute, 1.5, Orientation::Rotate270, 1.5, Orientation::Normal).unwrap();
+    let g = &partial["masks"][0]["components"][0]["shape"];
+    let close = |v: &Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-9;
+    assert!(close(&g["start"]["x"], 0.480645) && close(&g["start"]["y"], 1.0 - 0.451639), "{g}");
+    assert!(close(&g["end"]["x"], 0.481093) && close(&g["end"]["y"], 1.0 - 0.362544), "{g}");
+
+    let masks = |o: Orientation| {
+        let s = r#"s = {
+            MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+                { What = "Mask/Gradient", FullX = 0.1, FullY = 0.2, ZeroX = 0.3, ZeroY = 0.6 },
+                { What = "Mask/CircularGradient", Left = 0, Right = 0.2, Top = 0.1, Bottom = 0.3, Angle = 10, Feather = 50, Version = 2, Flipped = true },
+                { What = "Mask/Paint", Radius = 0.05, MaskValue = 1, Dabs = { "d 0.1 0.2", "d 0.3 0.6" } } } } } }"#;
+        let (partial, _) = mapped_settings(s, crate::crs::Target::RawAbsolute, 1.5, o, 1.5, Orientation::Normal).unwrap();
+        let c = &partial["masks"][0]["components"];
+        let (linear, radial, brush) = (&c[0]["shape"], &c[1]["shape"], &c[2]["shape"]["strokes"][0]["points"]);
+        [
+            &linear["start"]["x"],
+            &linear["start"]["y"],
+            &linear["end"]["x"],
+            &linear["end"]["y"],
+            &radial["center"]["x"],
+            &radial["center"]["y"],
+            &radial["rx"],
+            &radial["ry"],
+            &radial["angle"],
+            &brush[0]["x"],
+            &brush[0]["y"],
+            &brush[1]["x"],
+            &brush[1]["y"],
+        ]
+        .map(|v| (v.as_f64().unwrap() * 1e9).round() / 1e9)
+    };
+    // (x, y) of the stored image → (1 − y, x) a quarter turn clockwise, (y, 1 − x) counter-clockwise;
+    // a radial's radii (in long-edge units) swap with the axes, and a mirror turns its angle the
+    // other way
+    let r = (0.1, (0.1_f64 / 1.5 * 1e9).round() / 1e9);
+    assert_eq!(masks(Orientation::Normal), [0.1, 0.2, 0.3, 0.6, 0.1, 0.2, r.0, r.1, 10.0, 0.1, 0.2, 0.3, 0.6]);
+    assert_eq!(masks(Orientation::Rotate90), [0.8, 0.1, 0.4, 0.3, 0.8, 0.1, r.1, r.0, 10.0, 0.8, 0.1, 0.4, 0.3]);
+    assert_eq!(masks(Orientation::Rotate270), [0.2, 0.9, 0.6, 0.7, 0.2, 0.9, r.1, r.0, 10.0, 0.2, 0.9, 0.6, 0.7]);
+    assert_eq!(masks(Orientation::Rotate180), [0.9, 0.8, 0.7, 0.4, 0.9, 0.8, r.0, r.1, 10.0, 0.9, 0.8, 0.7, 0.4]);
+    assert_eq!(masks(Orientation::FlipH), [0.9, 0.2, 0.7, 0.6, 0.9, 0.2, r.0, r.1, -10.0, 0.9, 0.2, 0.7, 0.6]);
+    assert_eq!(masks(Orientation::Transpose), [0.2, 0.1, 0.6, 0.3, 0.2, 0.1, r.1, r.0, -10.0, 0.2, 0.1, 0.6, 0.3]);
+    // a photo already in the library has its shown size (portrait here), but Lightroom's edges are
+    // fractions of the stored image: a circle on a 3:2 stored image stays a circle
+    let s = r#"s = { MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+        { What = "Mask/CircularGradient", Left = 0.3, Right = 0.5, Top = 0.3, Bottom = 0.6, Version = 2, Flipped = true } } } } }"#;
+    let (partial, _) = mapped_settings(s, crate::crs::Target::RawAbsolute, 1.0 / 1.5, Orientation::Rotate90, 1.5, Orientation::Normal).unwrap();
+    let radial = &partial["masks"][0]["components"][0]["shape"];
+    assert!(close(&radial["rx"], 0.1) && close(&radial["ry"], 0.1), "{radial}");
+}
+
+#[test]
+fn inverted_radial_mask_keeps_its_inversion_on_import() {
+    // #2475: an inverted radial (LocalExposure2012 applies outside the ellipse) keeps its
+    // inversion when the catalog import also turns the mask for the photo's orientation
+    let s = r#"s = { MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+        { What = "Mask/CircularGradient", Left = 0, Right = 0.2, Top = 0.1, Bottom = 0.3, Angle = 10, Feather = 50, Version = 2, Flipped = true, Inverted = true } } } } }"#;
+    let (partial, _) = mapped_settings(s, crate::crs::Target::RawAbsolute, 1.5, Orientation::Rotate90, 1.5, Orientation::Normal).unwrap();
+    let c = &partial["masks"][0]["components"][0];
+    let close = |v: &Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-9;
+    // the orientation is applied: (x, y) → (1 − y, x), a quarter turn clockwise; the radii swap
+    let shape = &c["shape"];
+    assert!(close(&shape["center"]["x"], 0.8) && close(&shape["center"]["y"], 0.1), "{shape}");
+    // but the effect stays outside the ellipse
+    assert!(c["invert"].as_bool().unwrap_or(false) || shape["invert"].as_bool().unwrap_or(false), "{c}");
 }
 
 /// The `crs` corners and angle Lightroom would store for LightCraft crop `g` on a stored image
@@ -306,7 +890,8 @@ fn straightened_catalog_crops_round_trip() {
     for o in [Orientation::Normal, Orientation::Rotate90, Orientation::Rotate270, Orientation::Rotate180, Orientation::FlipH] {
         for angle in [6.5, -6.5] {
             let g = CropGeometry { angle, ..g };
-            let (partial, _) = mapped_settings(&lightroom_crop(g, o, 1.5), crate::crs::Target::RawAbsolute, 1.5, o, 1.5).unwrap();
+            let (partial, _) =
+                mapped_settings(&lightroom_crop(g, o, 1.5), crate::crs::Target::RawAbsolute, 1.5, o, 1.5, Orientation::Normal).unwrap();
             let got: CropGeometry = serde_json::from_value(partial["crop"]["geometry"].clone()).unwrap();
             let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
             assert!(
@@ -336,7 +921,7 @@ fn straightened_catalog_crops_match_lightroom_exports() {
             (6100.0, 9150.0),
         ),
     ] {
-        let (partial, _) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, o, 9504.0 / 6336.0).unwrap();
+        let (partial, _) = mapped_settings(settings, crate::crs::Target::RawAbsolute, 1.5, o, 9504.0 / 6336.0, Orientation::Normal).unwrap();
         let r: Rect = serde_json::from_value(partial["crop"]["geometry"]["rect"].clone()).unwrap();
         let (ow, oh) = if o.swaps_axes() { (6336.0, 9504.0) } else { (9504.0, 6336.0) };
         let (w, h) = (r.width() * ow, r.height() * oh);
@@ -359,6 +944,87 @@ fn imported_crops_use_the_catalog_orientation() {
     assert_eq!(r, [0.1, 0.1, 0.8, 0.6]);
 }
 
+/// Masks only the catalog's XMP has (the develop row has none to replace them) are on the stored
+/// image too: on a vertical shot (`DA`) they turn like the row's, and a radial keeps its shape on
+/// the 2:1 stored image, also for a photo already in the library at its shown 10 × 20.
+#[test]
+fn catalog_xmp_masks_follow_the_photo_orientation() {
+    let mut data = sample();
+    data.photos.truncate(1);
+    data.photos[0].image.remove("masterImage");
+    data.photos[0].image.insert("orientation".into(), json!("DA"));
+    data.photos[0].image.insert("fileWidth".into(), json!(20));
+    data.photos[0].image.insert("fileHeight".into(), json!(10));
+    data.photos[0].settings = "s = { Exposure2012 = 0.5 }".into();
+    data.photos[0].xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+ <crs:MaskGroupBasedCorrections><rdf:Seq>
+  <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="-0.25">
+   <crs:CorrectionMasks><rdf:Seq>
+    <rdf:li crs:What="Mask/Gradient" crs:FullX="0.1" crs:FullY="0.2" crs:ZeroX="0.3" crs:ZeroY="0.6"/>
+    <rdf:li crs:What="Mask/CircularGradient" crs:Left="0.3" crs:Right="0.5" crs:Top="0.3" crs:Bottom="0.6" crs:Flipped="true" crs:Version="2"/>
+   </rdf:Seq></crs:CorrectionMasks>
+  </rdf:Description></rdf:li>
+ </rdf:Seq></crs:MaskGroupBasedCorrections>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        .into();
+    let mut s = crate::Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let shown = Photo::new(id, Source::File { path: "/missing/test.ARW".into() }, "test.ARW", "ARW", 10, 20, "before");
+    s.commit("Browse folder", Op::AddPhoto { photo: Box::new(shown) }).unwrap();
+    apply(&mut s, data, true).unwrap();
+    assert_eq!(s.catalog.len(), 1, "the catalog's photo is the one already in the library");
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(p.develop.light.exposure, 0.5, "the develop row is applied too");
+    let c = &serde_json::to_value(&p.develop.masks).unwrap()[0]["components"];
+    let (linear, radial) = (&c[0]["shape"], &c[1]["shape"]);
+    let r = [&linear["start"]["x"], &linear["start"]["y"], &linear["end"]["x"], &linear["end"]["y"], &radial["center"]["x"], &radial["center"]["y"]]
+        .map(|v| (v.as_f64().unwrap() * 1e9).round() / 1e9);
+    // (x, y) → (y, 1 − x), a quarter turn counter-clockwise
+    assert_eq!(r, [0.2, 0.9, 0.6, 0.7, 0.45, 0.6], "{c}");
+    // 4 × 3 px of a 20 × 10 stored image, in long-edge units, with the axes swapped
+    let radii = [&radial["rx"], &radial["ry"]].map(|v| (v.as_f64().unwrap() * 1e9).round() / 1e9);
+    assert_eq!(radii, [0.075, 0.1], "{radial}");
+}
+
+/// A photo already in the library keeps its Rotate Left / Right on update, so the catalog's masks
+/// go through it too: an upright (`AB`) photo turned right in LightCraft gets its gradient turned.
+#[test]
+fn updated_masks_follow_the_rotation_kept_from_the_library() {
+    let mut data = sample();
+    data.photos.truncate(1);
+    data.photos[0].image.remove("masterImage");
+    data.photos[0].image.insert("orientation".into(), json!("AB"));
+    data.photos[0].settings =
+        r#"s = { MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+        { What = "Mask/Gradient", FullX = 0.1, FullY = 0.2, ZeroX = 0.3, ZeroY = 0.6 } } } } }"#
+            .into();
+    data.photos[0].xmp = String::new();
+    let mut s = crate::Session::new();
+    apply(&mut s, data.clone(), false).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let turned = lightcraft_develop::DevelopSettings { orientation: Orientation::Rotate90, ..Default::default() };
+    s.set_develop(id, turned, "Rotate Right").unwrap();
+    apply(&mut s, data, true).unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(p.develop.orientation, Orientation::Rotate90, "the update keeps the photo's rotation");
+    let g = &serde_json::to_value(&p.develop.masks).unwrap()[0]["components"][0]["shape"];
+    let r = [&g["start"]["x"], &g["start"]["y"], &g["end"]["x"], &g["end"]["y"]].map(|v| (v.as_f64().unwrap() * 1e9).round() / 1e9);
+    // (x, y) → (1 − y, x), a quarter turn clockwise
+    assert_eq!(r, [0.8, 0.1, 0.4, 0.3], "{g}");
+    // the catalog's orientation first, then the photo's own, for every pair
+    for a in 1..=8 {
+        for b in 1..=8 {
+            let (a, b) = (Orientation::from_exif(a), Orientation::from_exif(b));
+            for (x, y) in [(0.1, 0.2), (0.7, 0.4)] {
+                let (u, v) = a.map(x, y, 1.0, 1.0);
+                let ((p, q), (want_p, want_q)) = (in_photo_frame(a, b).map(x, y, 1.0, 1.0), b.map(u, v, 1.0, 1.0));
+                assert!((p - want_p).abs() < 1e-9 && (q - want_q).abs() < 1e-9, "{a:?} then {b:?}: ({p}, {q}) for ({want_p}, {want_q})");
+            }
+        }
+    }
+}
+
 #[test]
 fn deferred_auto_tone_sentinels_never_become_real_slider_values() {
     let mut data = sample();
@@ -374,8 +1040,15 @@ fn deferred_auto_tone_sentinels_never_become_real_slider_values() {
     assert_eq!(p.develop.light.shadows, 65.0);
     assert_eq!(p.develop.light.blacks, -22.0);
     assert!(report["unmapped"]["2"].as_array().unwrap().iter().any(|v| v.as_str().is_some_and(|v| v.contains("Deferred"))));
-    let (partial, _) =
-        mapped_settings("s = { Exposure2012 = -5, Contrast2012 = -100 }", crate::crs::Target::RawAbsolute, 1.0, Orientation::Normal, 1.5).unwrap();
+    let (partial, _) = mapped_settings(
+        "s = { Exposure2012 = -5, Contrast2012 = -100 }",
+        crate::crs::Target::RawAbsolute,
+        1.0,
+        Orientation::Normal,
+        1.5,
+        Orientation::Normal,
+    )
+    .unwrap();
     assert_eq!(partial["light"]["exposure"], -5.0);
     assert_eq!(partial["light"]["contrast"], -100.0);
 }
@@ -415,6 +1088,178 @@ fn wal_checksums_cover_commits_without_materializing_historical_databases() {
         assert!(committed_wal_len(&main, &wal).is_err());
         main[16..18].copy_from_slice(&512u16.to_be_bytes());
     }
+}
+
+/// Issue #2592: a catalog in Lightroom's backup layout (`Backups/<date>/<name>.zip`), with one
+/// collection and the catalog's own id.
+fn backup_fixture(root: &Path, catalog_id: &str) -> (PathBuf, PathBuf) {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let mut tables: Vec<(&str, &str, Vec<Vec<SqlValue>>)> = one_row(photo_tables(("/catalog/", "")));
+    tables.push((
+        "AgLibraryCollection",
+        "id_local INTEGER PRIMARY KEY, creationId, name, parent, systemOnly",
+        vec![vec![N, T("com.adobe.ag.library.collection".into()), T("Keepers".into()), N, I(0)]],
+    ));
+    tables.push(("AgLibraryCollectionImage", "id_local INTEGER PRIMARY KEY, collection, image", vec![vec![N, I(1), I(1)]]));
+    tables.push((
+        "Adobe_variablesTable",
+        "id_local INTEGER PRIMARY KEY, id_global, name, type, value",
+        vec![vec![N, T("v1".into()), T("Adobe_storeProviderID".into()), N, T(catalog_id.into())]],
+    ));
+    let bytes = native_catalog_rows(&tables, None);
+    let folder = root.join("Lightroom");
+    let dated = folder.join("Backups").join("2023-11-07 0900");
+    std::fs::create_dir_all(&dated).unwrap();
+    let live = folder.join("Cat.lrcat");
+    std::fs::write(&live, &bytes).unwrap();
+    let zip = dated.join("Cat.zip");
+    let files: [(&str, &[u8]); 2] = [("Cat.lrcat", &bytes), ("Cat.lrcat-data/CURRENT", b"MANIFEST-000005\n")];
+    std::fs::write(&zip, crate::lightroom_backup::tests::zip(&files, true, false)).unwrap();
+    (live, zip)
+}
+
+/// How many albums the library has.
+fn albums(s: &crate::Session) -> usize {
+    s.catalog.albums().count()
+}
+
+/// The zip imports the same photos and collections as its catalog, with the zip as source, no temp files and the zip unchanged.
+#[test]
+fn a_backup_zip_imports_like_its_catalog_and_leaves_no_temporary_files() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-zip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, zip) = backup_fixture(&root, "968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let zip_before = std::fs::read(&zip).unwrap();
+    let from_zip = read(&zip).unwrap();
+    let from_live = read(&live).unwrap();
+    assert_eq!(from_zip.source, zip.to_string_lossy(), "the zip is the import's source");
+    assert_eq!(from_zip.catalog_id.as_deref(), Some("968AF29B-EEE2-481E-8AF9-55DD82965F49"));
+    assert_eq!((from_zip.photos.len(), from_zip.collections.len()), (from_live.photos.len(), from_live.collections.len()));
+    assert_eq!(from_zip.photos[0].path, from_live.photos[0].path);
+    // the live catalog is gone (Lightroom uninstalled): the backup alone imports into a library
+    std::fs::remove_file(&live).unwrap();
+    let lib = root.join("Library");
+    let mut s = crate::Session::new();
+    s.open_library(&lib, false).unwrap();
+    let report = import(&mut s, &zip, false).unwrap();
+    assert_eq!((report["photos"].as_u64(), report["collections"].as_u64()), (Some(1), Some(1)));
+    assert_eq!(report["source"], json!(zip.to_string_lossy()));
+    assert_eq!(albums(&s), 1);
+    let interop: Vec<_> = std::fs::read_dir(lib.join("Interop")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(!interop.iter().any(|n| n.starts_with("lc-lrbackup-")), "the unpacked catalog is removed: {interop:?}");
+    assert_eq!(std::fs::read(&zip).unwrap(), zip_before, "the backup is only read");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Issue #2606: the backup of an imported catalog matches its collections by the catalog id.
+#[test]
+fn importing_a_backup_after_its_catalog_adds_no_album_twice() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-twice-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, zip) = backup_fixture(&root, "968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let mut s = crate::Session::new();
+    s.open_library(root.join("Library"), false).unwrap();
+    import(&mut s, &live, false).unwrap();
+    assert_eq!(albums(&s), 1);
+    let again = import(&mut s, &zip, false).unwrap();
+    assert_eq!(again["imported"], 0, "the photos are matched by their Lightroom id");
+    assert_eq!(albums(&s), 1, "the collections are matched by the catalog's id, not its path");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A backup of a catalog that an earlier release imported (collections keyed on the live
+/// `.lrcat` path, no catalog id) finds those albums through the path it was backed up from.
+#[test]
+fn a_backup_finds_collections_an_earlier_release_keyed_on_the_live_catalog_path() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-legacy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, zip) = backup_fixture(&root, "968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let mut s = crate::Session::new();
+    s.open_library(root.join("Library"), false).unwrap();
+    // an earlier release: the live catalog imported without its id (path keys only)
+    let mut old = read(&live).unwrap();
+    old.catalog_id = None;
+    apply(&mut s, old, false).unwrap();
+    assert_eq!(albums(&s), 1);
+    let backup = read(&zip).unwrap();
+    assert_eq!(backup.catalog_path.as_deref(), Some(live.to_string_lossy().as_ref()), "where the zip's catalog was");
+    apply(&mut s, backup, false).unwrap();
+    assert_eq!(albums(&s), 1, "the backup finds the albums keyed on the live catalog's path");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Issue #2606, the other order: a backup without a catalog id imported first, then the live
+/// catalog (no id either) finds the same albums through the live path the backup recorded.
+#[test]
+fn the_live_catalog_after_a_backup_without_an_id_adds_no_album_twice() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-noid-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, zip) = backup_fixture(&root, "968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let mut s = crate::Session::new();
+    s.open_library(root.join("Library"), false).unwrap();
+    let mut backup = read(&zip).unwrap();
+    backup.catalog_id = None;
+    apply(&mut s, backup, false).unwrap();
+    assert_eq!(albums(&s), 1);
+    let mut current = read(&live).unwrap();
+    current.catalog_id = None;
+    apply(&mut s, current, false).unwrap();
+    assert_eq!(albums(&s), 1, "the live catalog finds the albums the backup imported");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Issue #2606, the reviewer's second order: a backup with an id, then the live catalog read
+/// without one, is rejected rather than risk matching a different catalog at the same path.
+#[test]
+fn the_live_catalog_without_an_id_after_a_backup_with_one_adds_no_album_twice() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrbackup-idthennone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, zip) = backup_fixture(&root, "968AF29B-EEE2-481E-8AF9-55DD82965F49");
+    let mut s = crate::Session::new();
+    s.open_library(root.join("Library"), false).unwrap();
+    apply(&mut s, read(&zip).unwrap(), false).unwrap();
+    let mut current = read(&live).unwrap();
+    current.catalog_id = None;
+    let err = apply(&mut s, current, false).unwrap_err();
+    assert!(err.to_string().contains("no stable identity"));
+    assert_eq!(albums(&s), 1, "an ambiguous path must not change albums");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Two different catalogs (different ids) that sat at the same path, one after the other (a
+/// new computer's default location, a catalog recreated), keep their own albums even with the
+/// same collection `id_local`.
+#[test]
+fn two_catalogs_at_the_same_path_keep_their_own_albums() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrcat-samepath-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (live, _) = backup_fixture(&root, "AAAAAAAA-0000-0000-0000-000000000001");
+    let mut s = crate::Session::new();
+    s.open_library(root.join("Library"), false).unwrap();
+    apply(&mut s, read(&live).unwrap(), false).unwrap();
+    // another catalog, now at the same path
+    let (live2, _) = backup_fixture(&root, "BBBBBBBB-0000-0000-0000-000000000002");
+    assert_eq!(live, live2);
+    apply(&mut s, read(&live2).unwrap(), false).unwrap();
+    assert_eq!(albums(&s), 2, "the second catalog's collection is its own album");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Libraries imported by earlier releases (path keys) still find their albums.
+#[test]
+fn collections_imported_before_the_catalog_id_was_read_are_still_matched_by_path() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-pathkey-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = crate::Session::new();
+    s.open_library(&dir, false).unwrap();
+    // an import made by an earlier release: no catalog id, keys on the path
+    apply(&mut s, sample(), false).unwrap();
+    let before = albums(&s);
+    let mut data = sample();
+    data.catalog_id = Some("A-B".into());
+    apply(&mut s, data, false).unwrap();
+    assert_eq!(albums(&s), before, "the old path keys still find the albums");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -467,7 +1312,7 @@ fn record(values: &[SqlValue]) -> Vec<u8> {
                 body.extend(s.as_bytes());
                 13 + 2 * s.len() as u64
             }
-            _ => unreachable!(),
+            _ => panic!("unexpected SqlValue in a test record: {value:?}"),
         };
         header.extend(varint(serial));
     }
@@ -504,7 +1349,9 @@ fn native_catalog_with_last_table_page(tables: &[(&str, &str, Vec<SqlValue>)], l
 /// table's root page.
 fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: Option<i64>) -> Vec<u8> {
     use SqlValue::{Integer as I, Text as T};
-    let mut bytes = vec![0u8; 5 * 2048];
+    // the schema page, then one page per table (at least four: the photo tables)
+    let pages = (tables.len() + 1).max(5);
+    let mut bytes = vec![0u8; pages * 2048];
     bytes[..16].copy_from_slice(b"SQLite format 3\0");
     bytes[16..18].copy_from_slice(&2048u16.to_be_bytes());
     bytes[18] = 1;
@@ -512,7 +1359,7 @@ fn native_catalog_rows(tables: &[(&str, &str, Vec<Vec<SqlValue>>)], last_page: O
     bytes[21] = 64;
     bytes[22] = 32;
     bytes[23] = 32;
-    bytes[28..32].copy_from_slice(&5u32.to_be_bytes());
+    bytes[28..32].copy_from_slice(&(pages as u32).to_be_bytes());
     bytes[44..48].copy_from_slice(&4u32.to_be_bytes());
     bytes[56..60].copy_from_slice(&1u32.to_be_bytes());
     let mut schema = Vec::new();
@@ -546,6 +1393,83 @@ fn photo_tables(root: (&str, &str)) -> Vec<(&'static str, &'static str, Vec<SqlV
             vec![N, T("fixture-image".into()), I(1), T("ARW".into()), I(20), I(10), I(5), I(1)],
         ),
     ]
+}
+
+#[test]
+fn native_video_import_is_visible_in_video_filter() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-video-filter-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("videos.lrcat");
+    let mut tables = photo_tables((dir.to_str().unwrap(), ""));
+    tables[2].2[2] = SqlValue::Text("clip.MOV".into());
+    tables[3].2[3] = SqlValue::Text("VIDEO".into());
+    std::fs::write(&path, native_catalog(&tables)).unwrap();
+    let mut s = crate::Session::new();
+    let imported = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+    let id = PhotoId(imported["mapping"]["1"].as_u64().unwrap());
+    assert_eq!(s.catalog.photo(id).unwrap().kind, lightcraft_catalog::MediaKind::Video);
+    s.execute("library.filter", &json!({"kind": "video"})).unwrap();
+    assert_eq!(s.visible(), &[id]);
+    s.execute("library.filter", &json!({"kind": "image"})).unwrap();
+    assert!(s.visible().is_empty());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.is_empty());
+    s.execute("edit.redo", &json!({})).unwrap();
+    s.execute("library.filter", &json!({"kind": "video"})).unwrap();
+    assert_eq!(s.visible(), &[id]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native_video_reimport_repairs_kind_without_losing_edits_or_memberships() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-video-reimport-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("videos.lrcat");
+    let mut tables = photo_tables((dir.to_str().unwrap(), ""));
+    tables[2].2[2] = SqlValue::Text("clip.MOV".into());
+    tables[3].2[3] = SqlValue::Text("VIDEO".into());
+    std::fs::write(&path, native_catalog(&tables)).unwrap();
+    let mut s = crate::Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let mut photo =
+        Photo::new(id, Source::File { path: dir.join("Photos/clip.MOV").to_string_lossy().into() }, "clip.MOV", "VIDEO", 1920, 1080, "before");
+    photo.rating = 5;
+    photo.flag = Flag::Pick;
+    photo.file_size = 1234;
+    photo.content_hash = Some("existing-content".into());
+    s.commit("Previous import", Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    let mut settings = lightcraft_develop::DevelopSettings::default();
+    settings.light.exposure = 0.75;
+    s.set_develop(id, settings, "Personal edit").unwrap();
+    let peer_id = s.catalog.alloc_photo_id();
+    let peer = Photo::new(peer_id, Source::File { path: "/missing/peer.jpg".into() }, "peer.jpg", "JPEG", 20, 10, "before");
+    s.commit("Peer", Op::AddPhoto { photo: Box::new(peer) }).unwrap();
+    let mut album = Album::new(s.catalog.alloc_album_id(), "Personal album");
+    album.photos = vec![id, peer_id];
+    s.commit("Album", Op::AddAlbum { album: album.clone() }).unwrap();
+    let stack = lightcraft_catalog::Stack { id: s.catalog.alloc_stack_id(), photos: vec![id, peer_id], collapsed: false };
+    s.commit("Stack", Op::AddStack { stack: stack.clone() }).unwrap();
+    let before = s.catalog.to_snapshot();
+    let mut expected = (**s.catalog.photo(id).unwrap()).clone();
+    expected.kind = lightcraft_catalog::MediaKind::Video;
+    s.execute("library.filter", &json!({"kind": "video"})).unwrap();
+    assert!(s.visible().is_empty());
+    let result = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+    assert_eq!(result["mapping"]["1"], id.0);
+    assert_eq!(result["imported"], 0);
+    assert_eq!(result["preservedExistingEdits"], 1);
+    assert_eq!(s.catalog.photo(id).unwrap().as_ref(), &expected);
+    assert_eq!(s.visible(), &[id]);
+    let after = s.catalog.to_snapshot();
+    assert_eq!(s.catalog.album(album.id), Some(&album));
+    assert_eq!(s.catalog.stack(stack.id), Some(&stack));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.to_snapshot(), before);
+    assert!(s.visible().is_empty());
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.to_snapshot(), after);
+    assert_eq!(s.visible(), &[id]);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

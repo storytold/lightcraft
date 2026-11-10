@@ -123,12 +123,21 @@ fn prepare_guarded(
         let label = p.file_name.clone();
         let meta = export_metadata(p, &session.catalog, o);
         let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
-        let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
+        let mut job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
+        job.request.exact_size = true;
+        job.key ^= 0x86e2_fadc_0917_b435;
         let weight = render_weight(full_px, long, job.level, w.saturating_mul(h));
         if let Some(why) = too_big_for_memory((w, h), native_px, weight, crate::memory::total_ram()) {
             return Err(format!("{label}: {why}"));
         }
-        let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
+        let hdr_job = if gain_map {
+            let mut hdr = session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?;
+            hdr.request.exact_size = true;
+            hdr.key ^= 0x86e2_fadc_0917_b435;
+            Some(hdr)
+        } else {
+            None
+        };
         (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone() })), weight)
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
@@ -227,9 +236,22 @@ impl PreparedExport {
                     if remove_location {
                         let metadata = lightcraft_meta::try_extract(&bytes)
                             .map_err(|e| format!("{label}: can't verify location metadata in this original file: {e}"))?;
-                        if metadata.gps.is_some() {
+                        if !bytes.starts_with(b"8BPS") {
+                            let embedded = lightcraft_meta::embedded(&bytes);
+                            if let Some(xmp) = embedded.xmp.as_deref() {
+                                lightcraft_meta::parse_xmp(xmp).map_err(|e| {
+                                    format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}")
+                                })?;
+                            }
+                        }
+                        let embeds_place_name =
+                            [metadata.sublocation.as_deref(), metadata.city.as_deref(), metadata.state.as_deref(), metadata.country.as_deref()]
+                                .into_iter()
+                                .flatten()
+                                .any(|value| !value.trim().is_empty());
+                        if metadata.gps.is_some() || embeds_place_name {
                             return Err(format!(
-                                "{label}: can't remove the location from an original file that embeds GPS; export as JPEG, TIFF or DNG instead"
+                                "{label}: can't remove the location from an original file that embeds GPS or place names; export as JPEG or TIFF, or as DNG for a raw photo"
                             ));
                         }
                     }

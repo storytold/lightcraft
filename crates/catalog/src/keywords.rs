@@ -43,6 +43,33 @@ pub fn reparent(k: &str, from: &str, to: &str) -> String {
     std::iter::once(to).filter(|t| !t.is_empty()).chain(rest).collect::<Vec<_>>().join("|")
 }
 
+/// A photo's keywords as a sidecar writes them: the two lists [`to_file`] fills.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileKeywords {
+    /// For `dc:subject`: every level of every keyword, each once.
+    pub flat: Vec<String>,
+    /// For `lr:hierarchicalSubject`: every keyword as its path, when any keyword has levels;
+    /// empty otherwise, so a library without hierarchy doesn't gain the property.
+    pub hierarchical: Vec<String>,
+}
+
+/// A photo's keywords as a sidecar writes them, the inverse of [`from_file`]. `dc:subject` is the
+/// flat list other applications search, so it gets names (`travel`, `Italy`, `Rome`), never paths,
+/// as Lightroom Classic and darktable write it; the paths go to `lr:hierarchicalSubject`. Unlike
+/// [`Catalog::export_keywords`] it applies no export options (a sidecar is the photo's own record,
+/// not an export): no keyword is left out and no synonym added, so [`from_file`] reads the pair
+/// back as the same keywords. When any keyword has levels, every keyword is listed in
+/// `hierarchical`, the flat ones too: a flat `Rome` beside `travel|Italy|Rome` would otherwise be
+/// taken for a level of the path on the way back.
+pub fn to_file(keywords: &[String]) -> FileKeywords {
+    let mut paths: Vec<String> = keywords.iter().map(|k| clean(k)).collect();
+    dedupe(&mut paths);
+    let mut flat: Vec<String> = paths.iter().flat_map(|p| p.split(SEP).map(str::to_string)).collect();
+    dedupe(&mut flat);
+    let hierarchical = if paths.iter().any(|p| p.contains(SEP)) { paths } else { Vec::new() };
+    FileKeywords { flat, hierarchical }
+}
+
 /// A file's keywords as a photo carries them: the paths of `lr:hierarchicalSubject`, then the
 /// names of `dc:subject` that aren't levels of those paths (Lightroom Classic writes each keyword's
 /// name, its parents' and synonyms flat besides its path). Each once, cleaned.
@@ -59,6 +86,12 @@ pub fn from_file(flat: &[String], hierarchical: &[String]) -> Vec<String> {
 
 /// The deepest a keyword list file may nest keywords: a file is input, so its nesting is bounded.
 pub const MAX_LEVELS: usize = 64;
+
+/// The most bytes of full keyword paths a keyword list file may spell out. Every line names its
+/// keyword by its whole path (`parent|child`), so a file of one long keyword with many short ones
+/// inside it would otherwise grow into far more memory than its own size (CWE-400). Lightroom
+/// Classic's own lists of tens of thousands of keywords come to a few MiB.
+pub const MAX_LIST_PATH_BYTES: usize = 64 << 20; // 64 MiB
 
 /// A keyword list as written by [`Catalog::keyword_list_text`]: the file's text, the keywords in
 /// it (paths), and what the format can't hold and so is left out (a keyword, with those inside it,
@@ -87,6 +120,8 @@ pub fn parse_keyword_list(text: &str) -> Result<Vec<(String, KeywordInfo)>> {
     let mut synonyms: std::collections::HashMap<usize, std::collections::HashSet<String>> = std::collections::HashMap::new();
     // the keyword at each level above the line: its path and where it is in `out`
     let mut above: Vec<(String, usize)> = Vec::new();
+    // bytes of full paths spelled out so far, checked against `MAX_LIST_PATH_BYTES` before each
+    let mut path_bytes = 0usize;
     for (i, line) in text.split('\n').enumerate() {
         let n = i + 1;
         if line.trim().is_empty() {
@@ -135,6 +170,11 @@ pub fn parse_keyword_list(text: &str) -> Result<Vec<(String, KeywordInfo)>> {
             return Err(bad(n, "“|” separates a keyword's levels: a name can't hold one"));
         }
         above.truncate(depth);
+        let parent_len = above.last().map_or(0, |(parent, _)| parent.len().saturating_add(1));
+        path_bytes = path_bytes.saturating_add(parent_len.saturating_add(name.len()));
+        if path_bytes > MAX_LIST_PATH_BYTES {
+            return Err(bad(n, &format!("the keywords' full paths come to more than {} MiB", MAX_LIST_PATH_BYTES >> 20)));
+        }
         let path = match above.last() {
             Some((parent, _)) => format!("{parent}{SEP}{name}"),
             None => name.to_string(),
@@ -160,6 +200,14 @@ pub fn parse_keyword_list(text: &str) -> Result<Vec<(String, KeywordInfo)>> {
 /// The keyword of `from` that `k` is under, the closest one when several are (`a|b` before `a`).
 pub fn closest<'a>(k: &str, from: &'a [String]) -> Option<&'a String> {
     from.iter().filter(|f| is_under(k, f)).max_by_key(|f| f.split(SEP).count())
+}
+
+/// Add each of `more` to `synonyms` that isn't there in any case, in order. One lowered set of
+/// what is there, not a search of the growing list per synonym: an imported list can give a
+/// keyword many synonyms, and the search was quadratic in them (CWE-407).
+fn merge_synonyms(synonyms: &mut Vec<String>, more: impl IntoIterator<Item = String>) {
+    let mut seen: std::collections::HashSet<String> = synonyms.iter().map(|s| s.to_lowercase()).collect();
+    synonyms.extend(more.into_iter().filter(|s| seen.insert(s.to_lowercase())));
 }
 
 /// Keep the first of case-insensitively equal keywords.
@@ -192,6 +240,10 @@ pub struct KeywordInfo {
     /// most, see [`Catalog::default_keyword_parent`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub new_keywords_inside: bool,
+    /// Part of the keyword shortcut (Set Keyword Shortcut), which ⇧K adds to or removes from the
+    /// selected photos: see [`Catalog::keyword_shortcut`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keyword_shortcut: bool,
 }
 
 fn yes() -> bool {
@@ -207,6 +259,7 @@ impl Default for KeywordInfo {
             export_synonyms: true,
             person: false,
             new_keywords_inside: false,
+            keyword_shortcut: false,
         }
     }
 }
@@ -369,11 +422,8 @@ impl Catalog {
                 match list.get_mut(&path.to_lowercase()) {
                     Some(there) => {
                         there.info.new_keywords_inside |= l.info.new_keywords_inside;
-                        for s in l.info.synonyms {
-                            if !there.info.synonyms.iter().any(|x| same(x, &s)) {
-                                there.info.synonyms.push(s);
-                            }
-                        }
+                        there.info.keyword_shortcut |= l.info.keyword_shortcut;
+                        merge_synonyms(&mut there.info.synonyms, l.info.synonyms);
                     }
                     None => {
                         list.insert(path.to_lowercase(), ListedKeyword { path, info: l.info });
@@ -434,8 +484,11 @@ impl Catalog {
         let defaults = KeywordInfo::default();
         let info = |path: &str| self.keyword_info(path).unwrap_or(&defaults);
         let mut out = ExportKeywords::default();
-        let push = |v: &mut Vec<String>, s: &str| {
-            if !s.is_empty() && !v.iter().any(|x| same(x, s)) {
+        // what each list holds, lowered: a search of the list per name was quadratic in a keyword's
+        // synonyms, which an imported list sets (CWE-407)
+        let (mut flat_seen, mut paths_seen) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+        let push = |v: &mut Vec<String>, seen: &mut std::collections::HashSet<String>, s: &str| {
+            if !s.is_empty() && seen.insert(s.to_lowercase()) {
                 v.push(s.to_string());
             }
         };
@@ -448,11 +501,11 @@ impl Catalog {
             let levels: Vec<&str> = path.split(SEP).collect();
             let mut names = |at: usize, i: &KeywordInfo| {
                 if let Some(name) = levels.get(at) {
-                    push(&mut out.flat, name);
+                    push(&mut out.flat, &mut flat_seen, name);
                 }
                 if i.export_synonyms {
                     for s in &i.synonyms {
-                        push(&mut out.flat, s.trim());
+                        push(&mut out.flat, &mut flat_seen, s.trim());
                     }
                 }
             };
@@ -466,7 +519,7 @@ impl Catalog {
                     }
                 }
             }
-            push(&mut out.hierarchical, &path);
+            push(&mut out.hierarchical, &mut paths_seen, &path);
         }
         out
     }
@@ -476,6 +529,13 @@ impl Catalog {
     /// keyword, a keyword left out of export in square brackets; by name. What the format can't hold
     /// is left out and named, so the file always reads back.
     pub fn keyword_list_text(&self) -> KeywordListFile {
+        self.keyword_list_text_within(MAX_LIST_PATH_BYTES)
+    }
+
+    /// [`keyword_list_text`](Self::keyword_list_text) with the full paths written held to
+    /// `max_path_bytes` as [`parse_keyword_list`] holds them: a keyword past it is named
+    /// unwritable, with its subtree, so the file reads back.
+    fn keyword_list_text_within(&self, max_path_bytes: usize) -> KeywordListFile {
         // a name the list would read as something else, or not at all
         fn unwritable(name: &str) -> bool {
             name.trim().is_empty()
@@ -486,14 +546,27 @@ impl Catalog {
                 || (name.starts_with('[') && name.ends_with(']'))
                 || (name.starts_with('{') && name.ends_with('}'))
         }
-        fn write(c: &Catalog, nodes: &[KeywordNode], depth: usize, file: &mut KeywordListFile) {
+        fn write(
+            c: &Catalog,
+            nodes: &[KeywordNode],
+            depth: usize,
+            file: &mut KeywordListFile,
+            path_bytes: &mut usize,
+            max_path_bytes: usize,
+            parent_len: usize,
+        ) {
             let tabs = "\t".repeat(depth);
             for n in nodes {
                 // the keywords inside go with it: under its parent they'd be other keywords
-                if depth >= MAX_LEVELS || unwritable(&n.name) {
+                // (a line's full path is what the reader counts against its path budget)
+                // the path the reader rebuilds from the lines written: the parent as emitted, a
+                // separator, the name (a child's `n.path` can spell its parent in another case)
+                let emitted = if depth == 0 { n.name.len() } else { parent_len + SEP.len_utf8() + n.name.len() };
+                if depth >= MAX_LEVELS || unwritable(&n.name) || path_bytes.saturating_add(emitted) > max_path_bytes {
                     file.unwritable.push(n.path.clone());
                     continue;
                 }
+                *path_bytes += emitted;
                 let info = c.keyword_info(&n.path).cloned().unwrap_or_default();
                 if info.include_on_export {
                     file.text.push_str(&format!("{tabs}{}\n", n.name));
@@ -503,19 +576,21 @@ impl Catalog {
                 file.written.push(n.path.clone());
                 // the reader trims synonyms and takes one per spelling: an empty one, or another's
                 // in a different case, is no loss; a line break or a “|” is
-                let mut synonyms: Vec<&str> = Vec::new();
+                // (one lowered set, not a search of those written so far per synonym: quadratic
+                // in a keyword's synonyms, which an imported list sets — CWE-407)
+                let mut synonyms: std::collections::HashSet<String> = std::collections::HashSet::new();
                 for s in info.synonyms.iter().map(|s| s.trim()) {
-                    if s.is_empty() || synonyms.iter().any(|x| same(x, s)) {
+                    if s.is_empty() || synonyms.contains(&s.to_lowercase()) {
                         continue;
                     }
                     if s.chars().any(char::is_control) || s.contains(SEP) {
                         file.unwritable.push(format!("{} {{{s}}}", n.path));
                     } else {
-                        synonyms.push(s);
+                        synonyms.insert(s.to_lowercase());
                         file.text.push_str(&format!("{tabs}\t{{{s}}}\n"));
                     }
                 }
-                write(c, &n.children, depth + 1, file);
+                write(c, &n.children, depth + 1, file, path_bytes, max_path_bytes, emitted);
             }
         }
         let mut file = KeywordListFile::default();
@@ -535,7 +610,7 @@ impl Catalog {
                 }
             }
         }
-        write(self, &self.keyword_tree(), 0, &mut file);
+        write(self, &self.keyword_tree(), 0, &mut file, &mut 0, max_path_bytes, 0);
         file.unwritable.extend(over_deep);
         file
     }
@@ -580,7 +655,13 @@ impl Catalog {
                     continue;
                 }
                 if !known.contains_key(&key) {
-                    list.insert(key.clone(), ListedKeyword { path: path.clone(), info: KeywordInfo { new_keywords_inside: false, ..info.clone() } });
+                    list.insert(
+                        key.clone(),
+                        ListedKeyword {
+                            path: path.clone(),
+                            info: KeywordInfo { new_keywords_inside: false, keyword_shortcut: false, ..info.clone() },
+                        },
+                    );
                     // it and its parents are the library's now: what follows spells them so
                     let levels: Vec<&str> = path.split(SEP).collect();
                     for i in 0..levels.len() {
@@ -593,11 +674,7 @@ impl Catalog {
                 // one the library has: the list's synonyms join its own (listed only if it gains some)
                 let mut info_now = list.get(&key).map(|l| l.info.clone()).unwrap_or_default();
                 let before = info_now.synonyms.len();
-                for s in &info.synonyms {
-                    if !info_now.synonyms.iter().any(|x| same(x, s)) {
-                        info_now.synonyms.push(s.clone());
-                    }
-                }
+                merge_synonyms(&mut info_now.synonyms, info.synonyms.iter().cloned());
                 if info_now.synonyms.len() > before {
                     let path = list.get(&key).map_or(path, |l| l.path.clone());
                     list.insert(key, ListedKeyword { path, info: info_now });
@@ -664,6 +741,29 @@ impl Catalog {
                 }
             }),
         })
+    }
+
+    /// The keyword shortcut's keywords (Set Keyword Shortcut), in the keyword list's order.
+    pub fn keyword_shortcut(&self) -> Vec<String> {
+        self.keyword_list.values().filter(|l| l.info.keyword_shortcut).map(|l| l.path.clone()).collect()
+    }
+
+    /// Make `keywords` the keyword shortcut, in one batch. A keyword the library doesn't have yet is
+    /// listed, and the others keep the attributes they have.
+    pub fn set_keyword_shortcut_ops(&self, keywords: &[String]) -> Op {
+        let paths: Vec<String> =
+            keywords.iter().map(|k| self.keyword_path(k).unwrap_or_else(|| self.spelled(&clean(k)))).filter(|k| !k.is_empty()).collect();
+        Op::Batch {
+            ops: self.list_ops(|list| {
+                for l in list.values_mut() {
+                    l.info.keyword_shortcut = false;
+                }
+                for path in paths {
+                    let l = list.entry(path.to_lowercase()).or_insert_with(|| ListedKeyword { path, info: KeywordInfo::default() });
+                    l.info.keyword_shortcut = true;
+                }
+            }),
+        }
     }
 
     /// The keyword as written in the library (whatever the case of `path`): its listing, or the

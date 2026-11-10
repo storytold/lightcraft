@@ -43,7 +43,7 @@ fn grid_menu_shortcut_hints_keep_native_toggle_dispatch() {
         assert_eq!(label, "Photo Grid");
         assert_eq!(accelerator, Some("G"));
         assert!(!native_menu_delivers(accelerator.unwrap()));
-        for (key, text) in [("Cmd+Shift+G", "⌘⇧G"), ("Ctrl+G", "⌃G"), ("F3", "F3")] {
+        for (key, text) in [("Cmd+Shift+G", "⇧⌘G"), ("Ctrl+G", "⌃G"), ("F3", "F3")] {
             crate::shortcuts::assign(&mut keymap, "view.gridToggle", Some(key)).unwrap();
             let (label, accelerator) = native_item_presentation(&keymap, id, &Value::Null, "Photo Grid", Some(key));
             assert_eq!(label, format!("Photo Grid ({text})"));
@@ -767,9 +767,21 @@ fn native_menu_commands_respect_the_blocking_window_policy() {
 
 #[test]
 fn shortcut_text_per_platform() {
-    assert_eq!(shortcut_text("Cmd+Shift+Z", true), "⌘⇧Z");
+    assert_eq!(shortcut_text("Cmd+Shift+Z", true), "⇧⌘Z");
     assert_eq!(shortcut_text("Cmd+Shift+Z", false), "Ctrl+Shift+Z");
     assert_eq!(shortcut_text("Delete", true), "⌫");
+}
+
+/// AppKit and Apple's Human Interface Guidelines write modifiers ⌃⌥⇧⌘ whatever order the binding
+/// was spelled in, so the hint on a button matches the menu bar's own column.
+#[test]
+fn shortcut_text_orders_mac_modifiers_control_option_shift_command() {
+    assert_eq!(shortcut_text("Cmd+Alt+Shift+C", true), "⌥⇧⌘C");
+    assert_eq!(shortcut_text("Shift+Alt+Ctrl+Cmd+K", true), "⌃⌥⇧⌘K");
+    assert_eq!(shortcut_text("Cmd+Ctrl+F", true), "⌃⌘F");
+    assert_eq!(shortcut_text("Shift+Cmd+Up", true), "⇧⌘↑");
+    assert_eq!(shortcut_text("Shift+Alt+Y", true), "⌥⇧Y");
+    assert_eq!(shortcut_text("Cmd+Alt+Shift+C", false), "Ctrl+Alt+Shift+C", "other platforms keep the binding as written");
 }
 
 /// Every item of a menu, submenus included.
@@ -822,4 +834,21 @@ fn no_two_menu_commands_share_a_label() {
         }
     }
     assert!(clashes.is_empty(), "{clashes:#?}");
+}
+
+/// Edit lists Select Only Active Photo with the other Select rows and Paste Settings from Previous
+/// with the other Paste rows, not after Settings…, near the end of the menu.
+#[test]
+fn edit_menu_places_the_select_and_paste_rows_with_their_kin() {
+    let a = app();
+    let bar = menu_bar(&a);
+    let nodes = &bar.iter().find(|(title, _)| title == "Edit").unwrap().1;
+    let pos = |id: &str| {
+        nodes.iter().position(|n| matches!(n, MenuNode::Item { id: i, .. } if i == id)).unwrap_or_else(|| panic!("{id} is a top-level Edit row"))
+    };
+    assert_eq!(pos("library.selectOnlyActive"), pos("library.selectNone") + 1, "Select Only Active Photo follows Deselect All");
+    assert_eq!(pos("develop.pastePrevious"), pos("dialog.pasteSettings") + 1, "Paste Settings from Previous follows Paste Selected Settings…");
+    assert!(pos("app.settings") > pos("library.selectOnlyActive"), "Settings… stays after them");
+    let after = &nodes[pos("app.settings") + 1..];
+    assert!(!after.iter().any(|n| matches!(n, MenuNode::Item { .. })), "no row follows Settings… but a submenu: {after:?}");
 }

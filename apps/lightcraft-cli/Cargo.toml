@@ -25,6 +25,9 @@ lightcraft-merge = { workspace = true }
 serde_json = { workspace = true }
 dhat = { workspace = true, optional = true }
 
+[dev-dependencies]
+lightcraft-testkit = { workspace = true }
+
 [features]
 default = ["denoise"]
 denoise = ["lightcraft-engine/denoise"]

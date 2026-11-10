@@ -267,14 +267,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             let chunks = info.chunks(bytes.len() as u64);
             let first = chunks.first().ok_or_else(|| RawError::Corrupt("PEF without image data".into()))?;
             let mut c = *first;
-            c.len = chunks.iter().map(|c| c.len).sum::<u64>().max(first.len);
+            c.len = chunks.iter().fold(0u64, |a, c| a.saturating_add(c.len)).max(first.len);
             let src = chunk_bytes(bytes, &c)
                 .or_else(|| bytes.get(first.offset as usize..))
                 .ok_or_else(|| RawError::Corrupt("PEF data outside file".into()))?;
             if read == Mode::Full { RawData::U16(decode_huffman(src, &huff, w, hgt, bits)?) } else { RawData::U16(Vec::new()) }
         }
         1 => {
-            let strip: u64 = info.chunks(bytes.len() as u64).iter().map(|c| c.len).sum();
+            let strip = info.chunks(bytes.len() as u64).iter().fold(0u64, |a, c| a.saturating_add(c.len));
             let packing = if strip >= (w * hgt * 2) as u64 { Packing::Word16 } else { Packing::Msb };
             read_image_in(read, bytes, &info, tiff.order, packing)?
         }
@@ -706,5 +706,17 @@ mod tests {
         let (w, h) = (320, 288);
         let file = pef_with_black_point(w, h, 64, |x, y| 64 + ((x * 7 + y * 13) % 5) as u16);
         assert_eq!(decode(&file, Mode::Full).unwrap().active_area, Rect::new(0, 0, w, h));
+    }
+
+    /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow,
+    /// for the Huffman-coded and the uncompressed samples.
+    #[test]
+    fn strip_byte_counts_past_u64_max_do_not_overflow() {
+        for compression in [65535u16, 1] {
+            let file = crate::vendor::tests::huge_strip_counts(pef_with_pattern(compression, [0, 1, 1, 2]));
+            for mode in [Mode::Header, Mode::Full] {
+                let _ = decode(&file, mode);
+            }
+        }
     }
 }

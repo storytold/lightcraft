@@ -18,12 +18,10 @@ pub(super) fn local_now(app: &mut LightcraftApp, ui: &egui::Ui) -> Option<LocalN
     if !SidebarSection::Local.available() {
         return None;
     }
-    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default();
+    let home = home_folder();
     let mut builtin = app.services.local_places.clone().unwrap_or_default();
-    if app.services.local_places.is_none() && !home.is_empty() {
-        for (name, sub) in [("Pictures", "Pictures"), ("Desktop", "Desktop"), ("Downloads", "Downloads"), ("Home", "")] {
-            // joined with the platform's separator, like the paths browsing gives back
-            let p = if sub.is_empty() { home.clone() } else { std::path::Path::new(&home).join(sub).to_string_lossy().to_string() };
+    if app.services.local_places.is_none() {
+        for (name, p) in default_places(&home) {
             // (checked off the UI thread: a home folder can be on a network share)
             if fs_cached(ui, "is-dir", &p, 5.0, |p| std::path::Path::new(p).is_dir()) == Some(true) {
                 builtin.push((crate::i18n::tr(name).to_string(), p));
@@ -51,6 +49,41 @@ pub(super) fn local_now(app: &mut LightcraftApp, ui: &egui::Ui) -> Option<LocalN
         app.ui.local_browse_root = places.browse_root.clone();
     }
     Some(LocalNow { places, current, hidden })
+}
+
+/// The user's home folder, the engine's own reading of it (so the menu and the rename/move guard
+/// agree); empty when the host has none.
+fn home_folder() -> String {
+    lightcraft_engine::library::home_folder().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// Local's built-in places under `home` as (English name, path), in order. The names are keys for
+/// `tr`, never folder names: the folders on disk keep their own (Pictures, not "Bilder").
+fn default_places(home: &str) -> Vec<(&'static str, String)> {
+    if home.is_empty() {
+        return Vec::new();
+    }
+    [("Pictures", "Pictures"), ("Desktop", "Desktop"), ("Downloads", "Downloads"), ("Home", "")]
+        .into_iter()
+        // joined with the platform's separator, like the paths browsing gives back
+        .map(|(name, sub)| (name, if sub.is_empty() { home.to_string() } else { std::path::Path::new(home).join(sub).to_string_lossy().to_string() }))
+        .collect()
+}
+
+/// Whether `path` is one of Local's built-in places (the home folder, Pictures, Desktop,
+/// Downloads, or a place the host listed itself). They are the computer's own folders, shown under
+/// a translated label, so Local offers no Rename or Move for them.
+pub(super) fn is_builtin_place(app: &LightcraftApp, path: &str) -> bool {
+    builtin_place_in(app.services.local_places.as_deref(), &home_folder(), path)
+}
+
+/// [`is_builtin_place`] for the places the host listed (`injected`, which replace the defaults) or,
+/// without them, the ones under `home`.
+fn builtin_place_in(injected: Option<&[(String, String)]>, home: &str, path: &str) -> bool {
+    match injected {
+        Some(places) => places.iter().any(|(_, p)| same_folder(p, path)),
+        None => default_places(home).iter().any(|(_, p)| same_folder(p, path)),
+    }
 }
 
 /// Local's rows: each place as a folder tree, Browse Folder…, and the way back for hidden places.
@@ -224,14 +257,17 @@ fn list_subfolders(path: &str) -> std::sync::Arc<Vec<(String, String)>> {
     v.into()
 }
 
-/// How many [`fs_cached`] answers for `ctx` are being worked out right now. Rows appear (and
-/// the sidebar below them moves) when they land, so the headless driver counts them as pending
-/// work and waits for them before acting on widget positions.
+/// How many file-system answers for `ctx` are being worked out right now: [`fs_cached`]'s and the
+/// Missing Photos count's. Rows appear (and the sidebar below them moves) when they land, so the
+/// headless driver counts them as pending work and waits for them before acting on widget
+/// positions.
 pub(crate) fn fs_cached_running(ctx: &egui::Context) -> usize {
     fs_running_counter(ctx).load(std::sync::atomic::Ordering::Acquire)
 }
 
-fn fs_running_counter(ctx: &egui::Context) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+/// The counter behind [`fs_cached_running`]: a worker adds one before it starts and takes it off
+/// after its answer is stored.
+pub(super) fn fs_running_counter(ctx: &egui::Context) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
     ctx.data_mut(|d| d.get_temp_mut_or_default::<std::sync::Arc<std::sync::atomic::AtomicUsize>>(egui::Id::unique("fs-cached-running")).clone())
 }
 
@@ -295,6 +331,24 @@ pub(crate) fn fs_cached<T: Clone + Send + 'static>(ui: &egui::Ui, kind: &'static
 mod tests {
     use super::local_places;
     use crate::widgets::elide_head;
+
+    #[test]
+    fn the_standard_places_under_a_home_are_built_in_and_nothing_else_is() {
+        let home = "/home/example";
+        for path in [home, "/home/example/", "/home/example/Pictures", "/home/example/Pictures/", "/home/example/Desktop", "/home/example/Downloads"]
+        {
+            assert!(super::builtin_place_in(None, home, path), "{path}");
+        }
+        for path in ["/home/example/Pictures/Trip", "/home/example/Documents", "/home/other", "/home", "Pictures"] {
+            assert!(!super::builtin_place_in(None, home, path), "{path}");
+        }
+        // no home: no standard places, and no relative ones
+        assert!(!super::builtin_place_in(None, "", "Pictures") && !super::builtin_place_in(None, "", ""));
+        // places the host listed replace the standard ones
+        let injected = vec![("Sandbox".to_string(), "/lightcraft-test/home".to_string())];
+        assert!(super::builtin_place_in(Some(&injected), home, "/lightcraft-test/home"));
+        assert!(!super::builtin_place_in(Some(&injected), home, "/home/example/Pictures"));
+    }
 
     #[test]
     fn injected_places_replace_the_machine_home() {

@@ -6,7 +6,8 @@
 //! 2. Complete each candidate with red/blue by colour-difference (C − G) interpolation.
 //! 3. Convert both candidates to CIELab and measure, per pixel, how many of its 4 neighbours lie within the
 //!    adaptive luminance / chrominance tolerances (ε_L, ε_C from the paper) — the homogeneity.
-//! 4. Sum homogeneity over a 3×3 window and pick the more homogeneous candidate (average on ties).
+//! 4. Sum homogeneity over a 3×3 window and pick the more homogeneous candidate. The paper picks one outright;
+//!    we blend the two by how far apart their sums are (see [`BLEND`]), so a clear edge still takes one candidate.
 //!
 //! Work is done in overlapping tiles (bounded memory, rayon-parallel), one band of tiles at a time written
 //! straight into the output. Each step runs only where the tile's output depends on it: the choice reads the
@@ -19,6 +20,11 @@ use rayon::prelude::*;
 
 const TILE: usize = 128;
 const MARGIN: usize = 6;
+/// Difference of the two candidates' 3×3 homogeneity sums (each 0–36) from which the more homogeneous one is taken
+/// alone; closer sums blend the two linearly, equal sums half and half. In a flat, noisy area noise alone decides
+/// which sum is larger, and picking outright turned the noise into short horizontal and vertical strokes (a maze,
+/// coloured where white balance is strong). 12 keeps the PSNR of the outright pick on the edge tests.
+const BLEND: f32 = 12.0;
 
 pub(crate) fn ahd(m: &Mosaic) -> Rgb32f {
     ahd_window(m, 0, 0, m.w, m.h)
@@ -157,12 +163,16 @@ fn tile(m: &Mosaic, x0: usize, y0: usize, tw: usize, th: usize) -> Vec<[f32; 3]>
             sh += hh[j] as u32;
             sv += hv[j] as u32;
         }
-        out.push(if sh > sv {
+        let wh = (0.5 + (sh as f32 - sv as f32) / (2.0 * BLEND)).clamp(0.0, 1.0);
+        // a candidate taken alone is copied, and one that isn't finite (beside a float raw's NaN sample) is left out,
+        // so the other's value doesn't become 0 · NaN
+        let finite = |p: &[f32; 3]| p.iter().all(|v| v.is_finite());
+        out.push(if wh >= 1.0 || !finite(&rv[i]) {
             rh[i]
-        } else if sv > sh {
+        } else if wh <= 0.0 || !finite(&rh[i]) {
             rv[i]
         } else {
-            [(rh[i][0] + rv[i][0]) * 0.5, (rh[i][1] + rv[i][1]) * 0.5, (rh[i][2] + rv[i][2]) * 0.5]
+            [0, 1, 2].map(|c| rh[i][c] * wh + rv[i][c] * (1.0 - wh))
         });
     }
     out

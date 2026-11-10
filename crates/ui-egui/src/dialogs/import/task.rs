@@ -1,5 +1,5 @@
 use super::scan::{busy_synchronizing, running};
-use super::{ImportDialog, ImportUprightMode, ImportWarning, ImportWarningCode, LightcraftApp, Ordering, Value, json};
+use super::{ImportDialog, ImportUprightMode, ImportWarning, ImportWarningCode, LightcraftApp, Ordering, Value, json, recipe_items};
 
 /// Files per batch in the browser build (each batch joins the catalog as it is ready, so the
 /// progress window updates); the desktop's worker uses [`lightcraft_engine::import::batch_size`].
@@ -16,7 +16,7 @@ pub struct ImportTask {
     queue: Vec<String>,
     pub total: usize,
     pub done: usize,
-    params: Value,
+    pub(super) params: Value,
     pub imported: usize,
     /// Brought back from Recently Deleted (`onDeleted: restore`).
     pub restored: usize,
@@ -51,6 +51,11 @@ pub struct ImportTask {
 }
 
 impl ImportTask {
+    /// Whether it has its row in the activity list yet (it gets one on its first tick).
+    pub fn listed(&self) -> bool {
+        self.guard.is_some()
+    }
+
     /// An import of `paths` (files or folders) with `library.import` params (without `paths`).
     pub fn new(paths: Vec<String>, params: Value, undo0: usize, browse: bool) -> Self {
         ImportTask { total: paths.len(), queue: paths, params, undo0, browse, ..Default::default() }
@@ -220,6 +225,9 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
         (true, true) => "move",
     };
     let mut params = json!({"mode": mode, "keywords": d.keywords()});
+    if !d.recipe.is_empty() {
+        params["recipe"] = recipe_items(&d.recipe);
+    }
     if !d.on_deleted.is_empty() {
         params["onDeleted"] = json!(d.on_deleted);
     }

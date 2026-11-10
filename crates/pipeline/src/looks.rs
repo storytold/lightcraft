@@ -547,8 +547,8 @@ mod tests {
         let src = picture();
         let base = rgba(&src, &raw_info(Some(camera("X-T4"))), &settings("lc.color", 100.0));
         let looked = rgba(&src, &raw_info(Some(camera("X-T4"))), &settings("look:test/grey", 100.0));
-        // Adobe RGB 0.5 everywhere: the same mid grey in every pixel
-        assert!(looked.chunks(4).all(|p| p[..3] == looked[..3]), "one colour");
+        // Adobe RGB 0.5 everywhere: the same mid grey in every pixel (within a level of 8-bit dither)
+        assert!(looked.chunks(4).all(|p| p[..3].iter().zip(&looked[..3]).all(|(a, b)| a.abs_diff(*b) <= 1)), "one colour");
         assert!((i32::from(looked[0]) - i32::from(looked[2])).abs() <= 1 && (100..=140).contains(&looked[0]), "{:?}", &looked[..4]);
         assert_ne!(looked, base);
         // not this camera, no camera colour, or a rendered (non-raw) source: the starting look
@@ -559,7 +559,8 @@ mod tests {
         // amount 0 is the starting look; 50 % lies between
         assert_eq!(rgba(&src, &raw_info(Some(camera("X-T4"))), &settings("look:test/grey", 0.0)), base);
         let half = rgba(&src, &raw_info(Some(camera("X-T4"))), &settings("look:test/grey", 50.0));
-        assert!(half.iter().zip(&base).zip(&looked).all(|((h, b), l)| h.saturating_add(1) >= *b.min(l) && *h <= b.max(l).saturating_add(1)));
+        // (a level for rounding and one for 8-bit dither, which can move the half and the ends apart)
+        assert!(half.iter().zip(&base).zip(&looked).all(|((h, b), l)| h.saturating_add(2) >= *b.min(l) && *h <= b.max(l).saturating_add(2)));
         unregister("look:test/grey");
         assert_eq!(rgba(&src, &raw_info(Some(camera("X-T4"))), &settings("look:test/grey", 100.0)), base, "an unknown look renders nothing");
     }
