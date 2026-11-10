@@ -52,6 +52,22 @@ fn prefs(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = i.get("creator").and_then(Value::as_str) {
             d.creator = v.trim().to_string();
         }
+        if let Some(v) = i.get("copyDestination").and_then(Value::as_str) {
+            d.copy_destination = v.trim().to_string();
+        }
+        if let Some(v) = i.get("copyOrganize").and_then(Value::as_str) {
+            let v = v.trim();
+            if !matches!(v, "" | "date" | "month" | "flat" | "custom") {
+                return Err(bad(ID, format!("copyOrganize must be \"\", date, month, flat or custom, not `{v}`")));
+            }
+            d.copy_organize = v.to_string();
+        }
+        if let Some(v) = i.get("copyFolderTemplate").and_then(Value::as_str) {
+            d.copy_folder_template = v.trim().to_string();
+        }
+        if let Some(v) = i.get("copyRename").and_then(Value::as_str) {
+            d.copy_rename = v.trim().to_string();
+        }
         match i.get("metadataPreset") {
             Some(Value::String(n)) if n.is_empty() || n == "none" => d.metadata_preset = None,
             Some(Value::String(n)) => {
@@ -110,7 +126,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Library Preferences",
         [],
         None,
-        "{import?: {rawPreset?: presetId|\"default\", otherPreset?: presetId|\"default\", perCamera?: bool, cameras?: [{camera: \"Make Model\", preset: presetId|null}], copyright?: text, creator?: text (given to imported photos without one), showOnCard?: bool (open the import review when a camera or card is connected)}, camera?: {camera, preset?, remove?: bool}, cacheMb?: n (0 = default), forgetLocalDays?: n (forget untouched Local photos of folders not browsed for n days; 0 = never)} — develop defaults applied on import (raws / other images / per camera) and the thumbnail cache size, saved with the library → {xmp, import, cacheMb, forgetLocalDays, persistent}",
+        "{import?: {rawPreset?: presetId|\"default\", otherPreset?: presetId|\"default\", perCamera?: bool, cameras?: [{camera: \"Make Model\", preset: presetId|null}], copyright?: text, creator?: text (given to imported photos without one), showOnCard?: bool (open the import review when a camera or card is connected), copyDestination?: folder|\"\" (Originals), copyOrganize?: \"\"|date|month|flat|custom, copyFolderTemplate?: text, copyRename?: text (where copies go: the import review opens with these; confirming a copy or move remembers them)}, camera?: {camera, preset?, remove?: bool}, cacheMb?: n (0 = default), forgetLocalDays?: n (forget untouched Local photos of folders not browsed for n days; 0 = never)} — develop defaults applied on import (raws / other images / per camera) and the thumbnail cache size, saved with the library → {xmp, import, cacheMb, forgetLocalDays, persistent}",
         always,
         prefs
     )]

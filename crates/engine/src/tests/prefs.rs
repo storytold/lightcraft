@@ -431,3 +431,32 @@ fn slideshow_playback_settings_persist_with_the_library() {
     drop(s);
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+/// Where copies go is remembered with the library, so the next import review opens with it (issue #3951).
+#[test]
+fn copy_choices_persist_with_the_library() {
+    let lib = temp_dir("copychoices");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        let r = s
+            .execute(
+                "library.preferences",
+                &json!({"import": {"copyDestination": " D:\\Photos ", "copyOrganize": "custom", "copyFolderTemplate": "{date:%Y}/{date:%m-%d}", "copyRename": ""}}),
+            )
+            .unwrap();
+        assert_eq!(r["import"]["copyFolderTemplate"], "{date:%Y}/{date:%m-%d}", "{r}");
+        // only the structures `library.import` knows
+        assert!(s.execute("library.preferences", &json!({"import": {"copyOrganize": "byWeek"}})).is_err());
+        assert_eq!(s.import_defaults.copy_organize, "custom", "a refused change leaves the old one");
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let d = &s.import_defaults;
+    assert_eq!((d.copy_destination.as_str(), d.copy_organize.as_str()), ("D:\\Photos", "custom"));
+    assert_eq!(d.copy_folder_template, "{date:%Y}/{date:%m-%d}");
+    assert_eq!(d.copy_rename, "");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}

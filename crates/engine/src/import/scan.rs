@@ -12,6 +12,9 @@ pub struct ScanInput {
     /// ([`library_hashes`]), on the scan's thread.
     library: std::sync::Arc<lightcraft_catalog::Catalog>,
     cache: HashMap<String, ProbeInfo>,
+    /// The copy destination the library remembers ([`crate::import::ImportDefaults::copy_destination`]), looked
+    /// at on the scan's thread (a disconnected drive or stalled share must not hold up the window).
+    destination: Option<PathBuf>,
 }
 
 /// The library's photos of `files`: path → (photo, its summary as a candidate that is there
@@ -83,6 +86,9 @@ pub struct ScanOutput {
     pub unreadable: usize,
     /// Files inside the folders that are not a supported photo type (XMP sidecars not counted).
     pub unsupported: usize,
+    /// The remembered copy destination when it isn't a folder now (a drive not connected): the review then
+    /// copies to the library's Originals and says so (issue #3951).
+    pub destination_missing: Option<String>,
 }
 
 impl ScanInput {
@@ -91,7 +97,10 @@ impl ScanInput {
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)
         let library = std::sync::Arc::new(s.catalog.clone());
-        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes) };
+        // (only where files can be looked at: a demo or browser session has no folders to check)
+        let destination =
+            Some(s.import_defaults.copy_destination.trim()).filter(|d| !d.is_empty() && s.media.file_probe.is_some()).map(PathBuf::from);
+        let input = ScanInput { probe: s.media.file_probe.clone(), skip, library, cache: std::mem::take(&mut s.import_probes), destination };
         (input, paths.to_vec())
     }
 
@@ -375,6 +384,7 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
         }
         out.push(c);
     }
+    let destination_missing = input.destination.as_ref().filter(|d| !d.is_dir()).map(|d| d.to_string_lossy().into_owned());
     // (the walks' diagnostics are [`scan_with`]'s: these files were found already)
-    ScanOutput { candidates: out, probes: kept, truncated: false, unreadable: 0, unsupported: 0 }
+    ScanOutput { candidates: out, probes: kept, truncated: false, unreadable: 0, unsupported: 0, destination_missing }
 }

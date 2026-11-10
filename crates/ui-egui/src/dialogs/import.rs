@@ -235,6 +235,28 @@ impl ImportDialog {
             .map(|(_, (c, _))| c.path.clone())
             .collect()
     }
+    /// Open with where the last import that copied put its copies (issue #3951): destination, folder structure,
+    /// folder template and file names, as the library's import defaults remember them ([`Self::remembered`]).
+    pub fn recall_copy_choices(&mut self, defaults: &lightcraft_engine::import::ImportDefaults) {
+        self.destination = defaults.copy_destination.clone();
+        self.organize = defaults.copy_organize.clone();
+        self.folder_template = defaults.copy_folder_template.clone();
+        self.rename = defaults.copy_rename.clone();
+    }
+
+    /// The `library.preferences` `import` change that remembers this review's copy choices, or `None` when the
+    /// library already remembers them (or nothing is copied).
+    pub fn remembered(&self, defaults: &lightcraft_engine::import::ImportDefaults) -> Option<Value> {
+        let (destination, organize, template, rename) =
+            (self.destination.trim(), self.organize.as_str(), self.folder_template.trim(), self.rename.trim());
+        let same = defaults.copy_destination == destination
+            && defaults.copy_organize == organize
+            && defaults.copy_folder_template == template
+            && defaults.copy_rename == rename;
+        (self.copy && !same)
+            .then(|| json!({"copyDestination": destination, "copyOrganize": organize, "copyFolderTemplate": template, "copyRename": rename}))
+    }
+
     /// The `organize` param of `library.import` (`None` = the default, by day); an unusable
     /// custom folder template is an error.
     pub fn organize_param(&self) -> Result<Option<String>, String> {
@@ -424,6 +446,40 @@ mod tests {
         assert_eq!(recipe.get("light.exposure"), Some(&1.25), "a new value replaces the old");
         note_recipe_value(&mut recipe, spec, spec.default);
         assert!(recipe.is_empty(), "{recipe:?}");
+    }
+
+    /// Confirming an import that copies remembers where its copies went, and the next review opens with that
+    /// (issue #3951); an import that adds in place, or one with the same choices, doesn't touch the preferences.
+    #[test]
+    fn copy_choices_carry_over_to_the_next_review() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services { png: None, ..Default::default() });
+        let fresh = dialog();
+        assert_eq!((fresh.destination.as_str(), fresh.organize.as_str(), fresh.folder_template.as_str()), ("", "", ""));
+        // adding in place: nothing to remember
+        let mut d = dialog();
+        d.organize = "custom".into();
+        d.folder_template = "{date:%Y}/{date:%m-%d}".into();
+        assert!(d.remembered(&app.session.import_defaults).is_none());
+        // copying (here: moving, as a camera's review does) with a custom template
+        d.copy = true;
+        d.move_files = true;
+        d.destination = "H:\\Photos".into();
+        start(&mut app, &d).unwrap();
+        app.import = None;
+        let defaults = app.session.import_defaults.clone();
+        assert_eq!(defaults.copy_destination, "H:\\Photos");
+        assert_eq!(defaults.copy_organize, "custom");
+        assert_eq!(defaults.copy_folder_template, "{date:%Y}/{date:%m-%d}");
+        assert!(d.remembered(&defaults).is_none(), "the same choices again: nothing to save");
+        let mut next = dialog();
+        next.recall_copy_choices(&defaults);
+        assert_eq!(next.destination, "H:\\Photos");
+        assert_eq!(next.organize_param().unwrap().as_deref(), Some("{date:%Y}/{date:%m-%d}"));
+        // a bad template is refused before anything is remembered
+        let mut bad = d.clone();
+        bad.folder_template = "{date:%Y}/../x".into();
+        assert!(start(&mut app, &bad).is_err());
+        assert_eq!(app.session.import_defaults.copy_folder_template, "{date:%Y}/{date:%m-%d}");
     }
 
     /// `start` hands `library.import` a `recipe` only when the dialog has one.

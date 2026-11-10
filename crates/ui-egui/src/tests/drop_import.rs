@@ -1230,6 +1230,7 @@ fn auto_import_waits_for_a_browse_that_starts_during_its_listing() {
         truncated: false,
         unreadable: 0,
         unsupported: 0,
+        destination_missing: None,
     }))
     .unwrap();
     drop(tx);
@@ -1237,4 +1238,44 @@ fn auto_import_waits_for_a_browse_that_starts_during_its_listing() {
     assert!(h.step_until(T, |h| h.app.import.is_none()), "and it ends");
     assert!(h.step_until(T, |h| photos(h) == 2), "the browsed photo and the watched one arrive: {}", photos(&h));
     h.app.session.import_defaults.auto_folder = None;
+}
+
+/// The review opens with the copy choices the library remembers (issue #3951); a remembered folder the scan found
+/// gone (a drive not connected) gives way to the library's Originals, with a note, and the rest still applies.
+#[test]
+fn the_review_opens_with_the_remembered_copy_choices() {
+    use lightcraft_engine::import::{ImportCandidate, ScanOutput};
+    let dir = Scratch::new("remembered-copy");
+    let mut h = app(&dir);
+    let d = &mut h.app.session.import_defaults;
+    d.copy_destination = "Z:\\Unplugged".into();
+    d.copy_organize = "custom".into();
+    d.copy_folder_template = "{date:%Y}/{date:%m-%d}".into();
+    let review = |h: &mut Headless, gone: Option<&str>| {
+        let tx = crate::import::scan_by_hand(&mut h.app, false);
+        let found = ImportCandidate { path: dir.path("trip/a.png"), ..Default::default() };
+        tx.send(crate::import::ScanEnd::Done(ScanOutput {
+            candidates: vec![found],
+            probes: Default::default(),
+            truncated: false,
+            unreadable: 0,
+            unsupported: 0,
+            destination_missing: gone.map(str::to_string),
+        }))
+        .unwrap();
+        assert!(h.step_until(T, |h| matches!(h.app.ui.dialog, Some(Dialog::Import { .. }))), "the review opens");
+        match h.app.ui.dialog.take() {
+            Some(Dialog::Import { opts }) => *opts,
+            other => panic!("not the review: {other:?}"),
+        }
+    };
+    let opts = review(&mut h, None);
+    assert_eq!(opts.destination, "Z:\\Unplugged");
+    assert_eq!((opts.organize.as_str(), opts.folder_template.as_str()), ("custom", "{date:%Y}/{date:%m-%d}"));
+    h.app.ui.toast = None;
+    let opts = review(&mut h, Some("Z:\\Unplugged"));
+    assert_eq!(opts.destination, "", "copies go to Originals");
+    assert_eq!(opts.folder_template, "{date:%Y}/{date:%m-%d}", "the folder structure still applies");
+    let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("Z:\\Unplugged") && toast.contains("Originals"), "{toast}");
 }
