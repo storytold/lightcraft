@@ -1209,7 +1209,7 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
+        "wbPicker" | "colorRange" | "pointColor" | "maskPointColor" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {

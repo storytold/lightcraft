@@ -357,6 +357,21 @@ pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &eg
     }
 }
 
+/// The Masking panel's Point Color eyedropper: a click adds the colour there to the selected mask's samples
+/// (`mask.pointColor.pick`) and ends picking, as the photo's own picker does; a refusal (8 samples, no mask) is toasted.
+fn mask_point_color_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap) {
+    if resp.clicked()
+        && let Some(q) = resp.interact_pointer_pos()
+    {
+        let n = map.norm(q);
+        match app.run("mask.pointColor.pick", json!({"x": n.x, "y": n.y})) {
+            Ok(r) => app.ui.mask_point_color = r["index"].as_u64().unwrap_or(0) as usize,
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+        app.ui.tool.clear();
+    }
+}
+
 /// The Masking tool on the photo: outlines and handles of the selected mask, a pin per mask
 /// component (click selects its mask, drag moves the component), and brush painting. The mask
 /// itself shows as a rendered overlay ([`view_overlay`]).
@@ -405,6 +420,13 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
         color_range_pick(app, ui, resp, map);
+        return;
+    }
+    if app.ui.tool == "maskPointColor" {
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        mask_point_color_pick(app, ui, resp, map);
         return;
     }
     if app.ui.tool == "object" {

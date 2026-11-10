@@ -390,6 +390,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let out = slider(ui, s, v, true, None);
         apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
     }
+    let open = app.ui.flyout_open("maskPointColor");
+    if crate::widgets::flyout_row(ui, "maskPointColor", "Point Color", Icon::Picker, open).clicked() {
+        app.ui.toggle_flyout("maskPointColor");
+    }
+    if open {
+        super::edit::mask_point_color(app, ui, m.id, &m.point_colors);
+    }
     let amt = ControlSpec {
         id: "amount",
         label: "Amount",
