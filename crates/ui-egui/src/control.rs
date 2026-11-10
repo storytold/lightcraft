@@ -351,6 +351,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 ctx.request_repaint();
                 return started;
             }
+            if id == "mask.export" {
+                let started = crate::mask_export::ask(app, &params, req.reply.clone());
+                ctx.request_repaint();
+                return started;
+            }
             let r = app.run(id, params);
             ctx.request_repaint();
             wrap(r)

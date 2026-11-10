@@ -105,7 +105,7 @@ fn explicit_mask_with_subtraction_can_export_an_empty_selection() {
 }
 
 #[test]
-fn matte_uses_full_source_above_preview_size() {
+fn matte_stays_bounded_above_preview_size() {
     let mut s = Session::with_demo();
     s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
     let file = path("full");
@@ -117,6 +117,61 @@ fn matte_uses_full_source_above_preview_size() {
     assert_eq!(info.color_type, png::ColorType::Grayscale);
     assert_eq!(v["width"], info.width);
     assert_eq!(v["height"], info.height);
+    std::fs::remove_file(file).unwrap();
+}
+
+#[test]
+fn compression_does_not_erase_a_small_photo_selection() {
+    let mut s = Session::with_demo();
+    s.execute("mask.add", &json!({"kind": "radial", "center": [0.25, 0.5], "rx": 0.009, "ry": 0.009, "feather": 0})).unwrap();
+    let first = path("detail-before");
+    let second = path("detail-after");
+    let before = s.execute("mask.export", &json!({"path": first, "longEdge": 256})).unwrap();
+    let id = s.active().unwrap();
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    d.geometry.scale = 10.0;
+    d.crop.flip_h = true;
+    s.set_develop(id, d, "Compress").unwrap();
+    let after = s.execute("mask.export", &json!({"path": second, "longEdge": 256})).unwrap();
+    assert!(before["coverage"].as_f64().unwrap() > 0.0);
+    assert_eq!(before["coverage"], after["coverage"]);
+    assert_eq!(before["bounds"], after["bounds"]);
+    assert_eq!(std::fs::read(&first).unwrap(), std::fs::read(&second).unwrap());
+    std::fs::remove_file(first).unwrap();
+    std::fs::remove_file(second).unwrap();
+}
+
+#[test]
+fn matte_bounds_decode_before_calling_the_loader() {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    let mut s = Session::new();
+    let photo = Photo::new(PhotoId(1), Source::File { path: "huge.raw".into() }, "huge.raw", "RAW", u32::MAX, u32::MAX, "2026-01-01");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    s.execute("library.select", &json!({"ids": [1]})).unwrap();
+    s.media.file_loader = Some(std::sync::Arc::new(|_, _, _| panic!("oversized source must not be loaded")));
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    let file = path("decode-budget");
+    let error = s.execute("mask.export", &json!({"path": file, "longEdge": 3072})).unwrap_err();
+    assert!(error.to_string().contains("memory budget"), "{error}");
+    assert!(!file.exists());
+}
+
+#[test]
+fn a_legacy_corrected_space_mask_keeps_its_photo_position() {
+    let mut s = Session::with_demo();
+    s.execute("mask.add", &json!({"kind": "radial", "center": [0.375, 0.5], "rx": 0.02, "ry": 0.02, "feather": 0})).unwrap();
+    let id = s.active().unwrap();
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    d.masks.last_mut().unwrap().on_photo = false;
+    d.geometry.scale = 50.0;
+    d.crop.flip_h = true;
+    s.catalog
+        .apply(lightcraft_catalog::Op::SetDevelop { id, settings: std::sync::Arc::new(d), label: "Legacy transform".into(), edited: None })
+        .unwrap();
+    let file = path("legacy-geometry");
+    let value = s.execute("mask.export", &json!({"path": file, "longEdge": 256})).unwrap();
+    let bounds = value["bounds"].as_array().unwrap();
+    assert!((bounds[0].as_f64().unwrap() + bounds[2].as_f64().unwrap() - 0.5).abs() < 0.03, "{value}");
     std::fs::remove_file(file).unwrap();
 }
 

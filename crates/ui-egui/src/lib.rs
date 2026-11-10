@@ -34,6 +34,7 @@ pub mod lens_db;
 pub mod lightroom_import;
 pub mod links;
 pub mod loupe_timing;
+mod mask_export;
 pub mod menus;
 mod missing_sweep;
 pub mod panels;

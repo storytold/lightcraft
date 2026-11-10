@@ -29,7 +29,7 @@ pub mod lut_profiles;
 pub mod manage;
 pub mod mask_effect_files;
 pub mod mask_effects;
-mod masks;
+pub mod masks;
 mod merge;
 pub mod metadata;
 pub mod missing;

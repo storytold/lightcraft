@@ -37,6 +37,8 @@ pub struct Frame {
     /// `lightcraft_develop::Mask::on_photo`); otherwise they are normalized coordinates of this
     /// frame's transformed image, like spots and the crop.
     pub masks_on_photo: bool,
+    /// Original warp when evaluating a matte directly on the photo grid.
+    pub photo_mask_warp: Option<Warp>,
 }
 
 /// Where a windowed [`Frame`]'s pixels sit in the full output: its offset and the full output's
@@ -82,6 +84,7 @@ impl Frame {
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
             masks_on_photo: false,
+            photo_mask_warp: None,
         };
         if apply_crop {
             f.constrain_to_image(s.geometry.constrain_crop);
@@ -261,7 +264,11 @@ impl Frame {
     /// photo and the warp moves pixels, else none (mask coordinates are then this frame's
     /// normalized coordinates).
     pub fn mask_warp(&self) -> Option<&Warp> {
-        self.warp.as_ref().filter(|w| self.masks_on_photo && w.moves_pixels())
+        if self.photo_mask_warp.is_some() {
+            self.photo_mask_warp.as_ref().filter(|w| !self.masks_on_photo && w.moves_pixels())
+        } else {
+            self.warp.as_ref().filter(|w| self.masks_on_photo && w.moves_pixels())
+        }
     }
 
     /// Output pixel → mask coordinates (see [`Frame::masks_on_photo`]).
@@ -272,6 +279,7 @@ impl Frame {
             ow: self.ow,
             oh: self.oh,
             warp: self.mask_warp().cloned(),
+            from_photo: self.photo_mask_warp.is_some(),
         }
     }
 
@@ -280,7 +288,12 @@ impl Frame {
     pub fn mask_to_out(&self, out_w: usize, out_h: usize) -> impl Fn(Point) -> Option<Point> + use<> {
         let to_out = self.norm_to_out(out_w, out_h);
         let (warp, ow, oh) = (self.mask_warp().cloned(), self.ow, self.oh);
+        let from_photo = self.photo_mask_warp.is_some();
         move |n: Point| match &warp {
+            Some(w) if from_photo => {
+                let p = w.to_source(Point::new(n.x * ow, n.y * oh), 1);
+                Some(to_out.apply(Point::new(p.x / ow, p.y / oh)))
+            }
             Some(w) => w.from_source(Point::new(n.x * ow, n.y * oh)).map(|t| to_out.apply(Point::new(t.x / ow, t.y / oh))),
             None => Some(to_out.apply(n)),
         }
@@ -290,7 +303,8 @@ impl Frame {
     pub fn norm_to_mask(&self, n: Point) -> Point {
         match self.mask_warp() {
             Some(w) => {
-                let s = w.to_source(Point::new(n.x * self.ow, n.y * self.oh), 1);
+                let p = Point::new(n.x * self.ow, n.y * self.oh);
+                let s = if self.photo_mask_warp.is_some() { w.from_source(p).unwrap_or(Point::new(f64::NAN, f64::NAN)) } else { w.to_source(p, 1) };
                 Point::new(s.x / self.ow, s.y / self.oh)
             }
             None => n,
@@ -299,7 +313,17 @@ impl Frame {
 
     /// Mask coordinates → normalized coordinates of this frame's transformed image.
     pub fn mask_to_norm(&self, n: Point) -> Point {
-        mask_to_norm(self.mask_warp(), self.ow, self.oh, n)
+        if self.photo_mask_warp.is_some() {
+            match self.mask_warp() {
+                Some(w) => {
+                    let p = w.to_source(Point::new(n.x * self.ow, n.y * self.oh), 1);
+                    Point::new(p.x / self.ow, p.y / self.oh)
+                }
+                None => n,
+            }
+        } else {
+            mask_to_norm(self.mask_warp(), self.ow, self.oh, n)
+        }
     }
 
     /// Convert normalized oriented coordinates to "long-edge units" (isotropic), used by mask shapes.
@@ -421,6 +445,7 @@ pub struct MaskMap {
     ow: f64,
     oh: f64,
     warp: Option<Warp>,
+    from_photo: bool,
 }
 
 impl MaskMap {
@@ -429,7 +454,8 @@ impl MaskMap {
     pub fn apply(&self, p: Point) -> Point {
         match &self.warp {
             Some(w) => {
-                let s = w.to_source(self.o2t.apply(p), 1);
+                let p = self.o2t.apply(p);
+                let s = if self.from_photo { w.from_source(p).unwrap_or(Point::new(f64::NAN, f64::NAN)) } else { w.to_source(p, 1) };
                 Point::new(s.x / self.ow, s.y / self.oh)
             }
             None => self.to_norm.apply(p),

@@ -666,6 +666,41 @@ pub fn render(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &Render
     render_impl(Src::Borrowed(src), info, s, req, None)
 }
 
+/// Evaluate a mask directly at the uncropped, oriented photo's output resolution.
+/// No corrected-frame alpha raster is made first: a compressing warp cannot erase
+/// a selection before it is mapped back. Legacy corrected-space masks use the
+/// forward warp for their coordinates; the guide is sampled on the photo grid.
+pub fn photo_mask(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, id: u32) -> Result<lightcraft_raster::Plane, String> {
+    check_output_size(req.max_w, req.max_h)?;
+    let req = RenderRequest { apply_crop: false, window: None, ..*req };
+    let effective = s.effective();
+    let rendition = settings_for(&effective, &req);
+    let mut plan = plan(src, info, &rendition, &req);
+    let corrected = plan.frame.clone();
+    plan.frame.photo_mask_warp = plan.frame.warp.take();
+    plan.frame.flip_h = false;
+    plan.frame.flip_v = false;
+    let mut img = plan.frame.sample(src, plan.w, plan.h);
+    lin_cpu(&mut img, info, &plan);
+    let noise = colour_noise(src, info, &plan);
+    local::denoise(&mut img, &plan.settings, plan.detail_scale, noise.as_ref());
+    let log_l = img.map(local::log_lum);
+    let mask = plan.settings.masks.iter().find(|m| m.id == id).ok_or("no such mask")?;
+    let mut alpha = masks::evaluate_one(mask, &plan.frame, plan.w, plan.h, &img, &log_l, plan.settings.light.exposure as f32, plan.mattes.as_deref());
+    // Keep the existing visibility contract: photo pixels outside the corrected
+    // render are black, even for inverted masks. Test finiteness before indexing.
+    let map = corrected.for_mask(true).mask_to_out(plan.w, plan.h);
+    for (i, v) in alpha.data.iter_mut().enumerate() {
+        let p = lightcraft_geom::Point::new((i % plan.w) as f64 + 0.5, (i / plan.w) as f64 + 0.5);
+        let visible = map(lightcraft_geom::Point::new(p.x / plan.w as f64, p.y / plan.h as f64))
+            .is_some_and(|p| p.x.is_finite() && p.y.is_finite() && p.x >= 0.0 && p.y >= 0.0 && p.x < plan.w as f64 && p.y < plan.h as f64);
+        if !visible {
+            *v = 0.0;
+        }
+    }
+    Ok(alpha)
+}
+
 /// [`render`], reusing (and refreshing) the intermediate results in `cache`. The output is
 /// identical to [`render`]'s.
 pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: &StageCache) -> Rendered {

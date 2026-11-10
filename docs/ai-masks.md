@@ -198,7 +198,7 @@ Therefore:
 |---|---|---|
 | `mask.add` | `{kind: "object", points?: [[x,y],…], exclude?: [[x,y],…], seg?}` | an Object mask (empty until clicked) |
 | `mask.add` | `{kind: "prompt", text, seg?}` | a Describe mask |
-| `mask.export` | `{id?, path, longEdge?}` | writes a mask with components as an 8-bit greyscale PNG over the whole uncropped, oriented photo before lens/perspective corrections and crop flips; uses rendered edges, mapped back to photo coordinates (areas outside the corrected render are black); needs no model |
+| `mask.export` | `{id?, path, longEdge?}` | writes a mask with components as an 8-bit greyscale PNG over the whole uncropped, oriented photo before lens/perspective corrections and crop flips; evaluates photo-guided edges directly at photo resolution (areas outside the corrected render are black); needs no model |
 | `mask.addComponent` | `{op: add\|subtract\|intersect, kind: "object"\|"prompt", …}` | the same as a component |
 | `mask.objectPoint` | `{x, y, exclude?: bool, id?}` | one click on the selected mask's Object selection (≤ 64 clicks) |
 | `mask.refineDetail` | `{id?, component?}` | the zoomed-in detail pass → `{started}` |
@@ -267,7 +267,12 @@ LIGHTCRAFT_SAM3_DIR=<model dir> LIGHTCRAFT_SAM3_REF=ref.safetensors cargo test -
 ```
 
 `mask.export` defaults `longEdge` to 2048; supplied values must be integers in 16–3072
-(the cap bounds render memory). An empty mask is an error. The destination must not exist;
+(the cap bounds render memory). Source decoding is also budgeted before loading: oversized
+or unknown source dimensions are refused. The developed source is bounded to the requested
+edge, including above 2560, rather than a full-resolution RGB decode. RAW mosaics can still
+require native-resolution work; the memory estimate includes it and compressed file bytes.
+The desktop control channel runs decoding and evaluation on a worker under the export activity
+row, and answers with the same result when done. An empty mask is an error. The destination must not exist;
 originals and XMP sidecars are protected, including sidecars not yet created. Relative paths
 are relative to the process working directory. The result is `{path, width, height, coverage,
 bounds}`: `path` is absolute, `coverage` is mean alpha in 0..1, and `bounds` is the normalized
