@@ -71,7 +71,7 @@ string follows that.
 | Ukrainian | `uk` | 2,383 / 2,398 (99%; 2026-10-12) | Cyrillic (Inter) | no (community edits) | partial (lower-layer errors English) | 2–4 h |
 | Italian | `it` | 2,628 / 3,278 (80%, measured 2026-10-15; every interface string is translated, the other 650 are What's New lines, left in English) | Latin (Inter) | partly (written with an agent; corrections and the 2026-10-15 additions by a native speaker) | partial (lower-layer errors English) | 3–5 h |
 | Georgian | `ka` | 2,398 / 2,398 (100%: every plain and formats message any catalog has on 2026-10-12, plus the 27 display labels and 397 What's New lines no other catalog translates) | Geor: no craft-fonts face yet (boxes until one is available) | yes (native speaker) | partial (lower-layer errors English) | 2–4 h (+ a Georgian face) |
-| Finnish | `fi` | 2,965 / 2,965 (2,629 plain + 336 formats; 100% of every non-What's New plain and format message across all catalogs, 2026-11-10) | Latin (Inter) | yes (written with an agent; reviewed by native speaker @roopeg, 2026-11-03) | partial (lower-layer errors English) | 3–5 h |
+| Finnish | `fi` | 2,965 / 2,965 (2,629 plain + 336 formats; 100% of every non-What's New plain and format message across all catalogs, 2026-11-10) | Latin (Inter) | yes (written with an agent; reviewed by native speaker @roopeg, 2026-11-03; the 45 strings added 2026-11-10 pending) | partial (lower-layer errors English) | 3–5 h |
 | Polish | `pl` | 2,159 messages + 291 formats; every format message translated (2026-10-15) | Latin (Inter) | no (AI-drafted; follow-up by a native speaker) | partial (lower-layer errors English) | 2–4 h (full native review) |
 
 Target languages LightCraft lacks: Korean, Dutch, Norwegian Bokmål, Thai
