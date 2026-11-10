@@ -15,6 +15,8 @@ lightcraft-raster = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-geom = { workspace = true }
 serde = { workspace = true }
+chrono = { workspace = true }
+craft-crw = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
 miniz_oxide = { workspace = true }
