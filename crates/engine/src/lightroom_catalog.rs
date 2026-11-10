@@ -62,11 +62,6 @@ impl Reader {
         Ok(())
     }
 
-    /// Read a required or optional table with the reader's existing row and payload bounds.
-    fn table(&self, name: &str, required: bool) -> Result<Vec<Row>, String> {
-        self.table_with_cancel(name, required, &AtomicBool::new(false))
-    }
-
     /// Map table records while allowing cancellation between SQLite pages.
     fn table_with_cancel(&self, name: &str, required: bool, cancel: &AtomicBool) -> Result<Vec<Row>, String> {
         ensure_read_active(cancel)?;
@@ -100,18 +95,19 @@ impl Reader {
 
     /// The catalog's `Adobe_storeProviderID` (a UUID), kept by Lightroom in its backups; `None`
     /// when the table or the value is missing or doesn't look like an id.
-    fn catalog_id(&self) -> Option<String> {
-        let rows = self.table("Adobe_variablesTable", false).ok()?;
+    fn catalog_id(&self, cancel: &AtomicBool) -> Option<String> {
+        let rows = self.table_with_cancel("Adobe_variablesTable", false, cancel).ok()?;
         let row = rows.iter().find(|r| text(r, "name") == "Adobe_storeProviderID")?;
         let id = text(row, "value").trim();
         (!id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| id.to_string())
     }
 
     /// Keep other importable tables when an optional table cannot be decoded.
-    fn optional_table(&self, name: &str, warnings: &mut Vec<String>) -> Result<Vec<Row>, String> {
-        match self.table(name, false) {
+    fn optional_table(&self, name: &str, warnings: &mut Vec<String>, cancel: &AtomicBool) -> Result<Vec<Row>, String> {
+        match self.table_with_cancel(name, false, cancel) {
             Ok(rows) => Ok(rows),
             Err(error) => {
+                ensure_read_active(cancel)?;
                 warnings.push(format!("skipping optional Lightroom table {name}: {error}"));
                 Ok(Vec::new())
             }
@@ -119,16 +115,17 @@ impl Reader {
     }
 
     /// Decode XMP packets separately so opaque blobs never become JSON byte arrays.
-    fn xmp_table(&self) -> Result<(Vec<Row>, Vec<String>), String> {
+    fn xmp_table(&self, cancel: &AtomicBool) -> Result<(Vec<Row>, Vec<String>), String> {
         let Some(t) = self.tables.iter().find(|t| t.name == "Adobe_AdditionalMetadata") else { return Ok((Vec::new(), Vec::new())) };
         let columns = t.column_names.as_ref().ok_or_else(|| "cannot read Adobe_AdditionalMetadata columns".to_string())?;
-        let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("Adobe_AdditionalMetadata: {e:?}"))?;
+        let rows = self.db.read_table_with_cancel(t.rootpage, columns.len(), cancel).map_err(|e| format!("Adobe_AdditionalMetadata: {e:?}"))?;
         if rows.len() > 1_000_000 {
             return Err("Adobe_AdditionalMetadata: more than one million records".into());
         }
         let mut warnings = Vec::new();
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
+            ensure_read_active(cancel)?;
             let image = row
                 .values
                 .iter()
@@ -678,7 +675,7 @@ fn read_file(
     };
     let optional_table = |name: &str, warnings: &mut Vec<String>| -> Result<Vec<Row>, String> {
         ensure_read_active(cancel)?;
-        let rows = reader.optional_table(name, warnings)?;
+        let rows = reader.optional_table(name, warnings, cancel)?;
         done.fetch_add(1, Ordering::Relaxed);
         Ok(rows)
     };
@@ -690,9 +687,10 @@ fn read_file(
         .map(|r| (number(&r, "image"), text(&r, "text").to_string()))
         .collect();
     ensure_read_active(cancel)?;
-    let (metadata_rows, metadata_warnings) = match reader.xmp_table() {
+    let (metadata_rows, metadata_warnings) = match reader.xmp_table(cancel) {
         Ok(result) => result,
         Err(error) => {
+            ensure_read_active(cancel)?;
             warnings.push(format!("skipping optional Lightroom table Adobe_AdditionalMetadata: {error}"));
             (Vec::new(), Vec::new())
         }
@@ -755,7 +753,7 @@ fn read_file(
     let mut snapshots = group(optional_table("Adobe_libraryImageDevelopSnapshot", &mut warnings)?);
     let mut out = CatalogImport {
         source: source.to_string_lossy().into(),
-        catalog_id: reader.catalog_id(),
+        catalog_id: reader.catalog_id(cancel),
         catalog_path: (document != source).then(|| document.to_string_lossy().into()),
         photos: Vec::new(),
         collections: optional_table("AgLibraryCollection", &mut warnings)?,

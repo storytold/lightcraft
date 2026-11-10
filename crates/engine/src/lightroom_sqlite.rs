@@ -249,6 +249,7 @@ impl Database {
     }
 
     /// Read a table B-tree, decoding up to `ncols` values per record.
+    #[cfg(test)]
     pub fn read_table(&self, rootpage: u32, ncols: usize) -> Result<Vec<Record>, String> {
         self.read_table_active(rootpage, ncols, None)
     }
