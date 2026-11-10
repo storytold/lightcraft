@@ -9,6 +9,7 @@
 //! of decoded source proxies. Rendering is done by [`RenderJob`]s that are `Send` so frontends can
 //! run them off the UI thread.
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // Model/cache types remain available without linking the optional inference crate.
 #[cfg(not(feature = "denoise"))]
@@ -50,6 +51,7 @@ pub mod lens_profiles;
 pub mod lensfun_download;
 pub mod library;
 mod lightroom_archive;
+pub mod lightroom_backup;
 pub mod lightroom_catalog;
 pub mod lightroom_folder;
 pub mod lightroom_job;

@@ -131,7 +131,7 @@
   "{n} photo{} match · updates automatically as photos change": "{n} foto{0} correspondente{0} · atualiza automaticamente conforme as fotos mudam",
   "{n} photo{} now · updates automatically as photos change": "{n} foto{} agora · atualiza automaticamente conforme as fotos mudam",
   "{n} selected photo{} · {pages} page{}": "{n} foto{0} selecionada{0} · {pages} página{1}",
-  "{sel_n} selected · {counted}": "{sel_n} selecionadas · {counted}",
+  "{sel_n} selected · {counted}": "Selecionadas: {sel_n} · {counted}",
   "{stage}… {:.0}%": "{stage}… {:.0}%",
   "{verb} {n} Photo{}": "{verb} {n} foto{}",
   "{weekday}, {day}": "{weekday}, {day}",
@@ -160,6 +160,7 @@
   "; {outside} outside its time range": "; {outside} fora do intervalo de tempo",
   "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}": "@{}: {} PRs, {} commits, +{} / −{} linhas (Δ {}), +{} / −{} arquivos binários, {} – {}",
   "Added {what} to {name}": "{what} adicionado a {name}",
+  "Adjustments: {n}": "Ajustes: {n}",
   "Auto Import: added {} photo{}": "Importação automática: {} foto{1} adicionada{1}",
   "Building previews for {} photos…": "Gerando prévias de {} fotos…",
   "Couldn't open the editor: {e}": "Não foi possível abrir o editor: {e}",
@@ -323,5 +324,8 @@
   "Panel layout could not be restored: {error}": "Não foi possível restaurar a disposição dos painéis: {error}",
   "Panel move was not applied: {error}": "A movimentação do painel não foi aplicada: {error}",
   "{name} is installed": "{name} está instalado",
-  "{name} is installed and in use: face recognition is on": "{name} está instalado e em uso: o reconhecimento facial está ativado"
+  "{name} is installed and in use: face recognition is on": "{name} está instalado e em uso: o reconhecimento facial está ativado",
+  "Bring photos in with File › Import Photos… ({keys}).": "Traga fotos com Arquivo › Importar fotos… ({keys}).",
+  "View › Detail View ({keys}).": "Exibir › Exibição de detalhe ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys})."
 }
