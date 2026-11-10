@@ -122,6 +122,69 @@ fn light_ops(d: vec3<f32>) -> vec3<f32> {
     return mul3(PRO_TO_2020, p);
 }
 
+// `mixer_stage::level`: the lower and upper of three keys around `x` and the upper's weight, clamped.
+struct CLevel {
+    a: u32,
+    b: u32,
+    f: f32,
+}
+
+fn mstage_level(k: vec3<f32>, x: f32) -> CLevel {
+    if (x <= k.x) {
+        return CLevel(0u, 0u, 0.0);
+    }
+    if (x <= k.y) {
+        return CLevel(0u, 1u, (x - k.x) / (k.y - k.x));
+    }
+    if (x <= k.z) {
+        return CLevel(1u, 2u, (x - k.y) / (k.z - k.y));
+    }
+    return CLevel(2u, 2u, 0.0);
+}
+
+// `MixerStage::look`, with the level keys at `keys` (9 chroma by lightness level, then 3 lightness) and the table
+// after them: (hue shift, chroma factor, lightness change).
+fn mstage_look(keys: u32, l: f32, c: f32, h: f32) -> vec3<f32> {
+    let t = keys + 12u;
+    let hd = ((h * 57.29577951308232) % 360.0 + 360.0) % 360.0 / 5.0;
+    let i0 = u32(hd) % 72u;
+    let i1 = (i0 + 1u) % 72u;
+    let fh = hd - floor(hd);
+    let lb = mstage_level(vec3<f32>(aux[keys + 9u], aux[keys + 10u], aux[keys + 11u]), l);
+    var r = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
+    for (var j = 0u; j < 2u; j++) {
+        let m = select(lb.a, lb.b, j == 1u);
+        let ck = vec3<f32>(aux[keys + 3u * m], aux[keys + 3u * m + 1u], aux[keys + 3u * m + 2u]);
+        let cb = mstage_level(ck, c);
+        var v = vec3<f32>(0.0);
+        for (var o = 0u; o < 3u; o++) {
+            let r0 = t + ((m * 3u + cb.a) * 3u + o) * 72u;
+            let r1 = t + ((m * 3u + cb.b) * 3u + o) * 72u;
+            let a = aux[r0 + i0] * (1.0 - fh) + aux[r0 + i1] * fh;
+            let b = aux[r1 + i0] * (1.0 - fh) + aux[r1 + i1] * fh;
+            v[o] = a * (1.0 - cb.f) + b * cb.f;
+        }
+        if (c < ck.x) {
+            v.z *= max(c / ck.x, 0.0);
+        }
+        r[j] = v;
+    }
+    return r[0] * (1.0 - lb.f) + r[1] * lb.f;
+}
+
+// `MixerStage::apply`: the colour mixer, through OkLCh.
+fn mixer_stage(d: vec3<f32>) -> vec3<f32> {
+    let lab = oklab(d);
+    let l = lab.x;
+    let c = sqrt(lab.y * lab.y + lab.z * lab.z);
+    // atan2(0, 0) is undefined in WGSL; the CPU's gives 0
+    let h = select(atan2(lab.z, lab.y), 0.0, c == 0.0);
+    let r = mstage_look(pu(F_MSTAGE_OFF), l, c, h);
+    let h2 = h + r.x;
+    let c2 = c * r.y;
+    return oklab_inv(vec3<f32>(max(l + r.z, 0.0), c2 * cos(h2), c2 * sin(h2)));
+}
+
 // A table of process V8's curve stage (`Lut1::eval`) at offset `o` in `aux`.
 fn stage_lut(o: u32, x: f32) -> f32 {
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
@@ -729,7 +792,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         d = light_ops(d);
     }
 
-    // --- process V8: Whites and the tone curves
+    // --- process V8: the colour mixer, then Whites and the tone curves
+    if (pu(F_MSTAGE) != 0u) {
+        d = mixer_stage(d);
+    }
     if (pu(F_STAGE) != 0u) {
         d = curve_stage(d);
     }

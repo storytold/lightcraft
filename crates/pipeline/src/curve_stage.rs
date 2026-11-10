@@ -11,7 +11,8 @@
 //!   Whites reaches into the midtones (Whites −50 lowers encoded 0.6 by about 10/255), and each region is broad and
 //!   overlapping. The regions add: the sum of single regions reproduces three at once within 1/255.
 //!
-//! The stage runs after the tone map and Process V4's calibrated Contrast and Blacks, before the colour stage. It
+//! The stage runs after the tone map, Process V4's calibrated Contrast and Blacks and V8's colour mixer
+//! ([`crate::mixer_stage`]), before the colour stage. It
 //! replaces V7's curves on encoded output values; the tone map leaves Whites to it.
 
 use lightcraft_color::spline::{Lut1, MonotoneCurve};

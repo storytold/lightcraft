@@ -162,7 +162,8 @@ impl ColorOps {
             hue: bands.map(|b| (b.hue / 100.0) as f32 * 0.5),
             sat: bands.map(|b| (b.sat / 100.0) as f32),
             lum: bands.map(|b| (b.lum / 100.0) as f32 * 0.18),
-            mixer: !s.mixer.is_neutral(),
+            // from process V8 the colour stage applies the mixer (`crate::mixer_stage`)
+            mixer: !s.mixer.is_neutral() && s.process.process() < lightcraft_develop::Process::V8,
             points: if crate::is_bw(s) {
                 Vec::new()
             } else {
@@ -366,7 +367,8 @@ mod tests {
 
     #[test]
     fn mixer_targets_its_band() {
-        let mut s = DevelopSettings::default();
+        // V7's mixer (from V8 the colour stage applies it: `crate::mixer_stage`)
+        let mut s = DevelopSettings { process: lightcraft_develop::Process::V7.version(), ..DevelopSettings::default() };
         s.mixer.blue.sat = -100.0;
         let ops = ColorOps::new(&s);
         let blue = [0.02, 0.05, 0.4];

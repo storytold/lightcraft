@@ -26,6 +26,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("STAGE", 1),
     ("STAGE_OFF", 1),
     ("STAGE_REFINE", 1),
+    ("MSTAGE", 1),
+    ("MSTAGE_OFF", 1),
     ("GAIN", 1),
     ("EV", 1),
     ("AIR", 1),
@@ -217,6 +219,13 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         }
         aux.extend_from_slice(&l.v);
     }
+    // process V8's mixer stage: its 9 chroma and 3 lightness keys, then its table
+    let mstage_off = aux.len();
+    if let Some(cs) = &fp.mixer_stage {
+        aux.extend(cs.chroma.iter().flatten());
+        aux.extend_from_slice(&cs.light);
+        aux.extend_from_slice(&cs.table[..]);
+    }
     let mask_off = aux.len();
     for m in masks {
         aux.extend_from_slice(m);
@@ -265,6 +274,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.b("STAGE", fp.curve_stage.is_some());
     p.u("STAGE_OFF", stage_off as u32);
     p.f("STAGE_REFINE", fp.curve_stage.as_ref().map_or(1.0, |c| c.refine));
+    p.b("MSTAGE", fp.mixer_stage.is_some());
+    p.u("MSTAGE_OFF", mstage_off as u32);
     p.f("REFINE_SAT", fp.refine_sat);
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);

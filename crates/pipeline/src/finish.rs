@@ -248,6 +248,8 @@ pub struct FinishParams {
     pub shadow_tint: f32,
     /// Tone curves (parametric ∘ point, per channel) on encoded values, 1024 entries each.
     pub curves: Option<[Lut1; 3]>,
+    /// Process V8's colour mixer (it replaces the mixer in `ops`).
+    pub mixer_stage: Option<crate::mixer_stage::MixerStage>,
     /// Process V8's Whites and tone curves (they replace `curves`, which stays `None` from V8 on).
     pub curve_stage: Option<crate::curve_stage::CurveStage>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
@@ -338,6 +340,7 @@ impl FinishParams {
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
             curves: if s.process.process() < Process::V8 { curve_luts(&s.curve) } else { None },
+            mixer_stage: crate::mixer_stage::MixerStage::new(s),
             curve_stage: crate::curve_stage::CurveStage::new(s),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
@@ -568,7 +571,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- process V4: calibrated Contrast, Blacks (ProPhoto with the sRGB transfer)
             d = apply_light(d, light.as_ref(), preview_light.as_ref(), exact, srgb);
 
-            // --- process V8: Whites and the tone curves, as Lightroom applies them
+            // --- process V8: the colour mixer, then Whites and the tone curves, as Lightroom applies them
+            d = fp.mixer_stage.as_ref().map_or(d, |stage| stage.apply(d));
             d = fp.curve_stage.as_ref().map_or(d, |stage| stage.apply(d));
 
             // --- colour

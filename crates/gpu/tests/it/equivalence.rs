@@ -850,6 +850,35 @@ fn curve_stage_matches() {
     check("V8 HDR preview", &src, &raw, &s, &req);
 }
 
+/// Process V8's mixer stage matches the CPU's, alone, with Calibration (still V7's operator), with the curve
+/// stage after it, and with V7's colour tools (Saturation, B&W) that still follow.
+#[test]
+fn mixer_stage_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    let v8 = || DevelopSettings { process: Process::V8.version(), ..Default::default() };
+    let mut s = v8();
+    s.mixer.orange.sat = -60.0;
+    s.mixer.blue.hue = -40.0;
+    s.mixer.green.lum = 70.0;
+    s.mixer.magenta.hue = 15.0;
+    check("V8 mixer", &src, &raw, &s, &req);
+    s.calibration.red_hue = 45.0;
+    s.calibration.blue_sat = 60.0;
+    s.calibration.shadows_tint = 30.0;
+    check("V8 mixer and calibration", &src, &raw, &s, &req);
+    s.curve.master = vec![Point { x: 0.0, y: 0.05 }, Point { x: 0.5, y: 0.6 }, Point { x: 1.0, y: 0.95 }];
+    s.color.saturation = 20.0;
+    check("V8 colour stage, curves, Saturation", &src, &raw, &s, &req);
+    check("V8 colour stage, not raw", &src, &SourceInfo::default(), &s, &req);
+    s.treatment = lightcraft_develop::Treatment::Bw;
+    check("V8 colour stage, B&W", &src, &raw, &s, &req);
+}
+
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
 /// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.

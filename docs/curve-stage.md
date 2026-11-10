@@ -22,7 +22,8 @@ display-encoded output. Measured against Camera Raw, this goes wrong in three wa
 
 ## What V8 does
 
-After the tone map and V4's calibrated Contrast and Blacks, before the colour stage:
+After the tone map, V4's calibrated Contrast and Blacks and V8's colour mixer ([mixer-stage.md](mixer-stage.md)),
+before the colour stage:
 
 1. Convert linear Rec.2020 to linear ProPhoto RGB (D50, Bradford) and encode with the sRGB curve, as the V4
    operators do (`light_v3::prophoto_matrices`).
