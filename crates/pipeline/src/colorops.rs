@@ -144,6 +144,8 @@ pub struct ColorOps {
     pub grading: Option<([WheelK; 4], f32, f32)>,
     /// OkLCh hue of skin tones (protected by vibrance).
     pub skin: f32,
+    /// Process V8's Colour Grading, measured against Lightroom (`grading` is `None` from V8 on).
+    pub measured_grading: Option<crate::grading_stage::GradingStage>,
 }
 
 fn wheel(w: &lightcraft_develop::Wheel) -> WheelK {
@@ -170,7 +172,7 @@ impl ColorOps {
                 s.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter(|p| !p.is_neutral()).map(PointK::new).collect()
             },
             bw: crate::is_bw(s).then(|| s.bw_mix.bands().map(|v| (v / 100.0) as f32)),
-            grading: (!g.is_neutral()).then(|| {
+            grading: (!g.is_neutral() && s.process.process() < lightcraft_develop::Process::V8).then(|| {
                 (
                     [wheel(&g.shadows), wheel(&g.midtones), wheel(&g.highlights), wheel(&g.global)],
                     (g.blending / 100.0) as f32,
@@ -178,11 +180,18 @@ impl ColorOps {
                 )
             }),
             skin: oklch_hue_of_srgb_hue(25.0),
+            measured_grading: crate::grading_stage::GradingStage::new(s),
         }
     }
 
     pub fn is_identity(&self) -> bool {
-        self.vibrance == 0.0 && self.saturation == 0.0 && !self.mixer && self.points.is_empty() && self.bw.is_none() && self.grading.is_none()
+        self.vibrance == 0.0
+            && self.saturation == 0.0
+            && !self.mixer
+            && self.points.is_empty()
+            && self.bw.is_none()
+            && self.grading.is_none()
+            && self.measured_grading.is_none()
     }
 
     /// `local_sat` (−1..1) and `local_hue` (radians) come from masks.
@@ -251,6 +260,9 @@ impl ColorOps {
     /// Colour grading on OkLab, then back to linear Rec.2020.
     #[inline]
     fn grade(&self, mut lab: [f32; 3]) -> [f32; 3] {
+        if let Some(g) = &self.measured_grading {
+            return oklab_to_2020(g.apply(lab));
+        }
         if let Some((wheels, blending, balance)) = &self.grading {
             let m = 0.5 - balance * 0.25;
             let width = 0.15 + blending * 0.5;

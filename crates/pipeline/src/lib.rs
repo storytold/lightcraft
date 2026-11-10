@@ -37,6 +37,9 @@ mod curve_stage_tables;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod grading_stage;
+#[rustfmt::skip]
+mod grading_stage_tables;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
 #[rustfmt::skip]

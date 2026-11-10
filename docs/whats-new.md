@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Colour Grading behaves as in Lightroom (process V8)
+- The colour grading wheels now tint as strongly and in the same direction as Lightroom's, reach the same tones (the
+  shadows wheel spares the deepest blacks and reaches into the midtones, the global wheel acts most on the
+  midtones), and give less tint to colours that already lean its way, so a warm grade no longer oversaturates warm
+  colours. Blending, Balance and Luminance follow Lightroom's measured response too. This is part of rendering
+  process 8: photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [Colour Grading](grading-stage.md).
+
 ### The colour mixer behaves as in Lightroom (process V8)
 - Each band of the colour mixer now covers the colours Lightroom's does (a red-orange such as skin answers to
   Orange, Blue reaches further towards aqua and purple), and Hue, Saturation and Luminance follow Lightroom's

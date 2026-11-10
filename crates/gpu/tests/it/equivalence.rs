@@ -879,6 +879,36 @@ fn mixer_stage_matches() {
     check("V8 colour stage, B&W", &src, &raw, &s, &req);
 }
 
+/// Process V8's measured Colour Grading matches the CPU's: single wheels, all four with Blending and Balance,
+/// Luminance only, and together with the mixer stage, the curves and B&W.
+#[test]
+fn grading_stage_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    let v8 = || DevelopSettings { process: Process::V8.version(), ..Default::default() };
+    let mut s = v8();
+    s.grading.shadows = lightcraft_develop::Wheel { hue: 210.0, sat: 40.0, lum: 0.0 };
+    check("V8 shadows wheel", &src, &raw, &s, &req);
+    s.grading.midtones = lightcraft_develop::Wheel { hue: 45.0, sat: 22.0, lum: -20.0 };
+    s.grading.highlights = lightcraft_develop::Wheel { hue: 46.0, sat: 80.0, lum: 30.0 };
+    s.grading.global = lightcraft_develop::Wheel { hue: 300.0, sat: 15.0, lum: 10.0 };
+    s.grading.blending = 70.0;
+    s.grading.balance = -35.0;
+    check("V8 four wheels", &src, &raw, &s, &req);
+    let mut l = v8();
+    l.grading.highlights.lum = -60.0;
+    check("V8 grading Luminance only", &src, &raw, &l, &req);
+    s.mixer.orange.sat = 40.0;
+    s.curve.master = vec![Point { x: 0.0, y: 0.05 }, Point { x: 0.5, y: 0.6 }, Point { x: 1.0, y: 0.95 }];
+    check("V8 grading, mixer, curves", &src, &raw, &s, &req);
+    s.treatment = lightcraft_develop::Treatment::Bw;
+    check("V8 grading, B&W", &src, &raw, &s, &req);
+}
+
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
 /// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.

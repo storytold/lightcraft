@@ -372,7 +372,55 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
             lab.x += pf(F_WHEELS + 3u * k + 2u) * wt;
         }
     }
+    if (pu(F_MGRADE) != 0u) {
+        lab = measured_grade(lab);
+    }
     return oklab_inv(lab);
+}
+
+// `grading_stage` lightness grid (65 entries at `o`), clamped.
+fn mgrade_grid(o: u32, l: f32) -> f32 {
+    let p = clamp(l, 0.0, 1.0) * 64.0;
+    let i = min(u32(p), 63u);
+    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * (p - f32(i));
+}
+
+// `GradingStage::apply`: each wheel's damped tint by its lightness profile, then the Luminance curve.
+fn measured_grade(lab: vec3<f32>) -> vec3<f32> {
+    let off = pu(F_MGRADE_OFF);
+    let n = pu(F_MGRADE) - 1u;
+    let c = sqrt(lab.y * lab.y + lab.z * lab.z);
+    // atan2(0, 0) is undefined in WGSL; the CPU's gives 0
+    let hue = select(atan2(lab.z, lab.y), 0.0, c == 0.0);
+    var out = lab;
+    for (var k = 0u; k < n; k++) {
+        let w = off + 65u + k * 85u;
+        let p = mgrade_grid(w + 20u, lab.x);
+        if (p == 0.0) {
+            continue;
+        }
+        let ta = aux[w];
+        let tb = aux[w + 1u];
+        let diff = abs(wrap_angle(hue - atan2(tb, ta)));
+        let bin = min(u32(diff * 57.29577951308232 / 30.0), 5u);
+        // the damping's chroma levels (`grading_stage_tables::CHROMA`)
+        var damp = 1.0;
+        if (c <= 0.04) {
+            damp = 1.0 + (aux[w + 2u + bin] - 1.0) * c / 0.04;
+        } else if (c <= 0.08) {
+            let f = (c - 0.04) / 0.04;
+            damp = aux[w + 2u + bin] * (1.0 - f) + aux[w + 8u + bin] * f;
+        } else if (c <= 0.12) {
+            let f = (c - 0.08) / 0.04;
+            damp = aux[w + 8u + bin] * (1.0 - f) + aux[w + 14u + bin] * f;
+        } else {
+            damp = aux[w + 14u + bin];
+        }
+        out.y += p * ta * damp;
+        out.z += p * tb * damp;
+    }
+    out.x = max(lab.x + mgrade_grid(off, lab.x), 0.0);
+    return out;
 }
 
 // `colorops::calibrate`: primaries matrix, then the shadows tint (luminance kept).
