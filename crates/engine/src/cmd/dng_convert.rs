@@ -171,9 +171,16 @@ fn clear_cache(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = converted_photos(s);
     let (files, bytes, failed) = dc::clear_cache();
     // their smart previews were made from the deleted DNGs: removed now, also with `reload: false` (made again from
-    // the NEF when needed)
+    // the NEF when needed). A photo whose NEF is offline keeps its smart preview: it is then the only source it can
+    // be edited and exported from, and nothing could make a new one.
     for id in &ids {
-        drop_smart_preview(s, *id);
+        let online = s.catalog.photo(*id).is_some_and(|p| match &p.source {
+            Source::File { path } => Path::new(path).is_file(),
+            _ => true,
+        });
+        if online {
+            drop_smart_preview(s, *id);
+        }
     }
     let mut reloaded: Vec<PhotoId> = Vec::new();
     if !ids.is_empty() && p.get("reload").and_then(Value::as_bool) != Some(false) {
@@ -216,7 +223,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Converted DNGs",
             [],
             None,
-            "{reload?: bool} — delete the DNGs Adobe DNG Converter made for Nikon High Efficiency NEFs (the cache is shared by every library on this computer); this library's photos that developed from them lose their smart previews and are read again (unless `reload: false`) and show their embedded preview until converted again → {deletedFiles, freedBytes, failedFiles (DNGs that could not be deleted), converted: [ids that developed from a DNG], reloaded: [ids]}; with `reload: false` the catalog still marks those photos as converted until the caller reloads them (`photo.reload`)",
+            "{reload?: bool} — delete the DNGs Adobe DNG Converter made for Nikon High Efficiency NEFs (the cache is shared by every library on this computer); this library's photos that developed from them lose their smart previews (not when the NEF is offline) and are read again (unless `reload: false`); other libraries keep their smart previews and converted marks until Reload from Disk and show their embedded preview until converted again → {deletedFiles, freedBytes, failedFiles (DNGs that could not be deleted), converted: [ids that developed from a DNG], reloaded: [ids]}; with `reload: false` the catalog still marks those photos as converted until the caller reloads them (`photo.reload`)",
             always,
             clear_cache
         ),

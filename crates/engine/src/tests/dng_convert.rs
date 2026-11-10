@@ -154,6 +154,29 @@ fn a_converted_dng_develops_the_photo_and_the_nef_stays_its_file() {
     assert!(back.preview_only.is_some() && !back.converted_dng());
 }
 
+/// Deleting the converted DNGs keeps the smart preview of a photo whose NEF is offline: nothing else could develop it.
+#[cfg(unix)]
+#[test]
+fn an_offline_photo_keeps_its_smart_preview_when_the_dngs_are_deleted() {
+    let _serial = dc::TEST_SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut x = setup("offline");
+    let conv = copying(&x.dir, &x.dng);
+    dc::set_settings(dc::Settings { path: Some(conv), ..Default::default() });
+    let r = x.s.execute("photo.convertHighEfficiency", &json!({"ids": [x.id.0], "wait": true})).unwrap();
+    dc::set_settings(dc::Settings::default());
+    assert_eq!(r["converted"], json!([x.id.0]), "{r}");
+    let smart = x.dir.join("smart");
+    x.s.media.smart_dir = Some(smart.clone());
+    let proxy = crate::smart::sharded_file_path(&smart, x.s.catalog.photo(x.id).unwrap());
+    std::fs::create_dir_all(proxy.parent().unwrap()).unwrap();
+    std::fs::write(&proxy, b"proxy").unwrap();
+    // the NEF's drive is not connected
+    std::fs::rename(&x.nef, x.dir.join("away.bin")).unwrap();
+    let r = x.s.execute("library.clearDngCache", &json!({"reload": false})).unwrap();
+    assert_eq!(r["deletedFiles"], 1);
+    assert!(proxy.exists(), "the offline photo keeps its smart preview");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_failed_conversion_leaves_nothing_and_says_why() {
