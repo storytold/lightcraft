@@ -146,6 +146,18 @@ pub struct ColorOps {
     pub skin: f32,
 }
 
+/// How much of V6's tint the global colour-grading wheel keeps under V8.
+pub const GLOBAL_WHEEL_V8: f32 = 0.45;
+
+/// The global wheel: from V8 its tint is [`GLOBAL_WHEEL_V8`] of the other wheels' at the same saturation. On Lightroom
+/// exports of real edits with Global saturation 10 (three photos) and 16 (one), V6 left the photos about +2 b* and up
+/// to +2.8 a* warmer than the exports, and 0.4 to 0.6 of the tint cancels it; the shadows and highlights wheels
+/// measured right as they are (Highlights 23 got further from the exports when halved). Its luminance is unchanged.
+fn global_wheel(w: &lightcraft_develop::Wheel, process: lightcraft_develop::Process) -> WheelK {
+    let k = wheel(w);
+    if process >= lightcraft_develop::Process::V8 { WheelK { a: k.a * GLOBAL_WHEEL_V8, b: k.b * GLOBAL_WHEEL_V8, ..k } } else { k }
+}
+
 fn wheel(w: &lightcraft_develop::Wheel) -> WheelK {
     let h = oklch_hue_of_srgb_hue(w.hue);
     let s = (w.sat / 100.0) as f32 * 0.09;
@@ -171,7 +183,7 @@ impl ColorOps {
             bw: crate::is_bw(s).then(|| s.bw_mix.bands().map(|v| (v / 100.0) as f32)),
             grading: (!g.is_neutral()).then(|| {
                 (
-                    [wheel(&g.shadows), wheel(&g.midtones), wheel(&g.highlights), wheel(&g.global)],
+                    [wheel(&g.shadows), wheel(&g.midtones), wheel(&g.highlights), global_wheel(&g.global, s.process.process())],
                     (g.blending / 100.0) as f32,
                     (g.balance / 100.0) as f32,
                 )
@@ -454,5 +466,28 @@ mod tests {
         let bright = ops.apply([0.8, 0.8, 0.8], 0.0, 0.0);
         assert!(dark[2] > dark[0]);
         assert!((bright[2] - bright[0]).abs() < 0.02);
+    }
+
+    #[test]
+    fn v8_global_wheel_tints_at_its_calibrated_share() {
+        use lightcraft_develop::Process;
+        let tint = |p: Process, global: bool| {
+            let mut s = DevelopSettings { process: p.version(), ..Default::default() };
+            let w = lightcraft_develop::Wheel { hue: 35.0, sat: 16.0, lum: 0.0 };
+            if global {
+                s.grading.global = w
+            } else {
+                s.grading.shadows = w
+            }
+            let ops = ColorOps::new(&s);
+            let (wheels, _, _) = ops.grading.expect("grading");
+            let k = wheels[if global { 3 } else { 0 }];
+            (k.a, k.b)
+        };
+        assert_eq!(tint(Process::V6, true), tint(Process::V7, true), "V7 tints as V6");
+        let (v6, v7) = (tint(Process::V7, true), tint(Process::V8, true));
+        assert!(v6.0 != 0.0 && v6.1 != 0.0);
+        assert!((v7.0 - v6.0 * GLOBAL_WHEEL_V8).abs() < 1e-7 && (v7.1 - v6.1 * GLOBAL_WHEEL_V8).abs() < 1e-7);
+        assert_eq!(tint(Process::V7, false), tint(Process::V8, false), "the shadows wheel is unchanged");
     }
 }

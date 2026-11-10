@@ -99,12 +99,16 @@ pub enum Process {
     /// V6, with film grain from a stack of crystal layers (after Aurélien Pierre's model): resolution
     /// independent, fading out at black and white; V1 to V6 keep their value noise.
     V7,
+    /// V7, calibrated against Lightroom exports of real edits: global Shadows answers large amounts
+    /// compressively (`lightcraft_pipeline::finish::tone_slider`), a negative Texture smooths less
+    /// (`finish::texture_slider`) and the Global grading wheel tints less (`colorops::global_wheel`).
+    V8,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 7] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7];
-    pub const LATEST: Process = Process::V7;
+    pub const ALL: [Process; 8] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8];
+    pub const LATEST: Process = Process::V8;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -115,6 +119,7 @@ impl Process {
             Process::V5 => ProcessVersion(5),
             Process::V6 => ProcessVersion(6),
             Process::V7 => ProcessVersion(7),
+            Process::V8 => ProcessVersion(8),
         }
     }
 }
