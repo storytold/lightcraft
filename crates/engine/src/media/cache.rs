@@ -62,6 +62,7 @@ impl Default for MediaCache {
             budget,
             file_loader: None,
             reduced_loader: None,
+            look_loader: None,
             file_probe: None,
             preview_loader: None,
             file_bytes: None,
@@ -328,18 +329,45 @@ impl MediaCache {
         r
     }
 
+    /// Whether photo `p` is decoded for a measured look: its profile is one, and there is a loader for it. A photo with a
+    /// denoised picture is not: its pair loader decodes plainly, and asking for the other decode would miss the cache on
+    /// every render (its look undoes the profile's table approximately instead).
+    pub(super) fn for_look(&self, p: &Photo) -> bool {
+        self.look_loader.is_some() && lightcraft_pipeline::looks::is_look_profile(&p.develop.profile.id) && self.denoise.get(p.id).is_none()
+    }
+
     /// Is photo `p`'s original known to be missing (cached answer only)?
     fn original_offline(&self, p: &Photo) -> bool {
         matches!(&p.source, Source::File { path } if self.availability.is_offline(path))
     }
 
+    /// How to load photo `p` at `level` ([`Self::source_ref_for`] without the denoised picture) with camera profile
+    /// `wanted`, decoded for its measured look when its profile is one ([`Self::for_look`]).
     fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
+        let r = self.source_ref_decoded(p, level, cached, wanted);
+        // a photo whose profile is a measured look is decoded with its starting colour's matrix alone
+        match r {
+            SourceRef::File { path, max_edge, loader, fallback, denoise, camera_profile, outliers, reduced } if self.for_look(p) => {
+                SourceRef::File { path, max_edge, loader: self.look_loader.clone().or(loader), fallback, denoise, camera_profile, outliers, reduced }
+            }
+            r => r,
+        }
+    }
+
+    /// [`Self::source_ref_plain`] before the look decode is chosen: a decoded source from memory when it was decoded the
+    /// way the photo's profile needs, else the original, its smart preview or the demo scene.
+    fn source_ref_decoded(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
+        // a decoded source serves when it was decoded the way the photo's profile needs (for a measured look or not)
+        let fits = |s: &DecodedSource, for_look: bool| {
+            s.info.as_ref().and_then(|i| i.camera_rgb.as_ref()).is_none_or(|c| c.hue_sat.is_none() || c.deferred == for_look)
+        };
+        let for_look = self.for_look(p);
         let outliers = p.develop.removes_hot_pixels();
         // (a source developed with another camera profile, or none, doesn't stand in; a smart preview
         // has no camera profile, and decoding it again gives the same picture, so it stands in while the
         // original is offline)
         if cached
-            && let Some(a) = self.get_source(p.id, level).filter(|a| a.fits_outliers(outliers))
+            && let Some(a) = self.get_source(p.id, level).filter(|a| a.fits_outliers(outliers) && fits(a, for_look))
             && (a.camera_profile == wanted.as_ref().map(|(id, _)| id.clone()) || (a.from_proxy && self.original_offline(p)))
         {
             return SourceRef::Loaded(Box::new(a));
@@ -352,6 +380,7 @@ impl MediaCache {
             && let Some(big) = [SourceLevel::Preview, SourceLevel::Full].into_iter().find_map(|level| {
                 self.get_source(p.id, level).filter(|b| {
                     b.fits_outliers(outliers)
+                        && fits(b, for_look)
                         && (b.camera_profile.as_deref() == wanted.as_ref().map(|(tag, _)| tag.as_str()) || (b.from_proxy && self.original_offline(p)))
                 })
             })

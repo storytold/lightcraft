@@ -15,7 +15,7 @@ pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo),
 
 /// [`load_bytes`] developing a raw file with an imported camera profile (`dcp`) in place of its own colour model.
 pub fn load_bytes_with(bytes: &[u8], max_edge: usize, dcp: Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> {
-    load_bytes_decoded(bytes, max_edge, RawDecode { dcp, outliers: false })
+    load_bytes_decoded(bytes, max_edge, RawDecode { dcp, ..RawDecode::default() })
 }
 
 /// [`load_bytes`] decoding a raw file as `with` says.
@@ -36,6 +36,13 @@ pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize, with: RawDecode<'_>) ->
     rayon::scope(move |_| {
         load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true, with).map(|(img, _, info, reduced)| (img, info, reduced))
     })
+}
+
+/// [`load_vec`] for a photo whose profile is a measured look (`lightcraft_pipeline::looks`): a camera with looks
+/// is developed with its starting colour's matrix alone, and the finishing stage applies the rest. Other files
+/// decode as [`load_vec`] does.
+pub fn load_vec_for_look(bytes: Vec<u8>, max_edge: usize, with: RawDecode<'_>) -> Result<(Rgb32f, SourceInfo), String> {
+    load_vec(bytes, max_edge, RawDecode { for_look: true, ..with })
 }
 
 /// [`load_vec`] that also develops the photo's cached denoised picture (`spec`) from the same decode: the plain
@@ -74,6 +81,41 @@ fn denoised_camera_rgb(raw: &lightcraft_raw::RawImage, spec: &DenoiseSpec, facto
     }
 }
 
+/// How a raw of a camera with measured looks relates to its camera colour ([`lightcraft_pipeline::looks::CameraRgb`]):
+/// the decode multiplies the developed camera RGB (black 0, the file's white level 1) by `t.wb`, the starting
+/// colour's matrix and the baseline exposure. The looks were measured on camera RGB white-balanced with the file's
+/// own multipliers (green 1) and scaled so 1 is the sensor's full range (the white level is the top of the data when
+/// the frame is clipped, a little below full range), so the matrix recorded here takes that camera RGB to the decoded
+/// pixels. `for_look`: the decode leaves the starting colour's hue/saturation table out. `None` without the file's
+/// multipliers. The look's exposure: [`crate::camera_looks::exposure`].
+fn look_camera_rgb(
+    raw: &lightcraft_raw::RawImage,
+    t: &lightcraft_raw::color::CameraTransform,
+    look: Option<&crate::camera_preview::CameraLook>,
+    model: String,
+    dynamic_range: Option<u32>,
+    for_look: bool,
+) -> Option<lightcraft_pipeline::looks::CameraRgb> {
+    let own = raw.wb_multipliers.filter(|m| m.iter().all(|v| v.is_finite() && *v > 0.0))?;
+    let full = ((1u32 << raw.bits.clamp(1, 16)) - 1) as f32;
+    let black = raw.black.mean();
+    let (white, top) = (raw.white_at(0) - black, full - black);
+    if !(white > 0.0 && top > 0.0) {
+        return None;
+    }
+    // camera RGB as the looks take it = own ⊙ developed · white / top; decoded = gain · M · (t.wb ⊙ developed)
+    let k = 2f64.powf(t.baseline_exposure) * f64::from(top / white);
+    let wb = std::array::from_fn::<f64, 3, _>(|i| f64::from(t.wb[i] / own[i]));
+    let m = look.map_or(t.matrix, |l| l.matrix.mul(&t.matrix)).mul(&lightcraft_color::Mat3::diag(wb[0], wb[1], wb[2]));
+    let matrix = lightcraft_color::Mat3(m.0.map(|r| r.map(|v| v * k))).to_f32();
+    let hue_sat = look.and_then(|l| l.hue_sat.clone()).map(std::sync::Arc::new);
+    let exposure = crate::camera_looks::exposure(&model, raw.metadata.raw_exposure_bias, dynamic_range);
+    Some(lightcraft_pipeline::looks::CameraRgb { model, matrix, deferred: for_look && hue_sat.is_some(), hue_sat, exposure })
+}
+
+/// Decode `bytes` into the picture the pipeline takes, with its denoised twin when `denoise` asks for one; `with.for_look`:
+/// a camera with measured looks leaves its starting colour's hue/saturation table to the finishing stage
+/// ([`lightcraft_pipeline::looks::CameraRgb::deferred`]).
 fn load_bytes_now(
     bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
@@ -82,6 +124,7 @@ fn load_bytes_now(
     with: RawDecode<'_>,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo, bool), String> {
     let dcp = with.dcp;
+    let for_look = with.for_look;
     if lightcraft_raw::probe(&bytes).is_some() {
         // a thumbnail (`allow_reduced`, never an export) of a DNG that keeps smaller copies of its raw image
         // (Lightroom's merges) develops the smallest that covers it; a denoised photo's twin needs the full mosaic
@@ -165,6 +208,11 @@ fn load_bytes_now(
             },
             || dng_mattes(&bytes, &info),
         );
+        // a camera with measured looks: the dynamic range the camera developed the shot at (its looks start a stop
+        // brighter at DR200)
+        let look_model =
+            raw.metadata.model.clone().filter(|m| raw.format != lightcraft_raw::RawFormat::Dng && !crate::camera_looks::for_model(m).is_empty());
+        let dynamic_range = look_model.as_ref().and_then(|_| lightcraft_raw::fujifilm_dynamic_range(&bytes));
         drop(bytes);
         // Previews and thumbnails bin the mosaic straight to (about) the size they need; only
         // larger levels (exports, 1:1) demosaic the whole sensor.
@@ -187,9 +235,13 @@ fn load_bytes_now(
         let twin = denoise.and_then(|spec| denoised_camera_rgb(&raw, spec, factor)).filter(|d| d.width == img.width && d.height == img.height);
         // the samples aren't needed any more (the colour model below reads only the tags)
         raw.data = lightcraft_raw::RawData::U16(Vec::new());
-        let hue_sat = camera_look.as_ref().and_then(|p| p.hue_sat.as_ref()).and_then(crate::camera_preview::HueSat::new);
         // A DNG's own profile look (hue/saturation map, look table), DNG spec chapter 6.
         let tables = lightcraft_raw::profile::ProfileTables::new(&raw.color.profile, lightcraft_raw::color::illuminant_weight(&raw.color, xy));
+        let camera_rgb = look_model
+            .filter(|_| tables.is_none())
+            .and_then(|model| look_camera_rgb(&raw, &t, camera_look.as_ref(), model, dynamic_range, for_look).map(std::sync::Arc::new));
+        let deferred = camera_rgb.as_ref().is_some_and(|c| c.deferred);
+        let hue_sat = camera_look.as_ref().and_then(|p| p.hue_sat.as_ref()).filter(|_| !deferred).and_then(crate::camera_preview::HueSat::new);
         let colour = CameraColourModel {
             wb: t.wb,
             matrix: camera_look.as_ref().map(|p| p.matrix.mul(&t.matrix)).unwrap_or(t.matrix),
@@ -259,6 +311,7 @@ fn load_bytes_now(
                 legacy_relative_wb: scale.legacy_relative,
                 camera_color,
                 camera_tone,
+                camera_rgb,
                 mattes,
                 local_tone,
                 // (the catalog knows the original's size: `media::source_info`)

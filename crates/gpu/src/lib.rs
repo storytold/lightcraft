@@ -645,6 +645,10 @@ fn run(
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
+        // measured looks, and sources decoded for one, have no GPU stage (`lightcraft_pipeline::looks`)
+        if lightcraft_pipeline::looks::needs_cpu(s, info) {
+            return Err(Fallback::NotTried);
+        }
         // content-aware Fill spots (`spots::fill_box`) have no GPU kernel: the CPU renders the photo
         if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill) {
             return Err(Fallback::NotTried);

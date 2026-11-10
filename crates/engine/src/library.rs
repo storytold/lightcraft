@@ -625,6 +625,7 @@ impl Session {
             }
             let known = |id: &String| {
                 crate::presets::profile(id).is_some()
+                    || crate::camera_looks::find(id).is_some()
                     || self.lut_profiles.iter().any(|p| &p.id == id)
                     || self.dcp_profiles.iter().any(|p| &p.id == id)
             };

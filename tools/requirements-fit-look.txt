@@ -1,0 +1,6 @@
+# Python packages for tools/fit_look.py (fitted camera looks, assets/camera-looks/).
+#   python3 -m venv .venv-fit-look && .venv-fit-look/bin/pip install -r tools/requirements-fit-look.txt
+numpy==2.4.2
+scipy==1.17.1
+tifffile==2026.2.24
+Pillow==10.4.0

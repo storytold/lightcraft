@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Fujifilm X-T5 film simulation looks
+- X-T5 raws can now be shown in each of the camera's eleven colour film simulations, including REALA ACE and
+  Nostalgic Neg.: open the profile browser and pick one from "X-T5 looks, fitted". Each look was fitted to the X-T5's
+  own conversions of photos in that simulation; on photos it was not fitted to, it lands a median of 1.0 to 1.4
+  ΔE2000 from the camera's conversion, depending on the look. Photos shot at ISO 125 and 200, whose raws the camera
+  exposes a stop differently, are rendered to match too. Fitted from the camera; not made or endorsed by Fujifilm.
+
+### Fujifilm X-T4 film simulation looks
+- X-T4 raws can now be shown in each of the camera's nine colour film simulations: open the profile browser and pick one
+  from "X-T4 looks, measured", such as "Vivid (Velvia)". Each look was measured by having an X-T4 convert colour charts
+  in that film simulation, so it follows the camera's own colour and contrast: on 781 photos it lands a median of 0.52
+  to 0.64 ΔE2000 from the camera's own conversion, depending on the look. Exposure, white balance and your other edits apply as
+  usual, Amount blends back towards the starting look, and photos shot at DR200 are brightened a stop as the camera
+  brightens them. Looks render on the CPU, so editing with one is slower than with other profiles. Measured from the
+  camera; not made or endorsed by Fujifilm.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth

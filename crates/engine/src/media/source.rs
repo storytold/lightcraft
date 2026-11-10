@@ -94,6 +94,9 @@ pub struct RawDecode<'a> {
     pub dcp: Option<&'a DcpProfile>,
     /// Replace a raw's single outlier photosites first ([`DevelopSettings`] `detail.nr_outliers`).
     pub outliers: bool,
+    /// Decode for a measured look ([`crate::files::load_vec_for_look`]): a camera with looks leaves its starting
+    /// colour's hue/saturation table to the look's finishing stage.
+    pub for_look: bool,
 }
 
 /// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app), as the third argument says.
@@ -301,7 +304,7 @@ impl SourceRef {
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
             SourceRef::File { path, max_edge, loader, fallback, denoise, camera_profile, outliers, reduced } => {
-                let with = RawDecode { dcp: camera_profile.as_ref().map(|(_, p)| p.as_ref()), outliers: *outliers };
+                let with = RawDecode { dcp: camera_profile.as_ref().map(|(_, p)| p.as_ref()), outliers: *outliers, for_look: false };
                 let made_with = camera_profile.as_ref().map(|(id, _)| id.clone());
                 let plain = || match (reduced, loader) {
                     (Some(l), _) => l(path, *max_edge, with).map(|(image, info, reduced)| DecodedSource {

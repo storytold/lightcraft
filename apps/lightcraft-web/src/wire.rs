@@ -193,7 +193,7 @@ impl WorkerCore {
                 let src = match (&job.origin, original) {
                     (Source::File { .. }, Some(bytes)) => {
                         let outliers = job.settings.removes_hot_pixels();
-                        let with = lightcraft_engine::media::RawDecode { dcp: None, outliers };
+                        let with = lightcraft_engine::media::RawDecode { dcp: None, outliers, for_look: false };
                         let (image, info) = lightcraft_engine::files::load_bytes_decoded(bytes, job.max_edge, with)?;
                         DecodedSource { outliers, ..DecodedSource::new(Arc::new(image), Some(info)) }
                     }

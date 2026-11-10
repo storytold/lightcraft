@@ -19,8 +19,12 @@ impl crate::Session {
         }
         let b = thumb_bucket(long_edge);
         let mut job = self.build_job(id, b, b, false, true, Some(b))?;
-        // (a thumbnail may develop a smaller copy of the raw image that the file keeps)
-        if let SourceRef::File { reduced, .. } = &mut job.source {
+        // (a thumbnail may develop a smaller copy of the raw image that the file keeps, unless its look needs the
+        // look's decode: such copies are in DNGs only, and looks are not)
+        let for_look = self.catalog.photo(id).is_some_and(|p| self.media.for_look(p));
+        if let SourceRef::File { reduced, .. } = &mut job.source
+            && !for_look
+        {
             reduced.clone_from(&self.media.reduced_loader);
         }
         Some(job)

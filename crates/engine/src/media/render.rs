@@ -526,6 +526,7 @@ pub fn develop_reporting(
     (rendered, fallback)
 }
 
+/// Render `src` with `s`: on the GPU when it handles the render, else on the CPU (with the reason the GPU fell back).
 fn develop_image(
     src: &Arc<Rgb32f>,
     info: &SourceInfo,
@@ -534,7 +535,8 @@ fn develop_image(
     stages: Option<&StageCache>,
     gpu: bool,
 ) -> (Rendered, Option<String>) {
-    // (LUT profiles, Refine Edges and soft proofs render on the GPU too)
+    // (LUT profiles, Refine Edges and soft proofs render on the GPU too; measured looks, which have no GPU stage,
+    // come back from `try_render` as not tried and render on the CPU)
     let fallback = if gpu {
         match lightcraft_gpu::try_render(src, info, s, req, stages) {
             Ok(r) => return (r, None),

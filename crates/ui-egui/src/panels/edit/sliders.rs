@@ -91,8 +91,13 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     let heading = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
     };
+    // a measured look shows only for a photo that can render it
+    let looks_here =
+        app.session.active().and_then(|a| app.session.catalog.photo(a)).map(|p| lightcraft_engine::camera_looks::for_photo(p)).unwrap_or_default();
+    let shown = |id: &String| !lightcraft_pipeline::looks::is_look_profile(id) || looks_here.iter().any(|l| &l.id == id);
     for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {
-        let list: Vec<_> = ids.iter().filter_map(|id| app.session.profile_info(id).map(|(name, _)| (id.as_str(), name))).collect();
+        let list: Vec<_> =
+            ids.iter().filter(|id| shown(id)).filter_map(|id| app.session.profile_info(id).map(|(name, _)| (id.as_str(), name))).collect();
         if list.is_empty() {
             continue;
         }
@@ -112,6 +117,23 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
             });
         });
         register(ui, format!("profileMenu:groupMenu:{g}"), r.response.rect);
+        if r.inner.is_some() {
+            crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
+        }
+    }
+    // the measured looks this photo renders, by their groups, as the profile browser lists them
+    let mut look_groups: Vec<&str> = looks_here.iter().map(|l| l.group.as_str()).collect();
+    look_groups.dedup();
+    for g in look_groups {
+        let r = crate::widgets::menu_button(ui, g, |ui| {
+            crate::menu_level::level(ui, 2, Some(below), |ui| {
+                ui.set_min_width(170.0);
+                for l in looks_here.iter().filter(|l| l.group == g) {
+                    item(ui, "group", &l.id, &l.name, &mut pick);
+                }
+            });
+        });
+        register(ui, format!("profileMenu:lookGroupMenu:{g}"), r.response.rect);
         if r.inner.is_some() {
             crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
         }

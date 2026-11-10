@@ -19,6 +19,7 @@ pub mod activity;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
+pub mod camera_looks;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -1049,7 +1050,7 @@ impl Session {
                 if wb_changed {
                     sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
                 }
-                let synced = self.fit_constrained_crop(x, synced);
+                let synced = self.with_renderable_look(x, self.fit_constrained_crop(x, synced));
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
@@ -1066,10 +1067,25 @@ impl Session {
             && !label.starts_with("Restore ")
     }
 
-    /// The op that sets a photo's develop settings and appends a History entry (for batches).
+    /// `settings` for photo `id`, keeping the photo's own profile where `settings` would give it a camera look
+    /// it can't render (another camera's, or on a photo that isn't a raw), so Paste, Sync, Auto Sync and presets
+    /// carry the other settings to a mixed selection (`camera_looks`).
+    fn with_renderable_look(&self, id: PhotoId, mut settings: DevelopSettings) -> DevelopSettings {
+        if let Some(photo) = self.catalog.photo(id)
+            && settings.profile.id != photo.develop.profile.id
+            && lightcraft_pipeline::looks::is_look_profile(&settings.profile.id)
+            && !crate::camera_looks::renders(photo, &settings.profile.id)
+        {
+            settings.profile = photo.develop.profile.clone();
+        }
+        settings
+    }
+
+    /// The op that sets a photo's develop settings and appends a History entry (for batches). A camera look
+    /// the photo can't render is not stored ([`Self::with_renderable_look`]).
     pub fn develop_op(&self, id: PhotoId, settings: DevelopSettings, label: &str) -> Option<Op> {
         self.catalog.photo(id)?;
-        let mut settings = settings;
+        let mut settings = self.with_renderable_look(id, settings);
         // old masks (on the corrected frame) go onto the photo, from the frame they were drawn on:
         // masks this edit kept, under the photo's settings before it (a geometry edit then moves
         // the photo, not them); masks it brought in (paste, sync, a preset, a history step, a

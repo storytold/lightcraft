@@ -148,7 +148,7 @@ impl Originals {
         // whether it decodes in a worker or inline when workers are unavailable)
         let loader: FileLoader = Arc::new(move |path: &str, max_edge: usize, with: lightcraft_engine::media::RawDecode<'_>| {
             let bytes = s.get(path).ok_or_else(|| format!("{path}: the original is still loading from browser storage"))?;
-            load_bytes_decoded(&bytes, max_edge, lightcraft_engine::media::RawDecode { dcp: None, outliers: with.outliers })
+            load_bytes_decoded(&bytes, max_edge, lightcraft_engine::media::RawDecode { dcp: None, outliers: with.outliers, for_look: with.for_look })
         });
         let s = self.clone();
         let probe: FileProbe = Arc::new(move |path: &str| {
@@ -292,7 +292,7 @@ mod tests {
         let store = Originals::default();
         store.insert("h1", Arc::from(dng));
         let (loader, _) = store.hooks();
-        let with = loader("web/h1/a.dng", 64, lightcraft_engine::media::RawDecode { dcp: Some(&profile), outliers: false }).unwrap();
+        let with = loader("web/h1/a.dng", 64, lightcraft_engine::media::RawDecode { dcp: Some(&profile), outliers: false, for_look: false }).unwrap();
         let without = loader("web/h1/a.dng", 64, Default::default()).unwrap();
         assert_eq!(with.0.data, without.0.data, "the web loader leaves it out");
     }
