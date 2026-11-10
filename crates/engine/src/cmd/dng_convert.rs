@@ -170,15 +170,17 @@ fn clear_cache(s: &mut Session, p: &Value) -> Result<Value> {
     // passes `reload: false` and reloads them in the background itself)
     let ids = converted_photos(s);
     let (files, bytes, failed) = dc::clear_cache();
+    // their smart previews were made from the deleted DNGs: removed now, also with `reload: false` (made again from
+    // the NEF when needed)
+    for id in &ids {
+        drop_smart_preview(s, *id);
+    }
     let mut reloaded: Vec<PhotoId> = Vec::new();
     if !ids.is_empty() && p.get("reload").and_then(Value::as_bool) != Some(false) {
         let items = reload::plan(s, &json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>()}))?;
         let probe = reload::file_probe(s);
         let results = reload::probe(probe.as_ref(), &items, &AtomicBool::new(false), &|_| {});
         reloaded = reload::apply(s, items, results)?;
-        for id in &reloaded {
-            drop_smart_preview(s, *id);
-        }
     }
     Ok(json!({
         "deletedFiles": files,
@@ -214,7 +216,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Converted DNGs",
             [],
             None,
-            "{reload?: bool} — delete the DNGs Adobe DNG Converter made for Nikon High Efficiency NEFs (the cache is shared by every library on this computer); this library's photos that developed from them are read again (unless `reload: false`) and show their embedded preview until converted again → {deletedFiles, freedBytes, failedFiles (DNGs that could not be deleted), converted: [ids that developed from a DNG], reloaded: [ids]}; with `reload: false` the catalog still marks those photos as converted until the caller reloads them (`photo.reload`)",
+            "{reload?: bool} — delete the DNGs Adobe DNG Converter made for Nikon High Efficiency NEFs (the cache is shared by every library on this computer); this library's photos that developed from them lose their smart previews and are read again (unless `reload: false`) and show their embedded preview until converted again → {deletedFiles, freedBytes, failedFiles (DNGs that could not be deleted), converted: [ids that developed from a DNG], reloaded: [ids]}; with `reload: false` the catalog still marks those photos as converted until the caller reloads them (`photo.reload`)",
             always,
             clear_cache
         ),

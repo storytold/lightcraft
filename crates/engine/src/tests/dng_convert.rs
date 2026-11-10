@@ -136,9 +136,16 @@ fn a_converted_dng_develops_the_photo_and_the_nef_stays_its_file() {
     x.s.execute("edit.redo", &json!({})).unwrap();
     assert!(x.s.catalog.photo(x.id).unwrap().converted_dng());
 
+    // a smart preview made while the photo developed from its DNG
+    let smart = x.dir.join("smart");
+    x.s.media.smart_dir = Some(smart.clone());
+    let proxy = crate::smart::sharded_file_path(&smart, x.s.catalog.photo(x.id).unwrap());
+    std::fs::create_dir_all(proxy.parent().unwrap()).unwrap();
+    std::fs::write(&proxy, b"proxy").unwrap();
     // deleting the converted DNGs (the app reloads itself, in the background) …
     let r = x.s.execute("library.clearDngCache", &json!({"reload": false})).unwrap();
     assert_eq!(r["deletedFiles"], 1);
+    assert!(!proxy.exists(), "the smart preview made from the deleted DNG is removed, also without a reload");
     assert_eq!(r["converted"], json!([x.id.0]));
     assert_eq!(r["reloaded"], json!([]));
     // … then Reload puts the photo back on its embedded preview
