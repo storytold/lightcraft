@@ -83,8 +83,10 @@ pub fn default_window_backends(os: &str) -> Backends {
     match os {
         "windows" => Backends::DX12,
         "macos" | "ios" => Backends::METAL,
-        // GL only: a multi-backend set lets wgpu pick Vulkan (e.g. llvmpipe) and the GUI can fail to appear
-        _ => Backends::GL,
+        // GL only on Linux: a multi-backend set lets wgpu pick Vulkan (e.g. llvmpipe) and the GUI can fail to appear
+        "linux" => Backends::GL,
+        // other platforms keep the previous default (Vulkan-capable plus GL)
+        _ => Backends::PRIMARY | Backends::GL,
     }
 }
 
@@ -503,7 +505,8 @@ pub fn window_renderer_order(
         // no Vulkan on Windows: its driver can crash the process uncatchably (issue #136)
         "windows" => vec![Backends::DX12, Backends::GL],
         "macos" | "ios" => vec![Backends::METAL],
-        _ => vec![Backends::GL, Backends::VULKAN],
+        "linux" => vec![Backends::GL, Backends::VULKAN],
+        _ => vec![Backends::VULKAN, Backends::GL],
     };
     let chain = platform.into_iter().map(WindowRenderer::Wgpu).chain([WindowRenderer::Glow]);
     let usable = |r: &WindowRenderer| match r {
@@ -800,6 +803,10 @@ mod tests {
         let gl = WindowRenderer::Wgpu(Backends::GL);
         let automatic = window_renderer_order(None, None, None, "linux", all, true);
         assert_eq!(automatic, [gl, vk, WindowRenderer::Glow]);
+        // regression control: other platforms keep Vulkan first, with GL behind it
+        let other = window_renderer_order(None, None, None, "freebsd", all, true);
+        assert_eq!(other.first(), Some(&vk), "freebsd chain: {other:?}");
+        assert_eq!(default_window_backends("freebsd"), Backends::PRIMARY | Backends::GL);
         assert_eq!(automatic.first(), Some(&gl));
     }
 
