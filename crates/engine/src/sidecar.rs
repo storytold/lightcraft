@@ -893,13 +893,18 @@ fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
         }
     }
     let open = format!("<crs:{name}");
-    let Some(rel) = data.find(&open) else { return false };
-    let start = rel;
+    let mut search = 0;
+    let start = loop {
+        let Some(rel) = data.get(search..).and_then(|s| s.find(&open)) else { return false };
+        let s = search + rel;
+        let next = data.get(s + open.len()..).and_then(|t| t.chars().next());
+        if matches!(next, Some(c) if c.is_whitespace() || c == '>' || c == '/') {
+            break s;
+        }
+        search = s + open.len();
+    };
     let after = start + open.len();
-    let next = data.get(after..).and_then(|s| s.chars().next());
-    if !matches!(next, Some(c) if c.is_whitespace() || c == '>' || c == '/') {
-        return false;
-    }
+    let _ = after;
     let Some(end) = tag_end(data, start) else { return true };
     let escaped = escape_attr(value);
     if is_self_closing(data, end) {
