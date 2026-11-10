@@ -41,11 +41,14 @@ pub enum SettingsGroup {
     Spots,
     RedEye,
     LensBlur,
+    /// The RGB channel mixer: its own group, as it is its own section, so copying the Color Mixer (HSL) onto
+    /// an infrared photo leaves that photo's red/blue swap and picked gains alone (issue #2158).
+    ChannelMixer,
     Calibration,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 20] = [
+    pub const ALL: [SettingsGroup; 21] = [
         SettingsGroup::Profile,
         SettingsGroup::Treatment,
         SettingsGroup::WhiteBalance,
@@ -65,6 +68,7 @@ impl SettingsGroup {
         SettingsGroup::Spots,
         SettingsGroup::RedEye,
         SettingsGroup::LensBlur,
+        SettingsGroup::ChannelMixer,
         SettingsGroup::Calibration,
     ];
 
@@ -97,6 +101,7 @@ impl SettingsGroup {
             SettingsGroup::Spots => "Remove",
             SettingsGroup::RedEye => "Red Eye",
             SettingsGroup::LensBlur => "Lens Blur",
+            SettingsGroup::ChannelMixer => "Channel Mixer",
             SettingsGroup::Calibration => "Calibration",
         }
     }
@@ -110,7 +115,7 @@ impl SettingsGroup {
             SettingsGroup::Light => &["light", "hdr"],
             SettingsGroup::ToneCurve => &["curve"],
             SettingsGroup::Color => &["color"],
-            SettingsGroup::ColorMixer => &["mixer", "bw_mix", "point_colors", "channel_mixer"],
+            SettingsGroup::ColorMixer => &["mixer", "bw_mix", "point_colors"],
             SettingsGroup::ColorGrading => &["grading"],
             SettingsGroup::Effects => &["effects"],
             SettingsGroup::Vignette => &["vignette"],
@@ -123,6 +128,7 @@ impl SettingsGroup {
             SettingsGroup::Spots => &["spots"],
             SettingsGroup::RedEye => &["red_eye"],
             SettingsGroup::LensBlur => &["lens_blur"],
+            SettingsGroup::ChannelMixer => &["channel_mixer"],
             SettingsGroup::Calibration => &["calibration"],
         }
     }
@@ -331,25 +337,40 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Copying the Color Mixer group carries the channel mixer, and pasting an untouched one resets a mixed photo,
+    /// Copying the Channel Mixer group carries the channel mixer, and pasting an untouched one resets a mixed photo,
     /// though the identity isn't otherwise written (issue #2158).
     #[test]
-    fn color_mixer_group_carries_and_resets_the_channel_mixer() {
+    fn channel_mixer_group_carries_and_resets_the_channel_mixer() {
         let mut mixed = DevelopSettings::default();
         mixed.channel_mixer.red.red = 0.0;
         mixed.channel_mixer.red.blue = 100.0;
         let plain = DevelopSettings::default();
-        let copied = extract_groups(&mixed, &[SettingsGroup::ColorMixer]);
+        let copied = extract_groups(&mixed, &[SettingsGroup::ChannelMixer]);
         assert_eq!(apply_partial(&plain, &copied, 1.0).channel_mixer, mixed.channel_mixer);
-        let untouched = extract_groups(&plain, &[SettingsGroup::ColorMixer]);
+        let untouched = extract_groups(&plain, &[SettingsGroup::ChannelMixer]);
         assert!(untouched.get("channel_mixer").is_some());
         assert!(apply_partial(&mixed, &untouched, 1.0).channel_mixer.is_identity());
-        // other groups leave it alone
-        let light = extract_groups(&plain, &[SettingsGroup::Light]);
-        assert_eq!(apply_partial(&mixed, &light, 1.0).channel_mixer, mixed.channel_mixer);
         // at half strength the mix blends halfway (both sides are numbers, so the preset isn't dropped)
         let half = apply_partial(&plain, &copied, 0.5);
         assert_eq!((half.channel_mixer.red.red, half.channel_mixer.red.blue), (50.0, 50.0));
+    }
+
+    /// The channel mixer is in its own group and no other. A copied group always states the mixer (so an untouched
+    /// one can reset), so in the Color Mixer group, copying HSL changes from a normal photo onto an infrared one
+    /// undid its red/blue swap (issue #2158).
+    #[test]
+    fn only_the_channel_mixer_group_carries_the_channel_mixer() {
+        let mut mixed = DevelopSettings::default();
+        mixed.channel_mixer.red.red = 0.0;
+        mixed.channel_mixer.red.blue = 100.0;
+        let plain = DevelopSettings::default();
+        for g in SettingsGroup::ALL.into_iter().filter(|g| *g != SettingsGroup::ChannelMixer) {
+            let copied = extract_groups(&plain, &[g]);
+            assert!(copied.get("channel_mixer").is_none(), "{g:?} carries the channel mixer");
+            assert_eq!(apply_partial(&mixed, &copied, 1.0).channel_mixer, mixed.channel_mixer, "{g:?} changed the channel mixer");
+        }
+        // a plain Copy (the default groups) still takes it along
+        assert!(SettingsGroup::default_copy().contains(&SettingsGroup::ChannelMixer));
     }
 
     #[test]
