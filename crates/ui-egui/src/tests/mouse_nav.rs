@@ -199,3 +199,35 @@ fn forward_over_a_slider_changes_no_develop_setting() {
         assert_eq!(develop(&h, second), before_second, "{button:?}: the second photo keeps its settings");
     }
 }
+
+/// Back / Forward pressed while a slider is being dragged do nothing: stepping to another photo mid-drag would
+/// hand the rest of the drag to that photo (review of #3324). Once the drag ends they step again.
+#[test]
+fn the_buttons_wait_for_a_slider_drag_to_end() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    let ids = h.app.session.visible_cloned();
+    let (first, second) = (ids[2], ids[3]);
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [first.0], "active": first.0}}), T);
+    h.request("ui.set", json!({"view": "detail"}), T);
+    h.settle(SETTLE);
+    let at = h.app.widgets.iter().find(|(id, _)| id == "slider:light.exposure").map(|(_, r)| r.center()).expect("the Exposure slider");
+    let button = |button, pos, pressed| egui::Event::PointerButton { pos, button, pressed, modifiers: Default::default() };
+    // the drag: pressed on the slider and moving
+    h.app.synthetic.extend([egui::Event::PointerMoved(at), button(egui::PointerButton::Primary, at, true)]);
+    h.settle(SETTLE);
+    h.app.synthetic.push(egui::Event::PointerMoved(at + egui::vec2(20.0, 0.0)));
+    h.settle(SETTLE);
+    let to = at + egui::vec2(40.0, 0.0);
+    h.app.synthetic.extend([
+        egui::Event::PointerMoved(to),
+        button(egui::PointerButton::Extra2, to, true),
+        button(egui::PointerButton::Extra2, to, false),
+    ]);
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.active(), Some(first), "Forward mid-drag keeps the photo");
+    h.app.synthetic.push(button(egui::PointerButton::Primary, to, false));
+    h.settle(SETTLE);
+    press(&mut h, egui::PointerButton::Extra2);
+    assert_eq!(h.app.session.active(), Some(second), "after the drag Forward steps again");
+}
