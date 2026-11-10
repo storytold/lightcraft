@@ -269,7 +269,7 @@
   "Effect: {name}": "ეფექტი: {name}",
   "Exported to {path}": "ექსპორტირებულია: {path}",
   "Exported {} effect preset{}": "ექსპორტირებულია ეფექტის პრესეტი: {}{:.0}",
-  "Darker by {ev:.1} to fit the mix in range: raise Exposure if needed": "{ev:.1}-ით უფრო ბნელია, რომ მიქსი დიაპაზონში მოთავსდეს: საჭიროების შემთხვევაში გაზარდეთ ექსპოზიცია",
+  "Darker by {ev:.1} EV to fit the mix in range: raise Exposure if needed": "{ev:.1} EV-ით უფრო ბნელია, რომ მიქსი დიაპაზონში მოთავსდეს: საჭიროების შემთხვევაში გაზარდეთ ექსპოზიცია",
   "Imported {e} mask effect{} (Masking ▸ Effect)": "იმპორტირებულია ნიღბის ეფექტი: {e}{:.0} (ნიღბვა → ეფექტი)",
   "Imported {name}": "იმპორტირებულია: {name}",
   "Keywords of {n} selected photos": "მონიშნული ფოტოების ({n}) საკვანძო სიტყვები",

@@ -85,7 +85,7 @@
   "Exported {} point curve preset{}": "Exporterade {} punktkurvförinställning{}",
   "Exported {} preset{}": "Exporterade {} förinställning{}",
   "Exporting {} of {total}": "Exporterar {} av {total}",
-  "Darker by {ev:.1} to fit the mix in range: raise Exposure if needed": "{ev:.1} mörkare så att mixen ryms i intervallet: höj Exponeringen vid behov",
+  "Darker by {ev:.1} EV to fit the mix in range: raise Exposure if needed": "{ev:.1} EV mörkare så att mixen ryms i intervallet: höj Exponeringen vid behov",
   "Filter bar — {active} active filter{}": "Filterfält — {active} aktiva filter{}",
   "Filtered: {label}": "Filtrerat: {label}",
   "Focus {:.0}": "Fokus {:.0}",

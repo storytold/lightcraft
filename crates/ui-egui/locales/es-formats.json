@@ -286,7 +286,7 @@
   "Delete “{name}”?": "¿Eliminar «{name}»?",
   "Updated {name}": "Se actualizó {name}",
   "Exported to {path}": "Exportado a {path}",
-  "Darker by {ev:.1} to fit the mix in range: raise Exposure if needed": "{ev:.1} más oscura para que la mezcla quepa en el rango: sube la Exposición si hace falta",
+  "Darker by {ev:.1} EV to fit the mix in range: raise Exposure if needed": "{ev:.1} EV más oscura para que la mezcla quepa en el rango: sube la Exposición si hace falta",
   "Saved template {name}": "Plantilla {name} guardada",
   "Imported {name}": "Se importó {name}",
   "Skipped {problem}": "Omitido: {problem}",

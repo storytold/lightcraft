@@ -1259,7 +1259,7 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
                     if darker >= 0.05 {
                         app.toast(
                             ui.ctx(),
-                            crate::i18n::tr_format!("Darker by {ev:.1} to fit the mix in range: raise Exposure if needed", ev = darker),
+                            crate::i18n::tr_format!("Darker by {ev:.1} EV to fit the mix in range: raise Exposure if needed", ev = darker),
                         );
                     }
                 }
