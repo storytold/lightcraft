@@ -584,14 +584,8 @@ mod tests {
             model
         }
 
-        let concat_model = model(
-            &[
-                node("Concat", &["data", "data"], "joined", &[("axis", 1)]),
-                node("Add", &["joined", "data"], "a1", &[]),
-            ],
-            4,
-            "a1",
-        );
+        let concat_model =
+            model(&[node("Concat", &["data", "data"], "joined", &[("axis", 1)]), node("Add", &["joined", "data"], "a1", &[])], 4, "a1");
         assert!(matches!(read_bytes(&concat_model), Err(NetError::Unsupported(_))));
 
         let oversized_model = model(&[node("Add", &["data", "data"], "a1", &[])], 4097, "a1");
