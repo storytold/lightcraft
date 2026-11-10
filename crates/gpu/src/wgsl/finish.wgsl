@@ -340,13 +340,13 @@ fn cg_srgb_to_linear(v: f32) -> f32 {
     return select(pow((v + 0.055) / 1.055, 2.4), v / 12.92, v <= 0.04045);
 }
 
-fn crystal_grain(e: vec3<f32>, gx: f32, gy: f32) -> vec3<f32> {
+fn crystal_grain(e: vec3<f32>, gx: f32, gy: f32, scale: f32) -> vec3<f32> {
     let w = pf(F_GRAIN_FOOT);
     let x0 = gx * CRYSTAL_TPL - 0.5 * w;
     let y0 = gy * CRYSTAL_TPL - 0.5 * w;
     let g = (cg_box(pu(F_GRAIN_SAT), CRYSTAL_T0, x0, y0, w) + cg_box(pu(F_GRAIN_SAT + 1u), CRYSTAL_T1, x0, y0, w)) / (w * w);
     let lum = clamp(0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z, 0.0, 1.0);
-    let k = pf(F_GRAIN_K) * g * (1.0 - cg_srgb_to_linear(lum));
+    let k = pf(F_GRAIN_K) * scale * g * (1.0 - cg_srgb_to_linear(lum));
     return e + k * vec3<f32>(cg_lift(e.x), cg_lift(e.y), cg_lift(e.z));
 }
 
@@ -748,13 +748,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             e = refine_saturation(e0, e, rs);
         }
     }
-    if (pu(F_GRAIN) != 0u) {
+    // 1 with the photo's own Amount; with local grain the per-pixel amount (the model is at Amount 100)
+    let grain_scale = select(1.0, clamp(pf(F_GRAIN_BASE) + lt[17], 0.0, 1.0), pu(F_GRAIN_LOCAL) != 0u);
+    if (pu(F_GRAIN) != 0u && grain_scale > 0.0) {
         let px = f32(x) + 0.5;
         let py = f32(y) + 0.5;
         let gx = pf(F_GRAIN_AFF) * px + pf(F_GRAIN_AFF + 2u) * py + pf(F_GRAIN_AFF + 4u);
         let gy = pf(F_GRAIN_AFF + 1u) * px + pf(F_GRAIN_AFF + 3u) * py + pf(F_GRAIN_AFF + 5u);
         if (pu(F_GRAIN_MODEL) == 1u) {
-            e = crystal_grain(e, gx, gy);
+            e = crystal_grain(e, gx, gy, grain_scale);
         } else {
             let sc = pf(F_GRAIN_SC);
             let rough = pf(F_GRAIN_ROUGH);
@@ -765,7 +767,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (hdr) {
                 lum = clamp(lum, 0.0, 1.0);
             }
-            let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
+            let k = pf(F_GRAIN_AMT) * grain_scale * g * (0.35 + 2.6 * lum * (1.0 - lum));
             e = e + k;
         }
     }

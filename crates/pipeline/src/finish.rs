@@ -137,7 +137,13 @@ impl GrainModel {
     /// The grain `s` renders with at `px_per_long` output pixels per long edge (`None`: none);
     /// `draft`: for a drag ([`crate::crystal::CrystalGrain::draft`]).
     pub fn new(s: &DevelopSettings, px_per_long: f64, draft: bool) -> Option<GrainModel> {
-        let g = &s.grain;
+        Self::with_amount(s, s.grain.amount, px_per_long, draft)
+    }
+
+    /// [`Self::new`] with the Amount `amount` (0..100) instead of the photo's: both models are linear
+    /// in it, so one built at 100 serves every per-pixel amount (local grain, [`FinishParams::grain_local`]).
+    pub fn with_amount(s: &DevelopSettings, amount: f64, px_per_long: f64, draft: bool) -> Option<GrainModel> {
+        let g = &lightcraft_develop::Grain { amount, ..s.grain };
         match s.process.process() {
             Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 => (g.amount > 0.0).then(|| {
                 let cell = (0.0006 + (g.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
@@ -192,14 +198,14 @@ fn crystal_row(fp: &FinishParams, y: usize, w: usize) -> Vec<f32> {
 }
 
 /// Number of per-mask terms in [`mask_terms`].
-pub const MASK_TERMS: usize = 21;
+pub const MASK_TERMS: usize = 22;
 
 /// Number of alpha-weighted terms at the start of [`mask_terms`].
-pub const MASK_SUMS: usize = 17;
+pub const MASK_SUMS: usize = 18;
 
 /// A mask's local adjustments as the per-pixel stage uses them (alpha-weighted sums), in order:
 /// exposure, temp, tint, contrast, highlights, shadows, whites, blacks, texture, clarity, dehaze,
-/// saturation, hue, sharpness, noise, moiré, defringe, then the colour overlay: on (0/1), cos and
+/// saturation, hue, sharpness, noise, moiré, defringe, grain, then the colour overlay: on (0/1), cos and
 /// sin of its OkLCh hue, and its strength.
 pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
     let (on, cos, sin, amt) = if j.color_sat > 0.0 {
@@ -226,6 +232,7 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
         (j.noise / 100.0) as f32,
         (j.moire / 100.0) as f32,
         (j.defringe / 100.0) as f32,
+        (j.grain / 100.0) as f32,
         on,
         cos,
         sin,
@@ -278,6 +285,11 @@ pub struct FinishParams {
     pub ev: f32,
     /// Film grain: the model of the photo's process ([`GrainModel`]).
     pub grain: Option<GrainModel>,
+    /// A visible mask carries local grain: `grain` is then built at Amount 100 and each pixel scales it by
+    /// `clamp(grain_base + Σ αᵢ·grainᵢ, 0, 1)`. Otherwise `grain` has the photo's own Amount (scale 1).
+    pub grain_local: bool,
+    /// The global Amount as 0..1 (0 when the Effects eye is off); read only with `grain_local`.
+    pub grain_base: f32,
     /// Output px → normalized oriented coordinates.
     pub out_to_norm: lightcraft_geom::Affine,
     pub ow: f64,
@@ -324,7 +336,16 @@ impl FinishParams {
             && frame.oh.is_finite()
             && frame.ow.max(frame.oh) > 0.0
             && out_to_norm.0.iter().all(|v| v.is_finite());
-        let grain = if effects && finite_frame { GrainModel::new(s, px_per_long, draft) } else { None };
+        // Local grain is not gated by the Effects eye (it belongs to the mask); size, roughness and seed are global.
+        let grain_local = finite_frame && s.masks.iter().any(|m| m.visible && !m.components.is_empty() && m.adjust.grain > 0.0);
+        let grain_base = if effects { (s.grain.amount / 100.0).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let grain = if grain_local {
+            GrainModel::with_amount(s, 100.0, px_per_long, draft)
+        } else if effects && finite_frame {
+            GrainModel::new(s, px_per_long, draft)
+        } else {
+            None
+        };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
         FinishParams {
@@ -361,6 +382,8 @@ impl FinishParams {
             gain,
             ev,
             grain,
+            grain_local,
+            grain_base,
             out_to_norm,
             ow: frame.ow,
             oh: frame.oh,
@@ -500,10 +523,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
-    let FinishParams { light, curves, vig, to_out, out_luma, grain, .. } = fp;
+    let FinishParams { light, curves, vig, to_out, out_luma, grain, grain_local, grain_base, .. } = fp;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
-    let out_to_norm = fp.out_to_norm;
-    let long = fp.ow.max(fp.oh);
     let [vx, vy, vw, vh] = fp.view;
     let (vx_u, vy_u) = (vx.round() as usize, vy.round() as usize);
     // the vignette belongs to the whole output frame, not to the window being drawn
@@ -651,32 +672,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
             }
-            match grain {
-                Some(GrainModel::Value(g)) => {
-                    // V1/V2 (frozen): exactly the arithmetic those processes always had
-                    let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                    let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                    let sc = fp.px_per_long as f32 / g.cell;
-                    let mut v = grain_noise(gx * sc, gy * sc, g.seed);
-                    v = v * (1.0 - g.rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, g.seed ^ 0x55) * g.rough * 0.7;
-                    let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-                    if hdr {
-                        lum = lum.clamp(0.0, 1.0);
-                    }
-                    let k = g.amt * v * (0.35 + 2.6 * lum * (1.0 - lum));
-                    if k.is_finite() {
-                        e = e.map(|v| v + k);
-                    }
-                }
-                Some(GrainModel::Crystal(g)) => match crystal_row.get(x) {
-                    Some(&f) => e = g.apply_field(e, f),
-                    None => {
-                        let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                        e = g.apply(e, (n.x * fp.ow / long) as f32, (n.y * fp.oh / long) as f32);
-                    }
-                },
-                None => {}
-            }
+            // 1 with the photo's own Amount; with local grain the per-pixel amount (the model is at 100)
+            let grain_scale = if *grain_local { (*grain_base + local.values[17]).clamp(0.0, 1.0) } else { 1.0 };
+            e = apply_grain(fp, grain.as_ref(), &crystal_row, (x, y), e, grain_scale, hdr);
             let e = match &p_lut {
                 Some((l, k)) if hdr => {
                     // the LUT sees SDR values; the part above SDR white is carried over
@@ -713,6 +711,47 @@ fn apply_light(
     }
 }
 
+/// Display-encoded `e` of output pixel (`x`, `y`) with grain of strength `scale` (1: the model's own Amount).
+fn apply_grain(
+    fp: &FinishParams,
+    grain: Option<&GrainModel>,
+    crystal_row: &[f32],
+    (x, y): (usize, usize),
+    mut e: [f32; 3],
+    scale: f32,
+    hdr: bool,
+) -> [f32; 3] {
+    let long = fp.ow.max(fp.oh);
+    match grain {
+        Some(_) if scale <= 0.0 => {}
+        Some(GrainModel::Value(g)) => {
+            // V1/V2 (frozen): exactly the arithmetic those processes always had
+            let n = fp.out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
+            let sc = fp.px_per_long as f32 / g.cell;
+            let mut v = grain_noise(gx * sc, gy * sc, g.seed);
+            v = v * (1.0 - g.rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, g.seed ^ 0x55) * g.rough * 0.7;
+            let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+            if hdr {
+                lum = lum.clamp(0.0, 1.0);
+            }
+            let k = g.amt * scale * v * (0.35 + 2.6 * lum * (1.0 - lum));
+            if k.is_finite() {
+                e = e.map(|v| v + k);
+            }
+        }
+        Some(GrainModel::Crystal(g)) => match crystal_row.get(x) {
+            Some(&f) => e = g.apply_field_scaled(e, f, scale),
+            None => {
+                let n = fp.out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                e = g.apply_scaled(e, (n.x * fp.ow / long) as f32, (n.y * fp.oh / long) as f32, scale);
+            }
+        },
+        None => {}
+    }
+    e
+}
+
 struct PixelLocalTerms {
     values: [f32; MASK_SUMS],
     tint: Option<([f32; 3], f32)>,
@@ -737,7 +776,7 @@ fn pixel_local_terms(p: &Prepared, terms: &[[f32; MASK_TERMS]], index: usize) ->
 }
 
 fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 3], local: &PixelLocalTerms) -> ([f32; 3], f32) {
-    let [l_exp, l_temp, l_tint, _, _, _, _, _, _, _, l_dehaze, _, _, _, l_noise, l_moire, l_defringe] = local.values;
+    let [l_exp, l_temp, l_tint, _, _, _, _, _, _, _, l_dehaze, _, _, _, l_noise, l_moire, l_defringe, _] = local.values;
     let mut color = if fp.gain == 1.0 { raw } else { raw.map(|value| value * fp.gain) };
 
     let moire = (l_moire + 0.5 * l_noise.max(0.0)).clamp(-1.0, 1.0);
@@ -794,7 +833,7 @@ fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 
 }
 
 fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
-    let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
+    let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _, _] = local.values;
     let mut delta = 0.0;
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);
     if highlights != 0.0 || shadows != 0.0 {

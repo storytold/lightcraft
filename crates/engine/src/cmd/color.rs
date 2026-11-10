@@ -63,8 +63,16 @@ pub(crate) fn after_mixer_neutral(d: &mut DevelopSettings) {
     d.treatment = Treatment::Color;
     d.grading = Default::default();
     d.vignette.amount = 0.0;
-    d.grain.amount = 0.0;
+    no_grain(d);
     d.curve = Default::default();
+}
+
+/// No grain, global or in a mask: the samplers must not measure noise.
+fn no_grain(d: &mut DevelopSettings) {
+    d.grain.amount = 0.0;
+    for m in &mut d.masks {
+        m.adjust.grain = 0.0;
+    }
 }
 
 /// The targeted adjustment tool: the controls (and their new values) a vertical drag of `delta`
@@ -87,7 +95,7 @@ fn targeted(s: &mut Session, p: &Value) -> Result<Value> {
             // the encoded value the tone curve sees there (curves and grain neutralized)
             let e = probe(s, c, x, y, |d| {
                 d.curve = ToneCurve { refine_saturation: d.curve.refine_saturation, ..Default::default() };
-                d.grain.amount = 0.0;
+                no_grain(d);
             })?;
             let channel = p.get("channel").and_then(Value::as_str).unwrap_or("parametric");
             label = "Tone Curve";
@@ -206,4 +214,19 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(Value::Null)
         }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask};
+
+    #[test]
+    fn the_samplers_see_no_grain_in_masks_either() {
+        let mut d = DevelopSettings::default();
+        d.grain.amount = 40.0;
+        d.masks.push(Mask { adjust: LocalAdjustments { grain: 60.0, exposure: 0.5, ..Default::default() }, ..Default::default() });
+        super::after_mixer_neutral(&mut d);
+        assert_eq!((d.grain.amount, d.masks[0].adjust.grain), (0.0, 0.0));
+        assert_eq!(d.masks[0].adjust.exposure, 0.5, "only the grain");
+    }
 }

@@ -82,7 +82,7 @@ fn range_to_white_stays_open_and_unmapped_local_sliders_are_reported() {
     let x = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
  <crs:MaskGroupBasedCorrections><rdf:Seq>
-  <rdf:li><rdf:Description crs:What="Correction" crs:LocalClarity2012="-0.3" crs:LocalGrain="0.4" crs:LocalCurveRefineSaturation="100">
+  <rdf:li><rdf:Description crs:What="Correction" crs:LocalClarity2012="-0.3" crs:LocalGrain="0.4" crs:LocalBrightness="0.2" crs:LocalCurveRefineSaturation="100">
    <crs:CorrectionMasks><rdf:Seq>
     <rdf:li crs:What="Mask/RangeMask"><crs:CorrectionRangeMask crs:Type="2" crs:LumRange="0.6 0.85 1 1"/></rdf:li>
    </rdf:Seq></crs:CorrectionMasks>
@@ -95,7 +95,15 @@ fn range_to_white_stays_open_and_unmapped_local_sliders_are_reported() {
     let MaskShape::LuminanceRange { hi, hi_feather, .. } = &s.masks[0].components[0].shape else { panic!() };
     assert_eq!((*hi, *hi_feather), (1.0, 0.0), "brighter than scene white is still in the range");
     assert_eq!(s.masks[0].adjust.clarity, -30.0);
-    assert_eq!(unmapped, ["Mask: LocalGrain"], "a refine saturation of 100 is neutral, not reported");
+    assert_eq!(s.masks[0].adjust.grain, 40.0, "LocalGrain is a fraction, x100");
+    assert_eq!(unmapped, ["Mask: LocalBrightness"], "a refine saturation of 100 is neutral, not reported");
+}
+
+#[test]
+fn a_negative_local_grain_reads_as_zero() {
+    let m = local_values(|k| (k == "LocalGrain").then_some(-0.3));
+    assert_eq!(m["grain"], json!(0.0));
+    assert_eq!(local_values(|k| (k == "LocalGrain").then_some(3.0))["grain"], json!(100.0));
 }
 
 #[test]

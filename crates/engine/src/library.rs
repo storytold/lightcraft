@@ -588,7 +588,7 @@ impl Session {
         self.metadata_presets = prefs.metadata_presets;
         self.filter_presets = prefs.filter_presets;
         self.curve_presets = prefs.curve_presets;
-        self.mask_effects = prefs.mask_effects;
+        self.mask_effects = prefs.mask_effects.into_iter().map(crate::cmd::mask_effects::MaskEffect::normalized).collect();
         self.mask_tool_effects = prefs.mask_tool_effects;
         self.label_sets = prefs.label_sets;
         self.lut_profiles = prefs.lut_profiles;

@@ -897,7 +897,11 @@ pub struct LocalAdjustments {
     /// Colour overlay (hue degrees, saturation 0..100); sat 0 = none.
     pub color_hue: f64,
     pub color_sat: f64,
-    /// Local vignette/grain are not in Lightroom; we keep the struct extensible.
+    /// Film grain amount 0..100 inside the mask (added to the global Grain amount). Size, roughness and
+    /// seed stay the global ones. Skipped from JSON at 0, so older settings and render caches are unchanged.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub grain: f64,
+    /// Local vignette is not in Lightroom; we keep the struct extensible.
     pub amount: f64,
 }
 
@@ -923,6 +927,7 @@ impl Default for LocalAdjustments {
             defringe: 0.0,
             color_hue: 0.0,
             color_sat: 0.0,
+            grain: 0.0,
             amount: 100.0,
         }
     }

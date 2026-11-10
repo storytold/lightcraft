@@ -82,6 +82,10 @@ const FIELDS: &[(&str, usize)] = &[
     ("GRAIN_ROUGH", 1),
     ("GRAIN_SEED", 1),
     ("GRAIN_AFF", 6),
+    // local grain (`FinishParams::grain_local`): the model is at Amount 100 and each pixel scales it by
+    // clamp(GRAIN_BASE + the masks' summed grain term, 0, 1)
+    ("GRAIN_LOCAL", 1),
+    ("GRAIN_BASE", 1),
     ("REFINE_SAT", 1),
     ("CALIB", 1),
     ("CALIB_M", 9),
@@ -349,6 +353,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     }
     if let Some(model) = &fp.grain {
         p.b("GRAIN", true);
+        p.b("GRAIN_LOCAL", fp.grain_local);
+        p.f("GRAIN_BASE", fp.grain_base);
         match model {
             GrainModel::Value(g) => {
                 p.u("GRAIN_MODEL", 0);

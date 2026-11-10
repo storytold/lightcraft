@@ -58,6 +58,7 @@ const LOCAL: &[(&str, &str, f64)] = &[
     ("LocalDefringe", "defringe", 100.0),
     ("LocalToningSaturation", "color_sat", 100.0),
     ("LocalToningHue", "color_hue", 1.0),
+    ("LocalGrain", "grain", 100.0),
     // older process versions
     ("LocalExposure", "exposure", 4.0),
     ("LocalContrast", "contrast", 100.0),
@@ -85,7 +86,8 @@ pub(crate) fn local_values(get: impl Fn(&str) -> Option<f64>) -> serde_json::Map
             } else {
                 100.0
             };
-            let v = (v * k).clamp(if *ours == "color_hue" { 0.0 } else { -lim }, lim);
+            // hue and grain have no negative side
+            let v = (v * k).clamp(if matches!(*ours, "color_hue" | "grain") { 0.0 } else { -lim }, lim);
             a.insert((*ours).into(), json!(v));
         }
     }
@@ -99,7 +101,7 @@ fn adjust(c: &XmpValue) -> Value {
     Value::Object(a)
 }
 
-/// The correction's local sliders we have no counterpart for (e.g. `LocalGrain`), when set:
+/// The correction's local sliders we have no counterpart for (e.g. `LocalBrightness`), when set:
 /// reported, never dropped silently.
 fn unmapped_local(c: &XmpValue) -> Vec<String> {
     let XmpValue::Struct(m) = c else { return Vec::new() };

@@ -237,6 +237,18 @@ fn grain_patterns_in_turn_match() {
     }
 }
 
+fn local_grain(s: &mut DevelopSettings) {
+    let radial = MaskShape::Radial { center: Point::new(0.4, 0.6), rx: 0.3, ry: 0.25, angle: 0.0, feather: 50.0, invert: false };
+    let linear = MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.7) };
+    let m =
+        |shape, adjust| Mask { components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }], adjust, ..Default::default() };
+    use lightcraft_develop::LocalAdjustments as L;
+    s.grain.amount = 25.0;
+    s.grain.size = 40.0;
+    s.grain.roughness = 60.0;
+    s.masks = vec![m(radial, L { grain: 70.0, exposure: 0.2, ..Default::default() }), m(linear, L { grain: 40.0, ..Default::default() })];
+}
+
 fn cases() -> Vec<(&'static str, Edit)> {
     vec![
         ("default", |_| {}),
@@ -517,6 +529,16 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 m(radial, L { noise: 80.0, moire: 60.0, defringe: 100.0, ..Default::default() }),
                 m(linear, L { noise: -60.0, moire: -40.0, ..Default::default() }),
             ];
+        }),
+        // local grain: the global grain, a radial mask adding to it and a linear one grain-only (crystals, then V6's value noise)
+        ("masks (local grain)", local_grain),
+        ("masks (local grain, process V6)", |s| {
+            s.process = Process::V6.version();
+            local_grain(s);
+        }),
+        ("masks (local grain, no global grain)", |s| {
+            local_grain(s);
+            s.grain.amount = 0.0;
         }),
         ("masks (auto mask brush)", |s| {
             let st = |pts: &[(f64, f64)], auto_mask, erase| BrushStroke {

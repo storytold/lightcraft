@@ -35,6 +35,7 @@ pub const FIELDS: &[&str] = &[
     "defringe",
     "color_hue",
     "color_sat",
+    "grain",
 ];
 
 /// Brush settings an effect can carry (Lightroom keeps these per brush, not in presets).
@@ -121,7 +122,8 @@ pub fn get(a: &LocalAdjustments, k: &str) -> f64 {
 /// `a` with field `k` set to `v` (unchanged for an unknown name).
 pub fn set(a: &LocalAdjustments, k: &str, v: f64) -> LocalAdjustments {
     let Ok(Value::Object(mut o)) = serde_json::to_value(a) else { return *a };
-    if !o.contains_key(k) || !v.is_finite() {
+    // A neutral `grain` is skipped from the JSON, so a settable key may be absent from it.
+    if !FIELDS.contains(&k) && !o.contains_key(k) || !v.is_finite() {
         return *a;
     }
     o.insert(k.into(), json!(v));
@@ -171,6 +173,19 @@ impl MaskEffect {
     pub fn normalized(mut self) -> Self {
         self.name = self.name.trim().to_string();
         self.group = self.group.trim().to_string();
+        // grain kept in `extra` before it was a slider (a .lrtemplate's `grain`, an XMP's `LocalGrain`: both 0..1)
+        let mut moved = false;
+        for k in ["grain", "LocalGrain"] {
+            if let Some(v) = self.extra.remove(k).and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v > 0.0)
+                && self.adjust.grain == 0.0
+            {
+                self.adjust.grain = v * 100.0;
+                moved = true;
+            }
+        }
+        if moved && !self.fields.is_empty() {
+            self.fields.push("grain".into());
+        }
         let amount = if self.with_amount { self.adjust.amount } else { 100.0 };
         self.adjust = super::masks::clamp_local(LocalAdjustments { amount, ..self.adjust });
         self.fields.retain(|f| FIELDS.contains(&f.as_str()));
@@ -731,6 +746,23 @@ mod tests {
             names,
             vec![("".to_string(), vec!["3 a", "Burn"]), ("Detail".to_string(), vec!["11 a", "12 b"]), ("Retouch".to_string(), vec!["20 r"]),]
         );
+    }
+
+    #[test]
+    fn normalized_moves_grain_kept_aside_by_older_imports_into_the_slider() {
+        for key in ["grain", "LocalGrain"] {
+            let mut extra = Map::new();
+            extra.insert(key.into(), json!(0.25));
+            extra.insert("pointColors".into(), json!([1]));
+            let e = MaskEffect { extra: extra.clone(), ..Default::default() }.normalized();
+            assert_eq!(e.adjust.grain, 25.0, "{key}");
+            assert!(!e.extra.contains_key(key) && e.extra.contains_key("pointColors"), "{key}");
+            // an explicit field list gets it too; a grain already in the slider wins
+            let e = MaskEffect { extra: extra.clone(), fields: vec!["exposure".into()], ..Default::default() }.normalized();
+            assert_eq!((e.fields.as_slice(), e.adjust.grain), (["exposure".to_string(), "grain".into()].as_slice(), 25.0));
+            let own = MaskEffect { adjust: LocalAdjustments { grain: 10.0, ..Default::default() }, extra, ..Default::default() }.normalized();
+            assert_eq!(own.adjust.grain, 10.0);
+        }
     }
 
     #[test]

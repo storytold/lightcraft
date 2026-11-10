@@ -46,6 +46,11 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### Grain inside a mask
+- Each mask has a Grain slider (0 to 100) that adds film grain where the mask is, fading with its edges and Amount, on
+  top of the Effects panel's Grain. Size and Roughness stay the Effects panel's, as in Lightroom Classic. Effect presets
+  carry it, and Lightroom's `LocalGrain` is imported. Photos without local grain render as before.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

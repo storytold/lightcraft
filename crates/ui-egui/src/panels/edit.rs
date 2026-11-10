@@ -286,8 +286,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             control(app, ui, d, c, enabled);
         }
         sub_title(ui, crate::i18n::tr("Grain"));
+        // Size and Roughness also shape the grain a mask adds
+        let grainy = d.grain.amount != 0.0 || d.masks.iter().any(|m| m.visible && !m.components.is_empty() && m.adjust.grain > 0.0);
         for c in ["grain.amount", "grain.size", "grain.roughness"] {
-            control(app, ui, d, c, c == "grain.amount" || d.grain.amount != 0.0);
+            control(app, ui, d, c, c == "grain.amount" || grainy);
         }
         ui.add_space(8.0);
     });

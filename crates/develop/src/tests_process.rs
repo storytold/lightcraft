@@ -161,3 +161,20 @@ fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
 
 /// A process other than the latest: a newer LightCraft's number (no older one than V1 exists).
 const LATEST_PLUS_ONE: u32 = ProcessVersion::LATEST.0 + 1;
+
+#[test]
+fn local_grain_is_skipped_at_zero_and_old_masks_keep_their_json() {
+    // masks saved before local grain load with none, and save again without the key: files and the
+    // preview-cache key (`hash64`) of an existing photo with masks are unchanged
+    let v = legacy();
+    let s = DevelopSettings::from_json(&v).unwrap();
+    assert_eq!(s.masks[0].adjust.grain, 0.0);
+    assert_eq!(s.to_json()["masks"][0]["adjust"], v["masks"][0]["adjust"]);
+    assert!(s.to_json()["masks"][0]["adjust"].get("grain").is_none());
+    let mut with = s.clone();
+    with.masks[0].adjust.grain = 30.0;
+    assert_ne!(with.hash64(), s.hash64());
+    let back = DevelopSettings::from_json(&with.to_json()).unwrap();
+    assert_eq!(back.masks[0].adjust.grain, 30.0);
+    assert_eq!(back.to_json()["masks"][0]["adjust"]["grain"], 30.0);
+}

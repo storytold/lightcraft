@@ -648,7 +648,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Mask Adjustments",
             [],
             None,
-            "{id?, values: {exposure, contrast, highlights, shadows, whites, blacks, temp, tint, texture, clarity, dehaze, hue, saturation, sharpness, noise, moire, defringe, color_hue, color_sat, amount}}",
+            "{id?, values: {exposure, contrast, highlights, shadows, whites, blacks, temp, tint, texture, clarity, dehaze, hue, saturation, sharpness, noise, moire, defringe, color_hue, color_sat, grain, amount}}",
             has_active,
             |s, p| {
                 let vals = p.get("values").cloned().ok_or_else(|| bad("mask.adjust", "missing values"))?;
@@ -1149,6 +1149,7 @@ pub(crate) fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
     }
     c(&mut a.color_hue, 0.0, 360.0);
     c(&mut a.color_sat, 0.0, 100.0);
+    c(&mut a.grain, 0.0, 100.0);
     c(&mut a.amount, 0.0, 200.0);
     a
 }

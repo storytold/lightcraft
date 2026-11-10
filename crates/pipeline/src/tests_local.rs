@@ -107,3 +107,65 @@ fn local_defringe_desaturates_purple_edges_only() {
     let flat = |img: &Rgba8| sat(at(img, 70));
     assert!((flat(&on) - flat(&plain)).abs() <= 2.0, "flat purple kept: {} vs {}", flat(&on), flat(&plain));
 }
+
+/// Largest per-channel difference between two renders over columns `x0..x1`.
+fn max_diff(a: &Rgba8, b: &Rgba8, x0: usize, x1: usize) -> u8 {
+    (0..H)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .flat_map(|(x, y)| (0..3).map(move |c| a.data[y * W + x][c].abs_diff(b.data[y * W + x][c])))
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn local_grain_adds_grain_only_inside_the_mask() {
+    use lightcraft_develop::Process;
+    let src = Rgb32f::from_fn(W, H, |_, _| [0.18; 3]);
+    // the crystal grain (the default process) and the frozen value-noise grain
+    for process in [Process::V7, Process::V6] {
+        let mut s = left_mask(LocalAdjustments { grain: 100.0, ..Default::default() });
+        s.process = process.version();
+        let img = shot(&src, &s);
+        let (inside, outside) = (spread(&img, 10, 90, luma), spread(&img, 150, 230, luma));
+        assert!(inside > 1.0, "{process:?}: grain inside the mask: {inside}");
+        let plain = spread(&shot(&src, &DevelopSettings::default()), 150, 230, luma);
+        assert_eq!(outside, plain, "{process:?}: outside the mask nothing changes");
+        assert!(inside > 3.0 * plain.max(0.1), "{process:?}: {inside} vs {plain}");
+        // half the amount, half the strength (both models are linear in it)
+        let mut half = left_mask(LocalAdjustments { grain: 50.0, ..Default::default() });
+        half.process = process.version();
+        let ratio = spread(&shot(&src, &half), 10, 90, luma) / inside;
+        assert!((ratio - 0.5).abs() < 0.08, "{process:?}: grain 50 vs 100: {ratio}");
+    }
+}
+
+#[test]
+fn local_grain_zero_renders_as_before_and_adds_to_the_global_grain() {
+    let src = Rgb32f::from_fn(W, H, |x, y| [0.18 * (1.0 + 0.1 * noise(x, y, 3)); 3]);
+    let flat_src = Rgb32f::from_fn(W, H, |_, _| [0.18; 3]);
+    for on in [false, true] {
+        let global = |mut s: DevelopSettings| {
+            s.grain.amount = if on { 40.0 } else { 0.0 };
+            s
+        };
+        // a mask without grain leaves the global grain (on or off) byte-identical
+        let plain = shot(&src, &global(DevelopSettings::default()));
+        let masked = shot(&src, &global(left_mask(LocalAdjustments::default())));
+        assert_eq!(plain.data, masked.data, "global grain {on}");
+    }
+    // with local grain: the global grain is unchanged outside the mask, stronger inside
+    let mut flat = DevelopSettings::default();
+    flat.grain.amount = 40.0;
+    let mut s = left_mask(LocalAdjustments { grain: 60.0, ..Default::default() });
+    s.grain.amount = 40.0;
+    let (plain, local) = (shot(&src, &flat), shot(&src, &s));
+    let (flat_plain, flat_local) = (shot(&flat_src, &flat), shot(&flat_src, &s));
+    assert!(max_diff(&plain, &local, 150, 230) <= 1, "outside the mask the global grain stays");
+    let (inside_plain, inside_local) = (spread(&flat_plain, 10, 90, luma), spread(&flat_local, 10, 90, luma));
+    assert!(inside_local > 1.8 * inside_plain, "inside the mask the grain adds up: {inside_local} vs {inside_plain}");
+    // the Effects eye does not switch a mask's own grain off
+    let mut eye = left_mask(LocalAdjustments { grain: 100.0, ..Default::default() });
+    eye.disabled_sections.push("effects".into());
+    let flat = Rgb32f::from_fn(W, H, |_, _| [0.18; 3]);
+    assert!(spread(&shot(&flat, &eye), 10, 90, luma) > 1.0);
+}

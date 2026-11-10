@@ -305,7 +305,7 @@ fn mask_effects_import_apply_save_export_and_persist() {
         let r = s.execute("preset.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
         assert_eq!(r["imported"].as_array().unwrap().len(), 1, "the develop template stays a develop preset");
         assert_eq!(r["effects"][0]["name"], "Brighten");
-        assert_eq!(r["effects"][0]["unmapped"], json!(["Grain"]));
+        assert_eq!(r["effects"][0]["unmapped"], json!([]), "grain is a local slider now");
         assert_eq!(s.mask_effects.len(), 1);
         // apply to a mask: every slider set, Amount kept
         s.execute("mask.add", &json!({"kind": "radial"})).unwrap();

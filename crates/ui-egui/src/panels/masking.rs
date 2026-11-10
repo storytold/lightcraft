@@ -35,6 +35,8 @@ pub const LOCAL: &[ControlSpec] = &[
     spec("noise", "Noise", -100.0, 100.0, 1.0, 0, Track::Centered),
     spec("moire", "Moiré", -100.0, 100.0, 1.0, 0, Track::Centered),
     spec("defringe", "Defringe", -100.0, 100.0, 1.0, 0, Track::Centered),
+    // only adds grain: 0..100 (Size and Roughness stay the Effects panel's)
+    spec("grain", "Grain", 0.0, 100.0, 1.0, 0, Track::Plain),
 ];
 
 pub fn local_get(a: &LocalAdjustments, key: &str) -> f64 {

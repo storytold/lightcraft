@@ -46,7 +46,6 @@ fn setting_label(key: &str) -> String {
     let k = key.trim_start_matches("Local");
     let lower = k.to_ascii_lowercase();
     match lower.as_str() {
-        "grain" => "Grain".into(),
         "toningluminance" => "Color luminance".into(),
         "pointcolors" => "Point Color".into(),
         "refinesaturation" => "Refine Saturation".into(),
@@ -95,8 +94,7 @@ fn delocalize(t: &str) -> &str {
 }
 
 /// A Lightroom local adjustment preset → an effect named after its title (else `stem`), and the
-/// settings we have no equivalent for (e.g. `Grain`, `Point Color`), which the effect keeps in
-/// `extra`.
+/// settings we have no equivalent for (e.g. `Point Color`), which the effect keeps in `extra`.
 pub fn parse_lr_local_template(text: &str, stem: &str) -> std::result::Result<(MaskEffect, Vec<String>), String> {
     let root = parse_lua(text.trim_start_matches('\u{feff}'))?;
     if root.get("type").and_then(Lua::str) != Some(LR_LOCAL_TYPE) {
@@ -546,8 +544,9 @@ mod tests {
         assert!((e.adjust.texture + 30.0).abs() < 1e-9);
         assert!((e.adjust.noise - 10.0).abs() < 1e-9);
         assert!((e.adjust.amount - 100.0).abs() < 1e-9);
-        assert_eq!(unmapped, vec!["Color luminance".to_string(), "Grain".into(), "Point Color".into()]);
-        assert_eq!(e.extra.get("grain"), Some(&json!(0.25)), "kept for export");
+        assert_eq!(unmapped, vec!["Color luminance".to_string(), "Point Color".into()]);
+        assert_eq!(e.adjust.grain, 25.0, "grain is a local slider now");
+        assert!(!e.extra.contains_key("grain"));
         assert_eq!(e.extra["pointColors"][0]["HueRange"]["UpperFull"], json!(0.6));
         assert!(!e.extra.contains_key("refineSaturation"), "zero settings aren't kept");
     }
@@ -603,7 +602,8 @@ mod tests {
         let (e, unmapped) = parse_local_xmp(ACR, "file").unwrap();
         assert_eq!((e.name.as_str(), e.group.as_str()), ("Lift Shadows", "Faces"));
         assert_eq!((e.adjust.exposure, e.adjust.shadows), (1.0, 40.0));
-        assert_eq!(unmapped, vec!["Grain".to_string()]);
+        assert_eq!(e.adjust.grain, 20.0, "LocalGrain is a fraction, x100");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
         // a develop preset is not one
         let develop = ACR
             .replace(

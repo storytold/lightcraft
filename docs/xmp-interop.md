@@ -236,8 +236,9 @@ mask: `CorrectionName` → name, `CorrectionAmount` → Amount, inactive correct
 |---|---|---|
 | `LocalExposure2012` | `adjust.exposure` | stored as a fraction, ×4 EV |
 | `LocalContrast2012`, `LocalHighlights2012`, `LocalShadows2012`, `LocalWhites2012`, `LocalBlacks2012`, `LocalClarity2012`, `LocalTexture`, `LocalDehaze`, `LocalTemperature`, `LocalTint`, `LocalSaturation`, `LocalHue`, `LocalSharpness`, `LocalLuminanceNoise`, `LocalMoire`, `LocalDefringe`, `LocalToningSaturation` | the matching `adjust.*` | stored −1..1, ×100 |
+| `LocalGrain` | `adjust.grain` | stored 0..1, ×100 (a negative value is read as 0) |
 | `LocalToningHue` | `adjust.color_hue` | degrees |
-| other `Local*` sliders (`LocalGrain`…) | — | no counterpart in our masks: reported as `Mask: LocalGrain` when set (`LocalCurveRefineSaturation` 100 is neutral) |
+| other `Local*` sliders (`LocalBrightness`…) | — | no counterpart in our masks: reported as `Mask: LocalBrightness` when set (`LocalCurveRefineSaturation` 100 is neutral) |
 | `Mask/Gradient` (`FullX/Y`, `ZeroX/Y`) | linear gradient | full effect at the Full point |
 | `Mask/CircularGradient` (`Top/Left/Bottom/Right`, `Angle`, `Feather`, `Flipped`) | radial gradient | box fractions → long-edge radii (presets assume 3:2; sidecars use the photo's shape). `Flipped="true"` means effect inside: in `MaskGroupBasedCorrections` with `Version` 2 (what Lightroom writes for an ordinary radial) and in the legacy `CircularGradientBasedCorrections` Radial Filter, whose default (no `Flipped`) is outside. A `MaskGroupBasedCorrections` radial without `Version` is inside whatever `Flipped` says, and its `Feather` is halved (Lightroom rescales it that way when it upgrades one). Inverting is `MaskInverted` |
 | `Mask/Paint` (`Dabs` "d x y", `Radius`, `Flow`, `CenterWeight`, `MaskValue`) | brush | one brush component per correction; `MaskValue` ≤ 0 erases |

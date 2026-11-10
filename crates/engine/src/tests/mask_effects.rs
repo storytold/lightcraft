@@ -117,6 +117,35 @@ fn saving_some_sliders_and_amount() {
 }
 
 #[test]
+fn local_grain_is_clamped_and_carried_by_effects() {
+    let mut s = Session::with_demo();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    let mid = s.active_mask.unwrap();
+    s.execute("mask.adjust", &json!({"values": {"grain": 250}})).unwrap();
+    assert_eq!(mask_adjust(&s, mid).grain, 100.0);
+    s.execute("mask.adjust", &json!({"values": {"grain": -5}})).unwrap();
+    assert_eq!(mask_adjust(&s, mid).grain, 0.0);
+    s.execute("mask.adjust", &json!({"values": {"grain": 40, "exposure": 0.5}})).unwrap();
+    // saved as "changed", the effect lists Grain; a full preset applies it too
+    s.execute("mask.saveEffect", &json!({"name": "Grainy", "fields": "changed"})).unwrap();
+    assert_eq!(s.mask_effects[0].fields, ["exposure", "grain"]);
+    s.execute("mask.saveEffect", &json!({"name": "Only grain", "fields": ["grain"]})).unwrap();
+    // a fresh mask has no `grain` in its JSON: the effect still sets it, and a partial one touches nothing else
+    s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
+    let fresh = s.active_mask.unwrap();
+    assert_eq!(mask_adjust(&s, fresh).grain, 0.0);
+    s.execute("mask.applyEffect", &json!({"name": "Only grain", "remember": false})).unwrap();
+    let a = mask_adjust(&s, fresh);
+    assert_eq!((a.grain, a.exposure), (40.0, 0.0));
+    s.execute("mask.adjust", &json!({"values": {"grain": 0}})).unwrap();
+    s.execute("mask.applyEffect", &json!({"name": "Grainy", "remember": false})).unwrap();
+    let a = mask_adjust(&s, fresh);
+    assert_eq!((a.grain, a.exposure), (40.0, 0.5));
+    // and an effect whose only change is the grain is not empty
+    assert!(!s.mask_effects[1].is_empty());
+}
+
+#[test]
 fn applying_to_several_masks_and_photos_is_one_undo_step() {
     let mut s = Session::with_demo();
     with_effect(&mut s, "Bright", json!({"exposure": 1}));
@@ -219,12 +248,12 @@ fn lightroom_folder_import_groups_by_dividers_and_round_trips() {
             "the old divider effect is gone; folders and dividers give groups"
         );
         let sky = &r["effects"].as_array().unwrap().iter().find(|e| e["name"] == "12 Sky | Cloud").unwrap()["unmapped"];
-        assert_eq!(sky, &json!(["Grain"]));
+        assert_eq!(sky, &json!([]), "grain is a local slider now");
         // the effects' own import: a dry run changes nothing
         let r = s.execute("mask.importEffects", &json!({"path": src.to_string_lossy(), "dryRun": true, "group": "X"})).unwrap();
         assert_eq!(r["imported"].as_array().unwrap().len(), 4);
         assert!(s.mask_effects.iter().all(|e| e.group != "X"));
-        // export one group, everything; re-import keeps groups, stars and the kept grain
+        // export one group, everything; re-import keeps groups, stars and the grain
         s.execute("mask.favoriteEffect", &json!({"name": "21 Skin"})).unwrap();
         let out = lib.join("backup.lceffect");
         let r = s.execute("mask.exportEffects", &json!({"path": out.to_string_lossy(), "group": "retouching"})).unwrap();
@@ -237,7 +266,7 @@ fn lightroom_folder_import_groups_by_dividers_and_round_trips() {
         let r = s.execute("preset.import", &json!({"paths": [out.to_string_lossy()]})).unwrap();
         assert_eq!(r["effects"].as_array().unwrap().len(), 4);
         assert_eq!(s.mask_effects, before, "round trip");
-        assert_eq!(s.mask_effects[1].extra.get("grain"), Some(&json!(0.06)));
+        assert!((s.mask_effects[1].adjust.grain - 6.0).abs() < 1e-9, "the grain survives the export");
         s.close_library().unwrap();
     }
     let mut s = Session::new().with_fs();
