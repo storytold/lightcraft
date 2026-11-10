@@ -26,7 +26,8 @@ lightcraft-sysmem = { path = "crates/sysmem" }
 lightcraft-wincolor = { path = "crates/wincolor" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
-lightcraft-tiff = { path = "crates/tiff" }
+# TIFF/IFD: the shared reader and writer (moved from crates/tiff; craft-libs#783).
+craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "6595c432463d456cf91361d1cab1a4416661a006" }
 lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
 lightcraft-meta = { path = "crates/meta" }

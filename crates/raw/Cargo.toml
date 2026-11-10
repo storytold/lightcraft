@@ -9,7 +9,7 @@ description = "LightCraft RAW decoding, demosaicing and DNG colour model (L1)"
 workspace = true
 
 [dependencies]
-lightcraft-tiff = { workspace = true }
+craft-tiff = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-raster = { workspace = true }
 lightcraft-color = { workspace = true }
