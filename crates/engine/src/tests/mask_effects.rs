@@ -145,6 +145,50 @@ fn local_grain_is_clamped_and_carried_by_effects() {
     assert!(!s.mask_effects[1].is_empty());
 }
 
+fn mask_sections(s: &Session, id: u32) -> Vec<String> {
+    s.develop_of(s.active().unwrap()).unwrap().masks.iter().find(|m| m.id == id).unwrap().disabled_sections.clone()
+}
+
+#[test]
+fn mask_section_eyes_toggle_with_undo_and_travel_with_the_mask() {
+    let mut s = Session::with_demo();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    let mid = s.active_mask.unwrap();
+    s.execute("mask.adjust", &json!({"values": {"exposure": 1.0}})).unwrap();
+    assert!(mask_sections(&s, mid).is_empty());
+    // off (defaults to the active mask), on again, toggle; the values are never touched
+    s.execute("mask.sectionEnabled", &json!({"section": "tone", "enabled": false})).unwrap();
+    assert_eq!(mask_sections(&s, mid), ["tone"]);
+    assert_eq!(mask_adjust(&s, mid).exposure, 1.0);
+    s.execute("mask.sectionEnabled", &json!({"id": mid, "section": "tone", "enabled": false})).unwrap();
+    assert_eq!(mask_sections(&s, mid), ["tone"], "off twice stays one entry");
+    s.execute("mask.sectionEnabled", &json!({"section": "tone", "enabled": true})).unwrap();
+    assert!(mask_sections(&s, mid).is_empty());
+    s.execute("mask.sectionEnabled", &json!({"section": "pointColor"})).unwrap();
+    assert_eq!(mask_sections(&s, mid), ["pointColor"], "no `enabled` toggles");
+    // one undo step each
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(mask_sections(&s, mid).is_empty());
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(mask_sections(&s, mid), ["pointColor"]);
+    // unknown section / mask: an error listing the valid names, nothing changed
+    let e = s.execute("mask.sectionEnabled", &json!({"section": "bogus", "enabled": false})).unwrap_err().to_string();
+    assert!(e.contains("tone") && e.contains("pointColor") && e.contains("detail"), "{e}");
+    assert!(s.execute("mask.sectionEnabled", &json!({"enabled": false})).is_err());
+    assert!(s.execute("mask.sectionEnabled", &json!({"id": 999, "section": "tone"})).is_err());
+    assert_eq!(mask_sections(&s, mid), ["pointColor"]);
+    // a synced mask keeps its disabled sections
+    s.execute("mask.sectionEnabled", &json!({"section": "effects", "enabled": false})).unwrap();
+    let active = s.active().unwrap().0;
+    let other_id = s.catalog.photos().map(|p| p.id.0).find(|id| *id != active).unwrap();
+    let ids = [active, other_id];
+    s.execute("library.select", &json!({"ids": ids, "active": active})).unwrap();
+    s.execute("develop.sync", &json!({"groups": ["masks"]})).unwrap();
+    let other = s.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
+    let synced = other.masks.iter().find(|m| m.disabled_sections == ["pointColor", "effects"]);
+    assert!(synced.is_some_and(|m| m.adjust.exposure == 1.0), "{:?}", other.masks);
+}
+
 #[test]
 fn applying_to_several_masks_and_photos_is_one_undo_step() {
     let mut s = Session::with_demo();

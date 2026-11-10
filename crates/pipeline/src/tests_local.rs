@@ -169,3 +169,17 @@ fn local_grain_zero_renders_as_before_and_adds_to_the_global_grain() {
     let flat = Rgb32f::from_fn(W, H, |_, _| [0.18; 3]);
     assert!(spread(&shot(&flat, &eye), 10, 90, luma) > 1.0);
 }
+
+#[test]
+fn a_mask_section_with_its_eye_off_renders_neutral_and_comes_back() {
+    let src = Rgb32f::from_fn(W, H, |_, _| [0.18; 3]);
+    let plain = shot(&src, &DevelopSettings::default());
+    let mut s = left_mask(LocalAdjustments { exposure: 1.0, ..Default::default() });
+    let lit = shot(&src, &s);
+    assert!(luma(lit.data[60 * W + 20]) > luma(plain.data[60 * W + 20]) + 10.0, "exposure +1 brightens the masked half");
+    s.masks[0].set_section_enabled("tone", false);
+    let off = shot(&src, &s);
+    assert_eq!(off.data, plain.data, "tone off = exposure 0");
+    s.masks[0].set_section_enabled("tone", true);
+    assert_eq!(shot(&src, &s).data, lit.data, "eye back on restores it");
+}

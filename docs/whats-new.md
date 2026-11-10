@@ -51,6 +51,10 @@
   top of the Effects panel's Grain. Size and Roughness stay the Effects panel's, as in Lightroom Classic. Effect presets
   carry it, and Lightroom's `LocalGrain` is imported. Photos without local grain render as before.
 
+### Mask section eyes (control protocol)
+- `mask.sectionEnabled` switches off a mask's Tone, Color, Effects or Detail adjustments without resetting them, and
+  back on. There is no on-screen eye yet.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

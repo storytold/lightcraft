@@ -1115,6 +1115,57 @@ pub struct Mask {
     /// edit converts an old one (`lightcraft_pipeline::mask_space::attach`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub on_photo: bool,
+    /// Sections of this mask whose eye is off (Lightroom Classic's per-section eye): their adjustments are kept
+    /// but render as neutral, see [`Mask::effective`]. Names in [`Mask::SECTIONS`]. `pointColor` is
+    /// accepted and stored already; its handling in [`Mask::effective`] lands with the per-mask point colour.
+    /// Skipped from JSON when empty, so older settings and render caches are unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_sections: Vec<String>,
+}
+
+impl Mask {
+    /// The section names a mask's eyes can switch off.
+    pub const SECTIONS: [&'static str; 5] = ["tone", "color", "pointColor", "effects", "detail"];
+
+    /// True when the section's eye is on (every section is, by default).
+    pub fn section_enabled(&self, section: &str) -> bool {
+        !self.disabled_sections.iter().any(|s| s == section)
+    }
+
+    /// Switches a section's eye; the adjustments in it are kept either way.
+    pub fn set_section_enabled(&mut self, section: &str, on: bool) {
+        self.disabled_sections.retain(|s| s != section);
+        if !on {
+            self.disabled_sections.push(section.to_string());
+        }
+    }
+
+    /// This mask as rendered: the fields of every section whose eye is off are neutral (the stored values stay).
+    /// Sections of the sliders in [`LocalAdjustments`]: tone = exposure, contrast, highlights, shadows, whites,
+    /// blacks; color = temp, tint, hue, saturation, color_hue, color_sat; effects = texture, clarity, dehaze,
+    /// grain; detail = sharpness, noise, moire, defringe. `amount` (the mask's strength) belongs to no section.
+    pub fn effective(&self) -> std::borrow::Cow<'_, Mask> {
+        if self.disabled_sections.is_empty() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut m = self.clone();
+        let d = LocalAdjustments::default();
+        let a = &mut m.adjust;
+        if !self.section_enabled("tone") {
+            (a.exposure, a.contrast, a.highlights, a.shadows, a.whites, a.blacks) =
+                (d.exposure, d.contrast, d.highlights, d.shadows, d.whites, d.blacks);
+        }
+        if !self.section_enabled("color") {
+            (a.temp, a.tint, a.hue, a.saturation, a.color_hue, a.color_sat) = (d.temp, d.tint, d.hue, d.saturation, d.color_hue, d.color_sat);
+        }
+        if !self.section_enabled("effects") {
+            (a.texture, a.clarity, a.dehaze, a.grain) = (d.texture, d.clarity, d.dehaze, d.grain);
+        }
+        if !self.section_enabled("detail") {
+            (a.sharpness, a.noise, a.moire, a.defringe) = (d.sharpness, d.noise, d.moire, d.defringe);
+        }
+        std::borrow::Cow::Owned(m)
+    }
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -1136,6 +1187,7 @@ impl Default for Mask {
             adjust: LocalAdjustments::default(),
             refine: 0.0,
             on_photo: true,
+            disabled_sections: Vec::new(),
         }
     }
 }

@@ -644,6 +644,27 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "mask.sectionEnabled",
+            "Show/Hide Mask Section",
+            [],
+            None,
+            "{id?, section: tone|color|pointColor|effects|detail, enabled?: bool (default: toggle)} — the section's eye: off, its adjustments in this mask are kept but not applied",
+            has_active,
+            |s, p| {
+                let section = str_param(p, "section").ok_or_else(|| bad("mask.sectionEnabled", "missing section"))?.to_string();
+                if !Mask::SECTIONS.contains(&section.as_str()) {
+                    return Err(bad("mask.sectionEnabled", format!("unknown section {section:?} (valid: {})", Mask::SECTIONS.join(", "))));
+                }
+                let mid = mask_id(p, s.active_mask, "mask.sectionEnabled")?;
+                masks_edit(s, "mask.sectionEnabled", "Toggle Mask Section", |masks, _| {
+                    let i = find(masks, mid, "mask.sectionEnabled")?;
+                    let on = bool_or(p, "enabled", !masks[i].section_enabled(&section));
+                    masks[i].set_section_enabled(&section, on);
+                    Ok(())
+                })
+            }
+        ),
+        cmd!(
             "mask.adjust",
             "Set Mask Adjustments",
             [],
