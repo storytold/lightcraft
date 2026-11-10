@@ -2,7 +2,7 @@
 //! (box structure from ISO/IEC 14496-12, item model from ISO/IEC 23008-12).
 //!
 //! HEIC is what iPhones and Macs write. Its pixels need an HEVC decoder (the optional
-//! `lightcraft-heif` crate), its metadata does not, so this reader is in every build: a HEIC
+//! `craft-heif` crate), its metadata does not, so this reader is in every build: a HEIC
 //! imports with its capture time, camera and lens whether or not the build can show the picture.
 //!
 //! The `meta` box holds an item information box (`iinf`, one `infe` per item) naming each item's
@@ -390,14 +390,14 @@ mod tests {
         assert!(embedded(&lying).exif.is_none());
     }
 
-    /// The real container writer of `lightcraft-heif`, so the reader is proved against the layout
+    /// The real container writer of `craft-heif`, so the reader is proved against the layout
     /// a HEIF encoder produces and not only against this module's own test builder.
     #[test]
     fn a_synthetic_heif_file_carries_its_exif() {
         let tiff = iphone_exif("2026:10:18 13:00:00", "-05:00");
-        let mut spec = lightcraft_heif::testdata::Spec::new(64, 64, &|x, _| [x as u16 * 4, 0, 0]);
+        let mut spec = craft_heif::testdata::Spec::new(64, 64, &|x, _| [x as u16 * 4, 0, 0]);
         spec.exif = Some(tiff.clone());
-        let file = lightcraft_heif::testdata::build(&spec);
+        let file = craft_heif::testdata::build(&spec);
         assert!(is_heif(&file));
         assert_eq!(embedded(&file).exif.as_deref(), Some(tiff.as_slice()));
         assert_eq!(crate::extract(&file).capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-18T13:00:00-05:00"));

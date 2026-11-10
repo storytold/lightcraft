@@ -44,7 +44,8 @@ lightcraft-engine = { path = "crates/engine" }
 lightcraft-ui-egui = { path = "crates/ui-egui" }
 lightcraft-mcp = { path = "crates/mcp" }
 lightcraft-fetch = { path = "crates/fetch" }
-lightcraft-heif = { path = "crates/heif" }
+# HEIC/HEIF: the shared decoder (moved from crates/heif; craft-libs#784).
+craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "7e66c62b7a87db26993795a9da7ab35d098805b2" }
 lightcraft-segment = { path = "crates/segment" }
 lightcraft-geocode = { path = "crates/geocode" }
 lightcraft-slideshow = { path = "crates/slideshow" }
