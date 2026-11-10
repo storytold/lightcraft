@@ -327,5 +327,12 @@
   "Creates {} stacks from {} of {scope}": "Luo {} pinoa {} kuvasta: {scope}",
   "{n} photos in view · {slides} slides · {time}": "Kuvia näkymässä: {n} · dioja: {slides} · {time}",
   "{n} selected photos · {pages} pages": "Valittuja kuvia: {n} · sivuja: {pages}",
-  "{title}: {line}": "{title}: {line}"
+  "{title}: {line}": "{title}: {line}",
+  "Adjustments: {n}": "Säätöjä: {n}",
+  "LightCraft can correct distortion and vignetting for many lenses using the open lens database (lensfun, about {size} MB).": "LightCraft voi korjata monien objektiivien vääristymän ja vinjetoinnin avoimen objektiivitietokannan (lensfun, noin {size} Mt) avulla.",
+  "No lens profile found for {}.": "Objektiiviprofiilia ei löytynyt kohteelle {}.",
+  "Profile: {} (lens database)": "Profiili: {} (objektiivitietokanta)",
+  "The drive with this library's previews is almost full: {free} free of {total}. The preview cache takes {cache} and grows as the library does. To keep it smaller, set a size limit in Settings → Performance.": "Asema, jolla tämän kirjaston esikatselut ovat, on lähes täynnä: vapaana {free} / {total}. Esikatselun välimuisti vie {cache} ja kasvaa kirjaston mukana. Pienempänä pitääksesi aseta kokoraja kohdassa Asetukset → Suorituskyky.",
+  "The lens database is not installed (about {size} MB).": "Objektiivitietokantaa ei ole asennettu (noin {size} Mt).",
+  "{n} photos got their lens profile": "{n} kuvaa sai objektiiviprofiilinsa"
 }
