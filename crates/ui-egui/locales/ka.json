@@ -772,7 +772,7 @@
   "File name": "ფაილის სახელი",
   "File types:": "ფაილის ტიპები:",
   "File › Export… · File › Print…": "ფაილი › ექსპორტირება… · ფაილი › ბეჭდვა…",
-  "File › Export…": "ფაილი › ექსპორტი…",
+  "File › Export…": "ფაილი › ექსპორტირება…",
   "File → Import Lightroom Catalog… opens `.lrcat` directly, with originals referenced in place.": "ფაილი → Lightroom-ის კატალოგის იმპორტი… პირდაპირ ხსნის `.lrcat`-ს, ორიგინალებზე მათ ადგილას მიმართვით.",
   "File ▸ Import Keywords… and Export Keywords… read and write keyword list files as Lightroom Classic does (a keyword": "ფაილი → საკვანძო სიტყვების იმპორტი… და საკვანძო სიტყვების ექსპორტი… კითხულობს და წერს საკვანძო სიტყვების სიის ფაილებს, როგორც Lightroom Classic (თითო საკვანძო სიტყვა",
   "File ▸ New Library… asks for a name, then where to put it, and opens the new library (issue #902).": "ფაილი → ახალი ბიბლიოთეკა… ითხოვს სახელს, შემდეგ მდებარეობას და ხსნის ახალ ბიბლიოთეკას (ხარვეზი #902).",
