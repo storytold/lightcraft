@@ -173,45 +173,20 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
     let photos = ops.len();
     s.commit(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
     s.skip_auto_write = true;
-    // what they chose moves with them, so someone given the old name later starts afresh. What the new name held counts
-    // only when someone bears that name (a merge): then their picture is kept and the faces set aside for both add up;
-    // otherwise it is left over from an earlier rename and is replaced (or dropped when there is nothing to carry)
-    let before = vec![choices(s, &to_key), choices(s, &from_key)];
-    let mut changed = false;
+    // what they chose moves with them (see `carry_person_choices`); the undo step moves it back from where it is then,
+    // so a choice made under the new name in between goes back with them
     if from_key != to_key {
-        let set_aside = s.person_dismissed.remove(&from_key).unwrap_or_default();
-        changed |= !set_aside.is_empty();
-        if other {
-            if !set_aside.is_empty() {
-                let list = s.person_dismissed.entry(to_key.clone()).or_default();
-                for f in set_aside {
-                    if !list.iter().any(|g| g.is(f.photo, &f.face)) {
-                        list.push(f);
-                    }
-                }
-            }
-        } else if set_aside.is_empty() {
-            changed |= s.person_dismissed.remove(&to_key).is_some();
-        } else {
-            s.person_dismissed.insert(to_key.clone(), set_aside);
-        }
-        let cover = s.person_covers.remove(&from_key);
-        changed |= cover.is_some();
-        if !(other && s.person_covers.contains_key(&to_key)) {
-            changed |= match cover {
-                Some(c) => s.person_covers.insert(to_key.clone(), c) != Some(c),
-                None => s.person_covers.remove(&to_key).is_some(),
-            };
-        }
-    }
-    if changed {
-        // undoing the rename gives both names back what they had (a merge undone leaves the other person as they were)
+        let before = [s.person_choices(&to_key), s.person_choices(&from_key)];
+        let changed = s.carry_person_choices(&from_key, &to_key, other);
+        let after = s.person_choices(&to_key);
         if let Some(step) = s.undo.last_mut() {
-            step.people = before;
+            step.people = Some(crate::PeopleMove { from: from_key.clone(), to: to_key.clone(), merged: other, before, after });
         }
-        s.people_gen = s.people_gen.wrapping_add(1);
-        // the rename stands; a people.json that cannot take it now counts as unsaved
-        s.save_people_or_keep_unsaved();
+        if changed {
+            s.people_gen = s.people_gen.wrapping_add(1);
+            // the rename stands; a people.json that cannot take it now counts as unsaved
+            s.save_people_or_keep_unsaved();
+        }
     }
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
         s.filter.person = Some(to.clone());
@@ -222,11 +197,6 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
         f.person = Some(to.clone());
     }
     Ok(json!({"faces": faces, "photos": photos, "from": from, "to": to, "merged": other}))
-}
-
-/// What the person whose lower-cased name is `key` has chosen, as an undo step puts it back.
-fn choices(s: &Session, key: &str) -> crate::PersonChoices {
-    crate::PersonChoices { key: key.to_string(), cover: s.person_covers.get(key).copied(), dismissed: s.person_dismissed.get(key).cloned() }
 }
 
 /// Some face in the library bears the lower-cased name `key`.
