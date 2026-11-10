@@ -130,38 +130,50 @@ fn failed_gpu_renders_fall_back_with_a_reason() {
     let deep = RenderRequest { depth: lightcraft_pipeline::OutputDepth::U16, ..RenderRequest::fit(256, 256) };
     assert_eq!(lightcraft_gpu::try_render(&src, &info, &s, &deep, None).err(), Some(Fallback::NotTried));
 }
-/// A mask's own Point Color has no GPU kernel yet: `draws` says so, the GPU refuses the render without trying (the
-/// CPU renders it, with the samples), and the section eye / a sample that shifts nothing / a hidden mask bring the GPU
-/// back.
+/// A mask's own Point Color renders on the GPU: `draws` says so, the section eye / a sample that shifts nothing / a
+/// hidden mask change nothing about that, and a photo whose masks carry more samples than the kernel's table holds is
+/// the one the GPU refuses without trying (the CPU renders it).
 #[test]
-fn a_mask_point_color_is_rendered_on_the_cpu() {
+fn a_mask_point_color_is_rendered_on_the_gpu() {
     use lightcraft_develop::PointColor;
+    let sample = PointColor { lum: 0.6, chroma: 0.1, hue: 60.0, hue_shift: 80.0, range: 100.0, ..Default::default() };
     let mut s = DevelopSettings::default();
     masked(&mut s, 1);
     assert!(lightcraft_gpu::draws(&s));
-    // a neutral sample shifts nothing
     s.masks[0].point_colors.push(PointColor::default());
     assert!(lightcraft_gpu::draws(&s));
-    s.masks[0].point_colors[0] = PointColor { lum: 0.6, chroma: 0.1, hue: 60.0, hue_shift: 80.0, range: 100.0, ..Default::default() };
-    assert!(!lightcraft_gpu::draws(&s));
-    let mut other = s.clone();
-    other.masks[0].set_section_enabled("pointColor", false);
+    s.masks[0].point_colors[0] = sample;
+    assert!(lightcraft_gpu::draws(&s));
+    // the table holds 128 samples: 16 masks of 8 fill it, a 17th sample does not fit
+    let mut full = DevelopSettings::default();
+    masked(&mut full, 17);
+    for m in full.masks.iter_mut().take(16) {
+        m.point_colors = vec![sample; lightcraft_develop::MAX_POINT_COLORS];
+    }
+    assert!(lightcraft_gpu::draws(&full));
+    full.masks[16].point_colors = vec![sample];
+    assert!(!lightcraft_gpu::draws(&full));
+    // ... unless the extra ones don't count: a hidden mask, the section eye, a sample that shifts nothing, a B&W photo
+    let mut other = full.clone();
+    other.masks[16].visible = false;
     assert!(lightcraft_gpu::draws(&other));
-    other = s.clone();
-    other.masks[0].visible = false;
+    other = full.clone();
+    other.masks[16].set_section_enabled("pointColor", false);
     assert!(lightcraft_gpu::draws(&other));
-    // a black & white photo has no Point Color: the GPU draws it
-    other = s.clone();
+    other = full.clone();
+    other.masks[16].point_colors = vec![PointColor::default()];
+    assert!(lightcraft_gpu::draws(&other));
+    other = full.clone();
     other.treatment = lightcraft_develop::Treatment::Bw;
     assert!(lightcraft_gpu::draws(&other));
-    // the render is refused up front, never tried on the device
+    if !lightcraft_gpu::available() {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter ({})", lightcraft_gpu::unavailable_reason().unwrap_or_default());
+        return;
+    }
+    // the render beyond the table is refused up front, never tried on the device; within it, it is drawn
     let src = Arc::new(lightcraft_scenes::demo_library()[0].render(320, 200));
     let info = SourceInfo { raw: true, ..Default::default() };
     let req = RenderRequest::fit(320, 200);
-    assert_eq!(lightcraft_gpu::try_render(&src, &info, &s, &req, None).err(), Some(Fallback::NotTried));
-    // and the CPU shows the samples
-    let mut without = s.clone();
-    without.masks[0].point_colors.clear();
-    let (plain, shifted) = (render(&src, &info, &without, &req).image, render(&src, &info, &s, &req).image);
-    assert!(mean_abs_diff(&plain, &shifted) > 0.05);
+    assert_eq!(lightcraft_gpu::try_render(&src, &info, &full, &req, None).err(), Some(Fallback::NotTried));
+    assert!(lightcraft_gpu::try_render(&src, &info, &s, &req, None).is_ok(), "{:?}", lightcraft_gpu::last_fallback());
 }

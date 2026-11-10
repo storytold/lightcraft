@@ -1,7 +1,7 @@
 // The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
 // Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
 // blurred chromaticity when HAS_CHROMA), aux
-// (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms | light operator tables), out (packed RGBA8; a float render:
+// (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms | mask Point Color | light operator tables), out (packed RGBA8; a float render:
 // three words per pixel, see `F_DEEP`).
 
 fn tone_apply(y: f32) -> f32 {
@@ -140,16 +140,15 @@ fn band_weights(h: f32) -> array<f32, 8> {
     return w;
 }
 
-// `PointK::apply` for Point Color sample `k` (OkLCh in, OkLCh out).
-fn point_color(k: u32, lch: vec3<f32>) -> vec3<f32> {
-    let o = F_PC + k * POINT_WORDS;
-    let sl = pf(o);
-    let sc = pf(o + 1u);
-    let sh = pf(o + 2u);
-    let var_k = pf(o + 6u);
-    let wh_ = pf(o + 7u);
-    let wc_ = pf(o + 8u);
-    let wl_ = pf(o + 9u);
+// `PointK::apply` for the sample `v` (`PointK::words`: OkLCh in, OkLCh out).
+fn point_apply(v: array<f32, POINT_WORDS>, lch: vec3<f32>) -> vec3<f32> {
+    let sl = v[0];
+    let sc = v[1];
+    let sh = v[2];
+    let var_k = v[6];
+    let wh_ = v[7];
+    let wc_ = v[8];
+    let wl_ = v[9];
     var l = lch.x;
     var c = lch.y;
     var h = lch.z;
@@ -166,11 +165,50 @@ fn point_color(k: u32, lch: vec3<f32>) -> vec3<f32> {
     if (w <= 0.0) {
         return lch;
     }
-    h += w * (var_k * wrap_angle(h - sh) + pf(o + 3u));
+    h += w * (var_k * wrap_angle(h - sh) + v[3]);
     c += w * var_k * (c - sc);
-    c = max(c * (1.0 + w * pf(o + 4u)), 0.0);
-    l += w * (var_k * (l - sl) + pf(o + 5u));
+    c = max(c * (1.0 + w * v[4]), 0.0);
+    l += w * (var_k * (l - sl) + v[5]);
     return vec3<f32>(l, c, h);
+}
+
+// The photo's Point Color sample `k` (parameter block).
+fn point_color(k: u32, lch: vec3<f32>) -> vec3<f32> {
+    let o = F_PC + k * POINT_WORDS;
+    var v: array<f32, POINT_WORDS>;
+    for (var j = 0u; j < POINT_WORDS; j++) {
+        v[j] = pf(o + j);
+    }
+    return point_apply(v, lch);
+}
+
+// The masks' own Point Color (`apply_masks_points`): each mask in turn moves `d` its alpha of the way to the
+// colour its samples give, mixed in OkLab (an alpha above 1 extrapolates). `aux` holds the sample count of every
+// mask, then the samples in mask order.
+fn mask_points(d_in: vec3<f32>, i: u32, n: u32, nm: u32) -> vec3<f32> {
+    var d = d_in;
+    let head = pu(F_MPC_OFF);
+    var o = head + nm;
+    for (var m = 0u; m < nm; m++) {
+        let cnt = u32(aux[head + m]);
+        let a = masks[m * n + i];
+        if (cnt > 0u && a > 0.0) {
+            let lab = oklab(d);
+            let c0 = sqrt(lab.y * lab.y + lab.z * lab.z);
+            var lch = vec3<f32>(lab.x, c0, select(atan2(lab.z, lab.y), 0.0, c0 == 0.0));
+            for (var k = 0u; k < cnt; k++) {
+                var v: array<f32, POINT_WORDS>;
+                for (var j = 0u; j < POINT_WORDS; j++) {
+                    v[j] = aux[o + (k * POINT_WORDS) + j];
+                }
+                lch = point_apply(v, lch);
+            }
+            let to = vec3<f32>(lch.x, lch.y * cos(lch.z), lch.y * sin(lch.z));
+            d = oklab_inv(lab + a * (to - lab));
+        }
+        o += cnt * POINT_WORDS;
+    }
+    return d;
 }
 
 // `ColorOps::apply`.
@@ -669,6 +707,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (tint_on) {
         let lab = oklab(d);
         d = oklab_inv(vec3<f32>(lab.x, lab.y + tint_dir.x * 0.08 * tint_amt, lab.z + tint_dir.y * 0.08 * tint_amt));
+    }
+
+    // --- the masks' own Point Color, in mask order, each weighted by its alpha
+    if (pu(F_HAS_MPC) != 0u) {
+        d = mask_points(d, i, n, nm);
     }
 
     // --- vignette (display linear, post-crop)

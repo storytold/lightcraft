@@ -516,19 +516,22 @@ pub fn handles(depth: lightcraft_pipeline::OutputDepth, device_proof: bool, over
         && overlay != lightcraft_pipeline::Overlay::HdrRange
 }
 
-/// Whether the GPU has a kernel for everything in `s` that its render would draw: false when a visible mask carries
-/// its own Point Color samples, which only the CPU applies for now. [`try_render`] refuses
-/// such settings ([`Fallback::NotTried`], the CPU renders them) and the loupe sizes its slider-drag drafts by it
-/// together with [`handles`], so the two can't drift apart.
+/// Whether the GPU draws everything in `s` that its render would draw: false when the visible masks carry more
+/// Point Color samples of their own than the kernel's table holds (`params::MAX_MASK_POINTS`), which the CPU renders
+/// instead. [`try_render`] refuses such settings ([`Fallback::NotTried`]) and the loupe sizes its slider-drag drafts by
+/// it together with [`handles`], so the two can't drift apart.
 pub fn draws(s: &DevelopSettings) -> bool {
-    !s.masks.iter().any(|m| {
-        m.visible
-            // (a black & white photo has no Point Color, in masks either)
-            && !m.components.is_empty()
-            && !lightcraft_pipeline::is_bw(s)
-            && m.section_enabled("pointColor")
-            && !m.point_colors_are_neutral()
-    })
+    // (a black & white photo has no Point Color, in masks either)
+    let samples: usize = if lightcraft_pipeline::is_bw(s) {
+        0
+    } else {
+        s.masks
+            .iter()
+            .filter(|m| m.visible && !m.components.is_empty() && m.section_enabled("pointColor"))
+            .map(|m| m.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter(|p| !p.is_neutral()).count())
+            .sum()
+    };
+    samples <= params::MAX_MASK_POINTS
 }
 
 /// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU
@@ -660,7 +663,7 @@ fn run(
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
-        // a mask's own Point Color has no GPU kernel yet: the CPU renders the photo
+        // more mask Point Color samples than the kernel's table holds: the CPU renders the photo
         if !draws(s) {
             return Err(Fallback::NotTried);
         }

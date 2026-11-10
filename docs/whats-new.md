@@ -63,10 +63,9 @@
   the photo's), added with `mask.pointColor.pick`, changed with `mask.pointColor.set` and removed with
   `mask.pointColor.delete` or `mask.pointColor.clear`. They apply inside the mask, fading with its edges and Amount, like
   Lightroom Classic's mask Point Color, and the mask's Point Color eye (`mask.sectionEnabled`) switches them. They are
-  rendered on the CPU for now, so dragging a slider on a photo that has one previews at a smaller size. Lightroom's
-  `LocalPointColors` is reported when a sidecar has it, not imported. The Masking panel has a Point Color block for the
-  selected mask (the eyedropper, the samples, Hue, Saturation and Luminance shifts, Variance and Range; no Visualize
-  range yet); photos without mask Point Color render as before.
+  rendered on the GPU. Lightroom's `LocalPointColors` is reported when a sidecar has it, not imported. The Masking
+  panel has a Point Color block for the selected mask (the eyedropper, the samples, Hue, Saturation and Luminance
+  shifts, Variance and Range; no Visualize range yet); photos without mask Point Color render as before.
 
 ## 2026-11-02
 

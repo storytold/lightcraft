@@ -799,7 +799,14 @@ pub fn render(
         (Some(b), None) | (None, Some(b)) => Some(b.clone()),
         (None, None) => None,
     };
-    let (p, aux) = finish_block(&fp, &terms, &present, deep);
+    // each mask's own Point Color samples, in the mask list's order (`masks`)
+    let mask_points: Vec<&[lightcraft_pipeline::colorops::PointK]> = s
+        .masks
+        .iter()
+        .filter(|m| m.visible && !m.components.is_empty())
+        .map(|m| fp.mask_points.iter().find(|(id, _)| *id == m.id).map_or(&[][..], |(_, k)| k.as_slice()))
+        .collect();
+    let (p, aux) = finish_block(&fp, &terms, &mask_points, &present, deep);
     if crate::ctx::failed() {
         return None; // a malformed parameter block failed the render: the CPU fallback redoes it
     }
