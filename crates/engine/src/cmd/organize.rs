@@ -38,8 +38,9 @@ fn commit_ops(s: &mut Session, label: &str, ops: Vec<Op>) -> Result<usize> {
     Ok(n)
 }
 
-/// After collapsing, keep the active photo visible (move it to its stack's top).
-fn fix_active(s: &mut Session) {
+/// After collapsing (or putting another photo on top of a collapsed stack), keep the active photo
+/// visible (move it to its stack's top).
+pub(crate) fn fix_active(s: &mut Session) {
     let vis = s.visible_cloned();
     if let Some(a) = s.selection.active
         && !vis.contains(&a)

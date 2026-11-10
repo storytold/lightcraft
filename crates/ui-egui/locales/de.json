@@ -3509,7 +3509,7 @@
   "Next": "Weiter",
   "Get Started": "Loslegen",
   "Raw + JPEG": "Raw + JPEG",
-  "Treat JPEG files next to raw files as one photo": "JPEG-Dateien neben Raw-Dateien als ein Foto behandeln",
-  "A JPEG or HEIF with the same name as a raw in the same folder is stacked under it on import. Photo › Stack › Stack RAW+JPEG Pairs does the same for photos already in the library.": "Ein JPEG oder HEIF mit demselben Namen wie eine Raw-Datei im selben Ordner wird beim Import mit ihr gestapelt. Foto › Stapel › RAW+JPEG-Paare stapeln macht dasselbe für Fotos, die schon in der Bibliothek sind.",
+  "Stack JPEG files with the raw file of the same name": "JPEG-Dateien mit der gleichnamigen Raw-Datei stapeln",
+  "On import, a JPEG or HEIF with the same name as a raw in the same folder goes into a collapsed stack with the raw. The raw is on top, or the JPEG/HEIF when the raw shows only its embedded preview. Ratings, flags and deletes still apply to each file on its own. Photo › Stack › Stack RAW+JPEG Pairs does the same for photos already in the library.": "Beim Import kommt ein JPEG oder HEIF mit demselben Namen wie eine Raw-Datei im selben Ordner mit ihr in einen eingeklappten Stapel. Oben liegt die Raw-Datei, oder das JPEG/HEIF, wenn die Raw-Datei nur ihre eingebettete Vorschau zeigt. Bewertungen, Markierungen und Löschen gelten weiterhin für jede Datei einzeln. Foto › Stapel › RAW+JPEG-Paare stapeln macht dasselbe für Fotos, die schon in der Bibliothek sind.",
   "Stack RAW+JPEG Pairs": "RAW+JPEG-Paare stapeln"
 }

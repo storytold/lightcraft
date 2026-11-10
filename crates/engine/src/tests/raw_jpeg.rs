@@ -300,3 +300,61 @@ fn reload_puts_the_right_photo_on_top_of_a_pair() {
     assert_eq!(s.catalog.stack_of(raw).unwrap().photos, vec![raw, jpg]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A collapsed pair with the raw marked preview only, stacked with the JPEG on top.
+fn pair_with_preview_only_raw(tag: &str) -> (Session, PathBuf, PhotoId, PhotoId) {
+    let dir = temp_dir(tag);
+    write_raw(&dir.join("DSC_0001.DNG"));
+    write_jpeg(&dir.join("DSC_0001.JPG"), 9);
+    let mut s = Session::new().with_fs();
+    import(&mut s, &dir, json!({}));
+    let raw = id_named(&s, &dir, "DSC_0001.DNG");
+    let jpg = id_named(&s, &dir, "DSC_0001.JPG");
+    let p = lightcraft_catalog::Photo::clone(s.catalog.photo(raw).unwrap());
+    s.catalog
+        .apply(lightcraft_catalog::Op::SetContent {
+            id: raw,
+            width: p.width,
+            height: p.height,
+            file_size: p.file_size,
+            content_hash: p.content_hash.clone(),
+            preview_only: Some("not decoded by an older build".into()),
+            preview_checked: "0.0.1".into(),
+        })
+        .unwrap();
+    s.execute("stack.rawJpegPairs", &json!({"all": true})).unwrap();
+    assert_eq!(s.catalog.stack_of(raw).unwrap().photos, vec![jpg, raw]);
+    (s, dir, raw, jpg)
+}
+
+#[test]
+fn a_retop_moves_the_active_photo_to_the_new_top() {
+    let (mut s, dir, raw, jpg) = pair_with_preview_only_raw("retop-active");
+    s.selection = crate::Selection::single(jpg);
+    s.execute("library.recheckPreviewOnly", &json!({"all": true})).unwrap();
+    assert_eq!(s.catalog.stack_of(raw).unwrap().photos, vec![raw, jpg]);
+    // the JPEG is hidden in the collapsed stack now: the active photo is the one the grid shows
+    assert_eq!(s.selection.active, Some(raw));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_reload_that_only_changes_the_file_keeps_the_top_the_user_chose() {
+    let dir = temp_dir("keep-top");
+    write_raw(&dir.join("DSC_0001.DNG"));
+    write_jpeg(&dir.join("DSC_0001.JPG"), 10);
+    let mut s = Session::new().with_fs();
+    import(&mut s, &dir, json!({"pairRawJpeg": true}));
+    let raw = id_named(&s, &dir, "DSC_0001.DNG");
+    let jpg = id_named(&s, &dir, "DSC_0001.JPG");
+    assert_eq!(s.catalog.stack_of(raw).unwrap().photos, vec![raw, jpg]);
+    s.selection = crate::Selection::single(jpg);
+    s.execute("stack.setTop", &json!({"id": jpg.0})).unwrap();
+    assert_eq!(s.catalog.stack_of(raw).unwrap().photos, vec![jpg, raw]);
+    // the raw is saved again (new bytes) but still decodes: the user's top stays
+    write_raw_n(&dir.join("DSC_0001.DNG"), 9);
+    let r = s.execute("photo.reload", &json!({"ids": [raw.0]})).unwrap();
+    assert_eq!(r["reloaded"], json!([raw.0]), "{r}");
+    assert_eq!(s.catalog.stack_of(raw).unwrap().photos, vec![jpg, raw]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

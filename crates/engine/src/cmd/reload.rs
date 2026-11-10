@@ -103,12 +103,14 @@ pub fn apply(s: &mut Session, items: Vec<Item>, results: Vec<std::result::Result
         s.media.forget(*id);
     }
     if !ops.is_empty() {
+        let before = crate::cmd::recheck::raw_decodes(&s.catalog, &reloaded);
         s.commit("Reload Changed Files", Op::Batch { ops })?;
         // a RAW+JPEG pair whose raw decodes now (or no longer) shows the right photo on top; one undo step with the reload
-        let retop = s.catalog.raw_jpeg_retop_ops(&reloaded);
+        let retop = crate::cmd::recheck::retop_ops(&s.catalog, &before);
         if !retop.is_empty() {
             s.commit("Reload Changed Files", Op::Batch { ops: retop })?;
             s.merge_undo(2, "Reload Changed Files");
+            super::organize::fix_active(s);
         }
     }
     Ok(reloaded)

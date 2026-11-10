@@ -4,9 +4,10 @@
 
 ### A raw and its JPEG can show as one photo
 - A camera set to RAW+JPEG writes `DSC_0001.NEF` and `DSC_0001.JPG`, and the library showed every picture twice.
-  Turn on Settings ▸ Import ▸ Treat JPEG files next to raw files as one photo, and an import stacks each such pair
-  (same folder, same name, letter case ignored; also a HEIF next to a raw) collapsed, with the raw on top, so the grid
-  shows one photo (issues #332, #3439). When the raw opens only as Preview only, such as a Nikon High Efficiency NEF,
+  Turn on Settings ▸ Import ▸ Stack JPEG files with the raw file of the same name, and an import stacks each such pair
+  (same folder, same name, letter case ignored, exactly one raw and one JPEG with that name; also a HEIF next to a raw)
+  collapsed, with the raw on top, so the grid shows one photo (issues #332, #3439). Ratings, flags and deletes still
+  apply to each file on its own. When the raw opens only as Preview only, such as a Nikon High Efficiency NEF,
   the JPEG goes on top. Photo ▸ Stack ▸ Stack RAW+JPEG Pairs does the same for photos you imported before, as one undo
   step. The option is off until you turn it on, so nothing changes for a library by itself.
 
