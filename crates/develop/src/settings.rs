@@ -96,12 +96,15 @@ pub enum Process {
     /// V5, with colour noise reduction on the linear colour differences R−Y and B−Y, leaving Y alone, with
     /// edge-aware weights from a denoised guide and a brake for isolated colour specks (issue #815).
     V6,
+    /// V6, with film grain from a stack of crystal layers (after Aurélien Pierre's model): resolution
+    /// independent, fading out at black and white; V1 to V6 keep their value noise.
+    V7,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 6] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6];
-    pub const LATEST: Process = Process::V6;
+    pub const ALL: [Process; 7] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7];
+    pub const LATEST: Process = Process::V7;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -111,6 +114,7 @@ impl Process {
             Process::V4 => ProcessVersion(4),
             Process::V5 => ProcessVersion(5),
             Process::V6 => ProcessVersion(6),
+            Process::V7 => ProcessVersion(7),
         }
     }
 }
