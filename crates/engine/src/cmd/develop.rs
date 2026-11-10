@@ -51,11 +51,12 @@ fn partial_diff(a: &Value, b: &Value) -> Option<Value> {
     }
 }
 
-/// The settings as JSON with the HDR subtree always present: [`Hdr`] is left out while it is the default
-/// (its JSON stays as it was), so a reset to a default HDR value would have nothing to compare with and
-/// would be dropped from a saved preset.
+/// The settings as JSON with everything stored JSON leaves out at its default stated: the HDR subtree
+/// ([`Hdr`] is left out while it is the default, its JSON stays as it was), an untouched channel mixer
+/// and Remove Hot Pixels off ([`DevelopSettings::to_json_for_merge`]). A reset to one of those defaults
+/// would otherwise have nothing to compare with and would be dropped from a saved preset.
 fn full_json(s: &DevelopSettings) -> Value {
-    let mut v = s.to_json();
+    let mut v = s.to_json_for_merge();
     if let Some(obj) = v.as_object_mut() {
         obj.entry("hdr").or_insert_with(|| serde_json::to_value(s.hdr).unwrap_or(Value::Null));
     }
@@ -1564,5 +1565,22 @@ mod recipe_tests {
         let both = recipe_partial(&recipe(&[("hdr.maxEv", 3.0), ("light.exposure", 0.5)])).expect("both are stored");
         assert_eq!(both.pointer("/hdr/max_ev"), Some(&json!(3.0)), "{both}");
         assert_eq!(both.pointer("/light/exposure"), Some(&json!(0.5)), "{both}");
+    }
+
+    /// An untouched channel mixer is left out of the JSON too (issue #2158), so a recipe that puts mixer
+    /// sliders back at neutral, to undo a red/blue swap say, is stored: alone, where the recipe's
+    /// settings are the identity and there was no mixer key to compare, and next to another adjustment.
+    #[test]
+    fn a_channel_mixer_reset_is_stored_alone_and_next_to_another_adjustment() {
+        let unswap = [("channelMixer.red.red", 100.0), ("channelMixer.red.blue", 0.0)];
+        let reset = recipe_partial(&recipe(&unswap)).expect("a reset is stored");
+        assert_eq!(reset, json!({"channel_mixer": {"red": {"red": 100.0, "blue": 0.0}}}));
+        let both = recipe_partial(&recipe(&[unswap[0], unswap[1], ("light.exposure", 0.5)])).expect("both are stored");
+        assert_eq!(both.pointer("/channel_mixer/red/red"), Some(&json!(100.0)), "{both}");
+        assert_eq!(both.pointer("/channel_mixer/red/blue"), Some(&json!(0.0)), "{both}");
+        assert_eq!(both.pointer("/light/exposure"), Some(&json!(0.5)), "{both}");
+        // a mix that isn't neutral was stored already
+        let swap = recipe_partial(&recipe(&[("channelMixer.red.red", 0.0), ("channelMixer.red.blue", 100.0)])).expect("stored");
+        assert_eq!(swap, json!({"channel_mixer": {"red": {"red": 0.0, "blue": 100.0}}}));
     }
 }
