@@ -82,6 +82,10 @@ commit `4e012a59a6d2442ba749f109ea27aadb5c0b11a5` by Gardy, and addresses the ca
 [issue #283](https://github.com/storytold/lightcraft/issues/283). That PR was open when checked
 on 2026-10-08; this work extends its fix with library culling bindings and tests.
 
+## Permanent deletion from disk
+
+Use `Shift+Delete` or choose Delete from Disk in the photo context menu. LightCraft asks for confirmation before it permanently deletes selected original files. Successful deletions remove the corresponding library records; items without originals are skipped, and failures remain in the library. XMP sidecars and neighboring files are left alone.
+
 ## Grid thumbnail size
 
 `=` makes the grid thumbnails larger and `-` smaller (`+` also enlarges), as in Lightroom Classic. Each

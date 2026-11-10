@@ -1,4 +1,122 @@
 use super::{Dialog, LightcraftApp, Value, json};
+use lightcraft_catalog::{PhotoId, Source};
+use std::collections::HashSet;
+use std::path::Path;
+
+/// Ask before destroying the originals. The selected IDs and paths are frozen in the
+/// dialog so an intervening selection change cannot redirect the deletion.
+pub(super) fn request_delete_from_disk(app: &mut LightcraftApp) -> Result<Value, String> {
+    if cfg!(target_arch = "wasm32") {
+        return Err("Deleting originals from disk is available only in the desktop app".into());
+    }
+    let selected = app.session.selected();
+    if selected.is_empty() {
+        return Err("Select at least one photo to delete from disk".into());
+    }
+    let mut ids = Vec::with_capacity(selected.len());
+    let mut paths = Vec::with_capacity(selected.len());
+    let mut unique = HashSet::new();
+    let mut skipped_no_original = 0usize;
+    for id in selected {
+        let Some(photo) = app.session.catalog.photo(id) else {
+            return Err(format!("Photo {} no longer exists in the library", id.0));
+        };
+        // Generated demo scenes cannot have an original on disk. Skip those
+        // instead of disabling disk deletion of the real photographs in the selection.
+        let Source::File { path } = &photo.source else {
+            skipped_no_original += 1;
+            continue;
+        };
+        if !Path::new(path).is_absolute() || !unique.insert(path.clone()) {
+            return Err("A selected photo has an invalid or duplicate original file path".into());
+        }
+        // Do not destroy an original referenced by another photo/virtual copy in the catalog.
+        if app
+            .session
+            .catalog
+            .photos()
+            .any(|other| other.id != id && matches!(&other.source, Source::File { path: other_path } if other_path == path))
+        {
+            return Err(format!("The original {path} is referenced by another library photo; remove that reference first"));
+        }
+        ids.push(id.0);
+        paths.push(path.clone());
+    }
+    let count = ids.len();
+    if count == 0 {
+        return Err("None of the selected photos has an original file on disk".into());
+    }
+    app.ui.dialog = Some(Dialog::ConfirmDeleteFromDisk { ids, paths, library: app.session.library_generation(), skipped_no_original });
+    Ok(json!({"confirmationRequired": true, "count": count, "skippedNoOriginal": skipped_no_original}))
+}
+
+/// Called ONLY after the irreversible-deletion confirmation. Keep failed photos in the
+/// catalog, including files that could not be removed due to permissions or a disconnected drive.
+/// Sidecars and neighboring files are deliberately not removed.
+pub(crate) fn delete_from_disk(app: &mut LightcraftApp, ids: &[u64], paths: &[String], library: u64) -> Result<Value, String> {
+    if cfg!(target_arch = "wasm32") {
+        return Err("Deleting originals from disk is available only in the desktop app".into());
+    }
+    if library != app.session.library_generation() {
+        return Err("The library changed since the confirmation was opened; no files were deleted".into());
+    }
+    if ids.is_empty() || ids.len() != paths.len() {
+        return Err("There are no valid original files to delete".into());
+    }
+
+    // Revalidate every record *before* removing anything. A catalog operation or an
+    // automation could have changed the paths while the confirmation was open.
+    let mut unique = HashSet::new();
+    for (&id, path) in ids.iter().zip(paths) {
+        let pid = PhotoId(id);
+        let source_matches =
+            app.session.catalog.photo(pid).is_some_and(|photo| matches!(&photo.source, Source::File { path: current } if current == path));
+        if !source_matches || !Path::new(path).is_absolute() || !unique.insert(path) {
+            return Err("The selected originals changed since the confirmation was opened; nothing was deleted".into());
+        }
+        if app
+            .session
+            .catalog
+            .photos()
+            .any(|other| other.id != pid && matches!(&other.source, Source::File { path: other_path } if other_path == path))
+        {
+            return Err(format!("{path} is still referenced by another photo; nothing was deleted"));
+        }
+    }
+
+    let mut removed_ids = Vec::new();
+    let mut failed = Vec::new();
+    for (&id, path) in ids.iter().zip(paths) {
+        // Never recursively delete a directory or follow a symlink/reparse-point.
+        // A missing file is a failure, not permission to remove its catalog record.
+        let disk_result = std::fs::symlink_metadata(path).and_then(|m| {
+            if m.file_type().is_file() {
+                std::fs::remove_file(path)
+            } else {
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file"))
+            }
+        });
+        match disk_result {
+            Ok(()) => removed_ids.push(id),
+            Err(e) => failed.push(format!("{path}: {e}")),
+        }
+    }
+    // A successful disk deletion is permanent. Remove only those photos from the catalog;
+    // if a catalog write fails, report that fact rather than claiming the files still exist.
+    if !removed_ids.is_empty() {
+        app.run("photo.deletePermanently", json!({"ids": removed_ids}))
+            .map_err(|e| format!("Original files were deleted, but their library records could not be removed: {e}"))?;
+    }
+    if !failed.is_empty() {
+        return Err(format!(
+            "Deleted {} original file(s). {} failed and remain in the library:\n{}",
+            removed_ids.len(),
+            failed.len(),
+            failed.join("\n")
+        ));
+    }
+    Ok(json!({"deletedFromDisk": removed_ids.len()}))
+}
 
 /// The Delete key in an album: a normal album loses the selected photos (`album.removePhotos`),
 /// which stay in the library and their folder; a smart album keeps them (its rules decide) and
@@ -259,4 +377,120 @@ fn open_originals(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         return Err(format!("Couldn't open the editor: {e}"));
     }
     Ok(json!({"opened": opened, "skipped": skipped, "app": editor, "failed": failed}))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod disk_deletion_tests {
+    use super::*;
+    use lightcraft_catalog::{Op, Photo};
+
+    fn original_path() -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+        std::env::temp_dir().join(format!("lightcraft-delete-original-{}-{stamp}.jpg", std::process::id()))
+    }
+
+    // Test setup should fail immediately if it cannot build the in-memory fixture.
+    #[allow(clippy::unwrap_used)]
+    fn app_for(path: &Path) -> LightcraftApp {
+        let mut session = lightcraft_engine::Session::new();
+        let photo = Photo::new(PhotoId(1), Source::File { path: path.to_string_lossy().into_owned() }, "test.jpg", "JPEG", 1, 1, "2026-11-09");
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        session.execute("library.select", &json!({"ids": [1]})).unwrap();
+        LightcraftApp::new(session, crate::Services { png: None, ..Default::default() })
+    }
+
+    #[test]
+    fn shift_delete_is_the_default_shortcut_and_opens_confirmation_without_deleting() {
+        let path = original_path();
+        std::fs::write(&path, b"test").unwrap();
+        let mut app = app_for(&path);
+        assert_eq!(crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.deleteFromDisk"), Some("Shift+Delete"));
+        request_delete_from_disk(&mut app).unwrap();
+        assert!(matches!(app.ui.dialog, Some(Dialog::ConfirmDeleteFromDisk { .. })));
+        assert!(path.exists(), "requesting deletion must never delete the file");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn confirmed_delete_removes_original_and_catalog_record() {
+        let path = original_path();
+        std::fs::write(&path, b"test").unwrap();
+        let mut app = app_for(&path);
+        request_delete_from_disk(&mut app).unwrap();
+        let Some(Dialog::ConfirmDeleteFromDisk { ids, paths, library, .. }) = app.ui.dialog.take() else {
+            panic!("expected disk deletion confirmation");
+        };
+        let result = delete_from_disk(&mut app, &ids, &paths, library).unwrap();
+        assert_eq!(result["deletedFromDisk"], 1);
+        assert!(!path.exists());
+        assert!(app.session.catalog.photo(PhotoId(1)).is_none());
+    }
+
+    #[test]
+    fn recently_deleted_photos_can_still_delete_originals_from_disk() {
+        let path = original_path();
+        std::fs::write(&path, b"trash-test").unwrap();
+        let mut app = app_for(&path);
+        // This is the state of the screen in the user's screenshot: the photo
+        // is in Recently Deleted, and the selected original still exists.
+        app.session.catalog.apply(Op::SetDeleted { id: PhotoId(1), deleted: true }).unwrap();
+        app.session.source = lightcraft_engine::LibrarySource::RecentlyDeleted;
+        assert!(app.session.catalog.photo(PhotoId(1)).unwrap().deleted);
+        assert!(crate::menus::ui_enabled(&app, "photo.deleteFromDisk"));
+        assert_eq!(crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "photo.deleteFromDisk"), Some("Shift+Delete"));
+
+        let request = app.run("photo.deleteFromDisk", json!({})).unwrap();
+        assert_eq!(request["confirmationRequired"], true);
+        assert!(path.exists(), "choosing the menu item must only open a confirmation");
+
+        let Some(Dialog::ConfirmDeleteFromDisk { ids, paths, library, .. }) = app.ui.dialog.take() else {
+            panic!("expected a confirmation dialog for the Recently Deleted selection");
+        };
+        let result = delete_from_disk(&mut app, &ids, &paths, library).unwrap();
+        assert_eq!(result["deletedFromDisk"], 1);
+        assert!(!path.exists(), "the confirmed action should delete the original on disk");
+        assert!(app.session.catalog.photo(PhotoId(1)).is_none(), "the catalog record should also be removed");
+    }
+
+    #[test]
+    fn mixed_recently_deleted_selection_skips_demo_scenes_and_deletes_real_files_only() {
+        let path = original_path();
+        std::fs::write(&path, b"real-image").unwrap();
+        let mut app = app_for(&path);
+        let demo = Photo::new(PhotoId(2), Source::Demo { scene: 1 }, "demo", "Demo", 1, 1, "2026-11-09");
+        app.session.catalog.apply(Op::AddPhoto { photo: Box::new(demo) }).unwrap();
+        for id in [PhotoId(1), PhotoId(2)] {
+            app.session.catalog.apply(Op::SetDeleted { id, deleted: true }).unwrap();
+        }
+        app.session.source = lightcraft_engine::LibrarySource::RecentlyDeleted;
+        app.session.execute("library.select", &json!({"ids": [1, 2]})).unwrap();
+
+        assert!(crate::menus::ui_enabled(&app, "photo.deleteFromDisk"));
+        let response = app.run("photo.deleteFromDisk", json!({})).unwrap();
+        assert_eq!(response["count"], 1);
+        assert_eq!(response["skippedNoOriginal"], 1);
+        assert!(path.exists());
+        let Some(Dialog::ConfirmDeleteFromDisk { ids, paths, library, .. }) = app.ui.dialog.take() else {
+            panic!("expected confirmation for the single real original");
+        };
+        assert_eq!(ids, vec![1]);
+        assert_eq!(delete_from_disk(&mut app, &ids, &paths, library).unwrap()["deletedFromDisk"], 1);
+        assert!(!path.exists());
+        assert!(app.session.catalog.photo(PhotoId(1)).is_none());
+        assert!(app.session.catalog.photo(PhotoId(2)).is_some(), "demo scenes have no disk original and remain untouched");
+    }
+
+    #[test]
+    fn failed_file_removal_keeps_photo_in_catalog() {
+        let path = original_path();
+        std::fs::write(&path, b"test").unwrap();
+        let mut app = app_for(&path);
+        request_delete_from_disk(&mut app).unwrap();
+        let Some(Dialog::ConfirmDeleteFromDisk { ids, paths, library, .. }) = app.ui.dialog.take() else {
+            panic!("expected disk deletion confirmation");
+        };
+        std::fs::remove_file(&path).unwrap();
+        assert!(delete_from_disk(&mut app, &ids, &paths, library).is_err());
+        assert!(app.session.catalog.photo(PhotoId(1)).is_some());
+    }
 }

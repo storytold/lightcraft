@@ -2425,5 +2425,15 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "先以 --control 7980 (或 LIGHTCRAFT_CONTROL_PORT) 启动应用，lightcraft-cli mcp --connect 即可将一个智能体接入其中。",
   "Welcome": "欢迎",
   "Next": "下一步",
-  "Get Started": "开始使用"
+  "Get Started": "开始使用",
+  "Delete from Disk": "从磁盘永久删除",
+  "Permanently Delete Originals": "从磁盘永久删除原始照片",
+  "Permanently delete {what} from disk?": "确定从磁盘永久删除{what}吗？",
+  "this original photo": "这张原始照片",
+  "these {count} original photos": "这 {count} 张原始照片",
+  "The original files will be permanently deleted, not moved to the Recycle Bin. This cannot be undone.": "原始文件将被永久删除，不会进入回收站。此操作无法撤销。",
+  "Only the selected original files are deleted; XMP sidecars and neighboring files are kept.": "仅删除选中的原始照片文件；XMP 附属文件及同文件夹中的其他文件会保留。",
+  "… and {more} more": "……还有 {more} 个文件",
+  "Permanently deleted {n} original file(s) from disk": "已从磁盘永久删除 {n} 个原始文件",
+  "{count} selected item(s) have no original file on disk and will be skipped.": "选中的 {count} 个项目没有磁盘原文件，将跳过。"
 }

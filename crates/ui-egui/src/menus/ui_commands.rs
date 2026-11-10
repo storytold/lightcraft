@@ -275,6 +275,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.resetShortcuts", "Reset All Keyboard Shortcuts", None, ""),
     ("app.export", "Export Now", None, ""),
     ("app.showInFinder", "Show in Finder", Some("Cmd+R"), "Photo"),
+    // A separate irreversible action: unlike Delete Permanently this removes originals from disk.
+    ("photo.deleteFromDisk", "Delete from Disk", Some("Shift+Delete"), "Photo"),
     ("app.showInFolders", "Show in Folders", None, "Photo"),
     ("app.openSamModelFolder", "Show in File Manager", None, ""),
     ("dialog.rename", "Rename Photos…", Some("F2"), "Photo"),

@@ -157,6 +157,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     if id == "develop.auto" {
         return Some(crate::auto_settings::command(app, p));
     }
+    if id == "photo.deleteFromDisk" {
+        return Some(super::files::request_delete_from_disk(app));
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);

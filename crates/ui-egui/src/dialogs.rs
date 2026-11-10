@@ -474,6 +474,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
+        Dialog::ConfirmDeleteFromDisk { .. } => "Permanently Delete Originals",
         Dialog::MovePhotos { .. } => "Move Photos",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
@@ -578,7 +579,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::DenoiseModel { .. } if !informational => "Install",
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
-        Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::ConfirmDelete { .. } | Dialog::ConfirmDeleteFromDisk { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
         Dialog::SaveEffect { .. }
         | Dialog::NewAlbum { .. }
         | Dialog::NewSmartAlbum { .. }
@@ -765,6 +766,15 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
         }
         Err(e) if matches!(dlg, Dialog::MovePhotos { .. }) => {
             app.toast(ctx, e);
+            closed = true;
+        }
+        Ok(r) if matches!(dlg, Dialog::ConfirmDeleteFromDisk { .. }) => {
+            let n = r["deletedFromDisk"].as_u64().unwrap_or(0);
+            app.toast(ctx, crate::i18n::tr_format!("Permanently deleted {n} original file(s) from disk", n = n));
+            closed = true;
+        }
+        Err(e) if matches!(dlg, Dialog::ConfirmDeleteFromDisk { .. }) => {
+            app.toast_error(ctx, e);
             closed = true;
         }
         // photos whose capture time doesn't read are left as they were: say so
@@ -2141,6 +2151,40 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             crate::panels::mask_effects::manage_body(app, ui, search, selected, rename, confirm_delete, new_group)
         }
         Dialog::DeleteEffects { .. } => delete_effects_body(ui, t, dlg),
+        Dialog::ConfirmDeleteFromDisk { paths, skipped_no_original, .. } => {
+            let count = paths.len();
+            let what = if count == 1 {
+                crate::i18n::tr("this original photo").to_string()
+            } else {
+                crate::i18n::tr_format!("these {count} original photos", count = count)
+            };
+            ui.label(crate::i18n::tr_format!("Permanently delete {what} from disk?", what = what));
+            ui.label(
+                egui::RichText::new(crate::i18n::tr(
+                    "The original files will be permanently deleted, not moved to the Recycle Bin. This cannot be undone.",
+                ))
+                .color(t.text_label),
+            );
+            ui.label(
+                egui::RichText::new(crate::i18n::tr("Only the selected original files are deleted; XMP sidecars and neighboring files are kept."))
+                    .color(t.text_dim),
+            );
+            if *skipped_no_original > 0 {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr_format!(
+                        "{count} selected item(s) have no original file on disk and will be skipped.",
+                        count = *skipped_no_original
+                    ))
+                    .color(t.text_dim),
+                );
+            }
+            if let Some(path) = paths.first() {
+                ui.label(egui::RichText::new(path).color(t.text_dim).small());
+                if count > 1 {
+                    ui.label(egui::RichText::new(crate::i18n::tr_format!("… and {more} more", more = count - 1)).color(t.text_dim));
+                }
+            }
+        }
         Dialog::ConfirmDelete { count } => {
             let what =
                 if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
