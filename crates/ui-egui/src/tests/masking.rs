@@ -2306,3 +2306,29 @@ fn gradient_shortcuts_and_components_wait_for_a_drag() {
         assert!(h.app.ui.tool.is_empty(), "{op}: a bad op picks nothing");
     }
 }
+
+/// Review of #3988: on a photo whose pixels a lens correction moves, the drawn gradient's handles sit where the
+/// drag began and ended on screen (a new mask's coordinates are on the photo, before the correction).
+#[test]
+fn a_drawn_gradient_lands_under_the_drag_on_a_warped_photo() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "develop.set", json!({"control": "optics.distortion", "value": 60}));
+    h.step();
+    let img = h.app.image_rect.unwrap();
+    let at = |x: f32, y: f32| img.min + egui::vec2(x * img.width(), y * img.height());
+    let handle = |h: &Headless, mask: u32, i: usize| {
+        h.app.widgets.iter().find(|(w, _)| *w == format!("maskHandle:{mask}:0:{i}")).map(|(_, r)| r.center()).expect("the handle is drawn")
+    };
+    click(&mut h, "maskNew:linear");
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": 0.2, "y": 0.2}, {"kind": "drag", "x": 0.3, "y": 0.3},
+        {"kind": "drag", "x": 0.6, "y": 0.7}, {"kind": "up", "x": 0.6, "y": 0.7}]),
+    );
+    h.step();
+    let id = develop(&h).masks.last().expect("a mask").id;
+    assert!((handle(&h, id, 0) - at(0.2, 0.2)).length() < 2.0, "start at the press: {:?} vs {:?}", handle(&h, id, 0), at(0.2, 0.2));
+    assert!((handle(&h, id, 1) - at(0.6, 0.7)).length() < 2.0, "end at the release");
+    exec(&mut h, "edit.undo", json!({}));
+    assert!(develop(&h).masks.is_empty(), "one undo step");
+}

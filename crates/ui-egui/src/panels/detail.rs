@@ -20,6 +20,7 @@ mod geometry;
 mod info;
 mod look_ahead;
 mod masks;
+pub(crate) use masks::gradient_tool;
 mod retouch;
 mod window;
 

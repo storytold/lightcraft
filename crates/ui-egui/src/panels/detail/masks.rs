@@ -417,10 +417,14 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
             }
         }
     }
-    mask_keys(app, ui, map, d, &grips);
+    // Linear / Radial Gradient picked: the arrows don't move another mask's handle meanwhile
+    let armed = gradient_tool(&app.ui.tool).map(|(kind, op)| (kind.to_string(), op.map(str::to_string)));
+    if armed.is_none() {
+        mask_keys(app, ui, map, d, &grips);
+    }
     object_marks(app, p, map, d, active);
-    // Linear / Radial Gradient picked: a drag on the photo draws it
-    if let Some((kind, op)) = gradient_tool(&app.ui.tool).map(|(kind, op)| (kind.to_string(), op.map(str::to_string))) {
+    // …and a drag on the photo draws it
+    if let Some((kind, op)) = armed {
         draw_gradient(app, ui, resp, map, &kind, op.as_deref());
         return;
     }
@@ -884,6 +888,12 @@ fn draw_gradient(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respon
     if !resp.dragged() || a.distance(b) < 2.0 {
         return;
     }
+    app.ui.tool.clear();
+    let _ = app.run("develop.beginInteraction", json!({"label": if op.is_some() { "Edit Mask" } else { "Add Mask" }}));
+    // in the mask's coordinates: a new mask's are on the photo, before lens and perspective
+    // corrections (and a component's mask is on the photo once the interaction began)
+    let on_photo = op.is_none() || app.session.active_mask.and_then(|m| current_on_photo(app, m)).unwrap_or(true);
+    let map = &map.for_mask(on_photo);
     let (a, b) = (map.norm(a), map.norm(b));
     let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
     let handle = if kind == "linear" {
@@ -898,8 +908,6 @@ fn draw_gradient(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respon
         params.insert("ry".into(), json!(ry));
         6
     };
-    app.ui.tool.clear();
-    let _ = app.run("develop.beginInteraction", json!({"label": if op.is_some() { "Edit Mask" } else { "Add Mask" }}));
     if let Err(e) = app.run(command, params.into()) {
         let _ = app.run("develop.endInteraction", json!({}));
         app.toast(ui.ctx(), e);
