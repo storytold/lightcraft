@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Brush Flow as in Lightroom (process V8)
+- Flow now builds up the way it does in Lightroom: one stroke at Flow 25 covers a little under half, at Flow 50 about
+  three quarters, where it used to cover 90 % and more, and a slow stroke covers the same as a fast one (issue #4045).
+  New photos (and Reset) get it; photos you already edited keep their brushes until Photo ▸ Update to Current Process.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
