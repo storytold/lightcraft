@@ -860,11 +860,11 @@ pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, target
     let [w, h] = image.size;
     let Some(target) = target else {
         if cfg!(target_arch = "wasm32") {
-            let Some(img) = lightcraft_raster::Rgba8::from_pixels(w, h, image.pixels.iter().map(|c| c.to_array())) else {
-                return json!({"ok": false, "error": "bad screenshot buffer"});
-            };
             let Some(png) = app.services.png.as_ref() else {
                 return json!({"ok": false, "error": "no PNG encoder available"});
+            };
+            let Some(img) = lightcraft_raster::Rgba8::from_pixels(w, h, image.pixels.iter().map(|c| c.to_array())) else {
+                return json!({"ok": false, "error": "bad screenshot buffer"});
             };
             let png = png(&img);
             if png.len() > MAX_INLINE_PNG_BYTES {
