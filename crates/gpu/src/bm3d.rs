@@ -44,6 +44,9 @@ struct Uniforms {
     lambda: f32,
     sigma: f32,
     pad2: f32,
+    /// Each plane's threshold and Wiener sigma (`bm3d::plane_levels`), indexed by the plane.
+    lam: [f32; 4],
+    sig: [f32; 4],
 }
 
 struct Pipes {
@@ -293,11 +296,14 @@ impl Bm3dGpu {
             return Err(Error::Input("the tile is not four square planes".into()));
         }
         let y = hadamard(planes);
+        // the same per-plane levels the CPU filter uses, so a tile is denoised alike on either path
+        let levels = bm3d::plane_levels(&y, t, &plan.params, plan.lambda);
+        let levels: [(f32, f32); 4] = [0, 1, 2, 3].map(|i| levels.get(i).copied().unwrap_or((0.0, 0.0)));
         // one tile is one piece of GPU work: a photo's worth would outlast any wait at exit
         let Some(_work) = crate::exit::enter() else { return Err(Error::Runtime(CLOSING.into())) };
         let w = self.take()?;
         let flat: Vec<f32> = y.concat();
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute(&w, &flat, &plan))) {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute(&w, &flat, &plan, levels))) {
             Ok(Ok(out)) => {
                 self.give(w);
                 Ok(hadamard(&out.chunks_exact(t * t).map(<[f32]>::to_vec).collect::<Vec<_>>()))
@@ -320,7 +326,7 @@ impl Bm3dGpu {
 
     /// Run the filter's steps in `w` on the rotated planes `y` (one plane after another) and read the result back; a
     /// device that runs out of memory or fails validation gives an error.
-    fn execute(&self, w: &Workspace, y: &[f32], plan: &bm3d::Plan) -> Result<Vec<f32>, Error> {
+    fn execute(&self, w: &Workspace, y: &[f32], plan: &bm3d::Plan, levels: [(f32, f32); 4]) -> Result<Vec<f32>, Error> {
         let d = self.dev;
         let p = &plan.params;
         let sigma = p.sigma.max(1e-3);
@@ -338,6 +344,8 @@ impl Bm3dGpu {
             lambda: plan.lambda * sigma,
             sigma,
             pad2: 0.0,
+            lam: levels.map(|l| l.0),
+            sig: levels.map(|l| l.1),
         };
         let groups = (self.nr * self.nr) as u32;
         let cells = (self.t * self.t) as u32;
@@ -524,6 +532,27 @@ mod tests {
             eprintln!("{}: tile {t}, noise {noise}: worst {worst:e}, mean {mean:e} (noise deviation 1); {}", g.adapter(), g.build_report());
             assert!(got.iter().flatten().all(|v| v.is_finite()));
             assert!(mean < 1e-3 && worst < 0.1, "tile {t}: the GPU is off by {worst:e} at most and {mean:e} on average");
+        }
+    }
+
+    /// Colour-difference planes noisier than the brightness plane are denoised to the same level on the card as on the
+    /// processor (the per-plane thresholds and Wiener sigmas are the same on both paths).
+    #[test]
+    fn unequal_chroma_noise_is_denoised_alike_on_the_card() {
+        let p = Params::default();
+        for (t, seed, noise) in [(64usize, 5u64, 0.01f32), (100, 6, 0.04)] {
+            let Some(g) = gpu(&p, t) else { return };
+            let mut planes = scene(t, seed);
+            for plane in planes.iter_mut().skip(1) {
+                for v in plane.iter_mut() {
+                    *v *= 3.0;
+                }
+            }
+            let want = bm3d::filter(&planes, t, &p, noise);
+            let got = g.filter(&planes, t, noise).unwrap();
+            let (worst, mean) = differ(&got, &want);
+            assert!(got.iter().flatten().all(|v| v.is_finite()));
+            assert!(mean < 1e-3 && worst < 0.1, "tile {t}: unequal chroma noise, the GPU is off by {worst:e} at most and {mean:e} on average");
         }
     }
 

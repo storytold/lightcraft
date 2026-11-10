@@ -15,6 +15,8 @@ struct P {
     lambda: f32,   // hard threshold (already scaled by the noise's deviation)
     sigma: f32,    // the noise's deviation
     pad2: f32,
+    lam: vec4<f32>, // each plane's hard threshold (bm3d::plane_levels), by plane
+    sig: vec4<f32>, // each plane's noise deviation for the Wiener filter, by plane
 }
 
 @group(0) @binding(0) var<uniform> p: P;

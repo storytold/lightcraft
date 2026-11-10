@@ -432,27 +432,38 @@ fn scaled_lambda(lambda: f32, sigma_ref: f32, sigma: f32) -> f32 {
 
 /// Filter every plane of `y` over the groups: hard threshold when there is no `pilot`, Wiener shrinkage by it when
 /// there is.
-fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], t: usize, p: &Params, lambda: f32, tf: &Transform) -> Vec<Vec<f32>> {
-    let n = tf.n;
+/// The threshold and the Wiener sigma of each plane of `y` (the rotated planes), as `(lambda, sigma)` absolute levels.
+/// The CPU filter and the GPU runner both use these, so every plane is denoised to the same level on either path.
+pub fn plane_levels(y: &[Vec<f32>], t: usize, p: &Params, lambda: f32) -> Vec<(f32, f32)> {
     let sigma = p.sigma.max(1e-3);
     let lambda = lambda * sigma;
     // the tile-independent sigma (the stabilised planes have unit noise, scaled by `p.sigma`) is the basis;
     // a plane is only shrunk harder when its own robust noise, relative to the reference plane's, is larger
     let sigma_ref = sigma;
     let ref_noise = y.first().map_or(0.0, |pl| plane_noise(pl, t));
+    y.iter()
+        .map(|plane| {
+            let ratio = noise_ratio(ref_noise, plane_noise(plane, t));
+            let plane_sigma = sigma * ratio;
+            // a colour-difference plane noisier than the brightness plane is shrunk a little harder than its scaled
+            // level, as the brightness plane is the one the groups were matched on; one no noisier keeps its scaled level
+            let plane_lambda = scaled_lambda(lambda, sigma_ref, plane_sigma) * chroma_factor(ratio);
+            (plane_lambda, plane_sigma)
+        })
+        .collect()
+}
+
+fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], t: usize, p: &Params, lambda: f32, tf: &Transform) -> Vec<Vec<f32>> {
+    let n = tf.n;
+    let levels = plane_levels(y, t, p, lambda);
     let mut s = Scratch::default();
     let (mut buf, mut pbuf) = (Vec::new(), Vec::new());
     let mut out = Vec::with_capacity(y.len());
-    for plane in y {
+    for (plane, &(plane_lambda, plane_sigma)) in y.iter().zip(&levels) {
         let mut num = vec![0f32; t * t];
         let mut den = vec![0f32; t * t];
         let c = out.len();
         let pilot_plane = pilot.and_then(|pl| pl.get(c));
-        let ratio = noise_ratio(ref_noise, plane_noise(plane, t));
-        let plane_sigma = sigma * ratio;
-        // a colour-difference plane noisier than the brightness plane is shrunk a little harder than its scaled
-        // level, as the brightness plane is the one the groups were matched on; one no noisier keeps its scaled level
-        let plane_lambda = scaled_lambda(lambda, sigma_ref, plane_sigma) * chroma_factor(ratio);
         for members in groups {
             let m = members.len();
             gather(plane, t, n, members, &mut buf);
