@@ -73,7 +73,9 @@
   vanish for good after Crop & Rotate or a brush hid it: the sandbox couldn't see any cursor theme. The Flatpak now
   points at the host's cursor themes, as VectorCraft's does (issue #1657). Where the host's default theme is a
   symlink the sandbox can't follow (Ubuntu's `/etc/alternatives`), name a theme once:
-  `flatpak override --user --env=XCURSOR_THEME=Adwaita ai.storyteller.lightcraft`.
+  `flatpak override --user --env=XCURSOR_THEME=Adwaita ai.storyteller.lightcraft`, with in place of `Adwaita` any
+  cursor theme installed in `/usr/share/icons` or `~/.local/share/icons` (a theme in `~/.icons` also needs
+  `flatpak override --user --filesystem=~/.icons:ro ai.storyteller.lightcraft`).
 
 ### Lightroom catalogs with a print inside a collection import their collections
 - Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
