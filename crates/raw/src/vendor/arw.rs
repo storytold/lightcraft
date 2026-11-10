@@ -46,7 +46,7 @@
 
 use super::arw6;
 use crate::lens_metadata::SonyLensGeometry;
-use crate::tiffraw::{Packing, check_image, read_image_in};
+use crate::tiffraw::{Packing, check_image, decode_groups, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, LensMetadata, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
@@ -353,46 +353,50 @@ fn read_quad_tiles(bytes: &[u8], info: &ImageInfo) -> Result<Vec<u16>> {
     let (w, h) = (info.width as usize, info.height as usize);
     let total = check_image(bytes, info)?;
     let chunks = info.chunks(bytes.len() as u64);
-    let decoded: Vec<Result<(Chunk, ljpeg::Frame)>> = chunks
-        .par_iter()
-        .map(|c| {
-            let src = chunk_bytes(bytes, c).ok_or_else(|| RawError::Corrupt("tile offset past end of file".into()))?;
-            let f = ljpeg::decode(src, (c.width as usize * c.height as usize).max(1 << 16))?;
-            if f.components != 4 || f.data.len() < f.width * f.height * 4 {
-                return Err(RawError::Corrupt(format!(
-                    "lossless ARW tile: {} samples in a {}×{}×{} frame",
-                    f.data.len(),
-                    f.width,
-                    f.height,
-                    f.components
-                )));
-            }
-            Ok((*c, f))
-        })
-        .collect();
     let mut out = vec![0u16; total];
     let mut ok = 0usize;
     let mut first_err = None;
-    for r in decoded {
-        let (c, f) = match r {
-            Ok(v) => v,
-            Err(e) => {
-                first_err.get_or_insert(e);
-                continue;
-            }
-        };
-        ok += 1;
-        let (x0, y0) = (c.x as usize, c.y as usize);
-        for fy in 0..f.height {
-            for k in 0..4 {
-                let y = y0 + 2 * fy + (k >> 1);
-                if y >= h {
+    // decoded a group at a time: all tiles at once would hold every frame (up to four times the image, the tile grid
+    // check_image allows) beside the output (issue #2554)
+    for group in decode_groups(&chunks, 1, total) {
+        let decoded: Vec<Result<(Chunk, ljpeg::Frame)>> = chunks[group]
+            .par_iter()
+            .map(|c| {
+                let src = chunk_bytes(bytes, c).ok_or_else(|| RawError::Corrupt("tile offset past end of file".into()))?;
+                let f = ljpeg::decode(src, (c.width as usize * c.height as usize).max(1 << 16))?;
+                if f.components != 4 || f.data.len() < f.width * f.height * 4 {
+                    return Err(RawError::Corrupt(format!(
+                        "lossless ARW tile: {} samples in a {}×{}×{} frame",
+                        f.data.len(),
+                        f.width,
+                        f.height,
+                        f.components
+                    )));
+                }
+                Ok((*c, f))
+            })
+            .collect();
+        for r in decoded {
+            let (c, f) = match r {
+                Ok(v) => v,
+                Err(e) => {
+                    first_err.get_or_insert(e);
                     continue;
                 }
-                for fx in 0..f.width {
-                    let x = x0 + 2 * fx + (k & 1);
-                    if x < w {
-                        out[y * w + x] = f.data[(fy * f.width + fx) * 4 + k];
+            };
+            ok += 1;
+            let (x0, y0) = (c.x as usize, c.y as usize);
+            for fy in 0..f.height {
+                for k in 0..4 {
+                    let y = y0 + 2 * fy + (k >> 1);
+                    if y >= h {
+                        continue;
+                    }
+                    for fx in 0..f.width {
+                        let x = x0 + 2 * fx + (k & 1);
+                        if x < w {
+                            out[y * w + x] = f.data[(fy * f.width + fx) * 4 + k];
+                        }
                     }
                 }
             }
@@ -447,33 +451,37 @@ fn read_ycbcr_tiles(bytes: &[u8], info: &ImageInfo, raw: &Ifd, mode: Mode) -> Re
     if mode == Mode::Header {
         return Ok(Vec::new());
     }
-    let decoded: Vec<(Chunk, ljpeg::FrameSubsampled)> = chunks
-        .par_iter()
-        .map(|c| {
-            let src = chunk_bytes(bytes, c).ok_or_else(|| RawError::Corrupt("YCbCr tile outside file".into()))?;
-            let limit = (c.width as usize).checked_mul(c.height as usize).and_then(|n| n.checked_mul(3)).ok_or(RawError::Limit("tile too large"))?;
-            let f = ljpeg::decode_subsampled(src, limit, ljpeg::Prediction::Geometric)?;
-            if f.width != c.width as usize || f.height != c.height as usize {
-                return Err(RawError::Corrupt("Sony YCbCr tile dimensions".into()));
-            }
-            Ok((*c, f))
-        })
-        .collect::<Result<_>>()?;
     let (w, h) = (info.width as usize, info.height as usize);
     let mut out = vec![0u16; total];
-    for (c, f) in decoded {
-        for y in 0..f.height.min(h.saturating_sub(c.y as usize)) {
-            for x in 0..f.width.min(w.saturating_sub(c.x as usize)) {
-                let luma = f.planes[0][y * f.width + x] as f64;
-                let ci = (y / f.vertical_subsampling) * (f.width / 2) + x / 2;
-                let cb = f.planes[1][ci] as f64 - cbzero;
-                let cr = f.planes[2][ci] as f64 - crzero;
-                let r = luma + (2.0 - 2.0 * kr) * cr;
-                let b = luma + (2.0 - 2.0 * kb) * cb;
-                let g = (luma - kr * r - kb * b) / kg;
-                let dst = (((c.y as usize + y) * w) + c.x as usize + x) * 3;
-                for (s, value) in [r, g, b].into_iter().enumerate() {
-                    out[dst + s] = value.round().clamp(0.0, 65535.0) as u16;
+    // decoded a group at a time, as read_quad_tiles does (issue #2554)
+    for group in decode_groups(&chunks, 3, total) {
+        let decoded: Vec<(Chunk, ljpeg::FrameSubsampled)> = chunks[group]
+            .par_iter()
+            .map(|c| {
+                let src = chunk_bytes(bytes, c).ok_or_else(|| RawError::Corrupt("YCbCr tile outside file".into()))?;
+                let limit =
+                    (c.width as usize).checked_mul(c.height as usize).and_then(|n| n.checked_mul(3)).ok_or(RawError::Limit("tile too large"))?;
+                let f = ljpeg::decode_subsampled(src, limit, ljpeg::Prediction::Geometric)?;
+                if f.width != c.width as usize || f.height != c.height as usize {
+                    return Err(RawError::Corrupt("Sony YCbCr tile dimensions".into()));
+                }
+                Ok((*c, f))
+            })
+            .collect::<Result<_>>()?;
+        for (c, f) in decoded {
+            for y in 0..f.height.min(h.saturating_sub(c.y as usize)) {
+                for x in 0..f.width.min(w.saturating_sub(c.x as usize)) {
+                    let luma = f.planes[0][y * f.width + x] as f64;
+                    let ci = (y / f.vertical_subsampling) * (f.width / 2) + x / 2;
+                    let cb = f.planes[1][ci] as f64 - cbzero;
+                    let cr = f.planes[2][ci] as f64 - crzero;
+                    let r = luma + (2.0 - 2.0 * kr) * cr;
+                    let b = luma + (2.0 - 2.0 * kb) * cb;
+                    let g = (luma - kr * r - kb * b) / kg;
+                    let dst = (((c.y as usize + y) * w) + c.x as usize + x) * 3;
+                    for (s, value) in [r, g, b].into_iter().enumerate() {
+                        out[dst + s] = value.round().clamp(0.0, 65535.0) as u16;
+                    }
                 }
             }
         }
