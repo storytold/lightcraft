@@ -190,7 +190,7 @@ fn med8(v0: f32, v1: f32, v2: f32, v3: f32, v4: f32, v5: f32, v6: f32, v7: f32) 
     return 0.5 * (d + e);
 }
 
-// The farther of a value's distances to the least and largest of 8 (`speck_share`'s pre-test).
+// The farther of a value's distances to the least and largest of 8 (`speck_bound`).
 fn reach8(p: f32, v0: f32, v1: f32, v2: f32, v3: f32, v4: f32, v5: f32, v6: f32, v7: f32) -> f32 {
     let lo = min(min(min(v0, v1), min(v2, v3)), min(min(v4, v5), min(v6, v7)));
     let hi = max(max(max(v0, v1), max(v2, v3)), max(max(v4, v5), max(v6, v7)));
@@ -285,7 +285,8 @@ fn nrcj_speck(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgrou
     dst[3u * i + 2u] = o.z;
 }
 
-// `nrc_joint::pilot`: `a` = transformed image, `b` = its gaussian(0.8); writes the guide.
+// `nrc_joint::pilot`: `a` = transformed image; writes the guide. gaussian(0.8) is one 3-pixel box per axis
+// at any image size (`nrc_joint::PILOT_BOX_R`), summed here from `a` (clamped edges) without a blurred copy.
 @compute @workgroup_size(256)
 fn nrcj_pilot(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
@@ -296,7 +297,14 @@ fn nrcj_pilot(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgrou
     let h = pu(2u);
     let x = i % w;
     let y = i / w;
-    var out = jb3(i);
+    let xs = vec3<u32>(select(x - 1u, 0u, x == 0u), x, min(x + 1u, w - 1u));
+    let ys = vec3<u32>(select(y - 1u, 0u, y == 0u), y, min(y + 1u, h - 1u));
+    var sum = vec3<f32>(0.0);
+    for (var k = 0u; k < 3u; k++) {
+        let r = ys[k] * w;
+        sum += (ja(r + xs.x) + ja(r + xs.y) + ja(r + xs.z)) * (1.0 / 3.0);
+    }
+    var out = sum * (1.0 / 3.0);
     if (!(x == 0u || y == 0u || x + 1u == w || y + 1u == h)) {
         let p = ja(i);
         // 9 · noise variance per component, at the pixel's luminance
@@ -465,6 +473,60 @@ fn nrcj_dv(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups)
     dst[2u * i + 1u] = o.y;
 }
 
+// A vertical step (`nrcj_dv`) then a horizontal one (`nrcj_dh`) in one dispatch, the same operations:
+// each workgroup takes 256 pixels of a row, works the vertical step for them and `delta` pixels on either
+// side into workgroup memory, then the horizontal step from there. Parameters as `nrcj_dh`; delta at
+// most `JDVH_REACH` (the caller runs the two kernels beyond that). Grid: (columns / 256, rows).
+const JDVH_REACH: u32 = 128u;
+var<workgroup> jdvh_row: array<vec2<f32>, 512>;
+
+// `nrcj_dv` at pixel (x, y).
+fn jdv(x: u32, y: u32, w: u32, h: u32, delta: u32, rate: f32) -> vec2<f32> {
+    let i = y * w + x;
+    let p = ja2(i);
+    var o = p;
+    if (y >= delta) {
+        o += rate * b[2u * (i - delta * w) + 1u] * (ja2(i - delta * w) - p);
+    }
+    if (y + delta < h) {
+        o += rate * b[2u * i + 1u] * (ja2(i + delta * w) - p);
+    }
+    return o;
+}
+
+@compute @workgroup_size(256)
+fn nrcj_dvh(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
+    let w = pu(1u);
+    let h = pu(2u);
+    let delta = min(pu(3u), JDVH_REACH);
+    let rate = pf(4u);
+    let y = wg.y;
+    let x0 = wg.x * 256u;
+    // vertical step for columns x0 − delta .. x0 + 256 + delta (those inside the image)
+    for (var j = l.x; j < 256u + 2u * delta; j += 256u) {
+        let xx = i32(x0) - i32(delta) + i32(j);
+        if (y < h && xx >= 0 && u32(xx) < w) {
+            jdvh_row[j] = jdv(u32(xx), y, w, h, delta, rate);
+        }
+    }
+    workgroupBarrier();
+    let x = x0 + l.x;
+    if (y >= h || x >= w) {
+        return;
+    }
+    let i = y * w + x;
+    let p = jdvh_row[l.x + delta];
+    var o = p;
+    if (x >= delta) {
+        o += rate * b[2u * (i - delta)] * (jdvh_row[l.x] - p);
+    }
+    if (x + delta < w) {
+        o += rate * b[2u * i] * (jdvh_row[l.x + 2u * delta] - p);
+    }
+    dst[2u * i] = o.x;
+    dst[2u * i + 1u] = o.y;
+}
+
 // Back to RGB with the image's own luminance, blended by the strength: `a` = image, `b` = a band's
 // filtered chroma pairs, `dst` = the whole output. P[0] = pixels written, P[1] = strength,
 // P[2] = first pixel written (in the image), P[3] = first pixel of the band (in the image).
@@ -481,6 +543,26 @@ fn nrcj_recon(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgrou
     let y = lum2020(p);
     let r = y + b[2u * bi];
     let bl = y + b[2u * bi + 1u];
+    let res = vec3<f32>(r, (y - 0.2627 * r - 0.0593 * bl) / 0.6780, bl);
+    let o = p + s * (res - p);
+    dst[3u * i] = o.x;
+    dst[3u * i + 1u] = o.y;
+    dst[3u * i + 2u] = o.z;
+}
+
+// `nrcj_recon` over the image itself, for an image filtered as one band: `a` = the filtered chroma pairs,
+// `dst` = the image, read and written. P[0] = n, P[1] = strength.
+@compute @workgroup_size(256)
+fn nrcj_recon_in(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    let s = pf(1u);
+    let p = vec3<f32>(dst[3u * i], dst[3u * i + 1u], dst[3u * i + 2u]);
+    let y = lum2020(p);
+    let r = y + a[2u * i];
+    let bl = y + a[2u * i + 1u];
     let res = vec3<f32>(r, (y - 0.2627 * r - 0.0593 * bl) / 0.6780, bl);
     let o = p + s * (res - p);
     dst[3u * i] = o.x;

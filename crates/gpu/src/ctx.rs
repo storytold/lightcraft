@@ -78,7 +78,9 @@ const MODULES: &[Module] = &[
             "nrcj_links",
             "nrcj_dh",
             "nrcj_dv",
+            "nrcj_dvh",
             "nrcj_recon",
+            "nrcj_recon_in",
         ],
     },
     Module {
@@ -197,13 +199,23 @@ fn build_jobs(
             layout: Some(&p.pipeline_layout),
             module: &p.module,
             entry_point: Some(entry),
-            compilation_options: Default::default(),
+            compilation_options: compilation_options(entry),
             cache: None,
         });
         let kernel = Kernel { pipeline, layout: p.layout.clone(), nbuf: p.nbuf };
         built.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(entry, kernel);
     }
     pop_scopes(scopes)
+}
+
+/// Kernels that write every workgroup-memory entry before reading it, so the zero fill wgpu adds by default
+/// is not needed. On DX12 that fill is written out one assignment per element and FXC takes about 30 s over
+/// `nrcj_dvh`'s 512-entry array (0.2 s without it). Add a kernel only after checking each read is written first.
+const WORKGROUP_UNZEROED: &[&str] = &["nrcj_dvh"];
+
+/// The compilation options of kernel `entry`: see [`WORKGROUP_UNZEROED`].
+fn compilation_options(entry: &str) -> wgpu::PipelineCompilationOptions<'static> {
+    wgpu::PipelineCompilationOptions { zero_initialize_workgroup_memory: !WORKGROUP_UNZEROED.contains(&entry), ..Default::default() }
 }
 
 /// A device buffer of `len` 32-bit values.
@@ -1153,6 +1165,17 @@ pub fn groups1(n: usize) -> [u32; 3] {
 
 #[cfg(test)]
 mod tests {
+    /// Only the kernels listed in `WORKGROUP_UNZEROED` skip the zero fill, and each one listed exists (a renamed
+    /// kernel would otherwise get the fill back, and DX12 its 30 s build).
+    #[test]
+    fn only_listed_kernels_skip_the_workgroup_zero_fill() {
+        for &k in super::WORKGROUP_UNZEROED {
+            assert!(super::MODULES.iter().any(|m| m.entries.contains(&k)), "{k} is not a kernel");
+            assert!(!super::compilation_options(k).zero_initialize_workgroup_memory);
+        }
+        assert!(super::compilation_options("nrcj_dv").zero_initialize_workgroup_memory);
+    }
+
     /// Every kernel module, as it is handed to the device (the generated constants, the bindings, `common.wgsl`, the
     /// module), parses and validates without a GPU.
     #[test]

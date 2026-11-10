@@ -273,11 +273,14 @@ fn weight(distance: f32, path: f32) -> f32 {
     if m == 0.0 { 1.0 } else { (-m).exp() }
 }
 
-/// `weight(distance, path)` with the path given as exp(−path): min(exp(−distance), that), and no `exp`
-/// for a distance of 0.
+/// `weight(distance, path)` with the path given as exp(−path): min(exp(−distance), that). A distance of 0
+/// gives the path itself without a branch (exp(−0) is exactly 1 and paths are at most 1): beyond the direct
+/// neighbours, whether a distance is 0 is close to a coin toss in noise, and the mispredicted branch cost
+/// more than the `exp` it saved (links at delta 2–32, M2 Max: 24 → 18 ms each on 24 MP). `weight` keeps
+/// its branch: for direct neighbours a distance of 0 is common enough that skipping `exp` pays.
 #[inline]
 fn path_weight(distance: f32, path: f32) -> f32 {
-    if distance == 0.0 { path } else { (-distance).exp().min(path) }
+    (-distance).exp().min(path)
 }
 
 /// Denoise the pilot along a clearly smoother axis at strong edges. An isotropic blur
@@ -286,41 +289,140 @@ fn path_weight(distance: f32, path: f32) -> f32 {
 /// Written straight into planes (see `Planes`), one row at a time without branches per pixel.
 fn pilot(original: &Rgb32f, noise: &JointNoise) -> Planes {
     use rayon::prelude::*;
-    let blurred = gaussian(original, 0.8);
-    let (w, h) = (original.width, original.height);
+    let w = original.width;
     let mut planes = Planes { c: std::array::from_fn(|_| vec![0.0; original.len()]), w };
     let [py, pu, pv] = &mut planes.c;
-    py.par_chunks_mut(w.max(1)).zip(pu.par_chunks_mut(w.max(1))).zip(pv.par_chunks_mut(w.max(1))).enumerate().for_each_init(
-        Vec::new,
-        |out: &mut Vec<[f32; 3]>, (y, ((ry, ru), rv))| {
-            let Some(blur) = blurred.data.get(y * w..(y + 1) * w) else { return };
-            out.clear();
-            out.extend_from_slice(blur);
-            if y > 0
-                && y + 1 < h
-                && let (Some(up), Some(mid), Some(down)) =
-                    (original.data.get((y - 1) * w..y * w), original.data.get(y * w..(y + 1) * w), original.data.get((y + 1) * w..(y + 2) * w))
-            {
-                // columns 1 .. w − 1: the pixel, its left/right (axis 0) and upper/lower (axis 1) neighbours
-                for (((o, win), &u), &d) in out.iter_mut().skip(1).zip(mid.windows(3)).zip(up.iter().skip(1)).zip(down.iter().skip(1)) {
-                    let &[l, p, r] = win else { continue };
-                    let var: [f32; 3] = std::array::from_fn(|i| 9.0 * noise.var(i, p[0]));
-                    let axis = |a: [f32; 3], b: [f32; 3]| {
-                        let m: [f32; 3] = std::array::from_fn(|i| (a[i] + p[i] + b[i]) / 3.0);
-                        let t = |i: usize| ((a[i] - m[i]).powi(2) + (p[i] - m[i]).powi(2) + (b[i] - m[i]).powi(2)) / var[i];
-                        (m, t(0) + t(1) + t(2))
-                    };
-                    let (mh, vh) = axis(l, r);
-                    let (mv, vvar) = axis(u, d);
-                    *o = pilot_pick(*o, mh, vh, mv, vvar);
-                }
-            }
-            for (((c, y), u), v) in out.iter().zip(ry.iter_mut()).zip(ru.iter_mut()).zip(rv.iter_mut()) {
-                (*y, *u, *v) = (c[0], c[1], c[2]);
+    let band = lightcraft_raster::blur::BAND;
+    py.par_chunks_mut(w.max(1)).zip(pu.par_chunks_mut(w.max(1))).zip(pv.par_chunks_mut(w.max(1))).chunks(band).enumerate().for_each_init(
+        || (Vec::new(), PilotBlur::default()),
+        |(out, blur): &mut (Vec<[f32; 3]>, PilotBlur), (k, rows)| {
+            blur.start(original, k * band);
+            for (i, ((ry, ru), rv)) in rows.into_iter().enumerate() {
+                blur.next_row(original, out);
+                pilot_row(original, noise, k * band + i, out, [ry, ru, rv]);
             }
         },
     );
     planes
+}
+
+/// Radius of the pilot blur's box: `gaussian(…, 0.8)` is one 3-pixel box per axis at any image size
+/// (`lightcraft_raster::blur::box_radii`). The GPU's `nrcj_pilot` sums the same box.
+const PILOT_BOX_R: usize = 1;
+/// Source rows [`PilotBlur`] holds: the window, and the row entering it while the leaving one is still read.
+const PILOT_RING: usize = 2 * PILOT_BOX_R + 2;
+
+/// The rows of the pilot's `gaussian`, one band of `lightcraft_raster::blur::BAND` rows at a time, bit for
+/// bit (`pilot_matches_the_gaussian`): the same horizontal running sum per row and vertical running sums
+/// primed at the band's first row, without a blurred copy of the image.
+#[derive(Default)]
+struct PilotBlur {
+    /// horizontal boxes of the last [`PILOT_RING`] source rows, by row index modulo that
+    ring: Vec<[f32; 3]>,
+    /// the source row in each ring slot (`usize::MAX`: none)
+    held: [usize; PILOT_RING],
+    /// the vertical running sums
+    acc: Vec<[f32; 3]>,
+    y: usize,
+}
+
+impl PilotBlur {
+    fn start(&mut self, img: &Rgb32f, y0: usize) {
+        use lightcraft_raster::resample::Pixel;
+        let w = img.width;
+        self.ring.resize(PILOT_RING * w, [0.0; 3]);
+        self.held = [usize::MAX; PILOT_RING];
+        self.acc.clear();
+        self.acc.resize(w, <[f32; 3]>::zero());
+        self.y = y0;
+        let last = img.height.saturating_sub(1);
+        for i in 0..=2 * PILOT_BOX_R {
+            let yy = (y0 + i).saturating_sub(PILOT_BOX_R).min(last);
+            self.boxed(img, yy);
+            let slot = yy % PILOT_RING;
+            if let Some(row) = self.ring.get(slot * w..(slot + 1) * w) {
+                for (a, v) in self.acc.iter_mut().zip(row) {
+                    *a = a.madd(*v, 1.0);
+                }
+            }
+        }
+    }
+
+    /// The horizontal box of source row `y` into its ring slot (`y` modulo the ring's rows), computed
+    /// once while it stays there.
+    fn boxed(&mut self, img: &Rgb32f, y: usize) {
+        use lightcraft_raster::resample::Pixel;
+        let w = img.width;
+        let slot = y % PILOT_RING;
+        if self.held.get(slot) == Some(&y) {
+            return;
+        }
+        let (Some(out), Some(s), Some(last)) = (self.ring.get_mut(slot * w..(slot + 1) * w), img.data.get(y * w..(y + 1) * w), w.checked_sub(1))
+        else {
+            return;
+        };
+        let inv = 1.0 / (2 * PILOT_BOX_R + 1) as f32;
+        let at = |i: usize| s.get(i.min(last)).copied().unwrap_or_default();
+        let mut acc = <[f32; 3]>::zero();
+        for i in 0..=2 * PILOT_BOX_R {
+            acc = acc.madd(at(i.saturating_sub(PILOT_BOX_R)), 1.0);
+        }
+        for (x, o) in out.iter_mut().enumerate() {
+            *o = <[f32; 3]>::zero().madd(acc, inv);
+            acc = acc.madd(at(x + PILOT_BOX_R + 1), 1.0).madd(at(x.saturating_sub(PILOT_BOX_R)), -1.0);
+        }
+        if let Some(held) = self.held.get_mut(slot) {
+            *held = y;
+        }
+    }
+
+    /// The next blurred row of the band into `out`, then the running sums moved on by one row.
+    fn next_row(&mut self, img: &Rgb32f, out: &mut Vec<[f32; 3]>) {
+        use lightcraft_raster::resample::Pixel;
+        let (y, last) = (self.y, img.height.saturating_sub(1));
+        let inv = 1.0 / (2 * PILOT_BOX_R + 1) as f32;
+        out.clear();
+        out.extend(self.acc.iter().map(|a| <[f32; 3]>::zero().madd(*a, inv)));
+        // the row leaving the window is held until the one entering is boxed (they are 2r + 1 apart)
+        let (enter, leave) = ((y + PILOT_BOX_R + 1).min(last), y.saturating_sub(PILOT_BOX_R));
+        self.boxed(img, enter);
+        let w = img.width;
+        let (enter, leave) = (enter % PILOT_RING, leave % PILOT_RING);
+        let (Some(add), Some(sub)) = (self.ring.get(enter * w..(enter + 1) * w), self.ring.get(leave * w..(leave + 1) * w)) else {
+            return;
+        };
+        for ((a, p), q) in self.acc.iter_mut().zip(add).zip(sub) {
+            *a = a.madd(*p, 1.0).madd(*q, -1.0);
+        }
+        self.y += 1;
+    }
+}
+
+/// Row `y` of the pilot from its isotropic blur `out` (overwritten) into the planes' rows.
+fn pilot_row(original: &Rgb32f, noise: &JointNoise, y: usize, out: &mut [[f32; 3]], [ry, ru, rv]: [&mut [f32]; 3]) {
+    let (w, h) = (original.width, original.height);
+    if y > 0
+        && y + 1 < h
+        && let (Some(up), Some(mid), Some(down)) =
+            (original.data.get((y - 1) * w..y * w), original.data.get(y * w..(y + 1) * w), original.data.get((y + 1) * w..(y + 2) * w))
+    {
+        // columns 1 .. w − 1: the pixel, its left/right (axis 0) and upper/lower (axis 1) neighbours
+        for (((o, win), &u), &d) in out.iter_mut().skip(1).zip(mid.windows(3)).zip(up.iter().skip(1)).zip(down.iter().skip(1)) {
+            let &[l, p, r] = win else { continue };
+            let var: [f32; 3] = std::array::from_fn(|i| 9.0 * noise.var(i, p[0]));
+            let axis = |a: [f32; 3], b: [f32; 3]| {
+                let m: [f32; 3] = std::array::from_fn(|i| (a[i] + p[i] + b[i]) / 3.0);
+                let t = |i: usize| ((a[i] - m[i]).powi(2) + (p[i] - m[i]).powi(2) + (b[i] - m[i]).powi(2)) / var[i];
+                (m, t(0) + t(1) + t(2))
+            };
+            let (mh, vh) = axis(l, r);
+            let (mv, vvar) = axis(u, d);
+            *o = pilot_pick(*o, mh, vh, mv, vvar);
+        }
+    }
+    for (((c, y), u), v) in out.iter().zip(ry.iter_mut()).zip(ru.iter_mut()).zip(rv.iter_mut()) {
+        (*y, *u, *v) = (c[0], c[1], c[2]);
+    }
 }
 
 /// The pilot at one pixel from its isotropic blur `o`, the horizontal mean `mh` and noise-normalised
@@ -356,6 +458,7 @@ fn rgb2(y: f32, uv: Pair) -> [f32; 3] {
 ///
 /// Per pixel: `out = p`, then the lower neighbour's exchange, then the upper one's, in that order
 /// (the order the result depends on, bit for bit).
+#[cfg(test)]
 fn diffuse(src: &PairImage, dst: &mut PairImage, links: &PairImage, delta: usize, vertical: bool, rate: f32) {
     if vertical { diffuse_v(src, dst, links, delta, rate) } else { diffuse_h(src, dst, links, delta, rate) }
 }
@@ -366,6 +469,7 @@ fn exchange(out: &mut Pair, p: Pair, q: Pair, weight: f32) {
     out[1] += weight * (q[1] - p[1]);
 }
 
+#[cfg(test)]
 fn diffuse_h(src: &PairImage, dst: &mut PairImage, links: &PairImage, delta: usize, rate: f32) {
     let w = src.width;
     for_rows(&mut dst.data, w, |y, out| {
@@ -383,6 +487,7 @@ fn diffuse_h(src: &PairImage, dst: &mut PairImage, links: &PairImage, delta: usi
     });
 }
 
+#[cfg(test)]
 fn diffuse_v(src: &PairImage, dst: &mut PairImage, links: &PairImage, delta: usize, rate: f32) {
     let (w, h) = (src.width, src.height);
     for_rows(&mut dst.data, w, |y, out| {
@@ -403,6 +508,164 @@ fn diffuse_v(src: &PairImage, dst: &mut PairImage, links: &PairImage, delta: usi
             }
         }
     });
+}
+
+/// Output columns per tile of [`diffuse_scale`]: a tile's ring buffers stay in the core's cache.
+const TILE_W: usize = 512;
+
+/// One scale's four diffusion steps (horizontal, vertical, horizontal, vertical; see [`diffuse`]) in
+/// one sweep, bit for bit the same result. The four separate passes each stream the whole image and
+/// its links through memory; here a strip of rows is worked in column tiles, each passing its rows
+/// through two rings of `2·delta + 1` rows that stay in cache. A tile recomputes the halo (`2·delta`
+/// pixels on each side) its neighbours also compute.
+fn diffuse_scale(src: &PairImage, dst: &mut PairImage, links: &PairImage, delta: usize, rate: f32) {
+    use rayon::prelude::*;
+    let (w, h) = (src.width, src.height);
+    if w == 0 || h == 0 || delta == 0 || dst.data.len() != src.data.len() || links.data.len() != src.data.len() {
+        return;
+    }
+    let strip = (8 * delta).clamp(64, 512);
+    dst.data.par_chunks_mut(strip * w).enumerate().for_each_init(ScaleRings::default, |rings, (k, out)| {
+        let y0 = k * strip;
+        let y1 = (y0 + out.len() / w).min(h);
+        for x0 in (0..w).step_by(TILE_W) {
+            let x1 = (x0 + TILE_W).min(w);
+            // columns held (the first horizontal step reads 2·delta beyond the output)
+            let cx0 = x0.saturating_sub(2 * delta);
+            let width = (x1 + 2 * delta).min(w) - cx0;
+            let tile = ScaleTile { src, links, delta, rate, w, h, x0, x1, y0, y1, cx0, width };
+            tile.run(rings, out);
+        }
+    });
+}
+
+/// Per-thread buffers of [`diffuse_scale`].
+#[derive(Default)]
+struct ScaleRings {
+    first: Vec<Pair>,
+    third: Vec<Pair>,
+    row: Vec<Pair>,
+}
+
+/// One tile of [`diffuse_scale`]: output columns `x0..x1` of rows `y0..y1`.
+struct ScaleTile<'a> {
+    src: &'a PairImage,
+    links: &'a PairImage,
+    delta: usize,
+    rate: f32,
+    w: usize,
+    h: usize,
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
+    /// first column held, and the number held
+    cx0: usize,
+    width: usize,
+}
+
+impl ScaleTile<'_> {
+    /// `out`: the rows `y0..y1` of the destination, full width.
+    fn run(&self, rings: &mut ScaleRings, out: &mut [Pair]) {
+        let (d, w, h) = (self.delta, self.w, self.h);
+        let (cx0, width) = (self.cx0, self.width);
+        let cx1 = cx0 + width;
+        // the columns the first two steps produce (delta beyond the output)
+        let (ax0, ax1) = (self.x0.saturating_sub(d), (self.x1 + d).min(w));
+        let m = 2 * d + 1;
+        rings.first.resize(m * width, [0.0; 2]);
+        rings.third.resize(m * width, [0.0; 2]);
+        rings.row.resize(width, [0.0; 2]);
+        let ScaleRings { first, third, row } = rings;
+        // rows of the first step (2·delta beyond the output) and of the second and third (delta beyond)
+        let (first_hi, third_lo, third_hi) = ((self.y1 + 2 * d).min(h), self.y0.saturating_sub(d), (self.y1 + d).min(h));
+        let mut next_first = self.y0.saturating_sub(2 * d);
+        let mut next_third = third_lo;
+        for y in self.y0..self.y1 {
+            while next_third <= (y + d).min(third_hi - 1) {
+                let u = next_third;
+                while next_first <= (u + d).min(first_hi - 1) {
+                    let t = next_first;
+                    let (Some(s), Some(r)) = (self.src.data.get(t * w + cx0..t * w + cx1), first.get_mut((t % m) * width..(t % m + 1) * width))
+                    else {
+                        return;
+                    };
+                    self.horizontal(t, s, r, ax0, ax1);
+                    next_first += 1;
+                }
+                self.vertical(u, first, row, ax0, ax1);
+                let Some(r) = third.get_mut((u % m) * width..(u % m + 1) * width) else { return };
+                self.horizontal(u, row, r, self.x0, self.x1);
+                next_third += 1;
+            }
+            let Some(o) = out.get_mut((y - self.y0) * w + cx0..(y - self.y0) * w + cx1) else { return };
+            self.vertical(y, third, o, self.x0, self.x1);
+        }
+    }
+
+    /// `diffuse_h` of row `y` (`s`, `out`: the columns held), for the columns `from..to`.
+    fn horizontal(&self, y: usize, s: &[Pair], out: &mut [Pair], from: usize, to: usize) {
+        let (d, w, rate, cx0) = (self.delta, self.w, self.rate, self.cx0);
+        let Some(l) = self.links.data.get(y * w..(y + 1) * w) else { return };
+        // the columns with both neighbours, without branches; the few others one at a time
+        let lo = from.max(d).min(to);
+        let hi = to.min(w.saturating_sub(d)).max(lo);
+        let n = hi - lo;
+        // (an empty interior can lie left of `delta`: no column there to subtract it from)
+        let (i, left) = (lo - cx0, lo.checked_sub(d));
+        if n > 0
+            && let (Some(il), Some(left)) = (i.checked_sub(d), left)
+            && let (Some(sl), Some(sm), Some(sh), Some(ll), Some(lh), Some(o)) =
+                (s.get(il..il + n), s.get(i..i + n), s.get(i + d..i + d + n), l.get(left..left + n), l.get(lo..lo + n), out.get_mut(i..i + n))
+        {
+            for (((((o, &p), &a), &b), la), lb) in o.iter_mut().zip(sm).zip(sl).zip(sh).zip(ll).zip(lh) {
+                let mut v = p;
+                exchange(&mut v, p, a, rate * la[0]);
+                exchange(&mut v, p, b, rate * lb[0]);
+                *o = v;
+            }
+        }
+        for x in (from..lo).chain(hi..to) {
+            let i = x - cx0;
+            let (Some(&p), Some(o)) = (s.get(i), out.get_mut(i)) else { continue };
+            *o = p;
+            if x >= d
+                && let (Some(&q), Some(lk)) = (s.get(i - d), l.get(x - d))
+            {
+                exchange(o, p, q, rate * lk[0]);
+            }
+            if x + d < w
+                && let (Some(&q), Some(lk)) = (s.get(i + d), l.get(x))
+            {
+                exchange(o, p, q, rate * lk[0]);
+            }
+        }
+    }
+
+    /// `diffuse_v` of row `y` from the ring `ring` (rows `y − delta`, `y`, `y + delta` at their index
+    /// modulo its height) into `out` (the columns held), for the columns `from..to`.
+    fn vertical(&self, y: usize, ring: &[Pair], out: &mut [Pair], from: usize, to: usize) {
+        let (d, w, h, rate, cx0, width) = (self.delta, self.w, self.h, self.rate, self.cx0, self.width);
+        let m = 2 * d + 1;
+        let ring_row = |t: usize| ring.get((t % m) * width + from - cx0..(t % m) * width + to - cx0);
+        let link_row = |t: usize| self.links.data.get(t * w + from..t * w + to);
+        let (Some(s), Some(o)) = (ring_row(y), out.get_mut(from - cx0..to - cx0)) else { return };
+        o.copy_from_slice(s);
+        if y >= d
+            && let (Some(up), Some(lu)) = (ring_row(y - d), link_row(y - d))
+        {
+            for (((o, &p), &q), lk) in o.iter_mut().zip(s).zip(up).zip(lu) {
+                exchange(o, p, q, rate * lk[1]);
+            }
+        }
+        if y + d < h
+            && let (Some(down), Some(ld)) = (ring_row(y + d), link_row(y))
+        {
+            for (((o, &p), &q), lk) in o.iter_mut().zip(s).zip(down).zip(ld) {
+                exchange(o, p, q, rate * lk[1]);
+            }
+        }
+    }
 }
 
 /// The diffusion scales for a final spatial `sigma` (in grid pixels) on a `w × h` grid: each step's
@@ -492,20 +755,10 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// small detail almost always has a luminance step), and it is compact: the colour shift does not reach
 /// the border (a line or an edge carries it on). Demosaicing spreads high-ISO specks over 2 × 2 to
 /// 3 × 3 pixels, which all lie inside. The noise is taken at the ring's mean luminance (a median of it
-/// is only needed for the few pixels past the threshold).
+/// is only needed for the few pixels past the threshold). `despeck` asks only for pixels past [`speck_bound`].
 fn speck_share(p: [f32; 3], ring: &[[f32; 3]; 8], rest: impl Iterator<Item = [f32; 3]>, noise: &JointNoise, brake: SpeckBrake) -> (f32, [f32; 3]) {
     let y = ring.iter().map(|q| q[0]).sum::<f32>() / 8.0;
     let (vu, vv) = (noise.var(1, y), noise.var(2, y));
-    // The medians lie between the ring's least and largest value, so the farther of the two bounds the
-    // excess from above (rounding keeps that order): most pixels are decided without the medians.
-    let reach = |c: usize| {
-        let (lo, hi) = ring.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), q| (lo.min(q[c]), hi.max(q[c])));
-        (p[c] - lo).abs().max((p[c] - hi).abs())
-    };
-    let (bu, bv) = (reach(1), reach(2));
-    if bu * bu / vu + bv * bv / vv <= brake.threshold {
-        return (0.0, [0.0; 3]);
-    }
     let m = [0.0, median8(ring.map(|q| q[1])), median8(ring.map(|q| q[2]))];
     let (du, dv) = (p[1] - m[1], p[2] - m[2]);
     let excess = du * du / vu + dv * dv / vv;
@@ -533,6 +786,22 @@ fn speck_share(p: [f32; 3], ring: &[[f32; 3]; 8], rest: impl Iterator<Item = [f3
     (brake.share * smoothstep(brake.threshold, 2.0 * brake.threshold, excess) * alone * compact, m)
 }
 
+/// The speck brake's first test: a bound from above of the pixel's chroma excess against the ring's medians
+/// (a pixel is a speck candidate above the threshold). The medians lie between the ring's least and largest
+/// value, so the farther of the two bounds the excess (rounding keeps that order): most pixels are decided
+/// without the medians.
+#[inline]
+fn speck_bound(p: [f32; 3], ring: &[[f32; 3]; 8], noise: &JointNoise) -> f32 {
+    let y = ring.iter().map(|q| q[0]).sum::<f32>() / 8.0;
+    let (vu, vv) = (noise.var(1, y), noise.var(2, y));
+    let reach = |c: usize| {
+        let (lo, hi) = ring.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), q| (lo.min(q[c]), hi.max(q[c])));
+        (p[c] - lo).abs().max((p[c] - hi).abs())
+    };
+    let (bu, bv) = (reach(1), reach(2));
+    bu * bu / vu + bv * bv / vv
+}
+
 /// Replace the chroma of compact colour specks by that of their surroundings (see `speck_share`), in the
 /// transformed image (Y, R−Y, B−Y); luminance is never touched. Runs before the guide is built, so a speck
 /// is neither kept by the edge-aware weights nor spread by them.
@@ -550,17 +819,24 @@ fn despeck(img: &mut Rgb32f, noise: &JointNoise, brake: SpeckBrake) {
             let mut changed = Vec::new();
             let rows: [Option<&[[f32; 3]]>; 5] = std::array::from_fn(|k| source.data.get((y + k - 2) * w..(y + k - 1) * w));
             let [Some(r0), Some(r1), Some(r2), Some(r3), Some(r4)] = rows else { return changed };
-            for (x, ((((w0, w1), w2), w3), w4)) in
-                r0.windows(5).zip(r1.windows(5)).zip(r2.windows(5)).zip(r3.windows(5)).zip(r4.windows(5)).enumerate()
-            {
-                let (&[a0, a1, a2, a3, a4], &[b0, _, _, _, b4], &[c0, _, p, _, c4], &[d0, _, _, _, d4], &[e0, e1, e2, e3, e4]) = (w0, w1, w2, w3, w4)
-                else {
+            // the ring alone decides most pixels (`speck_bound`); the rest of the border is
+            // read only for the few that pass it
+            for (x, ((w0, w2), w4)) in r0.windows(5).zip(r2.windows(5)).zip(r4.windows(5)).enumerate() {
+                let (&[a0, _, a2, _, a4], &[c0, _, p, _, c4], &[e0, _, e2, _, e4]) = (w0, w2, w4) else {
                     continue;
                 };
                 // the ring: corners and edge centres of the 5 × 5 square, far enough that a speck spread over
                 // its direct neighbours by demosaicing does not reach them; the rest of the border: with the
                 // ring, every thin line or edge through the pixel crosses at least one of the 16 at any angle
                 let ring = [a0, a2, a4, c0, c4, e0, e2, e4];
+                if speck_bound(p, &ring, noise) <= brake.threshold {
+                    continue;
+                }
+                let (Some(&[a1, _, a3]), Some(&[b0, _, _, _, b4]), Some(&[d0, _, _, _, d4]), Some(&[e1, _, e3])) =
+                    (r0.get(x + 1..x + 4), r1.get(x..x + 5), r3.get(x..x + 5), r4.get(x + 1..x + 4))
+                else {
+                    continue;
+                };
                 let rest = [a1, a3, b0, b4, d0, d4, e1, e3];
                 let (k, m) = speck_share(p, &ring, rest.into_iter(), noise, brake);
                 if k > 0.0 {
@@ -700,13 +976,9 @@ fn denoise_with(img: &mut Rgb32f, params: &NrcParams, step: usize, detail: f32, 
     let sigma = params.passes.last().map_or(0.0, |p| p.sigma / step as f32);
     let plan = scale_plan(sigma, w, h);
     for (k, &(delta, rate)) in plan.iter().enumerate() {
-        for _ in 0..2 {
-            diffuse(&filtered, &mut scratch, &links, delta, false, rate);
-            std::mem::swap(&mut filtered, &mut scratch);
-            diffuse(&filtered, &mut scratch, &links, delta, true, rate);
-            std::mem::swap(&mut filtered, &mut scratch);
-        }
-        lap(&format!("scale {delta}"), &mut tt);
+        diffuse_scale(&filtered, &mut scratch, &links, delta, rate);
+        std::mem::swap(&mut filtered, &mut scratch);
+        lap(&format!("diffuse {delta}"), &mut tt);
         let Some(&(next, _)) = plan.get(k + 1) else { break };
         // In one pass: paths of length 2·delta (from the two adjacent delta-length paths, read from
         // `paths`, written to `scratch`) and the next scale's pair weights from them.
@@ -718,31 +990,42 @@ fn denoise_with(img: &mut Rgb32f, params: &NrcParams, step: usize, detail: f32, 
                 |(dh, dv), (y, (prow, lrow))| {
                     row_distances(y, next, dh, dv);
                     let (Some(here), below) = (old.data.get(y * w..(y + 1) * w), old.data.get((y + delta) * w..(y + delta + 1) * w)) else { return };
-                    for (x, (((out, link), &d0), &d1)) in prow.iter_mut().zip(lrow.iter_mut()).zip(dh.iter()).zip(dv.iter()).enumerate() {
-                        let Some(&p) = here.get(x) else { continue };
-                        *out = p;
-                        if x + delta < w
-                            && let Some(q) = here.get(x + delta)
-                        {
-                            out[0] = out[0].min(q[0]);
+                    prow.copy_from_slice(here);
+                    // paths: the horizontal one of x continues with that of x + delta, the vertical one
+                    // with the row delta below
+                    if let (Some(o), Some(q)) = (prow.get_mut(..w.saturating_sub(delta)), here.get(delta..)) {
+                        for (o, q) in o.iter_mut().zip(q) {
+                            o[0] = o[0].min(q[0]);
                         }
-                        if y + delta < h
-                            && let Some(q) = below.and_then(|b| b.get(x))
-                        {
-                            out[1] = out[1].min(q[1]);
+                    }
+                    if y + delta < h
+                        && let Some(b) = below
+                    {
+                        for (o, q) in prow.iter_mut().zip(b) {
+                            o[1] = o[1].min(q[1]);
                         }
-                        *link = [0.0; 2];
-                        if x + next < w {
-                            link[0] = path_weight(d0, out[0]);
-                        }
-                        if y + next < h {
+                    }
+                    let n = w.saturating_sub(next);
+                    for ((link, out), &d0) in lrow.iter_mut().zip(prow.iter()).zip(dh.iter()).take(n) {
+                        link[0] = path_weight(d0, out[0]);
+                    }
+                    for link in lrow.iter_mut().skip(n) {
+                        link[0] = 0.0;
+                    }
+                    if y + next < h {
+                        for ((link, out), &d1) in lrow.iter_mut().zip(prow.iter()).zip(dv.iter()) {
                             link[1] = path_weight(d1, out[1]);
+                        }
+                    } else {
+                        for link in lrow.iter_mut() {
+                            link[1] = 0.0;
                         }
                     }
                 },
             );
         }
         std::mem::swap(&mut paths, &mut scratch);
+        lap(&format!("links {next}"), &mut tt);
     }
     drop(scratch);
     drop(paths);
@@ -876,6 +1159,121 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `diffuse_scale` (one cache-blocked sweep) gives the four separate passes bit for bit, across tile
+    /// and strip borders, for reaches from 1 pixel to beyond the image.
+    #[test]
+    fn diffuse_scale_matches_four_passes() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f32 / (1u64 << 53) as f32
+        };
+        for (w, h) in [(1100usize, 700usize), (513, 65), (7, 3), (1, 9), (9, 1)] {
+            let mut src = PairImage::new(w, h);
+            let mut links = PairImage::new(w, h);
+            for (p, l) in src.data.iter_mut().zip(&mut links.data) {
+                *p = [rnd() - 0.5, rnd() - 0.5];
+                *l = [rnd(), rnd()];
+            }
+            for delta in [1usize, 2, 5, 32, 64, 600] {
+                let rate = 0.21;
+                let mut a = src.clone();
+                let mut scratch = PairImage::new(w, h);
+                for _ in 0..2 {
+                    for vertical in [false, true] {
+                        diffuse(&a, &mut scratch, &links, delta, vertical, rate);
+                        std::mem::swap(&mut a, &mut scratch);
+                    }
+                }
+                let mut b = PairImage::new(w, h);
+                diffuse_scale(&src, &mut b, &links, delta, rate);
+                for (i, (p, q)) in a.data.iter().zip(&b.data).enumerate() {
+                    assert!(p[0].to_bits() == q[0].to_bits() && p[1].to_bits() == q[1].to_bits(), "{w}x{h} delta {delta}: pixel {i}: {p:?} vs {q:?}");
+                }
+            }
+        }
+    }
+
+    /// `pilot` gives the guide of `gaussian(…, 0.8)`, the blur it replaces, bit for bit: across bands and
+    /// at the borders, and at any image size (the blur is one 3-pixel box per axis at all of them).
+    #[test]
+    fn pilot_matches_the_gaussian() {
+        let noise = noise_model(&noisy(&Rgb32f::filled(64, 64, [0.02; 3]), 7, 0.004).map(yuv));
+        for (w, h) in [(97usize, 83usize), (64, 64), (5, 3), (1, 7), (7, 1), (2, 2)] {
+            let img = noisy(&Rgb32f::from_fn(w, h, |x, y| [0.002 * x as f32, 0.01 + 0.001 * y as f32, 0.03]), 3, 0.01).map(yuv);
+            let blurred = gaussian(&img, 0.8);
+            let want: Vec<[f32; 3]> = blurred
+                .data
+                .chunks(w)
+                .enumerate()
+                .flat_map(|(y, blur)| {
+                    let mut out = blur.to_vec();
+                    let (mut ry, mut ru, mut rv) = (vec![0.0; w], vec![0.0; w], vec![0.0; w]);
+                    pilot_row(&img, &noise, y, &mut out, [&mut ry, &mut ru, &mut rv]);
+                    (0..w).map(move |x| [ry[x], ru[x], rv[x]])
+                })
+                .collect();
+            let got = pilot(&img, &noise);
+            for (i, q) in want.iter().enumerate() {
+                let p = [got.c[0][i], got.c[1][i], got.c[2][i]];
+                assert!((0..3).all(|c| p[c].to_bits() == q[c].to_bits()), "{w}x{h}: pixel {i}: {p:?} vs {q:?}");
+            }
+        }
+    }
+
+    /// The speck brake without `speck_bound`: `speck_share` of every pixel, for the check below.
+    fn despeck_before(img: &mut Rgb32f, noise: &JointNoise, brake: SpeckBrake) {
+        let (w, h) = (img.width, img.height);
+        let source = img.clone();
+        for y in 2..h - 2 {
+            let r: Vec<&[[f32; 3]]> = (0..5).map(|k| &source.data[(y + k - 2) * w..(y + k - 1) * w]).collect();
+            for (x, ((((w0, w1), w2), w3), w4)) in
+                r[0].windows(5).zip(r[1].windows(5)).zip(r[2].windows(5)).zip(r[3].windows(5)).zip(r[4].windows(5)).enumerate()
+            {
+                let (&[a0, a1, a2, a3, a4], &[b0, _, _, _, b4], &[c0, _, p, _, c4], &[d0, _, _, _, d4], &[e0, e1, e2, e3, e4]) = (w0, w1, w2, w3, w4)
+                else {
+                    continue;
+                };
+                let (k, m) = speck_share(p, &[a0, a2, a4, c0, c4, e0, e2, e4], [a1, a3, b0, b4, d0, d4, e1, e3].into_iter(), noise, brake);
+                if k > 0.0 {
+                    let o = &mut img.data[y * w + x + 2];
+                    (o[1], o[2]) = (p[1] + k * (m[1] - p[1]), p[2] + k * (m[2] - p[2]));
+                }
+            }
+        }
+    }
+
+    /// The speck brake reads the rest of a pixel's border only once `speck_bound` makes it a candidate: same
+    /// result bit for bit, so the bound never turns away a pixel `speck_share` would change.
+    #[test]
+    fn despeck_matches_the_whole_border_version() {
+        let dark = [0.004f32; 3];
+        let mut magenta = [0.024, 0.0, 0.024];
+        magenta[1] = (luminance_2020(dark) - 0.2627 * magenta[0] - 0.0593 * magenta[2]) / 0.6780;
+        let mut changed = 0;
+        let clean = Rgb32f::from_fn(160, 96, |x, y| match (x % 23, y % 19) {
+            (3..5, 3..5) => magenta,
+            (11, _) => [0.02, 0.001, 0.003],
+            _ => dark,
+        });
+        for (seed, sigma) in [(0x2545_f491_4f6c_dd1d, 0.001), (7, 0.004)] {
+            let input = noisy(&clean, seed, sigma).map(yuv);
+            let noise = noise_model(&input);
+            for amount in [0.25, 0.6, 1.0] {
+                let (mut a, mut b) = (input.clone(), input.clone());
+                despeck(&mut a, &noise, speck_brake(amount));
+                despeck_before(&mut b, &noise, speck_brake(amount));
+                changed += a.data.iter().zip(&input.data).filter(|(p, q)| p != q).count();
+                for (i, (p, q)) in a.data.iter().zip(&b.data).enumerate() {
+                    assert!((0..3).all(|c| p[c].to_bits() == q[c].to_bits()), "pixel {i}: {p:?} vs {q:?}");
+                }
+            }
+        }
+        assert!(changed > 100, "nothing to compare: only {changed} pixels changed");
     }
 
     /// BENCH (ignored, prints): the optimised filter against the reference on the same 24 MP image,

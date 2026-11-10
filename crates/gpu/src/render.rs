@@ -1146,9 +1146,10 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&Joi
         let Some(p) = local::nrc_params(&plan.settings, plan.detail_scale) else { return img };
         let s = &plan.settings.detail;
         let (detail, amount) = ((s.nr_color_detail / 100.0) as f32, (s.nr_color / 100.0) as f32);
-        if let Some(out) = color_nr_joint(cx, &img, w, h, &p, detail, amount, colour_noise) {
-            return out;
-        }
+        let img = match color_nr_joint(cx, img, w, h, &p, detail, amount, colour_noise) {
+            Ok(out) => return out,
+            Err(img) => img,
+        };
         // too small for the noise samples, or not even one band fits the device: this step on the CPU
         let mut host = cx.read_rgb(&img, w, h);
         let mut d = (*plan.settings).clone();
@@ -1207,6 +1208,42 @@ fn band_budget_from(free: u64, pooled: u64, renders: usize) -> usize {
     free.saturating_add(pooled).saturating_sub(reserve) as usize
 }
 
+/// The band budget where memory cannot be asked, and the most a device that shares system memory plans with.
+const FIXED_BAND_BUDGET: usize = 2048 << 20;
+
+/// [`band_budget_from`], at most [`FIXED_BAND_BUDGET`] on a device that shares system memory. There `free` is
+/// what the system has left: overdrawing it does not fail an allocation we could fall back from, it can bring
+/// the kernel's out-of-memory killer, so a short system gets bands or the CPU. A roomy one still gets no more
+/// than the fixed budget, as other programs want that memory too.
+fn measured_band_budget(free: u64, pooled: u64, renders: usize, shares_system_memory: bool) -> usize {
+    let budget = band_budget_from(free, pooled, renders);
+    if shares_system_memory { budget.min(FIXED_BAND_BUDGET) } else { budget }
+}
+
+/// The band budget: `NRV2_GPU_BAND_MB` (`fixed`) first, then the `measured` one, else [`FIXED_BAND_BUDGET`].
+/// `None` (the CPU runs the stage) for a device that shares system memory on a system that can say how much
+/// is available (`system_can_say`, Linux) but did not: there an overdraw brings the kernel's out-of-memory
+/// killer rather than an error to fall back from, so the fixed budget is not a safe guess. Where the system
+/// cannot be asked at all (macOS, Windows), the fixed budget stays.
+fn band_budget(fixed: Option<usize>, measured: Option<usize>, shared: bool, system_can_say: bool) -> Option<usize> {
+    fixed.or(measured).or_else(|| (!(shared && system_can_say)).then_some(FIXED_BAND_BUDGET))
+}
+
+/// Take the band plan's `lock` and `ask` for the free memory. A driver is asked before the lock: the first
+/// question for a device waits for it, and no other plan should wait with it. System memory is read under the
+/// lock: the read is quick, and a render that waited for the lock must not plan from a figure older than what
+/// the render before it allocated.
+fn lock_and_measure<'a>(
+    lock: &'a Mutex<()>,
+    shares_system_memory: bool,
+    ask: impl Fn() -> Option<u64>,
+) -> (std::sync::MutexGuard<'a, ()>, Option<u64>) {
+    let asked = if shares_system_memory { None } else { ask() };
+    let guard = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let free = if shares_system_memory { ask() } else { asked };
+    (guard, free)
+}
+
 /// The joint colour noise reduction (`lightcraft_pipeline::nrc_joint`) on the GPU, the same steps as the
 /// CPU: only the noise samples are read back (the noise model is fitted on the CPU, by the same code).
 /// Large images are filtered in horizontal bands whose halo covers every step's reach, so each kept pixel
@@ -1215,22 +1252,22 @@ fn band_budget_from(free: u64, pooled: u64, renders: usize) -> usize {
 #[allow(clippy::too_many_arguments)]
 fn color_nr_joint(
     cx: &mut Cx<'_>,
-    img: &Buf,
+    img: Buf,
     w: usize,
     h: usize,
     p: &local::NrcParams,
     detail: f32,
     amount: f32,
     frame_noise: Option<&JointNoise>,
-) -> Option<Buf> {
+) -> Result<Buf, Buf> {
     use lightcraft_pipeline::nrc_joint;
     let strength = nrc_joint::strength(amount);
     let brake = nrc_joint::speck_brake(amount);
     if w < 3 || h < 3 {
-        return None;
+        return Err(img);
     }
     if strength <= 0.0 {
-        return Some(cx.copy(img));
+        return Ok(img);
     }
     let n = w * h;
     let started = profiling().then(std::time::Instant::now);
@@ -1241,7 +1278,7 @@ fn color_nr_joint(
             let stride = nrc_joint::noise_sample_stride(n);
             let count = n.div_ceil(stride);
             let smp = cx.gpu.buffer(11 * count);
-            nrcj(cx, "nrcj_samples", count, &[count as u32, w as u32, h as u32, stride as u32], img, None, &smp);
+            nrcj(cx, "nrcj_samples", count, &[count as u32, w as u32, h as u32, stride as u32], &img, None, &smp);
             let raw: Vec<f32> = cx.read(&smp, 11 * count);
             drop(smp);
             if let Some(t) = started {
@@ -1268,24 +1305,32 @@ fn color_nr_joint(
     // scale's weight and path still read up to delta rows further (at most the largest delta); the
     // guide's blur and pilot reach a few rows, the speck brake two more. Hence 2·Σdelta + max delta + 10.
     let halo = plan.iter().map(|d| 2 * d.0).sum::<usize>() + plan.last().map_or(0, |d| d.0) + 10;
-    // Memory: the whole output (3 values per pixel) is held besides the input; a band then holds about
-    // 12 values per pixel (guide 3, two chroma buffers 2 + 2, paths 2, weights 2; up to 12 while the
-    // speck brake and the guide run). The budget for both together is `band_budget_from` the device memory
-    // free right now (where the driver can be asked, `crate::vram`); else a fixed 2 GB. One band plan at a
-    // time (`BANDS`), held until the bands are done. PROTOTYPE: `NRV2_GPU_BAND_MB` overrides it.
-    // (free memory asked before the lock: the first question for a device waits for the driver)
-    let free = crate::vram::free_bytes(&cx.gpu.info);
-    let _bands = BANDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Memory: with more than one band the whole output (3 values per pixel) is held besides the input (one
+    // band is written over the input); a band then holds about 12 values per pixel (guide 3, two chroma
+    // buffers 2 + 2, paths 3 (the transformed band's buffer, see `joint_band`), weights 2). The budget for
+    // both together is `band_budget`: from the memory free right now where it can be asked (`crate::vram`),
+    // else a fixed 2 GB, or none (the CPU) for a shared-memory device whose system memory could not be read
+    // on Linux. One band plan at a time (`BANDS`), held until the bands are done. PROTOTYPE:
+    // `NRV2_GPU_BAND_MB` overrides it.
+    let shared = crate::vram::shares_system_memory(cx.gpu.info.device_type);
+    let (_bands, free) = lock_and_measure(&BANDS, shared, || crate::vram::free_bytes(&cx.gpu.info));
     let fixed = std::env::var("NRV2_GPU_BAND_MB").ok().and_then(|v| v.parse::<usize>().ok()).map(|mb| mb << 20);
     let renders = RENDERS.load(std::sync::atomic::Ordering::Relaxed);
-    let measured = free.map(|free| band_budget_from(free, crate::ctx::memory().pooled, renders));
-    let budget = fixed.or(measured).unwrap_or(2048 << 20);
+    let measured = free.map(|free| measured_band_budget(free, crate::ctx::memory().pooled, renders, shared));
+    let Some(budget) = band_budget(fixed, measured, shared, cfg!(target_os = "linux")) else {
+        if profiling() {
+            eprintln!("  gpu joint budget: none (system memory could not be read): this stage runs on the CPU");
+        }
+        return Err(img);
+    };
     if profiling() {
         eprintln!(
             "  gpu joint budget: {} MB ({}, {renders} render(s) on the device)",
             budget >> 20,
             if fixed.is_some() {
                 "NRV2_GPU_BAND_MB"
+            } else if measured.is_some() && shared {
+                "available system memory, at most the fixed budget"
             } else if measured.is_some() {
                 "free device memory"
             } else {
@@ -1304,76 +1349,115 @@ fn color_nr_joint(
         rows - 2 * halo
     } else {
         // not even one band with its halo fits: this stage runs on the CPU (the rest of the render stays here)
-        return None;
+        return Err(img);
     };
+    Ok(joint_bands(cx, img, w, h, &JointFilter { noise: &noise, brake, plan: &plan, strength }, core, halo))
+}
+
+/// What `joint_bands` runs on each band.
+struct JointFilter<'a> {
+    noise: &'a lightcraft_pipeline::nrc_joint::JointNoise,
+    brake: lightcraft_pipeline::nrc_joint::SpeckBrake,
+    /// the diffusion scales (`nrc_joint::scale_plan`)
+    plan: &'a [(usize, f32)],
+    /// the share of the filtered colour in the result
+    strength: f32,
+}
+
+/// The joint colour NR of `img` (`w × h`) in bands of `core` kept rows, each filtered with `halo` rows
+/// on either side (`color_nr_joint`).
+fn joint_bands(cx: &mut Cx<'_>, img: Buf, w: usize, h: usize, f: &JointFilter<'_>, core: usize, halo: usize) -> Buf {
+    let n = w * h;
+    if core >= h {
+        // one band: each pixel's result reads only that pixel of the image, so it is written over the image
+        // (no new buffer for the whole output)
+        let filtered = joint_band(cx, &img, w, 0, h, f);
+        nrcj(cx, "nrcj_recon_in", n, &[n as u32, f.strength.to_bits()], &filtered, None, &img);
+        drop(filtered);
+        cx.sync();
+        return img;
+    }
+    // bands: a band's halo reads rows the band before it has filtered, so the output is a buffer of its own
     let out = cx.gpu.buffer(3 * n);
     let mut y0 = 0;
     while y0 < h {
-        let y1 = (y0 + core).min(h);
-        let (b0, b1) = if core >= h { (0, h) } else { (y0.saturating_sub(halo), (y1 + halo).min(h)) };
-        let filtered = joint_band(cx, img, w, b0, b1 - b0, &noise, brake, &plan);
+        let y1 = (y0 + core.max(1)).min(h);
+        let (b0, b1) = (y0.saturating_sub(halo), (y1 + halo).min(h));
+        let filtered = joint_band(cx, &img, w, b0, b1 - b0, f);
         let kept = (y1 - y0) * w;
-        nrcj(cx, "nrcj_recon", kept, &[kept as u32, strength.to_bits(), (y0 * w) as u32, (b0 * w) as u32], img, Some(&filtered), &out);
+        nrcj(cx, "nrcj_recon", kept, &[kept as u32, f.strength.to_bits(), (y0 * w) as u32, (b0 * w) as u32], &img, Some(&filtered), &out);
         drop(filtered);
         // wait: the driver frees a dropped buffer only once the GPU is done with it, and a band's
         // buffers are large (without waiting, freed memory piled up to the whole 4 GB of a Quadro M2200)
         cx.sync();
         y0 = y1;
     }
-    Some(out)
+    out
+}
+
+/// The largest delta `nrcj_dvh` takes (its `JDVH_REACH`).
+const JDVH_REACH: usize = 128;
+
+/// Whether `nrcj_dvh` can run a scale's middle steps: `delta` within its reach, and its `groups` (one
+/// workgroup per row, the only kernel this fine) within the device's limit per dimension.
+fn fits_jdvh(delta: usize, groups: [u32; 3], limit: u32) -> bool {
+    delta <= JDVH_REACH && groups.iter().all(|&g| g <= limit)
 }
 
 /// The filtered chroma pairs of rows `b0 .. b0 + bh` of the image, treated as an image of their own.
-#[allow(clippy::too_many_arguments)]
-fn joint_band(
-    cx: &mut Cx<'_>,
-    img: &Buf,
-    w: usize,
-    b0: usize,
-    bh: usize,
-    noise: &lightcraft_pipeline::nrc_joint::JointNoise,
-    brake: lightcraft_pipeline::nrc_joint::SpeckBrake,
-    plan: &[(usize, f32)],
-) -> Buf {
+fn joint_band(cx: &mut Cx<'_>, img: &Buf, w: usize, b0: usize, bh: usize, f: &JointFilter<'_>) -> Buf {
+    let &JointFilter { noise, brake, plan, .. } = f;
     let n = w * bh;
     let mut np = vec![n as u32, w as u32, bh as u32];
     np.extend(noise.model.alpha.iter().chain(&noise.model.beta).chain(&noise.ymax).map(|v| v.to_bits()));
     np.push(noise.tolerance.to_bits());
-    let mut yuv = cx.gpu.buffer(3 * n);
+    // Buffers are handed on to later steps instead of dropped and allocated again: the first write to a
+    // new buffer costs several times a pass over one in use (on an M2 Max, where memory is shared, 290 MB:
+    // 12 ms against 2 ms), and the band holds less at its peak. Kernels take their length from P[0], so a
+    // buffer of 3 values per pixel can stand in for one of 2.
+    let yuv = cx.gpu.buffer(3 * n);
     nrcj(cx, "nrcj_yuv", n, &[n as u32, (b0 * w) as u32], img, None, &yuv);
-    if brake.share > 0.0 {
+    // `yuv` is the transformed band and `guide` takes the pilot, the transformed band before the speck brake
+    // when there is one (no longer read by then)
+    let (yuv, guide) = if brake.share > 0.0 {
         let mut sp = np.clone();
         sp.extend([brake.threshold.to_bits(), brake.share.to_bits()]);
         let despecked = cx.gpu.buffer(3 * n);
         nrcj(cx, "nrcj_speck", n, &sp, &yuv, None, &despecked);
-        yuv = despecked;
-    }
-    let blurred = gaussian(cx, &yuv, w, bh, 3, 0.8);
-    let guide = cx.gpu.buffer(3 * n);
-    nrcj(cx, "nrcj_pilot", n, &np, &yuv, Some(&blurred), &guide);
-    drop(blurred);
+        (despecked, yuv)
+    } else {
+        (yuv, cx.gpu.buffer(3 * n))
+    };
+    nrcj(cx, "nrcj_pilot", n, &np, &yuv, None, &guide);
     let mut filtered = cx.gpu.buffer(2 * n);
     nrcj(cx, "nrcj_uv", n, &[n as u32], &yuv, None, &filtered);
-    drop(yuv);
-    // dropped buffers only become reusable (and their memory free) once the GPU is done with them
-    cx.sync();
     // paths (exp(−path), as on the CPU) and pair weights; the next scale's paths go to the scratch buffer,
-    // free after the diffusion steps, as on the CPU
-    let mut paths = cx.gpu.buffer(2 * n);
+    // free after the diffusion steps, as on the CPU. The paths take the transformed band's buffer.
+    let mut paths = yuv;
     nrcj(cx, "nrcj_links1", n, &np, &guide, None, &paths);
     let links = cx.gpu.buffer(2 * n);
     let mut lp = np.clone();
     lp.push(1);
     nrcj(cx, "nrcj_links", n, &lp, &guide, Some(&paths), &links);
     let mut scratch = cx.gpu.buffer(2 * n);
+    let dvh_groups = groups2(w, bh, [256, 1]);
+    let group_limit = cx.gpu.device.limits().max_compute_workgroups_per_dimension;
     for (k, &(delta, rate)) in plan.iter().enumerate() {
         let dp = [n as u32, w as u32, bh as u32, delta as u32, rate.to_bits()];
-        for _ in 0..2 {
-            nrcj(cx, "nrcj_dh", n, &dp, &filtered, Some(&links), &scratch);
+        // horizontal, vertical, horizontal, vertical; the middle two in one dispatch where they fit
+        nrcj(cx, "nrcj_dh", n, &dp, &filtered, Some(&links), &scratch);
+        std::mem::swap(&mut filtered, &mut scratch);
+        if fits_jdvh(delta, dvh_groups, group_limit) {
+            cx.run("nrcj_dvh", &dp, &[Some(&filtered), Some(&links), Some(&scratch)], dvh_groups);
             std::mem::swap(&mut filtered, &mut scratch);
-            nrcj(cx, "nrcj_dv", n, &dp, &filtered, Some(&links), &scratch);
-            std::mem::swap(&mut filtered, &mut scratch);
+        } else {
+            for kernel in ["nrcj_dv", "nrcj_dh"] {
+                nrcj(cx, kernel, n, &dp, &filtered, Some(&links), &scratch);
+                std::mem::swap(&mut filtered, &mut scratch);
+            }
         }
+        nrcj(cx, "nrcj_dv", n, &dp, &filtered, Some(&links), &scratch);
+        std::mem::swap(&mut filtered, &mut scratch);
         if let Some(&(next, _)) = plan.get(k + 1) {
             nrcj(cx, "nrcj_paths", n, &[n as u32, w as u32, bh as u32, delta as u32], &paths, None, &scratch);
             std::mem::swap(&mut paths, &mut scratch);
@@ -1700,6 +1784,55 @@ mod tests {
         assert!(RENDERS.load(std::sync::atomic::Ordering::Relaxed) < before + 2, "a finished render no longer counts");
     }
 
+    /// A device that shares system memory plans with what the system has left, at most the fixed budget: a
+    /// short laptop must not overdraw it (the kernel's out-of-memory killer, not an error to fall back from).
+    #[test]
+    fn shared_memory_band_budget_follows_the_system_up_to_the_fixed_budget() {
+        let mb = |x: u64| x << 20;
+        // plenty free: the fixed budget, so a 24 MP frame still runs in one band
+        assert_eq!(measured_band_budget(mb(27000), 0, 1, true), FIXED_BAND_BUDGET);
+        // short of memory: what is there less the reserve, which `color_nr_joint` turns into bands
+        assert_eq!(measured_band_budget(mb(1500), 0, 1, true), (1500usize << 20) - VRAM_RESERVE as usize);
+        assert!(measured_band_budget(mb(1500), 0, 1, true) < FIXED_BAND_BUDGET);
+        // our own pooled buffers are reused, and each other render is left its reserve
+        assert_eq!(measured_band_budget(mb(1000), mb(500), 1, true), (1500usize << 20) - VRAM_RESERVE as usize);
+        assert_eq!(measured_band_budget(mb(1500), 0, 2, true), (1500usize << 20) - 2 * VRAM_RESERVE as usize);
+        // nothing left: no band fits, the CPU runs the step
+        assert_eq!(measured_band_budget(mb(300), 0, 1, true), 0);
+        // a discrete card has no such ceiling
+        assert_eq!(measured_band_budget(mb(8000), 0, 1, false), (8000usize << 20) - VRAM_RESERVE as usize);
+    }
+
+    /// Where a shared-memory device's system can say how much memory is available (Linux) but did not, the
+    /// stage goes to the CPU rather than guess the fixed budget; an explicit override and the other cases keep
+    /// what they had.
+    #[test]
+    fn an_unreadable_system_memory_reading_sends_the_stage_to_the_cpu() {
+        let mb = |x: usize| x << 20;
+        assert_eq!(band_budget(None, None, true, true), None, "Linux could not say: the CPU runs the stage");
+        assert_eq!(band_budget(Some(mb(512)), None, true, true), Some(mb(512)), "NRV2_GPU_BAND_MB still wins");
+        assert_eq!(band_budget(None, Some(mb(900)), true, true), Some(mb(900)));
+        assert_eq!(band_budget(None, None, true, false), Some(FIXED_BAND_BUDGET), "macOS / Windows: fixed budget");
+        assert_eq!(band_budget(None, None, false, true), Some(FIXED_BAND_BUDGET), "a discrete card: fixed budget");
+        assert_eq!(band_budget(Some(mb(512)), Some(mb(900)), false, true), Some(mb(512)));
+    }
+
+    /// A render waiting for the band lock must read system memory after the render before it has allocated,
+    /// and a slow driver query must not hold the lock.
+    #[test]
+    fn system_memory_is_read_under_the_band_lock_and_a_driver_is_asked_before_it() {
+        let lock = Mutex::new(());
+        let held = || lock.try_lock().is_err();
+        let (guard, free) = lock_and_measure(&lock, true, || held().then_some(1));
+        assert_eq!(free, Some(1), "system memory was read without the lock");
+        drop(guard);
+        let (guard, free) = lock_and_measure(&lock, false, || (!held()).then_some(2));
+        assert_eq!(free, Some(2), "the driver was asked with the lock held");
+        assert!(held(), "the lock is held until the bands are done");
+        drop(guard);
+        assert!(!held());
+    }
+
     #[test]
     fn coverage_mask_matches_per_pixel_decision() {
         use lightcraft_develop::{EmbeddedLens, EmbeddedWarp};
@@ -1793,6 +1926,89 @@ mod tests {
                         let want = want[i % nc].data[i / nc];
                         assert!((g - want).abs() < 1e-5 * (1.0 + sigma / 10.0), "{w}×{h} nc={nc} sigma={sigma}: word {i} {g} vs {want}");
                     }
+                }
+            }
+        }
+    }
+
+    /// `joint_bands` gives the same words in one band (written over the image) as in several (a halo on
+    /// either side of each, written to an output of their own), with and without the speck brake.
+    #[test]
+    fn one_band_matches_several() {
+        use lightcraft_pipeline::nrc_joint;
+        let Some(gpu) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        let _scope = crate::ctx::RenderScope::new(gpu);
+        let (w, h) = (97usize, 300usize);
+        // a soft gradient with a vertical colour edge, and deterministic noise
+        let mut img = lightcraft_raster::Rgb32f::new(w, h);
+        for (i, p) in img.data.iter_mut().enumerate() {
+            let (x, y) = (i % w, i / w);
+            let r = |k: usize| (((i * 2654435761 + k * 40503) >> 7) % 1000) as f32 / 1000.0 - 0.5;
+            let base = if x < w / 2 { [0.30, 0.25, 0.20] } else { [0.20, 0.25, 0.32] };
+            *p = std::array::from_fn(|c| base[c] * (0.5 + y as f32 / h as f32) + 0.04 * r(c));
+        }
+        let mut noise = nrc_joint::noise_of_tiles(std::slice::from_ref(&img));
+        noise.tolerance = nrc_joint::tolerance(0.5);
+        let plan = nrc_joint::scale_plan(6.0, w, h);
+        let halo = plan.iter().map(|d| 2 * d.0).sum::<usize>() + plan.last().map_or(0, |d| d.0) + 10;
+        for brake in [nrc_joint::speck_brake(0.6), nrc_joint::SpeckBrake::OFF] {
+            let mut cx = Cx::new(gpu);
+            let f = JointFilter { noise: &noise, brake, plan: &plan, strength: 0.8 };
+            let one = joint_bands(&mut cx, gpu.upload(rgb_words(&img)), w, h, &f, h, halo);
+            let several = joint_bands(&mut cx, gpu.upload(rgb_words(&img)), w, h, &f, 64, halo);
+            let (a, b): (Vec<f32>, Vec<f32>) = (cx.read(&one, 3 * w * h), cx.read(&several, 3 * w * h));
+            // a failed render reads back as zeros, which would match
+            assert!(!crate::ctx::failed(), "the GPU failed");
+            let input = rgb_words(&img);
+            assert!(a.iter().zip(input).any(|(a, b)| a != b), "the filter changed nothing");
+            for (i, (a, b)) in a.iter().zip(&b).enumerate() {
+                assert_eq!(a.to_bits(), b.to_bits(), "brake {}: word {i}: one band {a}, bands {b}", brake.share);
+            }
+        }
+    }
+
+    /// `nrcj_dvh` runs within its reach and the device's workgroup limit, and the separate kernels otherwise.
+    #[test]
+    fn fused_diffusion_steps_stay_within_their_limits() {
+        let limit = 65_535;
+        assert!(fits_jdvh(JDVH_REACH, groups2(6048, 4032, [256, 1]), limit));
+        assert!(fits_jdvh(1, groups2(1, 65_535, [256, 1]), limit));
+        assert!(!fits_jdvh(JDVH_REACH + 1, groups2(6048, 4032, [256, 1]), limit));
+        // a device with a lower limit: rows, or columns, past it
+        assert!(!fits_jdvh(1, groups2(6048, 4097, [256, 1]), 4096));
+        assert!(!fits_jdvh(1, groups2(6048, 100, [256, 1]), 23));
+    }
+
+    /// `nrcj_dvh` (a vertical and a horizontal diffusion step in one dispatch) gives `nrcj_dv` then
+    /// `nrcj_dh`: rows that do and don't fill the last workgroup, reaches up to `JDVH_REACH` and beyond the row.
+    #[test]
+    fn fused_diffusion_steps_match_the_separate_ones() {
+        let Some(gpu) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        let _scope = crate::ctx::RenderScope::new(gpu);
+        for (w, h) in [(700usize, 5usize), (256, 3), (5, 300), (1, 9)] {
+            let n = w * h;
+            let v = |i: usize, k: usize| ((i * 7 + k * 13) % 29) as f32 / 28.0;
+            let pairs: Vec<f32> = (0..2 * n).map(|i| v(i, 1) - 0.5).collect();
+            let links: Vec<f32> = (0..2 * n).map(|i| v(i, 2)).collect();
+            for delta in [1usize, 4, 100, JDVH_REACH] {
+                let mut cx = Cx::new(gpu);
+                let (src, weights) = (gpu.upload(&pairs), gpu.upload(&links));
+                let dp = [n as u32, w as u32, h as u32, delta as u32, 0.21f32.to_bits()];
+                let (mid, two, fused) = (gpu.buffer(2 * n), gpu.buffer(2 * n), gpu.buffer(2 * n));
+                nrcj(&mut cx, "nrcj_dv", n, &dp, &src, Some(&weights), &mid);
+                nrcj(&mut cx, "nrcj_dh", n, &dp, &mid, Some(&weights), &two);
+                cx.run("nrcj_dvh", &dp, &[Some(&src), Some(&weights), Some(&fused)], groups2(w, h, [256, 1]));
+                let (want, got): (Vec<f32>, Vec<f32>) = (cx.read(&two, 2 * n), cx.read(&fused, 2 * n));
+                // a failed render reads back as zeros, which would match
+                assert!(!crate::ctx::failed(), "the GPU failed");
+                for (i, (a, b)) in want.iter().zip(&got).enumerate() {
+                    assert!((a - b).abs() <= 1e-6, "{w}×{h} delta {delta}: word {i} {b} vs {a}");
                 }
             }
         }
