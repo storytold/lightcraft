@@ -1818,7 +1818,7 @@ fn oversized_optional_table_warns_and_is_skipped() {
         wal_before: None,
     };
     let mut warnings = Vec::new();
-    let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
+    let rows = reader.optional_table("optional_history", &mut warnings, &AtomicBool::new(false)).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
 }
@@ -1936,4 +1936,40 @@ fn source_discovery_uses_the_original_document_location() {
     let document = Path::new(r"\\nas\photos\Catalog\Cat.lrcat");
     assert_eq!(network_sources_from_file(&fixture.0, document, &AtomicBool::new(false)).unwrap(), [r"\\nas\photos"]);
     assert!(network_sources(&fixture.0).unwrap().is_empty(), "the extracted file's local path grants no network source");
+}
+
+/// Even an empty XMP table must receive the flag at the SQLite read, before row decoding.
+#[test]
+fn cancelled_catalog_xmp_read_stops_before_reading_records() {
+    let bytes = native_catalog_rows(&[("Adobe_AdditionalMetadata", "image INTEGER, xmp BLOB", Vec::new())], None);
+    let fixture = CatalogFixture::new(&bytes);
+    let reader = open_reader(&fixture.0, &AtomicBool::new(false)).unwrap();
+    let cancel = AtomicBool::new(true);
+    assert!(reader.xmp_table(&cancel).unwrap_err().contains("cancelled"));
+    cancel.store(false, Ordering::Relaxed);
+    assert_eq!(reader.xmp_table(&cancel).unwrap(), (Vec::new(), Vec::new()));
+}
+
+/// Optional tables and backup identity reads must share the import's flag, not a new false flag.
+#[test]
+fn cancelled_catalog_optional_reads_do_not_hide_cancellation_as_a_warning() {
+    use SqlValue::Text as T;
+    let bytes = native_catalog_rows(
+        &[
+            ("Adobe_imageDevelopSettings", "image INTEGER, text TEXT", Vec::new()),
+            ("Adobe_variablesTable", "name TEXT, value TEXT", vec![vec![T("Adobe_storeProviderID".into()), T("EXAMPLE-1".into())]]),
+        ],
+        None,
+    );
+    let fixture = CatalogFixture::new(&bytes);
+    let reader = open_reader(&fixture.0, &AtomicBool::new(false)).unwrap();
+    let mut warnings = Vec::new();
+    let cancel = AtomicBool::new(true);
+    assert!(reader.optional_table("Adobe_imageDevelopSettings", &mut warnings, &cancel).unwrap_err().contains("cancelled"));
+    assert!(warnings.is_empty());
+    assert_eq!(reader.catalog_id(&cancel), None);
+    cancel.store(false, Ordering::Relaxed);
+    assert!(reader.optional_table("Adobe_imageDevelopSettings", &mut warnings, &cancel).unwrap().is_empty());
+    assert_eq!(reader.catalog_id(&cancel).as_deref(), Some("EXAMPLE-1"));
+    assert!(warnings.is_empty());
 }
