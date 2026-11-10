@@ -569,6 +569,46 @@ fn a_rename_leaves_nothing_under_the_old_name_and_a_choice_that_changes_nothing_
     assert_eq!((aside(&s, "bob"), aside(&s, "ada")), (Some(vec![0.1, 0.5]), None));
 }
 
+/// Review of #3317: undoing a rename or a merge moves the people's choices back from where they are then, so a picture
+/// chosen or a face set aside under the new name in between goes back with them instead of being lost, and a redo
+/// moves them again.
+#[test]
+fn undoing_a_rename_keeps_what_was_chosen_under_the_new_name_in_between() {
+    let mut s = Session::with_demo();
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.0, Some("Ann")), region(0.3, Some("Ann")), region(0.6, Some("Bob"))]);
+    set_regions(&mut s, b, vec![region(0.0, None), region(0.3, None), region(0.6, None)]);
+    let picture = |s: &Session, key: &str| s.person_covers.get(key).map(|c| (c.photo, c.face.x0));
+    let aside = |s: &Session, key: &str| -> Vec<f64> { s.person_dismissed.get(key).into_iter().flatten().map(|f| f.face.x0).collect() };
+    s.execute("faces.dismiss", &json!({"name": "Ann", "photo": b.0, "index": 0})).unwrap();
+    s.execute("faces.renamePerson", &json!({"from": "Ann", "to": "Ada"})).unwrap();
+    // chosen under the new name, after the rename
+    s.execute("faces.setCover", &json!({"name": "Ada", "photo": a.0, "index": 1})).unwrap();
+    s.execute("faces.dismiss", &json!({"name": "Ada", "photo": b.0, "index": 1})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((picture(&s, "ann"), aside(&s, "ann")), (Some((a, 0.3)), vec![0.0, 0.3]), "back with her under her old name");
+    assert_eq!((picture(&s, "ada"), aside(&s, "ada")), (None, vec![]));
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!((picture(&s, "ada"), aside(&s, "ada")), (Some((a, 0.3)), vec![0.0, 0.3]), "and over again");
+    assert_eq!((picture(&s, "ann"), aside(&s, "ann")), (None, vec![]));
+    // Ada merged into Bob, then a picture of his own and a face set aside for him: undone, he keeps those, and Ada has
+    // hers back; redone, they add up again
+    s.execute("faces.renamePerson", &json!({"from": "Ada", "to": "Bob", "merge": true})).unwrap();
+    assert_eq!((picture(&s, "bob"), aside(&s, "bob")), (Some((a, 0.3)), vec![0.0, 0.3]));
+    s.execute("faces.setCover", &json!({"name": "Bob", "photo": a.0, "index": 2})).unwrap();
+    s.execute("faces.dismiss", &json!({"name": "Bob", "photo": b.0, "index": 2})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((picture(&s, "bob"), aside(&s, "bob")), (Some((a, 0.6)), vec![0.6]), "what was chosen for him since");
+    assert_eq!((picture(&s, "ada"), aside(&s, "ada")), (Some((a, 0.3)), vec![0.0, 0.3]), "hers, as before the merge");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!((picture(&s, "bob"), aside(&s, "bob")), (Some((a, 0.6)), vec![0.6, 0.0, 0.3]));
+    assert_eq!((picture(&s, "ada"), aside(&s, "ada")), (None, vec![]));
+    // a face brought back for him after the merge stays brought back once it is undone
+    s.execute("faces.dismiss", &json!({"name": "Bob", "restore": true})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((aside(&s, "bob"), aside(&s, "ada")), (vec![], vec![0.0, 0.3]));
+}
+
 fn unit64(parts: &[(usize, f32)]) -> Vec<f32> {
     let mut v = vec![0.0f32; 64];
     for (i, x) in parts {
