@@ -328,7 +328,9 @@ fn cancelling_the_question_moves_nothing() {
 /// first move changes the Missing Photos count, which a worker takes: a count that was running
 /// when the photo moved finds its old place empty and adds the Missing Photos row, and the
 /// recount takes it away again. Each moves every folder row below it, so on a busy machine a drop
-/// aimed at the row read before the count landed went to the folder above (here, a slow count).
+/// aimed at the row read before the count landed went to the folder above. The slow count here
+/// doesn't make the drop miss by itself: it makes the rows move after the first move on every
+/// run, and the test checks that `home` stays put once the sidebar settled.
 #[test]
 fn dont_ask_again_moves_the_next_drop_at_once() {
     let count = std::time::Duration::from_secs(1);
