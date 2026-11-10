@@ -132,11 +132,14 @@ fn sam3_dir(var: Option<std::ffi::OsString>, config: Option<PathBuf>) -> Option<
 }
 
 impl Session {
-    /// Look for the SAM 3 model in the shared default folder ([`default_sam3_dir`]), and for the user's
-    /// download mirrors in `<config>/models/sam3-mirrors.txt`.
+    /// Look for the SAM 3 model in the shared default folder ([`default_sam3_dir`]), for the user's
+    /// download mirrors in `<config>/models/sam3-mirrors.txt` and for where it runs in
+    /// `<config>/models/sam3-settings.json`.
     pub fn with_default_sam3_model(mut self) -> Self {
         self.segmenter.dir = default_sam3_dir();
         self.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
+        self.segmenter.settings_file = config_dir().map(|d| d.join("models").join("sam3-settings.json"));
+        self.segmenter.load_settings();
         self
     }
 
