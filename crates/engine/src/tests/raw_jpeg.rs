@@ -377,3 +377,22 @@ fn stacking_a_selected_pair_leaves_only_the_visible_photo_selected() {
     assert_eq!(s.selection.active, Some(raw));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_raw_synchronized_next_to_the_active_jpeg_takes_its_place_in_the_selection() {
+    let dir = temp_dir("sync-selection");
+    write_jpeg(&dir.join("DSC_0001.JPG"), 13);
+    let mut s = Session::new().with_fs();
+    import(&mut s, &dir, json!({}));
+    let jpg = id_named(&s, &dir, "DSC_0001.JPG");
+    s.selection = crate::Selection::single(jpg);
+    write_raw(&dir.join("DSC_0001.DNG"));
+    s.execute("library.preferences", &json!({"import": {"pairRawJpeg": true}})).unwrap();
+    let r = s.execute("folder.synchronize", &json!({"path": dir.to_string_lossy()})).unwrap();
+    assert_eq!(r["paired"], 1, "{r}");
+    let raw = id_named(&s, &dir, "DSC_0001.DNG");
+    assert_eq!(s.catalog.stack_of(raw).unwrap().photos, vec![raw, jpg]);
+    // the JPEG is hidden under the raw: edits go to the photo the grid shows
+    assert_eq!((s.selection.ids.clone(), s.selection.active), (vec![raw], Some(raw)));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -34,6 +34,7 @@ mod merge;
 pub mod metadata;
 pub mod missing;
 mod organize;
+pub(crate) use organize::fix_selection;
 mod prefs;
 mod preset_files;
 pub mod previews;

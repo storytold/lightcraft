@@ -1252,8 +1252,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let sel = s.selection.clone();
                 let r = s.execute("library.import", &params)?;
-                // arriving photos don't take over the selection
+                // arriving photos don't take over the selection (but a JPEG they stacked under its raw leaves it)
                 s.selection = sel;
+                crate::cmd::fix_selection(s);
                 let mut result = json!({"imported": r["imported"], "folder": folder});
                 if let Some(warnings) = r.get("warnings") {
                     result["warnings"] = warnings.clone();

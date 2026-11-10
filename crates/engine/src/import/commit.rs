@@ -357,7 +357,11 @@ fn stack_raw_jpeg_pairs(s: &mut Session, report: &ImportReport) -> usize {
         return 0;
     }
     match s.commit(RAW_JPEG_UNDO, Op::Batch { ops }) {
-        Ok(_) => n,
+        Ok(_) => {
+            // a selected JPEG now under its raw (Synchronize Folder, auto-import) gives way to the raw
+            crate::cmd::fix_selection(s);
+            n
+        }
         Err(e) => {
             log::warn!("import: stacking {n} RAW+JPEG pairs: {e}");
             0
