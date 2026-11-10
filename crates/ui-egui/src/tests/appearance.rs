@@ -191,6 +191,15 @@ fn the_top_bar_button_and_settings_cards_drive_the_mode() {
 }
 
 #[test]
+fn top_bar_has_no_cloud_widget() {
+    // LightCraft has no cloud service: the icon only shows as the warning that saving is failing
+    // (`tests/unsaved.rs`), not as a button that does nothing.
+    let mut h = Headless::new(app(), [1400.0, 900.0], 1.0);
+    h.settle(T);
+    assert!(!h.app.widgets.iter().any(|(id, _)| id == "icon:cloud"), "the top bar still registers a dead cloud button");
+}
+
+#[test]
 fn interface_settings_fit_small_windows_and_stack_theme_choices() {
     // Desktop windows have a 900×560 minimum; also stress a smaller headless viewport.
     for size in [[900.0, 560.0], [640.0, 480.0]] {
