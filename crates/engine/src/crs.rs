@@ -552,7 +552,7 @@ pub fn crs_settings(settings: &DevelopSettings) -> Vec<(&'static str, String)> {
         ("Whites2012", light.whites),
         ("Blacks2012", light.blacks),
     ];
-    all.into_iter().filter(|(_, v)| *v != 0.0).map(|(name, v)| (name, v.to_string())).collect()
+    all.into_iter().map(|(name, v)| (name, v.to_string())).collect()
 }
 
 /// Read an XMP preset (`crs:` fields + `crs:Name` / `crs:Group`) into one of our presets.
@@ -577,6 +577,8 @@ mod tests;
 #[cfg(test)]
 mod crs_write_tests {
     use super::*;
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use lightcraft_develop::DevelopSettings;
 
     /// A develop edit must reach the other application's `crs:` fields: writing the sidecar
     /// updates the existing `crs:` block in place, so the app that wrote it sees our edit
@@ -614,6 +616,88 @@ mod crs_write_tests {
         assert_eq!(num(&props, "crs:Exposure2012"), Some(0.9), "the edit reaches the other application's field:\n{text}");
         assert_eq!(text.matches("crs:Exposure2012").count(), 1, "the existing block is updated, not written twice:\n{text}");
         assert!(text.contains(r#"xmp:CreatorTool="Other App""#), "the rest of the packet is kept:\n{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An explicit reset to zero must be written to the `crs:` field so the other application
+    /// sees the reset instead of its stale value.
+    #[test]
+    fn crs_write_writes_explicit_zero_reset() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+
+        /// A sidecar with a non-zero exposure from another application.
+        const FOREIGN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            xmp:CreatorTool="Other App" crs:Version="15.0" crs:Exposure2012="0.5"/>
+          </rdf:RDF></x:xmpmeta>"#;
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-crs-write-zero-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let sidecar = dir.join("IMG_1.xmp");
+        std::fs::write(&sidecar, FOREIGN).unwrap();
+
+        // our edit: explicit reset to zero
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.0;
+        let mut photo =
+            Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
+        photo.develop = std::sync::Arc::new(develop);
+        let mut s = crate::Session::new();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
+        assert_eq!(num(&props, "crs:Exposure2012"), Some(0.0), "the explicit zero reset reaches the other application's field:\n{text}");
+        assert_eq!(text.matches("crs:Exposure2012").count(), 1, "the existing block is updated, not written twice:\n{text}");
+        assert!(text.contains(r#"xmp:CreatorTool="Other App""#), "the rest of the packet is kept:\n{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A round-trip test: write zero, read it back, verify it's zero.
+    #[test]
+    fn crs_zero_round_trip() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-crs-roundtrip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+
+        // First write: non-zero exposure
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.7;
+        let mut photo =
+            Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
+        photo.develop = std::sync::Arc::new(develop);
+        let mut s = crate::Session::new();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let sidecar = dir.join("IMG_1.xmp");
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
+        assert_eq!(num(&props, "crs:Exposure2012"), Some(0.7));
+
+        // Second write: explicit reset to zero
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.0;
+        let p = s.catalog.photo(PhotoId(1)).unwrap();
+        let mut photo = Photo {
+            develop: std::sync::Arc::new(develop),
+            ..(*p).clone()
+        };
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: std::sync::Arc::new(develop), label: "Reset".into(), edited: Some("now".into()) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
+        assert_eq!(num(&props, "crs:Exposure2012"), Some(0.0), "zero is written and read back:\n{text}");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
