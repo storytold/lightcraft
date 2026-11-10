@@ -251,6 +251,9 @@ pub fn convert(converter: &Path, nef: &Path, content_hash: &str, timeout: Durati
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
     let r = run_into(converter, nef, &tmp, &name, timeout, cancel).and_then(|out| {
+        // the DNG is cached under the hash the NEF had when it was planned: a NEF changed (or replaced) since then
+        // would put another file's pixels under that hash
+        same_content(nef, content_hash)?;
         // (another process may have converted the same file meanwhile: its DNG is as good)
         if target.is_file() {
             return Ok(target.clone());
@@ -263,6 +266,27 @@ pub fn convert(converter: &Path, nef: &Path, content_hash: &str, timeout: Durati
     });
     let _ = std::fs::remove_dir_all(&tmp);
     r
+}
+
+/// The file at `path` still has content hash `content_hash` (as import computes it; a catalog suffix after `:` is not
+/// part of it). Read in pieces, no more than the size the file had when it was opened.
+fn same_content(path: &Path, content_hash: &str) -> Result<(), String> {
+    use std::io::Read;
+    let changed = || format!("{}: the file changed while it was converted; convert it again", path.display());
+    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let len = file.metadata().map_err(|e| format!("{}: {e}", path.display()))?.len();
+    let mut r = file.take(len);
+    let mut hasher = lightcraft_preview::Hasher128::new();
+    let mut piece = vec![0u8; 1 << 20];
+    loop {
+        let n = r.read(&mut piece).map_err(|e| format!("{}: {e}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(piece.get(..n).unwrap_or(&[]));
+    }
+    let want = content_hash.split(':').next().unwrap_or(content_hash);
+    (hasher.finish().to_string() == want).then_some(()).ok_or_else(changed)
 }
 
 /// Run the converter on `nef` into `tmp` as `name` and check what it wrote → the DNG's path in `tmp`.

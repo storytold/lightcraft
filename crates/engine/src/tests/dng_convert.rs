@@ -195,6 +195,10 @@ fn a_failed_conversion_leaves_nothing_and_says_why() {
     let silent = stand_in(&x.dir, "silent.sh", "exit 0");
     let e = dc::convert(&silent, &x.nef, &hash, dc::DEFAULT_TIMEOUT, &no).unwrap_err();
     assert!(e.contains("wrote no DNG"), "{e}");
+    // the NEF changes while it is converted: its DNG isn't cached under the hash it had before
+    let changing = stand_in(&x.dir, "changing.sh", &format!("printf more >> \"$7\"\ncp '{}' \"$4/$6\"", x.dng.display()));
+    let e = dc::convert(&changing, &x.nef, &hash, dc::DEFAULT_TIMEOUT, &no).unwrap_err();
+    assert!(e.contains("changed while it was converted"), "{e}");
     assert_eq!(std::fs::read_dir(&x.cache).unwrap().count(), 0, "no DNG and no temporary folder left behind");
     assert_eq!(dc::dng_path(&x.nef, &hash).map(|d| d.is_file()), Some(false));
 }
