@@ -323,6 +323,16 @@ impl Drop for Tracked {
     }
 }
 
+/// Whether an uncaptured error on the renderer's device stops the GPU renderer. The renderer's own
+/// work runs inside error scopes, so on the window's device ([`Gpu::adopt`]) an uncaptured error
+/// naming a `Surface` is the window's swapchain: a resize or a desktop switch can fail one
+/// `Surface::configure` ("Failed to wait for GPU to come idle") with the device fine, and eframe
+/// configures it again. That is logged, not a reason to render on the CPU for the rest of the
+/// session (#4029); a device that is really gone is reported by the device-lost callback.
+pub(crate) fn stops_renderer(window: bool, error: &str) -> bool {
+    !(window && error.contains("Surface::"))
+}
+
 #[cfg(test)]
 thread_local! {
     /// Polls on this thread panic as wgpu's do once a Vulkan or DX12 device is lost (#1858).
@@ -526,10 +536,16 @@ impl Gpu {
         // Only a device the renderer keeps gets these: a window's device declined above keeps the
         // window's own handler, so a later error of the window's can't stop the renderer's device
         // (review of PR #1065).
-        // Errors outside a render's error scopes (see `ErrorScopes`): log, and stop using the GPU.
-        device.on_uncaptured_error(std::sync::Arc::new(|e| {
-            log::error!("gpu: {e}");
-            crate::mark_broken(&format!("device error: {e}"));
+        // Errors outside a render's error scopes (see `ErrorScopes`): log, and stop using the GPU,
+        // unless it is the window's own surface failing on the window's device (#4029).
+        device.on_uncaptured_error(std::sync::Arc::new(move |e| {
+            let text = e.to_string();
+            if stops_renderer(window, &text) {
+                log::error!("gpu: {text}");
+                crate::mark_broken(&format!("device error: {text}"));
+            } else {
+                log::warn!("gpu: the window's surface: {text}");
+            }
         }));
         // wgpu reports a lost device (driver reset, GPU hang, watchdog) only here — never as an
         // error — so without this callback a lost device went unnoticed.
@@ -1153,6 +1169,18 @@ pub fn groups1(n: usize) -> [u32; 3] {
 
 #[cfg(test)]
 mod tests {
+    /// #4029: on the window's device, the window's surface failing to configure is logged, not a reason to stop
+    /// the GPU renderer; any other uncaptured error still stops it, and on a device of the renderer's own every one does.
+    #[test]
+    fn only_the_window_surface_failing_leaves_the_renderer_on_the_gpu() {
+        let surface =
+            "Validation Error\n\nCaused by:\n  In Surface::configure\n    Failed to wait for GPU to come idle before reconfiguring the Surface";
+        assert!(!super::stops_renderer(true, surface), "the window's surface on the window's device");
+        assert!(super::stops_renderer(false, surface), "on a device of the renderer's own every error counts");
+        let other = "Validation Error\n\nCaused by:\n  In Queue::submit\n    Buffer is destroyed";
+        assert!(super::stops_renderer(true, other), "anything else on the window's device still stops it");
+    }
+
     /// Every kernel module, as it is handed to the device (the generated constants, the bindings, `common.wgsl`, the
     /// module), parses and validates without a GPU.
     #[test]
