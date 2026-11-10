@@ -1525,3 +1525,74 @@ fn export_weights_follow_the_source_and_output_sizes() {
     assert_eq!(render_weight(0, 0, SourceLevel::Full, 0), 0);
     assert!(render_weight(usize::MAX, 1, SourceLevel::Full, usize::MAX) > 0, "no overflow");
 }
+
+/// `export.plan` lists the files `app.export` writes: same paths, nothing written to the folder.
+#[test]
+fn export_plan_lists_the_files_an_export_writes() {
+    let dir = std::env::temp_dir().join(format!("lc-plan-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir_s = dir.to_string_lossy().to_string();
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<_> = s.visible_cloned().into_iter().take(2).collect();
+    let o = ExportOptions::from_json(&json!({"format": "png", "naming": "plan-{seq}", "longEdge": 100}));
+    let to = Destination { dir: dir_s.clone(), exact: None };
+    let plan = export_plan(&mut s, &ids, &o, &to, &|p| std::path::Path::new(p).exists()).unwrap();
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "a plan must not write files");
+    let planned: Vec<String> = plan.iter().map(|f| f["path"].as_str().unwrap().to_string()).collect();
+    assert_eq!(planned, vec![format!("{dir_s}/plan-001.png"), format!("{dir_s}/plan-002.png")], "{plan:?}");
+    let mut written = Vec::new();
+    let mut write = |p: &str, b: &[u8]| {
+        written.push(p.to_string());
+        let _ = b;
+        Ok::<(), String>(())
+    };
+    let real = run_batch(prepare_batch(&mut s, &ids, &o).unwrap(), &o, &to, &mut write, &|_| false, false, &mut |_, _| true).unwrap();
+    assert_eq!(written, planned, "{real:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn export_plan_skip_and_unique_follow_the_conflict_policy() {
+    let dir = std::env::temp_dir().join(format!("lc-plan-conflict-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir_s = dir.to_string_lossy().to_string();
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<_> = s.visible_cloned().into_iter().take(2).collect();
+    let to = Destination { dir: dir_s.clone(), exact: None };
+    let skip = ExportOptions::from_json(&json!({"format": "png", "naming": "same", "conflict": "skip", "longEdge": 100}));
+    let plan = export_plan(&mut s, &ids, &skip, &to, &|_| false).unwrap();
+    assert_eq!(plan[0]["path"], format!("{dir_s}/same.png"), "{plan:?}");
+    assert_eq!(plan[1]["skipped"], format!("{dir_s}/same.png"), "{plan:?}");
+    let unique = ExportOptions::from_json(&json!({"format": "png", "naming": "same", "conflict": "unique", "longEdge": 100}));
+    let plan = export_plan(&mut s, &ids, &unique, &to, &|_| false).unwrap();
+    assert_eq!(plan[1]["path"], format!("{dir_s}/same-2.png"), "{plan:?}");
+    // a file already in the folder is a conflict too
+    std::fs::write(dir.join("same.png"), b"x").unwrap();
+    let plan = export_plan(&mut s, &ids, &skip, &to, &|p| std::path::Path::new(p).exists()).unwrap();
+    assert_eq!(plan[0]["skipped"], format!("{dir_s}/same.png"), "{plan:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn export_plan_exact_path_for_one_photo() {
+    let mut s = crate::Session::with_demo();
+    let id = s.visible_cloned()[0];
+    let o = ExportOptions::from_json(&json!({"format": "png", "longEdge": 100}));
+    let to = Destination { dir: String::new(), exact: Some("exact/name.png".into()) };
+    let plan = export_plan(&mut s, &[id], &o, &to, &|_| false).unwrap();
+    assert_eq!(plan[0]["path"], "exact/name.png", "{plan:?}");
+}
+
+#[test]
+fn export_plan_honors_explicit_id_over_selection() {
+    let mut session = crate::Session::with_demo();
+    let ids: Vec<u64> = session.visible_cloned().iter().take(3).map(|photo| photo.0).collect();
+    assert!(ids.len() >= 3, "demo library needs at least three photos");
+    let explicit = ids[2];
+    session.execute("library.select", &json!({"ids": [ids[0], ids[1]], "active": ids[0]})).unwrap();
+    let result = session.execute("export.plan", &json!({"id": explicit, "dir": "out"})).unwrap();
+    let files = result["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "explicit id should plan one photo, got {result}");
+}
