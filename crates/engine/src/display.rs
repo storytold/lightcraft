@@ -108,6 +108,13 @@ pub(crate) fn finish_render(image: &mut Rgba8, display: &Display, full_srgb: boo
     (srgb, histogram)
 }
 
+/// The sRGB histogram of a render into `display`'s primaries (sRGB curve), from the same pixels
+/// [`finish_render`] reads, leaving the image as it is (a High Quality Preview keeps its native
+/// render's histogram before scaling it to the view).
+pub(crate) fn srgb_histogram(image: &Rgba8, display: &Display) -> Option<Histogram> {
+    display.profile.to_srgb(&histogram_sample(image)).map_err(|e| log::warn!("display profile: {e}")).ok().map(|s| Histogram::of_srgb8(&s))
+}
+
 /// The pixels [`Histogram::of_srgb8`] reads (at most ~1 MP, a regular grid), as an image of
 /// their own (which it then reads whole).
 fn histogram_sample(img: &Rgba8) -> Rgba8 {
