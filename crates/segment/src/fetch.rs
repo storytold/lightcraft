@@ -36,7 +36,7 @@ pub const SAM3_WEIGHTS_SIZE: u64 = 3_439_938_512;
 /// SAM License there and download with their own token).
 // TODO(maintainer): add LightCraft's CDN locations (https, primary first), e.g.
 // "https://<cdn-host>/models/sam3/<revision>" — the files there must match `SAM3_FILES`.
-pub const DEFAULT_MIRRORS: &[&str] = &["https://getartcraft.com/models/sam3"];
+pub const DEFAULT_MIRRORS: &[&str] = &[];
 
 /// Environment variable with extra mirrors (base URLs separated by commas, spaces or newlines),
 /// tried before the defaults.
@@ -75,9 +75,8 @@ mod tests {
     }
 
     #[test]
-    fn default_mirrors_offer_a_download_location() {
-        let m = mirrors(None, None);
-        assert!(!m.is_empty(), "mirrors() must offer a download location by default");
-        assert!(m.iter().all(|base| base.starts_with("https://")));
+    fn without_a_configured_mirror_the_message_names_where_to_set_one() {
+        assert!(mirrors(None, None).is_empty(), "no download location is built in until the maintainer adds one");
+        assert!(no_mirrors_message().contains(MIRRORS_ENV));
     }
 }
