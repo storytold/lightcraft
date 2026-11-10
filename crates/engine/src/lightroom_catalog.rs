@@ -605,6 +605,24 @@ pub fn network_sources(path: &Path) -> Result<Vec<String>, String> {
 /// Discover sources with the UI task's cancellation flag, including during WAL reads.
 /// Discovery is bounded by the SQLite reader; the selection limit must not hide sources.
 pub fn network_sources_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<Vec<String>, String> {
+    network_sources_from_source(path, None, cancel)
+}
+
+/// Review a catalog or backup, unpacking backups on the library's disk when available.
+/// Relative roots belong to the original catalog location, never the extraction directory.
+pub fn network_sources_from_source(path: &Path, temp_root: Option<&Path>, cancel: &AtomicBool) -> Result<Vec<String>, String> {
+    ensure_read_active(cancel)?;
+    if crate::lightroom_backup::is_backup(path) {
+        let root = temp_root.map_or_else(std::env::temp_dir, Path::to_path_buf);
+        let extracted = crate::lightroom_backup::extract(path, &root, cancel)?;
+        let (document, _) = crate::lightroom_backup::original_catalog(path, &extracted.entry);
+        return network_sources_from_file(&extracted.catalog, &document, cancel);
+    }
+    network_sources_from_file(path, path, cancel)
+}
+
+/// Inspect recorded roots without touching original files or their servers.
+fn network_sources_from_file(path: &Path, document: &Path, cancel: &AtomicBool) -> Result<Vec<String>, String> {
     let reader = open_reader(path, cancel)?;
     ensure_read_active(cancel)?;
     let mut shares: BTreeMap<String, String> = BTreeMap::new();
@@ -619,7 +637,7 @@ pub fn network_sources_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<V
             // Relative roots/fallbacks can be on the catalog's own share. Resolve lexically,
             // without the existence checks used later by relocated_root during import.
             let share = crate::doc_path::network_share(stored)
-                .or_else(|| craft_docpath::resolve(stored, Some(path)).ok().and_then(|p| p.to_str().and_then(crate::doc_path::network_share)));
+                .or_else(|| craft_docpath::resolve(stored, Some(document)).ok().and_then(|p| p.to_str().and_then(crate::doc_path::network_share)));
             if let Some(share) = share {
                 shares.entry(share.to_ascii_lowercase()).or_insert(share);
             }
@@ -642,7 +660,14 @@ pub fn read_with_network_shares_and_progress(
 }
 
 /// Read the extracted file while resolving originals relative to the original catalog location.
-fn read_file(path: &Path, document: &Path, source: &Path, shares: &NetworkShares, cancel: &AtomicBool, done: &AtomicUsize) -> Result<CatalogImport, String> {
+fn read_file(
+    path: &Path,
+    document: &Path,
+    source: &Path,
+    shares: &NetworkShares,
+    cancel: &AtomicBool,
+    done: &AtomicUsize,
+) -> Result<CatalogImport, String> {
     let reader = open_reader(path, cancel)?;
     let mut warnings = Vec::new();
     let table = |name: &str, required: bool| -> Result<Vec<Row>, String> {

@@ -1890,3 +1890,50 @@ fn cancelled_root_table_read_stops_before_visiting_records() {
     assert!(error.contains("cancelled"));
     assert_eq!(db.read_table(2, 1).unwrap().len(), 1);
 }
+
+/// Backup discovery and inspection share the same consent policy and clean up every extraction.
+#[test]
+fn backup_network_sources_require_consent_and_leave_no_extraction() {
+    let bytes = native_catalog(&photo_tables((r"\\192.0.2.1\photos\", "")));
+    let fixture = CatalogFixture::new(&bytes);
+    let zip = fixture.0.with_extension("zip");
+    let temp = fixture.0.with_extension("extraction");
+    let packed = crate::lightroom_backup::tests::zip(&[("Cat.lrcat", &bytes)], true, false);
+    std::fs::write(&zip, &packed).unwrap();
+    let cancel = AtomicBool::new(false);
+    assert_eq!(network_sources_from_source(&zip, Some(&temp), &cancel).unwrap(), [r"\\192.0.2.1\photos"]);
+    assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+    let mut session = crate::Session::new();
+    assert_eq!(session.execute("library.lightroomNetworkSources", &json!({"path":zip})).unwrap()["networkSources"], json!([r"\\192.0.2.1\photos"]));
+    let total = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    for selected in [false, true] {
+        let shares = NetworkShares::new(if selected { vec![r"\\192.0.2.1\photos".into()] } else { Vec::new() }).unwrap();
+        let data = read_source_with_network_shares(&zip, Some(&temp), &shares, &cancel, &total, &done).unwrap();
+        assert_eq!(data.source, zip.to_string_lossy());
+        assert_eq!(data.photos.len(), 1);
+        if selected {
+            assert_eq!(data.photos[0].original, if cfg!(windows) { Original::Local } else { Original::NotHere });
+        } else {
+            assert!(matches!(data.photos[0].original, Original::Refused(_)));
+        }
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+    }
+    assert!(network_sources_from_source(&zip, Some(&temp), &AtomicBool::new(true)).unwrap_err().contains("cancel"));
+    assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+    assert_eq!(std::fs::read(&zip).unwrap(), packed, "source review and inspection never change the backup");
+    std::fs::write(&zip, crate::lightroom_backup::tests::zip(&[("Cat.lrcat", b"not SQLite")], false, false)).unwrap();
+    assert!(network_sources_from_source(&zip, Some(&temp), &cancel).is_err());
+    assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+    std::fs::remove_file(zip).unwrap();
+    std::fs::remove_dir(temp).unwrap();
+}
+
+/// Extraction location must not hide the share of a catalog-relative root in a network backup.
+#[test]
+fn source_discovery_uses_the_original_document_location() {
+    let fixture = CatalogFixture::new(&native_catalog(&photo_tables(("./", "../Originals"))));
+    let document = Path::new(r"\\nas\photos\Catalog\Cat.lrcat");
+    assert_eq!(network_sources_from_file(&fixture.0, document, &AtomicBool::new(false)).unwrap(), [r"\\nas\photos"]);
+    assert!(network_sources(&fixture.0).unwrap().is_empty(), "the extracted file's local path grants no network source");
+}

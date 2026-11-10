@@ -171,7 +171,7 @@ originals should be imported, including the catalog's own share; an empty select
 A path that is not a path on this computer (a Windows drive path read on macOS or
 Linux) is not looked at either and stays catalogued as missing.
 
-**Local catalog, NAS originals.** After choosing the `.lrcat`, LightCraft reads its recorded root
+**Local catalog, NAS originals.** After choosing the `.lrcat` or a Lightroom backup `.zip`, LightCraft reads its recorded root
 folders in the background and lists **Network sources in this catalog** in the import window.
 Each distinct UNC server/share (for example `\\nas\photos` or `\\archive\old-photos`) gets a checkbox;
 folders and ASCII case/separator variants on the same share are grouped, using the same comparison
@@ -188,7 +188,10 @@ and [two network sources with one selected](images/lightcraft-import-network-sou
 
 Discovery reads only the catalog and its committed WAL. It does not contact servers to probe
 originals, but a catalog on a share requires contacting that catalog's server to read the catalog
-and WAL. The network review also appears with **Always merge** or an in-memory library;
+and WAL. For a backup, discovery temporarily extracts its catalog using the same size, CRC and
+cancellation checks as import, then removes the extraction before asking for consent. Import
+extracts it again after confirmation. Relative sources refer to the original catalog location,
+not the temporary folder. The network review also appears with **Always merge** or an in-memory library;
 that preference still skips the destination question for catalogs without network sources. Cancel
 grants nothing. Selections apply only to this import and are not remembered on the next one.
 
@@ -197,7 +200,8 @@ The same explicit option is available to `file.importLightroom`, `library.import
 are accepted, validated before catalog reads or library creation. The resolver checks the full server
 and share names, not a path prefix: selecting `\\nas\photos` does not permit `\\nas\photos-private` or
 another server. Device paths, non-file URLs, invalid paths and remote `file://host/…` URLs remain refused.
-UNC originals work on Windows; on other platforms, use the NAS's locally mounted paths. An allowed but
+UNC originals work on Windows; on other platforms, an explicitly selected Windows UNC path stays
+as an offline record without contacting its server. Relink it to the NAS's locally mounted path. An allowed but
 offline original stays catalogued as missing for relinking. An explicit empty array allows no UNC shares,
 including the catalog's own share. Without the option, the original restriction remains: a catalog must not make the app contact a server the user has not chosen.
 
