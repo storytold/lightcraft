@@ -498,10 +498,10 @@ pub fn window_renderer_order(
         // no Vulkan on Windows: its driver can crash the process uncatchably (issue #136)
         "windows" => vec![Backends::DX12, Backends::GL],
         "macos" | "ios" => vec![Backends::METAL],
-        // Linux only: eframe's default (GL only when the build has it); other platforms
+        // Linux: GL first, then Vulkan as the fallback after a failed GL start; other platforms
         // keep the previous Vulkan, GL chain (e.g. FreeBSD, whose window default is
         // PRIMARY | GL in `default_window_backends`)
-        "linux" => vec![Backends::GL],
+        "linux" => vec![Backends::GL, Backends::VULKAN],
         _ => vec![Backends::VULKAN, Backends::GL],
     };
     let chain = platform.into_iter().map(WindowRenderer::Wgpu).chain([WindowRenderer::Glow]);
@@ -510,10 +510,11 @@ pub fn window_renderer_order(
         WindowRenderer::Wgpu(b) => !b.is_empty() && compiled.contains(*b),
     };
     let not_failed = |r: &WindowRenderer| Some(*r) != failed;
-    // On Windows and Linux the Vulkan driver is loaded only when the environment asks for it (the forced
+    // On Windows the Vulkan driver is loaded only when the environment asks for it (the forced
     // renderer): a broken one crashes the process uncatchably (issue #136). So neither the
     // renderer remembered from the last run nor the one the last start died in can bring it back.
-    let no_vulkan = |r: &WindowRenderer| !matches!(os, "windows" | "linux") || !matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN));
+    // On Linux Vulkan is the fallback after GL, so a remembered or failed Vulkan may still be tried.
+    let no_vulkan = |r: &WindowRenderer| os != "windows" || !matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN));
     let candidates = forced
         .into_iter()
         .chain(remembered.filter(|r| not_failed(r) && no_vulkan(r)))
@@ -852,8 +853,7 @@ mod tests {
         assert!(!default.contains(Backends::VULKAN), "the default Linux window backends must not contain Vulkan: {default:?}");
         assert!(default.contains(Backends::GL), "the default Linux window backends must contain GL: {default:?}");
         let automatic = window_renderer_order(None, None, None, "linux", all, true);
-        assert!(!automatic.contains(&vk), "the automatic Linux chain must not contain Vulkan: {automatic:?}");
-        assert_eq!(automatic.first(), Some(&gl));
+        assert_eq!(automatic, [gl, vk, WindowRenderer::Glow], "GL first, Vulkan as the fallback: {automatic:?}");
     }
 
     /// FreeBSD keeps the previous PRIMARY|GL window default (not Linux's GL-only), and on
@@ -867,10 +867,10 @@ mod tests {
         assert_eq!(default_window_backends("linux"), Backends::GL);
         assert_eq!(default_window_backends("freebsd"), Backends::PRIMARY | Backends::GL);
         let remembered = window_renderer_order(None, Some(vk), None, "linux", all, true);
-        assert!(!remembered.contains(&vk), "a remembered Vulkan must not be tried on Linux: {remembered:?}");
-        assert_eq!(remembered.first(), Some(&gl));
+        assert_eq!(remembered.first(), Some(&vk), "a remembered Vulkan is tried first on Linux: {remembered:?}");
         let failed = window_renderer_order(None, None, Some(vk), "linux", all, true);
-        assert!(!failed.contains(&vk), "a failed Vulkan must not be tried on Linux: {failed:?}");
+        assert_eq!(failed.last(), Some(&vk), "a failed Vulkan is the last resort on Linux: {failed:?}");
+        assert_eq!(failed.first(), Some(&gl));
         assert_eq!(window_renderer_order(Some(vk), None, None, "linux", all, true).first(), Some(&vk));
     }
 
@@ -889,10 +889,10 @@ mod tests {
         let order = window_renderer_order(None, None, None, "freebsd", Backends::VULKAN, true);
         assert_eq!(order.first(), Some(&vk));
         assert!(!order.contains(&gl));
-        // Linux stays GL-only in the automatic chain
+        // Linux tries GL first, with Vulkan as the fallback
         let linux = window_renderer_order(None, None, None, "linux", all, true);
-        assert!(!linux.contains(&vk));
         assert_eq!(linux.first(), Some(&gl));
+        assert_eq!(linux.get(1), Some(&vk));
     }
 
     /// Without a marker, non-Linux platforms keep their default renderer: FreeBSD
@@ -944,20 +944,18 @@ mod tests {
     }
 
     /// The empty-order fallback must not yield an empty backend set as a
-    /// usable renderer, and on Linux it must not load Vulkan automatically
-    /// to do so (issue #136): with GL not compiled in and glow unavailable
-    /// the order keeps the never-empty platform default (GL, not Vulkan);
-    /// with glow available it falls back to glow.
+    /// usable renderer: with GL not compiled in, Vulkan (the Linux fallback) is used when it is
+    /// compiled, and with neither compiled the never-empty platform default (GL) is kept; with
+    /// glow available it falls back to glow.
     #[test]
     fn empty_order_fallback_is_usable_when_gl_not_compiled() {
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN, false);
-        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::GL)), "platform default, not Vulkan: {order:?}");
-        assert!(!order.iter().any(|r| matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN))));
+        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::VULKAN)), "Vulkan is the usable fallback: {order:?}");
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN, true);
-        assert_eq!(order.first(), Some(&WindowRenderer::Glow));
+        assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::VULKAN)));
         // Metal is not a Linux window backend, so it does not count as a
         // compiled fallback; the platform default (GL) is kept instead
-        let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN | Backends::METAL, false);
+        let order = window_renderer_order(None, None, None, "linux", Backends::METAL, false);
         assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::GL)), "Metal is not a Linux fallback: {order:?}");
         let order = window_renderer_order(None, None, None, "linux", Backends::VULKAN | Backends::GL, false);
         assert_eq!(order.first(), Some(&WindowRenderer::Wgpu(Backends::GL)));
