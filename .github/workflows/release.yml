@@ -12,9 +12,9 @@ on:
         type: string
         default: ""
 
-permissions:
-  contents: write
-  packages: write
+# Nothing by default; each job names what it needs. Only `release` writes (the draft GitHub Release
+# and its packages).
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -68,6 +68,9 @@ jobs:
 
   release:
     needs: [git-sources, credits]
+    permissions:
+      contents: write
+      packages: write
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:
