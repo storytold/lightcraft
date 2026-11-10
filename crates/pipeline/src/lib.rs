@@ -516,6 +516,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         geo,
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
         format!("{:?}", s.spots),
+        // the process picks how spots heal (Update to Current Process, undo)
+        (!s.spots.is_empty()).then(|| spots::HealMethod::of(s)),
         format!("{eyes:?}"),
         // defringe runs in this stage
         format!("{:?}", s.optics),
@@ -616,7 +618,7 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     local_tone::apply(img, info, p);
     local::white_balance(img, info, s);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
-    spots::apply(img, &s.spots, &p.frame, p.px_per_long);
+    spots::apply(img, &s.spots, &p.frame, p.px_per_long, spots::HealMethod::of(s));
     redeye::apply(img, &p.eyes);
 }
 

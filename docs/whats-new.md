@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Heal meets its surroundings (process 8)
+- A healed spot now meets the photo exactly at its edge: on a gradient (a sky, a shaded wall, a cheek) it no longer
+  leaves a faint disc or ring, and a dark line near the spot that the spot doesn't touch no longer smudges into it.
+  Texture taken from a brighter or darker area keeps its contrast relative to the light where it lands, instead of
+  turning blotchy in shadows or flat in highlights, and the patch takes the grain of the area around it. Heal, Remove
+  and Clone read their source at whole pixels, so a patch is no longer smoother than the photo around it. This is
+  rendering process 8: new photos (and Reset) get it, photos you already edited keep their look until you choose
+  Photo ▸ Update to Current Process. See [process versions](process-versions.md).
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
