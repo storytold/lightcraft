@@ -180,6 +180,56 @@ fn mixer_picker_toasts_a_source_failure_as_itself_not_the_refusal() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A spot the maths refuses (here a black one) toasts the advice to pick a brighter area and leaves
+/// the eyedropper armed, so the next click is that other pick: before, the refusal ended the tool
+/// and the photographer had to arm it again to follow the advice. A pick that works still ends it.
+#[test]
+fn a_refused_spot_keeps_the_eyedropper_armed_for_another_pick() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-mixer-rearm-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // left half black (nothing to neutralize), right half a warm grey
+    let (w, h_px) = (64usize, 48usize);
+    let data: Vec<[u8; 4]> = (0..w * h_px).map(|i| if i % w < w / 2 { [0, 0, 0, 255] } else { [190, 150, 110, 255] }).collect();
+    let img = lightcraft_raster::Rgba8 { width: w, height: h_px, data };
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    let file = dir.join("halves.png");
+    std::fs::write(&file, png).unwrap();
+
+    let services = crate::Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo().with_fs(), services);
+    let mut h = Headless::new(app, [1400.0, 1100.0], 1.0);
+    h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["channelMixer"]}), T);
+    crate::import::start_paths(&mut h.app, vec![file.to_string_lossy().to_string()]).unwrap();
+    let t0 = std::time::Instant::now();
+    while h.app.import.is_some() && t0.elapsed() < SETTLE {
+        h.step();
+    }
+    assert!(h.app.import.is_none(), "import finished");
+    h.settle(SETTLE);
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "canvas:image"), "the canvas is there");
+
+    let before = dev_mixer(&h);
+    h.app.ui.toast = None;
+    let r = h.request("engine.execute", json!({"command": "tool.mixerPicker"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.clickWidget", json!({"id": "canvas:image", "fx": 0.2, "fy": 0.5}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let toast = h.app.ui.toast.clone().expect("a toast").0;
+    assert!(toast.contains("pick a brighter"), "the black spot is refused with the advice: {toast}");
+    assert_eq!(dev_mixer(&h), before, "a refused pick changes nothing");
+    assert_eq!(h.app.ui.tool, "mixerPicker", "the eyedropper stays armed for the other spot");
+
+    // the next click, on the grey half, is the pick: it sets the mixer and ends the tool
+    let r = h.request("ui.clickWidget", json!({"id": "canvas:image", "fx": 0.8, "fy": 0.5}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_ne!(dev_mixer(&h), before, "the second click picked");
+    assert_eq!(h.app.ui.tool, "", "a pick that works ends the tool");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The eyedropper and Swap Red and Blue share a wrapping row: in a narrow panel with a longer
 /// translation (Finnish) the text button drops to its own line below the eyedropper instead of
 /// running past the panel's edge (issue #2158 review).

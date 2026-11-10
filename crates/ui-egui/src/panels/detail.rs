@@ -1252,6 +1252,7 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
             // a spot the maths refuses (too dark, too saturated) says why; a mixer scaled down to
             // fit the sliders left the photo darker, and says by how much (Exposure is the
             // photographer's: the picker never changes it)
+            let mut pick_again = false;
             match app.run_typed("develop.mixerNeutralPick", json!({"x": n.x, "y": n.y})) {
                 Ok(r) => {
                     let darker = r["darker"].as_f64().unwrap_or(0.0);
@@ -1276,13 +1277,17 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
                             );
                         } else {
                             app.toast_error(ui.ctx(), crate::i18n::tr("This spot can't be made neutral: pick a brighter, less saturated area"));
+                            // the advice is to pick another spot: the eyedropper stays armed for it
+                            pick_again = true;
                         }
                     } else {
                         app.toast_error(ui.ctx(), e.message);
                     }
                 }
             }
-            app.ui.tool.clear();
+            if !pick_again {
+                app.ui.tool.clear();
+            }
         }
         return;
     }
