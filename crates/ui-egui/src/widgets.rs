@@ -1064,34 +1064,35 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
     if elided { resp.on_hover_text(text) } else { resp }
 }
 
-/// A row of `label` and a [`dropdown`] beside it, as White Balance has, choosing one of `items`
-/// (menu label, key): the panel way to pick one of several modes, where a row of buttons for
-/// each would take more room than the choice is worth. The closed dropdown names the `active`
-/// item; an `active` that names none (out of range, or `None`) means the first item, in the
-/// closed dropdown and the menu's check alike, so callers pass `None` only where the first item is
-/// what happens with nothing chosen. Like White Balance, it is as wide as the chosen item, so the
-/// chevron follows the text. Screen readers hear `label` as its name and the chosen item as
-/// its value. The dropdown registers as `dropdown:{id}` and each menu item as `{id}:{key}`.
-/// Returns the index of the item chosen this frame.
-pub fn labeled_dropdown(ui: &mut Ui, id: &str, label: &str, items: &[(&str, &str)], active: Option<usize>) -> Option<usize> {
+/// A row of `label` and a [`dropdown`] beside it, as White Balance has: the panel way to pick one
+/// of several modes, where a row of buttons for each would take more room than the choice is
+/// worth. `items` are (value, menu label, key); the closed dropdown names the item whose value is
+/// `current`, or the first when none is, so put first what happens with nothing chosen. It is as
+/// wide as that item, `hint` (when not empty) shows on hover, and screen readers hear `label` as
+/// its name and the item as its value. The dropdown registers as `dropdown:{id}` and each menu item
+/// as `{id}:{key}`. Returns the value chosen this frame.
+pub fn labeled_dropdown<T: Copy + PartialEq>(ui: &mut Ui, id: &str, label: &str, hint: &str, items: &[(T, &str, &str)], current: T) -> Option<T> {
     let t = Tokens::get(ui.ctx());
-    let active = active.filter(|&i| i < items.len()).or((!items.is_empty()).then_some(0));
+    let active = items.iter().position(|(v, _, _)| *v == current).unwrap_or(0);
     let mut chosen = None;
     ui.horizontal(|ui| {
         let name = crate::i18n::tr(label);
         ui.label(egui::RichText::new(name).color(t.text_dim));
-        let current = active.and_then(|i| items.get(i)).map_or("", |(l, _)| crate::i18n::tr(l));
-        let r = dropdown(ui, id, current, t.font(12.5), t.text_label);
+        let shown = items.get(active).map_or("", |(_, l, _)| crate::i18n::tr(l));
+        let mut r = dropdown(ui, id, shown, t.font(12.5), t.text_label);
+        if !hint.is_empty() {
+            r = r.on_hover_text(crate::i18n::tr(hint));
+        }
         ui.ctx().accesskit_node_builder(r.id, |node| {
             node.set_label(name.to_string());
-            node.set_value(current.to_string());
+            node.set_value(shown.to_string());
         });
         egui::Popup::menu(&r).show(|ui| {
-            for (i, (l, key)) in items.iter().enumerate() {
-                let item = ui.selectable_label(active == Some(i), crate::i18n::tr(l));
+            for (i, (v, l, key)) in items.iter().enumerate() {
+                let item = ui.selectable_label(i == active, crate::i18n::tr(l));
                 register(ui, format!("{id}:{key}"), item.rect);
                 if item.clicked() {
-                    chosen = Some(i);
+                    chosen = Some(*v);
                 }
             }
         });
