@@ -98,11 +98,17 @@ pub fn embedded_preview_dynamic_range_optimized(bytes: &[u8]) -> Option<bool> {
 
 /// The first frame (SOF) marker of a JPEG and its position, from the marker segments before the first scan.
 fn first_frame(b: &[u8]) -> Option<(u8, usize)> {
+    first_frame_within(b, &mut { usize::MAX })
+}
+
+/// [`first_frame`] charging `work` one per step (a segment, or a fill byte); `None` too when it runs out.
+fn first_frame_within(b: &[u8], work: &mut usize) -> Option<(u8, usize)> {
     if b.len() < 4 || !b.starts_with(&[0xff, 0xd8]) {
         return None;
     }
     let mut i = 2usize;
     while i.checked_add(4)? <= b.len() {
+        *work = work.checked_sub(1)?;
         if *b.get(i)? != 0xff {
             return None;
         }
@@ -329,12 +335,16 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
 
 /// Drops candidate ranges that repeat an earlier one, that are not a displayable JPEG or JPEG XL, and valid ones
 /// past a shared budget of [`scan_budget`] bytes: a range is charged only once it validates, so invalid ranges
-/// covering most of the file cannot use up the budget before a valid preview.
+/// covering most of the file cannot use up the budget before a valid preview. The header walks that validate
+/// (or reject) the ranges share a second budget of the same size, charged for every walk, so many ranges
+/// that start a JPEG header and run through fill bytes cannot each cost a walk of their length.
 fn bound_candidates(found: &mut Vec<&[u8]>, file_len: usize) {
     let mut seen = std::collections::HashSet::new();
     let mut left = scan_budget(file_len);
+    let mut work = scan_budget(file_len);
     found.retain(|s| {
-        if !seen.insert((s.as_ptr() as usize, s.len())) || !(is_dct_jpeg(s) || is_jxl(s)) || s.len() > left {
+        let mut dct = || first_frame_within(s, &mut work).is_some_and(|(m, _)| matches!(m, 0xc0..=0xc2));
+        if !seen.insert((s.as_ptr() as usize, s.len())) || !(dct() || is_jxl(s)) || s.len() > left {
             return false;
         }
         left -= s.len();
@@ -691,5 +701,22 @@ mod bound_tests {
         super::bound_candidates(&mut found, data.len());
         assert_eq!(found.len(), 1);
         assert!(found[0].starts_with(&[0xff, 0xd8]));
+    }
+
+    #[test]
+    fn header_walks_of_many_fill_byte_ranges_share_a_budget() {
+        // a JPEG header followed by 100 000 fill bytes and no frame: each walk would run to the end
+        let mut data = vec![0xffu8; 100_100];
+        data[..2].copy_from_slice(&[0xff, 0xd8]);
+        let valid = [0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0];
+        // 50 distinct such ranges (5 M steps against the 1 MiB budget), then a valid header
+        let mut found: Vec<&[u8]> = (0..50).map(|i| &data[..100_000 + i]).collect();
+        found.push(&valid);
+        super::bound_candidates(&mut found, data.len());
+        assert!(found.is_empty(), "the walks stop at the shared budget, so the later header is not reached");
+        // the same header with no hostile ranges before it is kept
+        let mut found: Vec<&[u8]> = vec![&valid];
+        super::bound_candidates(&mut found, data.len());
+        assert_eq!(found.len(), 1);
     }
 }
