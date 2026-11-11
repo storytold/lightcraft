@@ -108,7 +108,7 @@ pub fn resolve(choice: BackendChoice, default: Backends, compiled: Backends) -> 
     }
 }
 
-fn env_choice() -> BackendChoice {
+pub fn env_choice() -> BackendChoice {
     static C: std::sync::OnceLock<BackendChoice> = std::sync::OnceLock::new();
     *C.get_or_init(|| {
         let lc = std::env::var("LIGHTCRAFT_GPU_BACKEND").ok();
