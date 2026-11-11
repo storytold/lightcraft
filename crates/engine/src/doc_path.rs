@@ -181,7 +181,7 @@ pub(crate) fn open_original(path: impl AsRef<Path>) -> std::io::Result<std::fs::
     if network::is_unc(path) {
         return network::open(path, true);
     }
-    std::fs::File::open(path)
+    crate::read_file::open_for_read(path)
 }
 
 /// Query an original through the same no-follow UNC handle walk used for reading.
@@ -194,13 +194,9 @@ pub(crate) fn original_metadata(path: &Path) -> std::io::Result<std::fs::Metadat
     std::fs::metadata(path)
 }
 
-/// Read an original or sidecar using the validated handle, without reopening its path.
+/// Read a regular original or sidecar within the media byte cap, using the validated handle without reopening its path.
 pub(crate) fn read_original(path: impl AsRef<Path>) -> std::io::Result<Vec<u8>> {
-    use std::io::Read;
-    let mut file = open_original(path)?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    Ok(bytes)
+    crate::read_file::read_open(open_original(path)?, crate::read_file::MAX_MEDIA_BYTES)
 }
 
 /// Read a UTF-8 sidecar through a no-follow handle, preserving the usual UTF-8 error behavior.
@@ -211,6 +207,15 @@ pub(crate) fn read_original_text(path: impl AsRef<Path>) -> std::io::Result<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Guarded reads must retain upstream's regular-file check after authorization.
+    #[cfg(unix)]
+    #[test]
+    fn guarded_original_read_refuses_non_regular_files() {
+        let error = read_original("/dev/null").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("not a regular file"));
+    }
 
     /// Consent stays lexical: an unchecked non-ASCII alias cannot borrow the catalog share's grant.
     #[test]
