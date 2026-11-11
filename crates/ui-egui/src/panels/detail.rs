@@ -1289,9 +1289,21 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
 fn double_click_to_grid(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img: Rect, canvas: Rect) {
     let photo = app.session.active().map(|p| p.0);
     let (now, delay) = (ui.input(|i| i.time), ui.ctx().options(|o| o.input_options.max_double_click_delay));
+    let frame = ui.ctx().cumulative_frame_nr();
+    // a click waits only while this runs every frame: a tool taking the photo over, a gesture or
+    // another view in between ends it, so it can't zoom later when the loupe is back
+    match &mut app.ui.pending_click {
+        Some(click) if click.frame.saturating_add(1) >= frame => click.frame = frame,
+        pending => *pending = None,
+    }
     if resp.double_clicked() {
         app.ui.pending_click = None;
-        crate::menus::leave_detail(app);
+        if app.ui.fullscreen {
+            // as Esc: the full-screen preview ends first, the view under it stays
+            crate::panels::slideshow::end(app);
+        } else {
+            crate::menus::leave_detail(app);
+        }
         return;
     }
     let zoomed = zoomed(img, canvas);
@@ -1299,7 +1311,7 @@ fn double_click_to_grid(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Res
         let at = resp
             .interact_pointer_pos()
             .map(|q| (((q.x - img.left()) / img.width()).clamp(0.0, 1.0), ((q.y - img.top()) / img.height()).clamp(0.0, 1.0)));
-        app.ui.pending_click = Some(PendingClick { at, time: now, photo });
+        app.ui.pending_click = Some(PendingClick { at, time: now, photo, frame });
     } else if resp.dragged() {
         app.ui.pending_click = None;
     }
@@ -1310,6 +1322,8 @@ fn double_click_to_grid(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Res
         } else if waited >= delay {
             app.ui.pending_click = None;
             apply_click_zoom(app, click.at, zoomed);
+            // the photo was laid out before this: draw the zoom now, not at the next event
+            ui.ctx().request_repaint();
         } else {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((delay - waited).max(0.0)));
         }
@@ -1320,12 +1334,14 @@ fn double_click_to_grid(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Res
 }
 
 /// A single click on the loupe's photo, held back by [`double_click_to_grid`] until it is not the
-/// first of a double-click: where it landed (normalized image coordinates), when, and on which photo.
+/// first of a double-click: where it landed (normalized image coordinates), when, on which photo,
+/// and the last frame that kept it waiting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PendingClick {
     pub at: Option<(f32, f32)>,
     pub time: f64,
     pub photo: Option<u64>,
+    pub frame: u64,
 }
 
 /// A click's zoom: from Fit to the click-zoom ratio centred on `at`, and from a zoomed view

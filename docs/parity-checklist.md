@@ -147,7 +147,6 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| 2026-11-11 | minor | LR-VIEW-DETAIL: View ▸ Double-Click Returns to Grid (`view.doubleClickToGrid`, off by default) sends a double-click on the loupe's photo back to the grid, as in Lightroom; status unchanged |
 | LR-FILT-SEARCH-META | Text search | P0 | ✅ | `cmd:library.filter` (`text`), `crates/ui-egui/src/panels/topbar.rs`, `crates/catalog/src/query.rs` | fielded tokens (`rating:3`, `iso:>800`, `rating:>=3` / `iso:<=400`, `camera:…`); plain words also match the people named on faces; double quotes keep several words in one token (`person:"Jane Doe"`, `"jane doe"`, issue #1449); no suggestions dropdown |
 | LR-FILT-SEARCH-AI | Natural-language search | P2 | ⬜ | | |
 | LR-FILT-RATING | Rating filter | P0 | ✅ | `cmd:library.filter` (`rating`, `ratingOp`), `crates/ui-egui/src/panels/filterbar.rs` | ≥ / = / ≤ stars in the filter bar (`cmd:view.filterBar`) |
@@ -803,6 +802,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | LR-VIEW-DETAIL: View ▸ Double-Click Returns to Grid (`view.doubleClickToGrid`, off by default) sends a double-click on the loupe's photo back to the grid, as in Lightroom, and a single click then zooms after the double-click time; status unchanged |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | minor | LR-EDIT-LENSBLUR: ⬜ → 🟡 (Lens Blur section: Apply, Blur Amount, Boost, focus on the subject or a mask; no depth map yet); LR-MASK-SLIDERS: a Lens Blur block in every mask (selection or outside, Amount, Boost, Transition); KEY-SECTIONS: ⌘6 opens Lens Blur |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |

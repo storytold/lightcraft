@@ -326,6 +326,46 @@ fn a_double_click_over_several_frames_returns_to_the_grid_without_zooming() {
     assert_eq!(h.app.ui.pending_click, None);
 }
 
+/// A click still waiting when Crop takes the photo over is dropped: it does not zoom once Crop
+/// has closed again.
+#[test]
+fn a_waiting_click_is_dropped_when_a_tool_takes_the_photo_over() {
+    use crate::state::Zoom;
+    let mut h = detail();
+    h.app.ui.settings.zoom_to_focus = false;
+    h.app.ui.settings.loupe_double_click_grid = true;
+
+    click_photo(&mut h, false);
+    assert!(h.app.ui.pending_click.is_some());
+    for open in [true, false] {
+        let r = h.request("engine.execute", json!({"command": "panel.crop"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(h.app.ui.right == crate::state::RightPanel::Crop, open);
+        for _ in 0..30 {
+            h.step();
+        }
+    }
+    assert_eq!(h.app.ui.pending_click, None);
+    assert_eq!(h.app.ui.zoom, Zoom::Fit, "the click from before Crop did not zoom afterwards");
+}
+
+/// In the full-screen preview a double-click ends the preview, as Esc does, and the loupe under
+/// it stays.
+#[test]
+fn a_double_click_in_the_full_screen_preview_ends_the_preview() {
+    use crate::state::ViewMode;
+    let mut h = detail();
+    h.app.ui.settings.loupe_double_click_grid = true;
+    let r = h.request("engine.execute", json!({"command": "view.fullScreenPreview"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.fullscreen);
+
+    click_photo(&mut h, true);
+    assert!(!h.app.ui.fullscreen, "the preview ended");
+    assert_eq!(h.app.ui.view, ViewMode::Detail, "the loupe under it stayed");
+}
+
 /// Off (the default), a double-click on the photo toggles the zoom and stays in the loupe.
 #[test]
 fn a_double_click_stays_in_the_loupe_by_default() {
