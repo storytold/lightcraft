@@ -495,6 +495,50 @@ pub(crate) fn finish_deep(p: &Prepared, s: &DevelopSettings, frame: &Frame, info
     DeepImage { width: w, height: h, space, samples }
 }
 
+/// The vignette for one pixel (display linear, post-crop). `view` is `[vx, vy, vw, vh]`: the crop
+/// window inside the output frame — the vignette belongs to the whole frame, not to the window.
+/// `hdr`: lightening never pulls HDR highlights down.
+#[inline]
+fn vignette_apply(mut d: [f32; 3], v: &Vig, view: [f32; 4], x: usize, y: usize, hdr: bool) -> [f32; 3] {
+    let [vx, vy, vw, vh] = view;
+    let aspect = vw / vh;
+    let u = (vx + x as f32 + 0.5) / vw * 2.0 - 1.0;
+    let vv = (vy + y as f32 + 0.5) / vh * 2.0 - 1.0;
+    let sx = 1.0 + (aspect - 1.0) * v.aspect_mix;
+    let sy = 1.0 + (1.0 / aspect - 1.0) * v.aspect_mix;
+    let (ax, ay) = ((u * sx.max(1.0) / sx.max(sy)).abs(), (vv * sy.max(1.0) / sx.max(sy)).abs());
+    let dist = (ax.powf(v.power) + ay.powf(v.power)).powf(1.0 / v.power);
+    let t = smooth(v.start, v.start + v.width, dist);
+    if t > 0.0 {
+        let lum = luminance_2020(d).clamp(0.0, 1.0);
+        if v.amount < 0.0 {
+            if v.style == VignetteStyle::PaintOverlay {
+                // paint the corner: it settles on the paint's own level instead of scaling towards zero
+                let k = (-v.amount) * t;
+                d = d.map(|c| c * (1.0 - k) + PAINT_LEVEL * k);
+            } else {
+                let mut f = 1.0 + v.amount * t;
+                if v.style == VignetteStyle::HighlightPriority {
+                    f += (1.0 - f) * v.highlights * smooth(0.4, 1.0, lum);
+                }
+                d = d.map(|c| c * f);
+            }
+        } else if v.style == VignetteStyle::PaintOverlay {
+            let k = v.amount * t;
+            let flat = 1.0 - PAINT_LEVEL;
+            // never pulls a pixel down, so anything brighter than the paint (HDR highlights included)
+            // is left alone
+            d = d.map(|c| c + (flat - c).max(0.0) * k);
+        } else if hdr {
+            // lighten towards SDR white; never pull HDR highlights down to it
+            d = d.map(|c| c + (1.0 - c).max(0.0) * v.amount * t * 0.85);
+        } else {
+            d = d.map(|c| c + (1.0 - c) * v.amount * t * 0.85);
+        }
+    }
+    d
+}
+
 /// The per-pixel stage: every output pixel's colour in the output primaries, encoded with the sRGB
 /// curve (tone curves and grain applied; not clamped), handed to `store` for the final encoding.
 /// `exact`: encode with the exact sRGB curve instead of the (8/10-bit accurate) table.
@@ -510,10 +554,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
-    let [vx, vy, vw, vh] = fp.view;
-    let (vx_u, vy_u) = (vx.round() as usize, vy.round() as usize);
-    // the vignette belongs to the whole output frame, not to the window being drawn
-    let aspect = vw / vh;
+    let (vx_u, vy_u) = (fp.view[0].round() as usize, fp.view[1].round() as usize);
 
     let srgb = srgb_lut();
     let preview_light = if exact { None } else { light.as_ref().and_then(|lo| crate::light_v3::PreviewOps::new(lo, &|v| encode_srgb(srgb, v))) };
@@ -573,40 +614,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {
-                let u = (vx + x as f32 + 0.5) / vw * 2.0 - 1.0;
-                let vv = (vy + y as f32 + 0.5) / vh * 2.0 - 1.0;
-                let sx = 1.0 + (aspect - 1.0) * v.aspect_mix;
-                let sy = 1.0 + (1.0 / aspect - 1.0) * v.aspect_mix;
-                let (ax, ay) = ((u * sx.max(1.0) / sx.max(sy)).abs(), (vv * sy.max(1.0) / sx.max(sy)).abs());
-                let dist = (ax.powf(v.power) + ay.powf(v.power)).powf(1.0 / v.power);
-                let t = smooth(v.start, v.start + v.width, dist);
-                if t > 0.0 {
-                    let lum = luminance_2020(d).clamp(0.0, 1.0);
-                    if v.amount < 0.0 {
-                        if v.style == VignetteStyle::PaintOverlay {
-                            // paint the corner: it settles on the paint's own level instead of scaling towards zero
-                            let k = (-v.amount) * t;
-                            d = d.map(|c| c * (1.0 - k) + PAINT_LEVEL * k);
-                        } else {
-                            let mut f = 1.0 + v.amount * t;
-                            if v.style == VignetteStyle::HighlightPriority {
-                                f += (1.0 - f) * v.highlights * smooth(0.4, 1.0, lum);
-                            }
-                            d = d.map(|c| c * f);
-                        }
-                    } else if v.style == VignetteStyle::PaintOverlay {
-                        let k = v.amount * t;
-                        let flat = 1.0 - PAINT_LEVEL;
-                        // never pulls a pixel down, so anything brighter than the paint (HDR highlights included)
-                        // is left alone
-                        d = d.map(|c| c + (flat - c).max(0.0) * k);
-                    } else if hdr {
-                        // lighten towards SDR white; never pull HDR highlights down to it
-                        d = d.map(|c| c + (1.0 - c).max(0.0) * v.amount * t * 0.85);
-                    } else {
-                        d = d.map(|c| c + (1.0 - c) * v.amount * t * 0.85);
-                    }
-                }
+                d = vignette_apply(d, v, fp.view, x, y, hdr);
             }
 
             // --- gamut map to the output space (desaturate towards luminance until in range);
