@@ -10,7 +10,7 @@ measurements of Camera Raw's output. V1 to V8 are unchanged (`docs/process-versi
 ## What was wrong
 
 Up to V8 the mixer is a model: eight bands with smooth weights around fixed OkLCh hues, a hue rotation, a chroma
-scale and a lightness change, linear in the slider, applied after the tone curves. Measured against Camera Raw on
+scale and a lightness change, linear in the slider, applied after the tone map (so after Whites) and before the output curves. Measured against Camera Raw on
 fine colour charts:
 
 - **The bands sit in the wrong place.** V8 centres each band on the OkLab hue of the pure sRGB colour (Red 29,
@@ -23,7 +23,7 @@ fine colour charts:
   times. At ±100 Lightroom's Hue and Saturation sliders also move lightness, by up to 3 to 17 (OkLab L × 100)
   depending on the band. Its hue shift barely depends on the input's chroma (0.8 to 1.15 times between the lowest and
   highest measured level), while V8 scales the shift by chroma up to 0.12, so a colour of chroma 0.04 gets a third.
-- **The order differs.** Lightroom applies the mixer before the tone curves (below).
+- **The order differs.** Lightroom applies the mixer before Whites; V8 applies Whites in the tone map, before the mixer (below).
 
 ## What V9 does
 
@@ -42,7 +42,7 @@ After the tone map and V4's calibrated Contrast and Blacks, before the curve sta
 
 V8's mixer in `ColorOps` is off under V9 (`ColorOps::mixer`), so the mixer applies once. With the mixer neutral the
 stage does not run. Calibration, Saturation, Vibrance, Point Color, B&W and Colour Grading keep their V8 operators,
-after the curves as before.
+now after the curve stage (V1 to V8 run them before the output curves).
 
 ## How it was measured
 
