@@ -17,8 +17,8 @@ use std::path::Path;
 // TODO(maintainer): pin `vocab.json` and `merges.txt` (size + SHA-256) when the files are
 // uploaded to LightCraft's CDN.
 pub const SAM3_FILES: &[FileSpec] = &[
-    FileSpec { name: "vocab.json", size: None, sha256: None, max: 16 << 20 },
-    FileSpec { name: "merges.txt", size: None, sha256: None, max: 16 << 20 },
+    FileSpec { name: "vocab.json", size: None, sha256: None, max: 4 << 20 },
+    FileSpec { name: "merges.txt", size: None, sha256: None, max: 4 << 20 },
     FileSpec {
         name: crate::WEIGHTS_FILE,
         size: Some(SAM3_WEIGHTS_SIZE),
