@@ -1,4 +1,4 @@
-//! Process V8's heal (Heal spots, and Remove spots with their automatic source): the source keeps its
+//! Process V9's heal (Heal spots, and Remove spots with their automatic source): the source keeps its
 //! detail, and a smooth correction pins the patch to the photo on the spot's edge.
 //!
 //! The patch is `g · e^P` in log space, `g` the source: `P` solves Laplace's equation inside the spot,
@@ -17,7 +17,7 @@
 //! * the edge values are a light blur of the outside, so that the noise of one ring of pixels doesn't
 //!   ripple through the fill.
 //!
-//! The fill is `lightcraft_inpaint::membrane_fill` (cascadic SOR). See `docs/process-versions.md` (V8).
+//! The fill is `lightcraft_inpaint::membrane_fill` (cascadic SOR). See `docs/process-versions.md` (V9).
 
 use lightcraft_color::luminance_2020;
 use lightcraft_raster::Plane;
@@ -288,12 +288,12 @@ mod tests {
         img
     }
 
-    /// V7 and older photos keep the averaged heal; V8 and new photos get the pinned one.
+    /// V8 and older photos keep the averaged heal; V9 and new photos get the pinned one.
     #[test]
     fn the_process_picks_the_heal() {
         let on = |p: Process| DevelopSettings { process: p.version(), ..Default::default() };
-        assert_eq!(HealMethod::of(&on(Process::V7)), HealMethod::Averaged);
-        assert_eq!(HealMethod::of(&on(Process::V8)), HealMethod::Pinned);
+        assert_eq!(HealMethod::of(&on(Process::V8)), HealMethod::Averaged);
+        assert_eq!(HealMethod::of(&on(Process::V9)), HealMethod::Pinned);
         assert_eq!(HealMethod::of(&DevelopSettings::default()), HealMethod::Pinned, "new photos get the latest process");
     }
 

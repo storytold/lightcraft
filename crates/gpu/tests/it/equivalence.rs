@@ -1422,7 +1422,7 @@ fn soft_proofs_match() {
 
 /// Spot removal on the device: Clone, Heal and Remove (automatic source, scored on the device),
 /// brushed strokes, overlapping spots (each reads what the earlier ones left), feather 0 and
-/// spots cut by the image edge; on process V7 by the device kernels, on V8 (the pinned heal) on the
+/// spots cut by the image edge; on process V8 by the device kernels, on V9 (the pinned heal) on the
 /// CPU between the device stages.
 #[test]
 fn spots_match() {
@@ -1457,7 +1457,7 @@ fn spots_match() {
             ],
         ),
     ];
-    for ((name, spots), process) in sets.into_iter().flat_map(|set| [Process::V7, Process::V8].map(|p| (set.clone(), p))) {
+    for ((name, spots), process) in sets.into_iter().flat_map(|set| [Process::V8, Process::V9].map(|p| (set.clone(), p))) {
         let mut s = DevelopSettings { process: process.version(), ..Default::default() };
         typical(&mut s);
         s.spots = spots;

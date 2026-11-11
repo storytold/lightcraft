@@ -2,8 +2,8 @@
 
 > **Changes:** [revision history](#revision-history)
 
-From process V8 ([process versions](process-versions.md)) Heal and Remove spots use the pinned heal this paper
-proposes (`crates/pipeline/src/spots/pinned.rs`). [What shipped](#what-shipped-in-process-v8) lists how the
+From process V9 ([process versions](process-versions.md)) Heal and Remove spots use the pinned heal this paper
+proposes (`crates/pipeline/src/spots/pinned.rs`). [What shipped](#what-shipped-in-process-v9) lists how the
 implementation differs from the proposal.
 
 ## Abstract
@@ -117,7 +117,7 @@ So Lightroom has at least two heal methods, one named after the Poisson equation
 Unknown from public sources: Camera Raw's working domain (gamma, log or linear), its exact solver, and how it ranks
 source candidates.
 
-## 3. How LightCraft's Heal worked (process V1 to V7)
+## 3. How LightCraft's Heal worked (process V1 to V8)
 
 LightCraft's Heal added a Gaussian-weighted average of the tone difference measured around the spot. Nothing pinned
 the result to the spot's edge, and the addition happened in scene-linear light. The code called this "a fast, stable
@@ -258,15 +258,15 @@ outlier boundary pixels, a soft form of Photoshop's selection rule, is worth tes
 | Colour shifts near black in log space | a floor on the log, plus tests on dark scenes |
 | Crash paths in a new solver | bounded loops, allocations sized by the box, NaN-free floor, per LightCraft's never-crash rules |
 
-## What shipped in process V8
+## What shipped in process V9
 
 - **Fill:** the membrane (Laplace) fill of `lightcraft_inpaint::membrane_fill` (cascadic SOR, ported from PhotoCraft),
   known only on the ring of pixels touching the spot. No biharmonic step: on test scenes it measured no better, and the
   harmonic fill keeps the maximum principle (no overshoot past the edge values).
 - **Domain, boundary, detail gain:** as in 5.3, with the floor 1/4096 and the gain from medians of absolute fine detail.
 - **Whole pixels:** every spot, Clone included.
-- **GPU:** no kernel yet; on V8 photos with spots the GPU renderer reads the image back for the spot stage and keeps the
-  rest of the render on the device. V1 to V7 keep the device kernels.
+- **GPU:** no kernel yet; on V9 photos with spots the GPU renderer reads the image back for the spot stage and keeps the
+  rest of the render on the device. V1 to V8 keep the device kernels.
 - **Memory:** a spot's box larger than 33.5 MP (8.4 MP on the web), a stroke across most of a large frame at export
   size, gets the averaged heal rather than the pinned fill's larger working set.
 - **Not done:** the feather-circle drawing, the Remove wording and the source search (5.2, 5.4).
@@ -305,4 +305,5 @@ What Lightroom does is inferred from Adobe's published methods; Camera Raw's own
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | The pinned heal is process V9 (V8 is the Highlights/Shadows base of #3460); its memory bound |
 | 2026-11-10 | new | The paper, and the pinned heal as process V8 |

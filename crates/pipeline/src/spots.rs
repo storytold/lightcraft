@@ -2,9 +2,9 @@
 //!
 //! - **Clone** copies the source patch with a feathered edge.
 //! - **Heal** copies the source's *detail* and keeps the target's *tone*. How depends on the photo's
-//!   process ([`HealMethod`]): from V8 the patch is pinned to the photo on the spot's edge by a membrane
+//!   process ([`HealMethod`]): from V9 the patch is pinned to the photo on the spot's edge by a membrane
 //!   fill of the log ratio, with the source's fine detail matched to its surroundings ([`pinned`]);
-//!   before V8 it is src + blur(target − src), a Gaussian-weighted average of the difference around the
+//!   before V9 it is src + blur(target − src), a Gaussian-weighted average of the difference around the
 //!   spot (frequency separation).
 //! - **Remove** is Heal with an automatically chosen source: candidate offsets on rings around the
 //!   spot are scored by how well the source's surrounding annulus matches the target's.
@@ -25,11 +25,11 @@ mod pinned;
 /// photo's process (`docs/process-versions.md`), so a photo keeps its look until it is updated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HealMethod {
-    /// V1 to V7: the source plus a Gaussian-weighted average of the difference around the spot
+    /// V1 to V8: the source plus a Gaussian-weighted average of the difference around the spot
     /// (not pinned to the spot's edge, added in linear light), the source read where its offset
     /// lands, between pixels.
     Averaged,
-    /// V8 on: pinned to the photo on the spot's edge in log space, the source's fine detail matched
+    /// V9 on: pinned to the photo on the spot's edge in log space, the source's fine detail matched
     /// to its surroundings ([`pinned`]), and every spot (Clone too) reads its source at whole pixels,
     /// so the grain isn't averaged away.
     Pinned,
@@ -38,7 +38,7 @@ pub enum HealMethod {
 impl HealMethod {
     /// The method `s`'s process renders spots with.
     pub fn of(s: &DevelopSettings) -> HealMethod {
-        if s.process.process() >= Process::V8 { HealMethod::Pinned } else { HealMethod::Averaged }
+        if s.process.process() >= Process::V9 { HealMethod::Pinned } else { HealMethod::Averaged }
     }
 }
 
@@ -420,7 +420,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: 
         };
         let Some(&first) = pts.first() else { continue };
         let offset = offset.unwrap_or_else(|| auto_source(img, first, r));
-        // (V8 reads whole pixels: between them, bilinear sampling averages the source's grain away)
+        // (V9 reads whole pixels: between them, bilinear sampling averages the source's grain away)
         let offset = if pinned { (offset.0.round(), offset.1.round()) } else { offset };
         // alpha of the stroke, its distance and the source patch in the box
         let mut alpha = vec![0.0f32; bw * bh];
@@ -497,9 +497,11 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: 
 mod tests {
     use super::*;
 
-    /// Both processes' spot rendering (before and from V8).
+    /// Both processes' spot rendering (before and from V9).
     const BOTH: [HealMethod; 2] = [HealMethod::Averaged, HealMethod::Pinned];
 
+    /// A hard-edged spot of every mode at opacity 0, in the middle and at a corner, leaves every
+    /// pixel as it was, with either heal.
     #[test]
     fn hard_edge_spots_at_zero_opacity_leave_every_pixel_unchanged() {
         for (mode, method) in [SpotMode::Clone, SpotMode::Heal, SpotMode::Remove, SpotMode::Fill].into_iter().flat_map(|m| BOTH.map(|h| (m, h))) {
@@ -523,6 +525,8 @@ mod tests {
         }
     }
 
+    /// A hard-edged Clone copies the source inside its radius and leaves the pixels on the radius
+    /// unchanged, at two output sizes and with either heal.
     #[test]
     fn hard_edge_clone_copies_inside_and_preserves_pixels_on_the_radius() {
         for ((w, h, cx, cy, radius), method) in
@@ -547,6 +551,7 @@ mod tests {
         }
     }
 
+    /// Remove with an automatic source erases a black dot on a gentle gradient, with either heal.
     #[test]
     fn remove_erases_a_dot() {
         for method in BOTH {
@@ -591,6 +596,7 @@ mod tests {
         }
     }
 
+    /// Fill rebuilds the stripes through the blot it covers, and renders the same twice.
     #[test]
     fn fill_rebuilds_structure_deterministically() {
         let (w, h) = (200, 160);
@@ -609,6 +615,7 @@ mod tests {
         assert_eq!(img.data, again.data);
     }
 
+    /// Fill at half size matches the full-size fill box-downscaled (resolution independence).
     #[test]
     fn fill_matches_between_preview_and_export_size() {
         // the same photo at two sizes: the half-size fill matches the full-size one, downsampled
@@ -627,6 +634,7 @@ mod tests {
         assert!(err / n as f32 <= 0.08, "mean difference {}", err / n as f32);
     }
 
+    /// Fill spots off the image, of size 0, 2 or infinity, or at a NaN position render finite pixels.
     #[test]
     fn fill_survives_hostile_spots() {
         let frame = Frame::new(40, 30, &DevelopSettings::default(), true);
@@ -638,6 +646,8 @@ mod tests {
         }
     }
 
+    /// Clone copies the bright source half into a spot on the dark half and leaves pixels away from
+    /// the spot alone, with either heal.
     #[test]
     fn clone_copies_source() {
         for method in BOTH {
