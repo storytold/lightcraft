@@ -428,19 +428,25 @@ fn measured_grade(lab: vec3<f32>) -> vec3<f32> {
         let ta = aux[w];
         let tb = aux[w + 1u];
         let diff = abs(wrap_angle(hue - atan2(tb, ta)));
-        let bin = min(u32(diff * 57.29577951308232 / 30.0), 5u);
+        // linear between the 30° bins' centres (15°, 45° … 165°)
+        let pos = clamp(diff * 57.29577951308232 / 30.0 - 0.5, 0.0, 5.0);
+        let j = min(u32(pos), 4u);
+        let fa = pos - f32(j);
+        let d0 = aux[w + 2u + j] * (1.0 - fa) + aux[w + 3u + j] * fa;
+        let d1 = aux[w + 8u + j] * (1.0 - fa) + aux[w + 9u + j] * fa;
+        let d2 = aux[w + 14u + j] * (1.0 - fa) + aux[w + 15u + j] * fa;
         // the damping's chroma levels (`grading_stage_tables::CHROMA`)
         var damp = 1.0;
         if (c <= 0.04) {
-            damp = 1.0 + (aux[w + 2u + bin] - 1.0) * c / 0.04;
+            damp = 1.0 + (d0 - 1.0) * c / 0.04;
         } else if (c <= 0.08) {
             let f = (c - 0.04) / 0.04;
-            damp = aux[w + 2u + bin] * (1.0 - f) + aux[w + 8u + bin] * f;
+            damp = d0 * (1.0 - f) + d1 * f;
         } else if (c <= 0.12) {
             let f = (c - 0.08) / 0.04;
-            damp = aux[w + 8u + bin] * (1.0 - f) + aux[w + 14u + bin] * f;
+            damp = d1 * (1.0 - f) + d2 * f;
         } else {
-            damp = aux[w + 14u + bin];
+            damp = d2;
         }
         out.y += p * ta * damp;
         out.z += p * tb * damp;

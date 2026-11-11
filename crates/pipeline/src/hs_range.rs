@@ -48,9 +48,14 @@ impl FrameRange {
         if sample.is_empty() {
             return None;
         }
-        sample.sort_by(f32::total_cmp);
-        let at = |q: f32| sample[((q * (sample.len() - 1) as f32) as usize).min(sample.len() - 1)] + ev;
-        Some(FrameRange { lo: at(P_LO), hi: at(P_HI) })
+        // the two percentiles by selection: no sort of the whole proxy on every render
+        let last = sample.len() - 1;
+        let mut at = |q: f32| {
+            let i = ((q * last as f32) as usize).min(last);
+            *sample.select_nth_unstable_by(i, f32::total_cmp).1 + ev
+        };
+        let lo = at(P_LO);
+        Some(FrameRange { lo, hi: at(P_HI) })
     }
 
     /// The change in log₂ luminance that Highlights (−1..1) makes at base-layer value `base`.
