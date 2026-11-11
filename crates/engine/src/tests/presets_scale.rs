@@ -95,6 +95,21 @@ fn importing_thousands_of_presets_is_not_quadratic() {
 }
 
 #[test]
+fn a_preset_whose_settings_differ_only_in_the_sign_of_zero_is_a_repeat() {
+    let mut s = Session::new();
+    let preset = |x: f64| Preset {
+        id: "user.z".into(),
+        name: "Zero".into(),
+        group: "Coll".into(),
+        settings: json!({"light": {"exposure": x}}),
+        favorite: false,
+        builtin: false,
+    };
+    assert!(s.add_presets_each(vec![preset(0.0)])[0].is_some());
+    assert_eq!(s.add_presets_each(vec![preset(-0.0)]), vec![None]);
+}
+
+#[test]
 fn thousands_of_presets_sharing_a_name_and_id_get_unique_ids_in_one_pass() {
     let mut s = Session::new();
     let t = Instant::now();

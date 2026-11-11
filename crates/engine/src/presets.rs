@@ -208,10 +208,10 @@ impl Session {
         use std::collections::{HashMap, HashSet};
         // indexed: a collection of 10 000+ presets was quadratic (minutes) to import
         let mut ids: HashSet<String> = self.presets.iter().map(|q| q.id.clone()).collect();
-        // (name, group, settings): settings as their JSON text, which is canonical (object keys
-        // sorted), so a preset is looked up rather than compared with every namesake
-        let key_of = |p: &Preset| (p.name.clone(), p.group.clone(), serde_json::to_string(&p.settings).unwrap_or_default());
-        let mut present: HashSet<(String, String, String)> = self.presets.iter().map(key_of).collect();
+        // (name, group, settings): `Value` hashes as it compares (0.0 and -0.0 are one key), so a
+        // preset is looked up rather than compared with every namesake
+        let key_of = |p: &Preset| (p.name.clone(), p.group.clone(), p.settings.clone());
+        let mut present: HashSet<(String, String, serde_json::Value)> = self.presets.iter().map(key_of).collect();
         // the next suffix to try per generated id, so a batch of clashes doesn't probe from 2 each time
         let mut next_suffix: HashMap<String, u32> = HashMap::new();
         let mut added = Vec::with_capacity(presets.len());
