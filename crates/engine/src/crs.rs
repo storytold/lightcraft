@@ -544,19 +544,109 @@ pub fn has_saved_upright_transform(props: &Props) -> bool {
 /// rather than duplicated.
 pub fn crs_settings(settings: &DevelopSettings, previous: Option<&DevelopSettings>) -> Vec<(&'static str, String)> {
     let light = &settings.light;
+    let effects = &settings.effects;
+    let color = &settings.color;
+    let detail = &settings.detail;
+    let vignette = &settings.vignette;
+    let grain = &settings.grain;
+    let optics = &settings.optics;
+    let calibration = &settings.calibration;
+    let curve = &settings.curve;
+    let grading = &settings.grading;
     let prev_light = previous.map(|p| &p.light);
+    let prev_effects = previous.map(|p| &p.effects);
+    let prev_color = previous.map(|p| &p.color);
+    let prev_detail = previous.map(|p| &p.detail);
+    let prev_vignette = previous.map(|p| &p.vignette);
+    let prev_grain = previous.map(|p| &p.grain);
+    let prev_optics = previous.map(|p| &p.optics);
+    let prev_calibration = previous.map(|p| &p.calibration);
+    let prev_curve = previous.map(|p| &p.curve);
+    let prev_grading = previous.map(|p| &p.grading);
+    // Practical epsilon for develop settings comparison (f64::EPSILON is too strict).
+    const EPS: f64 = 1e-6;
     let all = [
+        // Light (process version 2012+)
         ("Exposure2012", light.exposure, prev_light.map(|l| l.exposure)),
         ("Contrast2012", light.contrast, prev_light.map(|l| l.contrast)),
         ("Highlights2012", light.highlights, prev_light.map(|l| l.highlights)),
         ("Shadows2012", light.shadows, prev_light.map(|l| l.shadows)),
         ("Whites2012", light.whites, prev_light.map(|l| l.whites)),
         ("Blacks2012", light.blacks, prev_light.map(|l| l.blacks)),
+        // Presence
+        ("Texture", effects.texture, prev_effects.map(|e| e.texture)),
+        ("Clarity2012", effects.clarity, prev_effects.map(|e| e.clarity)),
+        ("Dehaze", effects.dehaze, prev_effects.map(|e| e.dehaze)),
+        ("Vibrance", color.vibrance, prev_color.map(|c| c.vibrance)),
+        ("Saturation", color.saturation, prev_color.map(|c| c.saturation)),
+        // Tone curve: parametric regions
+        ("ParametricShadows", curve.shadows, prev_curve.map(|c| c.shadows)),
+        ("ParametricDarks", curve.darks, prev_curve.map(|c| c.darks)),
+        ("ParametricLights", curve.lights, prev_curve.map(|c| c.lights)),
+        ("ParametricHighlights", curve.highlights, prev_curve.map(|c| c.highlights)),
+        ("ParametricShadowSplit", curve.split_shadows, prev_curve.map(|c| c.split_shadows)),
+        ("ParametricMidtoneSplit", curve.split_mid, prev_curve.map(|c| c.split_mid)),
+        ("ParametricHighlightSplit", curve.split_highlights, prev_curve.map(|c| c.split_highlights)),
+        ("CurveRefineSaturation", curve.refine_saturation, prev_curve.map(|c| c.refine_saturation)),
+        // Color grading (split toning fields are shared with the older split-toning panel)
+        ("SplitToningShadowHue", grading.shadows.hue, prev_grading.map(|g| g.shadows.hue)),
+        ("SplitToningShadowSaturation", grading.shadows.sat, prev_grading.map(|g| g.shadows.sat)),
+        ("ColorGradeShadowLum", grading.shadows.lum, prev_grading.map(|g| g.shadows.lum)),
+        ("SplitToningHighlightHue", grading.highlights.hue, prev_grading.map(|g| g.highlights.hue)),
+        ("SplitToningHighlightSaturation", grading.highlights.sat, prev_grading.map(|g| g.highlights.sat)),
+        ("ColorGradeHighlightLum", grading.highlights.lum, prev_grading.map(|g| g.highlights.lum)),
+        ("ColorGradeMidtoneHue", grading.midtones.hue, prev_grading.map(|g| g.midtones.hue)),
+        ("ColorGradeMidtoneSat", grading.midtones.sat, prev_grading.map(|g| g.midtones.sat)),
+        ("ColorGradeMidtoneLum", grading.midtones.lum, prev_grading.map(|g| g.midtones.lum)),
+        ("ColorGradeGlobalHue", grading.global.hue, prev_grading.map(|g| g.global.hue)),
+        ("ColorGradeGlobalSat", grading.global.sat, prev_grading.map(|g| g.global.sat)),
+        ("ColorGradeGlobalLum", grading.global.lum, prev_grading.map(|g| g.global.lum)),
+        ("ColorGradeBlending", grading.blending, prev_grading.map(|g| g.blending)),
+        ("SplitToningBalance", grading.balance, prev_grading.map(|g| g.balance)),
+        // Detail
+        ("Sharpness", detail.sharpen_amount, prev_detail.map(|d| d.sharpen_amount)),
+        ("SharpenRadius", detail.sharpen_radius, prev_detail.map(|d| d.sharpen_radius)),
+        ("SharpenDetail", detail.sharpen_detail, prev_detail.map(|d| d.sharpen_detail)),
+        ("SharpenEdgeMasking", detail.sharpen_masking, prev_detail.map(|d| d.sharpen_masking)),
+        ("LuminanceSmoothing", detail.nr_luminance, prev_detail.map(|d| d.nr_luminance)),
+        ("LuminanceNoiseReductionDetail", detail.nr_detail, prev_detail.map(|d| d.nr_detail)),
+        ("LuminanceNoiseReductionContrast", detail.nr_contrast, prev_detail.map(|d| d.nr_contrast)),
+        ("ColorNoiseReduction", detail.nr_color, prev_detail.map(|d| d.nr_color)),
+        ("ColorNoiseReductionDetail", detail.nr_color_detail, prev_detail.map(|d| d.nr_color_detail)),
+        ("ColorNoiseReductionSmoothness", detail.nr_color_smoothness, prev_detail.map(|d| d.nr_color_smoothness)),
+        // Effects: post-crop vignette + grain
+        ("PostCropVignetteAmount", vignette.amount, prev_vignette.map(|v| v.amount)),
+        ("PostCropVignetteMidpoint", vignette.midpoint, prev_vignette.map(|v| v.midpoint)),
+        ("PostCropVignetteRoundness", vignette.roundness, prev_vignette.map(|v| v.roundness)),
+        ("PostCropVignetteFeather", vignette.feather, prev_vignette.map(|v| v.feather)),
+        ("PostCropVignetteHighlightContrast", vignette.highlights, prev_vignette.map(|v| v.highlights)),
+        ("GrainAmount", grain.amount, prev_grain.map(|g| g.amount)),
+        ("GrainSize", grain.size, prev_grain.map(|g| g.size)),
+        ("GrainFrequency", grain.roughness, prev_grain.map(|g| g.roughness)),
+        // Optics (manual corrections; lens profiles are ours, only the switch carries over)
+        ("AutoLateralCA", optics.remove_ca, prev_optics.map(|o| o.remove_ca)),
+        ("LensManualDistortionAmount", optics.distortion, prev_optics.map(|o| o.distortion)),
+        ("VignetteAmount", optics.vignetting, prev_optics.map(|o| o.vignetting)),
+        ("VignetteMidpoint", optics.vignetting_midpoint, prev_optics.map(|o| o.vignetting_midpoint)),
+        ("DefringePurpleAmount", optics.defringe_purple_amount, prev_optics.map(|o| o.defringe_purple_amount)),
+        ("DefringePurpleHueLo", optics.defringe_purple_hue_lo, prev_optics.map(|o| o.defringe_purple_hue_lo)),
+        ("DefringePurpleHueHi", optics.defringe_purple_hue_hi, prev_optics.map(|o| o.defringe_purple_hue_hi)),
+        ("DefringeGreenAmount", optics.defringe_green_amount, prev_optics.map(|o| o.defringe_green_amount)),
+        ("DefringeGreenHueLo", optics.defringe_green_hue_lo, prev_optics.map(|o| o.defringe_green_hue_lo)),
+        ("DefringeGreenHueHi", optics.defringe_green_hue_hi, prev_optics.map(|o| o.defringe_green_hue_hi)),
+        // Calibration
+        ("ShadowTint", calibration.shadows_tint, prev_calibration.map(|c| c.shadows_tint)),
+        ("RedHue", calibration.red_hue, prev_calibration.map(|c| c.red_hue)),
+        ("RedSaturation", calibration.red_sat, prev_calibration.map(|c| c.red_sat)),
+        ("GreenHue", calibration.green_hue, prev_calibration.map(|c| c.green_hue)),
+        ("GreenSaturation", calibration.green_sat, prev_calibration.map(|c| c.green_sat)),
+        ("BlueHue", calibration.blue_hue, prev_calibration.map(|c| c.blue_hue)),
+        ("BlueSaturation", calibration.blue_sat, prev_calibration.map(|c| c.blue_sat)),
     ];
     all.into_iter()
         .filter_map(
             |(name, current, previous)| {
-                if previous.is_some_and(|p| (current - p).abs() < f64::EPSILON) { None } else { Some((name, current.to_string())) }
+                if previous.is_some_and(|p| (current - p).abs() < EPS) { None } else { Some((name, current.to_string())) }
             },
         )
         .collect()
