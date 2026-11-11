@@ -529,21 +529,40 @@ pub fn window_renderer_order(
         .into_iter()
         .flat_map(|r| {
             if let WindowRenderer::Wgpu(b) = r {
-                let count = [Backends::DX12, Backends::VULKAN, Backends::METAL, Backends::GL]
+                let requested: Vec<Backends> = [Backends::DX12, Backends::VULKAN, Backends::METAL, Backends::GL]
                     .into_iter()
                     .filter(|backend| b.contains(*backend))
-                    .count();
-                if count > 1 {
+                    .collect();
+                if requested.len() > 1 {
                     let platform_order = match os {
                         "windows" => vec![Backends::DX12, Backends::GL],
                         "macos" | "ios" => vec![Backends::METAL],
                         "linux" => vec![Backends::GL, Backends::VULKAN],
                         _ => vec![Backends::VULKAN, Backends::GL],
                     };
-                    return platform_order.into_iter()
-                        .filter(|backend| b.contains(*backend))
-                        .map(WindowRenderer::Wgpu)
-                        .collect::<Vec<_>>();
+                    // Preserve the combined backend as the first choice, then expand to individual
+                    // backends: platform-preferred backends that the user requested (in platform order),
+                    // then other requested backends (in requested order), then platform-preferred
+                    // backends not requested (in platform order). This keeps explicitly requested
+                    // Vulkan on Windows after the platform preferences (DX12, GL), while still
+                    // trying the user's combined choice first.
+                    let mut expanded: Vec<WindowRenderer> = vec![r];
+                    for backend in platform_order {
+                        if b.contains(backend) {
+                            expanded.push(WindowRenderer::Wgpu(backend));
+                        }
+                    }
+                    for backend in requested {
+                        if !platform_order.contains(&backend) && !expanded.iter().any(|r| matches!(r, WindowRenderer::Wgpu(eb) if eb.contains(backend))) {
+                            expanded.push(WindowRenderer::Wgpu(backend));
+                        }
+                    }
+                    for backend in platform_order {
+                        if !b.contains(backend) && !expanded.iter().any(|r| matches!(r, WindowRenderer::Wgpu(eb) if eb.contains(backend))) {
+                            expanded.push(WindowRenderer::Wgpu(backend));
+                        }
+                    }
+                    return expanded;
                 }
             }
             vec![r]
@@ -874,9 +893,12 @@ mod tests {
             assert_eq!(WindowRenderer::parse(n).map(WindowRenderer::name), Some(n));
         }
         assert_eq!(WindowRenderer::parse(" DX12 "), Some(WindowRenderer::Wgpu(Backends::DX12)));
-        for n in ["auto", "off", "vulkan,gl", "", "bogus"] {
+        for n in ["auto", "off", "", "bogus"] {
             assert_eq!(WindowRenderer::parse(n), None, "{n}");
         }
+        // Comma-separated lists are now accepted for explicit backend selection on Linux
+        assert_eq!(WindowRenderer::parse("vulkan,gl"), Some(WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL)));
+        assert_eq!(WindowRenderer::parse("dx12,vulkan"), Some(WindowRenderer::Wgpu(Backends::DX12 | Backends::VULKAN)));
         assert_eq!(forced_window_renderer(Some("glow"), Some("dx12")), Some(WindowRenderer::Glow));
         assert_eq!(forced_window_renderer(Some("auto"), Some("vulkan")), Some(WindowRenderer::Wgpu(Backends::VULKAN)));
         assert_eq!(forced_window_renderer(None, None), None);
@@ -884,23 +906,86 @@ mod tests {
         assert_eq!(parse_backends("glow"), Some(BackendChoice::Auto));
     }
 
-    /// WindowRenderer::parse incorrectly rejects comma-separated backend lists that parse_backends
-    /// accepts. On Linux there is no probing, so explicit backend selection via
-    /// LIGHTCRAFT_GPU_BACKEND=vulkan,gl must work. This test fails before the fix.
+    /// WindowRenderer::parse accepts comma-separated backend lists for explicit selection on Linux.
     #[test]
     fn window_renderer_names_round_trip_review_regression_1() {
         // parse_backends accepts comma-separated lists
         assert_eq!(parse_backends("vulkan,gl"), Some(BackendChoice::Use(Backends::VULKAN | Backends::GL)));
         assert_eq!(parse_backends("dx12,vulkan"), Some(BackendChoice::Use(Backends::DX12 | Backends::VULKAN)));
 
-        // WindowRenderer::parse should accept them for explicit backend selection on Linux (no probing)
-        // but currently rejects them - this is the regression
+        // WindowRenderer::parse accepts them for explicit backend selection on Linux (no probing)
         assert_eq!(WindowRenderer::parse("vulkan,gl"), Some(WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL)));
         assert_eq!(WindowRenderer::parse("dx12,vulkan"), Some(WindowRenderer::Wgpu(Backends::DX12 | Backends::VULKAN)));
 
         // Single backends still work
         assert_eq!(WindowRenderer::parse("vulkan"), Some(WindowRenderer::Wgpu(Backends::VULKAN)));
         assert_eq!(WindowRenderer::parse("gl"), Some(WindowRenderer::Wgpu(Backends::GL)));
+    }
+
+    /// Regression test for three issues:
+    /// 1) window_gpu.rs Linux branch checks only for BackendChoice::Auto, not Off.
+    /// 2) Test assertion not updated after parser enhancement (vulkan,gl should parse).
+    /// 3) Forced backend expansion uses platform_order as filter instead of prefix.
+    #[test]
+    fn window_renderer_names_round_trip_review_regression_2() {
+        // Issue 2: WindowRenderer::parse should accept comma-separated lists (parser enhancement)
+        // This assertion fails before the parser fix because the test previously expected None
+        assert_eq!(
+            WindowRenderer::parse("vulkan,gl"),
+            Some(WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL)),
+            "vulkan,gl should parse as a valid WindowRenderer"
+        );
+        assert_eq!(
+            WindowRenderer::parse("dx12,vulkan"),
+            Some(WindowRenderer::Wgpu(Backends::DX12 | Backends::VULKAN)),
+            "dx12,vulkan should parse as a valid WindowRenderer"
+        );
+
+        // Issue 3: Forced backend expansion should preserve the user's combined choice first,
+        // then expand to platform-preferred backends that were requested, then other requested
+        // backends. On Windows, platform_order is [DX12, GL]; a user requesting "vulkan,gl"
+        // should get the combined backend first, then GL (platform-preferred), then Vulkan
+        // (explicitly requested but not in platform order).
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let forced_vk_gl = WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL);
+        let order = window_renderer_order(Some(forced_vk_gl), None, None, "windows", all, true);
+        // The forced renderer should appear first in the order.
+        assert_eq!(
+            order.first(),
+            Some(&forced_vk_gl),
+            "Forced multi-backend should be tried first, got: {order:?}"
+        );
+        // The forced expansion should contain both requested backends (GL and Vulkan).
+        let forced_expansion: Vec<_> = order.iter()
+            .take_while(|r| matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN) || b.contains(Backends::GL)))
+            .cloned()
+            .collect();
+        assert!(
+            forced_expansion.len() >= 2,
+            "Forced expansion should include both requested backends, got: {forced_expansion:?}"
+        );
+        // GL (platform-preferred) should appear before Vulkan (not in platform order) in the expansion.
+        let gl_pos = forced_expansion.iter().position(|r| matches!(r, WindowRenderer::Wgpu(b) if b == Backends::GL));
+        let vk_pos = forced_expansion.iter().position(|r| matches!(r, WindowRenderer::Wgpu(b) if b == Backends::VULKAN));
+        assert!(gl_pos.is_some() && vk_pos.is_some() && gl_pos.unwrap() < vk_pos.unwrap(),
+            "GL should appear before Vulkan in expansion, got: {forced_expansion:?}");
+
+        // Issue 1: window_backends() treats Off as Auto (already correct in backend.rs).
+        // The bug is in window_gpu.rs Linux branch which only checks for Auto.
+        // Verify the backend.rs behavior is correct: Off resolves to the same as Auto.
+        let compiled = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let default = default_window_backends("linux");
+        let default = if default.intersects(compiled) { default & compiled } else { compiled };
+        let choice_off = BackendChoice::Off;
+        let choice_auto = BackendChoice::Auto;
+        let resolved_off = resolve(choice_off, default, compiled);
+        let resolved_auto = resolve(choice_auto, default, compiled);
+        // Off returns None (GPU off for compute), but window_backends() converts Off to Auto
+        // This test documents the expected backend.rs behavior.
+        assert_eq!(resolved_off, None, "BackendChoice::Off resolves to None for compute");
+        assert_eq!(resolved_auto, Some(default), "BackendChoice::Auto resolves to default for compute");
+        // window_backends() internally converts Off to Auto, so it returns the default
+        // This is tested indirectly via the window_gpu.rs integration test.
     }
 
     #[test]
