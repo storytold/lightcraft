@@ -133,13 +133,17 @@ pub fn merge_command_of(item: &str) -> Option<String> {
     Some(format!("merge.{first}{}", chars.as_str()))
 }
 
-/// Whether the selection can be merged by `command`, decided by the engine's planner ([`lightcraft_engine::Session::plan_merge`]):
-/// the photos must form one merge group once collapsed stacks are expanded, with enough photos for the merge.
+/// Whether the selection can be merged by `command`, decided by the engine's planner:
+/// the photos must form at least one merge group once collapsed stacks are expanded, with enough photos for the merge.
 /// The error is the planner's reason (for the dialog and the last-settings commands).
 pub fn check_selection(app: &LightcraftApp, command: &str) -> Result<(), String> {
     let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).map_err(|e| e.to_string())?;
     let ids = app.session.selected();
-    app.session.plan_merge(kind, finish, &ids, false).map(|_| ()).map_err(|e| e.to_string())
+    // Use plan_merges (like the command layer) to allow multiple collapsed stacks.
+    // At least one group must be ready.
+    app.session
+        .plan_merges(kind, finish, &ids, false)
+        .map(|jobs| if jobs.is_empty() { Err("select at least 2 photos to merge".to_string()) } else { Ok(()) })?
 }
 
 fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: bool, explicit_group: bool) -> Result<MergeTask, String> {
