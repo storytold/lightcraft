@@ -465,17 +465,17 @@ fn straight_stroke(process: lightcraft_develop::Process, flow: f64, points: Vec<
     shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None)
 }
 
-/// Process V8: Flow is the coverage a stroke adds per brush radius it travels, as Lightroom
+/// Process V9: Flow is the coverage a stroke adds per brush radius it travels, as Lightroom
 /// Classic's strokes measure on a grey card (Feather 0, straight strokes, #4045): a point the brush
 /// passes over for a length `L` is covered by `1 − (1 − flow)^(L / r)`, so the centre of a stroke
 /// (L = 2 r) by 41 % at Flow 25, 76 % at 50 and fully at 100 (Lightroom), and a point 0.6 radii off
-/// the centre line less. Process V7 adds the flow per dab, r/4 apart: 90 % at Flow 25.
+/// the centre line less. Process V8 adds the flow per dab, r/4 apart: 90 % at Flow 25.
 #[test]
 fn flow_is_coverage_per_radius_travelled_as_in_lightroom() {
     use lightcraft_develop::Process;
     let line = vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)];
     for (flow, lightroom) in [(25.0, 0.41), (50.0, 0.76), (100.0, 1.0)] {
-        let a = straight_stroke(Process::V8, flow, line.clone());
+        let a = straight_stroke(Process::V9, flow, line.clone());
         let keep = 1.0 - flow as f32 / 100.0;
         let centre = a.get(200, 50);
         assert!((centre - (1.0 - keep.powi(2))).abs() < 0.03, "Flow {flow}: centre {centre}");
@@ -486,29 +486,29 @@ fn flow_is_coverage_per_radius_travelled_as_in_lightroom() {
         assert!((off - (1.0 - keep.powf(chord))).abs() < 0.05, "Flow {flow}: 0.6 r off the line {off}");
         assert!(off <= centre + 1e-6);
     }
-    let old = straight_stroke(Process::V7, 25.0, line).get(200, 50);
-    assert!(old > 0.85, "V7 keeps the flow per dab: {old}");
+    let old = straight_stroke(Process::V8, 25.0, line).get(200, 50);
+    assert!(old > 0.85, "V8 keeps the flow per dab: {old}");
 }
 
-/// Process V8: a stroke covers the same however densely its samples lie (a slow drag samples
-/// every pixel, a fast one far apart); before V8 a slow stroke laid more dabs and built up more.
+/// Process V9: a stroke covers the same however densely its samples lie (a slow drag samples
+/// every pixel, a fast one far apart); before V9 a slow stroke laid more dabs and built up more.
 #[test]
 fn flow_does_not_depend_on_how_fast_the_stroke_was_painted() {
     use lightcraft_develop::Process;
     let fast = vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)];
     // one sample per output pixel
     let slow: Vec<Point> = (40..=360).map(|x| Point::new(x as f64 / 400.0, 0.5)).collect();
-    let (f, s) = (straight_stroke(Process::V8, 25.0, fast.clone()).get(200, 50), straight_stroke(Process::V8, 25.0, slow.clone()).get(200, 50));
+    let (f, s) = (straight_stroke(Process::V9, 25.0, fast.clone()).get(200, 50), straight_stroke(Process::V9, 25.0, slow.clone()).get(200, 50));
     assert!((f - s).abs() < 0.02, "fast {f} vs slow {s}");
-    let (f7, s7) = (straight_stroke(Process::V7, 25.0, fast).get(200, 50), straight_stroke(Process::V7, 25.0, slow).get(200, 50));
-    assert!(s7 > f7, "before V8 a slow stroke builds up more: {f7} vs {s7}");
+    let (f8, s8) = (straight_stroke(Process::V8, 25.0, fast).get(200, 50), straight_stroke(Process::V8, 25.0, slow).get(200, 50));
+    assert!(s8 > f8, "before V9 a slow stroke builds up more: {f8} vs {s8}");
 }
 
 /// A click (one dab) paints its flow on every process; Flow 100 paints fully.
 #[test]
 fn a_click_paints_its_flow() {
     use lightcraft_develop::Process;
-    for p in [Process::V7, Process::V8] {
+    for p in [Process::V8, Process::V9] {
         let a = straight_stroke(p, 40.0, vec![Point::new(0.5, 0.5)]);
         assert!((a.get(200, 50) - 0.4).abs() < 1e-4, "{p:?}: {}", a.get(200, 50));
     }

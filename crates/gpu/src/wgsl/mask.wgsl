@@ -94,7 +94,7 @@ fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
             let hard = aux[o + 3u];
             var keep = 1.0;
             for (var j = 0u; j < cnt; j++) {
-                // dab record: centre x, y and the flow it adds (the stroke's before process V8)
+                // dab record: centre x, y and the flow it adds (the stroke's before process V9)
                 let dx = px - aux[off + 3u * j];
                 let dy = py - aux[off + 3u * j + 1u];
                 let flow = aux[off + 3u * j + 2u];

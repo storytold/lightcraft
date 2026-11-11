@@ -37,7 +37,7 @@ pub struct Frame {
     /// `lightcraft_develop::Mask::on_photo`); otherwise they are normalized coordinates of this
     /// frame's transformed image, like spots and the crop.
     pub masks_on_photo: bool,
-    /// Brush Flow is coverage per brush radius travelled (process V8, [`crate::masks::flow_per_radius`]),
+    /// Brush Flow is coverage per brush radius travelled (process V9, [`crate::masks::flow_per_radius`]),
     /// not per dab.
     pub brush_flow_per_radius: bool,
 }
