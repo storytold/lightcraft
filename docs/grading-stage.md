@@ -1,30 +1,30 @@
-# Colour Grading, measured (process V8)
+# Colour Grading, measured (process V9)
 
 > **Changes:** [revision history](#revision-history)
 
-Process V8 renders Colour Grading (the shadows, midtones, highlights and global wheels with Blending and Balance) the
-way Lightroom does, from measurements of Camera Raw's output. V1 to V7 are unchanged (`docs/process-versions.md`).
+Process V9 renders Colour Grading (the shadows, midtones, highlights and global wheels with Blending and Balance) the
+way Lightroom does, from measurements of Camera Raw's output. V1 to V8 are unchanged (`docs/process-versions.md`).
 The code is `crates/pipeline/src/grading_stage.rs`, its measured tables `crates/pipeline/src/grading_stage_tables.rs`,
 and the GPU kernel's `measured_grade` in `crates/gpu/src/wgsl/finish.wgsl`.
 
 ## What was wrong
 
-Up to V7 each wheel adds a fixed OkLab tint, 0.09 at saturation 100, in the direction of the pure sRGB colour of the
+Up to V8 each wheel adds a fixed OkLab tint, 0.09 at saturation 100, in the direction of the pure sRGB colour of the
 wheel's hue, weighted by smooth steps in lightness. Measured against Camera Raw on charts of grey steps and colour
 patches:
 
 - **The tints are the wrong size and direction.** Lightroom's tint at saturation 100 is 0.08 to 0.16 depending on
-  the hue. Wheel hue 0 points to OkLab hue 11 to 15 in Lightroom, 29 in V7.
+  the hue. Wheel hue 0 points to OkLab hue 11 to 15 in Lightroom, 29 in V8.
 - **The wheels reach different tones.** At Blending 50 Lightroom's shadows wheel peaks at lightness 0.33 and gives
-  at least half its tint from 0.12 to 0.52, so it barely touches the deepest shadows. V7's is strongest at black and
-  gone by 0.6. Lightroom's global wheel peaks in the midtones (0.62, half or more from 0.23 to 0.89). V7's is the
+  at least half its tint from 0.12 to 0.52, so it barely touches the deepest shadows. V8's is strongest at black and
+  gone by 0.6. Lightroom's global wheel peaks in the midtones (0.62, half or more from 0.23 to 0.89). V8's is the
   same at every lightness. Midtones peak at 0.59 and highlights at 0.84.
 - **Colours that already lean the tint's way get less of it.** A saturated colour in the tint's direction gets 62%
-  of the shadows tint and about 90% of the highlights and global tints. V7 adds the full tint to every colour.
+  of the shadows tint and about 90% of the highlights and global tints. V8 adds the full tint to every colour.
 
-## What V8 does
+## What V9 does
 
-At the end of the colour tools, where V7 grades (`ColorOps::grade`), in OkLab:
+At the end of the colour tools, where V8 grades (`ColorOps::grade`), in OkLab:
 
 1. Each wheel with a saturation above 0 adds its tint times its share at the pixel's lightness, times the damping.
    - The tint comes from the measured table: 12 hues of 30°, saturation 25, 50 and 100, linear in between, and
@@ -36,7 +36,7 @@ At the end of the colour tools, where V7 grades (`ColorOps::grade`), in OkLab:
 2. Each wheel's Luminance adds a lightness change by lightness, measured at ±50 and ±100, linear in between.
 3. The wheels act on the same input colour and their changes add.
 
-V7's grading is off under V8 (`ColorOps::grading` is `None`). With Colour Grading neutral the stage does not run.
+V8's grading is off under V9 (`ColorOps::grading` is `None`). With Colour Grading neutral the stage does not run.
 
 ## How it was measured
 
@@ -82,4 +82,4 @@ edit groups, and on the Teal & Orange preset from 2.66 to 1.34.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-10 | minor | Process V8: Colour Grading measured against Lightroom |
+| 2026-11-10 | minor | Process V9: Colour Grading measured against Lightroom |

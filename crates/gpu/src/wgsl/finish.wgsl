@@ -185,7 +185,7 @@ fn mixer_stage(d: vec3<f32>) -> vec3<f32> {
     return oklab_inv(vec3<f32>(max(l + r.z, 0.0), c2 * cos(h2), c2 * sin(h2)));
 }
 
-// A table of process V8's curve stage (`Lut1::eval`) at offset `o` in `aux`.
+// A table of process V9's curve stage (`Lut1::eval`) at offset `o` in `aux`.
 fn stage_lut(o: u32, x: f32) -> f32 {
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
     let i = min(u32(f), CURVE_N - 2u);
@@ -840,7 +840,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         d = light_ops(d);
     }
 
-    // --- process V8: the colour mixer, then Whites and the tone curves
+    // --- process V9: the colour mixer, then Whites and the tone curves
     if (pu(F_MSTAGE) != 0u) {
         d = mixer_stage(d);
     }

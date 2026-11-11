@@ -1,31 +1,31 @@
-# The colour mixer, measured (process V8)
+# The colour mixer, measured (process V9)
 
 > **Changes:** [revision history](#revision-history)
 
-Process V8 renders the colour mixer (Hue, Saturation and Luminance of the eight bands) the way Lightroom does, from
-measurements of Camera Raw's output. V1 to V7 are unchanged (`docs/process-versions.md`). The code is
+Process V9 renders the colour mixer (Hue, Saturation and Luminance of the eight bands) the way Lightroom does, from
+measurements of Camera Raw's output. V1 to V8 are unchanged (`docs/process-versions.md`). The code is
 `crates/pipeline/src/mixer_stage.rs`, its measured table `crates/pipeline/src/mixer_stage.bin`, and the GPU kernel's
 `mixer_stage` in `crates/gpu/src/wgsl/finish.wgsl`.
 
 ## What was wrong
 
-Up to V7 the mixer is a model: eight bands with smooth weights around fixed OkLCh hues, a hue rotation, a chroma
+Up to V8 the mixer is a model: eight bands with smooth weights around fixed OkLCh hues, a hue rotation, a chroma
 scale and a lightness change, linear in the slider, applied after the tone curves. Measured against Camera Raw on
 fine colour charts:
 
-- **The bands sit in the wrong place.** V7 centres each band on the OkLab hue of the pure sRGB colour (Red 29,
+- **The bands sit in the wrong place.** V8 centres each band on the OkLab hue of the pure sRGB colour (Red 29,
   Orange 82, Yellow 110, Green 142, Aqua 195, Blue 254, Purple 312, Magenta 335). Lightroom's Saturation +50 peaks
   at 10, 50, 95, 140, 180, 255, 320 and 350 (5° bins). A red-orange such as skin or autumn leaves gets Lightroom's
-  Orange adjustment but V7's Red one.
-- **The widths differ.** At half height Lightroom's Blue band is about 85° wide against V7's 59°, its Red and Magenta
+  Orange adjustment but V8's Red one.
+- **The widths differ.** At half height Lightroom's Blue band is about 85° wide against V8's 59°, its Red and Magenta
   bands about 20° against 54° and 39°.
 - **The response is not linear.** Saturation +100 does 2.6 to 2.9 times what +50 does, Luminance +100 about 1.7
   times. At ±100 Lightroom's Hue and Saturation sliders also move lightness, by up to 3 to 17 (OkLab L × 100)
   depending on the band. Its hue shift barely depends on the input's chroma (0.8 to 1.15 times between the lowest and
-  highest measured level), while V7 scales the shift by chroma up to 0.12, so a colour of chroma 0.04 gets a third.
+  highest measured level), while V8 scales the shift by chroma up to 0.12, so a colour of chroma 0.04 gets a third.
 - **The order differs.** Lightroom applies the mixer before the tone curves (below).
 
-## What V8 does
+## What V9 does
 
 After the tone map and V4's calibrated Contrast and Blacks, before the curve stage ([curve-stage.md](curve-stage.md)):
 
@@ -40,9 +40,9 @@ After the tone map and V4's calibrated Contrast and Blacks, before the curve sta
    (charts with several sliders at once: closer than adding).
 4. Convert back to linear Rec.2020.
 
-V7's mixer in `ColorOps` is off under V8 (`ColorOps::mixer`), so the mixer applies once. With the mixer neutral the
-stage does not run. Calibration, Saturation, Vibrance, Point Color and B&W keep their V7 operators, after the
-curves as before. Colour Grading also runs after the curves, through its own measured V8 stage
+V8's mixer in `ColorOps` is off under V9 (`ColorOps::mixer`), so the mixer applies once. With the mixer neutral the
+stage does not run. Calibration, Saturation, Vibrance, Point Color and B&W keep their V8 operators, after the
+curves as before. Colour Grading also runs after the curves, through its own measured V9 stage
 ([grading-stage.md](grading-stage.md)).
 
 ## How it was measured
@@ -71,13 +71,13 @@ and 1.66 with it after. Those check charts are not part of the tool.
 
 - Camera Raw's process version 2012 controls (`crs:ProcessVersion` 11.0), one chart layout, sRGB-gamut patches. More
   saturated colours than the top measured chroma level take its response.
-- Calibration is not measured in. Its measured response matched the charts better than V7's matrix, but made the
-  held-out photos worse (OkLab colour error 1.316 to 1.331), so V8 keeps V7's Calibration.
+- Calibration is not measured in. Its measured response matched the charts better than V8's matrix, but made the
+  held-out photos worse (OkLab colour error 1.316 to 1.331), so V9 keeps V8's Calibration.
 - Masks' Hue and Saturation keep the earlier operators.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-11 | patch | Colour Grading under V8 has its own measured stage, not V7's operator |
-| 2026-11-10 | minor | Process V8: the colour mixer measured against Lightroom, before the tone curves |
+| 2026-11-11 | patch | Colour Grading under V9 has its own measured stage, not V8's operator |
+| 2026-11-10 | minor | Process V9: the colour mixer measured against Lightroom, before the tone curves |
