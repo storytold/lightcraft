@@ -48,6 +48,20 @@ only what was added, and with the mask's Invert it gave the whole photo. Such ma
 first component, on every process. It landed in place as a bug fix: intersecting with nothing is not
 a look anyone chose.
 
+**Lettering under Highlights and Shadows** (V8) no longer grows blocks of the wrong tone. V2's base
+is the edge-aware filter of a separable median alone. Dark lettering on a bright panel (a bus
+number, a sign) has strokes and gaps about as wide as the median's radius, so each row and column
+window was close to half letter and half panel, and the median picked one tone or the other in
+rectangles: it filled the gaps between the letters and their counters with the letters' tone.
+Shadows then lifted those patches of panel by over 1 EV, into bright blocks beside the letters. From V8 each
+value moves toward that median only as far as the median of a 3× wider neighbourhood agrees
+(`local::detail_free`). A twig against a wall has both medians on the wall's side and takes its tone,
+as before (#632); the gap between two strokes sits in a wider neighbourhood that is mostly panel, the
+two medians disagree, and the gap keeps its own tone. The letters themselves count as fine dark detail
+on the panel and keep their contrast, as twigs do. V8 differs from V7 under Highlights or Shadows only in detail
+about as fine as the radius, mostly where it is packed closely (lettering, grilles). V2 to V7
+are released and keep the blocks (`tests_legacy` locks V1 and V2); Update to Current Process moves a photo past them.
+
 ## Adding a process
 
 1. Add a variant to `Process` (`V2`), append it to `Process::ALL` (oldest first), give it its number in
