@@ -81,6 +81,9 @@ pub struct XmpData {
     /// live with a partial map; a check that must prove a property is *absent* (an embedded
     /// location before copying an Original) must treat it as unverifiable instead.
     pub properties_truncated: bool,
+    /// True when any element or attribute anywhere in the packet, including inside array items
+    /// that [`XmpData::properties`] flattens to their text, is an Exif GPS property.
+    pub names_gps: bool,
 }
 
 impl XmpData {
@@ -93,10 +96,13 @@ impl XmpData {
         const IPTC_LOCATION_STRUCTS: [&str; 2] = ["Iptc4xmpExt:LocationShown", "Iptc4xmpExt:LocationCreated"];
         // Every flattened child of one LocationShown/LocationCreated root shares its answer.
         let mut checked_roots: BTreeMap<&str, bool> = BTreeMap::new();
+        if self.names_gps {
+            return true;
+        }
 
         for (key, values) in &self.properties {
             let parts = key.split('/');
-            if parts.clone().any(|part| part.starts_with("exif:GPS") || part.starts_with("exifEX:GPS")) {
+            if parts.clone().any(is_gps_name) {
                 // Even an isolated/blank GPS property is not proof that GPS was removed.
                 return true;
             }
@@ -121,9 +127,13 @@ impl XmpData {
                 return true;
             }
             if IPTC_LOCATION_STRUCTS.contains(&location_part) {
-                let root = parts.clone().next().unwrap_or(key);
-                let root_has_text = *checked_roots.entry(root).or_insert_with(|| self.location_root_has_text(root));
-                if root_has_text {
+                // The scope is the path up to the location field itself, so text elsewhere in an
+                // enclosing struct doesn't count as a place.
+                let scope_len =
+                    key.split('/').take_while(|part| *part != location_part).map(|part| part.len() + 1).sum::<usize>() + location_part.len();
+                let scope = key.get(..scope_len).unwrap_or(key);
+                let scope_has_text = *checked_roots.entry(scope).or_insert_with(|| self.location_scope_has_text(scope));
+                if scope_has_text {
                     return true;
                 }
             }
@@ -132,24 +142,31 @@ impl XmpData {
         false
     }
 
-    /// Whether a LocationShown/LocationCreated root holds text in its retained structured value or
-    /// any flattened child. `values` keeps the first text-bearing occurrence across RDF
-    /// descriptions, while flattened child properties retain every occurrence.
-    fn location_root_has_text(&self, root: &str) -> bool {
-        if self.values.get(root).is_some_and(value_has_text) {
+    /// Whether a LocationShown/LocationCreated field (a `/`-separated path from a top-level
+    /// property) holds text in its retained structured value or any flattened child. `values`
+    /// keeps the first text-bearing occurrence across RDF descriptions, while flattened child
+    /// properties retain every occurrence.
+    fn location_scope_has_text(&self, scope: &str) -> bool {
+        let mut parts = scope.split('/');
+        let structured = parts.next().and_then(|root| self.values.get(root)).and_then(|value| parts.try_fold(value, |value, part| value.field(part)));
+        if structured.is_some_and(value_has_text) {
             return true;
         }
-        let child_prefix = format!("{root}/");
+        let child_prefix = format!("{scope}/");
         self.properties
             .range::<str, _>((std::ops::Bound::Included(child_prefix.as_str()), std::ops::Bound::Unbounded))
             .take_while(|(candidate, _)| candidate.starts_with(&child_prefix))
             .any(|(_, nested_values)| nested_values.iter().any(|value| !value.trim().is_empty()))
     }
 
-    /// Whether the packet announces a JPEG Extended XMP continuation (`xmpNote:HasExtendedXMP`),
-    /// matched by local name so an undeclared or foreign prefix can't hide the announcement.
-    pub fn advertises_extended_xmp(&self) -> bool {
-        self.properties.keys().any(|key| !key.contains('/') && key.rsplit([':', '}']).next() == Some("HasExtendedXMP"))
+    /// The GUID of the JPEG Extended XMP continuation the packet announces
+    /// (`xmpNote:HasExtendedXMP`), matched by local name so an undeclared or foreign prefix can't
+    /// hide the announcement. `Some("")` when the announcement is blank.
+    pub fn extended_xmp_guid(&self) -> Option<&str> {
+        self.properties
+            .iter()
+            .find(|(key, _)| !key.contains('/') && key.rsplit([':', '}']).next() == Some("HasExtendedXMP"))
+            .map(|(_, values)| values.first().map_or("", |value| value.trim()))
     }
 }
 
@@ -598,6 +615,24 @@ fn find_descriptions<'a>(n: &'a Node, out: &mut Vec<&'a Node>) {
     }
 }
 
+/// Whether a canonical property name is an Exif GPS property.
+fn is_gps_name(name: &str) -> bool {
+    name.starts_with("exif:GPS") || name.starts_with("exifEX:GPS")
+}
+
+/// Whether any element or attribute in the tree is an Exif GPS property. The parser caps the tree
+/// at `MAX_NODES`, so this walk inventories every node, array items included.
+fn tree_names_gps(root: &Node) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if is_gps_name(&node.name) || node.attrs.iter().any(|(name, _)| is_gps_name(name)) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
 /// XMP GPS coordinate `DDD,MM,SSk` or `DDD,MM.mmk` (k = N/S/E/W) → signed degrees.
 fn parse_gps_coord(s: &str) -> Option<f64> {
     let s = s.trim();
@@ -704,6 +739,7 @@ fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
 pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     let s = s.trim_start_matches('\u{feff}');
     let tree = parse_tree(s)?;
+    let names_gps = tree_names_gps(&tree);
     let mut descs = Vec::new();
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
@@ -797,7 +833,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
-    Ok(XmpData { metadata: m, lc_settings, properties: props, values, properties_truncated: dropped })
+    Ok(XmpData { metadata: m, lc_settings, properties: props, values, properties_truncated: dropped, names_gps })
 }
 
 fn frac(v: f64) -> String {

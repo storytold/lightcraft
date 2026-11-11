@@ -251,8 +251,10 @@ impl PreparedExport {
                         if let Some(xmp) = embedded.xmp.as_deref() {
                             let packet = check_packet(xmp, "embedded XMP")?;
                             xmp_has_location = packet.has_location_metadata();
-                            if packet.advertises_extended_xmp() && embedded.xmp_extended.is_none() {
-                                return Err(unverifiable("the XMP announces Extended XMP that the file doesn't hold"));
+                            if let Some(guid) = packet.extended_xmp_guid()
+                                && embedded.xmp_extended_guid.as_deref() != Some(guid)
+                            {
+                                return Err(unverifiable("the XMP announces Extended XMP that the file doesn't hold in full under the same GUID"));
                             }
                         }
                         // JPEG Extended XMP continues the main packet in further APP1 segments and can

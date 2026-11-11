@@ -870,20 +870,29 @@ fn remove_location_checks_jpeg_extended_xmp_before_an_original_copy() {
     let encoded = lightcraft_codecs::EncodeMeta { xmp: Some(&main), ..Default::default() };
     let announced_only = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &encoded).unwrap();
     // An APP1 Extended XMP segment: signature, GUID, full length and offset, then the data.
-    let extended = rdf("<exif:GPSLatitude>37,46.494N</exif:GPSLatitude>");
-    let mut payload = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
-    payload.extend_from_slice(b"0123456789ABCDEF0123456789ABCDEF");
-    payload.extend_from_slice(&u32::try_from(extended.len()).unwrap().to_be_bytes());
-    payload.extend_from_slice(&0u32.to_be_bytes());
-    payload.extend_from_slice(extended.as_bytes());
-    let mut with_gps = announced_only[..2].to_vec();
-    with_gps.extend_from_slice(&[0xff, 0xe1]);
-    with_gps.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
-    with_gps.extend_from_slice(&payload);
-    with_gps.extend_from_slice(&announced_only[2..]);
+    let with_extension = |guid: &[u8], body: &str| {
+        let extended = rdf(body);
+        let mut payload = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
+        payload.extend_from_slice(guid);
+        payload.extend_from_slice(&u32::try_from(extended.len()).unwrap().to_be_bytes());
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(extended.as_bytes());
+        let mut jpeg = announced_only[..2].to_vec();
+        jpeg.extend_from_slice(&[0xff, 0xe1]);
+        jpeg.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+        jpeg.extend_from_slice(&payload);
+        jpeg.extend_from_slice(&announced_only[2..]);
+        jpeg
+    };
+    let with_gps = with_extension(b"0123456789ABCDEF0123456789ABCDEF", "<exif:GPSLatitude>37,46.494N</exif:GPSLatitude>");
+    let other_guid = with_extension(b"FEDCBA9876543210FEDCBA9876543210", "");
     assert!(lightcraft_meta::try_extract(&with_gps).unwrap().gps.is_none(), "the catalog doesn't read Extended XMP");
 
-    let cases = [("Extended.jpg", with_gps, "other XMP location metadata"), ("Announced.jpg", announced_only, "announces Extended XMP")];
+    let cases = [
+        ("Extended.jpg", with_gps, "other XMP location metadata"),
+        ("Announced.jpg", announced_only.clone(), "announces Extended XMP"),
+        ("OtherGuid.jpg", other_guid, "under the same GUID"),
+    ];
     let mut paths = Vec::new();
     for (name, bytes, _) in &cases {
         let path = dir.join(name);
