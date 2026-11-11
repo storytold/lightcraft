@@ -270,6 +270,18 @@ impl PreparedExport {
                 let mut raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{label}: {e}"))?;
                 crate::camera_preview::with_starting_colour(&mut raw, &bytes);
                 drop(bytes);
+                // The fitted matrix is already folded into the transform by starting_colour.
+                // Ensure the raw's color tags reflect the same transform for DNG export.
+                let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
+                let t = lightcraft_raw::color::camera_transform(&raw, xy);
+                raw.color = lightcraft_raw::ColorData {
+                    illuminant: t.white_xy.into(),
+                    color_matrix: [Some(t.matrix), None],
+                    forward_matrix: [Some(lightcraft_color::bradford(lightcraft_color::D65, lightcraft_color::D50).mul(&lightcraft_color::REC2020.to_xyz()).mul(&t.matrix)), None],
+                    as_shot_neutral: Some(t.wb.map(|w| 1.0 / w as f64)),
+                    baseline_exposure: t.baseline_exposure,
+                    ..Default::default()
+                };
                 let compression = match dng {
                     DngCompression::Lossless => lightcraft_raw::DngCompression::Lj92 { tile: 256 },
                     DngCompression::Deflate => lightcraft_raw::DngCompression::Deflate { tile: 256, half: false },
