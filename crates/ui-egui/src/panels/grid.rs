@@ -442,7 +442,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     });
     app.caches.grid_stats.cells_visited += visited;
-    app.renderer.evict_thumbs(&visible_ids, 600);
+    app.renderer.evict_thumbs(&visible_ids);
     let _ = (Color32::BLACK, StrokeKind::Inside, Stroke::NONE);
 }
 
@@ -702,6 +702,8 @@ fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: 
 /// [`lightcraft_engine::media::Session::embedded_thumb_is_final`]), which for a folder of raws on a
 /// network share is the difference between reading every file whole and reading a preview each.
 pub fn request_thumb(app: &mut LightcraftApp, id: PhotoId, size: usize, priority: u32) {
+    // (the grid's trim keeps what any view asked for in this frame or the last, see `evict_thumbs`)
+    app.renderer.thumb_asked(id);
     // A slider drag changes the photo every frame: its thumbnail follows once the drag ends, so its
     // renders (a raw decode the first time) don't compete with the loupe's drafts.
     if app.session.interaction.as_ref().is_some_and(|i| i.photo == id) && app.renderer.thumb(id).is_some() {

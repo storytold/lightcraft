@@ -380,6 +380,9 @@ impl LightcraftApp {
         self.widget_hits = std::mem::take(&mut self.next_widget_hits);
         // a frame without the loupe (grid, Compare, Survey, slideshow…) ends the loupe's step timing
         self.loupe_timing.end_frame(ctx.input(|i| i.time));
+        // what the views asked a thumbnail of in this frame is the frame before's now: aged here, once for each
+        // frame drawn, not in `logic`, which a hidden window gets as well, with no frame to draw
+        self.renderer.frame_drawn();
         panels::notices::finish_ui_pass(self, ctx);
         panels::library_problem::finish_ui_pass(self, ctx);
         self.ui_passes = self.ui_passes.wrapping_add(1);

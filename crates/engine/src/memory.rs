@@ -1,5 +1,5 @@
-//! Memory accounting: what each cache holds (`library.memory`, and `ui.inspect` → `memory` with the
-//! frontend's own caches added).
+//! Memory accounting: what each cache holds, and what the catalog's records take beside them
+//! (`library.memory`, and `ui.inspect` → `memory` with the frontend's own caches added).
 //!
 //! The numbers are the caches' own bookkeeping (pixels held), not the process's resident size: the
 //! allocator keeps freed pages for reuse and the GPU driver maps device buffers, so `ps`/`time -l`
@@ -18,10 +18,14 @@ use serde::Serialize;
 /// - a quarter for the working memory of decodes in flight ([`work_gate`]);
 /// - an eighth for the GPU renderer's pool of recycled buffers (trimmed when the app is idle).
 ///
-/// The rest is headroom for what isn't cached (renders in progress, textures, the UI). An export
-/// batch may, in addition, hold up to twice the budget in photos rendering side by side
-/// ([`export_gate`]): transient memory, given back when the batch ends. Default:
-/// a quarter of the machine's RAM, at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
+/// The rest is headroom for what isn't cached (renders in progress, the UI's other memory). The
+/// UI's own caches take shares of the budget on top of those, which may add up to more than the
+/// budget: a quarter for the idle per-view stage caches and a quarter for the grid's thumbnail
+/// textures (`ui.inspect` → `memory` reports both). The catalog is no cache: the budget doesn't
+/// limit it, and [`MemoryReport::catalog`] reports it beside them. An export batch may, in
+/// addition, hold up to twice the budget in photos rendering side by side ([`export_gate`]):
+/// transient memory, given back when the batch ends. Default: a quarter of the machine's RAM, at
+/// most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
 pub fn default_budget() -> usize {
     if let Some(mb) = std::env::var("LIGHTCRAFT_MEMORY_MB").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|m| *m >= 64) {
         return mb << 20;
@@ -233,7 +237,7 @@ pub struct GpuUsage {
     pub retired: u64,
 }
 
-/// What the engine's caches hold.
+/// What the engine's caches hold, and what the catalog's records take beside them.
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryReport {
@@ -254,6 +258,10 @@ pub struct MemoryReport {
     /// Working memory of decodes / probes in flight and its limit ([`work_gate`]).
     pub work_bytes: usize,
     pub work_limit: usize,
+    /// The photos the catalog holds, and the least their records take, beside the caches: not in
+    /// `engine_bytes`, and no share of the budget limits it. The strings and lists a record owns
+    /// come on top of the fixed part counted here ([`catalog_usage`]).
+    pub catalog: Usage,
     /// Live/peak heap when the binary counts allocations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub heap: Option<HeapUsage>,
@@ -294,6 +302,14 @@ pub fn gpu_usage() -> GpuUsage {
     GpuUsage { allocated: g.allocated, pooled: g.pooled, retired: g.retired }
 }
 
+/// What the catalog's `photos` records take at least: each one's fixed part, the [`lightcraft_catalog::Photo`]
+/// and the counts of the `Arc` it lives in. Counting the strings and lists they own would walk the
+/// whole catalog, which takes seconds in a library of a million photos.
+pub fn catalog_usage(photos: usize) -> Usage {
+    const RECORD: usize = std::mem::size_of::<lightcraft_catalog::Photo>() + 2 * std::mem::size_of::<usize>();
+    Usage::new(photos, photos.saturating_mul(RECORD))
+}
+
 impl crate::Session {
     /// What the engine's caches hold now.
     pub fn memory_report(&self) -> MemoryReport {
@@ -311,6 +327,7 @@ impl crate::Session {
             cache_budget: self.media.budget(),
             work_bytes: work_gate().usage().0,
             work_limit: work_gate().usage().1,
+            catalog: catalog_usage(self.catalog.len()),
             heap: heap_stats(),
         }
     }

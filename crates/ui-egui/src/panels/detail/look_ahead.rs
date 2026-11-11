@@ -9,9 +9,10 @@ const AHEAD: usize = 5;
 pub(super) const BEHIND: usize = 1;
 /// The look-ahead's priority: below the loupe's own render (100), above everything else.
 const AHEAD_PRIORITY: u32 = 96;
-/// Thumbnails the loupe keeps while stepping (as many as the grid keeps), and how many photos on
-/// either side of the open one stay when it trims them.
-const MAX_LOUPE_THUMBS: usize = 600;
+/// How many photos on either side of the open one keep their thumbnails when the loupe trims them
+/// (what the filmstrip can show): the nearest of them, as many as the thumbnails' share of the
+/// memory budget holds ([`keep_window`]). It trims once the thumbnails are over what the grid keeps
+/// them to, see [`crate::render::Renderer::thumbs_over_limit`].
 const KEEP_AROUND: usize = 64;
 /// The thumbnail size the look-ahead asks for (the filmstrip's at 2x).
 const AHEAD_THUMB_EDGE: usize = 256;
@@ -94,6 +95,9 @@ pub(crate) fn look_ahead(app: &mut LightcraftApp, id: PhotoId, edge: usize, crop
         app.look_ahead.last = Some(id);
     }
     let (visible_gen, ids) = app.session.visible_shared();
+    // before the early return below: the limit moves with the memory budget, and thumbnails arrive
+    // while the loupe rests on a photo, so being over it is not a matter of a step
+    trim_thumbs(app, &ids, id);
     // (the renderer's epoch: a reset drops the stand-ins made, which are then asked for again)
     let want = (id, app.look_ahead.dir, rev, visible_gen, edge, crop, prepare, app.renderer.epoch());
     if app.look_ahead.made_for == Some(want) {
@@ -102,12 +106,6 @@ pub(crate) fn look_ahead(app: &mut LightcraftApp, id: PhotoId, edge: usize, crop
     app.look_ahead.made_for = Some(want);
     let Some(i) = ids.iter().position(|p| *p == id) else { return };
     let targets = app.look_ahead.targets(app, &ids, i, prepare);
-    // stepping through a whole wedding in the loupe would keep every thumbnail it ever drew: keep
-    // the ones around the photo (what the filmstrip can show) once there are many
-    if app.renderer.thumb_textures() > MAX_LOUPE_THUMBS {
-        let keep = ids.iter().skip(i.saturating_sub(KEEP_AROUND)).take(2 * KEEP_AROUND + 1).copied().collect();
-        app.renderer.evict_thumbs(&keep, MAX_LOUPE_THUMBS);
-    }
     // their thumbnails first (a small embedded JPEG each, a few ms): something to show at once
     // even when a step outruns the full-size previews, and in full screen, where no filmstrip
     // asks for them
@@ -116,4 +114,36 @@ pub(crate) fn look_ahead(app: &mut LightcraftApp, id: PhotoId, edge: usize, crop
     }
     let jobs = targets.into_iter().filter_map(|nid| app.session.quick_view_job(nid, edge, crop)).collect();
     app.renderer.look_ahead(jobs, AHEAD_PRIORITY);
+}
+
+/// Stepping through a whole wedding in the loupe would keep every thumbnail it ever drew: once the
+/// thumbnails are over their limit, keep the ones around the open photo `id` (what the filmstrip
+/// can show, see [`keep_window`]) and drop the rest.
+fn trim_thumbs(app: &mut LightcraftApp, ids: &[PhotoId], id: PhotoId) {
+    if !app.renderer.thumbs_over_limit() {
+        return;
+    }
+    let Some(i) = ids.iter().position(|p| *p == id) else { return };
+    let keep = keep_window(&app.renderer, ids, i);
+    app.renderer.evict_thumbs(&keep);
+}
+
+/// The photos around position `i` of `ids` whose thumbnails the loupe keeps: nearest first (the open
+/// photo, then one each side of it, and so on outwards), up to [`KEEP_AROUND`] on either side and
+/// no more than the thumbnails' share of the memory budget holds, so that a small budget isn't
+/// held up by a window of large thumbnails the grid left. The open photo's own always stays.
+fn keep_window(renderer: &crate::render::Renderer, ids: &[PhotoId], i: usize) -> std::collections::HashSet<PhotoId> {
+    let budget = renderer.thumb_budget();
+    let outwards = (1..=KEEP_AROUND).flat_map(|d| [i.checked_sub(d), i.checked_add(d)]);
+    let mut keep = std::collections::HashSet::new();
+    let mut held = 0usize;
+    for at in std::iter::once(Some(i)).chain(outwards).flatten() {
+        let Some(&id) = ids.get(at) else { continue };
+        held = held.saturating_add(renderer.thumb_bytes_of(id));
+        if held > budget && !keep.is_empty() {
+            break;
+        }
+        keep.insert(id);
+    }
+    keep
 }
