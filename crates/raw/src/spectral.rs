@@ -64,8 +64,7 @@ const SAME_SENSOR: &[(&str, &str, &str)] = &[
     ("Fujifilm", "X-M5", "X-T3"),
     ("Fujifilm", "GFX100S II", "GFX 100"),
     ("Sony", "ILCE-7CM2", "ILCE-7M4"), // A7C II: same 33 MP sensor as the A7 IV
-    ("Sony", "ILCE-7M2", "ILCE-7M4"),  // issue 2113: A7C II's Exif model falls back to the A7 IV's matrices
-];
+    ];
 
 /// Model names compared without case, the brand, a leading `EOS` or a trailing `DIGITAL`
 /// (Exif "Canon EOS 400D DIGITAL" is the table's "EOS 400D").
@@ -202,11 +201,11 @@ mod tests {
     }
 
     #[test]
-    fn ilce_7m2_finds_ilce_7m4_matrices() {
-        // ILCE-7M2 is absent from the table and SAME_SENSOR, so it should fall
-        // through to the A7 IV's (ILCE-7M4) same-sensor matrices. Today it
-        // returns None: the A7C II's Exif model is missing from both.
-        assert_eq!(find(Some("SONY"), "ILCE-7M2").map(|c| c.model), Some("ILCE-7M4"));
+    fn ilce_7cm2_finds_ilce_7m4_matrices() {
+        // ILCE-7M2 (A7 II, 24.3 MP) does NOT use the same sensor as the A7 IV (ILCE-7M4, 33 MP).
+        // The SAME_SENSOR table incorrectly mapped ILCE-7M2 to ILCE-7M4 (issue 2113).
+        // This regression test ensures the incorrect alias stays removed.
+        assert_eq!(find(Some("SONY"), "ILCE-7M2").map(|c| c.model), None);
     }
 
     #[test]
