@@ -242,6 +242,7 @@ fn validate_files(files: &[FileSpec<'_>]) -> Result<u64, DownloadError> {
     if files.len() > 256 {
         return Err(DownloadError::Invalid("too many files".into()));
     }
+    // (names that differ only in case are one file on a case-insensitive file system)
     let mut seen = std::collections::HashSet::new();
     let mut total = 0u64;
     for f in files {
@@ -259,7 +260,7 @@ fn validate_files(files: &[FileSpec<'_>]) -> Result<u64, DownloadError> {
             || f.name.starts_with('.')
             || f.name.contains(['/', '\\', ':'])
             || f.name.chars().any(char::is_control)
-            || !seen.insert(f.name)
+            || !seen.insert(f.name.to_lowercase())
         {
             return Err(DownloadError::Invalid("a filename must be a unique, ordinary filename".into()));
         }
