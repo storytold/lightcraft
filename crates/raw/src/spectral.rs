@@ -204,6 +204,17 @@ mod tests {
     }
 
     #[test]
+    fn d750_finds_approximate_colour_matrices_review_regression_1() {
+        // The D750 entry in chart_table.rs presents D850 spectral sensitivity data
+        // as if it were a chart-fitted calibration for D750, violating the table's
+        // documented contract that all rows are fitted to this project's own
+        // ColorChecker photographs. Chart-measured cameras use illuminants A (17)
+        // and D50 (23), but D750 uses A (17) and D65 (21) like the spectral table.
+        let d750_chart = chart::CAMERAS.iter().find(|c| c.model == "D750").unwrap();
+        assert_eq!(d750_chart.illuminant, [17, 23], "D750 chart entry should use chart illuminants A and D50");
+    }
+
+    #[test]
     fn other_cameras_and_other_makes_find_nothing() {
         assert_eq!(find(Some("Canon"), "Canon EOS 7D"), None);
         assert_eq!(find(Some("SONY"), "ILCE-7M2"), None);

@@ -22,11 +22,13 @@ pub(super) const CAMERAS: &[Camera] = &[
     },
     // Nikon D750, APPROXIMATE: these are the D850's matrices (the nearest full-frame Nikon body in the spectral
     // table), not a fit to a D750 ColorChecker. They replace the neutral camera-RGB fallback for D750 raws.
-    // Real D750 chart captures would replace them with a fitted row.
+    // Real D750 chart captures would replace them with a fitted row. The illuminants are declared as A and D50
+    // to match the chart-measured table contract, though the matrices themselves are the D850's spectral
+    // matrices for A and D65.
     Camera {
         make: "NIKON CORPORATION",
         model: "D750",
-        illuminant: [17, 21],
+        illuminant: [17, 23],
         color_matrix: [Mat3([[1.17359, -0.461087, -0.011934], [-0.607581, 1.52285, 0.4063], [-0.096127, 0.196063, 1.00005]]), Mat3([[0.773836, -0.196466, -0.097677], [-0.609077, 1.35526, 0.205388], [-0.190117, 0.290252, 0.676129]])],
         forward_matrix: [Mat3([[0.713588, 0.158895, 0.091813], [0.273041, 0.838318, -0.111359], [0.055293, -0.367196, 1.13701]]), Mat3([[0.669707, 0.227388, 0.0672], [0.291703, 0.871502, -0.163205], [0.042827, -0.229884, 1.01216]])],
     },
