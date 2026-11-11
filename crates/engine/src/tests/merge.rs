@@ -666,3 +666,28 @@ fn hdr_batch_preserves_bracket_set_when_stack_contains_merge_result() {
     assert!(merged[0]["path"].as_str().unwrap().ends_with("IMG_0-HDR-2.dng"), "{merged:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The desktop batch plans each bracket set as its explicit group: the ids are merged as given, in their order,
+/// and the set is not expanded into the rest of its stack (here, the sources and the earlier merge result).
+#[test]
+fn explicit_bracket_set_is_merged_as_given() {
+    let dir = temp_dir("explicit-group");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(96, 64, &[-1.0, 0.0, 1.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let r = s.execute("merge.hdr", &json!({"ids": ids, "autoSettings": false, "stack": true})).unwrap();
+    let result = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    let set = [lightcraft_catalog::PhotoId(ids[2]), lightcraft_catalog::PhotoId(ids[0]), lightcraft_catalog::PhotoId(ids[2])];
+    let job = s.plan_merge_group(kind.clone(), finish.clone(), &set, false).unwrap();
+    assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![ids[2], ids[0]], "deduped, in the given order");
+    assert!(!job.sources.iter().any(|(p, _)| *p == result), "the earlier merge result is not added back");
+    let one = s.plan_merge_group(kind, finish, &set[..1], false);
+    assert!(one.is_err(), "a set of one photo is not a merge");
+    let _ = std::fs::remove_dir_all(&dir);
+}
