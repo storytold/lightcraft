@@ -396,7 +396,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // mask pins (the View ▸ Show Mask Pins switch) instead of opening Remove; the full-screen
     // preview shows no panels and a minimized window hides the panel, so there H keeps its own
     // binding
-    if h_press && tool_panel(app) == crate::state::RightPanel::Masking {
+    if h_press && tool_panel(app) == crate::state::RightPanel::Masking && crate::docking::exposed(app, crate::docking::Panel::Tools) {
         let _ = app.run("view.maskPins", json!({}));
         fire.retain(|f| f != "panel.remove");
     }
@@ -693,14 +693,9 @@ fn fire_flag_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> bool 
 
 /// The right panel whose tool is on screen and so owns the keys it shares with the library: `ui.right` itself
 /// outlives its view (it is saved, and stays while the grid, a comparison or the full-screen preview is
-/// shown, where no tool can act), so everywhere but the single-photo view with the Tools panel in front there
-/// is none.
+/// shown, where no tool can act), so everywhere but the single-photo view there is none.
 fn tool_panel(app: &LightcraftApp) -> crate::state::RightPanel {
-    if app.ui.view == crate::state::ViewMode::Detail && !app.ui.fullscreen && crate::docking::exposed(app, crate::docking::Panel::Tools) {
-        app.ui.right
-    } else {
-        crate::state::RightPanel::None
-    }
+    if app.ui.view == crate::state::ViewMode::Detail && !app.ui.fullscreen { app.ui.right } else { crate::state::RightPanel::None }
 }
 
 /// Delete acts on what's being edited: the active mask in the Masking panel; never the photo while retouching (spots
@@ -774,6 +769,7 @@ fn brush_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
 fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> bool {
     use crate::state::RightPanel as R;
     let right = tool_panel(app);
+    let in_detail = app.ui.view == crate::state::ViewMode::Detail && !app.ui.fullscreen;
     match f {
         // X is both reject (library) and swap crop aspect (crop tool). When both bindings fire,
         // swap once: twice would put the crop straight back (issue #1866).
@@ -784,8 +780,9 @@ fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> 
             true
         }
         "crop.rotateAspect" => right != R::Crop,
-        // A is both Visualize Spots and the crop aspect lock: each key only in its own context
-        "view.visualizeSpots" => right == R::Crop,
+        // A is both Visualize Spots and the crop aspect lock: each key only in its own context.
+        // In the grids and full-screen preview neither tool is on screen, so neither runs.
+        "view.visualizeSpots" => !in_detail || right == R::Crop,
         "crop.lockAspect" => right != R::Crop,
         // / refreshes the selected spot's source in the Remove tool (the filmstrip elsewhere)
         "view.filmstrip" if right == R::Remove && app.session.active_spot.is_some() => {

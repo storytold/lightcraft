@@ -472,6 +472,46 @@ fn x_rejects_in_the_grid_whatever_the_saved_right_panel() {
     assert_eq!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(1)).unwrap().flag, lightcraft_catalog::Flag::Reject);
 }
 
+/// Minimizing the Tools panel or hiding its tab does not let Delete delete the photo while a canvas
+/// tool is active: the tool on the canvas still owns the key.
+#[test]
+fn delete_stays_with_the_canvas_tool_even_when_tools_panel_is_not_exposed() {
+    use crate::docking::Panel;
+    use crate::state::{RightPanel as R, ViewMode as V};
+    for right in [R::Masking, R::Remove, R::RedEye] {
+        let mut h = library_in(V::Detail, right);
+        h.app.run("ui.dock", json!({"operation": "float", "panel": "tools", "rect": [400, 100, 320, 500]})).unwrap();
+        h.app.run("ui.dock", json!({"action": {"SetMinimized": {"panel": "tools", "minimized": true}}})).unwrap();
+        h.step();
+        assert!(!crate::docking::exposed(&h.app, Panel::Tools));
+        press(&mut h, egui::Key::Delete);
+        assert_eq!(h.app.ui.dialog, None, "{right:?}");
+        assert!(!h.app.session.catalog.photo(lightcraft_catalog::PhotoId(1)).unwrap().deleted, "{right:?}");
+    }
+}
+
+/// A does not trigger Visualize Spots or Crop Aspect Lock in grids or the full-screen preview:
+/// the hidden tool state is left unchanged.
+#[test]
+fn a_leaves_hidden_tool_state_unchanged_outside_single_photo_view() {
+    use crate::state::{RightPanel as R, ViewMode as V};
+    for view in [V::PhotoGrid, V::SquareGrid, V::Compare, V::Survey] {
+        for right in [R::Crop, R::Edit, R::None, R::Masking] {
+            let mut h = library_in(view, right);
+            let spots_before = h.app.ui.visualize_spots;
+            press(&mut h, egui::Key::A);
+            assert_eq!(h.app.ui.right, right, "view {view:?}, right {right:?}");
+            assert_eq!(h.app.ui.visualize_spots, spots_before, "view {view:?}");
+        }
+    }
+    let mut h = library_in(V::Detail, R::Crop);
+    h.app.ui.fullscreen = true;
+    let spots_before = h.app.ui.visualize_spots;
+    press(&mut h, egui::Key::A);
+    assert_eq!(h.app.ui.right, R::Crop, "full screen preview keeps saved right");
+    assert_eq!(h.app.ui.visualize_spots, spots_before);
+}
+
 use super::*;
 
 #[test]
