@@ -201,7 +201,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     aux.extend_from_slice(&srgb_lut()[..]);
     let curve_off = aux.len();
     let stage_off = curve_off + fp.curves.as_ref().map_or(0, |c| c.len() * CURVE_N as usize);
-    // process V8's stage (red, green, blue, then the base table) or the earlier processes' curves
+    // process V9's stage (red, green, blue, then the base table) or the earlier processes' curves
     let tables = fp.curves.iter().flatten().chain(fp.curve_stage.iter().flat_map(|c| c.chan.iter().chain([&c.base])));
     for l in tables {
         if l.v.len() != CURVE_N as usize {

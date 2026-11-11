@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure Lightroom's Whites and parametric curve on synthetic grey steps (process V8, docs/curve-stage.md).
+"""Measure Lightroom's Whites and parametric curve on synthetic grey steps (process V9, docs/curve-stage.md).
 
     python3 tools/lr_tone_charts.py charts OUT_DIR
         Writes linear DNG charts (48 grey steps plus colour patches) with the settings embedded as XMP:

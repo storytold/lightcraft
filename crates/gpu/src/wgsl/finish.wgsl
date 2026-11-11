@@ -122,7 +122,7 @@ fn light_ops(d: vec3<f32>) -> vec3<f32> {
     return mul3(PRO_TO_2020, p);
 }
 
-// A table of process V8's curve stage (`Lut1::eval`) at offset `o` in `aux`.
+// A table of process V9's curve stage (`Lut1::eval`) at offset `o` in `aux`.
 fn stage_lut(o: u32, x: f32) -> f32 {
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
     let i = min(u32(f), CURVE_N - 2u);
@@ -729,7 +729,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         d = light_ops(d);
     }
 
-    // --- process V8: Whites and the tone curves
+    // --- process V9: Whites and the tone curves
     if (pu(F_STAGE) != 0u) {
         d = curve_stage(d);
     }

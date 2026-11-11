@@ -76,6 +76,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub const INPUT: usize = 1008;
 /// Side of the low-resolution masks the model predicts.
 pub const MASK_SIDE: usize = 288;
+/// Most clicks one Object selection may carry (the engine's `MAX_CLICKS`).
+pub const MAX_CLICKS: usize = 64;
 #[cfg(not(target_arch = "wasm32"))]
 const _: () = assert!(MASK_SIDE == tracker::LOW_RES && INPUT == vit::IMAGE);
 
@@ -202,6 +204,10 @@ impl Sam3 {
     pub fn segment_clicks(&mut self, enc: &mut Encoded, clicks: &[Click]) -> Result<Prediction> {
         if clicks.is_empty() {
             return Err(Error::Model("no clicks".into()));
+        }
+        // the prompt grows with every click: the editor takes at most this many (the engine's `MAX_CLICKS`)
+        if clicks.len() > MAX_CLICKS {
+            return Err(Error::Model(format!("at most {MAX_CLICKS} clicks, not {}", clicks.len())));
         }
         let (neck, tracker) = self.tracker_parts()?;
         if enc.tracker.is_none() {

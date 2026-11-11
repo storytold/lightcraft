@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Whites and the tone curves behave as in Lightroom (process V8)
+### Whites and the tone curves behave as in Lightroom (process V9)
 - Whites now reaches into the upper midtones as Lightroom's does, and the Highlights, Lights, Darks and Shadows
   regions of the parametric curve are as broad as Lightroom's and add up the same way: both follow Lightroom's
   measured response. A contrast curve no longer turns orange towards red: the point curve keeps colours' hue, and
