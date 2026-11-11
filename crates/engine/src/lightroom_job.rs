@@ -275,14 +275,15 @@ impl LightroomJob {
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
-        let (paths, missing_sources) = original_paths(&mut data, cancel)?;
+        let OriginalPaths { paths, missing: missing_sources, errors } = original_paths(&mut data, cancel)?;
         // Catalog entries name files, never folders. Missing originals already have enough
         // catalog metadata for placeholders; probing them again only adds failed I/O and errors.
         // Complete the catalog step before the separate read/add photo progress starts.
         self.progress.catalog_done.fetch_add(1, Ordering::Relaxed);
         self.progress.photos.store(true, Ordering::Relaxed);
         self.import.total.fetch_add(paths.len(), Ordering::Relaxed);
-        let normal = self.import.prepare_files(paths, cancel);
+        let mut normal = self.import.prepare_files(paths, cancel);
+        normal.add_original_errors(errors);
         if cancel.load(Ordering::Relaxed) {
             normal.rollback();
             return Err(cancelled());
@@ -378,10 +379,24 @@ fn classify_rechecked_originals(s: &crate::Session, prepared: &mut PreparedLight
     refuse_redirected(&mut prepared.data, &redirected);
 }
 
-/// Collect unique accessible originals, preserve missing paths and mark refused redirects on every copy.
-fn original_paths(data: &mut CatalogImport, cancel: &AtomicBool) -> crate::Result<(Vec<String>, HashSet<String>)> {
-    let mut paths = Vec::new();
-    let mut missing = HashSet::new();
+#[derive(Default)]
+struct OriginalPaths {
+    paths: Vec<String>,
+    missing: HashSet<String>,
+    errors: Vec<(String, std::io::Error)>,
+}
+
+/// Collect unique originals without turning access errors or refused redirects into missing files.
+fn original_paths(data: &mut CatalogImport, cancel: &AtomicBool) -> crate::Result<OriginalPaths> {
+    original_paths_with_metadata(data, cancel, crate::doc_path::original_metadata)
+}
+
+fn original_paths_with_metadata(
+    data: &mut CatalogImport,
+    cancel: &AtomicBool,
+    mut metadata: impl FnMut(&Path) -> std::io::Result<std::fs::Metadata>,
+) -> crate::Result<OriginalPaths> {
+    let mut originals = OriginalPaths::default();
     let mut seen = HashSet::new();
     let mut redirected = HashSet::new();
     for photo in &data.photos {
@@ -396,11 +411,18 @@ fn original_paths(data: &mut CatalogImport, cancel: &AtomicBool) -> crate::Resul
             continue;
         }
         let is_file = if photo.original == lightroom_catalog::Original::Local {
-            match crate::doc_path::original_metadata(Path::new(&photo.path)) {
+            match metadata(Path::new(&photo.path)) {
                 Ok(meta) => meta.is_file(),
                 Err(e) => {
                     if crate::doc_path::is_network_redirect(&e) {
-                        redirected.insert(key.clone());
+                        redirected.insert(key);
+                        continue;
+                    }
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        // A failed lookup does not establish absence; keep the original error
+                        // for the report instead of retrying or turning it into a missing file.
+                        originals.errors.push((photo.path.clone(), e));
+                        continue;
                     }
                     false
                 }
@@ -409,13 +431,13 @@ fn original_paths(data: &mut CatalogImport, cancel: &AtomicBool) -> crate::Resul
             false
         };
         if is_file {
-            paths.push(photo.path.clone());
+            originals.paths.push(photo.path.clone());
         } else {
-            missing.insert(key);
+            originals.missing.insert(key);
         }
     }
     refuse_redirected(data, &redirected);
-    Ok((paths, missing))
+    Ok(originals)
 }
 
 fn refuse_redirected(data: &mut CatalogImport, redirected: &HashSet<String>) {
@@ -495,6 +517,50 @@ mod tests {
         }
     }
 
+    /// Failures in the first metadata pass must survive preparation and the final report.
+    #[test]
+    fn first_pass_access_errors_are_reported_separately_from_missing() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        use std::io::{Error, ErrorKind};
+        for kind in [ErrorKind::PermissionDenied, ErrorKind::TimedOut, ErrorKind::NetworkUnreachable, ErrorKind::Other] {
+            for known in [false, true] {
+                let mut session = crate::Session::new();
+                let path = r"\\nas\photos\photo.jpg";
+                if known {
+                    let photo = Photo::new(PhotoId(1), Source::File { path: path.into() }, "photo.jpg", "JPG", 1, 1, "2026-01-01T00:00:00");
+                    session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+                }
+                let mut prepared = prepared_for(&session, path, 4);
+                let message = format!("synthetic first-pass error: {kind:?}");
+                let cancel = AtomicBool::new(false);
+                let originals = original_paths_with_metadata(&mut prepared.data, &cancel, |_| Err(Error::new(kind, message.clone()))).unwrap();
+                assert!(originals.paths.is_empty(), "do not retry a failed first pass");
+                let mut job = ImportJob::new(&mut session, ImportOptions::default()).unwrap();
+                prepared.normal = job.prepare_files(originals.paths, &cancel);
+                prepared.normal.add_original_errors(originals.errors);
+                prepared.missing_sources = originals.missing;
+                let report = commit_prepared(&mut session, prepared).unwrap().report;
+                assert_eq!(report["missing"], serde_json::json!([]), "{kind:?}, known={known}");
+                assert_eq!(report["failed"], serde_json::json!([[path, message]]), "{kind:?}, known={known}");
+            }
+        }
+    }
+
+    #[test]
+    fn first_pass_not_found_stays_missing_without_an_access_failure() {
+        let mut session = crate::Session::new();
+        let path = r"\\nas\photos\absent.jpg";
+        let mut prepared = prepared_for(&session, path, 4);
+        let originals =
+            original_paths_with_metadata(&mut prepared.data, &AtomicBool::new(false), |_| Err(std::io::ErrorKind::NotFound.into())).unwrap();
+        assert!(originals.paths.is_empty());
+        assert!(originals.errors.is_empty());
+        prepared.missing_sources = originals.missing;
+        let report = commit_prepared(&mut session, prepared).unwrap().report;
+        assert_eq!(report["missing"], serde_json::json!([path]));
+        assert_eq!(report["failed"], serde_json::json!([]));
+    }
+
     /// A real UNC file lost between discovery and preparation stays missing through catalog commit.
     #[cfg(windows)]
     #[test]
@@ -514,7 +580,8 @@ mod tests {
         session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
         let mut prepared = prepared_for(&session, &path, 4);
         let cancel = AtomicBool::new(false);
-        let (paths, missing) = original_paths(&mut prepared.data, &cancel).unwrap();
+        let OriginalPaths { paths, missing, errors } = original_paths(&mut prepared.data, &cancel).unwrap();
+        assert!(errors.is_empty());
         assert_eq!(paths, vec![path.clone()], "discovery must first see the real UNC original");
         assert!(missing.is_empty());
         prepared.missing_sources = missing;
@@ -529,6 +596,38 @@ mod tests {
         assert_eq!(report["imported"], 1);
         assert_eq!(session.catalog.photos().count(), 1);
         assert!(!session.catalog.photo(PhotoId(1)).unwrap().local);
+    }
+
+    /// First-pass redirects remain refused, not missing or ordinary access failures.
+    #[cfg(windows)]
+    #[test]
+    fn first_pass_redirects_cannot_promote_a_known_photo() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        let f = crate::doc_path::network::tests::Fixture::new();
+        let Some(unc) = f.unc().filter(|p| std::fs::metadata(p).is_ok()) else {
+            lightcraft_testkit::skip!(System, "loopback administrative share unavailable");
+            return;
+        };
+        std::fs::write(f.0.join("unselected/photo.jpg"), b"fixture").unwrap();
+        junction::create(f.0.join("unselected"), f.0.join("selected/redirect")).unwrap();
+        let path = unc.join("selected/redirect/photo.jpg").to_string_lossy().into_owned();
+        let mut session = crate::Session::new();
+        let mut photo = Photo::new(PhotoId(1), Source::File { path: path.clone() }, "photo.jpg", "JPG", 1, 1, "2026-01-01T00:00:00");
+        photo.local = true;
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let before = session.catalog.to_snapshot();
+        let mut prepared = prepared_for(&session, &path, 4);
+        let originals = original_paths(&mut prepared.data, &AtomicBool::new(false)).unwrap();
+        assert!(originals.paths.is_empty());
+        assert!(originals.missing.is_empty());
+        assert!(originals.errors.is_empty());
+        assert!(matches!(prepared.data.photos[0].original, lightroom_catalog::Original::Refused(_)));
+        prepared.missing_sources = originals.missing;
+        let report = commit_prepared(&mut session, prepared).unwrap().report;
+        assert_eq!(report["missing"], serde_json::json!([]));
+        assert_eq!(report["failed"], serde_json::json!([]));
+        assert!(!report["warnings"].as_array().unwrap().is_empty());
+        assert_eq!(session.catalog.to_snapshot(), before);
     }
 
     /// A redirect discovered by the second pass must not promote an existing Local record.
