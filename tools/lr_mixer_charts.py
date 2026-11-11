@@ -3,8 +3,8 @@
 
     python3 tools/lr_mixer_charts.py charts OUT_DIR
         Writes linear DNG charts (OkLCh patches: 72 hues x 3 chroma x 3 lightness levels) with the settings embedded
-        as XMP: one neutral chart and every mixer band's Hue, Saturation and Luminance at -100, -75, -50, -25, 25,
-        50, 75 and 100.
+        as XMP: one neutral chart and every mixer band's Hue, Saturation and Luminance and Calibration's red, green
+        and blue Hue and Saturation at -100, -75, -50, -25, 25, 50, 75 and 100.
     (render every DNG through Camera Raw to a 16-bit Adobe RGB (1998) TIFF with the same file name)
     python3 tools/lr_mixer_charts.py table RENDER_DIR OUT_BIN
         Reads the renders and writes the response table of `lightcraft_pipeline::mixer_stage` (format below).
@@ -63,9 +63,13 @@ def chart():
     return img, patches
 
 
+CALIBRATION = ("RedHue", "RedSaturation", "GreenHue", "GreenSaturation", "BlueHue", "BlueSaturation")
+
+
 def sliders():
-    """(chart name stem, XMP key) per slider, in the table's order: mixer bands x (Hue, Sat, Lum)."""
-    return [(f"mix_{b}{p}", k + b) for b in BANDS for p, k in MIXER]
+    """(chart name stem, XMP key) per slider, in the table's order: mixer bands x (Hue, Sat, Lum), then the
+    calibration primaries x (Hue, Saturation)."""
+    return [(f"mix_{b}{p}", k + b) for b in BANDS for p, k in MIXER] + [(f"cal_{k}", k) for k in CALIBRATION]
 
 
 def variants():

@@ -340,7 +340,8 @@ impl FinishParams {
         let peak = s.hdr.peak();
         FinishParams {
             peak,
-            calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
+            // from V9 the primaries are measured in the mixer stage (`crate::mixer_stage`); the shadows tint stays
+            calib: if calibration && s.process.process() < Process::V9 { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
             rgb_tone: crate::default_tone::for_source(s, info).is_some(),

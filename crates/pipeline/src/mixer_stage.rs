@@ -1,5 +1,5 @@
-//! Process V9's mixer stage ([`lightcraft_develop::Process::V9`], `docs/mixer-stage.md`): the colour mixer,
-//! applied the way Lightroom applies it.
+//! Process V9's mixer stage ([`lightcraft_develop::Process::V9`], `docs/mixer-stage.md`): Calibration's red, green
+//! and blue primaries, then the colour mixer, applied the way Lightroom applies them.
 //!
 //! Measured on Camera Raw renders of synthetic OkLCh charts (`tools/lr_mixer_charts.py`):
 //! - Each slider's effect is a table of Camera Raw's measured response (`mixer_stage.bin`): per OkLab hue (72 bins of
@@ -7,13 +7,14 @@
 //!   change, at ±25, ±50, ±75 and ±100. Amounts in between are interpolated linearly, towards 0 below 25.
 //! - Lightroom's bands differ from V8's: their centres sit elsewhere on the hue circle (Orange at OkLab hue 50, not
 //!   82), Blue is wider and Red and Magenta narrower, and the response grows faster than linearly with the amount.
-//! - All 24 sliders act on the same input colour: their hue and lightness changes add and their chroma changes
-//!   multiply.
+//! - All 24 mixer sliders act on the same input colour: their hue and lightness changes add and their chroma changes
+//!   multiply. Calibration's 6 sliders combine the same way, in a pass of their own before the mixer.
 //! - Lightroom applies the mixer before the tone curves: predicting charts with a strong curve and the mixer from the
 //!   single-setting renders leaves 1.17 (OkLab × 100) in this order, 1.66 with the mixer after the curves.
 //!
 //! The stage runs after the tone map and Process V4's calibrated Contrast and Blacks, before the curve stage
-//! ([`crate::curve_stage`]). It replaces V8's mixer in [`crate::colorops::ColorOps`].
+//! ([`crate::curve_stage`]). It replaces V8's mixer in [`crate::colorops::ColorOps`] and V8's calibration matrix
+//! before the tone map (`FinishParams::calib`); Calibration's Shadows tint stays V8's.
 
 use lightcraft_color::perceptual::{lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
 use lightcraft_develop::{DevelopSettings, Process};
@@ -31,8 +32,11 @@ const OUTPUTS: usize = 3;
 pub const TABLE_LEN: usize = ROWS * OUTPUTS * HUES;
 /// The measured amounts.
 const AMOUNTS: [f32; 8] = [-100.0, -75.0, -50.0, -25.0, 25.0, 50.0, 75.0, 100.0];
-/// Sliders in the table: mixer bands (red … magenta) × (hue, saturation, luminance).
-const SLIDERS: usize = 24;
+/// Sliders in the table: mixer bands (red … magenta) × (hue, saturation, luminance), then the calibration
+/// primaries (red, green, blue) × (hue, saturation).
+const SLIDERS: usize = 30;
+/// The first calibration slider.
+const CALIBRATION: usize = 24;
 const HEADER: usize = 4 + 6 * 4 + AMOUNTS.len() * 4 + 12 * 4;
 const ROW_BYTES: usize = 4 + HUES;
 
@@ -45,7 +49,10 @@ pub struct MixerStage {
     pub chroma: [[f32; 3]; 3],
     /// Mean OkLab lightness of the measured lightness levels.
     pub light: [f32; 3],
-    pub table: Box<[f32; TABLE_LEN]>,
+    /// Calibration's red, green and blue primaries, applied first (`None`: all at 0).
+    pub calibration: Option<Box<[f32; TABLE_LEN]>>,
+    /// The mixer, applied to calibration's result (`None`: neutral).
+    pub table: Option<Box<[f32; TABLE_LEN]>>,
 }
 
 /// The little-endian `f32` at byte `off` of the table, if it is inside.
@@ -142,26 +149,37 @@ fn level(keys: &[f32; 3], x: f32) -> (usize, usize, f32) {
 }
 
 impl MixerStage {
-    /// The stage for `s`: `None` before V9, or when the mixer is neutral.
+    /// The stage for `s`: `None` before V9, or when the mixer and calibration's primaries are neutral.
     pub fn new(s: &DevelopSettings) -> Option<MixerStage> {
         if s.process.process() < Process::V9 {
             return None;
         }
         let (chroma, light) = levels()?;
         let sliders: Vec<(usize, f32)> = s.mixer.bands().iter().flat_map(|b| [b.hue, b.sat, b.lum]).enumerate().map(|(i, v)| (i, v as f32)).collect();
-        combine(&sliders).map(|table| MixerStage { chroma, light, table })
+        let primaries: Vec<(usize, f32)> = if s.section_enabled("calibration") {
+            s.calibration.primaries().iter().flat_map(|(h, sat)| [*h, *sat]).enumerate().map(|(i, v)| (CALIBRATION + i, v as f32)).collect()
+        } else {
+            Vec::new()
+        };
+        let (calibration, table) = (combine(&primaries), combine(&sliders));
+        (calibration.is_some() || table.is_some()).then_some(MixerStage { chroma, light, calibration, table })
     }
 
     /// The (hue shift, chroma factor, lightness change) for OkLCh `l`, `c`, `h`: linear in hue, bilinear in the chroma
     /// and lightness levels, clamped to the measured ones. Below the lowest measured chroma the lightness change fades
     /// out towards neutral.
     pub fn look(&self, l: f32, c: f32, h: f32) -> [f32; 3] {
+        self.table.as_deref().map_or([0.0, 1.0, 0.0], |t| self.look_in(t, l, c, h))
+    }
+
+    /// [`MixerStage::look`] in the combined table `table`.
+    fn look_in(&self, table: &[f32; TABLE_LEN], l: f32, c: f32, h: f32) -> [f32; 3] {
         let hd = h.to_degrees().rem_euclid(360.0) / 5.0;
         let i0 = (hd as usize) % HUES;
         let i1 = (i0 + 1) % HUES;
         let fh = hd - hd.floor();
         let (l0, l1, fl) = level(&self.light, l);
-        let at = |row: usize, out: usize, bin: usize| self.table.get((row * OUTPUTS + out) * HUES + bin).copied().unwrap_or(0.0);
+        let at = |row: usize, out: usize, bin: usize| table.get((row * OUTPUTS + out) * HUES + bin).copied().unwrap_or(0.0);
         // per lightness level: bilinear in its own chroma keys, the lightness change faded out below the lowest
         let per_level = |m: usize| {
             let keys = self.chroma.get(m).copied().unwrap_or([1.0; 3]);
@@ -180,11 +198,15 @@ impl MixerStage {
         std::array::from_fn(|k| a[k] * (1.0 - fl) + b[k] * fl)
     }
 
-    /// The colour mixer on linear Rec.2020 (through OkLCh).
+    /// Calibration's primaries, then the colour mixer, on linear Rec.2020 (through OkLCh).
     pub fn apply(&self, d: [f32; 3]) -> [f32; 3] {
-        let [l, c, h] = lab_to_lch(oklab_from_2020(d));
-        let [dh, k, dl] = self.look(l, c, h);
-        oklab_to_2020(lch_to_lab([(l + dl).max(0.0), c * k, h + dh]))
+        let mut lch = lab_to_lch(oklab_from_2020(d));
+        for t in [self.calibration.as_deref(), self.table.as_deref()].into_iter().flatten() {
+            let [l, c, h] = lch;
+            let [dh, k, dl] = self.look_in(t, l, c, h);
+            lch = [(l + dl).max(0.0), c * k, h + dh];
+        }
+        oklab_to_2020(lch_to_lab(lch))
     }
 }
 
@@ -234,14 +256,41 @@ mod tests {
     }
 
     #[test]
-    fn only_v8_with_a_mixer_gets_the_stage() {
+    fn only_v9_with_a_mixer_or_calibration_gets_the_stage() {
         assert!(MixerStage::new(&v9()).is_none());
         let mut s = v9();
+        s.calibration.shadows_tint = 30.0;
+        assert!(MixerStage::new(&s).is_none(), "the shadows tint keeps the earlier operator");
         s.calibration.blue_hue = -20.0;
-        assert!(MixerStage::new(&s).is_none(), "Calibration keeps the earlier operator");
+        let cal = MixerStage::new(&s).expect("calibration's primaries are measured");
+        assert!(cal.calibration.is_some() && cal.table.is_none());
         s.mixer.orange.sat = 30.0;
-        assert!(MixerStage::new(&s).is_some());
-        s.process = Process::V7.version();
+        let both = MixerStage::new(&s).expect("stage");
+        assert!(both.calibration.is_some() && both.table.is_some());
+        s.process = Process::V8.version();
+        assert!(MixerStage::new(&s).is_none());
+    }
+
+    #[test]
+    fn calibration_moves_its_primary_and_leaves_grey() {
+        let one = |f: &dyn Fn(&mut DevelopSettings)| {
+            let mut s = v9();
+            f(&mut s);
+            MixerStage::new(&s).expect("stage")
+        };
+        // Blue Saturation +60 makes a saturated blue more colourful and leaves a grey grey
+        let blue = colour(0.5, 0.12, 265.0);
+        let more = one(&|s| s.calibration.blue_sat = 60.0);
+        assert!(lch_of(more.apply(blue))[1] > lch_of(blue)[1] * 1.05, "{:?}", lch_of(more.apply(blue)));
+        let grey = [0.2f32; 3];
+        assert!(lch_of(more.apply(grey))[1] < 0.005);
+        // Red Hue +50 turns a red towards orange
+        let red = colour(0.55, 0.15, 25.0);
+        assert!(hue_shift(red, one(&|s| s.calibration.red_hue = 50.0).apply(red)) > 2.0);
+        // the section switch turns calibration off with it
+        let mut s = v9();
+        s.calibration.blue_sat = 60.0;
+        s.disabled_sections.push("calibration".into());
         assert!(MixerStage::new(&s).is_none());
     }
 

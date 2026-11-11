@@ -2,8 +2,8 @@
 
 > **Changes:** [revision history](#revision-history)
 
-Process V9 renders the colour mixer (Hue, Saturation and Luminance of the eight bands) the way Lightroom does, from
-measurements of Camera Raw's output. V1 to V8 are unchanged (`docs/process-versions.md`). The code is
+Process V9 renders the colour mixer (Hue, Saturation and Luminance of the eight bands) and Calibration's red, green
+and blue primaries (Hue and Saturation) the way Lightroom does, from measurements of Camera Raw's output. V1 to V8 are unchanged (`docs/process-versions.md`). The code is
 `crates/pipeline/src/mixer_stage.rs`, its measured table `crates/pipeline/src/mixer_stage.bin`, and the GPU kernel's
 `mixer_stage` in `crates/gpu/src/wgsl/finish.wgsl`.
 
@@ -30,30 +30,34 @@ fine colour charts:
 After the tone map and V4's calibrated Contrast and Blacks, before the curve stage ([curve-stage.md](curve-stage.md)):
 
 1. Convert linear Rec.2020 to OkLCh.
-2. Look up the response of every mixer slider that is set in Camera Raw's measured table: for the pixel's hue (72
+2. Calibration's primaries first: the lookup below with Calibration's six sliders. The mixer then acts on the colour
+   Calibration made.
+3. Look up the response of every mixer slider that is set in Camera Raw's measured table: for the pixel's hue (72
    bins of 5°), chroma and lightness, the hue shift, the relative chroma change and the lightness change. The table
    holds each slider at ±25, ±50, ±75 and ±100. Amounts in between are interpolated linearly, towards 0 below 25.
    Hue is interpolated linearly. Chroma and lightness are interpolated bilinearly between the three measured levels
    of each, and clamped outside them. Below the lowest measured chroma the lightness change fades out, so greys stay
    grey.
-3. All sliders act on the same input colour. Their hue and lightness changes add and their chroma changes multiply
+4. All mixer sliders act on the same input colour. Their hue and lightness changes add and their chroma changes multiply
    (charts with several sliders at once: closer than adding).
-4. Convert back to linear Rec.2020.
+5. Convert back to linear Rec.2020.
 
-V8's mixer in `ColorOps` is off under V9 (`ColorOps::mixer`), so the mixer applies once. With the mixer neutral the
-stage does not run. Calibration, Saturation, Vibrance, Point Color and B&W keep their V8 operators, after the
-curves as before. Colour Grading also runs after the curves, through its own measured V9 stage
+V8's mixer in `ColorOps` is off under V9 (`ColorOps::mixer`), and so is V8's calibration matrix before the tone map
+(`FinishParams::calib`), so each applies once. With the mixer and Calibration's primaries neutral the stage does not
+run. Calibration's Shadows tint, Saturation, Vibrance, Point Color and B&W keep their V8 operators, after the curves
+as before. Colour Grading also runs after the curves, through its own measured V9 stage
 ([grading-stage.md](grading-stage.md)).
 
 ## How it was measured
 
 `tools/lr_mixer_charts.py charts OUT_DIR` writes linear DNG charts of OkLCh patches (72 hues × 3 chroma levels × 3
 lightness levels, patches outside sRGB left out), with the settings in the DNG's XMP. It writes one neutral chart and
-each band's Hue, Saturation and Luminance at each measured amount (193 charts). The charts are original test data.
+each band's Hue, Saturation and Luminance and Calibration's red, green and blue Hue and Saturation at each measured
+amount (241 charts). The charts are original test data.
 Every chart was rendered through Camera Raw to a 16-bit Adobe RGB (1998) TIFF. Only that output is measured, and
 nothing of Adobe's is copied or shipped. `tools/lr_mixer_charts.py table RENDER_DIR OUT_BIN` reads each render's
 patches as OkLab, takes each setting's response against Camera Raw's own neutral chart, and writes
-`mixer_stage.bin` (format in the tool's docstring: per row a scale and 72 signed bytes, 394 KB). It needs numpy and
+`mixer_stage.bin` (format in the tool's docstring: per row a scale and 72 signed bytes, 493 KB). It needs numpy and
 tifffile (`tools/requirements-lr-tone-charts.txt`). Running the tool again reproduces the committed charts and the
 committed table byte for byte.
 
@@ -67,17 +71,26 @@ The order comes from separate check charts rendered while investigating: a stron
 settings. Predicting them from the single-setting renders leaves 1.17 (OkLab × 100) with the mixer before the curves
 and 1.66 with it after. Those check charts are not part of the tool.
 
+**Calibration on photos.** On the 5 held-out Panasonic Lumix DC-S9 photos (same method as
+[default-tone.md](default-tone.md)), with Lightroom's default curve and Highlights relative to the frame in place, the
+measured primaries take the mean a/b error over all edit groups from 0.59 to 0.56 (OkLab × 100) and tone from 2.44 to
+2.42. The Cool preset (Calibration Red Saturation +53, Blue Saturation +33) goes from 1.58 to 0.50.
+
 ## Limits
 
 - Camera Raw's process version 2012 controls (`crs:ProcessVersion` 11.0), one chart layout, sRGB-gamut patches. More
   saturated colours than the top measured chroma level take its response.
-- Calibration is not measured in. Its measured response matched the charts better than V8's matrix, but made the
-  held-out photos worse (OkLab colour error 1.316 to 1.331), so V9 keeps V8's Calibration.
+- Calibration is measured on the same generic charts, not on charts made with a camera's own colour data. In
+  Lightroom it moves the camera's primaries before the profile, so its response on a real camera can differ.
+  On the held-out photos it helps overall (below), but the Sunset preset gets worse in colour (0.48 to 0.72).
+  An earlier attempt, on the base render before Lightroom's default curve ([default-tone.md](default-tone.md)),
+  made the photos worse (1.316 to 1.331), so it was left out then.
 - Masks' Hue and Saturation keep the earlier operators.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Calibration's primaries measured too, applied before the mixer |
 | 2026-11-11 | patch | Colour Grading under V9 has its own measured stage, not V8's operator |
 | 2026-11-10 | minor | Process V9: the colour mixer measured against Lightroom, before the tone curves |

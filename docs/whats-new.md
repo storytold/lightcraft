@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Calibration behaves as in Lightroom (process V9)
+- The Red, Green and Blue primary Hue and Saturation sliders in Calibration now follow Lightroom's measured response
+  and act as strongly as Lightroom's, so presets that lean on Calibration (strong blue skies, warm skin) look as they
+  do in Lightroom. Shadows tint is unchanged. This is part of rendering process 9: photos you already edited keep
+  their look until you choose Photo ▸ Update to Current Process. See [The colour mixer](mixer-stage.md).
+
 ### Highlights behaves as in Lightroom (process V9)
 - Highlights now adapts to the photo, as Lightroom's does: on a photo with a wide range from its darkest to its
   brightest tones it recovers more and reaches further into the upper midtones, and on a flat photo it acts more

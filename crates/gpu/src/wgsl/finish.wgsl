@@ -198,14 +198,14 @@ fn mstage_look(keys: u32, l: f32, c: f32, h: f32) -> vec3<f32> {
     return r[0] * (1.0 - lb.f) + r[1] * lb.f;
 }
 
-// `MixerStage::apply`: the colour mixer, through OkLCh.
-fn mixer_stage(d: vec3<f32>) -> vec3<f32> {
+// One pass of `MixerStage::apply` (calibration or the mixer), through OkLCh: the keys and table at `keys` in `aux`.
+fn mixer_stage(d: vec3<f32>, keys: u32) -> vec3<f32> {
     let lab = oklab(d);
     let l = lab.x;
     let c = sqrt(lab.y * lab.y + lab.z * lab.z);
     // atan2(0, 0) is undefined in WGSL; the CPU's gives 0
     let h = select(atan2(lab.z, lab.y), 0.0, c == 0.0);
-    let r = mstage_look(pu(F_MSTAGE_OFF), l, c, h);
+    let r = mstage_look(keys, l, c, h);
     let h2 = h + r.x;
     let c2 = c * r.y;
     return oklab_inv(vec3<f32>(max(l + r.z, 0.0), c2 * cos(h2), c2 * sin(h2)));
@@ -874,7 +874,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- process V9: the colour mixer, then Whites and the tone curves
     if (pu(F_MSTAGE) != 0u) {
-        d = mixer_stage(d);
+        // calibration's primaries first, then the mixer (`MixerStage::apply`)
+        if (pu(F_MSTAGE_CAL) != 0u) {
+            d = mixer_stage(d, pu(F_MSTAGE_CAL_OFF));
+        }
+        if (pu(F_MSTAGE_MIX) != 0u) {
+            d = mixer_stage(d, pu(F_MSTAGE_OFF));
+        }
     }
     if (pu(F_STAGE) != 0u) {
         d = curve_stage(d);

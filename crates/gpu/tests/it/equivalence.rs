@@ -871,6 +871,10 @@ fn mixer_stage_matches() {
     s.calibration.blue_sat = 60.0;
     s.calibration.shadows_tint = 30.0;
     check("V9 mixer and calibration", &src, &raw, &s, &req);
+    let mut c = v9();
+    c.calibration.green_hue = -30.0;
+    c.calibration.red_sat = 50.0;
+    check("V9 calibration alone", &src, &raw, &c, &req);
     s.curve.master = vec![Point { x: 0.0, y: 0.05 }, Point { x: 0.5, y: 0.6 }, Point { x: 1.0, y: 0.95 }];
     s.color.saturation = 20.0;
     check("V9 colour stage, curves, Saturation", &src, &raw, &s, &req);

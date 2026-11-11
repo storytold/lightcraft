@@ -28,6 +28,9 @@ const FIELDS: &[(&str, usize)] = &[
     ("STAGE_REFINE", 1),
     ("MSTAGE", 1),
     ("MSTAGE_OFF", 1),
+    ("MSTAGE_MIX", 1),
+    ("MSTAGE_CAL", 1),
+    ("MSTAGE_CAL_OFF", 1),
     ("MGRADE", 1),
     ("MGRADE_OFF", 1),
     ("RGB_TONE", 1),
@@ -225,12 +228,18 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         }
         aux.extend_from_slice(&l.v);
     }
-    // process V9's mixer stage: its 9 chroma and 3 lightness keys, then its table
-    let mstage_off = aux.len();
-    if let Some(cs) = &fp.mixer_stage {
+    // process V9's mixer stage: calibration's table, then the mixer's, each after the 9 chroma and 3 lightness keys
+    let mstage_cal_off = aux.len();
+    if let Some((cs, t)) = fp.mixer_stage.as_ref().and_then(|cs| cs.calibration.as_deref().map(|t| (cs, t))) {
         aux.extend(cs.chroma.iter().flatten());
         aux.extend_from_slice(&cs.light);
-        aux.extend_from_slice(&cs.table[..]);
+        aux.extend_from_slice(&t[..]);
+    }
+    let mstage_off = aux.len();
+    if let Some((cs, t)) = fp.mixer_stage.as_ref().and_then(|cs| cs.table.as_deref().map(|t| (cs, t))) {
+        aux.extend(cs.chroma.iter().flatten());
+        aux.extend_from_slice(&cs.light);
+        aux.extend_from_slice(&t[..]);
     }
     // process V9's Colour Grading: the Luminance curve, then per wheel its tint, damping and profile
     let mgrade_off = aux.len();
@@ -293,6 +302,9 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("STAGE_REFINE", fp.curve_stage.as_ref().map_or(1.0, |c| c.refine));
     p.b("MSTAGE", fp.mixer_stage.is_some());
     p.u("MSTAGE_OFF", mstage_off as u32);
+    p.b("MSTAGE_MIX", fp.mixer_stage.as_ref().is_some_and(|cs| cs.table.is_some()));
+    p.b("MSTAGE_CAL", fp.mixer_stage.as_ref().is_some_and(|cs| cs.calibration.is_some()));
+    p.u("MSTAGE_CAL_OFF", mstage_cal_off as u32);
     // 0: off, else 1 + the number of wheels with a tint
     p.u("MGRADE", mgrade.map_or(0, |g| 1 + g.wheels.len() as u32));
     p.u("MGRADE_OFF", mgrade_off as u32);
