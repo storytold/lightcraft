@@ -656,6 +656,25 @@ fn an_over_budget_brush_mask_is_reported() {
     assert!(brush_over_budget(&vec![far; 10], &frame(w, h), w, h));
 }
 
+/// Strokes that fill the budget exactly are not over it; one more dab is.
+#[test]
+fn a_brush_mask_that_exactly_fills_the_budget_is_not_over_it() {
+    let (w, h) = (64, 64);
+    let stroke = |x: f64| BrushStroke { points: vec![Point::new(0.0, 0.5), Point::new(x, 0.5)], size: 0.05, ..Default::default() };
+    // a stroke whose dab count divides the budget evenly
+    let (s, m) = (0..14_000)
+        .map(|i| stroke(6.0 + f64::from(i) * 0.001))
+        .map(|s| {
+            let m = brush_dabs(&s, &frame(w, h), w, h).dabs.len();
+            (s, m)
+        })
+        .find(|(_, m)| *m >= 500 && MAX_STROKE_DABS.is_multiple_of(*m))
+        .expect("a stroke whose dabs divide the budget");
+    let k = MAX_STROKE_DABS / m;
+    assert!(!brush_over_budget(&vec![s.clone(); k], &frame(w, h), w, h), "{k} strokes of {m} dabs fill the budget exactly");
+    assert!(brush_over_budget(&vec![s; k + 1], &frame(w, h), w, h), "one more stroke is over it");
+}
+
 #[test]
 fn intersect_first_component_selects_its_shape() {
     let f = frame(100, 100);

@@ -833,7 +833,11 @@ pub fn brush_over_budget(strokes: &[BrushStroke], frame: &Frame, w: usize, h: us
         }
         let n = brush_dabs_within(s, frame, w, h, room).dabs.len();
         if n >= room {
-            return true;
+            // the budget is exactly filled, or the stroke was cut off at it: one more dab says which (a stroke
+            // already at its own cap [`MAX_STROKE_DABS`] is cut off, whatever it would have held)
+            if room >= MAX_STROKE_DABS || brush_dabs_within(s, frame, w, h, room + 1).dabs.len() > room {
+                return true;
+            }
         }
         room -= n;
     }

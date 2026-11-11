@@ -214,7 +214,7 @@ pub fn check_brush_budget(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
     for m in s.masks.iter().filter(|m| brush(m)) {
         for c in &m.components {
             if let lightcraft_develop::MaskShape::Brush { strokes } = &c.shape
-                && masks::brush_over_budget(strokes, &p.frame, p.w, p.h)
+                && masks::brush_over_budget(strokes, &p.frame.for_mask(m.on_photo), p.w, p.h)
             {
                 return Err(format!("mask \"{}\": the brush strokes hold more than {} dabs at this size", m.name, masks::MAX_STROKE_DABS));
             }
