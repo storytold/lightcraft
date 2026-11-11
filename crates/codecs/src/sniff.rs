@@ -75,7 +75,8 @@ impl Format {
             Format::Jxl => Some("built without the `jxl` feature"),
             #[cfg(not(feature = "heif"))]
             Format::Heif => Some(crate::heif::NOT_IN_BUILD),
-            Format::Avif => Some("no pure-Rust, permissively licensed AV1 decoder yet"),
+            #[cfg(target_arch = "wasm32")]
+            Format::Avif => Some("AVIF isn't decoded in the web build"),
             Format::RawTiffLike | Format::RawOther => Some("camera raw: decode with lightcraft-raw"),
             _ => None,
         }

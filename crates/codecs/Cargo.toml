@@ -13,6 +13,10 @@ lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
 lightcraft-heif = { workspace = true, optional = true }
+# AVIF decode: clean-room pure-Rust AV1 decoder (MIT OR Apache-2.0, no unsafe). Native only: on
+# wasm32 (panic = abort) a malformed file could take the page down instead of becoming an error,
+# so the web build refuses AVIF.
+filmcraft-av1 = { git = "https://github.com/storytold/filmcraft", rev = "de529c88f4948d0803bef746a325707f2671a71d" }
 serde = { workspace = true }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
