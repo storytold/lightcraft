@@ -119,7 +119,9 @@ such as a print saved inside a plain collection, or one whose parent is system-o
 nearest collection set above it, or the top level, and the result names it under warnings (issues #2165, #2532).
 Quick Collection and unsaved creations are system-only and not imported; publish collections live in tables the
 importer doesn't read. A collection the catalog lists twice imports once; a different collection with the id of an
-earlier one is left out with a warning naming both, and the photos listed under that id go to the first. Archived
+earlier one is left out with a warning naming both, and the photos listed under that id go to the first. A
+collection member whose `collection` is not a whole number (missing, NULL, text or a fraction) joins no album, with
+one warning; it does not join the collection whose id is 0 (or 11 for 11.5). Archived
 history and snapshots are source data, not native LightCraft history yet.
 A Custom white balance on a raw LightCraft develops relative to its as-shot look (ARW, NEF, RW2,
 RAF, CR3, CR2, PEF, SRW; Lightroom names them all `RAW`) can't be taken as Kelvin: the catalog keeps no
