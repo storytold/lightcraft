@@ -92,6 +92,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | patch | LRC-LIB-PEOPLE: ignored faces use catalog format 14 after Lens Blur took format 13 on main; the upgrade preserves Lens Blur, shared masks and earlier ignore decisions; no ranked gap/count change |
 | 2026-11-09 | patch | LRC-LIB-PEOPLE: require reviewed boxes in every ignore action, make retries no-ops, expose retained metadata/page/error details, follow changed photos in a derived ignored-face index, and cover literal legacy masks/faces plus Detect Faces catalog-only history; partial status and counts unchanged |
 | 2026-11-01 | minor | Gap 13: Lightroom catalog backup zips import directly, and a backup of an imported catalog adds no collection twice (#2592); the gap stays open |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |

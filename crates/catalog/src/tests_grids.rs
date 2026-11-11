@@ -168,7 +168,7 @@ fn v12_shared_grids_and_faces_upgrade_without_losing_either() {
             }
             let (mut j, mut loaded, report) = open(&m);
             assert_eq!(report.upgraded_from, Some(12));
-            assert!(snapshot_version(&m) > 12, "main's format-12 reader must refuse ignored-face snapshots");
+            assert!(snapshot_version(&m) > 13, "main's format-13 reader must refuse ignored-face snapshots");
             assert_eq!(loaded.to_snapshot(), live.to_snapshot());
             let snapshot = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
             assert_eq!(snapshot.match_indices(&blob).count(), 1, "the upgrade retains shared grids");

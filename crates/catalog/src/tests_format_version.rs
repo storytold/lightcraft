@@ -33,8 +33,8 @@ fn snapshot_version(m: &MemStore) -> u64 {
 #[test]
 fn frozen_legacy_face_and_mask_payloads_upgrade_and_replay() {
     const BODY: &str = r#"{"photos":{"1":{"id":1,"source":{"type":"demo","scene":1},"file_name":"old.jpg","format":"JPEG","width":4,"height":3,"imported":"2026-01-01","meta":{"regions":[{"rect":{"x0":0.1,"y0":0.2,"x1":0.4,"y1":0.6},"kind":"Face","name":"Legacy person","description":"retained"}]},"develop":{"masks":[{"id":1,"components":[{"shape":{"kind":"object","hint":[],"seg":{"side":1,"data":"YwAA"}}}]}]}}},"albums":{},"next_photo":2,"next_album":1}"#;
-    for version in [9, 10, 11, 12] {
-        let body = if version == 12 {
+    for version in [9, 10, 11, 12, 13] {
+        let body = if version >= 12 {
             BODY.replace("\"data\":\"YwAA\"", "\"grid\":0").replacen("{\"photos\"", "{\"grids\":[\"YwAA\"],\"photos\"", 1)
         } else {
             BODY.to_string()
@@ -69,6 +69,54 @@ fn frozen_legacy_face_and_mask_payloads_upgrade_and_replay() {
     }
 }
 
+/// Format 13 belongs to Lens Blur on main. It must upgrade before an ignored face is written,
+/// retaining both Lens Blur settings and face metadata (including earlier face-branch v13 data).
+#[test]
+fn v13_lens_blur_and_faces_upgrade_before_ignored_regions_are_written() {
+    const BODY: &str = r#"{"photos":{"1":{"id":1,"source":{"type":"demo","scene":1},"file_name":"old.jpg","format":"JPEG","width":4,"height":3,"imported":"2026-01-01","meta":{"regions":[{"rect":{"x0":0.1,"y0":0.2,"x1":0.4,"y1":0.6},"kind":"Face","name":"Legacy person","description":"retained"}]},"develop":{"lens_blur":{"enabled":true,"amount":42,"boost":18,"focus_mask":1,"transition":27},"masks":[{"id":1,"adjust":{"lens_blur":31,"lens_blur_boost":17},"components":[{"shape":{"kind":"object","hint":[],"seg":{"side":1,"grid":0}}}]}]}}},"grids":["YwAA"],"albums":{},"next_photo":2,"next_album":1}"#;
+    for kind in [lightcraft_meta::RegionKind::Face, lightcraft_meta::RegionKind::IgnoredFace] {
+        let body = if kind == lightcraft_meta::RegionKind::IgnoredFace {
+            BODY.replace("\"kind\":\"Face\"", "\"kind\":\"IgnoredFace\"")
+        } else {
+            BODY.to_string()
+        };
+        let store = MemStore::new();
+        store.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":13,\"seq\":0,\"catalog\":{body}}}").into_bytes());
+        let (mut journal, mut catalog, report) = Journal::open(Box::new(store.clone())).unwrap();
+        assert_eq!(report.upgraded_from, Some(13));
+        assert!(snapshot_version(&store) > 13, "main's Lens Blur reader must refuse ignored-face catalogs");
+        let photo = catalog.photo(PhotoId(1)).unwrap();
+        assert_eq!(photo.meta.regions[0].kind, kind);
+        assert_eq!(photo.meta.regions[0].name.as_deref(), Some("Legacy person"));
+        assert_eq!(photo.meta.regions[0].description.as_deref(), Some("retained"));
+        assert_eq!(photo.meta.regions[0].rect, lightcraft_geom::Rect { x0: 0.1, y0: 0.2, x1: 0.4, y1: 0.6 });
+        let settings = photo.develop.clone();
+        assert!(settings.lens_blur.enabled);
+        assert_eq!(
+            (settings.lens_blur.amount, settings.lens_blur.boost, settings.lens_blur.focus_mask, settings.lens_blur.transition),
+            (42.0, 18.0, Some(1), 27.0)
+        );
+        assert_eq!((settings.masks[0].adjust.lens_blur, settings.masks[0].adjust.lens_blur_boost), (31.0, 17.0));
+        let mut logits = Vec::new();
+        settings.visit_seg_masks(&mut |seg| logits.push(seg.logits()));
+        assert_eq!(logits, vec![Some(vec![0.0])]);
+        let mut meta = photo.meta.clone();
+        meta.regions[0].kind = lightcraft_meta::RegionKind::IgnoredFace;
+        let op = Op::SetMeta { id: PhotoId(1), meta: Box::new(meta.clone()) };
+        catalog.apply(op.clone()).unwrap();
+        journal.append(&[op]).unwrap();
+        drop(journal);
+        let (mut journal, replayed, report) = Journal::open(Box::new(store.clone())).unwrap();
+        assert_eq!(report.replayed, 1);
+        assert_eq!(replayed.photo(PhotoId(1)).unwrap().meta, meta);
+        assert_eq!(replayed.photo(PhotoId(1)).unwrap().develop, settings);
+        journal.snapshot(&replayed).unwrap();
+        drop(journal);
+        let (_, compacted, _) = Journal::open(Box::new(store)).unwrap();
+        assert_eq!(compacted.to_snapshot(), replayed.to_snapshot());
+    }
+}
+
 /// Existing catalogs upgrade before accepting ignored regions, retaining face metadata.
 #[test]
 fn legacy_faces_upgrade_without_losing_assignments_or_boxes() {
@@ -82,7 +130,7 @@ fn legacy_faces_upgrade_without_losing_assignments_or_boxes() {
         description: Some("retained".into()),
     }];
     base.apply(Op::SetMeta { id, meta: Box::new(meta.clone()) }).unwrap();
-    for version in [9, 10, 11, 12] {
+    for version in [9, 10, 11, 12, 13] {
         let m = MemStore::new();
         m.set(
             SNAPSHOT,
@@ -91,7 +139,7 @@ fn legacy_faces_upgrade_without_losing_assignments_or_boxes() {
         let (mut journal, mut catalog, report) = Journal::open(Box::new(m.clone())).unwrap();
         assert_eq!(report.upgraded_from, Some(version));
         assert_eq!(snapshot_version(&m), u64::from(VERSION));
-        assert!(snapshot_version(&m) > 12, "older builds must refuse the format before decoding ignored faces");
+        assert!(snapshot_version(&m) > 13, "older builds must refuse the format before decoding ignored faces");
         assert_eq!(catalog.photo(id).unwrap().meta, meta);
 
         let mut ignored = meta.clone();
@@ -322,10 +370,10 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v13: the persisted `RegionKind::IgnoredFace` value in metadata regions (v12: `Catalog.grids`
-    /// and `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
-    /// `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 13;
+    /// v14: the persisted `RegionKind::IgnoredFace` value in metadata regions (v13: Lens Blur
+    /// in develop settings and mask adjustments; v12: `Catalog.grids` and `SegMask.grid`; v11: `EmbeddedLens.source`;
+    /// v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 14;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

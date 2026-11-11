@@ -53,7 +53,7 @@
   selection controls and a face's right-click **Ignore face** action. Ignored faces stay out of recognition suggestions
   across launches; their photos, face boxes and names are retained. **Ignored faces…** in People lets you review and
   restore them, without a recognition model. Each ignore or restore batch is one Undo step and does not write XMP.
-  Existing libraries upgrade to catalog format 13; older builds cannot open an upgraded library.
+  Existing libraries upgrade to catalog format 14; older builds cannot open an upgraded library.
 
 ## 2026-11-02
 

@@ -1230,7 +1230,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Ignore Faces",
             [],
             None,
-            "{faces: [{photo, index, rect}], ignored?: boolean (default true)} → {changed, ignored} — ignore or restore 1..100000 reviewed faces atomically; rect must equal catalog geometry, not the display crop. Duplicate identities count once; already-desired states succeed without an undo step. Stale or invalid targets reject the whole batch. Changes are one catalog-only undo step; originals and sidecars stay untouched. Requires catalog format 13; older libraries upgrade on open. Restore large libraries in page-sized batches from faces.ignored",
+            "{faces: [{photo, index, rect}], ignored?: boolean (default true)} → {changed, ignored} — ignore or restore 1..100000 reviewed faces atomically; rect must equal catalog geometry, not the display crop. Duplicate identities count once; already-desired states succeed without an undo step. Stale or invalid targets reject the whole batch. Changes are one catalog-only undo step; originals and sidecars stay untouched. Requires catalog format 14; older libraries upgrade on open. Restore large libraries in page-sized batches from faces.ignored",
             super::always,
             ignore_faces
         ),

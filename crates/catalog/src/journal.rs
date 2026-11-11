@@ -64,7 +64,8 @@
 //! | 10 | masks stay on the photo under lens corrections, Upright and Transform | `Mask.on_photo` (develop settings) |
 //! | 11 | lens database profiles named in the Optics panel | `EmbeddedLens.source` |
 //! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
-//! | 13 | persistent ignored faces | `RegionKind::IgnoredFace` |
+//! | 13 | Lens Blur | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
+//! | 14 | persistent ignored faces | `RegionKind::IgnoredFace` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -89,7 +90,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

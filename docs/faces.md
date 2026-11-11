@@ -368,7 +368,7 @@ a recognition model installed. Controls and review counts follow the selected in
   is its field (or a top-level parameter when `target` is absent). MCP tools preserve these
   details in `structuredContent`, including per-step failures in `command_batch`.
 
-These commands require a build supporting catalog format 13 (discover them through
+These commands require a build supporting catalog format 14 (discover them through
 `engine.commands` / MCP `command_list`); they are not available in older builds.
 
 Select all in ignored-face review selects the current page only. On a person's page it selects the displayed confirmed faces (up to 5,000), not hidden results.
@@ -379,8 +379,9 @@ Face naming, ignore/restore, and face-box edits remain catalog-only through
 Undo and Redo, even when automatic XMP writing is enabled. They do not mark photos as developed
 or add develop-history entries. Manual Detect Faces uses the same catalog-only commit/history policy. The ignored-face review refreshes for metadata/membership changes (including direct-session commands and deletion/restoration) and indexed-crop changes; unrelated ratings do not refetch the page. Unrelated changes preserve the page and selection; changed review entries clear selections so stale region indices cannot be reused. Reading XMP retains local ignored regions, even when the foreign region list omits them; matching boxes keep their original ignored data. Mixed commands and merged Undo/Redo write XMP only for photos with ordinary metadata or develop changes; photos with face-only changes keep their sidecars untouched. If both kinds of changes affect the same photo, its ordinary change still triggers the normal metadata write.
 
-Ignored faces require **catalog format 13**. Opening an existing library (format 12 or earlier) upgrades its
-catalog automatically, preserving existing face assignments and boxes. Older builds then
+Ignored faces require **catalog format 14**, following main's format 13 for Lens Blur. Opening an
+existing library (format 13 or earlier) upgrades its catalog automatically, preserving Lens Blur
+settings, existing face assignments and boxes, and ignore decisions from earlier feature builds. Older builds then
 refuse the newer format instead of trying to decode it as an older catalog.
 
 **Show photos** puts their photos in the grid; **‹ People** or Escape goes back. "More" only holds faces the scan has
