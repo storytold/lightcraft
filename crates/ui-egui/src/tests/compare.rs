@@ -485,6 +485,110 @@ fn survey_command_click_takes_the_photo_out() {
     assert_eq!((sel(&h), active(&h)), (vec![a], Some(a)), "the last photo stays in the survey");
 }
 
+/// A photo taken out of the survey leaves the others to glide to their new cells, so it shows
+/// which photo went where: a frame later a tile is between its old and new place, then it lands.
+#[test]
+fn survey_tiles_glide_to_their_new_cells() {
+    let mut h = demo();
+    let [a, _, c] = survey_of_three(&mut h);
+    let tile = |h: &Headless| h.app.widgets.iter().find(|(w, _)| *w == format!("cull:{c}")).map(|(_, r)| *r).expect("the tile is laid out");
+    let before = tile(&h);
+    h.app.run("library.select", json!({"ids": [a], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    let moving = tile(&h);
+    assert!(h.app.survey_motion.moving(h.time()), "the tiles are on their way");
+    h.settle(SETTLE);
+    let after = tile(&h);
+    assert!(!h.app.survey_motion.moving(h.time()));
+    assert_ne!(before, after, "the photo has a new cell");
+    assert!(moving != before && moving != after, "between {before:?} and {after:?}: {moving:?}");
+}
+
+/// A photo that joins the survey makes room: the tiles already there glide to their new cells too.
+#[test]
+fn survey_tiles_glide_when_a_photo_joins() {
+    let mut h = demo();
+    let ids = survey_of_three(&mut h);
+    let joining = h.app.session.visible_cloned().iter().map(|p| p.0).find(|p| !ids.contains(p)).expect("a fourth photo");
+    let tile = |h: &Headless, id: u64| h.app.widgets.iter().find(|(w, _)| *w == format!("cull:{id}")).map(|(_, r)| *r).expect("the tile is laid out");
+    let before = ids.map(|id| tile(&h, id));
+    h.app.run("library.select", json!({"ids": [joining], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    let moving = ids.map(|id| tile(&h, id));
+    assert!(h.app.survey_motion.moving(h.time()), "the tiles are on their way");
+    h.settle(SETTLE);
+    let after = ids.map(|id| tile(&h, id));
+    let moved: Vec<usize> = (0..3).filter(|&i| before[i] != after[i]).collect();
+    assert!(!moved.is_empty(), "a photo joining changes the grid: {before:?} → {after:?}");
+    for i in moved {
+        assert!(moving[i] != before[i] && moving[i] != after[i], "tile {i} between {:?} and {:?}: {:?}", before[i], after[i], moving[i]);
+    }
+}
+
+/// A photo that joins takes its cell at once, so it asks for its own render while the others are
+/// still gliding (it doesn't wait on the thumbnail until they land).
+#[test]
+fn a_photo_that_joins_renders_while_the_others_glide() {
+    let mut h = demo();
+    let ids = survey_of_three(&mut h);
+    let joining = h.app.session.visible_cloned().into_iter().find(|p| !ids.contains(&p.0)).expect("a fourth photo");
+    h.app.run("library.select", json!({"ids": [joining.0], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    let now = h.time();
+    assert!(h.app.survey_motion.moving(now), "the others are on their way");
+    assert!(!h.app.survey_motion.gliding(joining, now), "the photo that joined stays put");
+    let slot = h.app.survey_motion.slot(joining).expect("the photo that joined has a slot");
+    assert!(h.app.renderer.wanted(crate::render::Slot::Compare(slot)).is_some(), "its render is asked for");
+}
+
+/// Photo ids are local to a library: opening another one forgets the survey's tiles, so a photo
+/// there with the same id doesn't glide from a cell of the library left.
+#[test]
+fn opening_another_library_forgets_the_survey_tiles() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-survey-switch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut h = demo();
+    let ids = survey_of_three(&mut h);
+    let tracked = |h: &Headless| ids.iter().filter(|id| h.app.survey_motion.tracks(lightcraft_catalog::PhotoId(**id))).count();
+    assert_eq!(tracked(&h), 3);
+    let r = h.app.run("app.openLibrary", json!({"path": dir.join("second").to_string_lossy()}));
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(tracked(&h), 0, "nothing of the library left is remembered");
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every surveyed photo gets its own render, and keeps it when another photo leaves the survey
+/// (each photo keeps its render slot, so the tiles that move don't fall back to thumbnails).
+#[test]
+fn survey_tiles_keep_their_renders_when_a_photo_leaves() {
+    let mut h = demo();
+    let [a, b, c] = survey_of_three(&mut h);
+    let rendered = |h: &Headless, ids: &[u64]| {
+        ids.iter().all(|id| h.app.renderer.textures.iter().any(|(s, t)| matches!(s, crate::render::Slot::Compare(_)) && t.photo.0 == *id))
+    };
+    assert!(h.step_until(SETTLE, |h| rendered(h, &[a, b, c])), "each tile shows its render");
+    let slot_of = |h: &Headless, id: u64| {
+        h.app.renderer.textures.iter().find(|(s, t)| matches!(s, crate::render::Slot::Compare(_)) && t.photo.0 == id).map(|(s, _)| *s)
+    };
+    let c_slot = slot_of(&h, c).expect("c is rendered");
+    let c_tex = h.app.renderer.textures.get(&c_slot).map(|t| t.tex.id()).expect("c's texture");
+    h.app.run("library.select", json!({"ids": [a], "mode": "toggle"})).unwrap();
+    h.step();
+    h.step();
+    assert!(h.app.survey_motion.moving(h.time()));
+    let drawn = h.view.painted_shapes().iter().any(|s| match s {
+        egui::epaint::Shape::Rect(r) => r.fill_texture_id() == c_tex,
+        egui::epaint::Shape::Mesh(m) => m.texture_id == c_tex,
+        _ => false,
+    });
+    assert!(drawn, "c's render is drawn while it moves, not its thumbnail");
+    assert!(h.step_until(SETTLE, |h| rendered(h, &[b, c])));
+}
+
 /// Hover photo `id`'s survey tile, as a person does, so its × appears; then click the × in its corner.
 fn click_x(h: &mut Headless, id: u64) {
     let name = format!("cull:{id}");
