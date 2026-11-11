@@ -119,11 +119,11 @@ fn scan(s: &str) -> Result<Scan, XmpError> {
                 let mut seen = HashSet::new();
                 for a in e.attributes().with_checks(false) {
                     let a = a.map_err(|e| XmpError::Xml(e.to_string()))?;
-                    let k = String::from_utf8_lossy(a.key.as_ref()).into_owned();
+                    let k = a.key.as_ref().to_owned();
                     if !seen.insert(k.clone()) {
                         return Err(XmpError::Xml(format!("repeated attribute {k}")));
                     }
-                    let v = String::from_utf8_lossy(&a.value).into_owned();
+                    let v = a.value.clone().into_owned();
                     if k == "xmlns" {
                         scope.push((String::new(), unescape_attr(&v)));
                     } else if let Some(p) = k.strip_prefix("xmlns:") {
@@ -132,7 +132,7 @@ fn scan(s: &str) -> Result<Scan, XmpError> {
                     raw_attrs.push((k, v));
                 }
                 scopes.push(scope);
-                let raw_name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let raw_name = e.name().as_ref().to_owned();
                 let name = canonical_name(&raw_name, &scopes, &mut opaque_budget)?;
                 let kind = match stack.last() {
                     Some(Kind::Rdf) if name == "rdf:Description" => {

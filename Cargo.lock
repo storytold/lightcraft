@@ -3874,7 +3874,7 @@ version = "0.18.0"
 dependencies = [
  "lightcraft-develop",
  "lightcraft-geom",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
 ]
 
 [[package]]
@@ -3913,7 +3913,7 @@ dependencies = [
  "lightcraft-heif",
  "lightcraft-tiff",
  "proptest",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
  "serde",
  "serde_json",
 ]

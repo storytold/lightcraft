@@ -110,7 +110,7 @@ pub fn parse_gpx(s: &str) -> Result<Tracklog, GpxError> {
         let ev = reader.read_event().map_err(|e| GpxError::Xml(e.to_string()))?;
         match ev {
             Event::Start(ref e) | Event::Empty(ref e) => {
-                let name = local(e.name().as_ref()).to_vec();
+                let name = local(e.name().as_ref().as_bytes()).to_vec();
                 let parent = path.last().map(Vec::as_slice);
                 if path.is_empty() {
                     if seen_root {
@@ -125,17 +125,13 @@ pub fn parse_gpx(s: &str) -> Result<Tracklog, GpxError> {
                     b"trkpt" if parent == Some(b"trkseg") => {
                         let mut p = Pending::default();
                         for a in e.attributes().with_checks(false).flatten() {
-                            match local(a.key.as_ref()) {
+                            match local(a.key.as_ref().as_bytes()) {
                                 b"lat" => {
-                                    let v = a
-                                        .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, reader.decoder())
-                                        .map_err(|e| GpxError::Xml(e.to_string()))?;
+                                    let v = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map_err(|e| GpxError::Xml(e.to_string()))?;
                                     p.lat = v.trim().parse().ok();
                                 }
                                 b"lon" => {
-                                    let v = a
-                                        .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, reader.decoder())
-                                        .map_err(|e| GpxError::Xml(e.to_string()))?;
+                                    let v = a.normalized_value(quick_xml::XmlVersion::Implicit1_0).map_err(|e| GpxError::Xml(e.to_string()))?;
                                     p.lon = v.trim().parse().ok();
                                 }
                                 _ => {}
@@ -155,13 +151,13 @@ pub fn parse_gpx(s: &str) -> Result<Tracklog, GpxError> {
                     finish_point(&mut log, pt.take(), segment)?;
                 }
             }
-            Event::Text(t) => text.push_str(&t.decode().map_err(|e| GpxError::Xml(e.to_string()))?),
-            Event::CData(t) => text.push_str(&String::from_utf8_lossy(&t)),
+            Event::Text(t) => text.push_str(&t),
+            Event::CData(t) => text.push_str(&t),
             Event::GeneralRef(r) => {
                 if let Some(c) = r.resolve_char_ref().map_err(|e| GpxError::Xml(e.to_string()))? {
                     text.push(c);
                 } else {
-                    let name = r.decode().map_err(|e| GpxError::Xml(e.to_string()))?;
+                    let name: &str = &r;
                     let entity = format!("&{name};");
                     let value = quick_xml::escape::unescape(&entity).map_err(|e| GpxError::Xml(e.to_string()))?;
                     text.push_str(value.as_ref());

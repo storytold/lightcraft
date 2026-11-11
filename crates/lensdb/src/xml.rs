@@ -94,13 +94,8 @@ pub(crate) fn parse(s: &str) -> Result<Node, Error> {
                 if count > MAX_NODES || stack.len() > MAX_DEPTH {
                     return Err(Error::TooLarge);
                 }
-                let attrs = e
-                    .attributes()
-                    .with_checks(false)
-                    .flatten()
-                    .map(|a| (String::from_utf8_lossy(a.key.as_ref()).into_owned(), unescape(&String::from_utf8_lossy(&a.value))))
-                    .collect();
-                let node = Node { name: String::from_utf8_lossy(e.name().as_ref()).into_owned(), attrs, ..Default::default() };
+                let attrs = e.attributes().with_checks(false).flatten().map(|a| (a.key.as_ref().to_owned(), unescape(&a.value))).collect();
+                let node = Node { name: e.name().as_ref().to_owned(), attrs, ..Default::default() };
                 if matches!(ev, Event::Empty(_)) {
                     if let Some(p) = stack.last_mut() {
                         p.children.push(node);
@@ -112,16 +107,16 @@ pub(crate) fn parse(s: &str) -> Result<Node, Error> {
             Event::End(_) => close(&mut stack),
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&t.decode().map_err(|e| Error::Xml(e.to_string()))?);
+                    top.text.push_str(&t);
                 }
             }
             Event::CData(t) => {
                 if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&String::from_utf8_lossy(&t));
+                    top.text.push_str(&t);
                 }
             }
             Event::GeneralRef(r) => {
-                if let (Some(top), Some(c)) = (stack.last_mut(), entity(&String::from_utf8_lossy(&r))) {
+                if let (Some(top), Some(c)) = (stack.last_mut(), entity(&r)) {
                     top.text.push(c);
                 }
             }
