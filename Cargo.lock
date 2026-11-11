@@ -1225,7 +1225,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=6595c432463d456cf91361d1cab1a4416661a006#6595c432463d456cf91361d1cab1a4416661a006"
+source = "git+https://github.com/storytold/craft-libs?rev=3b3104981bb3093904a12e44d6a3b41c6c4c39c8#3b3104981bb3093904a12e44d6a3b41c6c4c39c8"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
