@@ -792,3 +792,63 @@ fn deferred_writes_are_bounded_and_drain_to_disk() {
     assert!(keys.iter().all(|k| cache.get(*k).is_some()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `put_at` says whether the image is kept where it lasts: not for a job made before the cache was cleared or
+/// retired, nor when the disk cache can't write it (CodeRabbit on #3077).
+#[test]
+fn put_at_says_whether_the_image_was_kept() {
+    let dir = temp_dir("put-at-kept");
+    let cache = PreviewCache::with_disk(1 << 20, &dir, 1 << 20);
+    let (key, img) = (hash_bytes(b"kept"), Arc::new(gradient(8, 8, 3)));
+    let old = cache.generation();
+    assert!(cache.put_at(old, key, img.clone()), "kept");
+    cache.clear();
+    assert!(!cache.put_at(old, key, img.clone()), "a job from before the clear keeps nothing");
+    assert!(cache.put_at(cache.generation(), key, img.clone()));
+    let generation = cache.generation();
+    cache.retire();
+    assert!(!cache.put_at(generation, key, img.clone()), "nor one for a retired cache");
+    // a file where the cache folder goes: the write fails
+    let blocked = temp_dir("put-at-blocked");
+    std::fs::write(&blocked, b"not a folder").unwrap();
+    let cache = PreviewCache::with_disk(1 << 20, &blocked, 1 << 20);
+    assert!(!cache.put_at(cache.generation(), key, img.clone()), "not written");
+    let memory = PreviewCache::memory(1 << 20);
+    assert!(memory.put_at(memory.generation(), key, img), "a memory-only cache keeps it");
+    let _ = std::fs::remove_file(&blocked);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `dims` reads a cached file's first few KiB, and further when its size marker comes later (CodeRabbit on #3080).
+#[test]
+fn dims_finds_a_size_marker_past_the_first_few_kib() {
+    let dir = temp_dir("dims-far");
+    let d = DiskCache::new(&dir, 1 << 20);
+    let key = hash_bytes(b"far");
+    assert!(d.put(key, &gradient(40, 30, 5)));
+    assert_eq!(d.dims(key), Some((40, 30)));
+    // the same picture with a 10 KiB application segment before its frame header
+    let file = files_under(&dir).into_iter().find(|f| f.ends_with(disk::EXT)).expect("the cached file");
+    let path = dir.join(file);
+    let jpeg = std::fs::read(&path).unwrap();
+    let mut padded = jpeg[..2].to_vec();
+    let pad = 10 << 10;
+    padded.extend_from_slice(&[0xFF, 0xEF, ((pad + 2) >> 8) as u8, ((pad + 2) & 0xFF) as u8]);
+    padded.extend(std::iter::repeat_n(0u8, pad));
+    padded.extend_from_slice(&jpeg[2..]);
+    std::fs::write(&path, padded).unwrap();
+    assert_eq!(d.dims(key), Some((40, 30)), "found past the first read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A picture bigger than the room pruning leaves is removed by the pruning its own write starts: `put` says it
+/// was not kept (CodeRabbit on #3077).
+#[test]
+fn a_write_the_pruning_removes_is_not_reported_as_kept() {
+    let dir = temp_dir("pruned-away");
+    let d = DiskCache::new(&dir, 64);
+    assert!(!d.put(hash_bytes(b"too big"), &gradient(64, 64, 9)), "pruned away at once");
+    let roomy = DiskCache::new(&dir, 1 << 20);
+    assert!(roomy.put(hash_bytes(b"fits"), &gradient(64, 64, 9)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
