@@ -573,26 +573,24 @@ impl Session {
                     if !expanded_stacks.insert(st.id) {
                         continue;
                     }
-                    let members: Vec<PhotoId> = st
-                        .photos
-                        .iter()
-                        .copied()
-                        .filter(|id| self.catalog.photo(*id).is_none_or(|p| lightcraft_catalog::query::merged_kind(&p.file_name).is_none()))
-                        .collect();
+                    let members: Vec<PhotoId> =
+                        st.photos.iter().copied().filter(|id| self.catalog.photo(*id).is_none_or(|p| !p.is_merge_result)).collect();
                     // Capture order, not stack order (top first): an HDR panorama's bracket
                     // detection expects the periodic exposure sequence from the earliest capture.
                     // File names do not reflect capture sequence (renamed files, several cameras), so
-                    // ties on capture date fall back to PhotoId (catalog order), not the file name.
+                    // ties on capture date fall back to explicit capture_order, then PhotoId (catalog order).
                     // Keys are computed once per member, not once per comparison.
-                    let mut keyed: Vec<(String, PhotoId)> = members
+                    let mut keyed: Vec<(String, u32, PhotoId)> = members
                         .iter()
                         .map(|id| {
-                            let date = self.catalog.photo(*id).map(|p| p.date().to_string()).unwrap_or_default();
-                            (date, *id)
+                            let p = self.catalog.photo(*id).unwrap();
+                            let date = p.date().to_string();
+                            let order = p.capture_order.unwrap_or(0);
+                            (date, order, *id)
                         })
                         .collect();
-                    keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-                    groups.push(keyed.into_iter().map(|(_, id)| id).collect());
+                    keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+                    groups.push(keyed.into_iter().map(|(_, _, id)| id).collect());
                 }
                 None => {
                     let at = match loose {
