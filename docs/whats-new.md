@@ -46,6 +46,12 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### Arrow keys after a slider click
+- After clicking or dragging a Develop slider, Left and Right step through the photos again, as they do elsewhere.
+  The slider keeps Up and Down, which step it, and stays selected from photo to photo. Before, all four arrows were
+  kept for the slider, so Left and Right did nothing, and a press moved the keyboard focus to a neighbouring control
+  (LightCraft Classic issue emmertex/chromaforge#880).
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

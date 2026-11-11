@@ -392,6 +392,12 @@ fn update_wheel_arming(ui: &mut Ui, id: egui::Id, resp: &egui::Response, row: Re
         resp.request_focus();
         ui.data_mut(|d| d.insert_temp(focused_slider_key(), id));
     }
+    // The arrows belong to the selected slider and the photos (Up / Down step the slider, Left /
+    // Right the photos), not to egui's focus walk: otherwise a press hands the focus to a
+    // neighbouring control, and the next press steps that one instead.
+    if enabled && resp.has_focus() {
+        ui.memory_mut(|m| m.set_focus_lock_filter(id, egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() }));
+    }
     // A drag that leaves the row disarms too (it keeps dragging: that needs no wheel selection),
     // and one that only starts once the pointer is outside doesn't arm it again.
     if selected && pointer_in_row && !left_row {
