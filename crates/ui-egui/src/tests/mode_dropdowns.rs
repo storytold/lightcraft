@@ -171,3 +171,22 @@ fn visualize_spots_opens_remove_with_a_brush() {
     assert!(!h.app.ui.visualize_spots);
     assert!(h.app.ui.tool.is_empty(), "None stays chosen");
 }
+
+/// The White Balance eyedropper stays on across panels; opening Remove after it still chooses the
+/// Remove brush, so a click on the photo adds a spot.
+#[test]
+fn remove_opens_with_a_brush_after_the_eyedropper() {
+    let mut h = detail("panel.crop");
+    let r = h.request("engine.execute", json!({"command": "tool.wbPicker"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.tool, "wbPicker");
+    let r = h.request("engine.execute", json!({"command": "panel.remove"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.right, RightPanel::Remove);
+    assert_eq!(h.app.ui.tool, "remove");
+    assert!(shows(&h, "dropdown:removeMode", "Remove"));
+    click_photo(&mut h, 0.4, 0.4);
+    assert_eq!(spots(&h), 1, "the click paints a spot");
+}

@@ -6,7 +6,7 @@ use super::{Color32, DevelopSettings, Gesture, LightcraftApp, Point, Pos2, Rect,
 
 /// The `spot.add` mode the Remove panel's Mode paints with, or `None` while no brush is chosen
 /// (Mode ▸ None, or another tool): then the photo takes no new spots, by pointer or by keyboard.
-fn spot_brush(tool: &str) -> Option<&'static str> {
+pub(crate) fn spot_brush(tool: &str) -> Option<&'static str> {
     match tool {
         "remove" => Some("remove"),
         "fill" => Some("fill"),
@@ -148,7 +148,7 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
 /// Keyboard stand-ins for the Remove tool: each spot's target and source (an arrow press moves
 /// it a step, one undo step; Return selects the spot), and a placement point that the arrows move
 /// and Return turns into a new spot of the brush's size there (only while a brush is chosen, as
-/// with the pointer). True when a spot was added.
+/// with the pointer: with none the placement point is not offered). True when a spot was added.
 fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSettings, grips: &[(usize, bool, Pos2, f32)]) -> bool {
     for &(spot, source, q, _) in grips {
         let at = map.norm(q);
@@ -166,6 +166,7 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             let _ = app.run("develop.endInteraction", json!({}));
         }
     }
+    let Some(mode) = spot_brush(&app.ui.tool) else { return false };
     // where a new spot goes: the photo's centre at first, then wherever the arrows took it
     let key = egui::Id::unique("lc-spot-placement");
     let place: (f64, f64) = ui.data(|m| m.get_temp(key)).unwrap_or((0.5, 0.5));
@@ -181,14 +182,11 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
         let moved = ((place.0 + dx).clamp(0.0, 1.0), (place.1 + dy).clamp(0.0, 1.0));
         ui.data_mut(|m| m.insert_temp(key, moved));
     }
-    let brush = spot_brush(&app.ui.tool);
-    if brush.is_some() && crate::canvas_keys::has_focus(ui.ctx()) && ui.memory(|m| m.has_focus(crate::canvas_keys::id("spot:new"))) {
+    if crate::canvas_keys::has_focus(ui.ctx()) && ui.memory(|m| m.has_focus(crate::canvas_keys::id("spot:new"))) {
         let r = (app.ui.remove_size as f64 * (map.rect.width().max(map.rect.height())) as f64) as f32;
         ui.painter().circle_stroke(q, r, Stroke::new(1.0, Color32::WHITE));
     }
-    if keys.activated
-        && let Some(mode) = brush
-    {
+    if keys.activated {
         let _ = app.run(
             "spot.add",
             json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),

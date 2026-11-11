@@ -19,6 +19,15 @@ fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str
     let _ = app.session.end_interaction();
 }
 
+/// With the Remove panel open, choose the Remove brush unless one already is, so painting works
+/// straight away; another tool still on (the White Balance eyedropper) gives way. Mode ▸ None is
+/// for choosing in the panel itself.
+fn remove_brush(app: &mut LightcraftApp) {
+    if app.ui.right == RightPanel::Remove && crate::panels::detail::spot_brush(&app.ui.tool).is_none() {
+        app.ui.tool = "remove".into();
+    }
+}
+
 /// `[` / `]` (size ×`k`) and ⇧`[` / ⇧`]` (feather +`df`) for the brush in use: the Remove tool's
 /// (and its selected spot's) or the Masking brush's.
 fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
@@ -619,9 +628,7 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
                     app.ui.view = ViewMode::Detail;
                 }
-                if p == RightPanel::Remove && app.ui.tool.is_empty() {
-                    app.ui.tool = "remove".into();
-                }
+                remove_brush(app);
             }
             // A right panel that is open but not showing (minimized, or behind another tab)
             // keeps its mode; reveal_command brings it to the front.
@@ -859,11 +866,7 @@ fn ui_commands_6(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             } else {
                 app.ui.right = RightPanel::Remove;
                 app.ui.visualize_spots = true;
-                // as panel.remove: the panel opens with a brush, so painting works straight away
-                // (None is for choosing in the panel)
-                if !matches!(app.ui.tool.as_str(), "remove" | "fill" | "heal" | "clone") {
-                    app.ui.tool = "remove".into();
-                }
+                remove_brush(app);
             }
             Ok(Value::Null)
         }
@@ -959,9 +962,7 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         }
         "panel.remove" => {
             panel(app, ctx, RightPanel::Remove, "Remove");
-            if app.ui.right == RightPanel::Remove && app.ui.tool.is_empty() {
-                app.ui.tool = "remove".into();
-            }
+            remove_brush(app);
             Ok(Value::Null)
         }
         "panel.masking" => {
