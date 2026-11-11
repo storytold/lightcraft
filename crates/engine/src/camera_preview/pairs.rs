@@ -2,7 +2,7 @@ use super::hue_sat::{HueSat, fit_chroma, fit_hue_sat};
 use super::proxy::DARK_FLOOR;
 #[cfg(test)]
 use super::tone::highlights;
-use super::tone::{HighlightCheck, ToneFit, highlights_hold};
+use super::tone::{HighlightCheck, ToneFit, highlights_hold, keeps_local_contrast};
 use super::{CameraLook, CameraTone, HsvTable, Mat3, Rgb32f, ToneMap, luminance_2020};
 
 /// A fit must cut the held-out squared error to below this share of the fallback's.
@@ -288,6 +288,10 @@ pub(super) fn fit_attempt(
     fit_pairs_on(sensor, reference, colour, attempt.away_from_edges.then_some(EDGE_CONTRAST), attempt.tone, attempt.dark, bright)
 }
 
+/// One [`fit_attempt`]: the full look fitted on the pairs of all pixels, or of those away from edges with `edge_limit`,
+/// with the given colour (else the photo's own matrix, with and without a hue/saturation table) and `tone_fit`. `None`
+/// when it misses a gate: the bright areas ([`highlights_hold`]), the held-out error against the neutral fallback
+/// ([`MIN_IMPROVEMENT`], [`MAX_HOLDOUT_RMS`]), or, for a quantile curve, [`keeps_local_contrast`].
 fn fit_pairs_on(
     sensor: &Rgb32f,
     reference: &Rgb32f,
@@ -359,6 +363,16 @@ fn fit_pairs_on(
         );
     }
     if samples == 0 || after >= before * MIN_IMPROVEMENT || after / samples as f64 > MAX_HOLDOUT_RMS.powi(2) {
+        return None;
+    }
+    // a quantile curve that learned the camera's local or spatial processing instead of its tone (the conditional-median
+    // fallback's flat runs are bounded by its pooling limit instead)
+    let correction = look.hue_sat.as_ref().and_then(HueSat::new);
+    let colour = |x: [f64; 3]| {
+        let p = look.matrix.apply(x);
+        correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
+    };
+    if tone_fit == ToneFit::Quantile && !keeps_local_contrast(&look.tone, sensor, reference, colour) {
         return None;
     }
     Some(look)
@@ -444,6 +458,7 @@ pub(super) fn fit_partial(sensor: &Rgb32f, reference: &Rgb32f, highlights: &High
     [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| fit_partial_on(sensor, reference, edge_limit, highlights))
 }
 
+/// One try of [`fit_partial`], on all pixels or, with `edge_limit`, on those away from edges.
 fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>, highlights: &HighlightCheck) -> Option<CameraLook> {
     // as for a known colour model: enough signal for the tone, but no monochrome reference
     let (pairs, bright) = collect_pairs(sensor, reference, 0.005, edge_limit, false)?;
@@ -495,5 +510,5 @@ fn fit_partial_on(sensor: &Rgb32f, reference: &Rgb32f, edge_limit: Option<f32>, 
     }
     let better =
         after.is_finite() && after_encoded.is_finite() && after < before * MIN_IMPROVEMENT && after_encoded < before_encoded * MIN_IMPROVEMENT;
-    (samples > 0 && better).then_some(look)
+    (samples > 0 && better && keeps_local_contrast(&look.tone, sensor, reference, |x| matrix.apply(x))).then_some(look)
 }
