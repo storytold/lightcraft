@@ -875,6 +875,23 @@ fn the_pixel_bound_is_the_same_for_write_dims_and_read() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `dims` does not report an entry that `get` refuses for its size.
+#[test]
+fn dims_skips_an_entry_past_the_byte_cap() {
+    let dir = temp_dir("dims-cap");
+    let d = DiskCache::new(&dir, 1 << 20);
+    let key = hash_bytes(b"cap");
+    assert!(d.put(key, &gradient(40, 30, 5)));
+    assert_eq!(d.dims(key), Some((40, 30)));
+    let file = files_under(&dir).into_iter().find(|f| f.ends_with(disk::EXT)).expect("the cached file");
+    // a sparse file: the valid JPEG start, then a length one past the cap (nothing is allocated)
+    let f = std::fs::OpenOptions::new().write(true).open(dir.join(file)).unwrap();
+    f.set_len((64 << 20) + 1).unwrap();
+    assert_eq!(d.dims(key), None);
+    assert!(d.get(key).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A picture bigger than the room pruning leaves is removed by the pruning its own write starts: `put` says it
 /// was not kept (CodeRabbit on #3077).
 #[test]

@@ -201,6 +201,11 @@ impl DiskCache {
             return None;
         }
         let mut f = std::fs::File::open(&p).or_else(|_| std::fs::File::open(self.named(key, OLD_EXT))).ok()?;
+        // an entry `get` would refuse (not a regular file, or past the byte cap) is not reported as kept
+        let meta = f.metadata().ok()?;
+        if !meta.is_file() || meta.len() > MAX_ENTRY_BYTES {
+            return None;
+        }
         // the size is normally in the first few KiB: more is read only when that is not enough
         let mut head = Vec::new();
         for limit in [FIRST_HEADER_BYTES, HEADER_BYTES] {
