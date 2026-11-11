@@ -465,15 +465,22 @@ impl WindowRenderer {
         }
     }
 
-    /// One renderer name (`dx12`, `vulkan`, `metal`, `gl`, `glow`); anything else (lists, `auto`,
-    /// `off`, unknown names) is `None`.
+    /// One renderer name (`dx12`, `vulkan`, `metal`, `gl`, `glow`); comma-separated lists of
+    /// `dx12`, `vulkan`, `metal`, `gl`; anything else (`auto`, `off`, unknown names) is `None`.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim().to_ascii_lowercase();
         if s == "glow" {
             return Some(WindowRenderer::Glow);
         }
         match parse_backends(&s)? {
-            BackendChoice::Use(b) if [Backends::DX12, Backends::VULKAN, Backends::METAL, Backends::GL].contains(&b) => Some(WindowRenderer::Wgpu(b)),
+            BackendChoice::Use(b) => {
+                let valid = Backends::DX12 | Backends::VULKAN | Backends::METAL | Backends::GL;
+                if !b.is_empty() && (b & valid) == b {
+                    Some(WindowRenderer::Wgpu(b))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -854,6 +861,25 @@ mod tests {
         assert_eq!(forced_window_renderer(None, None), None);
         // `glow` only concerns the window: compute keeps its default, without a warning
         assert_eq!(parse_backends("glow"), Some(BackendChoice::Auto));
+    }
+
+    /// WindowRenderer::parse incorrectly rejects comma-separated backend lists that parse_backends
+    /// accepts. On Linux there is no probing, so explicit backend selection via
+    /// LIGHTCRAFT_GPU_BACKEND=vulkan,gl must work. This test fails before the fix.
+    #[test]
+    fn window_renderer_names_round_trip_review_regression_1() {
+        // parse_backends accepts comma-separated lists
+        assert_eq!(parse_backends("vulkan,gl"), Some(BackendChoice::Use(Backends::VULKAN | Backends::GL)));
+        assert_eq!(parse_backends("dx12,vulkan"), Some(BackendChoice::Use(Backends::DX12 | Backends::VULKAN)));
+
+        // WindowRenderer::parse should accept them for explicit backend selection on Linux (no probing)
+        // but currently rejects them - this is the regression
+        assert_eq!(WindowRenderer::parse("vulkan,gl"), Some(WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL)));
+        assert_eq!(WindowRenderer::parse("dx12,vulkan"), Some(WindowRenderer::Wgpu(Backends::DX12 | Backends::VULKAN)));
+
+        // Single backends still work
+        assert_eq!(WindowRenderer::parse("vulkan"), Some(WindowRenderer::Wgpu(Backends::VULKAN)));
+        assert_eq!(WindowRenderer::parse("gl"), Some(WindowRenderer::Wgpu(Backends::GL)));
     }
 
     #[test]
