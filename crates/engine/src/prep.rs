@@ -522,9 +522,12 @@ impl Session {
         // (a build left over from a library closed since says nothing about the one open now)
         let here = self.prep.build_library == self.library_generation;
         if b.cancel.load(Ordering::Relaxed) {
-            if mine && wanted {
+            if mine && (wanted || self.prep.started_for.is_some()) {
                 // stopped from its row: not again for this view, and nothing is owed any more (a
-                // stop the preparation made itself cleared `started_for`, and leaves the build owed)
+                // stop the preparation made itself cleared `started_for`, and leaves the build
+                // owed). `started_for` still set says the same when the build ended while
+                // previews were off: the stop was the user's, kept while the build ran, and
+                // switching previews back on does not take the build up again
                 if here && self.prep.started_for.is_some() {
                     self.set_prep_unfinished(false);
                 }

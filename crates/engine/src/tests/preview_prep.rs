@@ -1018,3 +1018,46 @@ fn a_build_stopped_from_its_row_is_not_reclassified_by_a_view_change() {
     drop(s);
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// CodeRabbit on #4093 (round 4): the round-3 guard keeps a user stop while the build is
+/// still running, but if previews are switched off and the build ends before they are
+/// switched on again, its end is followed with previews unwanted: `started_for` was
+/// cleared and the build stayed owed, so switching previews back on took up a build the
+/// user had stopped. The gate holds the build at its first photo, so the stop and the
+/// switch both land while it runs, and the build ends while previews are off.
+#[test]
+fn a_build_stopped_from_its_row_is_not_reclassified_by_previews_switched_off() {
+    use crate::cmd::previews::test_gate::{self, PreviewGate, ReleaseOnDrop};
+    let (mut s, root, ids) = library("prep-stopped-off", 4);
+    let mode = crate::prep::Mode::Library;
+    let gate = PreviewGate::new();
+    // also opens the gate if an assertion below panics, so the worker is never stranded
+    let release = ReleaseOnDrop(gate.clone());
+    test_gate::install(gate.clone());
+    for id in &ids[..3] {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    let b = s.preview_build.clone().expect("the view is prepared");
+    assert!(gate.wait_entered(1), "a lane reached its first photo");
+    assert!(b.running(), "held at its first photo");
+    assert!(marked_unfinished(&root), "its build is owed");
+    // (what the row's stop does: only the cancel flag is set)
+    s.execute("library.cancelPreviews", &json!({})).unwrap();
+    // previews are switched off while the stopped build is still running
+    s.execute("prefs.setBackgroundPrep", &json!({"settings": {"library": {"previews": false}}})).unwrap();
+    s.prep_tick(mode, Some(ids[2]), false);
+    assert!(b.running(), "still held: the stop has not landed yet");
+    drop(release);
+    assert!(wait_finished(&b), "a cancelled build stops");
+    // the build's end is followed while previews are off
+    s.prep_tick(mode, Some(ids[2]), false);
+    // previews on again: a build the user stopped is not taken up again
+    s.execute("prefs.setBackgroundPrep", &json!({"settings": {"library": {"previews": true}}})).unwrap();
+    for _ in 0..3 {
+        s.prep_tick(mode, None, false);
+    }
+    assert!(same_build(&s, &b), "a build the user stopped is not taken up again once previews are on again");
+    assert!(!s.prep.unfinished && !marked_unfinished(&root), "the user said no: nothing is unfinished");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}
