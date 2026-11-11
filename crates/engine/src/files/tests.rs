@@ -1888,3 +1888,19 @@ fn v5_extends_a_dng_tone_curve_past_white_in_stops() {
     let (white, beyond) = (at(Process::V5, 0.0), at(Process::V5, 1.0));
     assert!(beyond < 254.0 && beyond - white >= 3.0, "{white} then {beyond} a stop past the sensor's white");
 }
+
+/// The UNC guard and upstream regular-file bounds apply together in every whole-file loader.
+#[cfg(unix)]
+#[test]
+fn guarded_file_hooks_reject_non_regular_inputs_before_decoding() {
+    let path = "/dev/null";
+    let (load, probe) = fs_hooks();
+    let with = crate::media::RawDecode::default();
+    let spec = crate::media::DenoiseSpec { product: Default::default(), key: String::new(), make: None };
+    for error in
+        [load(path, 64, with).err(), probe(path).err(), fs_reduced_loader()(path, 64, with).err(), fs_pair_loader()(path, 64, &spec, with).err()]
+    {
+        assert!(error.is_some_and(|e| e.contains("not a regular file")), "refuse the opened device before any decode");
+    }
+    assert!(fs_preview_loader()(path, 64).is_none());
+}

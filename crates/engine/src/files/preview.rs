@@ -120,7 +120,7 @@ pub(super) fn fit_box(max_edge: usize) -> lightcraft_codecs::DecodeOptions {
 /// the whole file, which is what the decode of one can hold.
 pub fn fs_preview_loader() -> PreviewLoader {
     Arc::new(|path: &str, max_edge: usize| {
-        use std::io::{Read, Seek};
+        use std::io::Seek;
         let mut file = crate::doc_path::open_original(path).ok()?;
         let total = file.metadata().ok()?.len();
         let len = usize::try_from(total).unwrap_or(usize::MAX);
@@ -134,8 +134,7 @@ pub fn fs_preview_loader() -> PreviewLoader {
             return Some(image);
         }
         file.rewind().ok()?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).ok()?;
+        let bytes = crate::read_file::read_open(file, crate::read_file::MAX_MEDIA_BYTES).ok()?;
         embedded_preview_srgb(&bytes, max_edge)
     })
 }
