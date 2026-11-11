@@ -32,7 +32,7 @@ At the end of the colour tools, where V8 grades (`ColorOps::grade`), in OkLab:
    - The share comes from the profile measured at the pixel's Blending, plus the change that Balance makes (not for
      the global wheel).
    - The damping depends on the pixel's chroma (levels 0.04, 0.08 and 0.12, from none at 0) and on the angle between
-     its hue and the tint's (bins of 30°).
+     its hue and the tint's (measured in bins of 30°, linear between their centres).
 2. Each wheel's Luminance adds a lightness change by lightness, measured at ±50 and ±100, linear in between.
 3. The wheels act on the same input colour and their changes add.
 
