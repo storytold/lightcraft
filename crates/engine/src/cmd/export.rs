@@ -74,6 +74,41 @@ fn list(s: &Session) -> Value {
     Value::Array(s.all_export_presets().into_iter().map(|(p, builtin)| json!({"name": p.name, "builtin": builtin, "params": p.params})).collect())
 }
 
+/// `export.plan`: the paths `app.export` with these params would write, without writing anything.
+fn plan(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "export.plan";
+    let p = &s.export_params(p).map_err(|e| bad(ID, e))?;
+    let mut opts = crate::export::ExportOptions::from_params(p).map_err(|e| bad(ID, e.to_string()))?;
+    if !crate::export::ExportOptions::has_size_param(p) {
+        opts.resize = Some(crate::export::Resize::long_edge(3000));
+    }
+    let ids = crate::cmd::photo_ids(p, ID)?.unwrap_or_else(|| {
+        // An explicit `id` takes precedence over the ambient selection, as in headless
+        // `app.export`; without it, a multi-photo selection is planned as before.
+        if let Some(id) = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId) {
+            vec![id]
+        } else {
+            let sel: std::collections::HashSet<_> = s.selection.ids.iter().copied().collect();
+            let ordered: Vec<_> = s.visible_cloned().into_iter().filter(|id| sel.contains(id)).collect();
+            if ordered.len() > 1 {
+                ordered
+            } else if let Some(id) = s.active() {
+                vec![id]
+            } else {
+                ordered
+            }
+        }
+    });
+    let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
+    let exact = p.get("path").and_then(Value::as_str);
+    let files =
+        crate::export::export_plan(s, &ids, &opts, &crate::export::Destination { dir: dir.to_string(), exact: exact.map(str::to_string) }, &|path| {
+            std::path::Path::new(path).exists()
+        })
+        .map_err(|e| bad(ID, e))?;
+    Ok(json!({"files": files}))
+}
+
 /// Params that describe a destination or a selection, not the export settings.
 const NOT_SETTINGS: &[&str] = &["ids", "path", "dir", "preset"];
 
@@ -206,6 +241,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 crate::export::write_file(path, &doc.bytes).map_err(|e| bad("export.contactSheet", e))?;
                 Ok(json!({"path": path, "pages": doc.pages, "photos": doc.photos, "bytes": doc.bytes.len()}))
             }
+        ),
+        cmd!(
+            "export.plan",
+            "Export Plan",
+            [],
+            None,
+            "{ids?, id?, dir?, path?, preset?, format?, longEdge?} — list the paths an app.export with these params would write, without writing anything → {files: [{path, sidecars, width, height} | {photo, file, error} | {skipped}]}",
+            always,
+            plan
         ),
         cmd!(
             "export.presets",
