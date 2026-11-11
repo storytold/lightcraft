@@ -979,3 +979,42 @@ fn a_running_build_is_stopped_when_its_library_is_left() {
     std::fs::remove_dir_all(&root).unwrap();
     std::fs::remove_dir_all(&root2).unwrap();
 }
+
+/// CodeRabbit on #4093 (round 3): a stop from the build's row only sets the build's cancel
+/// flag, so while that build is still running, a view change (or previews switched off) runs
+/// the preparation's own stop branches, which clear `started_for` — the user's stop is
+/// reclassified as the preparation's, the build stays owed, and it is taken up again once
+/// the view settles. The gate holds the build at its first photo, so the stop and the view
+/// change both land while it runs.
+#[test]
+fn a_build_stopped_from_its_row_is_not_reclassified_by_a_view_change() {
+    use crate::cmd::previews::test_gate::{self, PreviewGate, ReleaseOnDrop};
+    let (mut s, root, ids) = library("prep-stopped-view", 4);
+    let mode = crate::prep::Mode::Library;
+    let gate = PreviewGate::new();
+    // also opens the gate if an assertion below panics, so the worker is never stranded
+    let release = ReleaseOnDrop(gate.clone());
+    test_gate::install(gate.clone());
+    for id in &ids[..3] {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    let b = s.preview_build.clone().expect("the view is prepared");
+    assert!(gate.wait_entered(1), "a lane reached its first photo");
+    assert!(b.running(), "held at its first photo");
+    assert!(marked_unfinished(&root), "its build is owed");
+    // (what the row's stop does: only the cancel flag is set)
+    s.execute("library.cancelPreviews", &json!({})).unwrap();
+    // the view changes while the stopped build is still running
+    s.catalog.apply(lightcraft_catalog::Op::RemovePhoto { id: ids[3] }).unwrap();
+    s.prep_tick(mode, Some(ids[2]), false);
+    assert!(b.running(), "still held: the stop has not landed yet");
+    drop(release);
+    assert!(wait_finished(&b), "a cancelled build stops");
+    for _ in 0..3 {
+        s.prep_tick(mode, None, false);
+    }
+    assert!(same_build(&s, &b), "a build the user stopped is not taken up again after the view change");
+    assert!(!s.prep.unfinished && !marked_unfinished(&root), "the user said no: nothing is unfinished");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+}

@@ -496,6 +496,9 @@ impl Session {
                 // so the view-change stop below cannot tell it apart; stopped, and the library
                 // now open is prepared in its place (not counted as stopped by the user)
                 b.cancel.store(true, Ordering::Relaxed);
+            } else if b.cancel.load(Ordering::Relaxed) {
+                // already stopped (by the user, from its row): keep `started_for`, so that
+                // the stop is still read as the user's once the build is over
             } else if !wanted {
                 // switched off: stopped by the preparation itself, as for another view below, so
                 // `started_for` goes too. Left set, the stop would read as the user's once the
