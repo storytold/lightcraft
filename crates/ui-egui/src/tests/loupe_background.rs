@@ -166,3 +166,47 @@ fn view_menu_lists_the_colours_with_the_current_one_checked() {
     assert_eq!(on.len(), 1, "{items:?}");
     assert_eq!(on[0].2, "black");
 }
+
+fn side_by_side(h: &mut Headless) -> (egui::Rect, egui::Rect) {
+    h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
+    h.settle(SETTLE);
+    h.snapshot(SETTLE);
+    let after = h.app.image_rect.expect("the After view");
+    let canvas = h.app.canvas_rect.expect("canvas");
+    // the Before view mirrors the After view about the canvas centre
+    (after.translate(egui::vec2(2.0 * canvas.center().x - after.left() - after.right(), 0.0)), after)
+}
+
+#[test]
+fn right_click_on_the_before_photo_keeps_the_zoom_menu() {
+    let mut h = loupe();
+    let (before, _) = side_by_side(&mut h);
+    right_click(&mut h, before.center());
+    assert!(h.painted_text().iter().any(|t| t == "Zoom"), "the Before photo keeps its menu: {:?}", h.painted_text());
+    assert!(text_rect(&h, "Light Gray").is_none(), "without the colours");
+}
+
+#[test]
+fn labels_on_the_canvas_stay_readable_on_white() {
+    let mut h = loupe();
+    let color = |h: &Headless, text: &str| {
+        fn find(shape: &egui::epaint::Shape, text: &str) -> Option<egui::Color32> {
+            match shape {
+                egui::epaint::Shape::Text(t) if t.galley.job.text == text => t.galley.job.sections.first().map(|s| s.format.color),
+                egui::epaint::Shape::Vec(v) => v.iter().find_map(|s| find(s, text)),
+                _ => None,
+            }
+        }
+        h.view.painted_shapes().iter().find_map(|s| find(s, text)).expect("the label is painted")
+    };
+    side_by_side(&mut h);
+    let theme = color(&h, "Before");
+    assert_eq!(theme, crate::theme::Tokens::get(&h.view.ctx).text_dim, "Theme Color keeps the theme's label");
+    set(&mut h, json!({"color": "white"}));
+    h.snapshot(SETTLE);
+    let on_white = color(&h, "Before");
+    assert!(on_white.r() < 0x80, "dark on white: {on_white:?}");
+    set(&mut h, json!({"color": "black"}));
+    h.snapshot(SETTLE);
+    assert!(color(&h, "After").r() > 0x80, "light on black");
+}

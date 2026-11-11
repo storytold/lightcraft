@@ -350,6 +350,7 @@ pub enum LoupeBackground {
 }
 
 impl LoupeBackground {
+    /// Every choice, in menu order (Theme first).
     pub const ALL: [LoupeBackground; 6] = [
         LoupeBackground::Theme,
         LoupeBackground::Black,
@@ -371,6 +372,7 @@ impl LoupeBackground {
         }
     }
 
+    /// The English menu label (translated where it is shown).
     pub fn label(self) -> &'static str {
         match self {
             LoupeBackground::Theme => "Theme Color",

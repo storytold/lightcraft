@@ -311,7 +311,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let br = before_img;
         draw(Slot::Before, br, areas[0]);
         shown = draw(Slot::Main, img_rect, main_area);
-        split_labels(&p, &t, [(br, areas[0]), (img_rect, main_area)]);
+        split_labels(&p, &canvas_text(app, &t), [(br, areas[0]), (img_rect, main_area)]);
     } else if show_before {
         shown = draw(Slot::Before, img_rect, canvas);
         // on the photo itself, so it gets the hover label's dark pill to stay readable over light
@@ -326,7 +326,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     } else {
         shown = draw(Slot::Main, img_rect, canvas);
         if shown == "none" {
-            none_message(app, &p, &t, canvas, id);
+            none_message(app, &p, &canvas_text(app, &t), canvas, id);
         }
     }
     // a wipe shows the Before whole-frame render on its side of the line…
@@ -383,7 +383,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !fullscreen {
         photo.preview_only.as_deref().inspect(|why| preview_only_pill(ui, canvas, why));
     }
-    loupe_context_menu(app, &resp, id, img_rect);
+    loupe_context_menu(app, &resp, id, &shown_photos(split, [(img_rect, main_area), (before_img, areas[0])]));
 }
 
 /// Names the loupe for screen readers as the grid names the same photo (file, rating, flag, label), not
@@ -392,13 +392,19 @@ fn announce_photo(app: &LightcraftApp, resp: &egui::Response, photo: &lightcraft
     crate::widgets::announce(resp, crate::i18n::tr_format!("Photo: {name}", name = super::grid::cell_description(app, photo)));
 }
 
+/// Where the photos show: the After view, and in a side-by-side or top-bottom view the Before view
+/// too, each cut at its pane (zoomed in, a photo reaches past it).
+fn shown_photos(split: bool, [(after, after_pane), (before, before_pane)]: [(Rect, Rect); 2]) -> Vec<Rect> {
+    if split { vec![after.intersect(after_pane), before.intersect(before_pane)] } else { vec![after] }
+}
+
 /// The loupe's right-click menu: zoom commands and the grid's photo menu on the photo; around it,
 /// the Loupe Background colours (issue #4102).
-fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId, img_rect: Rect) {
+fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId, photos: &[Rect]) {
     // where the right-click that opened the menu landed, kept while the menu stays open
     let key = egui::Id::unique("loupe-menu-background");
     if resp.secondary_clicked() {
-        let around = resp.interact_pointer_pos().is_some_and(|p| !img_rect.contains(p));
+        let around = resp.interact_pointer_pos().is_some_and(|p| !photos.iter().any(|r| r.contains(p)));
         resp.ctx.data_mut(|d| d.insert_temp(key, around));
     }
     let around = resp.ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
@@ -417,6 +423,16 @@ fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoI
         ui.separator();
         super::grid::context_menu(app, ui, id);
     });
+}
+
+/// Text painted straight on the canvas (render messages, Before / After labels) in colours that read
+/// on the chosen Loupe Background: dark on the light greys and white, light on the dark ones. The
+/// theme colour, and soft proofing's paper-white surround, keep the theme's text.
+fn canvas_text(app: &LightcraftApp, t: &Tokens) -> Tokens {
+    let Some(bg) = app.ui.settings.loupe_background.color().filter(|_| !app.ui.soft_proof) else { return *t };
+    let light = u16::from(bg.r()) + u16::from(bg.g()) + u16::from(bg.b()) > 3 * 128;
+    let (text, dim) = if light { (0x1c, 0x4a) } else { (0xee, 0xb4) };
+    Tokens { text: Color32::from_gray(text), text_dim: Color32::from_gray(dim), ..*t }
 }
 
 /// The right-click menu around the photo: the Loupe Background colours, the current one checked.

@@ -1163,9 +1163,6 @@ fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<e
     confirmed
 }
 
-/// A submenu row showing `text` at `depth`, whose rows `children` draws one level deeper,
-/// bounded like every level. The row is registered as `menusub:<label>` (the untranslated
-/// label), and while its submenu is open it is the anchor the next frame's room is measured from.
 /// View ▸ Loupe Background (also the right-click menu around the photo): one checkable item per colour.
 fn loupe_background_items(current: crate::state::LoupeBackground) -> Vec<MenuNode> {
     use crate::state::LoupeBackground;
@@ -1184,6 +1181,9 @@ fn loupe_background_items(current: crate::state::LoupeBackground) -> Vec<MenuNod
     v
 }
 
+/// A submenu row showing `text` at `depth`, whose rows `children` draws one level deeper,
+/// bounded like every level. The row is registered as `menusub:<label>` (the untranslated
+/// label), and while its submenu is open it is the anchor the next frame's room is measured from.
 fn submenu(ui: &mut egui::Ui, label: &str, text: String, depth: usize, bar_bottom: Option<f32>, children: impl FnOnce(&mut egui::Ui)) {
     let r = crate::widgets::menu_button(ui, text, |ui| crate::menu_level::level(ui, depth + 1, bar_bottom, children));
     crate::widgets::register(ui, format!("menusub:{label}"), r.response.rect);
