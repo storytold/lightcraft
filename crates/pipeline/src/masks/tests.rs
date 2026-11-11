@@ -205,7 +205,12 @@ fn ai_shapes_without_a_segmentation_select_nothing() {
     for shape in [
         MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
         MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0 },
-        MaskShape::Prompt { text: "sky".into(), seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None }), detail: vec![], edge: 0.0 },
+        MaskShape::Prompt {
+            text: "sky".into(),
+            seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None, grid: None }),
+            detail: vec![],
+            edge: 0.0,
+        },
     ] {
         assert!(shape_alpha(&shape, &f, 30, 30, &img, &l, 0.0, None).data.iter().all(|v| *v == 0.0));
     }
@@ -649,4 +654,15 @@ fn an_over_budget_brush_mask_is_reported() {
     let near = BrushStroke { points: vec![Point::new(0.1, 0.1), Point::new(0.9, 0.9)], size: 0.05, ..Default::default() };
     assert!(!brush_over_budget(std::slice::from_ref(&near), &frame(w, h), w, h));
     assert!(brush_over_budget(&vec![far; 10], &frame(w, h), w, h));
+}
+
+#[test]
+fn intersect_first_component_selects_its_shape() {
+    let f = frame(100, 100);
+    let img = Rgb32f::new(100, 100);
+    let l = Plane::new(100, 100);
+    let shape = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.2, angle: 0.0, feather: 20.0, invert: false };
+    let m = Mask { components: vec![MaskComponent { name: None, op: MaskOp::Intersect, invert: false, shape }], ..Default::default() };
+    let a = evaluate_one(&m, &f, 100, 100, &img, &l, 0.0, None);
+    assert!(a.get(50, 50) > 0.99 && a.get(5, 5) < 0.01, "intersect first: {} {}", a.get(50, 50), a.get(5, 5));
 }

@@ -105,6 +105,9 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("aperture", "Aperture", Kind::Number),
     ("shutterSpeed", "Shutter Speed", Kind::Number),
     ("iso", "ISO Speed", Kind::Number),
+    ("flash", "Flash", Kind::Bool),
+    ("exposureBias", "Exposure Bias", Kind::Number),
+    ("cameraSerial", "Camera Serial Number", Kind::Text),
     // Location
     ("location", "Location", Kind::Text),
     ("city", "City", Kind::Text),
@@ -136,7 +139,7 @@ pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Date", &["captureDate", "importDate", "editDate"]),
     ("Keywords & People", &["keywords", "keywordCount", "person", "personCount"]),
     ("Description", &["title", "caption", "altText", "creator", "copyright", "copyrightStatus"]),
-    ("Camera Info", &["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso"]),
+    ("Camera Info", &["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso", "flash", "exposureBias", "cameraSerial"]),
     ("Location", &["location", "city", "state", "country", "hasGps"]),
     ("Size", &["longEdge", "shortEdge", "aspect", "megapixels"]),
     ("Develop", &["edited", "cropped", "treatment"]),
@@ -1099,6 +1102,9 @@ impl Rule {
             "editDate" => date_op(op, p.edited.as_deref(), value),
             "shutterSpeed" => num_op(op, crate::parse_shutter_seconds(&m.shutter), &shutter_value(value)),
             "iso" => num_op(op, m.iso.map(|v| v as f64), value),
+            "flash" => yes(m.flash.unwrap_or(false)),
+            "exposureBias" => num_op(op, m.exposure_bias.map(f32_as_decimal), value),
+            "cameraSerial" => text(&m.serial_number),
             "aperture" => num_op(op, m.aperture.map(f32_as_decimal), value),
             "focalLength" => num_op(op, m.focal_mm.map(f32_as_decimal), value),
             "longEdge" | "shortEdge" => {
@@ -1146,7 +1152,7 @@ impl Rule {
                 "text" | "filePath" | "location" => COST_TEXT,
                 "keywords" | "person" | "personCount" | "stacked" | "copyName" | "fileName" | "extension" | "format" | "title" | "caption"
                 | "altText" | "city" | "state" | "country" | "camera" | "lens" | "creator" | "copyright" | "captureDate" | "importDate"
-                | "editDate" | "shutterSpeed" | "aspect" => COST_SMALL,
+                | "editDate" | "shutterSpeed" | "aspect" | "flash" | "cameraSerial" | "exposureBias" => COST_SMALL,
                 _ => COST_SCALAR,
             },
         }
