@@ -527,6 +527,27 @@ pub fn window_renderer_order(
     let no_vulkan = |r: &WindowRenderer| os != "windows" || !matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN));
     let candidates = forced
         .into_iter()
+        .flat_map(|r| {
+            if let WindowRenderer::Wgpu(b) = r {
+                let count = [Backends::DX12, Backends::VULKAN, Backends::METAL, Backends::GL]
+                    .into_iter()
+                    .filter(|backend| b.contains(*backend))
+                    .count();
+                if count > 1 {
+                    let platform_order = match os {
+                        "windows" => vec![Backends::DX12, Backends::GL],
+                        "macos" | "ios" => vec![Backends::METAL],
+                        "linux" => vec![Backends::GL, Backends::VULKAN],
+                        _ => vec![Backends::VULKAN, Backends::GL],
+                    };
+                    return platform_order.into_iter()
+                        .filter(|backend| b.contains(*backend))
+                        .map(WindowRenderer::Wgpu)
+                        .collect::<Vec<_>>();
+                }
+            }
+            vec![r]
+        })
         .chain(remembered.filter(|r| not_failed(r) && no_vulkan(r)))
         .chain(chain.filter(not_failed))
         .chain(failed.filter(no_vulkan));
