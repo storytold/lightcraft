@@ -1274,6 +1274,16 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         }
         return;
     }
+    if resp.double_clicked() && app.ui.settings.loupe_double_click_grid && app.ui.view == crate::state::ViewMode::Detail {
+        // the double-click's first click already toggled the zoom: put it back, then leave
+        if let Some((zoom, pan)) = app.ui.zoom_before_click.take() {
+            app.ui.zoom = zoom;
+            app.ui.pan = pan;
+            app.ui.zoom_anim = false;
+        }
+        crate::menus::leave_detail(app);
+        return;
+    }
     click_zoom_and_pan(app, resp, img, canvas);
     let _ = (native, aspect);
 }
@@ -1287,6 +1297,9 @@ pub(crate) fn zoomed(img: Rect, canvas: Rect) -> bool {
 /// Fit ↔ the chosen click-zoom ratio at the clicked point, a drag pans when zoomed.
 pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, resp: &egui::Response, img: Rect, canvas: Rect) {
     let zoomed = zoomed(img, canvas);
+    if resp.clicked() && !resp.double_clicked() {
+        app.ui.zoom_before_click = Some((app.ui.zoom, app.ui.pan));
+    }
     if resp.double_clicked() || (resp.clicked() && !zoomed) {
         if let Some(q) = resp.interact_pointer_pos() {
             let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);

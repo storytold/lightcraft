@@ -68,6 +68,10 @@ pub struct UiState {
     /// Animate the loupe rect toward its target (set by a click-zoom).
     #[serde(skip)]
     pub zoom_anim: bool,
+    /// The loupe's zoom and pan before the last single click changed them: the first click of a
+    /// double-click that returns to the grid is undone with it (`loupe_double_click_grid`).
+    #[serde(skip)]
+    pub zoom_before_click: Option<(Zoom, (f32, f32))>,
     pub before_after: BeforeAfter,
     pub thumb_size: f32,
     /// Import review thumbnail size in points, independent of the library grid.
@@ -412,6 +416,7 @@ impl Default for UiState {
             pan: (0.5, 0.5),
             click_zoom: 100,
             zoom_anim: false,
+            zoom_before_click: None,
             before_after: BeforeAfter::Off,
             thumb_size: 220.0,
             import_thumb_size: crate::import::THUMB_SIZE_DEFAULT,

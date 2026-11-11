@@ -264,3 +264,47 @@ fn a_crop_of_no_size_lays_out_at_a_finite_size() {
         }
     }
 }
+
+/// A click and a double-click in the middle of the loupe's photo.
+fn click_photo(h: &mut Headless, double: bool) {
+    let mut events = vec![json!({"kind": "down", "x": 0.5, "y": 0.5}), json!({"kind": "up", "x": 0.5, "y": 0.5})];
+    if double {
+        events.extend(events.clone());
+    }
+    let r = h.request("ui.pointer", json!({"events": events}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+}
+
+/// View ▸ Double-Click Returns to Grid: a double-click on the photo goes back to the grid as Esc
+/// does, and the zoom its first click toggled is put back; a single click still click-zooms.
+#[test]
+fn a_double_click_returns_to_the_grid_when_the_setting_is_on() {
+    use crate::state::{ViewMode, Zoom};
+    let mut h = detail();
+    h.app.ui.settings.zoom_to_focus = false;
+    let r = h.request("engine.execute", json!({"command": "view.doubleClickToGrid"}), T);
+    assert_eq!(r["result"]["on"], true, "{r}");
+    assert_eq!(h.app.ui.zoom, Zoom::Fit);
+
+    click_photo(&mut h, false);
+    assert_eq!(h.app.ui.view, ViewMode::Detail, "a single click stays in the loupe");
+    assert!(matches!(h.app.ui.zoom, Zoom::Percent(_)), "a single click still zooms: {:?}", h.app.ui.zoom);
+    h.request("engine.execute", json!({"command": "view.zoomFit"}), T);
+    h.settle(SETTLE);
+
+    click_photo(&mut h, true);
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "the double-click went back to the grid");
+    assert_eq!(h.app.ui.zoom, Zoom::Fit, "the first click's zoom was put back");
+}
+
+/// Off (the default), a double-click on the photo toggles the zoom and stays in the loupe.
+#[test]
+fn a_double_click_stays_in_the_loupe_by_default() {
+    use crate::state::ViewMode;
+    let mut h = detail();
+    assert!(!h.app.ui.settings.loupe_double_click_grid);
+    click_photo(&mut h, true);
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+}

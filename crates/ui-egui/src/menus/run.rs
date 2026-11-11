@@ -350,6 +350,11 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.settings.focus_point = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.settings.focus_point);
             Ok(json!({"on": app.ui.settings.focus_point}))
         }
+        "view.doubleClickToGrid" => {
+            // {on?}; no params toggles. A double-click on the loupe's photo goes back to the grid.
+            app.ui.settings.loupe_double_click_grid = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.settings.loupe_double_click_grid);
+            Ok(json!({"on": app.ui.settings.loupe_double_click_grid}))
+        }
         "view.zoomToFocus" => {
             // {on?}; no params toggles. Toggle Zoom (Z) centres on the focus point when there is one.
             app.ui.settings.zoom_to_focus = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.settings.zoom_to_focus);
@@ -1523,16 +1528,22 @@ fn view_back_command(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Val
     } else if matches!(app.ui.view, ViewMode::Compare | ViewMode::Survey | ViewMode::Reference) {
         app.ui.view = ViewMode::Detail;
     } else if app.ui.view == ViewMode::Detail {
-        // a photo opened from a person's page (or the unnamed faces) goes back there, any other to the grid
-        match app.ui.person_from.take() {
-            Some((name, photo)) if app.session.active().is_some_and(|a| a.0 == photo) => {
-                app.ui.view = ViewMode::People;
-                app.ui.person_page = name;
-            }
-            _ => app.ui.view = ViewMode::PhotoGrid,
-        }
+        leave_detail(app);
     }
     Ok(Value::Null)
+}
+
+/// Leave the loupe as Esc does: a photo opened from a person's page (or the unnamed faces) goes
+/// back there, any other to the grid. Also a double-click on the photo with
+/// `loupe_double_click_grid` on.
+pub(crate) fn leave_detail(app: &mut LightcraftApp) {
+    match app.ui.person_from.take() {
+        Some((name, photo)) if app.session.active().is_some_and(|a| a.0 == photo) => {
+            app.ui.view = ViewMode::People;
+            app.ui.person_page = name;
+        }
+        _ => app.ui.view = ViewMode::PhotoGrid,
+    }
 }
 
 /// The `view.viewOptions` command.

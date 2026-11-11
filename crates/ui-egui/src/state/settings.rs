@@ -196,6 +196,10 @@ pub struct AppSettings {
     /// View ▸ Zoom to Focus Point: Toggle Zoom (Z) centres the zoomed view on the camera's focus point
     /// when the photo has one (`view.zoomToFocus`).
     pub zoom_to_focus: bool,
+    /// View ▸ Double-Click Returns to Grid: a double-click on the photo in the loupe goes back to
+    /// the grid (or the person's page it came from), as Esc does, instead of toggling the zoom
+    /// (`view.doubleClickToGrid`; off by default).
+    pub loupe_double_click_grid: bool,
     /// View ▸ View Options: the lines the loupe's info overlay shows in Info 1 and Info 2.
     #[serde(deserialize_with = "lenient")]
     pub loupe_info: LoupeInfo,
@@ -257,6 +261,7 @@ impl Default for AppSettings {
             keyword_chips: KeywordChips::default(),
             focus_point: false,
             zoom_to_focus: true,
+            loupe_double_click_grid: false,
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
             lens_database: Default::default(),
