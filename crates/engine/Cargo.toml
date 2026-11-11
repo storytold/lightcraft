@@ -29,6 +29,8 @@ lightcraft-meta = { workspace = true }
 lightcraft-lensdb = { workspace = true }
 lightcraft-faces = { workspace = true }
 miniz_oxide = { workspace = true }
+# CRC-32 of a catalog unpacked from a Lightroom backup zip (lightroom_backup.rs).
+crc32fast = { workspace = true }
 lightcraft-merge = { workspace = true }
 lightcraft-geocode = { workspace = true }
 lightcraft-slideshow = { workspace = true }

@@ -232,6 +232,21 @@ fn serve_dir(dir: &Path, port: u16) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether a request path names a file inside the site folder: relative, made of plain names
+/// only (no `..`, no root, no `C:` drive or other `:`, which `Path::join` on Windows would take as
+/// the whole path).
+fn safe_site_path(rel: &str) -> bool {
+    !rel.contains(['\\', ':']) && Path::new(rel).components().all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// A regular file's bytes (a symlink, folder or device under the name is refused, not read).
+fn read_site_file(path: &Path) -> std::io::Result<Vec<u8>> {
+    if !std::fs::symlink_metadata(path)?.is_file() {
+        return Err(std::io::Error::other("not a file"));
+    }
+    std::fs::read(path)
+}
+
 fn handle(mut stream: TcpStream, dir: &Path) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
@@ -253,11 +268,14 @@ fn handle(mut stream: TcpStream, dir: &Path) -> std::io::Result<()> {
     let rel = path.trim_start_matches('/');
     let rel = if rel.is_empty() { "index.html" } else { rel };
     let file = dir.join(rel);
-    let safe = !rel.split('/').any(|c| c == ".." || c.contains('\\'));
+    let safe = safe_site_path(rel);
     let encoding = if safe { negotiate(&accept_encoding, |suffix| dir.join(format!("{rel}{suffix}")).is_file()) } else { None };
-    let read = match encoding {
-        Some((_, suffix)) => std::fs::read(dir.join(format!("{rel}{suffix}"))),
-        None => std::fs::read(&file),
+    // only a plain file of the site, read after the path check: a device or a path outside the
+    // folder is never opened
+    let read = match (safe, encoding) {
+        (false, _) => Err(std::io::Error::other("unsafe path")),
+        (true, Some((_, suffix))) => read_site_file(&dir.join(format!("{rel}{suffix}"))),
+        (true, None) => read_site_file(&file),
     };
     let (status, body, ctype) = match (method, safe, read) {
         ("GET" | "HEAD", true, Ok(b)) => ("200 OK", b, mime(&file)),
@@ -287,6 +305,14 @@ fn handle(mut stream: TcpStream, dir: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn served_paths_stay_inside_the_site() {
+        assert!(safe_site_path("index.html") && safe_site_path("pkg/lightcraft.js"));
+        for bad in ["../Cargo.toml", "a/../../x", "/etc/passwd", "C:/Windows/win.ini", "C:\\x", "a\\..\\b", "./x"] {
+            assert!(!safe_site_path(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn bindgen_version_is_locked() {
